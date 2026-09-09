@@ -53,8 +53,12 @@ set dac_spi_sclk_trace_delay    0.164
 set dac_spi_sdin_trace_delay    0.181
 set dac_spi_nsync_trace_delay   0.193
 
-# First flop synchronizer false path
-set_false_path -from [get_registers {*source_holding[*]}] -to *
+# The handshake bundled-data crossings used to be cut with a blanket
+#     set_false_path -from [get_registers {*source_holding[*]}] -to *
+# which removed them from analysis entirely -- no timing check and, more to
+# the point, no bound on how far apart the bits of the captured word may be
+# placed. See the max_skew constraints at the end of this file, which replace
+# it with the treatment Altera applies to its own dcfifo pointer crossings.
 
 # Slow Interfaces
 set_false_path -from *             -to [get_ports ps_sync_1p*]
@@ -87,8 +91,29 @@ set_false_path -from {reset_synchronizer:U_reset_sync_rx|sync} -to {tx:U_tx|tx_*
 set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
 set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
 
-# False path between hold_time and compare_time due to the way the FSM is setup
-set_false_path -from {*x_tamer|hold_time[*]} -to {*x_tamer|compare_time[*]}
+# hold_time -> compare_time is a bundled-data crossing, not a false path.
+#
+# It used to be cut outright, "due to the way the FSM is setup". What the FSM
+# actually does (time_tamer.vhd, WAIT_FOR_LOAD) is capture all 64 bits of
+# hold_time in the sample clock domain on a single enable, ts_compare_load,
+# which is itself synchronised through U_sync_load. That is the same
+# hold-the-data-and-synchronise-the-strobe protocol the handshake block
+# implements, just written out by hand -- so the payload needs the same
+# treatment: no per-cycle timing requirement, but a bound on how far apart the
+# bits may be placed. Cutting it left the skew unbounded, which is the one
+# thing that can hand the comparator a value that never existed.
+#
+# 128 such paths, found by classifying every system -> LVDS crossing by its
+# endpoints after the blanket cut was removed.
+set ht_src [get_keepers -nowarn {*_tamer|hold_time[*]}]
+if { [get_collection_size $ht_src] > 0 } {
+    set_max_skew  -from $ht_src \
+        -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
+    set_net_delay -from $ht_src -max \
+        -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+} else {
+    post_message -type warning "tamer hold_time registers not found"
+}
 
 # Mini Expansion Port (J51)
 set_false_path -from [get_ports mini_exp*] -to *
@@ -103,3 +128,162 @@ set_false_path -from *                     -to [get_ports mini_exp*]
 # hardened DSP datab input register, which has no delay elements to insert.
 # Setup remains constrained at one cycle.
 set_multicycle_path -hold -from [get_registers {*ad_iqcor:*|iqcor_coeff_*_r[*]}] 1
+
+# Altera's own constraints for the mixed-width dual-clock FIFOs. The design
+# has five of them and every one crosses a clock domain: RX and TX samples,
+# RX and TX metadata, and the RX loopback path. Without these the gray
+# pointers cross unconstrained -- there is no bound on inter-bit skew, so
+# nothing guarantees the receiving side sees a single coherent pointer value
+# rather than a mixture of two.
+#
+# The file ships with the licensed installation at
+# ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc and defines
+# apply_sdc_pre_mw_dcfifo, which walks every instance of the named entity and
+# applies set_max_skew, set_net_delay and relaxed min/max delay to the pointer
+# crossings. Driving it from the entity name is what makes the hierarchy paths
+# come out right: the hand-written attempt in common_dcfifo.vhd targets
+# *delayed_wrptr_g* without the full path and shows up as Invalid in
+# report_exceptions, i.e. it matches nothing.
+# The shipped file is a template: its last line is the literal token REPLACE,
+# which Quartus substitutes when it generates an IP variation. Sourcing it
+# whole fails with `invalid command name "REPLACE"`, so read it and evaluate
+# only the procedure definitions.
+set dcfifo_sdc "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc"
+if { [file exists $dcfifo_sdc] } {
+    set fh [open $dcfifo_sdc r]
+    set body [read $fh]
+    close $fh
+    # Drop the trailing template token, keep everything above it.
+    set body [string map {"\nREPLACE" "\n"} $body]
+    eval $body
+    # Only apply if the entity is actually in this revision. Altera's own
+    # constraint files all guard on collection size before constraining, and
+    # skipping that guard is how a project ends up with exceptions that are
+    # recorded but match nothing -- see the Invalid entries in
+    # report_exceptions.
+    if { [llength [get_entity_instances -nowarn common_dcfifo]] > 0 } {
+        apply_sdc_pre_mw_dcfifo "common_dcfifo"
+    } else {
+        post_message -type warning "no common_dcfifo instances in this revision"
+    }
+} else {
+    post_message -type warning "dcfifo constraints not found at $dcfifo_sdc"
+}
+
+# Bundled-data crossings in nuand's handshake block. There are eight of them
+# in this revision and three carry the 64-bit sample timestamp:
+# time_tamer's U_snap and U_current, and U_handshake_timestamp at top level.
+# The rest carry the VCTCXO PPS counter and similar wide values.
+#
+# The block is correct by construction -- source_holding is loaded only on a
+# synchronised request edge and the source cannot overwrite it until the
+# acknowledge returns -- but that argument is about the PROTOCOL. It says
+# nothing about how far apart the fitter may place the bits of the captured
+# word, and the destination samples all of them on one edge. Without a skew
+# bound there is nothing stopping one bit of a timestamp arriving a cycle
+# after its neighbours, which would hand the scheduler a value that never
+# existed. Same reasoning, and the same remedy, as the vendor dcfifo pointer
+# constraints above.
+#
+# source_holding is stable for the whole request/acknowledge round trip, so
+# the crossing is deliberately not timed as a single-cycle path: bound the
+# skew and the net delay instead, and relax setup/hold.
+set hs_src [get_keepers -nowarn {*handshake:*|source_holding[*]}]
+if { [get_collection_size $hs_src] > 0 } {
+    # Bound the skew and the net delay only. Altera's dcfifo file also relaxes
+    # min/max delay, but it can afford to because it names both ends of the
+    # crossing; here the destination is whatever consumes dest_data, so a
+    # -from-only set_max_delay reaches far past the crossing. Adding
+    # set_max_delay 100 / set_min_delay -100 here overrode the existing
+    # multicycle paths on the slow serial interfaces -- SPI and I2C run off
+    # the same system PLL -- and produced eight violations up to -14.061 ns
+    # on domains that have nothing to do with the handshake. Skew and net
+    # delay are the constraints that matter for a bundled-data crossing
+    # anyway: they bound how far apart the captured bits may be placed.
+    set_max_skew  -from $hs_src \
+        -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
+    set_net_delay -from $hs_src -max \
+        -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+} else {
+    post_message -type warning "handshake source_holding registers not found"
+}
+
+# Asynchronous clock groups.
+#
+# Until now the only group declared in the project was JTAG, so every other
+# domain was implicitly synchronous to every other one. That has two costs.
+# The tool spends effort trying to close paths between clocks that have no
+# phase relationship, and -- the reason this was found -- the
+# SYNCHRONIZER_IDENTIFICATION "FORCED IF ASYNCHRONOUS" attribute on the 93
+# synchronizer and 22 reset-synchronizer instances never fires, because
+# Quartus only classifies a two-flop chain as a synchronizer when the
+# crossing is declared asynchronous. No classification means no
+# metastability analysis, which is why report_metastability has never
+# produced an MTBF for this design.
+#
+# Three physically independent sources, traced in the RTL:
+#   c5_clock2    38.4 MHz VCTCXO   -> U_system_pll  -> system domain
+#   fx3_pclk     from the FX3      -> U_fx3_pll     -> FX3 domain
+#   adi_rx_clock 250 MHz AD9361    -> i_altlvds_rx  -> sclk / fclk / ena
+#
+# The AD9361 takes the same VCTCXO as its reference, but its sample clock
+# comes out of the part's own PLL, so there is no edge relationship STA could
+# use. Asynchronous, not exclusive: all three run at once, they simply have
+# no defined phase.
+#
+# fx3_virtual belongs in the FX3 group. It models the FX3 as the launching
+# device for set_input_delay on fx3_gpif/fx3_ctl; putting it in a group of
+# its own would cut those paths and silently discard the I/O constraints.
+#
+# Groups are built from clocks that actually exist in the revision. Naming a
+# clock that is not there produces an exception that matches nothing, which
+# is the failure mode already visible elsewhere in report_exceptions.
+proc _grp { patterns } {
+    set out {}
+    foreach p $patterns {
+        foreach_in_collection c [get_clocks -nowarn $p] {
+            lappend out [get_clock_info -name $c]
+        }
+    }
+    return $out
+}
+
+set grp_sys  [_grp {c5_clock2 {*U_system_pll*divclk}}]
+set grp_fx3  [_grp {fx3_pclk fx3_virtual {*U_fx3_pll*divclk}}]
+set grp_lvds [_grp {adi_rx_clock {*i_altlvds_rx*divclk}}]
+
+# JTAG is deliberately absent: it already has its own -exclusive group above,
+# and listing it twice would be two competing statements about the same clock.
+#
+# So are the pin-generated serial clocks -- adi_sclk_pin, adf_sclk_pin,
+# dac_sclk_pin, pwr_scl_pin, i2c_scl_reg, peri_sclk_reg, adi_sclk_reg. They
+# are divided down from the system PLL, so they are genuinely related to it,
+# and they already carry multicycle paths sized for their bit periods
+# (100 and 199 cycles). Declaring them asynchronous would throw that away.
+set groups {}
+foreach g [list $grp_sys $grp_fx3 $grp_lvds] {
+    if { [llength $g] > 0 } { lappend groups -group $g }
+}
+
+# Held behind a switch until the before/after crossing inventory is done.
+# Declaring clocks asynchronous stops the tool timing every path between the
+# families in BOTH directions, so it can turn a real unsynchronised crossing
+# from a visible violation into a silent pass. The inventory
+# (quartus/report_cdc_inventory.tcl, run with the switch off and again with it
+# on) lists what stops being timed; each entry has to be a known CDC mechanism
+# before this is turned on for good.
+#
+#   ~/soft/q25 quartus_sta -t ../../../../quartus/report_cdc_inventory.tcl
+#
+# Each family contributes two list elements (-group plus its clock list), so
+# four elements is two families -- the minimum for the statement to say
+# anything at all.
+if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
+    post_message -type warning \
+        "async clock groups NOT applied (set BLADERF_ASYNC_CLOCK_GROUPS=1 to enable)"
+} elseif { [llength $groups] >= 4 } {
+    set_clock_groups -asynchronous {*}$groups
+    post_message -type info "async clock groups applied: [expr {[llength $groups]/2}] families"
+} else {
+    post_message -type warning "fewer than two clock families resolved; not grouping"
+}

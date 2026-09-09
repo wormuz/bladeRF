@@ -20,9 +20,24 @@ architecture arch of synchronizer is
 
     signal reg0, reg1   : std_logic;
 
+    -- Attribute set matched to Altera's own std_synchronizer, which guards its
+    -- chain with four things where this file previously had two. The design
+    -- instantiates 93 of these and they are structurally identical, so the
+    -- missing guards are not academic:
+    --
+    --   DONT_MERGE_REGISTER   without it the fitter may merge equivalent
+    --                         registers across separate synchronizer
+    --                         instances, which silently destroys the
+    --                         isolation between two unrelated crossings
+    --   PRESERVE_REGISTER     survives netlist optimisation, not just the
+    --                         VHDL-level PRESERVE below
+    --   ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW
+    --                         keeps physical synthesis and retiming out of
+    --                         the chain; retiming a synchronizer would move
+    --                         the settling time it exists to provide
     attribute ALTERA_ATTRIBUTE of arch  : architecture is "-name SDC_STATEMENT ""set_false_path -to [get_registers {*synchronizer:*|reg0}] """;
-    attribute ALTERA_ATTRIBUTE of reg0  : signal is "-name SYNCHRONIZER_IDENTIFICATION ""FORCED IF ASYNCHRONOUS""";
-    attribute ALTERA_ATTRIBUTE of reg1  : signal is "-name SYNCHRONIZER_IDENTIFICATION ""FORCED IF ASYNCHRONOUS""";
+    attribute ALTERA_ATTRIBUTE of reg0  : signal is "-name SYNCHRONIZER_IDENTIFICATION ""FORCED IF ASYNCHRONOUS"" ; -name DONT_MERGE_REGISTER ON ; -name PRESERVE_REGISTER ON ; -name ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW";
+    attribute ALTERA_ATTRIBUTE of reg1  : signal is "-name SYNCHRONIZER_IDENTIFICATION ""FORCED IF ASYNCHRONOUS"" ; -name DONT_MERGE_REGISTER ON ; -name PRESERVE_REGISTER ON ; -name ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW";
     attribute PRESERVE of reg0          : signal is TRUE;
     attribute PRESERVE of reg1          : signal is TRUE;
     attribute PRESERVE of sync          : signal is TRUE;
