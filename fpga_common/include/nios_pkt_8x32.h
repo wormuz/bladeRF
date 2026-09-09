@@ -158,9 +158,12 @@
  *   bit  16     RX link active
  *   bit  17     RX usb speed latched
  *   bit  18     protocol start violation, TX
- *   bits 23:19  reserved, read as zero
- *   bits 27:24  link epoch count (low 4 bits), advances once per accepted
- *               START, shared by both directions
+ *   bit  19     reserved, read as zero
+ *   bits 27:20  link epoch count, 8 bits, advances once per accepted START,
+ *               shared by both directions. Diagnostic only -- what the host
+ *               waits on is bit 10, not this number. Eight bits rather than
+ *               four because it is read while retrying a start, and four
+ *               would wrap inside a single bad recovery session.
  *   bits 31:28  RF_LINK_STATUS protocol version, currently 0x1
  *
  * A mismatch means FX3 latched one USB speed for the epoch and the link is

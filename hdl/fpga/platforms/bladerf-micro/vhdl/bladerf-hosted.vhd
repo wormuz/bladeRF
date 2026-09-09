@@ -650,8 +650,12 @@ begin
     rf_link_status(16)           <= rx_link_active_sys;
     rf_link_status(17)           <= rx_speed_latched_sys;
     rf_link_status(18)           <= tx_protocol_start_violation_sys;
-    rf_link_status(23 downto 19) <= (others => '0');
-    rf_link_status(27 downto 24) <= std_logic_vector(rf_epoch_count_sys(3 downto 0));
+    rf_link_status(19)           <= '0';
+    -- Full eight bits, not the low four. This is the sequence number the host
+    -- reads while retrying a link start, and four bits wrap after sixteen
+    -- attempts -- which is well within one bad recovery session, exactly when
+    -- the number needs to still mean something.
+    rf_link_status(27 downto 20) <= std_logic_vector(rf_epoch_count_sys);
     rf_link_status(31 downto 28) <= "0001";
 
     -- SI53304 controls / clock output enables
