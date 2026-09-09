@@ -67,7 +67,15 @@ entity fifo_reader is
 
         underflow_led       :   buffer  std_logic;
         underflow_count     :   buffer  unsigned(63 downto 0);
-        underflow_duration  :   in      unsigned(15 downto 0)
+        underflow_duration  :   in      unsigned(15 downto 0);
+
+        -- Speed Latch & Monitor / link epoch (Stage 2)
+        link_start_toggle          :   in      std_logic := '0';
+        usb_speed_mismatch         :   out     std_logic := '0';
+        link_active                :   out     std_logic := '0';
+        speed_latched              :   out     std_logic := '0';
+        protocol_start_violation   :   out     std_logic := '0';
+        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0')
   );
 end entity;
 
@@ -79,6 +87,28 @@ architecture simple of fifo_reader is
 
     signal   dma_buf_size       : natural range DMA_BUF_SIZE_HS to DMA_BUF_SIZE_SS := DMA_BUF_SIZE_SS;
     signal   underflow_detected : std_logic := '0';
+
+    -- Speed Latch & Monitor: FX3 samples USB speed once per RF-link epoch
+    -- and never re-derives pcktSize/burstLen/dmaCfg.size afterward. The
+    -- FPGA must mirror that behavior -- freeze usb_speed on each new link
+    -- epoch (host-driven toggle, not a level) and flag (sticky) if the
+    -- link speed changes underneath us within the same epoch, instead of
+    -- silently re-sizing the DMA buffer mid-stream.
+    --
+    -- `enable` alone is NOT a reliable epoch boundary: it is a level that
+    -- means "TX/RX datapath enabled" and can stay '1' across an FX3
+    -- restart (USB reconnect, repeated stream-start) that changes speed
+    -- without ever dropping enable. The host must signal a new epoch
+    -- explicitly via link_start_toggle; enable rising without a prior
+    -- epoch is a protocol violation, tracked separately from mismatch.
+    signal   latched_usb_speed  : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
+    signal   speed_mismatch     : std_logic := '0';
+    signal   link_active_i      : std_logic := '0';
+    signal   speed_latched_i    : std_logic := '0';
+    signal   protocol_violation : std_logic := '0';
+    signal   epoch_counter      : unsigned(7 downto 0) := (others => '0');
+    signal   link_toggle_prev   : std_logic := '0';
+    signal   enable_prev        : std_logic := '0';
 
     type meta_state_t is (
         META_LOAD,
@@ -99,6 +129,16 @@ architecture simple of fifo_reader is
         meta_time_go    : std_logic;
         meta_fifo_empty : std_logic;
         meta_fifo_data  : std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
+        -- Halves of the 64-bit "timestamp >= meta_p_time" decision. A single
+        -- 64-bit compare took six logic levels and 9.529 ns against an 8.000 ns
+        -- period on the C8 part; splitting it into two 32-bit compares keeps
+        -- each carry chain short. These are registered one cycle ahead of the
+        -- comparison they feed, so they are computed against meta_p_time_r
+        -- (the value that becomes meta_p_time on the next clock).
+        due_hi_gt       : std_logic;
+        due_hi_eq       : std_logic;
+        due_lo_ge       : std_logic;
+        due_sentinel    : std_logic;
     end record;
 
     constant META_FSM_RESET_VALUE : meta_fsm_t := (
@@ -113,7 +153,11 @@ architecture simple of fifo_reader is
         meta_p_time_r   => (others => '-'),
         meta_time_go    => '0',
         meta_fifo_empty => '1',
-        meta_fifo_data  => (others => '0')
+        meta_fifo_data  => (others => '0'),
+        due_hi_gt       => '0',
+        due_hi_eq       => '0',
+        due_lo_ge       => '0',
+        due_sentinel    => '0'
     );
 
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
@@ -179,13 +223,73 @@ begin
         report "in_sample_controls must have same range as out_samples"
         severity failure;
 
-    -- Determine the DMA buffer size based on USB speed
+    -- Speed Latch & Monitor: fix the USB speed used for buffer-size math
+    -- on each new link epoch (toggle on link_start_toggle, not a level),
+    -- hold it for the duration of the epoch, and sticky-flag any observed
+    -- change so it can be reported via a status register without
+    -- perturbing dma_buf_size mid-epoch. `enable` is checked separately
+    -- as a sanity signal: rising without a prior epoch is a protocol
+    -- violation (sticky, independent of speed_mismatch) -- it never
+    -- "heals" the protocol or clears mismatch by itself.
+    latch_usb_speed : process( clock, reset )
+        variable start_link_pulse : std_logic;
+    begin
+        if( reset = '1' ) then
+            latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
+            speed_mismatch     <= '0';
+            link_active_i      <= '0';
+            speed_latched_i    <= '0';
+            protocol_violation <= '0';
+            epoch_counter      <= (others => '0');
+            link_toggle_prev   <= '0';
+            enable_prev        <= '0';
+        elsif( rising_edge(clock) ) then
+
+            start_link_pulse := '0';
+            if( link_start_toggle /= link_toggle_prev ) then
+                start_link_pulse := '1';
+            end if;
+            link_toggle_prev <= link_start_toggle;
+
+            if( start_link_pulse = '1' ) then
+                latched_usb_speed <= usb_speed;
+                speed_mismatch    <= '0';
+                link_active_i     <= '1';
+                -- ⛔ Це ЗАФІКСОВАНА ШВИДКІСТЬ (0=SS, 1=HS), а не «епоха була»:
+                -- хост перевіряє інваріант speed_latched == usb_speed_live, і
+                -- прапорець «щось зафіксовано» зробив би його завжди хибним.
+                -- Факт наявності епохи несе link_active.
+                speed_latched_i   <= usb_speed;
+                epoch_counter     <= epoch_counter + 1;
+            elsif( link_active_i = '1' ) then
+                if( usb_speed /= latched_usb_speed ) then
+                    speed_mismatch <= '1';
+                end if;
+            end if;
+
+            -- enable rising without an established link epoch: sticky
+            -- protocol violation, independent of speed_mismatch.
+            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+                protocol_violation <= '1';
+            end if;
+            enable_prev <= enable;
+
+        end if;
+    end process;
+
+    usb_speed_mismatch       <= speed_mismatch;
+    link_active               <= link_active_i;
+    speed_latched             <= speed_latched_i;
+    protocol_start_violation  <= protocol_violation;
+    link_epoch_counter        <= epoch_counter;
+
+    -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )
     begin
         if( reset = '1' ) then
             dma_buf_size <= DMA_BUF_SIZE_SS;
         elsif( rising_edge(clock) ) then
-            if( usb_speed = '0' ) then
+            if( latched_usb_speed = '0' ) then
                 dma_buf_size <= DMA_BUF_SIZE_SS;
             else
                 dma_buf_size <= DMA_BUF_SIZE_HS;
@@ -215,6 +319,8 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
+        variable  ts_next       : unsigned(63 downto 0);
+        variable  cmp_tgt       : unsigned(63 downto 0);
     begin
 
         meta_future <= meta_current;
@@ -231,8 +337,85 @@ begin
         -- MAX_TIMESTAMP and opens the gate immediately, so a burst
         -- scheduled in the future is emitted at once and nothing is left
         -- to send when its timestamp actually arrives.
+        -- ⛔ Do NOT register meta_fifo_data before this subtraction to break
+        -- the "M10K output -> 64-bit borrow chain -> comparator" timing path.
+        -- Tried and reverted: a registered copy is all zeros out of reset,
+        -- "0 - 1" wraps to all ones, which is exactly the META_NOW sentinel,
+        -- and fifo_reader_tb fails with "gate leaked: feed ran before its
+        -- timestamp" (2045 reads before the target instead of 0). This is the
+        -- same defect commit 441b90a9 fixed. The subtraction must consume the
+        -- header the FIFO is presenting now.
         meta_time := unsigned(meta_fifo_data(95 downto 32)) - 1;
         meta_future.meta_p_time_r <= meta_time;
+
+        -- Precompute "timestamp >= meta_p_time" one cycle early, split across
+        -- the 32-bit halves so neither carry chain spans 64 bits.
+        --
+        -- timestamp is a free-running counter incremented by exactly 1 each
+        -- clock (time_tamer.vhd), so the value it will hold when these
+        -- registered results are consumed is timestamp + 1. Comparing against
+        -- timestamp + 1 here therefore yields exactly the same answer the
+        -- unpipelined 64-bit compare would produce on that later cycle -- the
+        -- release cycle is unchanged, not delayed.
+        --
+        -- meta_p_time is constant for the whole of META_WAIT, and equals
+        -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
+        -- one cycle ahead of that capture is consistent for both states.
+        -- Compare against the RAW header, not against (header - 1).
+        --
+        -- The released condition is evaluated one cycle before it is used, so
+        -- the timestamp in force when the registered result is consumed is
+        -- timestamp + 1. Substituting that into the original test:
+        --     (timestamp + 1) >= meta_p_time      where meta_p_time = header - 1
+        --  => (timestamp + 1) >= header - 1
+        --  => (timestamp + 2) >= header
+        -- Hence ts_next is timestamp + 2 here, not + 1. Using + 1 releases one
+        -- cycle late: the bench reported 2000 reads instead of 2001, which is
+        -- the same signature as the deliberate off-by-one negative control.
+        ts_next := timestamp + 2;
+        -- Comparing the raw header keeps
+        -- the 64-bit borrow chain of the subtraction out of this comparison's
+        -- cone: on the worst seed the path was M10K memory output -> subtract
+        -- -> comparator in one cycle, cell-dominated (only 32% interconnect),
+        -- with 1.138 ns spent in the subtract's carry alone.
+        --
+        -- The subtraction itself stays where it is, feeding meta_p_time_r for
+        -- the META_LOAD test and the sentinel. It must keep reading the header
+        -- the FIFO presents now -- see the warning above it.
+        --
+        -- Sentinel: a raw header of 0 means "transmit now". Under the old form
+        -- 0 - 1 wrapped to all ones and META_WAIT matched MAX_TIMESTAMP; under
+        -- this form ts_next >= 0 is unconditionally true, which opens the gate
+        -- on the same cycle. Both encodings are still tested below.
+        cmp_tgt := unsigned(meta_fifo_data(95 downto 32));
+
+        if( ts_next(63 downto 32) > cmp_tgt(63 downto 32) ) then
+            meta_future.due_hi_gt <= '1';
+        else
+            meta_future.due_hi_gt <= '0';
+        end if;
+
+        if( ts_next(63 downto 32) = cmp_tgt(63 downto 32) ) then
+            meta_future.due_hi_eq <= '1';
+        else
+            meta_future.due_hi_eq <= '0';
+        end if;
+
+        if( ts_next(31 downto 0) >= cmp_tgt(31 downto 0) ) then
+            meta_future.due_lo_ge <= '1';
+        else
+            meta_future.due_lo_ge <= '0';
+        end if;
+
+        -- Sentinel test does not depend on the timestamp, so it stays off the
+        -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
+        -- a header of zero here, not MAX_TIMESTAMP -- MAX_TIMESTAMP is what
+        -- zero becomes after the -1 that produces meta_p_time.
+        if( cmp_tgt = 0 ) then
+            meta_future.due_sentinel <= '1';
+        else
+            meta_future.due_sentinel <= '0';
+        end if;
 
         case meta_current.state is
 
@@ -251,7 +434,21 @@ begin
                                (packet_en = '1' and packet_ready = '1') ) ) then
                        meta_future.meta_read <= '1';
                        meta_future.state     <= META_WAIT;
-                       if( packet_en = '1' or (meta_current.meta_p_time_r > timestamp and meta_current.meta_p_time_r /= META_NOW) ) then
+                       -- "not due yet" reuses the registered halves instead of
+                       -- a second 64-bit compare. With H the raw header,
+                       --   meta_p_time_r > timestamp and /= META_NOW
+                       -- is H - 1 > ts and H /= 0, i.e. H >= ts + 2, which is
+                       -- exactly the negation of the due_* result computed
+                       -- against timestamp + 2. Checked against the old form
+                       -- over H in {0,1,2,4000} and ts around the boundary.
+                       --
+                       -- This matters because the old form started its borrow
+                       -- chain at the meta FIFO's M10K output: on seed 7 the
+                       -- worst path was memory -> Add1 -> LessThan2 -> the
+                       -- fifo_read / data_v enables, at -0.502 ns.
+                       if( packet_en = '1' or not (meta_current.due_hi_gt = '1'
+                               or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
+                               or meta_current.due_sentinel = '1') ) then
                              meta_future.meta_time_go  <= '0';
                           else
                              meta_future.meta_time_go  <= '1';
@@ -270,7 +467,13 @@ begin
                    meta_future.dma_downcount <= dma_buf_size - 4;
                 end if;
 
-                if( (timestamp >= meta_current.meta_p_time or meta_current.meta_p_time = MAX_TIMESTAMP)
+                -- (timestamp >= meta_p_time) rebuilt from the registered
+                -- halves: high half greater, or high half equal and low half
+                -- greater-or-equal. Identical truth value to the 64-bit
+                -- compare, computed a cycle earlier against timestamp + 1.
+                if( ( meta_current.due_hi_gt = '1'
+                      or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
+                      or meta_current.due_sentinel = '1' )
                         and ( packet_en = '0' or ( packet_en = '1' and packet_ready = '1' ) ) ) then
                     meta_future.meta_time_go <= '1';
                     meta_future.state        <= META_DOWNCOUNT;

@@ -313,9 +313,22 @@ begin
                 end if;
 
                 -- Patches the late meta write for MIMO mode
+                --
+                -- Reads the registered copy, not the port. The port arrives
+                -- combinationally from adc_enable in the AD9361 control
+                -- register bundle, through the or/and in adc_assignment_proc
+                -- at the top level, and was the design-wide worst setup path
+                -- (-0.636 ns into state.PACKET_WAIT_EOP / state.META_WRITE).
+                -- The registered copy is written unconditionally every clock
+                -- (see in_sample_controls_r below), so this lags by exactly one
+                -- cycle. That is harmless here: the condition tests whether the
+                -- stream is in MIMO mode, which software sets long before
+                -- samples flow, and it is further gated on dma_downcount being
+                -- within NUM_STREAMS + 2 of the end -- a multi-cycle window,
+                -- not an exact coincidence.
                 if( in_sample_controls'length = 2 and
-                    in_sample_controls(0).enable = '1' and
-                    in_sample_controls(1).enable = '1' and
+                    fifo_current.in_sample_controls_r(0).enable = '1' and
+                    fifo_current.in_sample_controls_r(1).enable = '1' and
                     eight_bit_mode_en = '0' and
                     meta_current.dma_downcount <= NUM_STREAMS + 2 )
                 then

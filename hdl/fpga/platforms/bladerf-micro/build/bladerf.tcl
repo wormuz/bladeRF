@@ -73,6 +73,10 @@ set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS  "HALF SIGNAL SWING" 
 set_global_assignment -name OPTIMIZATION_TECHNIQUE                  SPEED
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC          ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+# Retiming is a no-op on Lite (unlicensed) but active on Standard. Measured
+# on 25.1 Standard, seed 7, effort 4.0: ON gives setup -0.636, OFF gives
+# -1.787. It partially pipelines the 64-bit timestamp compare in fifo_reader
+# without touching the RTL, so leave it ON.
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING    ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT            ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS               "SPARSE AUTO"

@@ -93,3 +93,13 @@ set_false_path -from {*x_tamer|hold_time[*]} -to {*x_tamer|compare_time[*]}
 # Mini Expansion Port (J51)
 set_false_path -from [get_ports mini_exp*] -to *
 set_false_path -from *                     -to [get_ports mini_exp*]
+
+# IQ correction coefficients are quasi-static: written only by a processor
+# register write (up_adc_channel.v:281, AXI address 4'h5), carried into the
+# ADC clock domain by an explicit up_xfer_cntrl handshake, then re-flopped in
+# ad_iqcor.v:106. The value cannot change while samples stream, so the
+# hold check against the same edge is not a real requirement -- the fitter
+# was spending routing effort on it and still missing by 8 ps into the
+# hardened DSP datab input register, which has no delay elements to insert.
+# Setup remains constrained at one cycle.
+set_multicycle_path -hold -from [get_registers {*ad_iqcor:*|iqcor_coeff_*_r[*]}] 1

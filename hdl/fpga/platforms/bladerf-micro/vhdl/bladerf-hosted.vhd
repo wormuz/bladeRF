@@ -158,6 +158,7 @@ architecture hosted_bladerf of bladerf is
     signal adc_controls           : sample_controls_t(ad9361.ch'range)    := (others => SAMPLE_CONTROL_DISABLE);
     signal adc_streams            : sample_streams_t(adc_controls'range)  := (others => ZERO_SAMPLE);
     signal adc_streams_last_v     : std_logic_vector(adc_controls'range)  := (others => '0');
+    signal adc_enable_r           : std_logic_vector(adc_controls'range)  := (others => '0');
 
     signal   ps_sync              : std_logic_vector(0 downto 0)          := (others => '0');
 
@@ -688,10 +689,32 @@ begin
             adc_streams            => adc_streams
         );
 
+    -- The per-channel enable is a configuration term: it comes from the AD9361
+    -- control-register bundle through up_xfer_cntrl, is combined here with the
+    -- MIMO enable, and is then consumed across the hierarchy in fifo_writer's
+    -- meta FSM. Left combinational it was the design-wide worst setup path,
+    -- with 1.8 ns of the budget spent on the single interconnect hop from this
+    -- process into fifo_writer. Registering it in rx_clock keeps that hop
+    -- between two flops instead of inside one cycle's logic cone.
+    --
+    -- Only .enable is registered. adc_streams(*).data_* stay combinational:
+    -- they are the sample stream itself, and delaying them by a cycle would
+    -- shift data against the valid strobe and the timestamp.
+    adc_enable_reg_proc : process( rx_clock )
+    begin
+        if( rising_edge( rx_clock ) ) then
+            for i in adc_controls'range loop
+                adc_enable_r(i) <= (ad9361.ch(i).adc.i.enable or
+                                    ad9361.ch(i).adc.q.enable) and
+                                   mimo_rx_enables(i);
+            end loop;
+        end if;
+    end process;
+
     adc_assignment_proc : process( all )
     begin
         for i in adc_controls'range loop
-            adc_controls(i).enable   <= (ad9361.ch(i).adc.i.enable or ad9361.ch(i).adc.q.enable) and mimo_rx_enables(i);
+            adc_controls(i).enable   <= adc_enable_r(i);
             adc_controls(i).data_req <= '1';
             adc_streams(i).data_i    <= signed(ad9361.ch(i).adc.i.data);
             adc_streams(i).data_q    <= signed(ad9361.ch(i).adc.q.data);
