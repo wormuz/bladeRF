@@ -74,7 +74,13 @@ entity fifo_writer is
         link_active                :   out     std_logic := '0';
         speed_latched              :   out     std_logic := '0';
         protocol_start_violation   :   out     std_logic := '0';
-        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0')
+        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0');
+
+        -- Abort path / sticky transport-fault flags (Stage 3)
+        link_stop_toggle           :   in      std_logic := '0';
+        clear_fault_toggle         :   in      std_logic := '0';
+        fault_sticky               :   out     std_logic_vector(4 downto 0) := (others => '0');
+        abort_active                :   out     std_logic := '0'
     );
 end entity;
 
@@ -110,11 +116,30 @@ architecture simple of fifo_writer is
     signal link_toggle_prev    : std_logic := '0';
     signal enable_prev         : std_logic := '0';
 
+    -- Abort path / sticky transport-fault flags (Stage 3): a fault detected
+    -- in this clock domain stops the transfer locally (registered FSM
+    -- transition) instead of waiting for Nios to poll a status register and
+    -- issue a stop. `fault_sticky` bits are set-dominant and only clear on
+    -- reset, a new epoch, or an explicit clear-fault pulse -- never merely
+    -- because the fault condition went away, so the host can always read
+    -- what happened even after link_active has dropped.
+    constant FAULT_BIT_SPEED_MISMATCH     : natural := 0;
+    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- phase 2, declared not yet driven
+    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- phase 2, declared not yet driven
+    constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
+    constant FAULT_BIT_FIFO_ABORT         : natural := 4;
+
+    signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+    signal abort_active_i      : std_logic := '0';
+    signal stop_toggle_prev    : std_logic := '0';
+    signal clear_toggle_prev   : std_logic := '0';
+
     type meta_state_t is (
         IDLE,
         META_WRITE,
         META_DOWNCOUNT,
-        PACKET_WAIT_EOP
+        PACKET_WAIT_EOP,
+        ABORTED
     );
 
     type meta_fsm_t is record
@@ -195,7 +220,10 @@ begin
     -- violation (sticky, independent of speed_mismatch) -- it never
     -- "heals" the protocol or clears mismatch by itself.
     latch_usb_speed : process( clock, reset )
-        variable start_link_pulse : std_logic;
+        variable start_link_pulse  : std_logic;
+        variable stop_link_pulse   : std_logic;
+        variable clear_fault_pulse : std_logic;
+        variable abort_active_next : std_logic;
     begin
         if( reset = '1' ) then
             latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
@@ -206,6 +234,10 @@ begin
             epoch_counter      <= (others => '0');
             link_toggle_prev   <= '0';
             enable_prev        <= '0';
+            fault_sticky_i     <= (others => '0');
+            abort_active_i     <= '0';
+            stop_toggle_prev   <= '0';
+            clear_toggle_prev  <= '0';
         elsif( rising_edge(clock) ) then
 
             start_link_pulse := '0';
@@ -213,6 +245,18 @@ begin
                 start_link_pulse := '1';
             end if;
             link_toggle_prev <= link_start_toggle;
+
+            stop_link_pulse := '0';
+            if( link_stop_toggle /= stop_toggle_prev ) then
+                stop_link_pulse := '1';
+            end if;
+            stop_toggle_prev <= link_stop_toggle;
+
+            clear_fault_pulse := '0';
+            if( clear_fault_toggle /= clear_toggle_prev ) then
+                clear_fault_pulse := '1';
+            end if;
+            clear_toggle_prev <= clear_fault_toggle;
 
             if( start_link_pulse = '1' ) then
                 latched_usb_speed <= usb_speed;
@@ -237,6 +281,64 @@ begin
             end if;
             enable_prev <= enable;
 
+            -- Sticky transport-fault flags: set-dominant, latched by their
+            -- own event, cleared only by reset / new epoch / explicit
+            -- clear-fault pulse -- never by the fault condition healing.
+            -- A new epoch (start pulse) clears the whole vector first so a
+            -- fresh link doesn't inherit the previous epoch's faults; the
+            -- set terms below are checked in the same cycle and win, which
+            -- only matters for FAULT_BIT_PROTOCOL_ERROR (fed from a signal
+            -- that can theoretically coincide with a start pulse).
+            if( start_link_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            elsif( clear_fault_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            end if;
+
+            if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
+                fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
+            end if;
+
+            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+                fault_sticky_i(FAULT_BIT_PROTOCOL_ERROR) <= '1';
+            end if;
+
+            -- What abort_active_i becomes this cycle absent a new epoch:
+            -- computed from LEVEL conditions (stop pulse or any of the
+            -- other fault triggers), independent of fault_sticky_i itself,
+            -- so it does not depend on this same cycle's sticky writes.
+            abort_active_next := '0';
+            if( stop_link_pulse = '1'
+                or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
+                or (enable = '1' and enable_prev = '0' and link_active_i = '0')
+                or abort_active_i = '1' ) then
+                abort_active_next := '1';
+            end if;
+
+            -- FAULT_BIT_FIFO_ABORT: set on the RISING EDGE of abort_active
+            -- only, i.e. the one cycle an abort actually discards in-flight
+            -- FSM state. Re-testing a held level every cycle would
+            -- immediately re-set this bit right after a clear-fault pulse
+            -- cleared it (self-referential loop) -- the edge form is clean.
+            if( abort_active_next = '1' and abort_active_i = '0' ) then
+                fault_sticky_i(FAULT_BIT_FIFO_ABORT) <= '1';
+            end if;
+
+            -- abort_active: set on any fault trigger or a stop pulse;
+            -- cleared only by reset or a new epoch. A stop pulse drops
+            -- link_active_i but deliberately leaves the sticky faults and
+            -- epoch_counter untouched so the host can still read them
+            -- after the datapath has stopped.
+            if( start_link_pulse = '1' ) then
+                abort_active_i <= '0';
+            else
+                abort_active_i <= abort_active_next;
+            end if;
+
+            if( stop_link_pulse = '1' ) then
+                link_active_i <= '0';
+            end if;
+
         end if;
     end process;
 
@@ -245,6 +347,8 @@ begin
     speed_latched             <= speed_latched_i;
     protocol_start_violation  <= protocol_violation;
     link_epoch_counter        <= epoch_counter;
+    fault_sticky              <= fault_sticky_i;
+    abort_active              <= abort_active_i;
 
     -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )
@@ -436,6 +540,19 @@ begin
                    end if;
                 end if;
 
+            when ABORTED =>
+
+                -- Sticky halt: only a new epoch (start pulse) leaves this
+                -- state. abort_active_i clears the same cycle the start
+                -- pulse registers (latch_usb_speed process), so testing it
+                -- here is reading the same registered signal the "Abort?"
+                -- clause below reads to enter this state -- symmetric.
+                meta_future.meta_write   <= '0';
+                meta_future.meta_written <= '0';
+                if( abort_active_i = '0' ) then
+                    meta_future.state <= IDLE;
+                end if;
+
             when others =>
 
                 meta_future.state <= IDLE;
@@ -443,6 +560,18 @@ begin
         end case;
 
         -- Abort?
+        -- abort_active_i is itself a registered signal (see latch_usb_speed
+        -- process): reading it here to steer the next FSM state is the same
+        -- class of dependency as reading `enable` below, and only reaches
+        -- the FIFO interface through meta_current.state on the FOLLOWING
+        -- clock -- meta_fifo_write/meta_fifo_data stay driven solely by
+        -- meta_current.meta_write / meta_current.meta_data, unchanged.
+        if( abort_active_i = '1' ) then
+            meta_future.meta_write    <= '0';
+            meta_future.meta_written  <= '0';
+            meta_future.state         <= ABORTED;
+        end if;
+
         if( (enable = '0') or (meta_en = '0') ) then
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
@@ -790,7 +919,11 @@ begin
         end case;
 
         -- Abort?
-        if( enable = '0' ) then
+        -- abort_active_i is registered (latch_usb_speed process); reading it
+        -- here only steers fifo_future.state, which reaches fifo_write on
+        -- the FOLLOWING clock through fifo_current -- the output assignment
+        -- below stays a plain mirror of fifo_current.fifo_write, unchanged.
+        if( enable = '0' or abort_active_i = '1' ) then
             fifo_future.fifo_clear <= '1';
             fifo_future.fifo_write <= '0';
             fifo_future.state      <= CLEAR;

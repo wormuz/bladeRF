@@ -92,6 +92,11 @@ architecture sim of fifo_reader_tb is
     signal reads_after  : natural := 0;
     signal done         : boolean := false;
 
+    -- Link epoch stimulus: real firmware signals a new epoch via
+    -- link_start_toggle before raising enable, else Stage 3's sticky
+    -- protocol-error/abort path (enable with no epoch) halts the datapath.
+    signal link_start_toggle : std_logic := '0';
+
     -- Bits 95 downto 32 of the meta header carry the timestamp.
     function hdr(ts : unsigned(63 downto 0)) return std_logic_vector is
         variable v : std_logic_vector(127 downto 0) := (others => '0');
@@ -174,14 +179,22 @@ begin
             out_samples           => out_smp,
             underflow_led         => uf_led,
             underflow_count       => uf_count,
-            underflow_duration    => uf_dur
+            underflow_duration    => uf_dur,
+            link_start_toggle     => link_start_toggle
         );
 
     stim : process
     begin
         wait for 50 ns;
         reset  <= '0';
-        wait for 20 ns;
+        -- Declare the link epoch inside the existing 20 ns of settling rather
+        -- than after it. Adding time here instead would shift every later
+        -- count by one read against the fixed 60 us window, and this bench's
+        -- read count is how the sentinel defect was caught -- it has to stay
+        -- comparable to the recorded baseline.
+        wait for 10 ns;
+        link_start_toggle <= not link_start_toggle;
+        wait for 10 ns;
         enable <= '1';
 
         wait for 60 us;
