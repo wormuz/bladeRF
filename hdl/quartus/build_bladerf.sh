@@ -161,7 +161,7 @@ fi
 
 # Set default options
 clear_work_dir=1
-nios_rev="Tiny"
+nios_rev="Fast"
 flow="full"
 # Seed 7, not upstream's 1. The original reason (seed 1 left a -0.040 ns hold
 # violation under Quartus 23.1.1) no longer describes the design: the timing

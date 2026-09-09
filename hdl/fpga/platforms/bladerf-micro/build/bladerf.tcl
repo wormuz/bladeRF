@@ -69,6 +69,12 @@ set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO"        
 set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS  "HALF SIGNAL SWING" -rise
 set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS  "HALF SIGNAL SWING" -fall
 
+# IP cores come from a licensed Standard installation, so build them for real
+# rather than as tethered OpenCore Plus evaluations. Evaluation mode produces
+# an image that only runs while the host tool keeps the device tethered and
+# stops after a timeout, which is useless for a standalone instrument.
+set_global_assignment -name OCP_HW_EVAL                             OFF
+
 # Synthesis
 set_global_assignment -name OPTIMIZATION_TECHNIQUE                  SPEED
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC          ON
