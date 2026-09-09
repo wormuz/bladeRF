@@ -41,6 +41,14 @@ entity tx is
         tx_underflow_led     : out   std_logic := '1';
         tx_timestamp         : in    unsigned(63 downto 0);
 
+        -- Link status (host register RF_LINK_STATUS)
+        link_start_toggle          : in    std_logic := '0';
+        usb_speed_mismatch         : out   std_logic := '0';
+        link_active                : out   std_logic := '0';
+        speed_latched               : out   std_logic := '0';
+        protocol_start_violation   : out   std_logic := '0';
+        link_epoch_counter         : out   unsigned(7 downto 0) := (others => '0');
+
         -- Triggering
         trigger_arm          : in    std_logic;
         trigger_fire         : in    std_logic;
@@ -217,6 +225,13 @@ begin
             meta_en             =>  meta_en,
             packet_en           =>  packet_en,
             timestamp           =>  tx_timestamp,
+
+            link_start_toggle          =>  link_start_toggle,
+            usb_speed_mismatch         =>  usb_speed_mismatch,
+            link_active                =>  link_active,
+            speed_latched              =>  speed_latched,
+            protocol_start_violation   =>  protocol_start_violation,
+            link_epoch_counter         =>  link_epoch_counter,
 
             eight_bit_mode_en   =>  eight_bit_mode_en,
             highly_packed_mode_en =>  highly_packed_mode_en,

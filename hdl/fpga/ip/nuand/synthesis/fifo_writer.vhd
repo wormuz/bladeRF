@@ -66,7 +66,15 @@ entity fifo_writer is
 
         overflow_led        :   buffer  std_logic;
         overflow_count      :   buffer  unsigned(63 downto 0);
-        overflow_duration   :   in      unsigned(15 downto 0)
+        overflow_duration   :   in      unsigned(15 downto 0);
+
+        -- Speed Latch & Monitor / link epoch (Stage 2)
+        link_start_toggle          :   in      std_logic := '0';
+        usb_speed_mismatch         :   out     std_logic := '0';
+        link_active                :   out     std_logic := '0';
+        speed_latched              :   out     std_logic := '0';
+        protocol_start_violation   :   out     std_logic := '0';
+        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0')
     );
 end entity;
 
@@ -79,6 +87,28 @@ architecture simple of fifo_writer is
 
     signal fifo_enough         : boolean   := false;
     signal overflow_detected   : std_logic := '0';
+
+    -- Speed Latch & Monitor: FX3 samples USB speed once per RF-link epoch
+    -- and never re-derives pcktSize/burstLen/dmaCfg.size afterward. The
+    -- FPGA must mirror that behavior -- freeze usb_speed on each new link
+    -- epoch (host-driven toggle, not a level) and flag (sticky) if the
+    -- link speed changes underneath us within the same epoch, instead of
+    -- silently re-sizing the DMA buffer mid-stream.
+    --
+    -- `enable` alone is NOT a reliable epoch boundary: it is a level that
+    -- means "TX/RX datapath enabled" and can stay '1' across an FX3
+    -- restart (USB reconnect, repeated stream-start) that changes speed
+    -- without ever dropping enable. The host must signal a new epoch
+    -- explicitly via link_start_toggle; enable rising without a prior
+    -- epoch is a protocol violation, tracked separately from mismatch.
+    signal latched_usb_speed   : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
+    signal speed_mismatch      : std_logic := '0';
+    signal link_active_i       : std_logic := '0';
+    signal speed_latched_i     : std_logic := '0';
+    signal protocol_violation  : std_logic := '0';
+    signal epoch_counter       : unsigned(7 downto 0) := (others => '0');
+    signal link_toggle_prev    : std_logic := '0';
+    signal enable_prev         : std_logic := '0';
 
     type meta_state_t is (
         IDLE,
@@ -156,13 +186,73 @@ begin
         report "fifo_data port width too narrow to support " & integer'image(NUM_STREAMS) & " MIMO streams."
         severity failure;
 
-    -- Determine the DMA buffer size based on USB speed
+    -- Speed Latch & Monitor: fix the USB speed used for buffer-size math
+    -- on each new link epoch (toggle on link_start_toggle, not a level),
+    -- hold it for the duration of the epoch, and sticky-flag any observed
+    -- change so it can be reported via a status register without
+    -- perturbing dma_buf_size mid-epoch. `enable` is checked separately
+    -- as a sanity signal: rising without a prior epoch is a protocol
+    -- violation (sticky, independent of speed_mismatch) -- it never
+    -- "heals" the protocol or clears mismatch by itself.
+    latch_usb_speed : process( clock, reset )
+        variable start_link_pulse : std_logic;
+    begin
+        if( reset = '1' ) then
+            latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
+            speed_mismatch     <= '0';
+            link_active_i      <= '0';
+            speed_latched_i    <= '0';
+            protocol_violation <= '0';
+            epoch_counter      <= (others => '0');
+            link_toggle_prev   <= '0';
+            enable_prev        <= '0';
+        elsif( rising_edge(clock) ) then
+
+            start_link_pulse := '0';
+            if( link_start_toggle /= link_toggle_prev ) then
+                start_link_pulse := '1';
+            end if;
+            link_toggle_prev <= link_start_toggle;
+
+            if( start_link_pulse = '1' ) then
+                latched_usb_speed <= usb_speed;
+                speed_mismatch    <= '0';
+                link_active_i     <= '1';
+                -- ⛔ Це ЗАФІКСОВАНА ШВИДКІСТЬ (0=SS, 1=HS), а не «епоха була»:
+                -- хост перевіряє інваріант speed_latched == usb_speed_live, і
+                -- прапорець «щось зафіксовано» зробив би його завжди хибним.
+                -- Факт наявності епохи несе link_active.
+                speed_latched_i   <= usb_speed;
+                epoch_counter     <= epoch_counter + 1;
+            elsif( link_active_i = '1' ) then
+                if( usb_speed /= latched_usb_speed ) then
+                    speed_mismatch <= '1';
+                end if;
+            end if;
+
+            -- enable rising without an established link epoch: sticky
+            -- protocol violation, independent of speed_mismatch.
+            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+                protocol_violation <= '1';
+            end if;
+            enable_prev <= enable;
+
+        end if;
+    end process;
+
+    usb_speed_mismatch       <= speed_mismatch;
+    link_active               <= link_active_i;
+    speed_latched             <= speed_latched_i;
+    protocol_start_violation  <= protocol_violation;
+    link_epoch_counter        <= epoch_counter;
+
+    -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )
     begin
         if( reset = '1' ) then
             dma_buf_size <= DMA_BUF_SIZE_SS;
         elsif( rising_edge(clock) ) then
-            if( usb_speed = '0' ) then
+            if( latched_usb_speed = '0' ) then
                 dma_buf_size <= DMA_BUF_SIZE_SS;
             else
                 dma_buf_size <= DMA_BUF_SIZE_HS;

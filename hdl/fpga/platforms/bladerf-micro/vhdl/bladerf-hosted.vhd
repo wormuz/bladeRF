@@ -57,6 +57,24 @@ architecture hosted_bladerf of bladerf is
     signal nios_gpio              : nios_gpio_t;
     signal nios_gpo_slv           : std_logic_vector(31 downto 0);
 
+    -- RF link status (RF_LINK_STATUS host register)
+    signal link_start_toggle_tx   : std_logic;
+    signal link_start_toggle_rx   : std_logic;
+
+    signal tx_usb_speed_mismatch       : std_logic;
+    signal tx_link_active              : std_logic;
+    signal tx_speed_latched            : std_logic;
+    signal tx_protocol_start_violation : std_logic;
+    signal tx_link_epoch_counter       : unsigned(7 downto 0);
+
+    signal rx_usb_speed_mismatch       : std_logic;
+    signal rx_link_active              : std_logic;
+    signal rx_speed_latched            : std_logic;
+    signal rx_protocol_start_violation : std_logic;
+    signal rx_link_epoch_counter       : unsigned(7 downto 0);
+
+    signal rf_link_status         : std_logic_vector(31 downto 0);
+
     signal i2c_scl_in             : std_logic;
     signal i2c_scl_out            : std_logic;
     signal i2c_scl_oen            : std_logic;
@@ -529,6 +547,21 @@ begin
     -- TPS2115A status
     nios_gpio.i.pwr_status <= pwr_status;
 
+    -- RF_LINK_STATUS composition. tx_*/rx_* sources are on tx_clock/rx_clock;
+    -- this word is a straight OR/concat, NOT yet synchronized into the Nios
+    -- clock domain -- see report to team-lead before wiring a pkt_8x32 case
+    -- that reads this signal.
+    rf_link_status(0)            <= tx_link_active;
+    rf_link_status(1)            <= tx_speed_latched;
+    rf_link_status(2)            <= nios_gpio.o.usb_speed;
+    rf_link_status(3)            <= tx_usb_speed_mismatch or rx_usb_speed_mismatch;
+    rf_link_status(4)            <= rx_usb_speed_mismatch;
+    rf_link_status(5)            <= tx_usb_speed_mismatch;
+    rf_link_status(6)            <= tx_protocol_start_violation or rx_protocol_start_violation;
+    rf_link_status(7)            <= '0';
+    rf_link_status(15 downto 8)  <= std_logic_vector(tx_link_epoch_counter);
+    rf_link_status(31 downto 16) <= (others => '0');
+
     -- SI53304 controls / clock output enables
     si_clock_sel <= nios_gpio.o.si_clock_sel;
     c5_clock2_oe <= '1';
@@ -561,6 +594,14 @@ begin
             usb_speed            => usb_speed_tx,
             tx_underflow_led     => tx_underflow_led,
             tx_timestamp         => tx_timestamp,
+
+            -- Link status
+            link_start_toggle          => link_start_toggle_tx,
+            usb_speed_mismatch         => tx_usb_speed_mismatch,
+            link_active                => tx_link_active,
+            speed_latched              => tx_speed_latched,
+            protocol_start_violation   => tx_protocol_start_violation,
+            link_epoch_counter         => tx_link_epoch_counter,
 
             -- Triggering
             trigger_arm          => tx_trigger_ctl.arm,
@@ -638,6 +679,14 @@ begin
             rx_mux_sel             => rx_mux_sel,
             rx_overflow_led        => rx_overflow_led,
             rx_timestamp           => rx_timestamp,
+
+            -- Link status
+            link_start_toggle          => link_start_toggle_rx,
+            usb_speed_mismatch         => rx_usb_speed_mismatch,
+            link_active                => rx_link_active,
+            speed_latched              => rx_speed_latched,
+            protocol_start_violation   => rx_protocol_start_violation,
+            link_epoch_counter         => rx_link_epoch_counter,
 
             -- Triggering
             trigger_arm            => rx_trigger_ctl.arm,
@@ -819,6 +868,28 @@ begin
             sync                =>  usb_speed_tx
         );
 
+
+    U_sync_link_start_toggle_rx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  rx_clock,
+            async               =>  nios_gpio.o.link_start_toggle,
+            sync                =>  link_start_toggle_rx
+        );
+
+    U_sync_link_start_toggle_tx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  tx_clock,
+            async               =>  nios_gpio.o.link_start_toggle,
+            sync                =>  link_start_toggle_tx
+        );
 
     U_sync_meta_en_pclk : entity work.synchronizer
         generic map (

@@ -317,6 +317,7 @@ package bladerf_p is
         adf_chip_enable : std_logic;
         rx_mux_sel      : std_logic_vector(2 downto 0);
         usb_speed       : std_logic;
+        link_start_toggle : std_logic;
     end record;
 
     type nios_gpi_t is record
@@ -610,6 +611,7 @@ package body bladerf_p is
         rv.adf_chip_enable := x(11);
         rv.rx_mux_sel      := x(10 downto 8);
         rv.usb_speed       := x(7);
+        rv.link_start_toggle := x(6);
         --rv.pwr_status    := x(0);            -- Reserved as input
         return rv;
     end function;

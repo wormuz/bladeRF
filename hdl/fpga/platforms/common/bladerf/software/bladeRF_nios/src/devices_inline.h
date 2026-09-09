@@ -77,6 +77,31 @@ static inline void rffe_csr_write(uint32_t value)
     #endif
 }
 
+/* RF link status: which USB speed the GPIF buffer geometry was latched at,
+ * and whether the host has since changed it behind our back.
+ *
+ * FX3 samples the USB speed once in NuandRFLinkStart and never rebuilds
+ * pcktSize/burstLen/dmaCfg.size, so the FPGA latches it on a link epoch
+ * rather than following the live signal. A mismatch means the two sides
+ * disagree on DMA packet geometry, which corrupts the stream silently --
+ * the control plane keeps answering. See OC bladerf/hdl-defect-hunt.
+ *
+ * Bit layout is composed in bladerf-hosted.vhd; bit 3 is the sticky
+ * mismatch the host must check before trusting a stream.
+ *
+ * Returns 0 until the Qsys PIO exists, same as rffe_csr_read above: the
+ * #ifdef keeps the firmware buildable while the component is still
+ * pending, and 0 reads as "no link, no mismatch" rather than a false
+ * alarm. */
+static inline uint32_t rf_link_status_read(void)
+{
+    #ifdef RF_LINK_STATUS_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RF_LINK_STATUS_BASE);
+    #else
+    return 0;
+    #endif
+}
+
 static inline uint32_t expansion_port_read(void)
 {
     return IORD_ALTERA_AVALON_PIO_DATA(XB_GPIO_BASE);

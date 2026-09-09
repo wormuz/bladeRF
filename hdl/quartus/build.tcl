@@ -101,6 +101,30 @@ if { $opts(seed) != "" } {
     set_global_assignment -name SEED "$opts(seed)"
 }
 
+# Worst-case hold slack on the AD9361 RX LVDS deserializer's internal
+# PLL_OUTPUT_COUNTER|divclk was -0.040 ns (Fast 1100mV 0C corner). "All
+# Paths" is Quartus 23.1's default already (confirmed in hosted.fit.rpt,
+# both Setting and Effective columns) and changing nothing produced an
+# identical .rbf checksum, so it buys nothing here.
+#
+# OPTIMIZE_HOLD_TIMING is deliberately NOT set here: "All Paths" is already
+# the Quartus default (hostedxA4.fit.rpt shows it as both Setting and
+# Effective), so an explicit assignment changes nothing - verified by a
+# bit-identical .rbf. A one-off diagnostic run with it OFF was done
+# 2026-09-08 and is written up in OC bladerf/gateware-build.md; do not leave
+# that value in the tree, it makes hold slack ~25x worse.
+
+# Owner-directed 2026-09-08: seed sweep on the AD9361 RX LVDS
+# pll_sclk~PLL_OUTPUT_COUNTER|divclk domain shows the fitter trading setup
+# and hold violations against each other on the same path across seeds
+# (report_timing confirmed the endpoints are ordinary programmable LE
+# registers, not hard-IP internals, so placement can move it). Standard
+# Fit with 4x the normal placement iterations targets the root cause -
+# insufficient data delay margin against clock skew - rather than papering
+# over the report.
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+
 # Save all the options
 export_assignments
 project_close

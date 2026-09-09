@@ -62,6 +62,15 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             return false;
 #endif  // BOARD_BLADERF_MICRO
 
+#ifdef BOARD_BLADERF_MICRO
+        /* Which USB speed the GPIF buffer geometry was latched at, plus a
+         * sticky bit for "the host changed it since". Reads 0 until the
+         * Qsys PIO exists -- see rf_link_status_read(). */
+        case NIOS_PKT_8x32_TARGET_RF_LINK_STATUS:
+            *data = rf_link_status_read();
+            break;
+#endif  // BOARD_BLADERF_MICRO
+
         default:
             DBG("Invalid id: 0x%x\n", id);
             *data = 0x00;

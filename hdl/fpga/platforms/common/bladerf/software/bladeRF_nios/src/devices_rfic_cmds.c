@@ -101,9 +101,14 @@ static bool _rfic_deinitialize(struct rfic_state *state)
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
 
-    /* Deinitialize AD9361 */
+    /* Deinitialize AD9361
+     *
+     * ad9361_deinit() was a local addition to the driver revision this used
+     * to build against; upstream provides ad9361_remove() instead, which
+     * frees more (clocks, SPI and all GPIO descriptors on top of the data).
+     * Mirrors the host side fix in rfic_host.c. */
     if (NULL != state->phy) {
-        CHECK_BOOL(ad9361_deinit(state->phy));
+        CHECK_BOOL(ad9361_remove(state->phy));
         state->phy = NULL;
     }
 
@@ -146,12 +151,19 @@ static bool _rfic_initialize(struct rfic_state *state)
         usleep(1000);
         _reset_rfic(false);
 
-        CHECK_BOOL(ad9361_init(&state->phy, init_param, NULL));
+        /* ad9361_init() used to take the device handle as a third argument
+         * and stash it for the SPI and GPIO accessors. On this platform
+         * there is no such handle: the Nios SPI/GPIO adapters
+         * (bladerf2_headless_spi.c/bladerf2_headless_gpio.c) reach the RFIC
+         * through registers directly, not through desc->extra. Mirrors the
+         * host side fix in rfic_host.c, minus the .extra wiring host needs
+         * for its USB backend. */
+        CHECK_BOOL(ad9361_init(&state->phy, init_param));
 
         if (NULL == state->phy || NULL == state->phy->pdata) {
             /* Oh no */
             DBG("%s: ad9361_init failed silently\n", __FUNCTION__);
-            ad9361_deinit(state->phy);
+            ad9361_remove(state->phy);
             state->phy = NULL;
             return false;
         }
