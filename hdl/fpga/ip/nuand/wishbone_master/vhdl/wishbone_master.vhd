@@ -227,7 +227,13 @@ begin
         lpm_width       =>  (1+ADDR_BITS+DATA_BITS),
         lpm_widthu      =>  4,
         lpm_numwords    =>  16,
-        lpm_showahead   =>  "ON"
+        lpm_showahead   =>  "ON",
+        -- Stated rather than defaulted. Left unset Quartus picks 2 and warns
+        -- (272007/287001) that it had to choose for you; these cross the Nios
+        -- system clock to the Wishbone clock, so say 3 and mean it. The five
+        -- datapath FIFOs in common_dcfifo.vhd already use 5.
+        rdsync_delaypipe =>  3,
+        wrsync_delaypipe =>  3
       )
       port map (
         aclr            => reset,
@@ -262,7 +268,13 @@ begin
         lpm_width       =>  32,
         lpm_widthu      =>  4,
         lpm_numwords    =>  16,
-        lpm_showahead   =>  "ON"
+        lpm_showahead   =>  "ON",
+        -- Stated rather than defaulted. Left unset Quartus picks 2 and warns
+        -- (272007/287001) that it had to choose for you; these cross the Nios
+        -- system clock to the Wishbone clock, so say 3 and mean it. The five
+        -- datapath FIFOs in common_dcfifo.vhd already use 5.
+        rdsync_delaypipe =>  3,
+        wrsync_delaypipe =>  3
       )
       port map (
         aclr            => reset,

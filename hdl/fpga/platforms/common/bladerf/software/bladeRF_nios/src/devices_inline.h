@@ -89,10 +89,11 @@ static inline void rffe_csr_write(uint32_t value)
  * Bit layout is composed in bladerf-hosted.vhd; bit 3 is the sticky
  * mismatch the host must check before trusting a stream.
  *
- * Returns 0 until the Qsys PIO exists, same as rffe_csr_read above: the
- * #ifdef keeps the firmware buildable while the component is still
- * pending, and 0 reads as "no link, no mismatch" rather than a false
- * alarm. */
+ * The PIO exists as of the rf_link_status instance in nios_system.tcl, so
+ * RF_LINK_STATUS_BASE comes from the generated system header and this reads
+ * the real word. The #ifdef stays for platform revisions that do not
+ * instantiate it; there 0 reads as "no link, no mismatch" rather than a
+ * false alarm. */
 static inline uint32_t rf_link_status_read(void)
 {
     #ifdef RF_LINK_STATUS_BASE

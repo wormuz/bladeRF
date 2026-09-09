@@ -156,15 +156,53 @@ if { [file exists $dcfifo_sdc] } {
     # Drop the trailing template token, keep everything above it.
     set body [string map {"\nREPLACE" "\n"} $body]
     eval $body
-    # Only apply if the entity is actually in this revision. Altera's own
-    # constraint files all guard on collection size before constraining, and
-    # skipping that guard is how a project ends up with exceptions that are
-    # recorded but match nothing -- see the Invalid entries in
-    # report_exceptions.
-    if { [llength [get_entity_instances -nowarn common_dcfifo]] > 0 } {
-        apply_sdc_pre_mw_dcfifo "common_dcfifo"
+    # apply_sdc_pre_mw_dcfifo cannot be used directly: it hardcodes
+    #     <hier>|dcfifo_mixed_widths_component|auto_generated|...
+    # which is the name Quartus gives an IP variation it generated itself.
+    # common_dcfifo.vhd instantiates the megafunction by hand as
+    # U_dcfifo_mixed_widths, so every collection came back empty and all 160
+    # constraints were dropped with "Ignored set_max_skew ... contains zero
+    # elements". They were in the file, they were reported as applied, and
+    # they did nothing. Found only by counting warning ids in the build log.
+    #
+    # So call the vendor's own arithmetic with our hierarchy instead of its
+    # assumed one. The delay maths stays theirs; only the paths are ours.
+    # Probed against a fitted netlist rather than assumed:
+    #     *dcfifo_mixed_widths_component|auto_generated|*rdptr_g*      0 keepers
+    #     *|auto_generated|*rdptr_g*                                 206 keepers
+    #     *delayed_wrptr_g*                                           59 keepers
+    # The component name the vendor procedure expects does not exist here --
+    # it is what Quartus calls an IP variation it generated itself, and
+    # common_dcfifo.vhd instantiates the megafunction directly. Matching on
+    # auto_generated instead reaches the same registers.
+    #
+    # Second correction, same class of mistake one level down. The destination
+    # patterns matched a non-empty collection, so the guard below passed, but
+    # no path was ever found between the two: "No path is found satisfying
+    # assignment set_max_skew ...". The separator is a colon, not a pipe. Real
+    # names from the fitter report of hostedxA4-2026-09-09_23.24.25:
+    #     auto_generated|alt_synch_pipe_9pl:ws_dgrp|dffpipe_ve9:dffpipe17
+    #     auto_generated|alt_synch_pipe_8pl:rs_dgwp|dffpipe_pe9:dffpipe13
+    # so *ws_dgrp needs no leading pipe, and dffpipe* must not be followed by
+    # a pipe either. A non-empty collection is not proof that a constraint
+    # binds -- check for 332182 as well as for "contains zero elements".
+    set rd_from [get_keepers -nowarn {*|auto_generated|*rdptr_g*}]
+    set rd_to   [get_keepers -nowarn {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}]
+    set wr_from [get_keepers -nowarn {*|auto_generated|delayed_wrptr_g*}]
+    set wr_to   [get_keepers -nowarn {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}]
+
+    if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
+        apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
+        apply_sdc_mw_dcfifo_mstable_delay $rd_to $rd_to
     } else {
-        post_message -type warning "no common_dcfifo instances in this revision"
+        post_message -type warning "dcfifo read-pointer crossing not matched"
+    }
+
+    if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
+        apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
+        apply_sdc_mw_dcfifo_mstable_delay $wr_to $wr_to
+    } else {
+        post_message -type warning "dcfifo write-pointer crossing not matched"
     }
 } else {
     post_message -type warning "dcfifo constraints not found at $dcfifo_sdc"

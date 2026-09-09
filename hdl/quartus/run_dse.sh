@@ -30,10 +30,10 @@ fi
 
 cd "$WORK"
 
-# --lower-priority keeps the machine usable; this is the owner's laptop.
-exec "$HOME/soft/q25" quartus_dse bladerf \
+# nice keeps the machine usable; this is the owner's laptop. quartus_dse in
+# 25.1 no longer accepts --lower-priority, which 23.1 had.
+exec nice -n 15 "$HOME/soft/q25" quartus_dse bladerf \
     --revision hosted \
     --explore "$EXPLORE" \
     --num-seeds "$SEEDS" \
-    --lower-priority \
     --report-file "dse_${EXPLORE}.rpt"

@@ -114,6 +114,31 @@
 #define NIOS_PKT_8x32_TARGET_USR1     0x80
 #define NIOS_PKT_8x32_TARGET_USR128   0xff
 
+/* RF link status word (read-only): assembled from tx.vhd/rx.vhd fifo_reader/
+ * fifo_writer status ports in bladerf-hosted.vhd (signal rf_link_status),
+ * carried to the Nios by the rf_link_status input PIO in nios_system.tcl.
+ *
+ *   bit  0      TX link active
+ *   bit  1      TX usb speed latched
+ *   bit  2      usb speed as the host last set it
+ *   bit  3      speed mismatch, either direction
+ *   bit  4      speed mismatch, RX
+ *   bit  5      speed mismatch, TX
+ *   bit  6      protocol start violation, either direction
+ *   bit  7      protocol start violation, RX
+ *   bits 15:8   TX link epoch counter
+ *   bit  16     RX link active
+ *   bit  17     RX usb speed latched
+ *   bit  18     protocol start violation, TX
+ *   bits 23:19  reserved, read as zero
+ *   bits 31:24  RX link epoch counter
+ *
+ * A mismatch means FX3 latched one USB speed for the epoch and the link is
+ * now running at another, so the DMA buffer geometry no longer matches the
+ * transfers. A start violation means the datapath was enabled without the
+ * host first signalling a new epoch. Both are sticky within an epoch. */
+#define NIOS_PKT_8x32_TARGET_RF_LINK_STATUS  0x81
+
 /* Flag bits */
 #define NIOS_PKT_8x32_FLAG_WRITE      (1 << 0)
 #define NIOS_PKT_8x32_FLAG_SUCCESS    (1 << 1)

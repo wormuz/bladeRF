@@ -107,7 +107,6 @@ architecture hosted_bladerf of bladerf is
     signal meta_en_tx             : std_logic;
     signal meta_en_rx             : std_logic;
 
-    signal eightbit_en_pclk       : std_logic;
     signal eightbit_en_tx         : std_logic;
     signal eightbit_en_rx         : std_logic;
 
@@ -181,15 +180,18 @@ architecture hosted_bladerf of bladerf is
     signal   ps_sync              : std_logic_vector(0 downto 0)          := (others => '0');
 
 
-    signal tx_packet_control      : packet_control_t ;
     signal rx_packet_control      : packet_control_t := PACKET_CONTROL_DEFAULT ;
 
     signal rx_packet_ready        : std_logic;
 
     signal tx_packet_ready        : std_logic;
-    signal tx_packet_empty        : std_logic;
 
-
+    -- Wishbone master conduit. Nuand exports this as an extension point: the
+    -- bridge is mapped into the Nios address space at 0x10000000 on IRQ 10 and
+    -- the conduit is brought out of the Qsys system, so an out-of-tree design
+    -- can attach a Wishbone target to it. No in-tree revision does, and this
+    -- image does not, but the interface is part of the FPGA's ABI and is not
+    -- ours to delete -- see the inert termination below.
     signal wbm_wb_clk_i           : std_logic;
     signal wbm_wb_rst_i           : std_logic;
     signal wbm_wb_adr_o           : std_logic_vector(31 downto 0);
@@ -200,6 +202,7 @@ architecture hosted_bladerf of bladerf is
     signal wbm_wb_stb_o           : std_logic;
     signal wbm_wb_ack_i           : std_logic;
     signal wbm_wb_cyc_o           : std_logic;
+
 begin
 
     U_rx_pkt_gen : entity work.rx_packet_generator
@@ -446,6 +449,7 @@ begin
             ad9361_dac_q1_valid             => ad9361.ch(1).dac.q.valid,  -- out sl
             ad9361_dac_q1_data              => ad9361.ch(1).dac.q.data,   -- in  slv(15:0)
             ad9361_dac_underflow_unf        => ad9361.dac_underflow,      -- in  sl
+            rf_link_status_export           => rf_link_status,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
@@ -558,11 +562,43 @@ begin
     rf_link_status(4)            <= rx_usb_speed_mismatch;
     rf_link_status(5)            <= tx_usb_speed_mismatch;
     rf_link_status(6)            <= tx_protocol_start_violation or rx_protocol_start_violation;
-    rf_link_status(7)            <= '0';
+    rf_link_status(7)            <= rx_protocol_start_violation;
     rf_link_status(15 downto 8)  <= std_logic_vector(tx_link_epoch_counter);
-    rf_link_status(31 downto 16) <= (others => '0');
+    -- The RX side reports the same three things as the TX side. It was
+    -- collecting them and dropping them on the floor: rx_link_active,
+    -- rx_speed_latched and rx_link_epoch_counter were assigned and never
+    -- read, which is what Quartus was reporting as warning 10036. Only the
+    -- RX mismatch bit had made it into the word.
+    rf_link_status(16)           <= rx_link_active;
+    rf_link_status(17)           <= rx_speed_latched;
+    rf_link_status(18)           <= tx_protocol_start_violation;
+    rf_link_status(23 downto 19) <= (others => '0');
+    rf_link_status(31 downto 24) <= std_logic_vector(rx_link_epoch_counter);
 
     -- SI53304 controls / clock output enables
+    -- Inert termination for the Wishbone extension conduit.
+    --
+    -- This image attaches no Wishbone target, but the bridge stays mapped at
+    -- 0x10000000 on IRQ 10, so the Nios can still address it. It must not be
+    -- left unacknowledged: wishbone_master.vhd leaves WAIT_FOR_REQ only on
+    -- wb_ack_i = '1' (line 209), so a permanently low ack makes any access to
+    -- that region wait forever and stalls the Avalon data master with it. That
+    -- is exactly what the previous "wbm_wb_ack_i <= '0'" here would have done.
+    --
+    -- So acknowledge immediately instead: writes are discarded, reads return
+    -- zero, and a stray access completes rather than hanging the CPU. The
+    -- bridge exposes no wb_err_i (ports at lines 59-61 are stb/ack/cyc only),
+    -- so a bus error is not available as a cleaner answer. wb_stb_o is tied
+    -- high inside the bridge and wb_cyc_o follows its request FIFO, so the
+    -- request predicate is cyc and stb.
+    --
+    -- This is compatibility, not support: an out-of-tree Wishbone peripheral
+    -- still will not work against this image, it just fails predictably.
+    wbm_wb_clk_i <= sys_clock;
+    wbm_wb_rst_i <= sys_reset;
+    wbm_wb_ack_i <= wbm_wb_cyc_o and wbm_wb_stb_o;
+    wbm_wb_dat_i <= (others => '0');
+
     si_clock_sel <= nios_gpio.o.si_clock_sel;
     c5_clock2_oe <= '1';
     exp_clock_oe <= exp_present and exp_clock_req;
@@ -613,10 +649,13 @@ begin
             eight_bit_mode_en    => eightbit_en_tx,
             highly_packed_mode_en => highly_packed_en_txrx,
 
-            -- Packet FIFO
+            -- Packet FIFO. The two status outputs are left open: TX packet
+            -- mode runs without flow control here -- packet_ready is tied
+            -- high above -- so nothing consumes them, and wiring them to
+            -- signals only produced "assigned but never read" warnings.
             packet_en            => packet_en_tx,
-            packet_empty         => tx_packet_empty,
-            packet_control       => tx_packet_control,
+            packet_empty         => open,
+            packet_control       => open,
             packet_ready         => tx_packet_ready,
 
             -- Samples from host via FX3
@@ -924,16 +963,9 @@ begin
             sync                =>  meta_en_tx
         );
 
-    U_sync_eightbit_en_pclk : entity work.synchronizer
-        generic map (
-            RESET_LEVEL         =>  '0'
-        )
-        port map (
-            reset               =>  '0',
-            clock               =>  fx3_pclk_pll,
-            async               =>  nios_gpio.o.eightbit_en,
-            sync                =>  eightbit_en_pclk
-        );
+    -- No eightbit_en synchroniser into the FX3 domain: fx3_gpif transfers and
+    -- counts words, and gpif_buf_size depends only on USB speed, so the FIFOs
+    -- hand it ordinary 32-bit words whatever the sample format.
 
     U_sync_eightbit_en_rx : entity work.synchronizer
         generic map (

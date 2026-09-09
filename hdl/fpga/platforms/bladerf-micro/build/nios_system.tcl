@@ -352,6 +352,26 @@ set_instance_parameter_value vctcxo_tamer_0 {writable} {1}
 set_instance_parameter_value vctcxo_tamer_0 {ecc_enabled} {0}
 set_instance_parameter_value vctcxo_tamer_0 {resetrequest_enabled} {1}
 
+# RF link status. Input only: the fabric assembles the word (usb speed latch,
+# epoch counter, protocol violation, mismatch flags) and the host reads it
+# through NIOS_PKT_8x32_TARGET_RF_LINK_STATUS. Without this PIO the whole
+# mechanism was dead weight -- rf_link_status was assigned in
+# bladerf-hosted.vhd and read in pkt_8x32.c, with nothing in between, so
+# Quartus reported "assigned a value but never read" and the host would have
+# read zero forever.
+add_instance rf_link_status altera_avalon_pio
+set_instance_parameter_value rf_link_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rf_link_status {bitModifyingOutReg} {0}
+set_instance_parameter_value rf_link_status {captureEdge} {0}
+set_instance_parameter_value rf_link_status {direction} {Input}
+set_instance_parameter_value rf_link_status {edgeType} {RISING}
+set_instance_parameter_value rf_link_status {generateIRQ} {0}
+set_instance_parameter_value rf_link_status {irqType} {LEVEL}
+set_instance_parameter_value rf_link_status {resetValue} {0.0}
+set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
+set_instance_parameter_value rf_link_status {width} {32}
+
 add_instance xb_gpio altera_avalon_pio
 set_instance_parameter_value xb_gpio {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value xb_gpio {bitModifyingOutReg} {0}
@@ -441,6 +461,7 @@ set_interface_property tx_tamer EXPORT_OF tx_tamer.conduit_end
 add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
+set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
 add_interface xb_gpio_dir conduit end
 set_interface_property xb_gpio_dir EXPORT_OF xb_gpio_dir.external_connection
@@ -538,6 +559,10 @@ set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 baseAddress {0x10000000}
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 defaultConnection {0}
 
+add_connection nios2.data_master rf_link_status.s1
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 defaultConnection {0}
 add_connection nios2.data_master xb_gpio.s1
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 baseAddress {0x90b0}
@@ -625,6 +650,7 @@ add_connection system_clock.clk tx_trigger_ctl.clk
 
 add_connection system_clock.clk vctcxo_tamer_0.clk1
 
+add_connection system_clock.clk rf_link_status.clk
 add_connection system_clock.clk xb_gpio.clk
 
 add_connection system_clock.clk xb_gpio_dir.clk
@@ -663,6 +689,7 @@ add_connection system_clock.clk_reset tx_trigger_ctl.reset
 
 add_connection system_clock.clk_reset vctcxo_tamer_0.reset1
 
+add_connection system_clock.clk_reset rf_link_status.reset
 add_connection system_clock.clk_reset xb_gpio.reset
 
 add_connection system_clock.clk_reset xb_gpio_dir.reset
