@@ -372,6 +372,47 @@ set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
 set_instance_parameter_value rf_link_status {width} {32}
 
+# RF link config. Output only: the host declares a link generation and the
+# fabric obeys it. This is the write half of the mechanism above.
+#
+# It exists because tx_enable/rx_enable are long-lived LEVELS, not start
+# strobes. If FX3 restarts at a different USB speed while enable stays high,
+# the fabric never sees an edge and keeps the previous speed latch, while FX3
+# rebuilds its DMA geometry from the new speed -- the two sides of one GPIF
+# then disagree and nothing in the control path reports it. FX3 samples the
+# speed exactly once, in NuandRFLinkStart (fx3_firmware/src/rf.c:234), and we
+# cannot rebuild that firmware, so the fabric has to be told explicitly when a
+# new link generation begins.
+#
+# Bits 1..3 are TOGGLES, not levels: every transition is one request. A level
+# would be lost across the clock-domain crossing if the host wrote it and
+# cleared it faster than the destination domain samples.
+#
+#   bit  0      requested usb speed, 0 = SuperSpeed geometry, 1 = Hi-Speed
+#   bit  1      start toggle  -- latch speed, bump the shared epoch, clear
+#                                transport faults, then allow the datapath
+#   bit  2      stop  toggle  -- drop link_active, abort and flush locally,
+#                                keep the diagnostics
+#   bit  3      clear fault toggle -- lab use; does NOT restart the datapath
+#   bits 15:8   host epoch tag, diagnostic only
+#   bits 31:16  reserved, write zero
+#
+# start means "the host asserts that FX3 link start succeeded and asks the
+# fabric to enter this epoch". It is not evidence about FX3 itself -- only
+# observed GPIF progress is that.
+add_instance rf_link_cfg altera_avalon_pio
+set_instance_parameter_value rf_link_cfg {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rf_link_cfg {bitModifyingOutReg} {0}
+set_instance_parameter_value rf_link_cfg {captureEdge} {0}
+set_instance_parameter_value rf_link_cfg {direction} {Output}
+set_instance_parameter_value rf_link_cfg {edgeType} {RISING}
+set_instance_parameter_value rf_link_cfg {generateIRQ} {0}
+set_instance_parameter_value rf_link_cfg {irqType} {LEVEL}
+set_instance_parameter_value rf_link_cfg {resetValue} {0.0}
+set_instance_parameter_value rf_link_cfg {simDoTestBenchWiring} {0}
+set_instance_parameter_value rf_link_cfg {simDrivenValue} {0.0}
+set_instance_parameter_value rf_link_cfg {width} {32}
+
 add_instance xb_gpio altera_avalon_pio
 set_instance_parameter_value xb_gpio {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value xb_gpio {bitModifyingOutReg} {0}
@@ -462,6 +503,7 @@ add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
 set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
+set_interface_property rf_link_cfg EXPORT_OF rf_link_cfg.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
 add_interface xb_gpio_dir conduit end
 set_interface_property xb_gpio_dir EXPORT_OF xb_gpio_dir.external_connection
@@ -563,6 +605,10 @@ add_connection nios2.data_master rf_link_status.s1
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 defaultConnection {0}
+add_connection nios2.data_master rf_link_cfg.s1
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 baseAddress {0x9540}
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 defaultConnection {0}
 add_connection nios2.data_master xb_gpio.s1
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 baseAddress {0x90b0}
@@ -651,6 +697,7 @@ add_connection system_clock.clk tx_trigger_ctl.clk
 add_connection system_clock.clk vctcxo_tamer_0.clk1
 
 add_connection system_clock.clk rf_link_status.clk
+add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
 
 add_connection system_clock.clk xb_gpio_dir.clk
@@ -690,6 +737,7 @@ add_connection system_clock.clk_reset tx_trigger_ctl.reset
 add_connection system_clock.clk_reset vctcxo_tamer_0.reset1
 
 add_connection system_clock.clk_reset rf_link_status.reset
+add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset
 
 add_connection system_clock.clk_reset xb_gpio_dir.reset
