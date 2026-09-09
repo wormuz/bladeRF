@@ -90,7 +90,6 @@ architecture hosted_bladerf of bladerf is
     -- from rf_link_start_toggle (already a sys_clock signal out of
     -- rf_link_controller) drives both the toggle mirror and the count.
     signal rf_link_start_toggle_prev : std_logic := '0';
-    signal rf_epoch_toggle_sys       : std_logic := '0';
     signal rf_epoch_count_sys        : unsigned(7 downto 0) := (others => '0');
 
     -- Per-direction epoch acknowledgement, crossed back into the system
@@ -643,8 +642,7 @@ begin
     -- reset and set only by an actual start, so the host has to see both.
     rf_link_status(8)            <= rx_epoch_current;
     rf_link_status(9)            <= tx_epoch_current;
-    rf_link_status(10)           <= rx_epoch_current and tx_epoch_current and
-                                    rx_epoch_valid_sys and tx_epoch_valid_sys;
+    rf_link_status(10)           <= rx_epoch_current and tx_epoch_current;
     rf_link_status(11)           <= rx_epoch_valid_sys;
     rf_link_status(12)           <= tx_epoch_valid_sys;
     rf_link_status(13)           <= rf_link_speed_disagree;
@@ -1128,8 +1126,14 @@ begin
 
     -- Compare against the toggle that actually went to the directions, not
     -- against the local mirror of it: the mirror only proves what we sent.
-    rx_epoch_current <= '1' when rx_epoch_ack_sys = rf_link_start_toggle else '0';
-    tx_epoch_current <= '1' when tx_epoch_ack_sys = rf_link_start_toggle else '0';
+    -- The validity term belongs here, not only in the applied bit: after reset
+    -- the issued toggle and a zeroed acknowledgement compare equal, so the
+    -- comparison alone would report "current" for a direction that has never
+    -- consumed an epoch.
+    rx_epoch_current <= '1' when rx_epoch_valid_sys = '1' and
+                                 rx_epoch_ack_sys = rf_link_start_toggle else '0';
+    tx_epoch_current <= '1' when tx_epoch_valid_sys = '1' and
+                                 tx_epoch_ack_sys = rf_link_start_toggle else '0';
 
     U_sync_rx_link_active : entity work.synchronizer
         generic map (
@@ -1175,21 +1179,27 @@ begin
             sync                =>  rx_protocol_start_violation_sys
         );
 
-    -- Epoch toggle/count mirror, entirely in sys_clock: advances on the same
-    -- edge that rf_link_start_toggle changes (i.e. the cycle the controller
-    -- accepts a start), so it never needs its own CDC -- rf_link_start_toggle
-    -- is already native to this domain.
-    epoch_mirror : process( sys_clock, sys_reset )
+    -- Host-visible epoch number, entirely in sys_clock: advances on the same
+    -- edge that rf_link_start_toggle changes, i.e. the cycle the controller
+    -- accepts a start. rf_link_start_toggle is native to this domain, so no
+    -- CDC is involved.
+    --
+    -- There is deliberately no second toggle register here. An earlier version
+    -- kept rf_epoch_toggle_sys as a local mirror and the acknowledgements were
+    -- compared against it, which would have made the mirror a second source of
+    -- truth: if it ever diverged from the toggle actually sent to the
+    -- directions, the comparison would have hidden the divergence instead of
+    -- exposing it. The counter is diagnostic only and is not what the
+    -- acknowledgement is measured against.
+    epoch_count : process( sys_clock, sys_reset )
     begin
         if( sys_reset = '1' ) then
             rf_link_start_toggle_prev <= '0';
-            rf_epoch_toggle_sys       <= '0';
             rf_epoch_count_sys        <= (others => '0');
         elsif( rising_edge(sys_clock) ) then
             rf_link_start_toggle_prev <= rf_link_start_toggle;
             if( rf_link_start_toggle /= rf_link_start_toggle_prev ) then
-                rf_epoch_toggle_sys <= not rf_epoch_toggle_sys;
-                rf_epoch_count_sys  <= rf_epoch_count_sys + 1;
+                rf_epoch_count_sys <= rf_epoch_count_sys + 1;
             end if;
         end if;
     end process;

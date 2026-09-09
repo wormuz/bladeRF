@@ -142,11 +142,12 @@
  *               reset
  *   bit  12     TX epoch valid, same for TX
  *
- *               Bits 11 and 12 are not redundant with 8 and 9. After reset
+ *               Bits 8 and 9 already include the validity term: after reset
  *               the issued toggle and a zeroed acknowledgement compare equal,
- *               so bits 8 and 9 would read 1 before any epoch existed. The
- *               valid bits are cleared by reset and set only by a real start,
- *               which is why bit 10 requires all four.
+ *               so the comparison alone would report "current" for a
+ *               direction that had never consumed an epoch. Bits 11 and 12
+ *               are exposed separately so the host can tell "never started"
+ *               apart from "started, but not this epoch".
  *
  *               "Current" is deliberately not "link active": link_active
  *               drops on stop or abort while the epoch toggle stands still,
