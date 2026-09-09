@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+#
+# Release gate for a Quartus build log.
+#
+#   qgate <logfile>          exit 0 if the build is acceptable, 1 if not
+#   qgate <logfile> --warn   report but always exit 0
+#
+# Exists because a build can report "successful" while the constraints you
+# wrote never bound to anything. That happened here: 160 vendor DCFIFO
+# constraints were dropped with "contains zero elements" for weeks. The
+# compile was green, the timing summary was green, and the gray-code pointer
+# crossings of all five datapath FIFOs were unconstrained the whole time.
+#
+# A timing conclusion is only worth as much as the SDC that produced it, so
+# these are failures, not warnings:
+#
+#   Ignored <assignment>          the constraint parsed and matched nothing
+#   contains zero elements        the collection was empty
+#   No path is found              endpoints exist, no path between them
+#
+# Those last two are different failures and both matter. A guard of the form
+#   if {[get_collection_size $from] > 0 && [get_collection_size $to] > 0}
+# only proves the collections are non-empty; it says nothing about whether a
+# path runs between them. The dcfifo pointer crossings passed that guard and
+# still bound to nothing, because the destination pattern used "|" where the
+# hierarchy has ":" -- it matched a different, real set of registers. Hence
+# "no path for assignment" is a hard failure here, not a warning.
+#   Invalid                       in report_exceptions
+#   Critical Warning / Error      anything Quartus itself calls serious
+#
+# Known-acceptable cases are listed in WAIVED below, each with a reason.
+set -uo pipefail
+
+f="${1:?usage: qgate <logfile> [--warn]}"
+mode="${2:-}"
+[ -r "$f" ] || { echo "qgate: cannot read $f" >&2; exit 2; }
+
+fail=0
+note() { printf '%-6s %s\n' "$1" "$2"; }
+
+# Patterns that are expected and understood. Keep the reason with the
+# pattern: a waiver without one is just a silenced failure.
+WAIVED=(
+    # Skew from a generated pin clock to its own output pin: the clock is
+    # the pin, so there is no internal path to bound. From spi.sdc/i2c.sdc,
+    # predates this work.
+    'set_max_skew -from \[get_clocks \{(adf|adi|dac|pwr)_[a-z]*_pin\}\]'
+)
+
+waived() {
+    local line="$1" p
+    for p in "${WAIVED[@]}"; do
+        [[ "$line" =~ $p ]] && return 0
+    done
+    return 1
+}
+
+check() {
+    local label="$1" pattern="$2" n=0
+    while IFS= read -r line; do
+        waived "$line" && continue
+        n=$((n + 1))
+        [ "$n" -le 3 ] && note "" "$(echo "$line" | sed 's/^\s*//' | cut -c1-110)"
+    done < <(grep -E "$pattern" "$f" 2>/dev/null)
+    if [ "$n" -gt 0 ]; then
+        note FAIL "$label: $n"
+        fail=1
+    else
+        note ok "$label"
+    fi
+}
+
+echo "qgate $(basename "$f")"
+check "errors"                 '^\s*Error'
+check "critical warnings"      '^\s*Critical Warning'
+check "constraints ignored"    'Ignored (set_|filter)'
+check "empty collections"      'contains zero elements'
+check "no path for assignment" 'No path is found satisfying'
+# An exception the analyser accepted but could not apply is the same class of
+# defect as one that matched nothing: the intent is recorded and not enforced.
+check "invalid exceptions"     'Invalid (set_|timing)|exception is invalid'
+# Unconstrained paths are how a whole crossing avoids analysis without any
+# constraint being wrong. Two separate regressions here were only visible as
+# a slack number, never as a message, so count them explicitly.
+check "unconstrained paths"    'Unconstrained [A-Za-z ]*Paths? *: *[1-9]'
+
+# Timing: any negative slack in the summary is a failure. The .sta.summary
+# sits beside the build directory, so derive it from the log's own report of
+# where it wrote.
+sta=$(grep -oE '/[^ ]*hostedxA4\.sta\.summary' "$f" 2>/dev/null | head -1)
+if [ -z "$sta" ]; then
+    d=$(ls -dt "$(dirname "$f")"/../hostedxA4-* 2>/dev/null | head -1)
+    [ -n "$d" ] && sta="$d/hostedxA4.sta.summary"
+fi
+if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
+    neg=$(grep -A1 '^Type' "$sta" | grep -cE '^Slack\s*:\s*-' || true)
+    if [ "${neg:-0}" -gt 0 ]; then
+        note FAIL "negative slack entries: $neg"
+        fail=1
+    else
+        note ok "timing (no negative slack)"
+    fi
+else
+    note "?" "timing summary not found, not checked"
+fi
+
+if [ "$mode" = "--warn" ]; then
+    exit 0
+fi
+exit "$fail"

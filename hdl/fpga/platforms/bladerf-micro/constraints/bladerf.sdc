@@ -113,21 +113,28 @@ set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*
 # so the exception has a proper endpoint and stops there. The comparison that
 # follows, compare_time = timestamp, is ordinary same-clock logic and stays
 # timed.
-set ht_dst [get_keepers -nowarn {*_tamer|compare_time[*]}]
-if { [get_collection_size $ht_dst] > 0 } {
-    set_false_path -from [get_keepers -nowarn {*_tamer|hold_time[*]}] -to $ht_dst
-} else {
-    post_message -type error "tamer compare_time not found: hold_time crossing would be timed as single-cycle"
+# Per instance, not one glob across both. There are two time_tamer instances,
+# rx_tamer and tx_tamer, and "*_tamer|hold_time[*]" collects the registers of
+# BOTH. An exception written that way asks, among other things, for a path
+# from rx_tamer's hold_time to tx_tamer's compare_time, which does not exist:
+# the same mistake that left the dcfifo pointer constraints unbound twice.
+set ht_done 0
+foreach tamer {rx_tamer tx_tamer} {
+    set ht_src [get_keepers -nowarn "*time_tamer:${tamer}|hold_time\[*\]"]
+    set ht_dst [get_keepers -nowarn "*time_tamer:${tamer}|compare_time\[*\]"]
+    if { [get_collection_size $ht_src] > 0 && [get_collection_size $ht_dst] > 0 } {
+        set_false_path -from $ht_src -to $ht_dst
+        set_max_skew  -from $ht_src -to $ht_dst \
+            -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
+        set_net_delay -from $ht_src -to $ht_dst -max \
+            -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+        incr ht_done
+    }
 }
-
-set ht_src [get_keepers -nowarn {*_tamer|hold_time[*]}]
-if { [get_collection_size $ht_src] > 0 } {
-    set_max_skew  -from $ht_src \
-        -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
-    set_net_delay -from $ht_src -max \
-        -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+if { $ht_done == 0 } {
+    post_message -type error "tamer hold_time crossing not matched: it would be timed as a single-cycle path"
 } else {
-    post_message -type warning "tamer hold_time registers not found"
+    post_message -type info "tamer hold_time crossing constrained on $ht_done instance(s)"
 }
 
 # Mini Expansion Port (J51)
@@ -201,23 +208,62 @@ if { [file exists $dcfifo_sdc] } {
     # so *ws_dgrp needs no leading pipe, and dffpipe* must not be followed by
     # a pipe either. A non-empty collection is not proof that a constraint
     # binds -- check for 332182 as well as for "contains zero elements".
-    set rd_from [get_keepers -nowarn {*|auto_generated|*rdptr_g*}]
-    set rd_to   [get_keepers -nowarn {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}]
-    set wr_from [get_keepers -nowarn {*|auto_generated|delayed_wrptr_g*}]
-    set wr_to   [get_keepers -nowarn {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}]
-
-    if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
-        apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
-        apply_sdc_mw_dcfifo_mstable_delay $rd_to $rd_to
-    } else {
-        post_message -type warning "dcfifo read-pointer crossing not matched"
+    # THIRD correction, and the last one of this shape. Fixing the separator
+    # was necessary but not sufficient: with wildcards on both ends the
+    # collections still spanned SEVERAL dcfifo instances, so the constraint
+    # asked for a path from one FIFO's pointer to a different FIFO's
+    # synchroniser. Both collections non-empty, no path between them, 332182
+    # again. From the fitter report of hostedxA4-2026-09-10_01.49.45:
+    #     rdptr_g  exists in dcfifo_0p92, bt92, et92, U_av2wb, U_wb2av
+    #     ws_dgrp  exists only in dcfifo_et92 and dcfifo_mu92
+    # so the wildcard form could never have matched pairwise.
+    #
+    # Walk the instances instead and constrain each crossing against its own
+    # synchroniser. An instance with no gray-pointer synchroniser (the plain
+    # dcfifo variants) simply contributes nothing, which is correct rather
+    # than silently wrong.
+    # Collect the owning instance of every synchroniser flop first, uniquely:
+    # iterating the flops directly would re-apply the same constraint once per
+    # bit.
+    proc bladerf_dcfifo_owners { pattern } {
+        set owners [list]
+        foreach_in_collection n [get_keepers -nowarn $pattern] {
+            set name [get_node_info -name $n]
+            if { [regexp {^(.*\|auto_generated)\|} $name -> owner] } {
+                if { [lsearch -exact $owners $owner] < 0 } {
+                    lappend owners $owner
+                }
+            }
+        }
+        return $owners
     }
 
-    if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
-        apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
-        apply_sdc_mw_dcfifo_mstable_delay $wr_to $wr_to
+    set ptr_done 0
+
+    foreach owner [bladerf_dcfifo_owners {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}] {
+        set rd_from [get_keepers -nowarn "${owner}|*rdptr_g*"]
+        set rd_to   [get_keepers -nowarn "${owner}|*ws_dgrp*dffpipe*|dffe*"]
+        if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
+            apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
+            apply_sdc_mw_dcfifo_mstable_delay $rd_to $rd_to
+            incr ptr_done
+        }
+    }
+
+    foreach owner [bladerf_dcfifo_owners {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}] {
+        set wr_from [get_keepers -nowarn "${owner}|*delayed_wrptr_g*"]
+        set wr_to   [get_keepers -nowarn "${owner}|*rs_dgwp*dffpipe*|dffe*"]
+        if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
+            apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
+            apply_sdc_mw_dcfifo_mstable_delay $wr_to $wr_to
+            incr ptr_done
+        }
+    }
+
+    if { $ptr_done == 0 } {
+        post_message -type error "dcfifo pointer crossings: no instance matched, gray-code transfers are unconstrained"
     } else {
-        post_message -type warning "dcfifo write-pointer crossing not matched"
+        post_message -type info "dcfifo pointer crossings constrained on $ptr_done instance(s)"
     }
 } else {
     post_message -type warning "dcfifo constraints not found at $dcfifo_sdc"
@@ -273,31 +319,52 @@ if { [file exists $dcfifo_sdc] } {
 # not inspected, and a false path asserted without reading the consumer is the
 # same blind waiver this whole change exists to remove. They will show up as
 # real paths if they are wrong.
-set hs_ends [list \
-    {*_tamer|current_time_q[*]} \
-    {*time_tamer:*|dout[*]}     \
-    {*|fx3_timestamp[*]}        ]
+# Source and destination are paired PER INSTANCE. Collecting every
+# source_holding and every capture register into two big collections would
+# ask for paths that do not exist -- rx_tamer's handshake into tx_tamer's
+# capture register, and so on -- and the constraint would bind to less than it
+# appears to. Three separate regressions in this file had exactly that shape.
+set hs_pairs [list \
+    {*time_tamer:rx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:rx_tamer|current_time_q[*]} \
+    {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
+    {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
+    {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
+    {*U_handshake_timestamp|source_holding[*]}                    {*|fx3_timestamp[*]}                     ]
 
-set hs_dst [get_keepers -nowarn [join $hs_ends " "]]
-if { [get_collection_size $hs_dst] > 0 } {
-    set_false_path -from [get_keepers -nowarn {*handshake:*|source_holding[*]}] \
-                   -to   $hs_dst
+set hs_done 0
+foreach { src_pat dst_pat } $hs_pairs {
+    set src [get_keepers -nowarn $src_pat]
+    set dst [get_keepers -nowarn $dst_pat]
+    if { [get_collection_size $src] > 0 && [get_collection_size $dst] > 0 } {
+        set_false_path -from $src -to $dst
+        set_max_skew  -from $src -to $dst \
+            -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
+        set_net_delay -from $src -to $dst -max \
+            -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+        incr hs_done
+    } else {
+        post_message -type error "handshake crossing not matched: $src_pat -> $dst_pat"
+    }
+}
+if { $hs_done == 0 } {
+    post_message -type error "no handshake crossing constrained: bundled-data transfers would be timed as single-cycle"
 } else {
-    post_message -type error "handshake capture registers not found: bundled-data crossings would be timed as single-cycle"
+    post_message -type info "handshake crossings constrained: $hs_done"
 }
 
+# Catch-all skew/delay bound for handshake instances NOT named in the pairs
+# above -- vctcxo_tamer has two whose consumers have not been read, and an
+# unread consumer must not get a false path. They still deserve a physical
+# bound on how far apart their bits may be placed, which is what these two
+# commands give: unlike a false path, they do not excuse anything, so applying
+# them more broadly than necessary is safe.
+#
+# Deliberately -from only. A -from-only set_max_delay would be a different
+# matter: tried once, it reached far past the crossing and overrode the
+# multicycles on SPI and I2C, which run off the same system PLL, producing
+# eight violations up to -14.061 ns on unrelated domains.
 set hs_src [get_keepers -nowarn {*handshake:*|source_holding[*]}]
 if { [get_collection_size $hs_src] > 0 } {
-    # Bound the skew and the net delay only. Altera's dcfifo file also relaxes
-    # min/max delay, but it can afford to because it names both ends of the
-    # crossing; here the destination is whatever consumes dest_data, so a
-    # -from-only set_max_delay reaches far past the crossing. Adding
-    # set_max_delay 100 / set_min_delay -100 here overrode the existing
-    # multicycle paths on the slow serial interfaces -- SPI and I2C run off
-    # the same system PLL -- and produced eight violations up to -14.061 ns
-    # on domains that have nothing to do with the handshake. Skew and net
-    # delay are the constraints that matter for a bundled-data crossing
-    # anyway: they bound how far apart the captured bits may be placed.
     set_max_skew  -from $hs_src \
         -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
     set_net_delay -from $hs_src -max \
