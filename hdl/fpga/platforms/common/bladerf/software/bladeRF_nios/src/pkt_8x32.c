@@ -111,6 +111,36 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             break;
 #endif  // BOARD_BLADERF_MICRO
 
+#ifdef BOARD_BLADERF_MICRO
+        /* RF link control. addr carries the command, not a register offset,
+         * so the host never has to know that bits 1..3 of the underlying
+         * word are toggles -- it says "start", the firmware flips the bit.
+         * Encoding the toggle state on the host would mean two writers
+         * racing over one shadow. */
+        case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
+            switch (addr) {
+                case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:
+                    rf_link_cfg_set_speed(data != 0);
+                    break;
+                case NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG:
+                    rf_link_cfg_set_epoch_tag((uint8_t)data);
+                    break;
+                case NIOS_PKT_8x32_RF_LINK_CMD_START:
+                    rf_link_cfg_start();
+                    break;
+                case NIOS_PKT_8x32_RF_LINK_CMD_STOP:
+                    rf_link_cfg_stop();
+                    break;
+                case NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS:
+                    rf_link_cfg_clear_faults();
+                    break;
+                default:
+                    DBG("Invalid RF link command: 0x%x\n", addr);
+                    return false;
+            }
+            break;
+#endif  // BOARD_BLADERF_MICRO
+
         default:
             DBG("Invalid id: 0x%x\n", id);
             return false;

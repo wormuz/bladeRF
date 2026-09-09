@@ -75,6 +75,22 @@ architecture hosted_bladerf of bladerf is
 
     signal rf_link_status         : std_logic_vector(31 downto 0);
 
+    -- RF link control. The word arrives from the rf_link_cfg PIO in the
+    -- system clock domain; rf_link_controller is the only thing that decodes
+    -- it, and what leaves it are already-debounced command toggles.
+    signal rf_link_cfg_word       : std_logic_vector(31 downto 0);
+    signal rf_link_start_toggle   : std_logic;
+    signal rf_link_stop_toggle    : std_logic;
+    signal rf_link_clear_fault    : std_logic;
+    signal rf_link_req_speed      : std_logic;
+    signal rf_link_speed_disagree : std_logic;
+    signal rf_link_epoch_tag      : std_logic_vector(7 downto 0);
+
+    signal link_stop_toggle_rx    : std_logic;
+    signal link_stop_toggle_tx    : std_logic;
+    signal clear_fault_toggle_rx  : std_logic;
+    signal clear_fault_toggle_tx  : std_logic;
+
     signal i2c_scl_in             : std_logic;
     signal i2c_scl_out            : std_logic;
     signal i2c_scl_oen            : std_logic;
@@ -450,6 +466,7 @@ begin
             ad9361_dac_q1_data              => ad9361.ch(1).dac.q.data,   -- in  slv(15:0)
             ad9361_dac_underflow_unf        => ad9361.dac_underflow,      -- in  sl
             rf_link_status_export           => rf_link_status,
+            rf_link_cfg_export              => rf_link_cfg_word,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
@@ -572,7 +589,12 @@ begin
     rf_link_status(16)           <= rx_link_active;
     rf_link_status(17)           <= rx_speed_latched;
     rf_link_status(18)           <= tx_protocol_start_violation;
-    rf_link_status(23 downto 19) <= (others => '0');
+    -- The host asked for a speed that did not match the live GPIO bit at the
+    -- instant it asked to start, so the epoch was refused rather than started
+    -- on a premise already known to be wrong. Without this bit the host would
+    -- see link_active stay low and have nothing saying why.
+    rf_link_status(19)           <= rf_link_speed_disagree;
+    rf_link_status(23 downto 20) <= (others => '0');
     rf_link_status(31 downto 24) <= std_logic_vector(rx_link_epoch_counter);
 
     -- SI53304 controls / clock output enables
@@ -885,6 +907,14 @@ begin
             sync                =>  usb_speed_pclk
         );
 
+    -- The datapath FIFOs take the speed the host DECLARED for this epoch, not
+    -- the live vendor GPIO bit. The two are compared in rf_link_controller
+    -- and a disagreement refuses the epoch outright, so by the time a start
+    -- reaches the FIFOs the two agree by construction.
+    --
+    -- The FX3 GPIF path above deliberately still reads nios_gpio.o.usb_speed:
+    -- that bit is libbladeRF's own, it maintains it automatically, and taking
+    -- it away from that path would be a compatibility regression.
     U_sync_usb_speed_rx : entity work.synchronizer
         generic map (
             RESET_LEVEL         =>  '0'
@@ -892,7 +922,7 @@ begin
         port map (
             reset               =>  '0',
             clock               =>  rx_clock,
-            async               =>  nios_gpio.o.usb_speed,
+            async               =>  rf_link_req_speed,
             sync                =>  usb_speed_rx
         );
 
@@ -903,11 +933,38 @@ begin
         port map (
             reset               =>  '0',
             clock               =>  tx_clock,
-            async               =>  nios_gpio.o.usb_speed,
+            async               =>  rf_link_req_speed,
             sync                =>  usb_speed_tx
         );
 
 
+    -- One decoder for the whole link protocol, in the system clock domain.
+    -- Everything downstream of it sees debounced toggles, never raw PIO bits,
+    -- so there is exactly one place that knows what a start means.
+    --
+    -- usb_speed_live is the vendor GPIO bit the host already maintains
+    -- (BLADERF_GPIO_FEATURE_SMALL_DMA_XFER). It is an observation here, not
+    -- an authority: the controller compares it against the speed the host
+    -- requested and refuses the epoch if they disagree, rather than guessing
+    -- which of the two is right.
+    U_rf_link_controller : entity work.rf_link_controller
+        port map (
+            clock                    =>  sys_clock,
+            reset                    =>  sys_reset,
+            cfg_word                 =>  rf_link_cfg_word,
+            usb_speed_live           =>  nios_gpio.o.usb_speed,
+            start_toggle_out         =>  rf_link_start_toggle,
+            stop_toggle_out          =>  rf_link_stop_toggle,
+            clear_fault_out          =>  rf_link_clear_fault,
+            requested_speed          =>  rf_link_req_speed,
+            start_speed_disagreement =>  rf_link_speed_disagree,
+            host_epoch_tag           =>  rf_link_epoch_tag
+        );
+
+    -- Both directions take the SAME start toggle, so one host command is one
+    -- shared epoch. Two independent latches would let RX sit in the old
+    -- generation while TX moved to the new one, which is the split-brain the
+    -- epoch mechanism exists to prevent.
     U_sync_link_start_toggle_rx : entity work.synchronizer
         generic map (
             RESET_LEVEL         =>  '0'
@@ -915,7 +972,7 @@ begin
         port map (
             reset               =>  '0',
             clock               =>  rx_clock,
-            async               =>  nios_gpio.o.link_start_toggle,
+            async               =>  rf_link_start_toggle,
             sync                =>  link_start_toggle_rx
         );
 
@@ -926,8 +983,52 @@ begin
         port map (
             reset               =>  '0',
             clock               =>  tx_clock,
-            async               =>  nios_gpio.o.link_start_toggle,
+            async               =>  rf_link_start_toggle,
             sync                =>  link_start_toggle_tx
+        );
+
+    U_sync_link_stop_toggle_rx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  rx_clock,
+            async               =>  rf_link_stop_toggle,
+            sync                =>  link_stop_toggle_rx
+        );
+
+    U_sync_link_stop_toggle_tx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  tx_clock,
+            async               =>  rf_link_stop_toggle,
+            sync                =>  link_stop_toggle_tx
+        );
+
+    U_sync_clear_fault_rx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  rx_clock,
+            async               =>  rf_link_clear_fault,
+            sync                =>  clear_fault_toggle_rx
+        );
+
+    U_sync_clear_fault_tx : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  '0',
+            clock               =>  tx_clock,
+            async               =>  rf_link_clear_fault,
+            sync                =>  clear_fault_toggle_tx
         );
 
     U_sync_meta_en_pclk : entity work.synchronizer

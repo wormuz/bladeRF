@@ -130,7 +130,9 @@
  *   bit  16     RX link active
  *   bit  17     RX usb speed latched
  *   bit  18     protocol start violation, TX
- *   bits 23:19  reserved, read as zero
+ *   bit  19     start refused: requested speed disagreed with the live
+ *               GPIO speed bit at the moment START was issued
+ *   bits 23:20  reserved, read as zero
  *   bits 31:24  RX link epoch counter
  *
  * A mismatch means FX3 latched one USB speed for the epoch and the link is
@@ -138,6 +140,42 @@
  * transfers. A start violation means the datapath was enabled without the
  * host first signalling a new epoch. Both are sticky within an epoch. */
 #define NIOS_PKT_8x32_TARGET_RF_LINK_STATUS  0x81
+
+/* RF link control (write-only). The write half of the mechanism above: the
+ * host declares a link generation, the fabric latches USB speed at that
+ * moment and reports back through RF_LINK_STATUS.
+ *
+ * It exists because FX3 samples the USB speed exactly once per RF link start
+ * and never rebuilds pcktSize/burstLen/dmaCfg.size afterwards, while the FPGA
+ * re-reads it continuously. On a renegotiation the two sides of one GPIF end
+ * up with different DMA geometry and nothing reports it -- the control path
+ * still answers. We cannot rebuild the FX3 firmware, so the fabric has to be
+ * told explicitly when a new generation begins rather than inferring it from
+ * the long-lived enable level, which can stay high across an FX3 restart.
+ *
+ * The 8-bit address field carries the command rather than a register offset.
+ * The underlying hardware bits are toggles, so "start" is a transition, not a
+ * value; keeping that in the firmware means the host cannot desynchronise a
+ * shadow copy of them.
+ *
+ * Required host ordering -- the mechanism does not work otherwise:
+ *   stop streaming -> STOP -> poll RF_LINK_STATUS until link_active == 0
+ *   -> determine actual USB speed -> SET_SPEED -> restart the FX3 RF link
+ *   (alt 0 then alt 1, working around the glUsbAltInterface guard)
+ *   -> START -> poll until link_active == 1, speed_latched matches, no
+ *   mismatch, and both epoch counters equal -> enable the datapath.
+ *
+ * START asserts that the FX3 link start succeeded. It is not evidence about
+ * FX3 by itself; only observed data progress is that. If the requested speed
+ * disagrees with the live GPIO speed bit at that instant, the fabric fails
+ * closed and refuses the epoch rather than guessing which one is right. */
+#define NIOS_PKT_8x32_TARGET_RF_LINK_CFG     0x82
+
+#define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
+#define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
+#define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02
+#define NIOS_PKT_8x32_RF_LINK_CMD_STOP          0x03
+#define NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS  0x04
 
 /* Flag bits */
 #define NIOS_PKT_8x32_FLAG_WRITE      (1 << 0)

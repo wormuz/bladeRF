@@ -103,6 +103,75 @@ static inline uint32_t rf_link_status_read(void)
     #endif
 }
 
+/* RF link config: the write half. The host declares a link generation here
+ * and the fabric obeys it; rf_link_status_read() above reports what the
+ * fabric actually did with it.
+ *
+ * Bits 1..3 are toggles, so the value written depends on what was written
+ * last. A read-modify-write cannot recover that -- an output PIO reads back
+ * its own register, but nothing guarantees this is the only writer and the
+ * toggle state is not derivable from any observable. So the shadow below is
+ * the authority, and every helper mutates it and rewrites the whole word.
+ *
+ * Do not "write 1 to start". A toggle is a transition: writing 1 twice is
+ * one command, not two. */
+static uint32_t rf_link_cfg_shadow = 0;
+
+#define RF_LINK_CFG_USB_SPEED     (1u << 0)
+#define RF_LINK_CFG_START_TOGGLE  (1u << 1)
+#define RF_LINK_CFG_STOP_TOGGLE   (1u << 2)
+#define RF_LINK_CFG_CLEAR_FAULT   (1u << 3)
+#define RF_LINK_CFG_EPOCH_TAG_LSB 8
+
+static inline void rf_link_cfg_commit(void)
+{
+    #ifdef RF_LINK_CFG_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(RF_LINK_CFG_BASE, rf_link_cfg_shadow);
+    #endif
+}
+
+/* Speed is a level, not a toggle: it is latched by the fabric at the next
+ * start, so setting it twice is harmless and setting it after the start is
+ * too late. */
+static inline void rf_link_cfg_set_speed(bool high_speed)
+{
+    if (high_speed) {
+        rf_link_cfg_shadow |= RF_LINK_CFG_USB_SPEED;
+    } else {
+        rf_link_cfg_shadow &= ~RF_LINK_CFG_USB_SPEED;
+    }
+    rf_link_cfg_commit();
+}
+
+static inline void rf_link_cfg_set_epoch_tag(uint8_t tag)
+{
+    rf_link_cfg_shadow &= ~(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB);
+    rf_link_cfg_shadow |= ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB;
+    rf_link_cfg_commit();
+}
+
+/* Call only after the FX3 RF link start has actually succeeded. This asserts
+ * that it did; it is not evidence about FX3 on its own. */
+static inline void rf_link_cfg_start(void)
+{
+    rf_link_cfg_shadow ^= RF_LINK_CFG_START_TOGGLE;
+    rf_link_cfg_commit();
+}
+
+static inline void rf_link_cfg_stop(void)
+{
+    rf_link_cfg_shadow ^= RF_LINK_CFG_STOP_TOGGLE;
+    rf_link_cfg_commit();
+}
+
+/* Clears the sticky fault bits. Does not restart anything -- only a new
+ * epoch does that. */
+static inline void rf_link_cfg_clear_faults(void)
+{
+    rf_link_cfg_shadow ^= RF_LINK_CFG_CLEAR_FAULT;
+    rf_link_cfg_commit();
+}
+
 static inline uint32_t expansion_port_read(void)
 {
     return IORD_ALTERA_AVALON_PIO_DATA(XB_GPIO_BASE);

@@ -126,6 +126,7 @@ package bladerf_p is
         oc_i2c_sda_pad_o                :   out std_logic;
         oc_i2c_sda_padoen_o             :   out std_logic;
         rf_link_status_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        rf_link_cfg_export              :   out std_logic_vector(31 downto 0);
         xb_gpio_in_port                 :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                :   out std_logic_vector(31 downto 0);
         xb_gpio_dir_export              :   out std_logic_vector(31 downto 0);
@@ -318,7 +319,6 @@ package bladerf_p is
         adf_chip_enable : std_logic;
         rx_mux_sel      : std_logic_vector(2 downto 0);
         usb_speed       : std_logic;
-        link_start_toggle : std_logic;
     end record;
 
     type nios_gpi_t is record
@@ -612,7 +612,11 @@ package body bladerf_p is
         rv.adf_chip_enable := x(11);
         rv.rx_mux_sel      := x(10 downto 8);
         rv.usb_speed       := x(7);
-        rv.link_start_toggle := x(6);
+        -- bit 6 is deliberately NOT decoded: it is BLADERF_GPIO_RX_LB_ENABLE
+        -- (2 << 5) in the vendor host header. The link epoch toggle lived
+        -- here briefly and had to move to the rf_link_cfg register, because
+        -- any tool writing a raw bladeRF1-style GPIO mask would have flipped
+        -- it and started a new link epoch under a running stream.
         --rv.pwr_status    := x(0);            -- Reserved as input
         return rv;
     end function;
