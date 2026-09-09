@@ -105,6 +105,21 @@ set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*
 #
 # 128 such paths, found by classifying every system -> LVDS crossing by its
 # endpoints after the blanket cut was removed.
+# Same omission as the handshake block below: skew and net delay were added,
+# the relaxation was not, so this crossing is still being timed per cycle.
+#
+# Here the capture register genuinely exists in the RTL -- time_tamer does
+# "compare_time <= hold_time" under ts_compare_load, in the ts_clock domain --
+# so the exception has a proper endpoint and stops there. The comparison that
+# follows, compare_time = timestamp, is ordinary same-clock logic and stays
+# timed.
+set ht_dst [get_keepers -nowarn {*_tamer|compare_time[*]}]
+if { [get_collection_size $ht_dst] > 0 } {
+    set_false_path -from [get_keepers -nowarn {*_tamer|hold_time[*]}] -to $ht_dst
+} else {
+    post_message -type error "tamer compare_time not found: hold_time crossing would be timed as single-cycle"
+}
+
 set ht_src [get_keepers -nowarn {*_tamer|hold_time[*]}]
 if { [get_collection_size $ht_src] > 0 } {
     set_max_skew  -from $ht_src \
@@ -226,6 +241,51 @@ if { [file exists $dcfifo_sdc] } {
 # source_holding is stable for the whole request/acknowledge round trip, so
 # the crossing is deliberately not timed as a single-cycle path: bound the
 # skew and the net delay instead, and relax setup/hold.
+# ⛔ set_max_skew and set_net_delay do NOT relax setup/hold. They bound the
+# physical placement of the bits; the ordinary per-cycle timing check stays.
+# Removing the old blanket false path and adding only those two left this
+# crossing analysed as a single-cycle path and produced the worst path in the
+# design, -9.545 ns from source_holding[49] into time_tamer's comparator. The
+# relaxation has to be restored -- narrowly.
+#
+# Narrowly means: end the exception at the FIRST register on the destination
+# side, never "-to *". The old form hid everything downstream of the crossing
+# as well, which is how a 64-bit compare feeding an FSM state decision went
+# unnoticed at -11.203 ns.
+#
+# handshake.vhd has no capture flop of its own -- it is literally
+# "dest_data <= source_holding" -- so the first destination register is in the
+# consumer. In time_tamer that is current_time_q, added for exactly this
+# reason: without it the comparator read the far domain's register directly
+# and could sample it mid-change, answering about a timestamp that never
+# existed. Anything after current_time_q is ordinary same-clock logic and must
+# stay timed.
+# Five handshake instances carry data in this revision, and each one ends at a
+# different consumer register. Named individually rather than with one glob:
+# a pattern that silently matches nothing is how 160 dcfifo constraints were
+# lost, so an empty collection here is an error, not a warning.
+#
+#   U_current  -> current_time_q   time_tamer, the -9.545 ns path
+#   U_snap     -> dout             time_tamer, read back a byte at a time
+#   timestamp  -> fx3_timestamp    top level, tx_clock into fx3_pclk_pll
+#
+# vctcxo_tamer's two instances are left out deliberately: their consumers were
+# not inspected, and a false path asserted without reading the consumer is the
+# same blind waiver this whole change exists to remove. They will show up as
+# real paths if they are wrong.
+set hs_ends [list \
+    {*_tamer|current_time_q[*]} \
+    {*time_tamer:*|dout[*]}     \
+    {*|fx3_timestamp[*]}        ]
+
+set hs_dst [get_keepers -nowarn [join $hs_ends " "]]
+if { [get_collection_size $hs_dst] > 0 } {
+    set_false_path -from [get_keepers -nowarn {*handshake:*|source_holding[*]}] \
+                   -to   $hs_dst
+} else {
+    post_message -type error "handshake capture registers not found: bundled-data crossings would be timed as single-cycle"
+}
+
 set hs_src [get_keepers -nowarn {*handshake:*|source_holding[*]}]
 if { [get_collection_size $hs_src] > 0 } {
     # Bound the skew and the net delay only. Altera's dcfifo file also relaxes

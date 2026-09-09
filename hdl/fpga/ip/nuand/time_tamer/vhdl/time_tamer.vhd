@@ -40,9 +40,9 @@ architecture arch of time_tamer is
 
     signal snap_ack  : std_logic ;
 
-    -- Initialised because the comparison below is free-running: it evaluates
-    -- hold_time every cycle, including before the host has ever written one.
-    -- Left uninitialised it produced a stream of NUMERIC_STD "<" metavalue
+    -- Initialised because the comparison below evaluates hold_time every
+    -- cycle, including before the host has ever written one. Left
+    -- uninitialised it produced a stream of NUMERIC_STD "<" metavalue
     -- warnings in simulation, which is noise that hides real ones. Hardware
     -- powers up at zero anyway; this just makes the model agree.
     signal hold_time    :   unsigned(63 downto 0) := (others => '0') ;
@@ -68,6 +68,10 @@ architecture arch of time_tamer is
     signal mm_time_trigger      :   std_logic ;
 
     signal current_time         :   unsigned(63 downto 0) ;
+    -- Local capture of current_time. The handshake hands over a combinational
+    -- view of the far domain's register; this is the first flop on this side,
+    -- and the point where the clock-domain crossing ends.
+    signal current_time_q       :   unsigned(63 downto 0) := (others => '0') ;
     signal time_is_past         :   std_logic := '0' ;
     signal current_req          :   std_logic ;
     signal current_ack          :   std_logic ;
@@ -333,15 +337,40 @@ begin
     -- Registered form of "the armed time has already gone past". Splitting the
     -- 64-bit magnitude compare out of the interrupt FSM keeps a full-width
     -- carry chain from sharing a cycle with a state transition; see the
-    -- comment in CHECK_CURRENT_TIME. Free-running is fine: the FSM only looks
-    -- at it in COMPARE_CURRENT_TIME, one cycle after it has stopped
-    -- requesting new timestamps, so the operands are static by then.
+    -- comment in CHECK_CURRENT_TIME.
+    --
+    -- current_time is NOT a local register. It is the combinational output of
+    -- U_current, i.e. source_holding in the ts_clock domain wired straight
+    -- across -- handshake.vhd does "dest_data <= source_holding", there is no
+    -- capture flop inside the block. The bundled-data protocol only promises
+    -- that word is stable between a synchronised request and its acknowledge.
+    --
+    -- So the compare cannot run free. Doing that made this the worst path in
+    -- the design at -9.545 ns: a 64-bit compare sourced directly from another
+    -- clock domain, timed every cycle. Worse than the slack, a free-running
+    -- compare can sample the word while it is changing and answer about a
+    -- timestamp that never existed.
+    --
+    -- Capture it locally first, on the acknowledge that means the word is
+    -- settled, and compare the captured copy. The crossing then ends at
+    -- current_time_q, which is what the SDC exception names.
+    capture_current_time : process(clock, reset)
+    begin
+        if( reset = '1' ) then
+            current_time_q <= (others => '0') ;
+        elsif( rising_edge(clock) ) then
+            if( current_ack = '1' ) then
+                current_time_q <= current_time ;
+            end if ;
+        end if ;
+    end process ;
+
     compare_current_time : process(clock, reset)
     begin
         if( reset = '1' ) then
             time_is_past <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( hold_time < current_time ) then
+            if( hold_time < current_time_q ) then
                 time_is_past <= '1' ;
             else
                 time_is_past <= '0' ;
@@ -350,7 +379,7 @@ begin
     end process ;
 
     interrupt : process(clock, reset)
-        type fsm_t is (WAIT_FOR_ARM, CHECK_CURRENT_TIME, COMPARE_CURRENT_TIME, SET_COMPARE_TIME, PAST_TIME, WAIT_FOR_COMPARE, WAIT_FOR_INTR_CLEAR, WAIT_FOR_COMPARE_CLEAR) ;
+        type fsm_t is (WAIT_FOR_ARM, CHECK_CURRENT_TIME, CAPTURE_CURRENT_TIME, COMPARE_CURRENT_TIME, SET_COMPARE_TIME, PAST_TIME, WAIT_FOR_COMPARE, WAIT_FOR_INTR_CLEAR, WAIT_FOR_COMPARE_CLEAR) ;
         variable fsm : fsm_t := WAIT_FOR_ARM ;
     begin
         if( reset = '1' ) then
@@ -398,8 +427,18 @@ begin
                             -- source_holding on a fresh request. So the
                             -- comparison registered below sees a value that
                             -- cannot change under it.
-                            fsm := COMPARE_CURRENT_TIME ;
+                            --
+                            -- current_ack is also the enable that captures
+                            -- the word into current_time_q, so from here it
+                            -- takes two cycles, not one: capture, then
+                            -- compare. CAPTURE_CURRENT_TIME spends the first.
+                            fsm := CAPTURE_CURRENT_TIME ;
                         end if ;
+
+                    when CAPTURE_CURRENT_TIME =>
+                        -- current_time_q is loading this cycle; time_is_past
+                        -- still reflects the previous contents. Wait one.
+                        fsm := COMPARE_CURRENT_TIME ;
 
                     when COMPARE_CURRENT_TIME =>
                         -- One cycle later the registered result is ready. The
