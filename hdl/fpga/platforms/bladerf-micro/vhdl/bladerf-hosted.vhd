@@ -91,6 +91,11 @@ architecture hosted_bladerf of bladerf is
     signal clear_fault_toggle_rx  : std_logic;
     signal clear_fault_toggle_tx  : std_logic;
 
+    signal rx_fault_sticky        : std_logic_vector(4 downto 0);
+    signal tx_fault_sticky        : std_logic_vector(4 downto 0);
+    signal rx_abort_active        : std_logic;
+    signal tx_abort_active        : std_logic;
+
     signal i2c_scl_in             : std_logic;
     signal i2c_scl_out            : std_logic;
     signal i2c_scl_oen            : std_logic;
@@ -655,11 +660,15 @@ begin
 
             -- Link status
             link_start_toggle          => link_start_toggle_tx,
+            link_stop_toggle           => link_stop_toggle_tx,
+            clear_fault_toggle         => clear_fault_toggle_tx,
             usb_speed_mismatch         => tx_usb_speed_mismatch,
             link_active                => tx_link_active,
             speed_latched              => tx_speed_latched,
             protocol_start_violation   => tx_protocol_start_violation,
             link_epoch_counter         => tx_link_epoch_counter,
+            fault_sticky               => tx_fault_sticky,
+            abort_active               => tx_abort_active,
 
             -- Triggering
             trigger_arm          => tx_trigger_ctl.arm,
@@ -743,11 +752,15 @@ begin
 
             -- Link status
             link_start_toggle          => link_start_toggle_rx,
+            link_stop_toggle           => link_stop_toggle_rx,
+            clear_fault_toggle         => clear_fault_toggle_rx,
             usb_speed_mismatch         => rx_usb_speed_mismatch,
             link_active                => rx_link_active,
             speed_latched              => rx_speed_latched,
             protocol_start_violation   => rx_protocol_start_violation,
             link_epoch_counter         => rx_link_epoch_counter,
+            fault_sticky               => rx_fault_sticky,
+            abort_active               => rx_abort_active,
 
             -- Triggering
             trigger_arm            => rx_trigger_ctl.arm,
