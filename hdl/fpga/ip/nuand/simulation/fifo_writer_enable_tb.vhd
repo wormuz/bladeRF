@@ -84,6 +84,17 @@ architecture tb of fifo_writer_enable_tb is
     signal ovf_led      : std_logic;
     signal ovf_count    : unsigned(63 downto 0);
 
+    -- Link epoch stimulus: real firmware always signals a new epoch via
+    -- link_start_toggle before raising enable (see fifo_writer's
+    -- latch_usb_speed comments). Establishing it here keeps this bench out
+    -- of the "enable rose with no epoch" sticky protocol-error/abort path
+    -- added in Stage 3, which is exercised by fifo_writer_abort_tb instead.
+    signal link_start_toggle : std_logic := '0';
+    signal link_stop_toggle   : std_logic := '0';
+    signal clear_fault_toggle : std_logic := '0';
+    signal fault_sticky       : std_logic_vector(4 downto 0);
+    signal abort_active       : std_logic;
+
     -- Observation counters
     signal cycles          : natural := 0;
     signal writes_total    : natural := 0;
@@ -138,7 +149,13 @@ begin
 
             overflow_led          => ovf_led,
             overflow_count        => ovf_count,
-            overflow_duration     => to_unsigned(0, 16)
+            overflow_duration     => to_unsigned(0, 16),
+
+            link_start_toggle     => link_start_toggle,
+            link_stop_toggle      => link_stop_toggle,
+            clear_fault_toggle    => clear_fault_toggle,
+            fault_sticky          => fault_sticky,
+            abort_active          => abort_active
         );
 
     -- Free-running sample timestamp, same shape as time_tamer.
@@ -204,6 +221,13 @@ begin
         wait for 10*CLK_PERIOD;
         wait until rising_edge(clock);
         reset <= '0';
+        wait until rising_edge(clock);
+
+        -- Establish a link epoch before enable, as real firmware does, so
+        -- this bench stays out of the Stage 3 "enable with no epoch" sticky
+        -- protocol-error/abort path (covered separately by
+        -- fifo_writer_abort_tb).
+        link_start_toggle <= not link_start_toggle;
         wait until rising_edge(clock);
 
         -- Bring both channels up: MIMO, which is what the patch guards.

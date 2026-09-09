@@ -81,6 +81,13 @@ architecture sim of fifo_reader_edge_tb is
     signal enable     : std_logic := '0';
     signal timestamp  : unsigned(63 downto 0) := unsigned(TS_START);
 
+    -- Link epoch stimulus: real firmware signals a new epoch via
+    -- link_start_toggle before raising enable, else Stage 3's sticky
+    -- protocol-error/abort path (enable with no epoch) halts the datapath.
+    -- Reset clears link_active, so re-pulse after the mid-run RESET_AT reset
+    -- too.
+    signal link_start_toggle : std_logic := '0';
+
     signal fifo_usedw : std_logic_vector(11 downto 0) := (others => '1');
     signal fifo_read  : std_logic;
     signal fifo_data  : std_logic_vector(63 downto 0) := x"0BAD0BAD0BAD0BAD";
@@ -224,7 +231,8 @@ begin
             out_samples           => out_smp,
             underflow_led         => uf_led,
             underflow_count       => uf_count,
-            underflow_duration    => x"ffff"
+            underflow_duration    => x"ffff",
+            link_start_toggle     => link_start_toggle
         );
 
     stim : process
@@ -233,6 +241,9 @@ begin
         wait for 20 ns;
         wait until rising_edge(clock);
         reset  <= '0';
+        wait until rising_edge(clock);
+        link_start_toggle <= not link_start_toggle;
+        wait until rising_edge(clock);
         enable <= '1';
 
         if RESET_AT > 0 then
@@ -243,6 +254,9 @@ begin
             wait until rising_edge(clock);
             wait until rising_edge(clock);
             reset <= '0';
+            wait until rising_edge(clock);
+            link_start_toggle <= not link_start_toggle;
+            wait until rising_edge(clock);
         end if;
 
         wait for RUN_US * 1 us;
