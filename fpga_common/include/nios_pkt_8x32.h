@@ -118,22 +118,49 @@
  * fifo_writer status ports in bladerf-hosted.vhd (signal rf_link_status),
  * carried to the Nios by the rf_link_status input PIO in nios_system.tcl.
  *
+ * All tx_clock/rx_clock-domain bits below are synchronized into sys_clock
+ * (bladerf-hosted.vhd, U_sync_tx_*/U_sync_rx_*) before reaching this PIO --
+ * none of the raw tx_*/rx_* signals cross domains uncrossed anymore.
+ *
  *   bit  0      TX link active
  *   bit  1      TX usb speed latched
  *   bit  2      usb speed as the host last set it
- *   bit  3      speed mismatch, either direction
+ *   bit  3      reserved, read as zero (was speed mismatch OR of TX/RX,
+ *               a combinational cross-domain OR -- host can OR bits 4/5)
  *   bit  4      speed mismatch, RX
  *   bit  5      speed mismatch, TX
- *   bit  6      protocol start violation, either direction
+ *   bit  6      reserved, read as zero (was protocol start violation OR of
+ *               TX/RX, same combinational cross-domain defect -- host can
+ *               OR bits 7/18)
  *   bit  7      protocol start violation, RX
- *   bits 15:8   TX link epoch counter
+ *   bit  8      RX epoch current: RX mirrored back the epoch toggle the host
+ *               issued, so RX consumed THIS epoch
+ *   bit  9      TX epoch current, same meaning for the other direction
+ *   bit  10     epoch applied: both directions current AND both valid. This
+ *               is the bit the host waits on before trusting a stream.
+ *   bit  11     RX epoch valid: RX has consumed at least one epoch since
+ *               reset
+ *   bit  12     TX epoch valid, same for TX
+ *
+ *               Bits 11 and 12 are not redundant with 8 and 9. After reset
+ *               the issued toggle and a zeroed acknowledgement compare equal,
+ *               so bits 8 and 9 would read 1 before any epoch existed. The
+ *               valid bits are cleared by reset and set only by a real start,
+ *               which is why bit 10 requires all four.
+ *
+ *               "Current" is deliberately not "link active": link_active
+ *               drops on stop or abort while the epoch toggle stands still,
+ *               so it means "still running", not "took this epoch".
+ *   bit  13     start refused: requested speed disagreed with the live
+ *               GPIO speed bit at the moment START was issued
+ *   bits 15:14  reserved, read as zero
  *   bit  16     RX link active
  *   bit  17     RX usb speed latched
  *   bit  18     protocol start violation, TX
- *   bit  19     start refused: requested speed disagreed with the live
- *               GPIO speed bit at the moment START was issued
- *   bits 23:20  reserved, read as zero
- *   bits 31:24  RX link epoch counter
+ *   bits 23:19  reserved, read as zero
+ *   bits 27:24  link epoch count (low 4 bits), advances once per accepted
+ *               START, shared by both directions
+ *   bits 31:28  RF_LINK_STATUS protocol version, currently 0x1
  *
  * A mismatch means FX3 latched one USB speed for the epoch and the link is
  * now running at another, so the DMA buffer geometry no longer matches the

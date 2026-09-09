@@ -52,6 +52,8 @@ entity tx is
         link_epoch_counter         : out   unsigned(7 downto 0) := (others => '0');
         fault_sticky               : out   std_logic_vector(4 downto 0) := (others => '0');
         abort_active               : out   std_logic := '0';
+        epoch_ack                  : out   std_logic := '0';
+        epoch_valid                : out   std_logic := '0';
 
         -- Triggering
         trigger_arm          : in    std_logic;
@@ -240,6 +242,8 @@ begin
             link_epoch_counter         =>  link_epoch_counter,
             fault_sticky               =>  fault_sticky,
             abort_active               =>  abort_active,
+            epoch_ack                  =>  epoch_ack,
+            epoch_valid                =>  epoch_valid,
 
             eight_bit_mode_en   =>  eight_bit_mode_en,
             highly_packed_mode_en =>  highly_packed_mode_en,

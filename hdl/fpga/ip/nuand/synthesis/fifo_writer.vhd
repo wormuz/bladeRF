@@ -80,7 +80,19 @@ entity fifo_writer is
         link_stop_toggle           :   in      std_logic := '0';
         clear_fault_toggle         :   in      std_logic := '0';
         fault_sticky               :   out     std_logic_vector(4 downto 0) := (others => '0');
-        abort_active                :   out     std_logic := '0'
+        abort_active                :   out     std_logic := '0';
+        -- Proof that THIS direction consumed the current epoch toggle.
+        -- epoch_ack mirrors the toggle it acted on, so the system domain can
+        -- compare it against the toggle it issued; epoch_valid says an epoch
+        -- was ever consumed at all. Both are needed: after reset the toggle
+        -- and a zeroed ack would compare equal, and the host would read
+        -- "epoch applied" before any epoch existed.
+        --
+        -- link_active cannot serve this purpose. It rises with the start but
+        -- also drops on stop and abort while the toggle stands still, so it
+        -- conflates "consumed this epoch" with "still running".
+        epoch_ack                   :   out     std_logic := '0';
+        epoch_valid                 :   out     std_logic := '0'
     );
 end entity;
 
@@ -131,6 +143,8 @@ architecture simple of fifo_writer is
 
     signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
     signal abort_active_i      : std_logic := '0';
+    signal epoch_ack_i         : std_logic := '0';
+    signal epoch_valid_i       : std_logic := '0';
     signal stop_toggle_prev    : std_logic := '0';
     signal clear_toggle_prev   : std_logic := '0';
 
@@ -238,6 +252,11 @@ begin
             abort_active_i     <= '0';
             stop_toggle_prev   <= '0';
             clear_toggle_prev  <= '0';
+            -- epoch_valid_i MUST clear on reset. Left set, the system domain
+            -- would compare a stale ack against a fresh toggle and could
+            -- report an epoch applied that no direction ever consumed.
+            epoch_ack_i        <= '0';
+            epoch_valid_i      <= '0';
         elsif( rising_edge(clock) ) then
 
             start_link_pulse := '0';
@@ -262,6 +281,10 @@ begin
                 latched_usb_speed <= usb_speed;
                 speed_mismatch    <= '0';
                 link_active_i     <= '1';
+                -- Mirror the toggle we just acted on, and record that an
+                -- epoch has now been consumed at least once.
+                epoch_ack_i       <= link_start_toggle;
+                epoch_valid_i     <= '1';
                 -- ⛔ Це ЗАФІКСОВАНА ШВИДКІСТЬ (0=SS, 1=HS), а не «епоха була»:
                 -- хост перевіряє інваріант speed_latched == usb_speed_live, і
                 -- прапорець «щось зафіксовано» зробив би його завжди хибним.
@@ -349,6 +372,8 @@ begin
     link_epoch_counter        <= epoch_counter;
     fault_sticky              <= fault_sticky_i;
     abort_active              <= abort_active_i;
+    epoch_ack                 <= epoch_ack_i;
+    epoch_valid               <= epoch_valid_i;
 
     -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )

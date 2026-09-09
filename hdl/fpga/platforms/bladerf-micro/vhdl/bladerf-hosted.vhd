@@ -73,6 +73,41 @@ architecture hosted_bladerf of bladerf is
     signal rx_protocol_start_violation : std_logic;
     signal rx_link_epoch_counter       : unsigned(7 downto 0);
 
+    -- Synchronized (sys_clock domain) copies of the eight single-bit tx_*/
+    -- rx_* flags above. rf_link_status is assembled ONLY from these plus
+    -- signals already native to sys_clock -- see ADR on RF_LINK_STATUS CDC.
+    signal tx_link_active_sys              : std_logic;
+    signal tx_speed_latched_sys            : std_logic;
+    signal tx_usb_speed_mismatch_sys       : std_logic;
+    signal tx_protocol_start_violation_sys : std_logic;
+
+    signal rx_link_active_sys              : std_logic;
+    signal rx_speed_latched_sys            : std_logic;
+    signal rx_usb_speed_mismatch_sys       : std_logic;
+    signal rx_protocol_start_violation_sys : std_logic;
+
+    -- Epoch bookkeeping, entirely in sys_clock: a one-cycle pulse derived
+    -- from rf_link_start_toggle (already a sys_clock signal out of
+    -- rf_link_controller) drives both the toggle mirror and the count.
+    signal rf_link_start_toggle_prev : std_logic := '0';
+    signal rf_epoch_toggle_sys       : std_logic := '0';
+    signal rf_epoch_count_sys        : unsigned(7 downto 0) := (others => '0');
+
+    -- Per-direction epoch acknowledgement, crossed back into the system
+    -- domain. One bit each way instead of an eight-bit counter: the host's
+    -- question is "did both directions take the epoch I asked for", not "what
+    -- number are they on".
+    signal rx_epoch_ack              : std_logic;
+    signal tx_epoch_ack              : std_logic;
+    signal rx_epoch_valid            : std_logic;
+    signal tx_epoch_valid            : std_logic;
+    signal rx_epoch_ack_sys          : std_logic;
+    signal tx_epoch_ack_sys          : std_logic;
+    signal rx_epoch_valid_sys        : std_logic;
+    signal tx_epoch_valid_sys        : std_logic;
+    signal rx_epoch_current          : std_logic;
+    signal tx_epoch_current          : std_logic;
+
     signal rf_link_status         : std_logic_vector(31 downto 0);
 
     -- RF link control. The word arrives from the rf_link_cfg PIO in the
@@ -573,34 +608,53 @@ begin
     -- TPS2115A status
     nios_gpio.i.pwr_status <= pwr_status;
 
-    -- RF_LINK_STATUS composition. tx_*/rx_* sources are on tx_clock/rx_clock;
-    -- this word is a straight OR/concat, NOT yet synchronized into the Nios
-    -- clock domain -- see report to team-lead before wiring a pkt_8x32 case
-    -- that reads this signal.
-    rf_link_status(0)            <= tx_link_active;
-    rf_link_status(1)            <= tx_speed_latched;
+    -- RF_LINK_STATUS composition. Every source here is EITHER a _sys
+    -- synchronized copy of a tx_clock/rx_clock flag, OR already native to
+    -- sys_clock (nios_gpio.o.usb_speed, rf_link_speed_disagree, the epoch
+    -- mirror above) -- see the grep in the ADR report for the invariant
+    -- this is meant to hold.
+    rf_link_status(0)            <= tx_link_active_sys;
+    rf_link_status(1)            <= tx_speed_latched_sys;
     rf_link_status(2)            <= nios_gpio.o.usb_speed;
-    rf_link_status(3)            <= tx_usb_speed_mismatch or rx_usb_speed_mismatch;
-    rf_link_status(4)            <= rx_usb_speed_mismatch;
-    rf_link_status(5)            <= tx_usb_speed_mismatch;
-    rf_link_status(6)            <= tx_protocol_start_violation or rx_protocol_start_violation;
-    rf_link_status(7)            <= rx_protocol_start_violation;
-    rf_link_status(15 downto 8)  <= std_logic_vector(tx_link_epoch_counter);
-    -- The RX side reports the same three things as the TX side. It was
-    -- collecting them and dropping them on the floor: rx_link_active,
-    -- rx_speed_latched and rx_link_epoch_counter were assigned and never
-    -- read, which is what Quartus was reporting as warning 10036. Only the
-    -- RX mismatch bit had made it into the word.
-    rf_link_status(16)           <= rx_link_active;
-    rf_link_status(17)           <= rx_speed_latched;
-    rf_link_status(18)           <= tx_protocol_start_violation;
-    -- The host asked for a speed that did not match the live GPIO bit at the
-    -- instant it asked to start, so the epoch was refused rather than started
-    -- on a premise already known to be wrong. Without this bit the host would
-    -- see link_active stay low and have nothing saying why.
-    rf_link_status(19)           <= rf_link_speed_disagree;
-    rf_link_status(23 downto 20) <= (others => '0');
-    rf_link_status(31 downto 24) <= std_logic_vector(rx_link_epoch_counter);
+    -- bit 3 was tx_usb_speed_mismatch OR rx_usb_speed_mismatch, combining two
+    -- unrelated clock domains combinationally. Deleted: redundant with bits
+    -- 4/5 below, which the host can OR itself.
+    rf_link_status(3)            <= '0';
+    rf_link_status(4)            <= rx_usb_speed_mismatch_sys;
+    rf_link_status(5)            <= tx_usb_speed_mismatch_sys;
+    -- bit 6 was the same OR-of-two-domains pattern as bit 3, over
+    -- protocol_start_violation instead. Deleted for the same reason,
+    -- redundant with bits 7/18.
+    rf_link_status(6)            <= '0';
+    rf_link_status(7)            <= rx_protocol_start_violation_sys;
+    -- Epoch acknowledgement. Each direction mirrors the toggle it actually
+    -- acted on, so comparing that mirror against the toggle we issued proves
+    -- the direction consumed THIS epoch -- not merely that it is running.
+    --
+    -- link_active cannot answer this: it rises with the start but also drops
+    -- on stop or abort while the toggle stands still, so it would read "not
+    -- applied" after a clean stop even though the start was consumed. Nor can
+    -- the top level re-derive an ack from its own copy of the toggle: that
+    -- would prove only that the top level knows what it sent.
+    --
+    -- epoch_valid is separate on purpose. After reset the issued toggle and a
+    -- zeroed ack compare equal, so the equality alone would report an applied
+    -- epoch before any direction had consumed one. epoch_valid is cleared by
+    -- reset and set only by an actual start, so the host has to see both.
+    rf_link_status(8)            <= rx_epoch_current;
+    rf_link_status(9)            <= tx_epoch_current;
+    rf_link_status(10)           <= rx_epoch_current and tx_epoch_current and
+                                    rx_epoch_valid_sys and tx_epoch_valid_sys;
+    rf_link_status(11)           <= rx_epoch_valid_sys;
+    rf_link_status(12)           <= tx_epoch_valid_sys;
+    rf_link_status(13)           <= rf_link_speed_disagree;
+    rf_link_status(15 downto 14) <= (others => '0');
+    rf_link_status(16)           <= rx_link_active_sys;
+    rf_link_status(17)           <= rx_speed_latched_sys;
+    rf_link_status(18)           <= tx_protocol_start_violation_sys;
+    rf_link_status(23 downto 19) <= (others => '0');
+    rf_link_status(27 downto 24) <= std_logic_vector(rf_epoch_count_sys(3 downto 0));
+    rf_link_status(31 downto 28) <= "0001";
 
     -- SI53304 controls / clock output enables
     -- Inert termination for the Wishbone extension conduit.
@@ -669,6 +723,8 @@ begin
             link_epoch_counter         => tx_link_epoch_counter,
             fault_sticky               => tx_fault_sticky,
             abort_active               => tx_abort_active,
+            epoch_ack                  => tx_epoch_ack,
+            epoch_valid                => tx_epoch_valid,
 
             -- Triggering
             trigger_arm          => tx_trigger_ctl.arm,
@@ -761,6 +817,8 @@ begin
             link_epoch_counter         => rx_link_epoch_counter,
             fault_sticky               => rx_fault_sticky,
             abort_active               => rx_abort_active,
+            epoch_ack                  => rx_epoch_ack,
+            epoch_valid                => rx_epoch_valid,
 
             -- Triggering
             trigger_arm            => rx_trigger_ctl.arm,
@@ -973,6 +1031,168 @@ begin
             start_speed_disagreement =>  rf_link_speed_disagree,
             host_epoch_tag           =>  rf_link_epoch_tag
         );
+
+    -- RF_LINK_STATUS CDC: synchronize the eight tx_*/rx_* single-bit flags
+    -- from tx_clock/rx_clock into sys_clock. Using the same synchronizer.vhd
+    -- entity and instantiation style as every other crossing in this file.
+    U_sync_tx_link_active : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_link_active,
+            sync                =>  tx_link_active_sys
+        );
+
+    U_sync_tx_speed_latched : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_speed_latched,
+            sync                =>  tx_speed_latched_sys
+        );
+
+    U_sync_tx_usb_speed_mismatch : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_usb_speed_mismatch,
+            sync                =>  tx_usb_speed_mismatch_sys
+        );
+
+    U_sync_tx_protocol_start_violation : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_protocol_start_violation,
+            sync                =>  tx_protocol_start_violation_sys
+        );
+
+    -- Epoch acknowledgement coming back. These are levels that change only on
+    -- an epoch boundary, so an ordinary two-flop synchroniser is the right
+    -- treatment; there is no multi-bit word to keep coherent.
+    U_sync_rx_epoch_ack : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_epoch_ack,
+            sync                =>  rx_epoch_ack_sys
+        );
+
+    U_sync_tx_epoch_ack : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_epoch_ack,
+            sync                =>  tx_epoch_ack_sys
+        );
+
+    U_sync_rx_epoch_valid : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_epoch_valid,
+            sync                =>  rx_epoch_valid_sys
+        );
+
+    U_sync_tx_epoch_valid : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_epoch_valid,
+            sync                =>  tx_epoch_valid_sys
+        );
+
+    -- Compare against the toggle that actually went to the directions, not
+    -- against the local mirror of it: the mirror only proves what we sent.
+    rx_epoch_current <= '1' when rx_epoch_ack_sys = rf_link_start_toggle else '0';
+    tx_epoch_current <= '1' when tx_epoch_ack_sys = rf_link_start_toggle else '0';
+
+    U_sync_rx_link_active : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_link_active,
+            sync                =>  rx_link_active_sys
+        );
+
+    U_sync_rx_speed_latched : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_speed_latched,
+            sync                =>  rx_speed_latched_sys
+        );
+
+    U_sync_rx_usb_speed_mismatch : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_usb_speed_mismatch,
+            sync                =>  rx_usb_speed_mismatch_sys
+        );
+
+    U_sync_rx_protocol_start_violation : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_protocol_start_violation,
+            sync                =>  rx_protocol_start_violation_sys
+        );
+
+    -- Epoch toggle/count mirror, entirely in sys_clock: advances on the same
+    -- edge that rf_link_start_toggle changes (i.e. the cycle the controller
+    -- accepts a start), so it never needs its own CDC -- rf_link_start_toggle
+    -- is already native to this domain.
+    epoch_mirror : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rf_link_start_toggle_prev <= '0';
+            rf_epoch_toggle_sys       <= '0';
+            rf_epoch_count_sys        <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            rf_link_start_toggle_prev <= rf_link_start_toggle;
+            if( rf_link_start_toggle /= rf_link_start_toggle_prev ) then
+                rf_epoch_toggle_sys <= not rf_epoch_toggle_sys;
+                rf_epoch_count_sys  <= rf_epoch_count_sys + 1;
+            end if;
+        end if;
+    end process;
 
     -- Both directions take the SAME start toggle, so one host command is one
     -- shared epoch. Two independent latches would let RX sit in the old
