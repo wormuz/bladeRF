@@ -388,6 +388,13 @@ architecture core_bladerf of bladerf_core is
     signal dwell_rd_index         : unsigned(3 downto 0) := (others => '0');
     signal dwell_rd_data          : std_logic_vector(31 downto 0) := (others => '0');
     signal dwell_generation       : unsigned(15 downto 0) := (others => '0');
+
+    -- Trigger threshold config: system domain word, its rx_clock copy, and
+    -- the decoded 48-bit value.
+    signal dwell_cfg_word         : std_logic_vector(31 downto 0);
+    signal dwell_cfg_rx           : std_logic_vector(31 downto 0);
+    signal dwell_shift            : natural range 0 to 24 := 0;
+    signal dwell_threshold        : unsigned(47 downto 0) := (others => '0');
     signal pretrig_frozen_sys     : std_logic;
     signal pretrig_wrapped_sys    : std_logic;
     signal dwell_triggered_sys    : std_logic;
@@ -672,6 +679,7 @@ begin
             pretrig_data_export             => pretrig_rd_data,
             dwell_status_export             => dwell_status_word,
             dwell_readout_export            => dwell_rd_data,
+            dwell_cfg_export                => dwell_cfg_word,
             rf_link_cfg_export              => rf_link_cfg_word,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
@@ -779,9 +787,7 @@ begin
                 reset         => rx_reset,
                 sample        => adc_streams(0),
                 dwell_start   => dwell_start,
-                -- Zero disables the trigger and leaves measurement running,
-                -- which is what we want until the host owns this register.
-                threshold     => (others => '0'),
+                threshold     => dwell_threshold,
                 summary_valid => dwell_summary_valid,
                 energy_sum    => dwell_energy_sum,
                 peak          => dwell_peak,
@@ -855,6 +861,53 @@ begin
     -- straight into a system-domain word -- the same trap as oldest_index,
     -- just harder to see.
     dwell_rd_index <= unsigned(pretrig_addr_word(19 downto 16));
+
+    -- Trigger threshold, host-programmed, as mantissa and shift.
+    --
+    -- The threshold is compared against a window energy sum: 1024 samples of
+    -- I^2+Q^2 at full scale 2048 reaches 2^33, so the field is 48 bits wide
+    -- and a PIO carries 32. Rather than a second register for the top bits,
+    -- the host writes a 24-bit mantissa in 23:0 and a shift in 29:24, giving
+    -- mantissa << shift. That covers the whole range at a resolution far
+    -- finer than any threshold is ever set to -- this decides "is there
+    -- energy here", not a calibrated level.
+    --
+    -- ⛔ Zero still means the trigger is disabled and measurement continues.
+    -- That is the reset state and the safe one: dwell_summary reports every
+    -- dwell either way, and a threshold nobody set must not silently start
+    -- classifying dwells.
+    -- The register lives in the system domain and the analyser runs on
+    -- rx_clock, so the word crosses through the same handshake block every
+    -- other bundled-data crossing in this design uses -- and which the SDC
+    -- already constrains as a pair. Synchronising 30 bits individually
+    -- could hand the analyser a threshold that was never written.
+    --
+    -- dest_req tied high: the far side has no reason to refuse a value it
+    -- only ever reads, and holding it high means the newest word is always
+    -- on its way across.
+    U_dwell_cfg_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => sys_reset,
+            source_clock => sys_clock,
+            source_data  => dwell_cfg_word,
+            dest_reset   => rx_reset,
+            dest_clock   => rx_clock,
+            dest_data    => dwell_cfg_rx,
+            dest_req     => '1',
+            dest_ack     => open
+        );
+
+    -- Shift saturated at 24, not masked: 24 + the 24-bit mantissa is exactly
+    -- the 48-bit field. A larger shift left unclamped would push the value
+    -- off the top and read as zero -- which means "trigger disabled", the
+    -- opposite of the very high threshold that was asked for.
+    dwell_shift <= to_integer(unsigned(dwell_cfg_rx(29 downto 24)))
+                   when unsigned(dwell_cfg_rx(29 downto 24)) <= 24
+                   else 24;
+
+    dwell_threshold <= shift_left(
+        resize(unsigned(dwell_cfg_rx(23 downto 0)), 48), dwell_shift);
 
     -- Read address for the ring, from the host. Only the low DEPTH_LOG2
     -- bits mean anything; the rest are ignored rather than checked, since a

@@ -426,6 +426,19 @@ set_instance_parameter_value pretrig_data {width} {32}
 #
 # One word rather than five PIOs: these are read together or not at all, and
 # a single read cannot show two of them from different instants.
+add_instance dwell_cfg altera_avalon_pio
+set_instance_parameter_value dwell_cfg {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value dwell_cfg {bitModifyingOutReg} {0}
+set_instance_parameter_value dwell_cfg {captureEdge} {0}
+set_instance_parameter_value dwell_cfg {direction} {Output}
+set_instance_parameter_value dwell_cfg {edgeType} {RISING}
+set_instance_parameter_value dwell_cfg {generateIRQ} {0}
+set_instance_parameter_value dwell_cfg {irqType} {LEVEL}
+set_instance_parameter_value dwell_cfg {resetValue} {0.0}
+set_instance_parameter_value dwell_cfg {simDoTestBenchWiring} {0}
+set_instance_parameter_value dwell_cfg {simDrivenValue} {0.0}
+set_instance_parameter_value dwell_cfg {width} {32}
+
 add_instance dwell_readout altera_avalon_pio
 set_instance_parameter_value dwell_readout {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value dwell_readout {bitModifyingOutReg} {0}
@@ -587,6 +600,7 @@ set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
 set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
 set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
 set_interface_property dwell_readout EXPORT_OF dwell_readout.external_connection
+set_interface_property dwell_cfg EXPORT_OF dwell_cfg.external_connection
 set_interface_property rf_link_cfg EXPORT_OF rf_link_cfg.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
 add_interface xb_gpio_dir conduit end
@@ -693,6 +707,10 @@ add_connection nios2.data_master pretrig_data.s1
 set_connection_parameter_value nios2.data_master/pretrig_data.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/pretrig_data.s1 baseAddress {0x9580}
 set_connection_parameter_value nios2.data_master/pretrig_data.s1 defaultConnection {0}
+add_connection nios2.data_master dwell_cfg.s1
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 baseAddress {0x95e0}
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 defaultConnection {0}
 add_connection nios2.data_master dwell_readout.s1
 set_connection_parameter_value nios2.data_master/dwell_readout.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/dwell_readout.s1 baseAddress {0x95c0}
@@ -798,6 +816,7 @@ add_connection system_clock.clk vctcxo_tamer_0.clk1
 
 add_connection system_clock.clk pretrig_addr.clk
 add_connection system_clock.clk pretrig_data.clk
+add_connection system_clock.clk dwell_cfg.clk
 add_connection system_clock.clk dwell_readout.clk
 add_connection system_clock.clk dwell_status.clk
 add_connection system_clock.clk rf_link_status.clk
@@ -842,6 +861,7 @@ add_connection system_clock.clk_reset vctcxo_tamer_0.reset1
 
 add_connection system_clock.clk_reset pretrig_addr.reset
 add_connection system_clock.clk_reset pretrig_data.reset
+add_connection system_clock.clk_reset dwell_cfg.reset
 add_connection system_clock.clk_reset dwell_readout.reset
 add_connection system_clock.clk_reset dwell_status.reset
 add_connection system_clock.clk_reset rf_link_status.reset
