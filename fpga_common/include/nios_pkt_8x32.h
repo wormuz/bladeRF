@@ -202,6 +202,58 @@
  * closed and refuses the epoch rather than guessing which one is right. */
 #define NIOS_PKT_8x32_TARGET_RF_LINK_CFG     0x82
 
+/* Dwell status (read-only), sweep revision.
+ *
+ * One word describing the dwell that just ended and the state of the
+ * pre-trigger ring. Read as a unit: these bits are only meaningful together,
+ * and separate reads would show them from different instants.
+ *
+ *   bit  0      frozen         the ring holds a trigger's history and has
+ *                              stopped recording
+ *   bit  1      wrapped        the ring filled at least once, so all
+ *                              PRETRIG_DEPTH entries are history. When
+ *                              clear, only entries 0..oldest-1 are valid
+ *   bit  2      triggered      the dwell crossed the energy threshold for
+ *                              long enough. Advisory: the host decides what
+ *                              to do, the fabric never discards a dwell
+ *   bit  3      measure_valid  the receiver had settled. Low means the
+ *                              samples describe a gain transient rather
+ *                              than the band
+ *   bit  4      gain_too_high  the dwell clipped past 100 ppm, so its
+ *                              amplitude figures are bounded by the ADC
+ *                              rail, not by the signal
+ *   bits 15:5   reserved, read as zero
+ *   bits 27:16  oldest_index, where the ring's oldest sample lives. Only
+ *               meaningful with bit 1 set
+ *   bits 31:28  protocol version, currently 0x1
+ *
+ * Reads 0 on the hosted revision, which instantiates none of this: 0 means
+ * "nothing frozen, nothing triggered", which is the truth there. */
+#define NIOS_PKT_8x32_TARGET_DWELL_STATUS    0x83
+
+/* Pre-trigger ring read (read-only), sweep revision.
+ *
+ * The returned word is one IQ sample, Q in bits 31:16 and I in bits 15:0,
+ * both signed 16-bit in the same SC16 Q11 format the sample path uses --
+ * full scale 2048, not 32768.
+ *
+ * Paged, because the packet's addr field is 8 bits and the ring is 4096
+ * deep. WRITE this target to set the page base (low 12 bits of data), then
+ * READ with addr as the offset within the page; the entry returned is
+ * base + addr. The host writes a base every 256 entries.
+ *
+ * The field was not widened on purpose: this is the vendor packet format
+ * and it stays compatible.
+ *
+ * ⛔ addr is a RAW ring index, not an offset from the oldest sample. The
+ * ring wrapped, so reading 0..N-1 in order yields a rotated capture: correct
+ * samples in the wrong order, which looks like a signal that begins
+ * mid-burst. Start from the oldest_index reported by DWELL_STATUS and wrap.
+ *
+ * Only meaningful while DWELL_STATUS reports frozen; otherwise the write
+ * side is still overwriting entries as they are read. */
+#define NIOS_PKT_8x32_TARGET_PRETRIG_READ    0x84
+
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
 #define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02

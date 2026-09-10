@@ -29,6 +29,19 @@
 #include "devices.h"
 #include "debug.h"
 
+#ifdef BOARD_BLADERF_MICRO
+/* Page base for pre-trigger ring reads. See the PRETRIG_READ case below:
+ * the packet carries an 8-bit address and the ring is 4096 deep, so the
+ * host writes a base and then reads 256 entries relative to it.
+ *
+ * File-scope state in a packet handler is worth being uneasy about, but the
+ * alternative is a wider address field in a vendor packet format we keep
+ * compatible. It is only read by PRETRIG_READ, and a stale base yields
+ * samples from the wrong part of a frozen ring -- not a hang, and visible
+ * because the host wrote the base it expects. */
+static uint16_t pretrig_base = 0;
+#endif  // BOARD_BLADERF_MICRO
+
 static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
 {
     switch (id) {
@@ -68,6 +81,35 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * Qsys PIO exists -- see rf_link_status_read(). */
         case NIOS_PKT_8x32_TARGET_RF_LINK_STATUS:
             *data = rf_link_status_read();
+            break;
+#endif  // BOARD_BLADERF_MICRO
+
+#ifdef BOARD_BLADERF_MICRO
+        /* Dwell summary and pre-trigger ring state. Reads 0 on revisions
+         * that do not instantiate the PIOs, which is the honest answer
+         * there: nothing frozen, nothing triggered. */
+        case NIOS_PKT_8x32_TARGET_DWELL_STATUS:
+            *data = dwell_status_read();
+            break;
+
+        /* One entry of the pre-trigger ring.
+         *
+         * The packet's addr field is 8 bits (nios_pkt_8x32.h:98) and the
+         * ring is 4096 deep, so addr alone reaches 1/16 of it. Widening the
+         * field is not available: this is the vendor packet format and we
+         * keep it compatible.
+         *
+         * So the index is split. A write to this target sets the base --
+         * any 32-bit value, of which the low 12 bits are used -- and a read
+         * returns base + addr. The host writes a base every 256 entries and
+         * reads 256 words between them.
+         *
+         * addr is a RAW ring index, not an offset from the oldest sample.
+         * The caller converts using oldest_index from DWELL_STATUS; the
+         * ring wrapped, so reading 0..N-1 in order gives a rotated capture
+         * that looks like a burst starting in the middle. */
+        case NIOS_PKT_8x32_TARGET_PRETRIG_READ:
+            *data = pretrig_read((uint16_t) (pretrig_base + addr));
             break;
 #endif  // BOARD_BLADERF_MICRO
 
@@ -117,6 +159,13 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * word are toggles -- it says "start", the firmware flips the bit.
          * Encoding the toggle state on the host would mean two writers
          * racing over one shadow. */
+        /* Set the page base for subsequent ring reads. Masked to the ring
+         * depth here rather than trusted: a base past the end would other-
+         * wise alias to a valid entry and return a plausible wrong sample. */
+        case NIOS_PKT_8x32_TARGET_PRETRIG_READ:
+            pretrig_base = (uint16_t) (data & (PRETRIG_DEPTH - 1u));
+            break;
+
         case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
             switch (addr) {
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:

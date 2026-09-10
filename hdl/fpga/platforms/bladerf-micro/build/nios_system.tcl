@@ -372,6 +372,73 @@ set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
 set_instance_parameter_value rf_link_status {width} {32}
 
+# Pre-trigger ring drain. Two PIOs, because a memory needs an address and a
+# datum and a PIO carries one word.
+#
+#   pretrig_addr   Output. Low 12 bits select the entry; the ring is 4096
+#                  deep. Bits 31..12 are unused, not reserved for anything.
+#   pretrig_data   Input. The entry, Q in 31..16 and I in 15..0, matching
+#                  the packing the fabric writes.
+#
+# Read sequence: write the address, read the datum. The buffer registers its
+# read port, so the datum is valid the cycle after the address -- and any
+# Avalon read takes longer than that, so no wait state is needed.
+#
+# Deliberately not a burst or DMA path: draining 4096 words happens once per
+# trigger, during a 102.5 ms dwell, while the host has nothing else to do
+# with this register window. A DMA engine here would be more logic than the
+# buffer it serves.
+add_instance pretrig_addr altera_avalon_pio
+set_instance_parameter_value pretrig_addr {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value pretrig_addr {bitModifyingOutReg} {0}
+set_instance_parameter_value pretrig_addr {captureEdge} {0}
+set_instance_parameter_value pretrig_addr {direction} {Output}
+set_instance_parameter_value pretrig_addr {edgeType} {RISING}
+set_instance_parameter_value pretrig_addr {generateIRQ} {0}
+set_instance_parameter_value pretrig_addr {irqType} {LEVEL}
+set_instance_parameter_value pretrig_addr {resetValue} {0.0}
+set_instance_parameter_value pretrig_addr {simDoTestBenchWiring} {0}
+set_instance_parameter_value pretrig_addr {simDrivenValue} {0.0}
+set_instance_parameter_value pretrig_addr {width} {32}
+
+add_instance pretrig_data altera_avalon_pio
+set_instance_parameter_value pretrig_data {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value pretrig_data {bitModifyingOutReg} {0}
+set_instance_parameter_value pretrig_data {captureEdge} {0}
+set_instance_parameter_value pretrig_data {direction} {Input}
+set_instance_parameter_value pretrig_data {edgeType} {RISING}
+set_instance_parameter_value pretrig_data {generateIRQ} {0}
+set_instance_parameter_value pretrig_data {irqType} {LEVEL}
+set_instance_parameter_value pretrig_data {resetValue} {0.0}
+set_instance_parameter_value pretrig_data {simDoTestBenchWiring} {0}
+set_instance_parameter_value pretrig_data {simDrivenValue} {0.0}
+set_instance_parameter_value pretrig_data {width} {32}
+
+# Dwell status. Input only. The summary the host reads to decide whether the
+# ring is worth draining at all:
+#
+#   0       frozen        the ring holds a trigger's history
+#   1       wrapped       it filled once, so all 4096 entries are history
+#   2       triggered     the dwell that just ended crossed the threshold
+#   3       measure_valid the receiver had settled
+#   4       gain_too_high the previous dwell clipped past 100 ppm
+#   16..27  oldest_index  where to start reading when wrapped
+#
+# One word rather than five PIOs: these are read together or not at all, and
+# a single read cannot show two of them from different instants.
+add_instance dwell_status altera_avalon_pio
+set_instance_parameter_value dwell_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value dwell_status {bitModifyingOutReg} {0}
+set_instance_parameter_value dwell_status {captureEdge} {0}
+set_instance_parameter_value dwell_status {direction} {Input}
+set_instance_parameter_value dwell_status {edgeType} {RISING}
+set_instance_parameter_value dwell_status {generateIRQ} {0}
+set_instance_parameter_value dwell_status {irqType} {LEVEL}
+set_instance_parameter_value dwell_status {resetValue} {0.0}
+set_instance_parameter_value dwell_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value dwell_status {simDrivenValue} {0.0}
+set_instance_parameter_value dwell_status {width} {32}
+
 # RF link config. Output only: the host declares a link generation and the
 # fabric obeys it. This is the write half of the mechanism above.
 #
@@ -503,6 +570,9 @@ add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
 set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
+set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
+set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
+set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
 set_interface_property rf_link_cfg EXPORT_OF rf_link_cfg.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
 add_interface xb_gpio_dir conduit end
@@ -601,6 +671,18 @@ set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 baseAddress {0x10000000}
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 defaultConnection {0}
 
+add_connection nios2.data_master pretrig_addr.s1
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 baseAddress {0x9560}
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 defaultConnection {0}
+add_connection nios2.data_master pretrig_data.s1
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 baseAddress {0x9580}
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 defaultConnection {0}
+add_connection nios2.data_master dwell_status.s1
+set_connection_parameter_value nios2.data_master/dwell_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/dwell_status.s1 baseAddress {0x95a0}
+set_connection_parameter_value nios2.data_master/dwell_status.s1 defaultConnection {0}
 add_connection nios2.data_master rf_link_status.s1
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
@@ -696,6 +778,9 @@ add_connection system_clock.clk tx_trigger_ctl.clk
 
 add_connection system_clock.clk vctcxo_tamer_0.clk1
 
+add_connection system_clock.clk pretrig_addr.clk
+add_connection system_clock.clk pretrig_data.clk
+add_connection system_clock.clk dwell_status.clk
 add_connection system_clock.clk rf_link_status.clk
 add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
@@ -736,6 +821,9 @@ add_connection system_clock.clk_reset tx_trigger_ctl.reset
 
 add_connection system_clock.clk_reset vctcxo_tamer_0.reset1
 
+add_connection system_clock.clk_reset pretrig_addr.reset
+add_connection system_clock.clk_reset pretrig_data.reset
+add_connection system_clock.clk_reset dwell_status.reset
 add_connection system_clock.clk_reset rf_link_status.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset

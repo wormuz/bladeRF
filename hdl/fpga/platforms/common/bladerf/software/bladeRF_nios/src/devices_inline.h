@@ -103,6 +103,87 @@ static inline uint32_t rf_link_status_read(void)
     #endif
 }
 
+/* Dwell status, sweep revision only.
+ *
+ * The hosted image does not instantiate these PIOs, so every accessor here
+ * degrades to "nothing to report" rather than failing to build. That is the
+ * same #ifdef discipline as rf_link_status above, and for the same reason:
+ * one software tree serves both revisions.
+ *
+ * Bit layout is composed in bladerf_core.vhd:
+ *
+ *   0        frozen         the pre-trigger ring holds a trigger's history
+ *   1        wrapped        it filled once, so all 4096 entries are history
+ *   2        triggered      the dwell that ended crossed the threshold
+ *   3        measure_valid  the receiver had settled
+ *   4        gain_too_high  the previous dwell clipped past 100 ppm
+ *   16..27   oldest_index   where to start reading, valid only when wrapped
+ *   28..31   format version, currently 1
+ */
+#define DWELL_STATUS_FROZEN         (1u << 0)
+#define DWELL_STATUS_WRAPPED        (1u << 1)
+#define DWELL_STATUS_TRIGGERED      (1u << 2)
+#define DWELL_STATUS_MEASURE_VALID  (1u << 3)
+#define DWELL_STATUS_GAIN_TOO_HIGH  (1u << 4)
+#define DWELL_STATUS_OLDEST_SHIFT   16
+#define DWELL_STATUS_OLDEST_MASK    0xfffu
+
+#define PRETRIG_DEPTH               4096u
+
+static inline uint32_t dwell_status_read(void)
+{
+    #ifdef DWELL_STATUS_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(DWELL_STATUS_BASE);
+    #else
+    return 0;
+    #endif
+}
+
+/* One entry of the pre-trigger ring: write the address, read the datum.
+ *
+ * The buffer registers its read port, so the datum is valid the cycle after
+ * the address. An Avalon write followed by an Avalon read takes far longer
+ * than that, so no explicit wait is needed -- but the two accesses must not
+ * be reordered, hence the separate statements rather than one expression.
+ *
+ * Reading while the ring is not frozen returns whatever the write side is
+ * currently overwriting. The caller checks DWELL_STATUS_FROZEN first; this
+ * function deliberately does not, so a caller that wants a live peek can
+ * have one. */
+static inline uint32_t pretrig_read(uint16_t index)
+{
+    #if defined(PRETRIG_ADDR_BASE) && defined(PRETRIG_DATA_BASE)
+    IOWR_ALTERA_AVALON_PIO_DATA(PRETRIG_ADDR_BASE,
+                                index & (PRETRIG_DEPTH - 1u));
+    return IORD_ALTERA_AVALON_PIO_DATA(PRETRIG_DATA_BASE);
+    #else
+    (void) index;
+    return 0;
+    #endif
+}
+
+/* Ring index n counting from the oldest sample, wrapping.
+ *
+ * Before the ring has wrapped there is no history older than entry zero, so
+ * the oldest index is zero and this is the identity. After wrapping the
+ * write pointer sits on the oldest entry -- the slot about to be
+ * overwritten -- and the sequence runs from there.
+ *
+ * Getting this wrong yields a capture that is correct but rotated, which
+ * looks like a signal that starts in the middle and is easy to mistake for
+ * a real one. */
+static inline uint16_t pretrig_index_from_oldest(uint32_t status, uint16_t n)
+{
+    uint16_t oldest = 0;
+
+    if (status & DWELL_STATUS_WRAPPED) {
+        oldest = (uint16_t) ((status >> DWELL_STATUS_OLDEST_SHIFT)
+                             & DWELL_STATUS_OLDEST_MASK);
+    }
+
+    return (uint16_t) ((oldest + n) & (PRETRIG_DEPTH - 1u));
+}
+
 /* RF link config: the write half. The host declares a link generation here
  * and the fabric obeys it; rf_link_status_read() above reports what the
  * fabric actually did with it.

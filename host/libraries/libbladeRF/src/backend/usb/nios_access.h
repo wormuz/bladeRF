@@ -273,6 +273,44 @@ int nios_rffe_control_write(struct bladerf *dev, uint32_t value);
  */
 int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
 
+/* Pre-trigger ring depth in samples, fixed by the gateware (DEPTH_LOG2 = 12
+ * in bladerf_core.vhd). Here so callers can size a buffer without guessing;
+ * a mismatch would silently truncate or over-read a drain. */
+#define BLADERF_PRETRIG_DEPTH 4096u
+
+/**
+ * Read the dwell status word: pre-trigger ring state and the verdict on the
+ * dwell that just ended. Sweep revision only -- the hosted image reads 0,
+ * which is the truth there: nothing frozen, nothing triggered.
+ *
+ * Bit layout is documented at NIOS_PKT_8x32_TARGET_DWELL_STATUS.
+ */
+int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
+
+/**
+ * Read one entry of the pre-trigger ring.
+ *
+ * @param   index   Raw ring index, NOT an offset from the oldest sample.
+ *                  The ring wraps, so a capture read from index 0 is
+ *                  rotated -- start from the oldest_index in the dwell
+ *                  status word.
+ *
+ * Costs two transactions (page write, then read). To drain more than a few
+ * entries use nios_pretrig_read_block().
+ */
+int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value);
+
+/**
+ * Read `count` consecutive ring entries starting at `start`, wrapping at
+ * the end of the ring. Writes the page base only when it changes, so a full
+ * drain costs count reads plus seventeen writes rather than 2*count.
+ *
+ * Only meaningful while the status word reports frozen; otherwise the
+ * fabric is still overwriting entries as they are read.
+ */
+int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
+                            uint32_t *buf, size_t count);
+
 /**
  * Issue an RF link control command.
  *

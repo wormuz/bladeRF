@@ -820,6 +820,73 @@ int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_STATUS, 0, value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Read 0x%08x\n", __FUNCTION__, *value);
+    }
+#endif
+
+    return status;
+}
+
+int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value)
+{
+    int status;
+
+    /* Paged: the packet's address field is 8 bits and the ring is 4096
+     * deep. Write the page base, then read the offset within it. Two
+     * transactions per sample would be wasteful, so callers draining the
+     * whole ring should use nios_pretrig_read_block() below. */
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ, 0,
+                             index & ~0xffu);
+    if (status != 0) {
+        return status;
+    }
+
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                          (uint8_t)(index & 0xff), value);
+}
+
+int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
+                            uint32_t *buf, size_t count)
+{
+    int status;
+    size_t i;
+    uint16_t base = 0xffff;   /* impossible, forces the first write */
+
+    for (i = 0; i < count; i++) {
+        uint16_t index = (uint16_t)((start + i) & (BLADERF_PRETRIG_DEPTH - 1));
+        uint16_t page  = index & ~0xffu;
+
+        /* One base write per page rather than per sample. The ring is read
+         * in oldest-first order, which wraps, so the page changes at most
+         * seventeen times over a full drain -- sixteen pages plus the wrap
+         * back to where it started. */
+        if (page != base) {
+            status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                                     0, page);
+            if (status != 0) {
+                return status;
+            }
+            base = page;
+        }
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                                (uint8_t)(index & 0xff), &buf[i]);
+        if (status != 0) {
+            return status;
+        }
+    }
+
+    return 0;
+}
+
 /* The command goes in the address field, not the data field. The underlying
  * hardware bits are toggles, so "start" is a transition rather than a value,
  * and keeping that knowledge in the Nios means the host cannot desynchronise
