@@ -401,9 +401,19 @@ set hs_pairs [list \
     {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
-    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    \
-    {*pps_counter:*|handshake:U_handshake|source_holding[*]}      {*vctcxo_tamer:*|pps_*.count[*]}         \
-    {*U_handshake_tune_mode|source_holding[*]}                    {*vctcxo_tamer:*|tune_ref_mode*}         ]
+    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    ]
+
+# vctcxo_tamer.vhd has two more handshake instances, and they are NOT listed
+# above because this revision does not instantiate that entity at all:
+# bladerf-hosted.vhd never names it, and the vctcxo_tamer_0 that does appear
+# in the fitted netlist is an altera_avalon_onchip_memory2 from the Qsys
+# system that happens to share the name (nios_system.tcl:331).
+#
+# Constraints for them were written and had to be removed: they matched
+# nothing, which the count check reported as a critical warning rather than
+# passing over in silence. If the entity is ever instantiated here, its pairs
+# are pps_counter's source_holding into pps_1s/10s/100s.count, and
+# U_handshake_tune_mode's into tune_ref_mode.
 
 set hs_done 0
 foreach { src_pat dst_pat } $hs_pairs {
