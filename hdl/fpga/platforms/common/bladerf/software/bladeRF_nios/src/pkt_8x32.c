@@ -92,6 +92,17 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             *data = dwell_status_read();
             break;
 
+        /* One word of the latched dwell summary; addr is the word index,
+         * 15 being the generation counter.
+         *
+         * The consistency check belongs to the caller, not here: it needs
+         * the generation before and after the whole record, and this
+         * protocol carries one word per packet. libbladeRF's
+         * nios_dwell_summary_read does it. */
+        case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
+            *data = dwell_word_read(addr);
+            break;
+
         /* One entry of the pre-trigger ring.
          *
          * The packet's addr field is 8 bits (nios_pkt_8x32.h:98) and the

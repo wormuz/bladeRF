@@ -287,6 +287,43 @@ int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
  */
 int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
 
+/* Word indices within the latched dwell summary. Wide fields are split low
+ * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
+#define BLADERF_DWELL_WORD_ENERGY_LO    0
+#define BLADERF_DWELL_WORD_ENERGY_HI    1
+#define BLADERF_DWELL_WORD_PEAK         2
+#define BLADERF_DWELL_WORD_CLIP_COUNT   3
+#define BLADERF_DWELL_WORD_SAMPLE_COUNT 4
+#define BLADERF_DWELL_WORD_TS_LO        5
+#define BLADERF_DWELL_WORD_TS_HI        6
+#define BLADERF_DWELL_WORD_MEAN_POWER   7
+#define BLADERF_DWELL_WORD_FLOOR_LO     8
+#define BLADERF_DWELL_WORD_FLOOR_HI     9
+#define BLADERF_DWELL_WORD_PEAKWIN_LO   10
+#define BLADERF_DWELL_WORD_PEAKWIN_HI   11
+#define BLADERF_DWELL_WORD_FIRST_WINDOW 12
+#define BLADERF_DWELL_WORD_COUNT        13
+#define BLADERF_DWELL_WORD_GENERATION   15
+
+/**
+ * Read the whole latched dwell summary, consistently.
+ *
+ * Reads the generation before and after the record and retries if a dwell
+ * boundary landed in between. Without that the words can come from two
+ * different dwells -- an energy from one band with a peak from another,
+ * which looks like a measurement and is not.
+ *
+ * @param   words   Array of at least BLADERF_DWELL_WORD_COUNT entries.
+ * @param   gen     Receives the generation the record belongs to. May be
+ *                  NULL. Zero is a valid generation: a device that has just
+ *                  reset has not completed a dwell yet.
+ *
+ * @return 0 on success, BLADERF_ERR_UNEXPECTED if the record could not be
+ *         read consistently in four attempts, or a transport error.
+ */
+int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words,
+                            uint32_t *gen);
+
 /**
  * Read one entry of the pre-trigger ring.
  *

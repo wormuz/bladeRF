@@ -150,6 +150,83 @@ static inline uint32_t dwell_status_read(void)
  * currently overwriting. The caller checks DWELL_STATUS_FROZEN first; this
  * function deliberately does not, so a caller that wants a live peek can
  * have one. */
+/* Latched dwell summary: thirteen words plus a generation counter.
+ *
+ * The index shares the address register with the pre-trigger ring -- bits
+ * 11:0 select a ring entry, 19:16 a summary word -- because the host reads
+ * one or the other, never both at once.
+ *
+ * ⛔ A record read word by word is only meaningful if the generation is the
+ * same before and after. The fabric latches the whole summary on each dwell
+ * boundary, so a read that straddles one returns an energy from one band
+ * with a peak from another and looks entirely plausible. Use
+ * dwell_summary_read() rather than calling this in a loop. */
+#define DWELL_WORD_ENERGY_LO    0u
+#define DWELL_WORD_ENERGY_HI    1u
+#define DWELL_WORD_PEAK         2u
+#define DWELL_WORD_CLIP_COUNT   3u
+#define DWELL_WORD_SAMPLE_COUNT 4u
+#define DWELL_WORD_TS_LO        5u
+#define DWELL_WORD_TS_HI        6u
+#define DWELL_WORD_MEAN_POWER   7u
+#define DWELL_WORD_FLOOR_LO     8u
+#define DWELL_WORD_FLOOR_HI     9u
+#define DWELL_WORD_PEAKWIN_LO   10u
+#define DWELL_WORD_PEAKWIN_HI   11u
+#define DWELL_WORD_FIRST_WINDOW 12u
+#define DWELL_WORD_COUNT        13u
+#define DWELL_WORD_GENERATION   15u
+
+static inline uint32_t dwell_word_read(uint8_t word)
+{
+    #if defined(PRETRIG_ADDR_BASE) && defined(DWELL_READOUT_BASE)
+    IOWR_ALTERA_AVALON_PIO_DATA(PRETRIG_ADDR_BASE,
+                                ((uint32_t)(word & 0xfu)) << 16);
+    return IORD_ALTERA_AVALON_PIO_DATA(DWELL_READOUT_BASE);
+    #else
+    (void) word;
+    return 0;
+    #endif
+}
+
+/* Read the whole summary, retrying until it is consistent.
+ *
+ * Returns true and stores the record's generation in *gen. False means the
+ * record could not be read consistently -- a dwell boundary lands every
+ * 102.5 ms and reading fifteen registers takes microseconds, so repeated
+ * failure means something else is wrong and reporting it beats looping.
+ *
+ * The generation is a separate output rather than the return value because
+ * 0 is a legitimate generation: it is what the counter reads after reset,
+ * before the first dwell completes. Folding "failed" into the same number
+ * would make a freshly reset device look broken.
+ *
+ * out must have room for DWELL_WORD_COUNT words. */
+static inline bool dwell_summary_read(uint32_t *out, uint32_t *gen)
+{
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 4u; attempt++) {
+        uint32_t before = dwell_word_read(DWELL_WORD_GENERATION);
+        uint8_t i;
+
+        for (i = 0; i < DWELL_WORD_COUNT; i++) {
+            out[i] = dwell_word_read(i);
+        }
+
+        /* Equal means no dwell boundary landed while the words were being
+         * read, so they all come from the same measurement. */
+        if (dwell_word_read(DWELL_WORD_GENERATION) == before) {
+            if (gen != NULL) {
+                *gen = before;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static inline uint32_t pretrig_read(uint16_t index)
 {
     #if defined(PRETRIG_ADDR_BASE) && defined(PRETRIG_DATA_BASE)

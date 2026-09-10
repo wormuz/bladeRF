@@ -254,6 +254,36 @@
  * side is still overwriting entries as they are read. */
 #define NIOS_PKT_8x32_TARGET_PRETRIG_READ    0x84
 
+/* Dwell summary readout (read-only), sweep revision.
+ *
+ * addr selects a word of the latched summary:
+ *
+ *    0,1   energy_sum, low word first
+ *    2     peak
+ *    3     clip_count
+ *    4     sample_count
+ *    5,6   first_timestamp, low word first
+ *    7     mean_power        energy per window, dwell_energy >> WINDOW_LOG2
+ *    8,9   noise_floor       quietest window of the dwell
+ *   10,11  peak_window       loudest window
+ *   12     first_window      window index where the trigger first crossed
+ *   15     generation        advances once per completed dwell
+ *
+ * All values are in raw ADC units squared, summed -- no scaling, no dB. The
+ * fabric does not divide except by powers of two, so nothing here has been
+ * rounded on the way out.
+ *
+ * ⛔ Read word by word, this cannot be trusted on its own. The fabric
+ * latches the whole summary at each dwell boundary, so a read that
+ * straddles one returns an energy from one band with a peak from another --
+ * a record that describes no dwell and looks entirely plausible. Read the
+ * generation before and after and keep the record only if they match; that
+ * is what nios_dwell_summary_read() does.
+ *
+ * Generation 0 is legitimate: it is what a device reads after reset, before
+ * the first dwell completes. */
+#define NIOS_PKT_8x32_TARGET_DWELL_READOUT   0x85
+
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
 #define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02

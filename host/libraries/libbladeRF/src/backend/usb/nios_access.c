@@ -835,6 +835,55 @@ int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
+{
+    int status;
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 4; attempt++) {
+        uint32_t before, after;
+        uint8_t i;
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                BLADERF_DWELL_WORD_GENERATION, &before);
+        if (status != 0) {
+            return status;
+        }
+
+        for (i = 0; i < BLADERF_DWELL_WORD_COUNT; i++) {
+            status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                    i, &words[i]);
+            if (status != 0) {
+                return status;
+            }
+        }
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                BLADERF_DWELL_WORD_GENERATION, &after);
+        if (status != 0) {
+            return status;
+        }
+
+        /* Same generation either side means no dwell boundary landed while
+         * the words were being read, so they describe one measurement. A
+         * differing one is not an error -- it is the mechanism working. */
+        if (before == after) {
+            if (gen != NULL) {
+                *gen = before;
+            }
+            return 0;
+        }
+    }
+
+    /* Dwells are 102.5 ms apart and this is fifteen USB control transfers.
+     * Failing four times means the device is retuning far faster than a
+     * sweep does, or something else is wrong; looping forever would hide
+     * that. */
+    log_debug("%s: summary torn on four consecutive attempts\n",
+              __FUNCTION__);
+    return BLADERF_ERR_UNEXPECTED;
+}
+
 int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value)
 {
     int status;
