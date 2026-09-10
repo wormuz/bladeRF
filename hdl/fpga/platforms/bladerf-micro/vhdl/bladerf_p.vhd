@@ -129,6 +129,7 @@ package bladerf_p is
         pretrig_addr_export             :   out std_logic_vector(31 downto 0);
         pretrig_data_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');
         dwell_status_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        dwell_readout_export            :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rf_link_cfg_export              :   out std_logic_vector(31 downto 0);
         xb_gpio_in_port                 :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                :   out std_logic_vector(31 downto 0);

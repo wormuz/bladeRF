@@ -383,6 +383,11 @@ architecture core_bladerf of bladerf_core is
     signal pretrig_rd_data        : std_logic_vector(31 downto 0) := (others => '0');
     signal pretrig_addr_word      : std_logic_vector(31 downto 0);
     signal dwell_status_word      : std_logic_vector(31 downto 0);
+
+    -- Latched dwell summary read window.
+    signal dwell_rd_index         : unsigned(3 downto 0) := (others => '0');
+    signal dwell_rd_data          : std_logic_vector(31 downto 0) := (others => '0');
+    signal dwell_generation       : unsigned(15 downto 0) := (others => '0');
     signal pretrig_frozen_sys     : std_logic;
     signal pretrig_wrapped_sys    : std_logic;
     signal dwell_triggered_sys    : std_logic;
@@ -666,6 +671,7 @@ begin
             pretrig_addr_export             => pretrig_addr_word,
             pretrig_data_export             => pretrig_rd_data,
             dwell_status_export             => dwell_status_word,
+            dwell_readout_export            => dwell_rd_data,
             rf_link_cfg_export              => rf_link_cfg_word,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
@@ -790,6 +796,29 @@ begin
                 peak_window   => dwell_peak_window
             );
 
+        -- Latched read window. Without it the host reads thirteen words one
+        -- at a time and a dwell boundary between two of them yields a record
+        -- that is half one dwell and half the next -- which looks like a
+        -- measurement and is not.
+        U_dwell_readout : entity work.dwell_readout
+            port map (
+                clock           => rx_clock,
+                reset           => rx_reset,
+                summary_valid   => dwell_summary_valid,
+                energy_sum      => dwell_energy_sum,
+                peak            => dwell_peak,
+                clip_count      => dwell_clip_count,
+                sample_count    => dwell_sample_count,
+                first_timestamp => dwell_first_timestamp,
+                first_window    => dwell_first_window,
+                mean_power      => dwell_mean_power,
+                noise_floor     => dwell_noise_floor,
+                peak_window     => dwell_peak_window,
+                rd_index        => dwell_rd_index,
+                rd_data         => dwell_rd_data,
+                generation      => dwell_generation
+            );
+
     end generate;
 
     -- Settling sequencer. Shares the dwell boundary with the analyser and
@@ -814,6 +843,19 @@ begin
     -- the current build. Gated by ENABLE_TRIGGER_CAPTURE, which is what
     -- that generic was reserved for; it stays false in hosted so the
     -- memory is only spent where it is used.
+    -- Dwell summary read. The index shares the address register with the
+    -- ring: bits 11:0 select a ring entry, bits 19:16 a summary word. One
+    -- register because the host reads one or the other, never both at once,
+    -- and a second PIO would cost a Qsys instance to save nothing.
+    --
+    -- Index 15 returns the generation counter, and that multiplexing lives
+    -- inside dwell_readout rather than here on purpose: routed through the
+    -- block it arrives already latched on rx_clock, so the host cannot catch
+    -- it mid-increment. A mux here would carry a 16-bit rx_clock counter
+    -- straight into a system-domain word -- the same trap as oldest_index,
+    -- just harder to see.
+    dwell_rd_index <= unsigned(pretrig_addr_word(19 downto 16));
+
     -- Read address for the ring, from the host. Only the low DEPTH_LOG2
     -- bits mean anything; the rest are ignored rather than checked, since a
     -- wider write can only select an entry that exists.
