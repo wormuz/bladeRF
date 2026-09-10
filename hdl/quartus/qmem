@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def newest_report():
-    builds = sorted((ROOT / "hdl/quartus").glob("hostedxA4-*/hostedxA4.fit.rpt"),
+    # Any device size: xA4 and xA9 are the same design on different parts.
+    builds = sorted((ROOT / "hdl/quartus").glob("hostedx*-*/hostedx*.fit.rpt"),
                     key=lambda p: p.stat().st_mtime, reverse=True)
     return builds[0] if builds else None
 
@@ -123,7 +124,11 @@ def main():
 
     if args:
         d = Path(args[0])
-        report = d if d.is_file() else d / "hostedxA4.fit.rpt"
+        if d.is_file():
+            report = d
+        else:
+            found = sorted(d.glob("hostedx*.fit.rpt"))
+            report = found[0] if found else d / "missing.fit.rpt"
     else:
         report = newest_report()
 

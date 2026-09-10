@@ -1,6 +1,6 @@
 # Post-fit proof that every CDC constraint reached the design it names.
 #
-#   cd hdl/quartus/work/bladerf-micro-A4-hosted
+#   cd hdl/quartus/work/bladerf-micro-<SIZE>-hosted    # A4 or A9
 #   ~/soft/q25 quartus_sta -t ../../qbind.tcl
 #
 # qcheck reads the SDC as text and catches patterns that are wrong on their

@@ -34,8 +34,20 @@ HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
 findings = []
 
 
+notes = []
+
+
 def fail(rule, detail, cost):
     findings.append((rule, detail, cost))
+
+
+def note(text):
+    """Something worth knowing that is not a defect.
+
+    Kept separate from failures on purpose: a check that fails on things
+    which are usually fine trains people to ignore it.
+    """
+    notes.append(text)
 
 
 def code_only(text, comment="#"):
@@ -183,6 +195,48 @@ def check_sdc():
             break
 
 
+def check_no_hardcoded_device_size():
+    """Our own tooling must not hardcode a device size.
+
+    xA4 and xA9 are the same design on different parts -- the vendor build
+    system has handled both all along (platform.conf lists A2/A4/A5/A9 and
+    derives the part number as 5CEB<size>F23C8). What was hardcoded was
+    everything we wrote on top: qgate looked for hostedxA4.sta.summary, qmem
+    globbed hostedxA4-*, the build skill passed -s A4. On an xA9 board every
+    one of those silently finds nothing or builds the wrong part.
+
+    The constraints themselves were fine, which is the point: the trap is in
+    tooling, where a missing file reads as "no problem found".
+    """
+    ours = [ROOT / "hdl/quartus/qgate",
+            ROOT / "hdl/quartus/qmem",
+            ROOT / "hdl/quartus/qbind.tcl",
+            ROOT / "hdl/quartus/qlog",
+            ROOT / ".claude/skills/fpga-build/SKILL.md"]
+    for f in ours:
+        if not f.exists():
+            continue
+        is_md = f.suffix == ".md"
+        for i, line in enumerate(f.read_text().split("\n"), 1):
+            # In Markdown "#" starts a heading, not a comment, and prose
+            # explaining the rule mentions the very strings it forbids. Only
+            # indented lines are commands there.
+            if is_md:
+                if not line.startswith("    "):
+                    continue
+                code = line
+            else:
+                code = line.split("#")[0]
+            if re.search(r"hostedxA[0-9]|micro-A[0-9]-|-s\s+A[0-9]\b", code):
+                fail("tooling-hardcodes-device-size",
+                     f"{f.name}:{i}: {code.strip()[:70]} -- xA4 and xA9 are "
+                     "the same design on different parts; match hostedx*- or "
+                     "take the size from a variable",
+                     "an xA9 build would have found no artefacts and said "
+                     "nothing was wrong")
+                return
+
+
 def check_handshake_pairs_are_crossings():
     """Every handshake pair in the SDC must actually cross a clock domain.
 
@@ -326,6 +380,45 @@ def check_vhdl():
             continue
         break
 
+    # 8b. A signal with an initialiser and no assignment looks like a
+    #     constant, and is one only if every port it connects to is an INPUT.
+    #     Connected to an output port it is the opposite: the instance drives
+    #     it, and reading it as a constant leads straight to "this feature is
+    #     dead, remove it".
+    #
+    #     That is exactly what happened with tx_loopback_enabled. Declared
+    #     ":= '0'", never assigned in bladerf-hosted.vhd, so I concluded the
+    #     digital loopback was disabled by construction. It is an OUT port of
+    #     rx (rx.vhd:97), driven from rx_mux_mode = RX_MUX_DIGITAL_LOOPBACK,
+    #     and the mode is public API: BLADERF_RX_MUX_DIGITAL_LOOPBACK = 0x4.
+    #     I was one step from deleting a working feature to reclaim 4 M10Ks.
+    #     Ten signals in bladerf-hosted.vhd share this shape and all ten are
+    #     legitimate module outputs, so the pattern cannot separate the trap
+    #     from the norm -- there is nothing textual to separate. Failing the
+    #     build on all ten would be noise, and a guard that cries wolf gets
+    #     ignored, so this is a note rather than a failure. The list itself is
+    #     the useful part: these are the signals where "never assigned"
+    #     proves nothing.
+    quiet = []
+    for m in re.finditer(r"^\s*signal\s+(\w+)\s*:[^:=\n]*:=\s*[^;\n]+;",
+                         raw, re.M):
+        name = m.group(1)
+        if re.search(rf"^\s*{name}\s*<=", raw, re.M):
+            continue          # assigned somewhere, nothing to say
+        if not re.search(rf"=>\s*{name}\b", raw):
+            continue          # not wired to any port
+        if not re.search(
+                rf"<=.*\b{name}\b|\bif\b[^\n]*\b{name}\b|\band\s+{name}\b"
+                rf"|\b{name}\s+and\b|\bor\s+{name}\b|\b{name}\s+or\b", raw):
+            continue          # not read in logic, nobody reasons about it
+        quiet.append(name)
+    if quiet:
+        note("driven-from-elsewhere: " + ", ".join(sorted(quiet)) +
+             " -- initialised, never assigned here, but wired to a port and "
+             "read in logic. If the port is an OUT the instance drives it, so "
+             "'never assigned' does NOT mean constant. Check the direction "
+             "before calling anything unreachable.")
+
     # 9. Two domains ORed combinationally have no owning domain at all, so no
     #    synchroniser can be attached to the result.
     for line in raw.split("\n"):
@@ -407,10 +500,16 @@ def main():
         return 0
 
     check_all_sdcs()
+    check_no_hardcoded_device_size()
     check_handshake_pairs_are_crossings()
     check_sdc()
     check_vhdl()
     check_headers()
+
+    for n in notes:
+        print(f"note  {n}")
+    if notes:
+        print()
 
     if not findings:
         print("qcheck: clean")

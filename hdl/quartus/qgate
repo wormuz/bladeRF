@@ -117,6 +117,11 @@ expect_count() {
     fi
 }
 
+# These counts are structural, not device-dependent: they count instances of
+# time_tamer, handshake and dcfifo in the hosted RTL, which is the same design
+# on xA4 and on xA9. A bigger part changes how much fits, not how many
+# crossings exist. If one of these ever differs between sizes, that means the
+# revision instantiates something conditionally and the difference is the news.
 expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-9]+' 2
 expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        5
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
@@ -124,10 +129,12 @@ expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-
 # Timing: any negative slack in the summary is a failure. The .sta.summary
 # sits beside the build directory, so derive it from the log's own report of
 # where it wrote.
-sta=$(grep -oE '/[^ ]*hostedxA4\.sta\.summary' "$f" 2>/dev/null | head -1)
+# Device size is not hardcoded: xA4 and xA9 are the same design on different
+# parts, and the artefact names carry the size (hostedxA4, hostedxA9).
+sta=$(grep -oE '/[^ ]*hostedx[A-Z][0-9]\.sta\.summary' "$f" 2>/dev/null | head -1)
 if [ -z "$sta" ]; then
-    d=$(ls -dt "$(dirname "$f")"/../hostedxA4-* 2>/dev/null | head -1)
-    [ -n "$d" ] && sta="$d/hostedxA4.sta.summary"
+    d=$(ls -dt "$(dirname "$f")"/../hostedx[A-Z][0-9]-* 2>/dev/null | head -1)
+    [ -n "$d" ] && sta="$d/$(basename "$d" | sed 's/-.*//').sta.summary"
 fi
 if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
     neg=$(grep -A1 '^Type' "$sta" | grep -cE '^Slack\s*:\s*-' || true)

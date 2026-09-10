@@ -39,7 +39,7 @@ disable-model-invocation: true
 ### 2. Збірка
 
     cd ~/projects/bladerf/hdl/quartus
-    nohup ~/soft/q25 ./build_bladerf.sh -b bladeRF-micro -r hosted -s A4 -l full \
+    nohup ~/soft/q25 ./build_bladerf.sh -b bladeRF-micro -r hosted -s "${SIZE:-A4}" -l full \
         > /var/tmp/q25_$(date +%H%M).log 2>&1 &
 
 Триває близько чотирнадцяти хвилин. Не чекати `sleep`-циклом.
@@ -56,10 +56,14 @@ disable-model-invocation: true
 
 ### 4. Вердикт таймінгу
 
-    D=$(ls -dt hostedxA4-* | head -1)
-    grep -cE '^Slack\s*:\s*-' $D/hostedxA4.sta.summary
+    D=$(ls -dt hostedx*-* | head -1)
+    grep -cE '^Slack\s*:\s*-' $D/$(basename $D | sed 's/-.*//').sta.summary
 
 Нуль — таймінг закритий. Інакше далі.
+
+⛔ Розмір кристала ніде не зашивати. `xA4` і `xA9` — той самий дизайн на
+різних кристалах, і артефакти звуться `hostedxA4-*` / `hostedxA9-*`.
+Задавати через `SIZE=A9`, типове значення A4.
 
 ### 5. Самі шляхи, не домени
 
@@ -67,7 +71,7 @@ disable-model-invocation: true
 `FROMCLK ...|pll_sclk|divclk` читалось як «зривається інтерфейс LVDS», хоча
 винна логіка була наша.
 
-    cd hdl/quartus/work/bladerf-micro-A4-hosted
+    cd hdl/quartus/work/bladerf-micro-${SIZE:-A4}-hosted
     CAP_RUN_OK=180 ~/soft/q25 quartus_sta -t /tmp/paths.tcl 2>&1 | grep "^S "
 
 де `/tmp/paths.tcl` відкриває ревізію `hosted` проєкту `bladerf`, будує
