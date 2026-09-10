@@ -1,0 +1,59 @@
+# Match PLL Compensation Clock, held out of the main flow.
+#
+#   include this file to try it:
+#       set_global_assignment -name SOURCE_TCL_SCRIPT_FILE ... (see below)
+#   or paste the two assignments into the revision QSF for one build.
+#
+# Why it exists
+# -------------
+# Two builds in a row report:
+#
+#   Warning (177007): PLL(s) placed in location FRACTIONALPLL_X54_Y38_N0 /
+#   FRACTIONALPLL_X0_Y1_N0 do not have a PLL clock to compensate specified -
+#   the Fitter will attempt to compensate all PLL clocks
+#
+# Those two locations are U_system_pll and U_fx3_pll. The AD9361 LVDS PLL is
+# NOT among them, which is the whole reason this is safe to try: the
+# source-synchronous receive interface is not in scope. Do not extend these
+# assignments to i_altlvds_rx without a hardware RX validation plan.
+#
+# What it is expected to do, and what it is not
+# ---------------------------------------------
+# Naming a compensated output fixes the phase reference for that output's
+# clock network instead of letting the fitter compensate all of them. It is
+# NOT expected to fix the hold path that currently limits this design
+# (fifo_writer|meta_data -> RX metadata M10K input register, skew +0.38 to
+# +0.50 ns): both ends of that path are in the AD9361 clock family, and
+# intra-domain skew comes from placement and local clock topology, not from
+# which PLL output carries the compensation reference.
+#
+# Treat a timing change here as a side effect worth measuring, not as the
+# mechanism. The reason to set it at all is that an unstated compensation
+# target leaves a fitter choice undocumented.
+#
+# Both PLLs are altera_pll with a single output each, so the target node is
+# unambiguous. Node names taken from a fitted netlist, not assumed:
+#
+#   U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk
+#   U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk
+#
+# How to judge the result
+# -----------------------
+# Same seed, everything else unchanged. Compare:
+#   - warning 177007 gone
+#   - hold WNS and the identity of the worst hold path
+#   - setup WNS
+#   - clock skew on the metadata M10K path specifically
+#   - report_clock_transfers and report_exceptions unchanged
+# Then repeat across the seed set before believing any improvement.
+
+# MATCH_PLL_COMPENSATION_CLOCK, not PLL_COMPENSATE. Both names exist --
+# get_all_assignment_names lists PLL_COMPENSATE, PLL_COMPENSATION_MODE and
+# MATCH_PLL_COMPENSATION_CLOCK -- and this is the one that answers 177007.
+# Confirmed against the tool rather than assumed, after the DCFIFO episode
+# where constraints parsed cleanly and bound to nothing.
+set_instance_assignment -name MATCH_PLL_COMPENSATION_CLOCK \
+    -to "U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
+
+set_instance_assignment -name MATCH_PLL_COMPENSATION_CLOCK \
+    -to "U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk"
