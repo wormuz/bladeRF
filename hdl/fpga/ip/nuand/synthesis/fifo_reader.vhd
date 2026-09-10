@@ -133,12 +133,32 @@ architecture simple of fifo_reader is
     -- rationale -- set-dominant sticky bits, registered abort_active_i,
     -- cleared only by reset / new epoch / explicit clear-fault pulse.
     constant FAULT_BIT_SPEED_MISMATCH     : natural := 0;
-    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- phase 2, declared not yet driven
-    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- phase 2, declared not yet driven
+    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- epoch started, nothing ever read
+    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- reads were flowing, then stopped
     constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
     constant FAULT_BIT_FIFO_ABORT         : natural := 4;
 
     signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+
+    -- Progress watchdogs, mirroring fifo_writer. Same two questions, same
+    -- timeout, watching fifo_read instead of fifo_write:
+    --
+    --   start   the epoch began and nothing was ever read out of the FIFO.
+    --           The link came up but the host is not supplying samples, or
+    --           FX3 never armed the OUT endpoint.
+    --   stall   samples were flowing and stopped.
+    --
+    -- Told apart by whether this epoch ever moved a sample. Without that,
+    -- a TX link that never started and one that wedged report identically,
+    -- and they need different actions.
+    --
+    -- ⛔ Both directions must report, not just RX. Leaving these undriven
+    -- here means a wedged transmitter looks healthy while the receiver
+    -- reports the same fault -- an asymmetry that reads as an RX problem.
+    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
+    signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
+                                    := (others => '0');
+    signal read_this_epoch     : std_logic := '0';
     signal abort_active_i      : std_logic := '0';
     signal epoch_ack_i         : std_logic := '0';
     signal epoch_valid_i       : std_logic := '0';
@@ -283,6 +303,8 @@ begin
             link_toggle_prev   <= '0';
             enable_prev        <= '0';
             fault_sticky_i     <= (others => '0');
+            progress_count     <= (others => '0');
+            read_this_epoch    <= '0';
             abort_active_i     <= '0';
             stop_toggle_prev   <= '0';
             clear_toggle_prev  <= '0';
@@ -325,9 +347,24 @@ begin
                 -- Факт наявності епохи несе link_active.
                 speed_latched_i   <= usb_speed;
                 epoch_counter     <= epoch_counter + 1;
+                -- A new epoch restarts both watchdogs from nothing-seen.
+                progress_count    <= (others => '0');
+                read_this_epoch   <= '0';
             elsif( link_active_i = '1' ) then
                 if( usb_speed /= latched_usb_speed ) then
                     speed_mismatch <= '1';
+                end if;
+
+                -- Progress watchdog. A read clears the counter and marks
+                -- the epoch as having moved data; otherwise it runs. Only
+                -- while the link is up: a stopped link is not stalled.
+                if( fifo_read = '1' ) then
+                    progress_count  <= (others => '0');
+                    read_this_epoch <= '1';
+                elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
+                    -- Saturates rather than wrapping: a wrap would clear
+                    -- the evidence and re-arm the fault every 34 ms.
+                    progress_count <= progress_count + 1;
                 end if;
             end if;
 
@@ -349,6 +386,19 @@ begin
 
             if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
                 fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
+            end if;
+
+            -- Progress faults, same timeout told apart by whether this
+            -- epoch ever moved a sample. Guarded on start_link_pulse = '0'
+            -- so the clear at the top of a new epoch is not undone by a
+            -- counter that has not been reset yet in the same cycle.
+            if( link_active_i = '1' and start_link_pulse = '0' and
+                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                if( read_this_epoch = '0' ) then
+                    fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
+                else
+                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                end if;
             end if;
 
             if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then

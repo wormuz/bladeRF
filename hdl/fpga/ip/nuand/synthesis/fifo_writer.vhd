@@ -136,12 +136,35 @@ architecture simple of fifo_writer is
     -- because the fault condition went away, so the host can always read
     -- what happened even after link_active has dropped.
     constant FAULT_BIT_SPEED_MISMATCH     : natural := 0;
-    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- phase 2, declared not yet driven
-    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- phase 2, declared not yet driven
+    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- epoch started, nothing ever written
+    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- writes were flowing, then stopped
     constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
     constant FAULT_BIT_FIFO_ABORT         : natural := 4;
 
     signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+
+    -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
+    -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
+    -- sample FIFO -- but answer different questions:
+    --
+    --   start   the epoch began and nothing was ever written. The link came
+    --           up but no data flows: FX3 never armed, wrong alt-setting,
+    --           the endpoint is not being drained.
+    --   stall   data was flowing and stopped. That is the FX3 defect we
+    --           cannot fix in firmware, so the gateware has to name it.
+    --
+    -- Told apart by whether any write has happened this epoch. Without that
+    -- distinction a silent link and a wedged one report the same fault, and
+    -- they need different actions from the host.
+    --
+    -- The limit is in sample clocks. 2^22 is ~34 ms at 122.88 MHz and ~68 ms
+    -- at 61.44 -- far longer than any legitimate gap between USB buffers,
+    -- short enough that the host learns within one poll. A power of two so
+    -- the comparison is one bit, not a magnitude compare.
+    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
+    signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
+                                    := (others => '0');
+    signal wrote_this_epoch    : std_logic := '0';
     signal abort_active_i      : std_logic := '0';
     signal epoch_ack_i         : std_logic := '0';
     signal epoch_valid_i       : std_logic := '0';
@@ -249,6 +272,8 @@ begin
             link_toggle_prev   <= '0';
             enable_prev        <= '0';
             fault_sticky_i     <= (others => '0');
+            progress_count     <= (others => '0');
+            wrote_this_epoch   <= '0';
             abort_active_i     <= '0';
             stop_toggle_prev   <= '0';
             clear_toggle_prev  <= '0';
@@ -291,9 +316,27 @@ begin
                 -- Факт наявності епохи несе link_active.
                 speed_latched_i   <= usb_speed;
                 epoch_counter     <= epoch_counter + 1;
+                -- A new epoch restarts both watchdogs from nothing-seen.
+                progress_count    <= (others => '0');
+                wrote_this_epoch  <= '0';
             elsif( link_active_i = '1' ) then
                 if( usb_speed /= latched_usb_speed ) then
                     speed_mismatch <= '1';
+                end if;
+
+                -- Progress watchdog. A write clears the counter and marks
+                -- the epoch as having moved data; otherwise the counter
+                -- runs. Only while the link is up: a stopped link is not
+                -- stalled, it is stopped, and flagging that would make the
+                -- fault meaningless.
+                if( fifo_write = '1' ) then
+                    progress_count   <= (others => '0');
+                    wrote_this_epoch <= '1';
+                elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
+                    -- Saturates instead of wrapping: once the top bit is
+                    -- set the fault is latched, and a wrap would clear the
+                    -- evidence and re-arm the same fault every 34 ms.
+                    progress_count <= progress_count + 1;
                 end if;
             end if;
 
@@ -320,6 +363,21 @@ begin
 
             if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
                 fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
+            end if;
+
+            -- Progress faults. Same timeout, told apart by whether this
+            -- epoch ever moved a sample: nothing written at all is a link
+            -- that never started, writes that stopped is a link that
+            -- wedged. Guarded on start_link_pulse = '0' like the term
+            -- above, so the clear at the top of a new epoch is not undone
+            -- by a counter that has not been reset yet in the same cycle.
+            if( link_active_i = '1' and start_link_pulse = '0' and
+                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                if( wrote_this_epoch = '0' ) then
+                    fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
+                else
+                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                end if;
             end if;
 
             if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then

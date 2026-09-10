@@ -196,6 +196,14 @@ architecture core_bladerf of bladerf_core is
     signal tx_usb_speed_mismatch_sys       : std_logic;
     signal tx_protocol_start_violation_sys : std_logic;
 
+    -- Fault aggregate, reduced in the originating domain then crossed as a
+    -- single bit. rx_fault_any lives on rx_clock, its _sys copy on sys_clock.
+    signal rx_fault_any                    : std_logic;
+    signal tx_fault_any                    : std_logic;
+    signal rx_fault_any_sys                : std_logic;
+    signal tx_fault_any_sys                : std_logic;
+    signal rx_abort_active_sys             : std_logic;
+
     signal rx_link_active_sys              : std_logic;
     signal rx_speed_latched_sys            : std_logic;
     signal rx_usb_speed_mismatch_sys       : std_logic;
@@ -345,6 +353,41 @@ architecture core_bladerf of bladerf_core is
     signal adc_controls           : sample_controls_t(ad9361.ch'range)    := (others => SAMPLE_CONTROL_DISABLE);
     signal adc_streams            : sample_streams_t(adc_controls'range)  := (others => ZERO_SAMPLE);
     signal adc_streams_last_v     : std_logic_vector(adc_controls'range)  := (others => '0');
+
+    -- Sweep analyser: measures every dwell on chip and reports a summary
+    -- the host cannot compute in time. Present only when the generic is
+    -- set, so the hosted revision pays nothing for it.
+    signal dwell_sync_in          : std_logic := '0';
+    signal dwell_sync_in_r        : std_logic := '0';
+    signal dwell_start            : std_logic := '0';
+    signal dwell_summary_valid    : std_logic;
+    signal dwell_energy_sum       : unsigned(63 downto 0);
+    signal dwell_peak             : unsigned(31 downto 0);
+    signal dwell_clip_count       : unsigned(31 downto 0);
+    signal dwell_sample_count     : unsigned(31 downto 0);
+    signal dwell_triggered        : std_logic := '0';
+    signal dwell_first_window     : unsigned(15 downto 0);
+    signal dwell_first_timestamp  : unsigned(63 downto 0);
+    signal dwell_mean_power       : unsigned(31 downto 0);
+    signal dwell_noise_floor      : unsigned(47 downto 0);
+    signal dwell_peak_window      : unsigned(47 downto 0);
+    signal dwell_measure_valid    : std_logic := '0';
+    signal dwell_gain_too_high    : std_logic := '0';
+
+    -- Pre-trigger ring: drained by the host, so the read side stays tied
+    -- off here until the Nios register window exists.
+    signal pretrig_frozen         : std_logic := '0';
+    signal pretrig_oldest         : unsigned(11 downto 0) := (others => '0');
+    signal pretrig_wrapped        : std_logic := '0';
+    signal pretrig_rd_addr        : unsigned(11 downto 0) := (others => '0');
+    signal pretrig_rd_data        : std_logic_vector(31 downto 0) := (others => '0');
+    signal pretrig_addr_word      : std_logic_vector(31 downto 0);
+    signal dwell_status_word      : std_logic_vector(31 downto 0);
+    signal pretrig_frozen_sys     : std_logic;
+    signal pretrig_wrapped_sys    : std_logic;
+    signal dwell_triggered_sys    : std_logic;
+    signal dwell_measure_valid_sys : std_logic;
+    signal dwell_gain_too_high_sys : std_logic;
     signal adc_enable_r           : std_logic_vector(adc_controls'range)  := (others => '0');
 
     signal   ps_sync              : std_logic_vector(0 downto 0)          := (others => '0');
@@ -620,6 +663,9 @@ begin
             ad9361_dac_q1_data              => ad9361.ch(1).dac.q.data,   -- in  slv(15:0)
             ad9361_dac_underflow_unf        => ad9361.dac_underflow,      -- in  sl
             rf_link_status_export           => rf_link_status,
+            pretrig_addr_export             => pretrig_addr_word,
+            pretrig_data_export             => pretrig_rd_data,
+            dwell_status_export             => dwell_status_word,
             rf_link_cfg_export              => rf_link_cfg_word,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
@@ -684,6 +730,150 @@ begin
     adi_rx_spdt1_v <= unpack(rffe_gpio.o).rx_spdt1;
     rx_bias_en     <= unpack(rffe_gpio.o).rx_bias_en;
     --adi_sync_in    <= unpack(rffe_gpio.o).sync_in;
+
+    -- Per-dwell measurement, sweep revision only.
+    --
+    -- Tapped off adc_streams(0) rather than inserted into the datapath: the
+    -- FIFO write path is untouched, so a fault here cannot cost samples.
+    --
+    -- The dwell boundary is the host's own sync_in strobe, which it already
+    -- drives as part of the retune sequence -- there is no hardware retune
+    -- signal in this gateware to use instead (checked: no retune/quick_tune
+    -- net exists in the core). sync_in is in the Nios/system domain and the
+    -- analyser runs on rx_clock, so it crosses through the same synchroniser
+    -- every other control bit uses, then the rising edge is taken on
+    -- rx_clock. A level would restart the dwell for as long as it is held.
+    gen_sweep_analyzer : if( ENABLE_SWEEP_ANALYZER ) generate
+
+        U_dwell_sync : entity work.synchronizer
+            generic map ( RESET_LEVEL => '0' )
+            port map (
+                reset  => rx_reset,
+                clock  => rx_clock,
+                async  => unpack(rffe_gpio.o).sync_in,
+                sync   => dwell_sync_in
+            );
+
+        dwell_edge_proc : process( rx_clock )
+        begin
+            if( rising_edge( rx_clock ) ) then
+                if( rx_reset = '1' ) then
+                    dwell_sync_in_r <= '0';
+                    dwell_start     <= '0';
+                else
+                    dwell_sync_in_r <= dwell_sync_in;
+                    dwell_start     <= dwell_sync_in and not dwell_sync_in_r;
+                end if;
+            end if;
+        end process;
+
+        U_dwell_summary : entity work.dwell_summary
+            port map (
+                clock         => rx_clock,
+                reset         => rx_reset,
+                sample        => adc_streams(0),
+                dwell_start   => dwell_start,
+                -- Zero disables the trigger and leaves measurement running,
+                -- which is what we want until the host owns this register.
+                threshold     => (others => '0'),
+                summary_valid => dwell_summary_valid,
+                energy_sum    => dwell_energy_sum,
+                peak          => dwell_peak,
+                clip_count    => dwell_clip_count,
+                sample_count  => dwell_sample_count,
+                triggered     => dwell_triggered,
+                first_window  => dwell_first_window,
+                timestamp       => rx_timestamp,
+                first_timestamp => dwell_first_timestamp,
+                mean_power    => dwell_mean_power,
+                noise_floor   => dwell_noise_floor,
+                peak_window   => dwell_peak_window
+            );
+
+    end generate;
+
+    -- Settling sequencer. Shares the dwell boundary with the analyser and
+    -- consumes its summary, so the clip verdict describes the dwell that
+    -- just ended rather than the one starting.
+    --
+    -- It changes no gain: the AD9361 owns that loop. This only says when the
+    -- receiver has settled, so the host knows which part of a dwell is worth
+    -- trusting, and whether the previous one clipped past the point where
+    -- its numbers mean anything.
+    --
+    -- Its own generate, not nested inside the analyser's, so
+    -- ENABLE_GAIN_SEQUENCER actually decides something. Nested, the generic
+    -- would be accepted and ignored -- the worst kind of switch. It does
+    -- depend on the analyser for its inputs, hence the "and" below rather
+    -- than the generic alone.
+    -- Pre-trigger history. The trigger necessarily fires after the onset,
+    -- so without this every capture starts mid-burst and the preamble --
+    -- the part that identifies an emitter -- is already gone.
+    --
+    -- 4096 samples is 67 us at 61.44 MHz and 13 M10K, half the 26 free on
+    -- the current build. Gated by ENABLE_TRIGGER_CAPTURE, which is what
+    -- that generic was reserved for; it stays false in hosted so the
+    -- memory is only spent where it is used.
+    -- Read address for the ring, from the host. Only the low DEPTH_LOG2
+    -- bits mean anything; the rest are ignored rather than checked, since a
+    -- wider write can only select an entry that exists.
+    pretrig_rd_addr <= unsigned(pretrig_addr_word(11 downto 0));
+
+    -- Dwell status word. Every bit crosses from rx_clock through its own
+    -- synchroniser, same rule as RF_LINK_STATUS: no raw rx_* signal is
+    -- assembled into a word read in the system domain.
+    --
+    -- oldest_index is the exception and is deliberately NOT synchronised
+    -- bit by bit -- a 12-bit counter crossed that way can be sampled
+    -- mid-change and yield an index that never existed. It is only read
+    -- while frozen is set, at which point it has been static for however
+    -- long the host took to notice, so the host reads it after seeing
+    -- frozen and gets a settled value.
+    dwell_status_word(0)            <= pretrig_frozen_sys;
+    dwell_status_word(1)            <= pretrig_wrapped_sys;
+    dwell_status_word(2)            <= dwell_triggered_sys;
+    dwell_status_word(3)            <= dwell_measure_valid_sys;
+    dwell_status_word(4)            <= dwell_gain_too_high_sys;
+    dwell_status_word(15 downto 5)  <= (others => '0');
+    dwell_status_word(27 downto 16) <= std_logic_vector(pretrig_oldest);
+    dwell_status_word(31 downto 28) <= "0001";
+
+    gen_trigger_capture : if( ENABLE_SWEEP_ANALYZER and ENABLE_TRIGGER_CAPTURE ) generate
+
+        U_pretrigger : entity work.pretrigger_buffer
+            generic map ( DEPTH_LOG2 => 12 )
+            port map (
+                clock        => rx_clock,
+                reset        => rx_reset,
+                sample       => adc_streams(0),
+                trigger      => dwell_triggered,
+                dwell_start  => dwell_start,
+                frozen       => pretrig_frozen,
+                oldest_index => pretrig_oldest,
+                wrapped      => pretrig_wrapped,
+                rd_addr      => pretrig_rd_addr,
+                rd_data      => pretrig_rd_data
+            );
+
+    end generate;
+
+    gen_gain_sequencer : if( ENABLE_SWEEP_ANALYZER and ENABLE_GAIN_SEQUENCER ) generate
+
+        U_gain_sequencer : entity work.gain_sequencer
+            port map (
+                clock          => rx_clock,
+                reset          => rx_reset,
+                dwell_start    => dwell_start,
+                sample_valid   => adc_streams(0).data_v,
+                summary_valid  => dwell_summary_valid,
+                clip_count     => dwell_clip_count,
+                sample_count   => dwell_sample_count,
+                measure_valid  => dwell_measure_valid,
+                gain_too_high  => dwell_gain_too_high,
+                settle_elapsed => open
+            );
+
+    end generate;
     adi_en_agc     <= unpack(rffe_gpio.o).en_agc;
     adi_txnrx      <= unpack(rffe_gpio.o).txnrx;
     adi_enable     <= unpack(rffe_gpio.o).enable;
@@ -761,11 +951,35 @@ begin
     rf_link_status(11)           <= rx_epoch_valid_sys;
     rf_link_status(12)           <= tx_epoch_valid_sys;
     rf_link_status(13)           <= rf_link_speed_disagree;
-    rf_link_status(15 downto 14) <= (others => '0');
+    -- Sticky faults, one aggregate bit per direction.
+    --
+    -- Five fault bits exist per direction (fifo_writer/fifo_reader:
+    -- SPEED_MISMATCH, START_NO_PROGRESS, GPIF_TIMEOUT, PROTOCOL_ERROR,
+    -- FIFO_ABORT) and there are three free bits in this word, so the
+    -- per-bit detail cannot go here. The aggregate answers the question the
+    -- host asks first -- "did this direction fault since the last clear" --
+    -- and the individual bits remain readable where they are latched.
+    --
+    -- OR-reduced in its OWN clock domain before crossing, not after: an OR
+    -- of five separately synchronised bits could glitch on a cycle where
+    -- two of them settle differently, which is the two-domain OR this word
+    -- already had deleted at bits 3 and 6.
+    rf_link_status(14)           <= rx_fault_any_sys;
+    rf_link_status(15)           <= tx_fault_any_sys;
     rf_link_status(16)           <= rx_link_active_sys;
     rf_link_status(17)           <= rx_speed_latched_sys;
     rf_link_status(18)           <= tx_protocol_start_violation_sys;
-    rf_link_status(19)           <= '0';
+    -- Abort in progress, RX only. Distinct from the sticky fault above: a
+    -- fault says something went wrong at some point, this says the direction
+    -- is in an aborted state right now and is not moving samples.
+    --
+    -- Not "rx or tx". One bit is free and the OR of two directions is
+    -- exactly the pattern deleted at bits 3 and 6 -- it tells the host
+    -- something is aborted without saying which, which is the answer that
+    -- needs a second read anyway. RX is the direction this instrument
+    -- collects on; TX abort stays readable at its latch and gets its own bit
+    -- when the next format version widens the word.
+    rf_link_status(19)           <= rx_abort_active_sys;
     -- Full eight bits, not the low four. This is the sequence number the host
     -- reads while retrying a link start, and four bits wrap after sixteen
     -- attempts -- which is well within one bad recovery session, exactly when
@@ -1253,6 +1467,76 @@ begin
                                  rx_epoch_ack_sys = rf_link_start_toggle else '0';
     tx_epoch_current <= '1' when tx_epoch_valid_sys = '1' and
                                  tx_epoch_ack_sys = rf_link_start_toggle else '0';
+
+    -- Reduced where the bits are latched, so only a settled single bit
+    -- crosses. Combinational on purpose: fault_sticky is set-dominant and
+    -- holds until an explicit clear, so there is no pulse to miss.
+    rx_fault_any <= '1' when rx_fault_sticky /= "00000" else '0';
+    tx_fault_any <= '1' when tx_fault_sticky /= "00000" else '0';
+
+    -- Dwell/pre-trigger flags into the system domain. Five instances rather
+    -- than one wide crossing: each is an independent single-bit level, and
+    -- the host reads them as a snapshot where a one-cycle skew between them
+    -- changes nothing it can act on.
+    U_sync_pretrig_frozen : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => pretrig_frozen, sync => pretrig_frozen_sys );
+
+    U_sync_pretrig_wrapped : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => pretrig_wrapped, sync => pretrig_wrapped_sys );
+
+    U_sync_dwell_triggered : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => dwell_triggered, sync => dwell_triggered_sys );
+
+    U_sync_dwell_measure_valid : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => dwell_measure_valid,
+                   sync  => dwell_measure_valid_sys );
+
+    U_sync_dwell_gain_too_high : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => dwell_gain_too_high,
+                   sync  => dwell_gain_too_high_sys );
+
+    U_sync_rx_fault_any : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_fault_any,
+            sync                =>  rx_fault_any_sys
+        );
+
+    U_sync_tx_fault_any : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  tx_fault_any,
+            sync                =>  tx_fault_any_sys
+        );
+
+    U_sync_rx_abort_active : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '0'
+        )
+        port map (
+            reset               =>  sys_reset,
+            clock               =>  sys_clock,
+            async               =>  rx_abort_active,
+            sync                =>  rx_abort_active_sys
+        );
 
     U_sync_rx_link_active : entity work.synchronizer
         generic map (
