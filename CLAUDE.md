@@ -52,6 +52,30 @@ C8 — найповільніша). Quartus 25.1 Standard через `~/soft/q25
 ⛔ Закритий таймінг і прив'язані обмеження — РІЗНІ твердження. Нуль
 від'ємних записів при відкинутих межах перекосу нічого не доводить.
 
+⛔ `exit 0` ВІД `build_bladerf.sh` НІЧОГО НЕ ДОВОДИТЬ — перевіряти хвіст
+логу, а не код повернення. Скрипт виходить нулем і тоді, коли не зробив
+нічого. Двічі поспіль (2026-09-10) збірка зерна 3 віддала `exit 0`:
+
+    Quartus не в PATH    `nohup ./build_bladerf.sh` без обгортки —
+                         скрипт друкує «quartus_sh does not appear to
+                         be in your PATH» і виходить НУЛЕМ.
+                         Запускати лише `~/soft/q25 bash ./build_...`
+    обрив фонової задачі харнес закрив фонову задачу на збірці
+                         libad936x, лог обірвався на 26%, статус
+                         «completed, exit 0». Довгу збірку (~40 хв)
+                         запускати `setsid nohup ... < /dev/null &`
+                         + `disown`, інакше вона живе не довше
+                         фонової задачі
+
+Ознака справжнього завершення — рядок фітера/`qgate` у логу й наявність
+`output_files/*.sta.rpt` СВІЖІШИМ за час запуску, не exit code.
+
+⛔ DSE НЕ лишає `sta.rpt`/`fit.rpt` по точках — лише слаки в
+`output/exploration_summary.csv`. Ворота `qgate`/`qbind` читають звіти,
+тож прийняти зерно з DSE без перезбірки з `-S <зерно>` НЕМОЖЛИВО.
+Зерно точки шукати в `output/assignment.csv`: у `hosted.qsf` кожного
+клону лишається `SEED 7` незалежно від точки.
+
 ## ⛔ Обмеження перетинів — попарно НА ІНСТАНС
 
 Шаблон із зірками на обох кінцях збирає регістри КІЛЬКОХ інстансів, і
@@ -159,8 +183,39 @@ VHDL-міток (`dcfifo:\fifo_gen:U_dcfifo`), а зворотний слеш у
 
     cd ~/projects/bladerf/hdl/quartus
     ./qcheck                                    # секунда, перед усім
-    ~/soft/q25 ./build_bladerf.sh -b bladeRF-micro -r hosted -s A4 -l full
-    ./qgate /var/tmp/<лог>
+    Q=~/projects/bladerf/.venv/bin/python
+    $Q -m quartusq.cli submit --revision hostedxA4 --seed 3 --label "нащо"
+    $Q -m quartusq.cli list
+    $Q -m quartusq.cli status <id> --json
+
+## ⛔ ЗБІРКИ — ЧЕРЕЗ ЧЕРГУ `quartusq`, НЕ РУКАМИ
+
+Служба `systemctl --user status quartusq` тримає ОДНУ збірку за раз,
+сама викликає `qgate` наприкінці й записує в SQLite вердикт, слаки,
+M10K/ALM/DSP і шлях до артефактів. Причина появи: у `hdl/quartus/`
+лежали десятки тек `hostedxA4-<дата>` без жодного запису, що в них і
+чим вони відрізняються.
+
+    submit / list / status / logs / cancel / artifact / compare
+    sweep submit --seeds 1,2,3,5,7   свип однією командою
+    sweep show <id>                  таблиця + медіана + N з M
+    compare <a> <b>                  дельти з напрямком краще/гірше
+
+⛔ Дві збірки в одну базу `work/` — заборонено за побудовою (flock +
+транзакційний claim). Паралельні свипи вимагали б окремого worktree Й
+окремої бази на задачу.
+
+⛔ Ручний запуск лишається законним лише при зупиненій службі, і тоді
+ОБОВ'ЯЗКОВО так:
+
+    setsid nohup ~/soft/q25 bash ./build_bladerf.sh \
+        -b bladeRF-micro -r hosted -s A4 -n Fast -S <seed> \
+        > /var/tmp/<лог>.log 2>&1 < /dev/null & disown
+
+⛔ Щоб сесію розбудило завершенням збірки (а не щоб я про неї забув) —
+сторож фоновою задачею, не `sleep`-цикл:
+
+    /var/tmp/wait_build.sh <лог>     чекає вихід Quartus, тоді qgate
 
 ⛔ `pgrep -f quartus` ловить власний рядок команди й показує «зайнято»
 на вільній машині. Писати `pgrep -f "quartus_[a-z]"`.

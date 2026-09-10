@@ -38,11 +38,38 @@ disable-model-invocation: true
 
 ### 2. Збірка
 
-    cd ~/projects/bladerf/hdl/quartus
-    nohup ~/soft/q25 ./build_bladerf.sh -b bladeRF-micro -r hosted -s "${SIZE:-A4}" -l full \
-        > /var/tmp/q25_$(date +%H%M).log 2>&1 &
+**Через чергу, не руками.** Служба `quartusq` бере задачу сама, тримає
+одну збірку за раз і сама викликає `qgate` наприкінці.
 
-Триває близько чотирнадцяти хвилин. Не чекати `sleep`-циклом.
+    cd ~/projects/bladerf/hdl/quartus
+    Q=~/projects/bladerf/.venv/bin/python
+    $Q -m quartusq.cli submit --revision hosted --seed 3 --label "нащо це"     # -s із SIZE, типове A4
+    $Q -m quartusq.cli list
+    $Q -m quartusq.cli status <id> --json
+
+Свип зерен — однією командою, не N разів submit:
+
+    $Q -m quartusq.cli sweep submit --revision hosted --seeds 1,2,3,5,7 \
+        --label "перевірка після правки CDC"
+    $Q -m quartusq.cli sweep show <id>      таблиця + медіана + N з M
+    $Q -m quartusq.cli compare <a> <b>      дельти з напрямком
+
+⛔ Ручний запуск лишається законним лише коли служба зупинена. Тоді
+ОБОВ'ЯЗКОВО через обгортку й відв'язано від сесії:
+
+    setsid nohup ~/soft/q25 bash ./build_bladerf.sh \
+        -b bladeRF-micro -r hosted -s "${SIZE:-A4}" -n Fast -S <seed> \
+        > /var/tmp/<лог>.log 2>&1 < /dev/null & disown
+
+⛔⛔ `exit 0` НЕ Є ДОКАЗОМ. `build_bladerf.sh` виходить нулем і коли
+Quartus не в PATH (без обгортки), і коли харнес убив фонову задачу
+посеред збірки. Обидва випадки виглядають як успіх. Єдина ознака —
+рядок `Quartus Prime Fitter was successful` у логу.
+
+Триває 15-19 хвилин. ⛔ Не чекати `sleep`-циклом. Щоб сесію розбудило
+завершенням, ставити сторожа фоновою задачею:
+
+    /var/tmp/wait_build.sh <лог>     чекає вихід Quartus, тоді qgate
 
 ### 3. Ворота
 
@@ -97,3 +124,14 @@ netlist на потрібному куті (`-model slow -temperature 85 -voltag
 
 ⛔ Не прошивати образ із відомим порушенням таймінгу: вимір із нього нічого
 не доводить.
+
+⛔ Ім'я вузла в SDC від верхнього рівня (`{entity:inst|...}` чи
+`set clkvar {U_pll|...}`) ламається, щойно модуль переїде в обгортку.
+Розділення на `bladerf_core` так тихо зняло чотири вендорські false path
+(68 попереджень) і, через алиас `system_clock`, ще 16 multicycle у
+`spi.sdc`/`i2c.sdc`, які самі по собі коректні. Писати `{*entity:inst|...}`.
+Ловить `qcheck` правилом `sdc-node-name-rooted-at-top`.
+
+⛔ Порівнювати ворота двох збірок можна лише при тотожному коміті.
+Порівняння зерна з DSE проти власної збірки дало «зерно погане», хоча
+насправді різнились ревізії коду на вісім комітів.

@@ -29,8 +29,13 @@ derive_pll_clocks
 derive_clock_uncertainty
 
 # Platform-specific clock aliases
-set fx3_clock    {U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
-set system_clock {U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+# Anchored with a leading * for the same reason as the exceptions below:
+# the bladerf_core split moved both PLLs to bladerf_core:U_core|..., and
+# spi.sdc/i2c.sdc derive their generated clocks from system_clock. One
+# unanchored alias here silently dropped 16 multicycle constraints in
+# those two files, which are themselves correct.
+set fx3_clock    {*U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+set system_clock {*U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
 # Trace delays between AD9361 and FPGA (bladeRF Micro)
 set adi_spi_clk_trace_delay     0.127
@@ -86,10 +91,18 @@ set_output_delay -clock [get_clocks altera_reserved_tck] 2.0 [get_ports altera_r
 # The DCFIFO documentation says to false path aclr-->rdclk, but we need to do it to wrclk.
 # Has not been an issue so far, so probably safe?
 # With the LVDS cores, the TX PLL clock got merged with the RX PLL clock
-set_false_path -from {reset_synchronizer:U_reset_sync_rx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
-set_false_path -from {reset_synchronizer:U_reset_sync_rx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
-set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
-set_false_path -from {reset_synchronizer:U_reset_sync_tx|sync} -to {tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
+#
+# The leading * is load-bearing. These four were written when the whole
+# architecture body sat at the top level; splitting it into bladerf_core
+# (one core, two wrappers) pushed every one of these registers down to
+# bladerf_core:U_core|..., and the unanchored names then matched nothing.
+# Quartus dropped all four silently -- 68 warnings, no error, a .rbf that
+# looked fine. Anchoring on the suffix keeps them working from either
+# wrapper instead of naming U_core, which only hosted has.
+set_false_path -from {*reset_synchronizer:U_reset_sync_rx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
+set_false_path -from {*reset_synchronizer:U_reset_sync_rx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
+set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
+set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
 
 # hold_time -> compare_time is a bundled-data crossing, not a false path.
 #

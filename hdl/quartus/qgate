@@ -71,6 +71,22 @@ check() {
 }
 
 echo "qgate $(basename "$f")"
+
+# Did the build run at all? Every other check below looks for something bad
+# in the log, so a log that stops early passes all of them. build_bladerf.sh
+# exits 0 when Quartus is not in PATH ("does not appear to be in your PATH")
+# and a killed background job leaves a truncated log with the same status --
+# both happened on 2026-09-10 and both looked like clean builds.
+if grep -qE 'does not appear to be in your PATH' "$f"; then
+    note FAIL "build never started: Quartus not in PATH (use ~/soft/q25)"
+    fail=1
+elif ! grep -qE 'Quartus Prime (Fitter|Timing Analyzer) was successful' "$f"; then
+    note FAIL "build did not finish: no Fitter/STA success line in log"
+    fail=1
+else
+    note ok "build completed"
+fi
+
 check "errors"                 '^\s*Error'
 check "critical warnings"      '^\s*Critical Warning'
 check "constraints ignored"    'Ignored (set_|filter)'

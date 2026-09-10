@@ -165,6 +165,41 @@ def check_sdc():
     # block says so. That check works from the build's own report and needs no
     # guess about what the build contains.
 
+    # 6b. A node name rooted at the top level breaks the moment the module
+    #     moves down a level. These four were written as
+    #     "reset_synchronizer:U_reset_sync_rx|sync" when the architecture
+    #     body was the top level; splitting it into bladerf_core pushed them
+    #     to bladerf_core:U_core|reset_synchronizer:... and all four matched
+    #     nothing. Quartus dropped them with 332174/332049 -- warnings, not
+    #     errors -- and produced a .rbf that looked fine.
+    #     Note this is the opposite of 6a: there a leading wildcard was too
+    #     greedy, here its absence is too brittle. The difference is whether
+    #     deeper namesakes exist. An entity:instance pair is unique, so
+    #     anchoring it on the suffix costs nothing and survives a refactor.
+    #     Two spellings carry the same defect and both must be caught:
+    #       -from {entity:inst|...}       the false paths, 68 warnings
+    #       set clkvar {U_instance|...}   the clock aliases
+    #     The second is worse because it is indirect: bladerf.sdc defines
+    #     system_clock as U_system_pll|... and spi.sdc/i2c.sdc build their
+    #     generated clocks on it, so one unanchored name there took out
+    #     16 multicycle constraints in files that are themselves correct.
+    rooted = [(m.group(1), m.group(2), m.group(0))
+              for m in re.finditer(r"-(?:from|to)\s+\{(\w+):(\w+)\|", src)
+              if m.group(1) not in ("get_clocks", "get_ports", "get_pins")]
+    rooted += [(m.group(1), "", m.group(0))
+               for m in re.finditer(r"^set \w+\s+\{(U_\w+)\|", src, re.M)]
+    if rooted:
+        ent, inst, shown = rooted[0]
+        name = f"{ent}:{inst}" if inst else ent
+        fail("sdc-node-name-rooted-at-top",
+             f"'{name}|...' is written from the top level, so it stops "
+             "matching if that instance is ever moved into a wrapper. "
+             f"Write '*{name}|...' -- the leading wildcard makes the depth "
+             f"irrelevant. {len(rooted)} such name(s), first: {shown.strip()}",
+             "the bladerf_core split silently dropped four vendor false "
+             "paths (68 warnings) and, through the system_clock alias, "
+             "16 multicycle constraints in spi.sdc/i2c.sdc")
+
     # 6c. Constraining a crossing that vendor IP already cuts. The dcfifo
     #     megafunction emits its own set_false_path on rdptr_g -> ws_dgrp and
     #     delayed_wrptr_g -> rs_dgwp, twenty of them, from inside the
