@@ -147,7 +147,41 @@ def check_vhdl():
                  "30 of 32 bits crossed uncrossed; found as a -7.168 ns path")
             break
 
-    # 8. Two domains ORed combinationally have no owning domain at all, so no
+    # 8. Sequential overrides after a case statement. Each one stacks another
+    #    multiplexer on the next-state logic, and the LAST one silently wins,
+    #    which is rarely the intended priority.
+    for f in (ROOT / "hdl/fpga/ip/nuand/synthesis").glob("fifo_*.vhd"):
+        body = f.read_text()
+        # Two `if ... then` blocks assigning the same record's state, back to
+        # back, with no elsif between them.
+        seq = re.compile(
+            r"\n(\s*)if\([^\n]*\)\s*then\n(?:[^\n]*\n)*?\1end if;\n+"
+            r"\1if\([^\n]*\)\s*then\n(?:[^\n]*\n)*?\1(?:end if;)",
+            re.M)
+        for m in seq.finditer(body):
+            block = m.group(0)
+            # Two blocks in DIFFERENT processes are not stacked overrides.
+            # The first version of this rule matched the tail of one process
+            # against the head of the next and reported a defect that was not
+            # there -- a guard that cries wolf teaches people to ignore it.
+            if re.search(r"\bend process\b|\bprocess\s*\(", block):
+                continue
+            if block.count(".state") >= 2 or block.count("_FSM_RESET_VALUE") >= 1:
+                if ".state" in block or "RESET_VALUE" in block:
+                    line_no = body[:m.start()].count("\n") + 2
+                    fail("vhdl-stacked-fsm-override",
+                         f"{f.name}:{line_no}: two back-to-back if blocks "
+                         "both assign the next FSM state; use one elsif "
+                         "chain so the priority is stated and the logic "
+                         "stays one level deep",
+                         "-0.164 ns setup, and the disable clause silently "
+                         "overrode the abort")
+                    break
+        else:
+            continue
+        break
+
+    # 9. Two domains ORed combinationally have no owning domain at all, so no
     #    synchroniser can be attached to the result.
     for line in raw.split("\n"):
         code = line.split("--")[0]
@@ -200,6 +234,7 @@ sdc-false-path-on-bundle   false path drops the skew bound on the same pair
 sdc-source-only-relaxation -from without -to reaches past the crossing
 sdc-regexp-on-hierarchy    backslashes in hierarchy names defeat Tcl regexp
 sdc-unchecked-count        a block that binds zero instances says nothing
+vhdl-stacked-fsm-override  two if blocks both assigning next state; last wins
 vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
 vhdl-cross-domain-or       an OR of two domains has no owning domain
 header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code

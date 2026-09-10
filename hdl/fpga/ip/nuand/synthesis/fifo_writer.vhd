@@ -591,13 +591,21 @@ begin
         -- the FIFO interface through meta_current.state on the FOLLOWING
         -- clock -- meta_fifo_write/meta_fifo_data stay driven solely by
         -- meta_current.meta_write / meta_current.meta_data, unchanged.
+        -- One priority chain, not two sequential overrides. Written as two
+        -- separate if statements this cost -0.164 ns on the setup path
+        -- meta_current.meta_written -> meta_current.state.IDLE (measured,
+        -- hostedxA4-2026-09-10_04.09.16): the next-state logic ran through
+        -- two more multiplexers stacked on top of the whole case statement.
+        --
+        -- The order matters as much as the depth. With the disable clause
+        -- second it overrode the abort, so dropping enable walked the FSM
+        -- out of ABORTED into IDLE without a new epoch -- exactly the sticky
+        -- halt the abort exists to provide. Abort wins now.
         if( abort_active_i = '1' ) then
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= ABORTED;
-        end if;
-
-        if( (enable = '0') or (meta_en = '0') ) then
+        elsif( (enable = '0') or (meta_en = '0') ) then
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= IDLE;

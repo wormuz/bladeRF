@@ -648,12 +648,15 @@ begin
         -- the meta FIFO interface through meta_current on the FOLLOWING
         -- clock -- the output assignment below stays a plain mirror of
         -- meta_current.meta_read, unchanged.
+        -- One priority chain, same as fifo_writer. Two sequential overrides
+        -- stack another multiplexer on the next-state logic, and the second
+        -- one wins: with the disable clause separate, dropping enable reset
+        -- the FSM straight out of ABORTED without a new epoch, which defeats
+        -- the sticky halt. Abort wins.
         if( abort_active_i = '1' ) then
             meta_future.meta_read <= '0';
             meta_future.state     <= ABORTED;
-        end if;
-
-        if( (enable = '0') or (meta_en = '0') ) then
+        elsif( (enable = '0') or (meta_en = '0') ) then
             meta_future <= META_FSM_RESET_VALUE;
         end if;
 
