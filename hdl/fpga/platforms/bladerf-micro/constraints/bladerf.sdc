@@ -303,7 +303,16 @@ if { [file exists $dcfifo_sdc] } {
     }
 
     foreach owner [bladerf_dcfifo_owners {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}] {
-        set rd_from [bladerf_first_nonempty $owner {*rdptr_g1p* *rdptr_g*}]
+        # rdptr_g first, NOT rdptr_g1p. Both names exist in every instance --
+        # measured on hostedxA4-2026-09-10_04.37.41, all five FIFOs have both
+        # -- and it is rdptr_g that feeds the synchroniser. Preferring g1p
+        # bound five instances to a register with no destination clock and
+        # cost them their net-delay bound: warning 17897 went from 2 to 7.
+        # Exact names from the fitted netlist, not guessed: rdptr_g is a
+        # direct child of auto_generated, rdptr_g1p lives one level down
+        # inside a_graycounter_*. So "rdptr_g*" without an anchor would take
+        # both.
+        set rd_from [bladerf_first_nonempty $owner {rdptr_g\[*\] rdptr_g *rdptr_g1p*}]
         set rd_to   [get_keepers -nowarn "${owner}|*ws_dgrp*dffpipe*|dffe*"]
         if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
             apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
@@ -313,7 +322,13 @@ if { [file exists $dcfifo_sdc] } {
     }
 
     foreach owner [bladerf_dcfifo_owners {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}] {
-        set wr_from [bladerf_first_nonempty $owner {*delayed_wrptr_g* *wrptr_g1p* *wrptr_g*}]
+        # delayed_wrptr_g is what the vendor procedures name, and it does not
+        # exist in this netlist at all -- checked across every instance. The
+        # write pointer here is plain wrptr_g, a direct child of
+        # auto_generated, with wrptr_g1p one level down inside
+        # a_graycounter_* and wrptr_g_gray2bin inside a_gray2bin_*. Anchor on
+        # the real one.
+        set wr_from [bladerf_first_nonempty $owner {wrptr_g\[*\] wrptr_g *delayed_wrptr_g*}]
         set wr_to   [get_keepers -nowarn "${owner}|*rs_dgwp*dffpipe*|dffe*"]
         if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
             apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
