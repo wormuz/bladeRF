@@ -153,6 +153,25 @@ def check_sdc():
     # block says so. That check works from the build's own report and needs no
     # guess about what the build contains.
 
+    # 6c. Constraining a crossing that vendor IP already cuts. The dcfifo
+    #     megafunction emits its own set_false_path on rdptr_g -> ws_dgrp and
+    #     delayed_wrptr_g -> rs_dgwp, twenty of them, from inside the
+    #     generated IP. Anything layered on top has no path to attach to and
+    #     is dropped with "No path is found" -- which reads like a broken
+    #     pattern and is not.
+    #     The tell is a call to the vendor pointer procedures at all: their
+    #     whole purpose is to constrain crossings the IP has already cut.
+    m = re.search(r"apply_sdc_(mw_)?dcfifo_(for_ptrs|mstable_delay)", src)
+    if m:
+        fail("sdc-constrains-vendor-cut-path",
+             f"{m.group(0)} is called, but the dcfifo megafunction already "
+             "false-paths rdptr_g -> ws_dgrp and delayed_wrptr_g -> rs_dgwp "
+             "itself (Info 332165/332166, twenty of them in this design). "
+             "Anything added there has no path to attach to and is dropped "
+             "with 332182, which reads like a broken pattern and is not",
+             "three rounds of pattern fixes for a crossing that needed "
+             "nothing; the check is one get_timing_paths query")
+
     # 7. Every block that walks instances must say how many it bound, and
     #    zero must be loud. A block that quietly constrains nothing is
     #    indistinguishable from one that works.
