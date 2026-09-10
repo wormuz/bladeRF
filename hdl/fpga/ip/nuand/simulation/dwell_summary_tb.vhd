@@ -41,6 +41,9 @@ architecture sim of dwell_summary_tb is
     signal sample_count  : unsigned(31 downto 0);
     signal triggered     : std_logic;
     signal first_window  : unsigned(15 downto 0);
+    signal mean_power    : unsigned(31 downto 0);
+    signal noise_floor   : unsigned(47 downto 0);
+    signal peak_window   : unsigned(47 downto 0);
 
     signal done          : boolean := false;
 
@@ -67,7 +70,10 @@ begin
             clip_count    => clip_count,
             sample_count  => sample_count,
             triggered     => triggered,
-            first_window  => first_window
+            first_window  => first_window,
+            mean_power    => mean_power,
+            noise_floor   => noise_floor,
+            peak_window   => peak_window
         );
 
     stim : process
@@ -177,6 +183,44 @@ begin
             severity error;
         report "case 4b OK: two loud windows trigger, first_window = "
                & integer'image(to_integer(first_window));
+
+        ----------------------------------------------------------------
+        -- 5: the case the derived values exist for. A signal present in
+        --    part of the dwell only.
+        --
+        --    Window 0 loud at (300,400): 16 * (90000+160000) = 4,000,000
+        --    Windows 1 and 2 quiet at (10,10): 16 * 200      =     3,200
+        --
+        --    A dwell average would report 1,335,466 and describe neither
+        --    state. noise_floor reports the quiet part, which is what a
+        --    threshold should be measured against, and peak_window reports
+        --    the loud part. The host gets the contrast without receiving a
+        --    single IQ sample.
+        ----------------------------------------------------------------
+        threshold <= (others => '0');   -- measure only, no trigger
+        feed(300, 400, 16);
+        feed(10, 10, 16);
+        feed(10, 10, 16);
+        end_dwell;
+
+        assert noise_floor = 16 * (10*10 + 10*10)
+            report "FAIL floor: got " & integer'image(to_integer(noise_floor(31 downto 0)))
+                   & ", expected " & integer'image(16 * 200)
+                   & " -- the floor must be the quiet window, not an average"
+            severity error;
+        assert peak_window = 16 * (300*300 + 400*400)
+            report "FAIL peak_window: got " & integer'image(to_integer(peak_window(31 downto 0)))
+                   & ", expected " & integer'image(16 * 250000)
+            severity error;
+        -- mean_power is energy per window: total / 3 windows, shifted by
+        -- WINDOW_LOG2. Total = 4,000,000 + 3,200 + 3,200 = 4,006,400.
+        assert mean_power = 4006400 / (2**WINDOW_LOG2)
+            report "FAIL mean: got " & integer'image(to_integer(mean_power))
+                   & ", expected " & integer'image(4006400 / (2**WINDOW_LOG2))
+            severity error;
+        report "case 5 OK: floor " & integer'image(to_integer(noise_floor(31 downto 0)))
+               & ", peak window " & integer'image(to_integer(peak_window(31 downto 0)))
+               & " -- contrast visible without any IQ";
 
         report "dwell_summary_tb: all cases passed";
         done <= true;

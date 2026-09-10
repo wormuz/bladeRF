@@ -75,7 +75,24 @@ entity dwell_summary is
         clip_count      : out unsigned(31 downto 0);
         sample_count    : out unsigned(31 downto 0);
         triggered       : out std_logic;
-        first_window    : out unsigned(15 downto 0)
+        first_window    : out unsigned(15 downto 0);
+
+        -- Derived on-chip, because the fabric can and the host cannot do it
+        -- in time. All three come from the window accumulator, which exists
+        -- anyway for the trigger.
+        --
+        --   mean_power    energy per sample: a shift, since the window is a
+        --                 power of two. What "how strong" means without
+        --                 first having to know how many samples there were.
+        --   noise_floor   the quietest window in the dwell. With a signal
+        --                 present for part of the dwell this is the part
+        --                 without it, which is exactly the reference a
+        --                 threshold should be relative to.
+        --   peak_window   the loudest window. Against noise_floor it gives
+        --                 the dwell's dynamic range for free.
+        mean_power      : out unsigned(31 downto 0);
+        noise_floor     : out unsigned(47 downto 0);
+        peak_window     : out unsigned(47 downto 0)
     );
 end entity;
 
@@ -105,6 +122,11 @@ architecture arch of dwell_summary is
                                 := (others => '0');
     signal trig_latched     : std_logic := '0';
     signal trig_window      : unsigned(15 downto 0) := (others => '0');
+
+    -- Quietest and loudest completed window of the dwell. The minimum
+    -- starts at all ones so the first window always replaces it.
+    signal win_min          : unsigned(47 downto 0) := (others => '1');
+    signal win_max          : unsigned(47 downto 0) := (others => '0');
 
     function ones( v : std_logic_vector ) return natural is
         variable n : natural := 0;
@@ -194,6 +216,32 @@ begin
                 triggered     <= trig_latched;
                 first_window  <= trig_window;
 
+                -- Mean power per WINDOW, not per sample.
+                --
+                -- Per sample would need dwell_energy / dwell_samples, and
+                -- dwell_samples is not a power of two, so that is a real
+                -- divider. Per window is dwell_energy >> WINDOW_LOG2, a
+                -- fixed shift and free. It is directly comparable with
+                -- noise_floor and peak_window, which are also window sums,
+                -- and that comparison is the one that matters: is this
+                -- dwell's average near its own floor or well above it.
+                --
+                -- The host can still get per-sample by dividing by the
+                -- window size, which it knows.
+                mean_power <= resize(shift_right(dwell_energy, WINDOW_LOG2),
+                                     32);
+
+                -- A dwell with no completed window has no floor to report.
+                -- All ones would read as "very loud", which is the opposite
+                -- of the truth, so send zero and let sample_count say why.
+                if( dwell_windows = 0 ) then
+                    noise_floor <= (others => '0');
+                    peak_window <= (others => '0');
+                else
+                    noise_floor <= win_min;
+                    peak_window <= win_max;
+                end if;
+
                 window_sum    <= (others => '0');
                 window_count  <= (others => '0');
                 dwell_energy  <= (others => '0');
@@ -204,6 +252,8 @@ begin
                 over_history  <= (others => '0');
                 trig_latched  <= '0';
                 trig_window   <= (others => '0');
+                win_min       <= (others => '1');
+                win_max       <= (others => '0');
 
             elsif( inst_valid = '1' ) then
                 window_sum    <= window_sum + resize(inst_energy, 48);
@@ -226,6 +276,16 @@ begin
                     window_sum   <= (others => '0');
                     window_count <= (others => '0');
                     dwell_windows <= dwell_windows + 1;
+
+                    -- Track the quietest and loudest completed window.
+                    -- window_sum does not yet include this last sample, so
+                    -- add it here as the trigger comparison does.
+                    if( (window_sum + resize(inst_energy, 48)) < win_min ) then
+                        win_min <= window_sum + resize(inst_energy, 48);
+                    end if;
+                    if( (window_sum + resize(inst_energy, 48)) > win_max ) then
+                        win_max <= window_sum + resize(inst_energy, 48);
+                    end if;
 
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
