@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""Static check for every defect class that has cost a build in this repo.
+
+Runs in under a second and needs no Quartus. Every rule here exists because
+the same mistake shipped, the build died or lied, and the day went into
+finding it again. The point is to never spend that day twice.
+
+    qcheck            check the working tree
+    qcheck --list     explain each rule and the build it cost
+
+Exit 1 if anything fires.
+"""
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+SDC = ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc"
+HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
+HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
+
+findings = []
+
+
+def fail(rule, detail, cost):
+    findings.append((rule, detail, cost))
+
+
+def code_only(text, comment="#"):
+    """Strip comments so a rule cannot fire on its own explanation."""
+    return "\n".join(l.split(comment)[0] for l in text.split("\n"))
+
+
+# ---------------------------------------------------------------- SDC rules
+
+def check_sdc():
+    if not SDC.exists():
+        return
+    raw = SDC.read_text()
+    src = code_only(raw)
+
+    # 1. A fatal message inside an SDC aborts read_sdc, and the fitter then
+    #    runs WITHOUT the constraints while still producing a .rbf and a
+    #    timing summary. One build claimed "Can't fit design" with ALMs at
+    #    55% because of this.
+    if re.search(r"post_message\s+-type\s+error", src):
+        fail("sdc-fatal-message",
+             "post_message -type error aborts read_sdc; every later "
+             "constraint is discarded and the fitter carries on regardless",
+             "one build reported a bogus 'Can't fit design'")
+
+    # 2. Both ends wildcarded with neither pinning an instance collects
+    #    registers from SEVERAL instances, so the constraint asks for a path
+    #    that does not exist. Non-empty collections, so a size guard passes.
+    pair = re.compile(
+        r"(set_false_path|set_max_skew|set_net_delay|set_multicycle_path"
+        r"|set_max_delay|set_min_delay)\b[^\n]*?"
+        r"-from[^\n]*?\{\s*(\*[^\}]*)\}[^\n]*?-to[^\n]*?\{\s*(\*[^\}]*)\}")
+    inst = re.compile(r"[A-Za-z_]\w*:[A-Za-z_]\w*\|")
+    for m in pair.finditer(src):
+        if not inst.search(m.group(2)) and not inst.search(m.group(3)):
+            fail("sdc-unpinned-pair",
+                 f"{m.group(1)}: -from {{{m.group(2)}}} -to {{{m.group(3)}}} "
+                 "spans instances; both collections will be non-empty and no "
+                 "path will exist between them",
+                 "shipped three times; each cost a build")
+            break
+
+    # 3. A false path takes the skew and net-delay bounds down with it: the
+    #    following set_max_skew is reported "No path is found" and dropped,
+    #    leaving a held-data bus with no bound on bit-to-bit skew.
+    for m in re.finditer(r"set_false_path\s+-from\s+\$(\w+)\s+-to\s+\$(\w+)", src):
+        fail("sdc-false-path-on-bundle",
+             f"set_false_path -from ${m.group(1)} -to ${m.group(2)}: use "
+             "set_max_delay 100 / set_min_delay -100 with both ends instead, "
+             "or the skew bound on the same pair is silently dropped",
+             "left five crossings physically unbounded")
+        break
+
+    # 4. A source-only relaxation reaches past the crossing.
+    if re.search(r"set_(max|min)_delay\s+-?\d+\s+-from\s+\$?\w+\s*(\n|$)", src):
+        fail("sdc-source-only-relaxation",
+             "set_max_delay/set_min_delay with -from but no -to reaches every "
+             "fanout of the source",
+             "overrode the SPI and I2C multicycles: eight violations to -14.061 ns")
+
+    # 5. Tcl regexp against Quartus hierarchy names: they contain backslashes
+    #    from VHDL generate labels, and a backslash in a regexp is an escape,
+    #    so a pattern that reads correctly matches nothing.
+    if re.search(r"regexp\s+\{[^}]*\\\|", src):
+        fail("sdc-regexp-on-hierarchy",
+             "regexp against a hierarchy name: \\fifo_gen: style labels make "
+             "it match nothing. Split on the separator instead",
+             "dcfifo pointers bound to zero instances")
+
+    # 6. Every block that walks instances must say how many it bound, and
+    #    zero must be loud. A block that quietly constrains nothing is
+    #    indistinguishable from one that works.
+    for var in re.findall(r"incr\s+(\w+_done)\b", src):
+        if not re.search(rf"\${var}\s*==\s*0|\${var}\s*>", src):
+            fail("sdc-unchecked-count",
+                 f"${var} counts bound instances but nothing checks it for zero",
+                 "160 vendor constraints were dropped unnoticed for weeks")
+            break
+
+
+# --------------------------------------------------------------- VHDL rules
+
+def check_vhdl():
+    if not HOSTED.exists():
+        return
+    raw = HOSTED.read_text()
+
+    # 7. Raw rx_/tx_ signals packed into a word read from another domain.
+    #    Reads fine as VHDL; nothing in the line says which domain either
+    #    side is in.
+    target = re.compile(r"^\s*(\w*(?:status|state)\w*)\s*\(", re.I)
+    rawsig = re.compile(r"\b((?:rx|tx)_\w+)\b")
+
+    def derived_locally(name):
+        for line in raw.split("\n"):
+            if "<=" not in line:
+                continue
+            lhs, rhs = line.split("<=", 1)
+            if lhs.strip() != name:
+                continue
+            deps = rawsig.findall(rhs)
+            return bool(deps) and all(
+                d.endswith("_sys") or d.endswith("_sync") for d in deps)
+        return False
+
+    for line in raw.split("\n"):
+        code = line.split("--")[0]
+        if "<=" not in code:
+            continue
+        m = target.match(code)
+        if not m:
+            continue
+        rhs = code.split("<=", 1)[1]
+        bad = [n for n in rawsig.findall(rhs)
+               if not (n.endswith("_sys") or n.endswith("_sync"))
+               and not derived_locally(n)]
+        if bad:
+            fail("vhdl-raw-cdc-in-status",
+                 f"{m.group(1)}: {', '.join(sorted(set(bad)))} reach a "
+                 "cross-domain word without a synchroniser",
+                 "30 of 32 bits crossed uncrossed; found as a -7.168 ns path")
+            break
+
+    # 8. Two domains ORed combinationally have no owning domain at all, so no
+    #    synchroniser can be attached to the result.
+    for line in raw.split("\n"):
+        code = line.split("--")[0]
+        if "<=" not in code:
+            continue
+        rhs = code.split("<=", 1)[1]
+        if re.search(r"\btx_\w+\s+or\s+rx_\w+|\brx_\w+\s+or\s+tx_\w+", rhs):
+            fail("vhdl-cross-domain-or",
+                 f"{code.strip()}: an OR of two clock domains owns neither",
+                 "two status bits had to be deleted outright")
+            break
+
+
+# ------------------------------------------------------------- header rules
+
+def check_headers():
+    # 9. A wildcard inside a C block comment: "U_sync_tx_*/U_sync_rx_*"
+    #    contains */ and ends the comment, so the rest becomes code.
+    for h in HEADERS:
+        text = h.read_text()
+        depth = 0
+        for i, line in enumerate(text.split("\n"), 1):
+            j = 0
+            while j < len(line) - 1:
+                two = line[j:j + 2]
+                if two == "/*" and depth == 0:
+                    depth = 1
+                    j += 2
+                    continue
+                if two == "*/" and depth == 1:
+                    # A comment terminator immediately after a wildcard is
+                    # almost always an accident.
+                    if j > 0 and line[j - 1] == "*" and not line[:j].strip().endswith("*"):
+                        pass
+                    depth = 0
+                    j += 2
+                    continue
+                j += 1
+        if re.search(r"[A-Za-z_]\*/[A-Za-z_]", text):
+            fail("header-wildcard-ends-comment",
+                 f"{h.name}: a '*/' inside prose ends the block comment and "
+                 "the rest of the sentence becomes code",
+                 "libad936x stopped compiling; the build never reached timing")
+
+
+RULES = """
+sdc-fatal-message          post_message -type error aborts read_sdc entirely
+sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
+sdc-false-path-on-bundle   false path drops the skew bound on the same pair
+sdc-source-only-relaxation -from without -to reaches past the crossing
+sdc-regexp-on-hierarchy    backslashes in hierarchy names defeat Tcl regexp
+sdc-unchecked-count        a block that binds zero instances says nothing
+vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
+vhdl-cross-domain-or       an OR of two domains has no owning domain
+header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
+"""
+
+
+def main():
+    if "--list" in sys.argv:
+        print(RULES.strip())
+        return 0
+
+    check_sdc()
+    check_vhdl()
+    check_headers()
+
+    if not findings:
+        print("qcheck: clean")
+        return 0
+
+    for rule, detail, cost in findings:
+        print(f"FAIL  {rule}")
+        print(f"      {detail}")
+        print(f"      cost: {cost}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
