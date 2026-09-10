@@ -18,10 +18,10 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
--- sweep revision: thin wrapper around bladerf_core. Generics will later
--- enable ENABLE_SWEEP_ANALYZER / ENABLE_TRIGGER_CAPTURE / ENABLE_GAIN_SEQUENCER
--- for this revision; all kept false for now so hosted and sweep stay
--- logically identical until those features are actually implemented.
+-- sweep revision: thin wrapper around bladerf_core. ENABLE_SWEEP_ANALYZER
+-- and ENABLE_GAIN_SEQUENCER are on here and off in hosted, so the analyser
+-- and its settling sequencer cost the hosted image nothing.
+-- ENABLE_TRIGGER_CAPTURE brings in the 4096-sample pre-trigger ring (13 M10K).
 
 library ieee;
     use ieee.std_logic_1164.all;
@@ -40,9 +40,9 @@ begin
 
     U_core : entity work.bladerf_core
         generic map (
-            ENABLE_SWEEP_ANALYZER  => false,
-            ENABLE_TRIGGER_CAPTURE => false,
-            ENABLE_GAIN_SEQUENCER  => false
+            ENABLE_SWEEP_ANALYZER  => true,
+            ENABLE_TRIGGER_CAPTURE => true,
+            ENABLE_GAIN_SEQUENCER  => true
         )
         port map (
             c5_clock2      => c5_clock2,

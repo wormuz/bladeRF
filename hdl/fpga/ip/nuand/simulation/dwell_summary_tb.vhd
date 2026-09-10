@@ -41,6 +41,11 @@ architecture sim of dwell_summary_tb is
     signal sample_count  : unsigned(31 downto 0);
     signal triggered     : std_logic;
     signal first_window  : unsigned(15 downto 0);
+
+    -- Free-running counter standing in for the RX timestamp, so a captured
+    -- value can be checked against the moment it was captured.
+    signal ts_counter      : unsigned(63 downto 0) := (others => '0');
+    signal first_timestamp : unsigned(63 downto 0);
     signal mean_power    : unsigned(31 downto 0);
     signal noise_floor   : unsigned(47 downto 0);
     signal peak_window   : unsigned(47 downto 0);
@@ -48,6 +53,15 @@ architecture sim of dwell_summary_tb is
     signal done          : boolean := false;
 
 begin
+
+    -- Stands in for the RX timestamp: free-running, never reset by a dwell,
+    -- exactly like the real one.
+    ts_proc : process( clock )
+    begin
+        if( rising_edge(clock) ) then
+            ts_counter <= ts_counter + 1;
+        end if;
+    end process;
 
     clock <= '0' when done else not clock after 4 ns;   -- 125 MHz
 
@@ -71,6 +85,8 @@ begin
             sample_count  => sample_count,
             triggered     => triggered,
             first_window  => first_window,
+            timestamp       => ts_counter,
+            first_timestamp => first_timestamp,
             mean_power    => mean_power,
             noise_floor   => noise_floor,
             peak_window   => peak_window
@@ -183,6 +199,23 @@ begin
             severity error;
         report "case 4b OK: two loud windows trigger, first_window = "
                & integer'image(to_integer(first_window));
+
+        -- The timestamp must name the crossing, not the dwell boundary.
+        -- Both are non-zero, so "did it get captured" is not enough: the
+        -- captured value has to be strictly earlier than now, which is what
+        -- fails if the sample is taken at end_dwell instead.
+        assert first_timestamp > 0
+            report "FAIL timestamp: trigger fired but first_timestamp is zero"
+            severity error;
+        assert first_timestamp < ts_counter
+            report "FAIL timestamp: captured at the dwell boundary, not at "
+                   & "the crossing (first_timestamp="
+                   & integer'image(to_integer(first_timestamp))
+                   & " now=" & integer'image(to_integer(ts_counter)) & ")"
+            severity error;
+        report "case 4c OK: timestamp captured at the crossing, "
+               & integer'image(to_integer(first_timestamp))
+               & " < now " & integer'image(to_integer(ts_counter));
 
         ----------------------------------------------------------------
         -- 5: the case the derived values exist for. A signal present in

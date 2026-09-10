@@ -63,6 +63,11 @@ entity dwell_summary is
         -- current dwell and starts the next.
         dwell_start     : in  std_logic;
 
+        -- Free-running RX timestamp, same clock domain, sampled at the
+        -- moment the trigger first latches. Tie to zero if unused: the
+        -- output then reads zero and first_window still says which window.
+        timestamp       : in  unsigned(63 downto 0) := (others => '0');
+
         -- Threshold on the per-window energy sum, host-programmed. Zero
         -- disables the trigger without disabling measurement.
         threshold       : in  unsigned(47 downto 0);
@@ -76,6 +81,12 @@ entity dwell_summary is
         sample_count    : out unsigned(31 downto 0);
         triggered       : out std_logic;
         first_window    : out unsigned(15 downto 0);
+
+        -- Timestamp captured when the trigger first latched, in RX sample
+        -- ticks. first_window locates the event to a window; this locates it
+        -- to a sample, which is what correlating two receivers needs.
+        -- Meaningless unless triggered is set -- reads zero otherwise.
+        first_timestamp : out unsigned(63 downto 0);
 
         -- Derived on-chip, because the fabric can and the host cannot do it
         -- in time. All three come from the window accumulator, which exists
@@ -122,6 +133,7 @@ architecture arch of dwell_summary is
                                 := (others => '0');
     signal trig_latched     : std_logic := '0';
     signal trig_window      : unsigned(15 downto 0) := (others => '0');
+    signal trig_time        : unsigned(63 downto 0) := (others => '0');
 
     -- Quietest and loudest completed window of the dwell. The minimum
     -- starts at all ones so the first window always replaces it.
@@ -194,6 +206,7 @@ begin
             over_history  <= (others => '0');
             trig_latched  <= '0';
             trig_window   <= (others => '0');
+            trig_time     <= (others => '0');
             summary_valid <= '0';
             energy_sum    <= (others => '0');
             peak          <= (others => '0');
@@ -214,7 +227,8 @@ begin
                 clip_count    <= dwell_clips;
                 sample_count  <= dwell_samples;
                 triggered     <= trig_latched;
-                first_window  <= trig_window;
+                first_window    <= trig_window;
+                first_timestamp <= trig_time;
 
                 -- Mean power per WINDOW, not per sample.
                 --
@@ -252,6 +266,7 @@ begin
                 over_history  <= (others => '0');
                 trig_latched  <= '0';
                 trig_window   <= (others => '0');
+                trig_time     <= (others => '0');
                 win_min       <= (others => '1');
                 win_max       <= (others => '0');
 
@@ -304,6 +319,12 @@ begin
                             >= TRIGGER_K ) then
                         trig_latched <= '1';
                         trig_window  <= dwell_windows;
+                        -- Sampled here, at the crossing, not at the dwell
+                        -- boundary: by then the timestamp has advanced by
+                        -- the rest of the dwell and would name the wrong
+                        -- instant. Latched once, since trig_latched gates
+                        -- this branch.
+                        trig_time    <= timestamp;
                     end if;
                 end if;
             end if;
