@@ -804,6 +804,42 @@ int nios_rffe_control_write(struct bladerf *dev, uint32_t value)
     return status;
 }
 
+int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, 0,
+                            value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Read 0x%08x\n", __FUNCTION__, *value);
+    }
+#endif
+
+    return status;
+}
+
+/* The command goes in the address field, not the data field. The underlying
+ * hardware bits are toggles, so "start" is a transition rather than a value,
+ * and keeping that knowledge in the Nios means the host cannot desynchronise
+ * a shadow copy of them by retrying a write. */
+int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
+{
+    int status;
+
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RF_LINK_CFG, cmd,
+                             data);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: cmd 0x%02x data 0x%08x\n", __FUNCTION__, cmd, data);
+    }
+#endif
+
+    return status;
+}
+
 int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile)
 {

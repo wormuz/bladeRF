@@ -260,6 +260,37 @@ int nios_rffe_control_read(struct bladerf *dev, uint32_t *value);
 int nios_rffe_control_write(struct bladerf *dev, uint32_t value);
 
 /**
+ * Read the RF link status word.
+ *
+ * Bit layout and its reasoning are in nios_pkt_8x32.h. The bit to wait on
+ * before trusting a stream is 10, epoch applied: both directions have
+ * confirmed the link generation the host asked for.
+ *
+ * @param       dev     Device handle
+ * @param[out]  value   Status word
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
+
+/**
+ * Issue an RF link control command.
+ *
+ * Exists because FX3 samples the USB speed exactly once per link start and
+ * never rebuilds its DMA geometry afterwards, while the FPGA re-reads it
+ * continuously. On a renegotiation the two sides of one GPIF disagree and
+ * nothing reports it. We cannot rebuild the FX3 firmware, so the fabric has
+ * to be told explicitly when a new link generation begins.
+ *
+ * @param   dev     Device handle
+ * @param   cmd     NIOS_PKT_8x32_RF_LINK_CMD_*
+ * @param   data    Command argument; ignored by START, STOP, CLEAR_FAULTS
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
+
+/**
  * Save an RFFE fast lock profile to the Nios.
  *
  * @param           dev          Device handle
