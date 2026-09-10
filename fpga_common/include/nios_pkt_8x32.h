@@ -118,9 +118,9 @@
  * fifo_writer status ports in bladerf-hosted.vhd (signal rf_link_status),
  * carried to the Nios by the rf_link_status input PIO in nios_system.tcl.
  *
- * All tx_clock/rx_clock-domain bits below are synchronized into sys_clock
- * (bladerf-hosted.vhd, U_sync_tx_*/U_sync_rx_*) before reaching this PIO --
- * none of the raw tx_*/rx_* signals cross domains uncrossed anymore.
+ * All tx_clock and rx_clock domain bits below are synchronized into sys_clock
+ * by the U_sync_tx_ and U_sync_rx_ instances in bladerf-hosted.vhd before
+ * reaching this PIO. No raw tx or rx signal crosses a domain uncrossed.
  *
  *   bit  0      TX link active
  *   bit  1      TX usb speed latched
