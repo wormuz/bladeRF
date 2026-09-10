@@ -395,6 +395,11 @@ architecture core_bladerf of bladerf_core is
     signal dwell_cfg_rx           : std_logic_vector(31 downto 0);
     signal dwell_shift            : natural range 0 to 24 := 0;
     signal dwell_threshold        : unsigned(47 downto 0) := (others => '0');
+
+    -- gain_sequencer counts settling in samples; SETTLE_LOG2 defaults to 13,
+    -- so the port is 14 bits and the readout word carries 16.
+    signal dwell_settle_raw       : unsigned(13 downto 0) := (others => '0');
+    signal dwell_settle_elapsed   : unsigned(15 downto 0) := (others => '0');
     signal pretrig_frozen_sys     : std_logic;
     signal pretrig_wrapped_sys    : std_logic;
     signal dwell_triggered_sys    : std_logic;
@@ -820,6 +825,10 @@ begin
                 mean_power      => dwell_mean_power,
                 noise_floor     => dwell_noise_floor,
                 peak_window     => dwell_peak_window,
+                triggered       => dwell_triggered,
+                measure_valid   => dwell_measure_valid,
+                gain_too_high   => dwell_gain_too_high,
+                settle_elapsed  => dwell_settle_elapsed,
                 rd_index        => dwell_rd_index,
                 rd_data         => dwell_rd_data,
                 generation      => dwell_generation
@@ -861,6 +870,12 @@ begin
     -- straight into a system-domain word -- the same trap as oldest_index,
     -- just harder to see.
     dwell_rd_index <= unsigned(pretrig_addr_word(19 downto 16));
+
+    -- Widened rather than truncated: gain_sequencer's counter is
+    -- SETTLE_LOG2+1 bits and the readout word holds 16, so this cannot lose
+    -- a value even if SETTLE_LOG2 is raised. Zero when the sequencer is not
+    -- built, which is what its default already says.
+    dwell_settle_elapsed <= resize(dwell_settle_raw, 16);
 
     -- Trigger threshold, host-programmed, as mantissa and shift.
     --
@@ -965,7 +980,7 @@ begin
                 sample_count   => dwell_sample_count,
                 measure_valid  => dwell_measure_valid,
                 gain_too_high  => dwell_gain_too_high,
-                settle_elapsed => open
+                settle_elapsed => dwell_settle_raw
             );
 
     end generate;

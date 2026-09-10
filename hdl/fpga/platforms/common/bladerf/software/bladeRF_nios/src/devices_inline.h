@@ -139,18 +139,7 @@ static inline uint32_t dwell_status_read(void)
     #endif
 }
 
-/* One entry of the pre-trigger ring: write the address, read the datum.
- *
- * The buffer registers its read port, so the datum is valid the cycle after
- * the address. An Avalon write followed by an Avalon read takes far longer
- * than that, so no explicit wait is needed -- but the two accesses must not
- * be reordered, hence the separate statements rather than one expression.
- *
- * Reading while the ring is not frozen returns whatever the write side is
- * currently overwriting. The caller checks DWELL_STATUS_FROZEN first; this
- * function deliberately does not, so a caller that wants a live peek can
- * have one. */
-/* Latched dwell summary: thirteen words plus a generation counter.
+/* Latched dwell summary: fourteen words plus a generation counter.
  *
  * The index shares the address register with the pre-trigger ring -- bits
  * 11:0 select a ring entry, 19:16 a summary word -- because the host reads
@@ -174,8 +163,21 @@ static inline uint32_t dwell_status_read(void)
 #define DWELL_WORD_PEAKWIN_LO   10u
 #define DWELL_WORD_PEAKWIN_HI   11u
 #define DWELL_WORD_FIRST_WINDOW 12u
-#define DWELL_WORD_COUNT        13u
+#define DWELL_WORD_VERDICT      13u
+#define DWELL_WORD_COUNT        14u
 #define DWELL_WORD_GENERATION   15u
+
+/* Word 13, the verdict, latched with the numbers it describes.
+ *
+ * These bits also appear in the dwell status register, but that register is
+ * live: read separately it can be a dwell ahead of the record, which is how
+ * a quiet dwell ends up carrying the previous band's "triggered". Use these
+ * when the answer has to match the numbers. */
+#define DWELL_VERDICT_MEASURE_VALID (1u << 0)
+#define DWELL_VERDICT_GAIN_TOO_HIGH (1u << 1)
+#define DWELL_VERDICT_TRIGGERED     (1u << 2)
+#define DWELL_VERDICT_SETTLE_SHIFT  16
+#define DWELL_VERDICT_SETTLE_MASK   0xffffu
 
 static inline uint32_t dwell_word_read(uint8_t word)
 {
@@ -227,6 +229,16 @@ static inline bool dwell_summary_read(uint32_t *out, uint32_t *gen)
     return false;
 }
 
+/* One entry of the pre-trigger ring: write the address, read the datum.
+ *
+ * The buffer registers its read port, so the datum is valid the cycle after
+ * the address. An Avalon write followed by an Avalon read takes far longer
+ * than that, so no explicit wait is needed -- but the two accesses must not
+ * be reordered, hence separate statements rather than one expression.
+ *
+ * Reading while the ring is not frozen returns whatever the write side is
+ * currently overwriting. The caller checks DWELL_STATUS_FROZEN first; this
+ * deliberately does not, so a caller that wants a live peek can have one. */
 static inline uint32_t pretrig_read(uint16_t index)
 {
     #if defined(PRETRIG_ADDR_BASE) && defined(PRETRIG_DATA_BASE)

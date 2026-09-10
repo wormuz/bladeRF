@@ -42,6 +42,16 @@ entity dwell_readout is
         noise_floor     : in  unsigned(47 downto 0);
         peak_window     : in  unsigned(47 downto 0);
 
+        -- Verdict bits for the same dwell. Latched here rather than read
+        -- from a separate status register so that the flags and the numbers
+        -- provably describe one measurement: a register read separately can
+        -- be a dwell ahead of the record, which is how a quiet dwell ends up
+        -- carrying the previous band's "triggered".
+        triggered       : in  std_logic := '0';
+        measure_valid   : in  std_logic := '0';
+        gain_too_high   : in  std_logic := '0';
+        settle_elapsed  : in  unsigned(15 downto 0) := (others => '0');
+
         -- Word select from the host. Out-of-range reads return zero rather
         -- than aliasing to a valid word, which would look like data.
         rd_index        : in  unsigned(3 downto 0);
@@ -56,7 +66,7 @@ end entity;
 
 architecture arch of dwell_readout is
 
-    constant WORDS : natural := 13;
+    constant WORDS : natural := 14;
 
     type words_t is array (0 to WORDS-1) of std_logic_vector(31 downto 0);
     signal latched : words_t := (others => (others => '0'));
@@ -108,6 +118,21 @@ begin
                 latched(11) <= std_logic_vector(
                                    resize(peak_window(47 downto 32), 32));
                 latched(12) <= std_logic_vector(resize(first_window, 32));
+
+                -- Word 13: this dwell's verdict, captured with its numbers
+                -- so the two cannot disagree. One assignment, not several
+                -- into slices of the same signal -- in a clocked process the
+                -- last one wins and the earlier bits silently vanish.
+                --
+                --   0      measure_valid   receiver had settled
+                --   1      gain_too_high   clipped past 100 ppm
+                --   2      triggered       crossed the threshold
+                --   15:4   reserved
+                --   31:16  settle_elapsed  samples counted before settling
+                latched(13) <= std_logic_vector(settle_elapsed)
+                               & x"000"
+                               & '0' & triggered & gain_too_high
+                               & measure_valid;
 
                 gen_i <= gen_i + 1;
             end if;

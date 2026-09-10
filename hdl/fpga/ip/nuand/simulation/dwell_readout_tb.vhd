@@ -34,6 +34,10 @@ architecture sim of dwell_readout_tb is
     signal mean_power      : unsigned(31 downto 0) := (others => '0');
     signal noise_floor     : unsigned(47 downto 0) := (others => '0');
     signal peak_window     : unsigned(47 downto 0) := (others => '0');
+    signal triggered       : std_logic := '0';
+    signal measure_valid   : std_logic := '0';
+    signal gain_too_high   : std_logic := '0';
+    signal settle_elapsed  : unsigned(15 downto 0) := (others => '0');
 
     signal rd_index        : unsigned(3 downto 0) := (others => '0');
     signal rd_data         : std_logic_vector(31 downto 0);
@@ -59,6 +63,10 @@ begin
             mean_power      => mean_power,
             noise_floor     => noise_floor,
             peak_window     => peak_window,
+            triggered       => triggered,
+            measure_valid   => measure_valid,
+            gain_too_high   => gain_too_high,
+            settle_elapsed  => settle_elapsed,
             rd_index        => rd_index,
             rd_data         => rd_data,
             generation      => generation
@@ -204,6 +212,45 @@ begin
             severity error;
         report "case 7 OK: index 15 reads the generation counter, "
                & integer'image(to_integer(unsigned(rd_data)));
+
+        ------------------------------------------------------------------
+        -- 8. The verdict word travels with the numbers. Read from a
+        --    separate register the flags can be a dwell ahead, which is how
+        --    a quiet dwell ends up carrying the previous band's "triggered".
+        ------------------------------------------------------------------
+        triggered      <= '1';
+        measure_valid  <= '1';
+        gain_too_high  <= '0';
+        settle_elapsed <= to_unsigned(1234, 16);
+        tick(1);
+        publish;
+
+        rd_index <= to_unsigned(13, 4); tick(2);
+        assert rd_data(0) = '1'
+            report "FAIL: measure_valid not in bit 0" severity error;
+        assert rd_data(1) = '0'
+            report "FAIL: gain_too_high should be clear" severity error;
+        assert rd_data(2) = '1'
+            report "FAIL: triggered not in bit 2" severity error;
+        assert unsigned(rd_data(31 downto 16)) = 1234
+            report "FAIL: settle_elapsed is "
+                   & integer'image(to_integer(unsigned(rd_data(31 downto 16))))
+                   & ", expected 1234"
+            severity error;
+        report "case 8 OK: verdict word carries flags and settle_elapsed";
+
+        -- And it holds, like the rest of the record, while the live inputs
+        -- move on.
+        triggered      <= '0';
+        settle_elapsed <= to_unsigned(9999, 16);
+        tick(4);
+        rd_index <= to_unsigned(13, 4); tick(2);
+        assert rd_data(2) = '1'
+               and unsigned(rd_data(31 downto 16)) = 1234
+            report "FAIL: verdict word followed the live inputs instead of "
+                   & "holding with the record"
+            severity error;
+        report "case 9 OK: verdict word held with the rest of the record";
 
         report "dwell_readout_tb: all cases passed";
         done <= true;

@@ -302,7 +302,8 @@ int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
 #define BLADERF_DWELL_WORD_PEAKWIN_LO   10
 #define BLADERF_DWELL_WORD_PEAKWIN_HI   11
 #define BLADERF_DWELL_WORD_FIRST_WINDOW 12
-#define BLADERF_DWELL_WORD_COUNT        13
+#define BLADERF_DWELL_WORD_VERDICT      13
+#define BLADERF_DWELL_WORD_COUNT        14
 #define BLADERF_DWELL_WORD_GENERATION   15
 
 /**
