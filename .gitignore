@@ -63,3 +63,7 @@ __pycache__/
 *$py.class
 
 .vscode/
+
+# quartusq build queue: local state, not source
+hdl/quartus/quartusq.db*
+hdl/quartus/builds/
