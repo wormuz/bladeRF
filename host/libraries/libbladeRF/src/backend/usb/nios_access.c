@@ -835,6 +835,35 @@ int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
+                         uint8_t settle_sel)
+{
+    uint32_t mantissa = 0;
+    uint32_t shift    = 0;
+
+    /* Encode as mantissa << shift. The loop stops at 24 because that is
+     * where the fabric saturates; going further would encode a value the
+     * hardware cannot represent and the two sides would disagree about what
+     * was set. */
+    while ((threshold >> shift) > 0xffffffULL && shift < 24) {
+        shift++;
+    }
+    mantissa = (uint32_t)((threshold >> shift) & 0xffffffULL);
+
+    /* A non-zero threshold that rounds to a zero mantissa would silently
+     * disable the trigger -- zero means disabled. Round up to one instead:
+     * the caller asked for a threshold, and the smallest representable one
+     * is closer to that intent than none at all. */
+    if (threshold != 0 && mantissa == 0) {
+        mantissa = 1;
+    }
+
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
+                           mantissa
+                           | (shift << 24)
+                           | (((uint32_t)(settle_sel & 0x3u)) << 30));
+}
+
 int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
 {
     int status;

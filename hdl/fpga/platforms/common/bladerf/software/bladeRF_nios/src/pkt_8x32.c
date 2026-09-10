@@ -177,6 +177,14 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             pretrig_base = (uint16_t) (data & (PRETRIG_DEPTH - 1u));
             break;
 
+        /* Trigger threshold and settling interval, one word. Written
+         * straight through: the fabric saturates the threshold shift and
+         * selects the settling interval from two bits, so no value here can
+         * produce an out-of-range setting. */
+        case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
+            dwell_cfg_write(data);
+            break;
+
         case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
             switch (addr) {
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:

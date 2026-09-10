@@ -179,6 +179,32 @@ static inline uint32_t dwell_status_read(void)
 #define DWELL_VERDICT_SETTLE_SHIFT  16
 #define DWELL_VERDICT_SETTLE_MASK   0xffffu
 
+/* Trigger configuration, written as one word.
+ *
+ *   23:0    threshold mantissa
+ *   29:24   threshold shift, saturated at 24 -- threshold is mantissa <<
+ *           shift, compared against a window energy sum
+ *   31:30   settling interval, as a shift BELOW the built-in maximum:
+ *           0 = full 8192 samples, 1 = 4096, 2 = 2048, 3 = 1024
+ *
+ * A threshold of zero disables the trigger and leaves measurement running.
+ * That is the reset state and the safe one: every dwell is reported either
+ * way, and a threshold nobody set must not start classifying dwells. */
+#define DWELL_CFG_MANTISSA_MASK     0xffffffu
+#define DWELL_CFG_SHIFT_SHIFT       24
+#define DWELL_CFG_SHIFT_MASK        0x3fu
+#define DWELL_CFG_SETTLE_SHIFT      30
+#define DWELL_CFG_SETTLE_MASK       0x3u
+
+static inline void dwell_cfg_write(uint32_t value)
+{
+    #ifdef DWELL_CFG_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE, value);
+    #else
+    (void) value;
+    #endif
+}
+
 static inline uint32_t dwell_word_read(uint8_t word)
 {
     #if defined(PRETRIG_ADDR_BASE) && defined(DWELL_READOUT_BASE)

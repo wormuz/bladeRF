@@ -34,10 +34,11 @@ library ieee;
 
 entity gain_sequencer is
     generic (
-        -- Settling time in sample clocks, counted from the dwell boundary.
-        -- 8192 is ~67 us at 122.88 MHz and ~133 us at 61.44 -- longer than
-        -- the AD9361 fast-lock profile recall plus its analogue settling,
-        -- and a power of two so the comparison is one bit.
+        -- Maximum settling time in samples, as a power of two so the
+        -- comparison is one bit. 8192 is ~67 us at 122.88 MHz and ~133 us at
+        -- 61.44 -- longer than the AD9361 fast-lock profile recall plus its
+        -- analogue settling. The host can select a shorter interval at
+        -- runtime; this sizes the counter.
         SETTLE_LOG2      : natural := 13;
 
         -- Clip fraction above which the dwell is called unusable, in parts
@@ -52,6 +53,17 @@ entity gain_sequencer is
 
         -- Dwell boundary, same pulse the analyser uses.
         dwell_start      : in  std_logic;
+
+        -- Host-selected settling interval, as a shift below SETTLE_LOG2:
+        -- 0 gives the full 2^SETTLE_LOG2 samples, 1 half of it, and so on.
+        -- Two bits because the useful span is 33 us to 267 us and finer
+        -- control than a factor of two is not something anyone can justify
+        -- from a measurement.
+        --
+        -- Selected rather than free-form so the interval is always a power
+        -- of two: the comparison stays a single bit test, and an arbitrary
+        -- value would need a magnitude compare on the sample path.
+        settle_sel       : in  unsigned(1 downto 0) := (others => '0');
 
         -- Sample strobe: settling is counted in samples, not in idle clock
         -- edges, so the interval means the same thing at either sample rate.
@@ -145,7 +157,13 @@ begin
                     settled      <= '0';
 
                 elsif( settled = '0' and sample_valid = '1' ) then
-                    if( settle_count(SETTLE_LOG2) = '1' ) then
+                    -- Which bit of the counter marks "settled" -- still a
+                    -- single bit test, just a selectable one. settle_sel is
+                    -- read here rather than latched at the dwell boundary:
+                    -- the host changes it between sweeps, not mid-dwell, and
+                    -- latching it would need another register to no purpose.
+                    if( settle_count(SETTLE_LOG2 - to_integer(settle_sel))
+                            = '1' ) then
                         settled <= '1';
                     else
                         settle_count <= settle_count + 1;

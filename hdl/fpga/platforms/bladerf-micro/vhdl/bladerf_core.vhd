@@ -975,6 +975,7 @@ begin
                 reset          => rx_reset,
                 dwell_start    => dwell_start,
                 sample_valid   => adc_streams(0).data_v,
+                settle_sel     => unsigned(dwell_cfg_rx(31 downto 30)),
                 summary_valid  => dwell_summary_valid,
                 clip_count     => dwell_clip_count,
                 sample_count   => dwell_sample_count,

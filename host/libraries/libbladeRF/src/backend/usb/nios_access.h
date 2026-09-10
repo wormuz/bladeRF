@@ -326,6 +326,25 @@ int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words,
                             uint32_t *gen);
 
 /**
+ * Set the advisory trigger threshold and the settling interval.
+ *
+ * @param   threshold   Window energy sum to trigger on, in raw summed ADC
+ *                      units. Zero disables the trigger; measurement
+ *                      continues either way, so this only decides which
+ *                      dwells are flagged, never which are reported.
+ *                      Encoded as mantissa and shift, so large values are
+ *                      rounded to about 0.2% -- fine for a detection
+ *                      threshold, not a calibrated level.
+ * @param   settle_sel  Settling interval as a shift below the maximum:
+ *                      0 = 8192 samples, 1 = 4096, 2 = 2048, 3 = 1024.
+ *                      At 61.44 MHz that spans 133 us down to 17 us.
+ *
+ * @return 0 on success, BLADERF_ERR_* on error.
+ */
+int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
+                         uint8_t settle_sel);
+
+/**
  * Read one entry of the pre-trigger ring.
  *
  * @param   index   Raw ring index, NOT an offset from the oldest sample.

@@ -28,6 +28,7 @@ architecture sim of gain_sequencer_tb is
     signal reset         : std_logic := '1';
     signal dwell_start   : std_logic := '0';
     signal sample_valid  : std_logic := '0';
+    signal settle_sel    : unsigned(1 downto 0) := (others => '0');
     signal summary_valid : std_logic := '0';
     signal clip_count    : unsigned(31 downto 0) := (others => '0');
     signal sample_count  : unsigned(31 downto 0) := (others => '0');
@@ -51,6 +52,7 @@ begin
             reset          => reset,
             dwell_start    => dwell_start,
             sample_valid   => sample_valid,
+            settle_sel     => settle_sel,
             summary_valid  => summary_valid,
             clip_count     => clip_count,
             sample_count   => sample_count,
@@ -180,6 +182,37 @@ begin
                    & "blaming the wrong frequency"
             severity error;
         report "case 6 OK: empty dwell cleared the verdict";
+
+        ------------------------------------------------------------------
+        -- 7. settle_sel shortens the interval by powers of two. With
+        --    SETTLE_LOG2 = 4 the full interval is 16 samples; sel=1 must
+        --    settle at 8 and not before.
+        ------------------------------------------------------------------
+        settle_sel <= "01";
+        new_dwell;
+        feed(7);
+        assert measure_valid = '0'
+            report "FAIL: settled after 7 samples with sel=1, expected 8"
+            severity error;
+        feed(3);
+        assert measure_valid = '1'
+            report "FAIL: not settled after 10 samples with sel=1 (expected "
+                   & "8) -- settle_sel is not shortening the interval"
+            severity error;
+        report "case 7 OK: sel=1 settles at half the interval";
+
+        -- And sel=0 is still the full interval, so the default did not move.
+        settle_sel <= "00";
+        new_dwell;
+        feed(10);
+        assert measure_valid = '0'
+            report "FAIL: sel=0 settled early -- the default interval changed"
+            severity error;
+        feed(8);
+        assert measure_valid = '1'
+            report "FAIL: sel=0 did not settle after the full interval"
+            severity error;
+        report "case 8 OK: sel=0 unchanged at the full interval";
 
         report "gain_sequencer_tb: all cases passed";
         done <= true;
