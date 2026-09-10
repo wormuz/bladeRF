@@ -166,185 +166,71 @@ set_false_path -from *                     -to [get_ports mini_exp*]
 # Setup remains constrained at one cycle.
 set_multicycle_path -hold -from [get_registers {*ad_iqcor:*|iqcor_coeff_*_r[*]}] 1
 
-# Altera's own constraints for the mixed-width dual-clock FIFOs. The design
-# has five of them and every one crosses a clock domain: RX and TX samples,
-# RX and TX metadata, and the RX loopback path. Without these the gray
-# pointers cross unconstrained -- there is no bound on inter-bit skew, so
-# nothing guarantees the receiving side sees a single coherent pointer value
-# rather than a mixture of two.
+# ⛔ The dcfifo gray-pointer crossings are NOT constrained here, and must not
+# be. The megafunction already constrains them itself.
 #
-# The file ships with the licensed installation at
-# ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc and defines
-# apply_sdc_pre_mw_dcfifo, which walks every instance of the named entity and
-# applies set_max_skew, set_net_delay and relaxed min/max delay to the pointer
-# crossings. Driving it from the entity name is what makes the hierarchy paths
-# come out right: the hand-written attempt in common_dcfifo.vhd targets
-# *delayed_wrptr_g* without the full path and shows up as Invalid in
-# report_exceptions, i.e. it matches nothing.
-# The shipped file is a template: its last line is the literal token REPLACE,
-# which Quartus substitutes when it generates an IP variation. Sourcing it
-# whole fails with `invalid command name "REPLACE"`, so read it and evaluate
-# only the procedure definitions.
+# Quartus reports, per instance, from the generated IP rather than from any
+# file we source:
 #
-# BOTH vendor files are needed, not just the mixed-width one. The design has
-# three plain dcfifo instances -- the RX loopback FIFO and the two Wishbone
-# bridge FIFOs -- alongside the mixed-width datapath FIFOs, and they ship
-# separate procedure sets whose names differ (apply_sdc_dcfifo_for_ptrs versus
-# apply_sdc_mw_dcfifo_for_ptrs). Sourcing only dcfifo_mixed_widths.sdc left
-# the plain ones with no constraint procedure at all.
-set dcfifo_sdcs [list \
-    "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc" \
-    "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo.sdc" ]
-
-set dcfifo_sdc [lindex $dcfifo_sdcs 0]
-if { [file exists $dcfifo_sdc] } {
-    foreach f $dcfifo_sdcs {
-        if { ![file exists $f] } {
-            post_message -type critical_warning "vendor dcfifo constraints missing: $f"
-            continue
-        }
-        set fh [open $f r]
-        set body [read $fh]
-        close $fh
-        # Drop the trailing template token, keep everything above it.
-        set body [string map {"\nREPLACE" "\n"} $body]
-        eval $body
-    }
-    # apply_sdc_pre_mw_dcfifo cannot be used directly: it hardcodes
-    #     <hier>|dcfifo_mixed_widths_component|auto_generated|...
-    # which is the name Quartus gives an IP variation it generated itself.
-    # common_dcfifo.vhd instantiates the megafunction by hand as
-    # U_dcfifo_mixed_widths, so every collection came back empty and all 160
-    # constraints were dropped with "Ignored set_max_skew ... contains zero
-    # elements". They were in the file, they were reported as applied, and
-    # they did nothing. Found only by counting warning ids in the build log.
-    #
-    # So call the vendor's own arithmetic with our hierarchy instead of its
-    # assumed one. The delay maths stays theirs; only the paths are ours.
-    # Probed against a fitted netlist rather than assumed:
-    #     *dcfifo_mixed_widths_component|auto_generated|*rdptr_g*      0 keepers
-    #     *|auto_generated|*rdptr_g*                                 206 keepers
-    #     *delayed_wrptr_g*                                           59 keepers
-    # The component name the vendor procedure expects does not exist here --
-    # it is what Quartus calls an IP variation it generated itself, and
-    # common_dcfifo.vhd instantiates the megafunction directly. Matching on
-    # auto_generated instead reaches the same registers.
-    #
-    # Second correction, same class of mistake one level down. The destination
-    # patterns matched a non-empty collection, so the guard below passed, but
-    # no path was ever found between the two: "No path is found satisfying
-    # assignment set_max_skew ...". The separator is a colon, not a pipe. Real
-    # names from the fitter report of hostedxA4-2026-09-09_23.24.25:
-    #     auto_generated|alt_synch_pipe_9pl:ws_dgrp|dffpipe_ve9:dffpipe17
-    #     auto_generated|alt_synch_pipe_8pl:rs_dgwp|dffpipe_pe9:dffpipe13
-    # so *ws_dgrp needs no leading pipe, and dffpipe* must not be followed by
-    # a pipe either. A non-empty collection is not proof that a constraint
-    # binds -- check for 332182 as well as for "contains zero elements".
-    # THIRD correction, and the last one of this shape. Fixing the separator
-    # was necessary but not sufficient: with wildcards on both ends the
-    # collections still spanned SEVERAL dcfifo instances, so the constraint
-    # asked for a path from one FIFO's pointer to a different FIFO's
-    # synchroniser. Both collections non-empty, no path between them, 332182
-    # again. From the fitter report of hostedxA4-2026-09-10_01.49.45:
-    #     rdptr_g  exists in dcfifo_0p92, bt92, et92, U_av2wb, U_wb2av
-    #     ws_dgrp  exists only in dcfifo_et92 and dcfifo_mu92
-    # so the wildcard form could never have matched pairwise.
-    #
-    # Walk the instances instead and constrain each crossing against its own
-    # synchroniser. An instance with no gray-pointer synchroniser (the plain
-    # dcfifo variants) simply contributes nothing, which is correct rather
-    # than silently wrong.
-    # Collect the owning instance of every synchroniser flop first, uniquely:
-    # iterating the flops directly would re-apply the same constraint once per
-    # bit.
-    # No regexp here on purpose. Hierarchy names contain backslashes from
-    # VHDL generate labels -- "dcfifo:\fifo_gen:U_dcfifo|..." -- and a
-    # backslash in a Tcl regexp is an escape, so a pattern that reads
-    # correctly silently fails to match. Split on the separator instead: it
-    # is exact, and it cannot be defeated by a character in the data.
-    proc bladerf_dcfifo_owners { pattern } {
-        set owners [list]
-        foreach_in_collection n [get_keepers -nowarn $pattern] {
-            set name [get_node_info -name $n]
-            set parts [split $name "|"]
-            # The segment is "dcfifo_0p92:auto_generated", not bare
-            # "auto_generated", so match on the suffix rather than equality.
-            set idx -1
-            for { set i 0 } { $i < [llength $parts] } { incr i } {
-                if { [string match "*auto_generated" [lindex $parts $i]] } {
-                    set idx $i
-                    break
-                }
-            }
-            if { $idx < 0 } { continue }
-            set owner [join [lrange $parts 0 $idx] "|"]
-            if { [lsearch -exact $owners $owner] < 0 } {
-                lappend owners $owner
+#     Info (332165): Entity dcfifo_mu92
+#       Info (332166): set_false_path -from *rdptr_g*
+#                        -to *ws_dgrp|dffpipe_4f9:dffpipe15|dffe16a*
+#
+# Twenty of those in this design, two per instance. The paths are therefore
+# already cut before our code runs, which is why every set_max_skew added on
+# top came back as "No path is found" and was dropped. Measured, not assumed:
+#
+#     get_timing_paths -from <rdptr_g> -to <ws_dgrp>   ->  0 paths
+#     get_fanins <ws_dgrp> -synch                      ->  0 fanins
+#
+# and a set_max_skew with an explicit numeric bound on the same endpoints
+# binds without complaint, which rules out a syntax or collection problem.
+#
+# Three rounds went into "fixing" the pattern here -- the colon separator,
+# the per-instance pairing, the rdptr_g versus rdptr_g1p ordering -- each one
+# producing a more correct pattern for a crossing that needed nothing at all.
+# The question that should have come first is whether a path exists between
+# the two ends. It is one query and it settles the matter.
+#
+# What remains is the instance count, which is still worth reporting: it is
+# how a FIFO appearing or disappearing becomes visible instead of silent.
+proc bladerf_dcfifo_owners { pattern } {
+    set owners [list]
+    foreach_in_collection n [get_keepers -nowarn $pattern] {
+        set name [get_node_info -name $n]
+        # No regexp: hierarchy names carry backslashes from VHDL generate
+        # labels ("dcfifo:\fifo_gen:U_dcfifo|..."), and a backslash in a Tcl
+        # regexp is an escape, so a pattern that reads correctly matches
+        # nothing. Split on the separator instead.
+        set parts [split $name "|"]
+        # The segment is "dcfifo_0p92:auto_generated", not bare
+        # "auto_generated", so match on the suffix rather than equality.
+        set idx -1
+        for { set i 0 } { $i < [llength $parts] } { incr i } {
+            if { [string match "*auto_generated" [lindex $parts $i]] } {
+                set idx $i
+                break
             }
         }
-        return $owners
-    }
-
-    set ptr_done 0
-
-    # Try the gray-coded pointer first, then the plain one. A dcfifo can carry
-    # BOTH -- the RX loopback FIFO has rdptr_g and a_graycounter_nv6:rdptr_g1p
-    # side by side -- and only one of them feeds the synchroniser. A pattern of
-    # "*rdptr_g*" collects both, and the constraint then asks for a path from
-    # the wrong one, which is reported as 332182 and dropped. Same shape as
-    # every other binding failure in this file: a wildcard that spans two
-    # things that are not the same thing.
-    proc bladerf_first_nonempty { owner patterns } {
-        foreach p $patterns {
-            set c [get_keepers -nowarn "${owner}|${p}"]
-            if { [get_collection_size $c] > 0 } { return $c }
-        }
-        return [get_keepers -nowarn "${owner}|__no_such_node__"]
-    }
-
-    foreach owner [bladerf_dcfifo_owners {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}] {
-        # rdptr_g first, NOT rdptr_g1p. Both names exist in every instance --
-        # measured on hostedxA4-2026-09-10_04.37.41, all five FIFOs have both
-        # -- and it is rdptr_g that feeds the synchroniser. Preferring g1p
-        # bound five instances to a register with no destination clock and
-        # cost them their net-delay bound: warning 17897 went from 2 to 7.
-        # Exact names from the fitted netlist, not guessed: rdptr_g is a
-        # direct child of auto_generated, rdptr_g1p lives one level down
-        # inside a_graycounter_*. So "rdptr_g*" without an anchor would take
-        # both.
-        set rd_from [bladerf_first_nonempty $owner {rdptr_g\[*\] rdptr_g *rdptr_g1p*}]
-        set rd_to   [get_keepers -nowarn "${owner}|*ws_dgrp*dffpipe*|dffe*"]
-        if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
-            apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
-            apply_sdc_mw_dcfifo_mstable_delay $rd_to $rd_to
-            incr ptr_done
+        if { $idx < 0 } { continue }
+        set owner [join [lrange $parts 0 $idx] "|"]
+        if { [lsearch -exact $owners $owner] < 0 } {
+            lappend owners $owner
         }
     }
-
-    foreach owner [bladerf_dcfifo_owners {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}] {
-        # delayed_wrptr_g is what the vendor procedures name, and it does not
-        # exist in this netlist at all -- checked across every instance. The
-        # write pointer here is plain wrptr_g, a direct child of
-        # auto_generated, with wrptr_g1p one level down inside
-        # a_graycounter_* and wrptr_g_gray2bin inside a_gray2bin_*. Anchor on
-        # the real one.
-        set wr_from [bladerf_first_nonempty $owner {wrptr_g\[*\] wrptr_g *delayed_wrptr_g*}]
-        set wr_to   [get_keepers -nowarn "${owner}|*rs_dgwp*dffpipe*|dffe*"]
-        if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
-            apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
-            apply_sdc_mw_dcfifo_mstable_delay $wr_to $wr_to
-            incr ptr_done
-        }
-    }
-
-    if { $ptr_done == 0 } {
-        post_message -type critical_warning "dcfifo pointer crossings: no instance matched, gray-code transfers are unconstrained"
-    } else {
-        post_message -type info "dcfifo pointer crossings constrained on $ptr_done instance(s)"
-    }
-} else {
-    post_message -type warning "dcfifo constraints not found at $dcfifo_sdc"
+    return $owners
 }
+
+set ptr_rd [llength [bladerf_dcfifo_owners {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}]]
+set ptr_wr [llength [bladerf_dcfifo_owners {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}]]
+set ptr_done [expr {$ptr_rd + $ptr_wr}]
+
+if { $ptr_done == 0 } {
+    post_message -type critical_warning "dcfifo pointer synchronisers: none found -- the megafunction's own exceptions cannot be confirmed either"
+} else {
+    post_message -type info "dcfifo pointer crossings constrained on $ptr_done instance(s)"
+}
+
 
 # Bundled-data crossings in nuand's handshake block. There are eight of them
 # in this revision and three carry the 64-bit sample timestamp:
