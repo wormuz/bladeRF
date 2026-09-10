@@ -125,6 +125,19 @@ export_assignments
 # Create the hosted
 make_revision hosted
 
+# Create the sweep revision.
+#
+# Ours, not Nuand's. It starts as a copy of hosted -- same RF link epoch
+# control, same abort path, same metadata handling -- and exists so that
+# work aimed at the spectrum sweep can go on the die without disturbing the
+# revision we rely on to stream.
+#
+# The three vendor revisions stay. They cost nothing: they are separate
+# images, absent from our .rbf, and each is a worked example of the thing we
+# want -- adsb decides on-chip rather than shipping samples, wlan drives AGC
+# without the host in the loop.
+make_revision sweep
+
 # Create the adsb
 make_revision adsb
 
