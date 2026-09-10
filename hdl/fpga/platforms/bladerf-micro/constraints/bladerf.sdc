@@ -329,10 +329,23 @@ foreach { src_pat dst_pat } $hs_pairs {
         # instead of being reported "No path is found".
         set_max_delay 100  -from $src -to $dst
         set_min_delay -100 -from $src -to $dst
-        set_max_skew  -from $src -to $dst \
-            -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
-        set_net_delay -from $src -to $dst -max \
-            -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
+        # Explicit nanoseconds, not derived from a clock period.
+        #
+        # The derived form is dropped on the U_snap crossings with
+        # "No destination clock period was found" (17897), while the very
+        # same command with a number binds -- checked directly against the
+        # fitted netlist, both forms, same endpoints. The endpoints are fine:
+        # dout is a real register, 8 keepers, and paths reach it. The tool
+        # simply cannot resolve a period to derive from once the relaxation
+        # above is in place.
+        #
+        # 6.4 ns is 0.8 of the 8 ns destination period, i.e. exactly what the
+        # derived form would have produced. It is a placement bound on a bus
+        # the protocol holds stable for a full request/acknowledge round
+        # trip, so it is conservative by a wide margin -- the value has to be
+        # under the stable window, not under one clock.
+        set_max_skew  -from $src -to $dst 6.4
+        set_net_delay -from $src -to $dst -max 6.4
         incr hs_done
     } else {
         post_message -type critical_warning "handshake crossing not matched: $src_pat -> $dst_pat"
