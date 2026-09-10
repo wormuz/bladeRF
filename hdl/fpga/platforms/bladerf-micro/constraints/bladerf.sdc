@@ -185,14 +185,31 @@ set_multicycle_path -hold -from [get_registers {*ad_iqcor:*|iqcor_coeff_*_r[*]}]
 # which Quartus substitutes when it generates an IP variation. Sourcing it
 # whole fails with `invalid command name "REPLACE"`, so read it and evaluate
 # only the procedure definitions.
-set dcfifo_sdc "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc"
+#
+# BOTH vendor files are needed, not just the mixed-width one. The design has
+# three plain dcfifo instances -- the RX loopback FIFO and the two Wishbone
+# bridge FIFOs -- alongside the mixed-width datapath FIFOs, and they ship
+# separate procedure sets whose names differ (apply_sdc_dcfifo_for_ptrs versus
+# apply_sdc_mw_dcfifo_for_ptrs). Sourcing only dcfifo_mixed_widths.sdc left
+# the plain ones with no constraint procedure at all.
+set dcfifo_sdcs [list \
+    "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo_mixed_widths.sdc" \
+    "$::env(QUARTUS_ROOTDIR)/../ip/altera/megafunctions/fifo/dcfifo.sdc" ]
+
+set dcfifo_sdc [lindex $dcfifo_sdcs 0]
 if { [file exists $dcfifo_sdc] } {
-    set fh [open $dcfifo_sdc r]
-    set body [read $fh]
-    close $fh
-    # Drop the trailing template token, keep everything above it.
-    set body [string map {"\nREPLACE" "\n"} $body]
-    eval $body
+    foreach f $dcfifo_sdcs {
+        if { ![file exists $f] } {
+            post_message -type critical_warning "vendor dcfifo constraints missing: $f"
+            continue
+        }
+        set fh [open $f r]
+        set body [read $fh]
+        close $fh
+        # Drop the trailing template token, keep everything above it.
+        set body [string map {"\nREPLACE" "\n"} $body]
+        eval $body
+    }
     # apply_sdc_pre_mw_dcfifo cannot be used directly: it hardcodes
     #     <hier>|dcfifo_mixed_widths_component|auto_generated|...
     # which is the name Quartus gives an IP variation it generated itself.
@@ -270,8 +287,23 @@ if { [file exists $dcfifo_sdc] } {
 
     set ptr_done 0
 
+    # Try the gray-coded pointer first, then the plain one. A dcfifo can carry
+    # BOTH -- the RX loopback FIFO has rdptr_g and a_graycounter_nv6:rdptr_g1p
+    # side by side -- and only one of them feeds the synchroniser. A pattern of
+    # "*rdptr_g*" collects both, and the constraint then asks for a path from
+    # the wrong one, which is reported as 332182 and dropped. Same shape as
+    # every other binding failure in this file: a wildcard that spans two
+    # things that are not the same thing.
+    proc bladerf_first_nonempty { owner patterns } {
+        foreach p $patterns {
+            set c [get_keepers -nowarn "${owner}|${p}"]
+            if { [get_collection_size $c] > 0 } { return $c }
+        }
+        return [get_keepers -nowarn "${owner}|__no_such_node__"]
+    }
+
     foreach owner [bladerf_dcfifo_owners {*|auto_generated|*ws_dgrp*dffpipe*|dffe*}] {
-        set rd_from [get_keepers -nowarn "${owner}|*rdptr_g*"]
+        set rd_from [bladerf_first_nonempty $owner {*rdptr_g1p* *rdptr_g*}]
         set rd_to   [get_keepers -nowarn "${owner}|*ws_dgrp*dffpipe*|dffe*"]
         if { [get_collection_size $rd_from] > 0 && [get_collection_size $rd_to] > 0 } {
             apply_sdc_mw_dcfifo_for_ptrs $rd_from $rd_to
@@ -281,7 +313,7 @@ if { [file exists $dcfifo_sdc] } {
     }
 
     foreach owner [bladerf_dcfifo_owners {*|auto_generated|*rs_dgwp*dffpipe*|dffe*}] {
-        set wr_from [get_keepers -nowarn "${owner}|*delayed_wrptr_g*"]
+        set wr_from [bladerf_first_nonempty $owner {*delayed_wrptr_g* *wrptr_g1p* *wrptr_g*}]
         set wr_to   [get_keepers -nowarn "${owner}|*rs_dgwp*dffpipe*|dffe*"]
         if { [get_collection_size $wr_from] > 0 && [get_collection_size $wr_to] > 0 } {
             apply_sdc_mw_dcfifo_for_ptrs $wr_from $wr_to
@@ -345,10 +377,20 @@ if { [file exists $dcfifo_sdc] } {
 #   U_snap     -> dout             time_tamer, read back a byte at a time
 #   timestamp  -> fx3_timestamp    top level, tx_clock into fx3_pclk_pll
 #
-# vctcxo_tamer's two instances are left out deliberately: their consumers were
-# not inspected, and a false path asserted without reading the consumer is the
-# same blind waiver this whole change exists to remove. They will show up as
-# real paths if they are wrong.
+# vctcxo_tamer's two instances are covered too, consumers read rather than
+# assumed:
+#
+#   pps_counter U_handshake      vctcxo_clock -> sys_clock, dest_data is
+#                                sys_count, which leaves the block as a port
+#                                and lands in pps_1s/10s/100s.count at
+#                                vctcxo_tamer.vhd:223/239/255
+#   U_handshake_tune_mode        mm_clock -> tune_ref, dest_data is
+#                                tune_ref_mode_hs, captured into
+#                                tune_ref_mode at vctcxo_tamer.vhd:426 under
+#                                tune_ref_mode_update_ack
+#
+# Leaving them out was the wrong call: an unconstrained crossing is not
+# safer than a constrained one, it is only less visible.
 # Source and destination are paired PER INSTANCE. Collecting every
 # source_holding and every capture register into two big collections would
 # ask for paths that do not exist -- rx_tamer's handshake into tx_tamer's
@@ -359,7 +401,9 @@ set hs_pairs [list \
     {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
-    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    ]
+    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    \
+    {*pps_counter:*|handshake:U_handshake|source_holding[*]}      {*vctcxo_tamer:*|pps_*.count[*]}         \
+    {*U_handshake_tune_mode|source_holding[*]}                    {*vctcxo_tamer:*|tune_ref_mode*}         ]
 
 set hs_done 0
 foreach { src_pat dst_pat } $hs_pairs {
@@ -389,17 +433,28 @@ if { $hs_done == 0 } {
     post_message -type info "handshake crossings constrained: $hs_done"
 }
 
-# Catch-all skew/delay bound for handshake instances NOT named in the pairs
-# above -- vctcxo_tamer has two whose consumers have not been read, and an
-# unread consumer must not get a false path. They still deserve a physical
-# bound on how far apart their bits may be placed, which is what these two
-# commands give: unlike a false path, they do not excuse anything, so applying
-# them more broadly than necessary is safe.
+# Every handshake instance in the design is named in the pairs above. This
+# block is the net that catches a future one: a new instance gets a physical
+# bound from the day it appears, rather than silently crossing unconstrained
+# until someone notices. Skew and net delay excuse nothing, so applying them
+# to a superset is safe.
 #
-# Deliberately -from only. A -from-only set_max_delay would be a different
-# matter: tried once, it reached far past the crossing and overrode the
-# multicycles on SPI and I2C, which run off the same system PLL, producing
-# eight violations up to -14.061 ns on unrelated domains.
+# The count check below is the part that matters. If the number of instances
+# ever exceeds the number of pairs, a crossing exists that nobody wrote an
+# endpoint for, and that must be said out loud rather than left to show up as
+# a timing number months later.
+#
+# Deliberately -from only HERE. A -from-only set_max_delay would be a
+# different matter: tried once, it reached far past the crossing and overrode
+# the multicycles on SPI and I2C, which run off the same system PLL,
+# producing eight violations up to -14.061 ns on unrelated domains.
+set hs_all [get_keepers -nowarn {*handshake:*|source_holding[0]}]
+set hs_inst [get_collection_size $hs_all]
+if { $hs_inst > $hs_done } {
+    post_message -type critical_warning \
+        "handshake instances: $hs_inst, endpoint pairs written: $hs_done -- some crossing has no capture endpoint named"
+}
+
 set hs_src [get_keepers -nowarn {*handshake:*|source_holding[*]}]
 if { [get_collection_size $hs_src] > 0 } {
     set_max_skew  -from $hs_src \
