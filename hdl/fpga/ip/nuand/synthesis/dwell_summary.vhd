@@ -1,0 +1,253 @@
+-- Per-dwell measurement summary.
+--
+-- The sweep visits 282 frequencies per cycle, 28.9 s round trip, and today
+-- every dwell ships in full over USB whether or not anything was there. Most
+-- of the band is quiet most of the time.
+--
+-- The obvious answer -- drop dwells below a threshold -- is the wrong one for
+-- this instrument. A wrong threshold, a shifted noise floor, a narrowband
+-- signal under wideband noise, a short burst, a gain transition: any of those
+-- makes a real emitter vanish with nothing on the host to say it was ever
+-- there. False negatives are invisible by construction, which is the worst
+-- property a collector can have.
+--
+-- So this block measures and never discards. It emits a compact summary for
+-- EVERY dwell, quiet ones included, and raises an advisory trigger. What to
+-- do with that -- capture raw IQ, keep only the summary, audit a fraction of
+-- quiet dwells anyway -- stays with the host, where the policy can be read,
+-- argued with and changed without a fourteen-minute rebuild.
+--
+-- What the host gets per dwell:
+--
+--     energy_sum    integrated I^2+Q^2 over the dwell
+--     peak          largest instantaneous I^2+Q^2
+--     clip_count    samples at or past the ADC rail
+--     sample_count  how many samples the sum covers
+--     trigger       advisory: energy crossed threshold for long enough
+--     first_window  window index where it first crossed
+--
+-- Division is deliberately not done here. The host divides; hardware that
+-- rounds is hardware that has to be explained later.
+
+library ieee;
+    use ieee.std_logic_1164.all;
+    use ieee.numeric_std.all;
+
+library work;
+    use work.fifo_readwrite_p.all;
+
+entity dwell_summary is
+    generic (
+        -- Samples per analysis window, a power of two so the trigger
+        -- comparison needs no divider.
+        WINDOW_LOG2     : natural := 10;
+        -- Trigger persistence: windows over threshold, out of the last
+        -- TRIGGER_OF, before the trigger is raised. Rejects single-window
+        -- noise spikes without needing a filter.
+        TRIGGER_K       : natural := 2;
+        TRIGGER_OF      : natural := 3;
+        -- ADC full scale is 2048 for the 12-bit AD9361 in this design; a
+        -- component at or past 2044 counts as clipped. Same threshold the
+        -- host uses, so the two agree on what clipping means.
+        CLIP_THRESHOLD  : natural := 2044
+    );
+    port (
+        clock           : in  std_logic;
+        reset           : in  std_logic;
+
+        -- Registered sample stream, tapped alongside the datapath rather
+        -- than in it. Nothing here drives the FIFO write interface.
+        sample          : in  sample_stream_t;
+
+        -- Dwell boundary from the host's retune sequence. A pulse ends the
+        -- current dwell and starts the next.
+        dwell_start     : in  std_logic;
+
+        -- Threshold on the per-window energy sum, host-programmed. Zero
+        -- disables the trigger without disabling measurement.
+        threshold       : in  unsigned(47 downto 0);
+
+        -- Summary of the dwell that just ended, valid for one cycle with
+        -- summary_valid. Everything is registered.
+        summary_valid   : out std_logic;
+        energy_sum      : out unsigned(63 downto 0);
+        peak            : out unsigned(31 downto 0);
+        clip_count      : out unsigned(31 downto 0);
+        sample_count    : out unsigned(31 downto 0);
+        triggered       : out std_logic;
+        first_window    : out unsigned(15 downto 0)
+    );
+end entity;
+
+architecture arch of dwell_summary is
+
+    -- I^2 + Q^2 for signed(15 downto 0) inputs needs 33 bits: each square is
+    -- at most 2^30, and the sum of two is at most 2^31.
+    signal inst_energy      : unsigned(31 downto 0) := (others => '0');
+    signal inst_valid       : std_logic := '0';
+    signal inst_clip        : std_logic := '0';
+
+    -- Per-window accumulator. WINDOW_LOG2 samples of a 32-bit value fits in
+    -- 32 + WINDOW_LOG2 bits; 48 covers any window up to 2^16 samples.
+    signal window_sum       : unsigned(47 downto 0) := (others => '0');
+    signal window_count     : unsigned(15 downto 0) := (others => '0');
+
+    -- Dwell totals.
+    signal dwell_energy     : unsigned(63 downto 0) := (others => '0');
+    signal dwell_peak       : unsigned(31 downto 0) := (others => '0');
+    signal dwell_clips      : unsigned(31 downto 0) := (others => '0');
+    signal dwell_samples    : unsigned(31 downto 0) := (others => '0');
+    signal dwell_windows    : unsigned(15 downto 0) := (others => '0');
+
+    -- Trigger state: a shift register of "this window was over threshold",
+    -- and the window index where the run began.
+    signal over_history     : std_logic_vector(TRIGGER_OF-1 downto 0)
+                                := (others => '0');
+    signal trig_latched     : std_logic := '0';
+    signal trig_window      : unsigned(15 downto 0) := (others => '0');
+
+    function ones( v : std_logic_vector ) return natural is
+        variable n : natural := 0;
+    begin
+        for i in v'range loop
+            if( v(i) = '1' ) then
+                n := n + 1;
+            end if;
+        end loop;
+        return n;
+    end function;
+
+begin
+
+    -- Stage 1: instantaneous energy and clip detection.
+    --
+    -- Clipping is judged per COMPONENT, not on the magnitude. The magnitude
+    -- of an unclipped sample reaches sqrt(2) times full scale, so a
+    -- magnitude test would call healthy samples clipped -- measured at 1.328
+    -- on this hardware. Widen to signed 32 before squaring: abs() of the
+    -- most negative 16-bit value does not fit in 16 bits.
+    energy_stage : process( clock, reset )
+        variable i_ext : signed(31 downto 0);
+        variable q_ext : signed(31 downto 0);
+        variable i_sq  : signed(63 downto 0);
+        variable q_sq  : signed(63 downto 0);
+        variable mag   : unsigned(63 downto 0);
+    begin
+        if( reset = '1' ) then
+            inst_energy <= (others => '0');
+            inst_valid  <= '0';
+            inst_clip   <= '0';
+        elsif( rising_edge(clock) ) then
+            inst_valid <= sample.data_v;
+
+            i_ext := resize(sample.data_i, 32);
+            q_ext := resize(sample.data_q, 32);
+            i_sq  := i_ext * i_ext;
+            q_sq  := q_ext * q_ext;
+            mag   := unsigned(i_sq) + unsigned(q_sq);
+            inst_energy <= mag(31 downto 0);
+
+            if( abs(i_ext) >= CLIP_THRESHOLD or
+                abs(q_ext) >= CLIP_THRESHOLD ) then
+                inst_clip <= '1';
+            else
+                inst_clip <= '0';
+            end if;
+        end if;
+    end process;
+
+    -- Stage 2: window accumulation, dwell totals, trigger persistence.
+    accumulate : process( clock, reset )
+        variable window_done : boolean;
+        variable over        : std_logic;
+    begin
+        if( reset = '1' ) then
+            window_sum    <= (others => '0');
+            window_count  <= (others => '0');
+            dwell_energy  <= (others => '0');
+            dwell_peak    <= (others => '0');
+            dwell_clips   <= (others => '0');
+            dwell_samples <= (others => '0');
+            dwell_windows <= (others => '0');
+            over_history  <= (others => '0');
+            trig_latched  <= '0';
+            trig_window   <= (others => '0');
+            summary_valid <= '0';
+            energy_sum    <= (others => '0');
+            peak          <= (others => '0');
+            clip_count    <= (others => '0');
+            sample_count  <= (others => '0');
+            triggered     <= '0';
+            first_window  <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            summary_valid <= '0';
+
+            -- A dwell boundary publishes what has accumulated and clears.
+            -- Checked first so a boundary is never lost to a sample arriving
+            -- in the same cycle: the sample belongs to the new dwell.
+            if( dwell_start = '1' ) then
+                summary_valid <= '1';
+                energy_sum    <= dwell_energy;
+                peak          <= dwell_peak;
+                clip_count    <= dwell_clips;
+                sample_count  <= dwell_samples;
+                triggered     <= trig_latched;
+                first_window  <= trig_window;
+
+                window_sum    <= (others => '0');
+                window_count  <= (others => '0');
+                dwell_energy  <= (others => '0');
+                dwell_peak    <= (others => '0');
+                dwell_clips   <= (others => '0');
+                dwell_samples <= (others => '0');
+                dwell_windows <= (others => '0');
+                over_history  <= (others => '0');
+                trig_latched  <= '0';
+                trig_window   <= (others => '0');
+
+            elsif( inst_valid = '1' ) then
+                window_sum    <= window_sum + resize(inst_energy, 48);
+                window_count  <= window_count + 1;
+                dwell_energy  <= dwell_energy + resize(inst_energy, 64);
+                dwell_samples <= dwell_samples + 1;
+
+                if( inst_clip = '1' ) then
+                    dwell_clips <= dwell_clips + 1;
+                end if;
+
+                if( inst_energy > dwell_peak ) then
+                    dwell_peak <= inst_energy;
+                end if;
+
+                -- Window boundary.
+                window_done := (window_count = to_unsigned(2**WINDOW_LOG2 - 1,
+                                                           window_count'length));
+                if( window_done ) then
+                    window_sum   <= (others => '0');
+                    window_count <= (others => '0');
+                    dwell_windows <= dwell_windows + 1;
+
+                    -- A zero threshold means "measure but never trigger",
+                    -- which is how the host runs a survey before it knows
+                    -- what a sensible threshold would be.
+                    if( threshold /= 0 and
+                        (window_sum + resize(inst_energy, 48)) > threshold ) then
+                        over := '1';
+                    else
+                        over := '0';
+                    end if;
+
+                    over_history <= over_history(TRIGGER_OF-2 downto 0) & over;
+
+                    if( trig_latched = '0' and
+                        ones(over_history(TRIGGER_OF-2 downto 0) & over)
+                            >= TRIGGER_K ) then
+                        trig_latched <= '1';
+                        trig_window  <= dwell_windows;
+                    end if;
+                end if;
+            end if;
+        end if;
+    end process;
+
+end architecture;
