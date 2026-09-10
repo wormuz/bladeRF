@@ -123,7 +123,22 @@ foreach tamer {rx_tamer tx_tamer} {
     set ht_src [get_keepers -nowarn "*time_tamer:${tamer}|hold_time\[*\]"]
     set ht_dst [get_keepers -nowarn "*time_tamer:${tamer}|compare_time\[*\]"]
     if { [get_collection_size $ht_src] > 0 && [get_collection_size $ht_dst] > 0 } {
-        set_false_path -from $ht_src -to $ht_dst
+        # Two-ended max/min instead of a false path. Measured: with
+        # set_false_path on this exact pair, the set_max_skew that follows is
+        # reported as "No path is found" and dropped -- so the crossing ended
+        # up with neither a timing requirement nor a bound on how far apart
+        # the bits may be placed, which is the one thing a held-data bus
+        # cannot do without.
+        #
+        # The huge numbers are not a target. They say "do not enforce
+        # ordinary synchronous setup/hold on this asynchronous held-data
+        # crossing". The real limits are the skew and net delay below.
+        #
+        # Both ends are named. A -from-only form of these two once reached
+        # past the crossing and overrode the SPI and I2C multicycles, which
+        # run off the same system PLL.
+        set_max_delay 100  -from $ht_src -to $ht_dst
+        set_min_delay -100 -from $ht_src -to $ht_dst
         set_max_skew  -from $ht_src -to $ht_dst \
             -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
         set_net_delay -from $ht_src -to $ht_dst -max \
@@ -351,7 +366,14 @@ foreach { src_pat dst_pat } $hs_pairs {
     set src [get_keepers -nowarn $src_pat]
     set dst [get_keepers -nowarn $dst_pat]
     if { [get_collection_size $src] > 0 && [get_collection_size $dst] > 0 } {
-        set_false_path -from $src -to $dst
+        # Same treatment as the tamer crossing above, and for the same
+        # measured reason: a false path here silently took the skew and
+        # net-delay bounds down with it, leaving the bus with no limit on how
+        # far apart its bits may be placed. Verified on q25_v4: with these
+        # two replacing the false path, the tamer skew constraints bind
+        # instead of being reported "No path is found".
+        set_max_delay 100  -from $src -to $dst
+        set_min_delay -100 -from $src -to $dst
         set_max_skew  -from $src -to $dst \
             -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
         set_net_delay -from $src -to $dst -max \
