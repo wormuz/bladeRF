@@ -15,7 +15,19 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SDC = ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc"
+
+# Every SDC the hosted revision actually reads, not just the one we edit.
+# The same defect classes can sit in the ones we inherited: they are read by
+# the same read_sdc pass, and a fatal message or an unbound exception in any
+# of them costs exactly as much.
+SDCS = [
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc",
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/spi.sdc",
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/i2c.sdc",
+    ROOT / "hdl/fpga/platforms/common/bladerf/constraints/ad9361.sdc",
+    ROOT / "hdl/fpga/platforms/common/bladerf/constraints/fx3.sdc",
+]
+SDC = SDCS[0]
 HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
 HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
 
@@ -33,38 +45,46 @@ def code_only(text, comment="#"):
 
 # ---------------------------------------------------------------- SDC rules
 
+def check_all_sdcs():
+    """Rules that apply to any SDC the build reads, ours or inherited.
+
+    A fatal message or an exception spanning instances costs the same
+    whichever file it sits in -- read_sdc processes them in one pass.
+    """
+    for f in SDCS:
+        if not f.exists():
+            continue
+        src = code_only(f.read_text())
+
+        if re.search(r"post_message\s+-type\s+error", src):
+            fail("sdc-fatal-message",
+                 f"{f.name}: post_message -type error aborts read_sdc; every "
+                 "later constraint is discarded, in every file",
+                 "one build reported a bogus 'Can't fit design'")
+
+        pair = re.compile(
+            r"(set_false_path|set_max_skew|set_net_delay|set_multicycle_path"
+            r"|set_max_delay|set_min_delay)\b[^\n]*?"
+            r"-from[^\n]*?\{\s*(\*[^\}]*)\}[^\n]*?-to[^\n]*?\{\s*(\*[^\}]*)\}")
+        inst = re.compile(r"[A-Za-z_]\w*:[A-Za-z_]\w*\|")
+        for m in pair.finditer(src):
+            if not inst.search(m.group(2)) and not inst.search(m.group(3)):
+                fail("sdc-unpinned-pair",
+                     f"{f.name}: {m.group(1)} -from {{{m.group(2)}}} "
+                     f"-to {{{m.group(3)}}} spans instances",
+                     "shipped three times; each cost a build")
+                break
+
+
 def check_sdc():
     if not SDC.exists():
         return
     raw = SDC.read_text()
     src = code_only(raw)
 
-    # 1. A fatal message inside an SDC aborts read_sdc, and the fitter then
-    #    runs WITHOUT the constraints while still producing a .rbf and a
-    #    timing summary. One build claimed "Can't fit design" with ALMs at
-    #    55% because of this.
-    if re.search(r"post_message\s+-type\s+error", src):
-        fail("sdc-fatal-message",
-             "post_message -type error aborts read_sdc; every later "
-             "constraint is discarded and the fitter carries on regardless",
-             "one build reported a bogus 'Can't fit design'")
-
-    # 2. Both ends wildcarded with neither pinning an instance collects
-    #    registers from SEVERAL instances, so the constraint asks for a path
-    #    that does not exist. Non-empty collections, so a size guard passes.
-    pair = re.compile(
-        r"(set_false_path|set_max_skew|set_net_delay|set_multicycle_path"
-        r"|set_max_delay|set_min_delay)\b[^\n]*?"
-        r"-from[^\n]*?\{\s*(\*[^\}]*)\}[^\n]*?-to[^\n]*?\{\s*(\*[^\}]*)\}")
-    inst = re.compile(r"[A-Za-z_]\w*:[A-Za-z_]\w*\|")
-    for m in pair.finditer(src):
-        if not inst.search(m.group(2)) and not inst.search(m.group(3)):
-            fail("sdc-unpinned-pair",
-                 f"{m.group(1)}: -from {{{m.group(2)}}} -to {{{m.group(3)}}} "
-                 "spans instances; both collections will be non-empty and no "
-                 "path will exist between them",
-                 "shipped three times; each cost a build")
-            break
+    # Rules 1 and 2 (fatal message, unpinned pair) moved to
+    # check_all_sdcs: they apply to every SDC the build reads, not only
+    # the one we wrote.
 
     # 3. A false path takes the skew and net-delay bounds down with it: the
     #    following set_max_skew is reported "No path is found" and dropped,
@@ -301,6 +321,7 @@ def main():
         print(RULES.strip())
         return 0
 
+    check_all_sdcs()
     check_sdc()
     check_vhdl()
     check_headers()
