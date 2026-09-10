@@ -24,6 +24,7 @@ from . import db
 from . import parse
 
 QUARTUS_ROOT = Path(__file__).resolve().parent.parent  # hdl/quartus
+REPO_ROOT = QUARTUS_ROOT.parent.parent               # the git repository
 BUILDS_DIR = QUARTUS_ROOT / "builds"
 LOCK_PATH = Path(os.environ.get("QUARTUSQ_LOCK_PATH", "/var/lock/quartusq.lock"))
 POLL_INTERVAL_S = 2.0
@@ -162,6 +163,42 @@ class Worker:
         self._run_job(job["id"])
         return job["id"]
 
+    def _prepare_worktree(self, job_id: int, commit: str, build_dir: Path) -> Path:
+        """Check the job's commit out into its own worktree.
+
+        Without this the build runs in the main tree and reads whatever is
+        there at the moment each file is opened -- Quartus reads sources
+        throughout a run, not as a snapshot at the start. Editing during a
+        build then produces a result describing no version of the design,
+        silently: on 2026-09-11 that cost 3h25m on a compile that takes 19
+        minutes, and the only symptom was the runtime.
+
+        A worktree also makes the build reproducible: it is pinned to a
+        commit, so its manifest names something that can be checked out
+        again. Development continues in the main tree meanwhile.
+        """
+        wt = build_dir / "src"
+        if wt.exists():
+            return wt
+
+        db.log_event(self.conn, job_id, "info",
+                     f"worktree at {commit[:12]}", phase="prepare")
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(wt), commit],
+            cwd=str(REPO_ROOT), check=True,
+            capture_output=True, text=True, timeout=300,
+        )
+        # Submodules are not carried over by worktree add, and the build
+        # needs them: the ADI tree lives in one. build_bladerf.sh runs
+        # submodule update itself, but from the worktree that is a no-op
+        # unless the modules are initialised there first.
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=str(wt), check=False,
+            capture_output=True, text=True, timeout=1800,
+        )
+        return wt
+
     def _run_job(self, job_id: int) -> None:
         conn = self.conn
         job = db.get_job(conn, job_id)
@@ -181,9 +218,18 @@ class Worker:
         compile_log = logs_dir / "compile.log"
         live_jsonl = logs_dir / "live.jsonl"
 
+        # Build in the job's own worktree, not the shared tree. Falls back
+        # to the shared tree only when there is no commit to pin to -- a
+        # fake_command selfcheck, where nothing is compiled anyway.
+        if self.fake_command or not job["git_commit"]:
+            run_cwd = QUARTUS_ROOT
+        else:
+            wt = self._prepare_worktree(job_id, job["git_commit"], build_dir)
+            run_cwd = wt / "hdl" / "quartus"
+
         proc = subprocess.Popen(
             command,
-            cwd=str(QUARTUS_ROOT),
+            cwd=str(run_cwd),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

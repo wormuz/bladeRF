@@ -126,6 +126,9 @@ package bladerf_p is
         oc_i2c_sda_pad_o                :   out std_logic;
         oc_i2c_sda_padoen_o             :   out std_logic;
         rf_link_status_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        pretrig_addr_export             :   out std_logic_vector(31 downto 0);
+        pretrig_data_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        dwell_status_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rf_link_cfg_export              :   out std_logic_vector(31 downto 0);
         xb_gpio_in_port                 :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                :   out std_logic_vector(31 downto 0);
