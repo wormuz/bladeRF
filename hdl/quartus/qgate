@@ -95,6 +95,32 @@ check "sdc read failed"        'Read_sdc failed|error.*reading.*SDC|Evaluation o
 # crossing physically unbounded while the file still claims otherwise.
 check "physical bound ignored" 'No destination clock period was found'
 
+# CDC inventory. The SDC prints how many instances each crossing class bound;
+# these are the numbers a known-good build reports. A change is not
+# automatically wrong -- adding a FIFO legitimately moves one -- but it must
+# be noticed and re-approved rather than drifting.
+#
+# Every number here was once wrong and silent. The dcfifo pointers bound zero
+# instances for weeks while the file looked correct.
+expect_count() {
+    local label="$1" pattern="$2" want="$3"
+    local got
+    got=$(grep -oE "$pattern" "$f" 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+    if [ -z "$got" ]; then
+        note FAIL "$label: never reported (the SDC block did not run)"
+        fail=1
+    elif [ "$got" != "$want" ]; then
+        note FAIL "$label: $got, expected $want"
+        fail=1
+    else
+        note ok "$label: $got"
+    fi
+}
+
+expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-9]+' 2
+expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        5
+expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
+
 # Timing: any negative slack in the summary is a failure. The .sta.summary
 # sits beside the build directory, so derive it from the log's own report of
 # where it wrote.
