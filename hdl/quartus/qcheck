@@ -93,7 +93,47 @@ def check_sdc():
              "it match nothing. Split on the separator instead",
              "dcfifo pointers bound to zero instances")
 
-    # 6. Every block that walks instances must say how many it bound, and
+    # 6a. An unanchored node pattern picks up deeper namesakes. Both rdptr_g
+    #     and a_graycounter_*:rdptr_g1p exist in every FIFO, and only the
+    #     first feeds the synchroniser; "*rdptr_g*" takes both. Preferring
+    #     the wrong one bound five instances to a register with no
+    #     destination clock.
+    #     The order in a fallback list is what matters: whichever pattern is
+    #     tried first wins, so a wildcard variant ahead of the anchored one
+    #     silently takes precedence.
+    for m in re.finditer(r"first_nonempty\s+\$\w+\s+\{([^}]*)\}", src):
+        alts = [a for a in m.group(1).split() if re.search(r"(rd|wr)ptr_g", a)]
+        if not alts:
+            continue
+        # The first alternative decides, because first_nonempty stops there.
+        # It must be anchored -- no leading wildcard -- or it also matches
+        # the deeper namesakes and the intended register is never reached.
+        if alts[0].startswith("*"):
+            fail("sdc-unanchored-node-name",
+                 f"'{alts[0]}' is tried first and starts with a wildcard, so "
+                 "it also matches the deeper namesakes "
+                 "(a_graycounter_*:...g1p, a_gray2bin_*:...g_gray2bin). "
+                 "Anchor the first alternative on the exact form the fitter "
+                 "reports",
+                 "five FIFOs lost their net-delay bound; "
+                 "warning 17897 went from 2 to 7")
+            break
+
+    # NOT a rule: "is this entity instantiated in this revision".
+    #
+    # Written, then withdrawn after two rounds of false positives. There is no
+    # complete static list of what gets built: bladerf-hosted.vhd covers the
+    # top level, nios_system.tcl covers Qsys, and ad_iqcor is in neither
+    # because it comes from the ADI IP tree -- yet it appears 672 times in the
+    # netlist. Adding sources until the false positive goes away is fitting
+    # the rule to the answer, not checking anything.
+    #
+    # vctcxo_tamer, the case that motivated it, was caught by the count check
+    # instead: constraints for an absent entity bind zero instances and the
+    # block says so. That check works from the build's own report and needs no
+    # guess about what the build contains.
+
+    # 7. Every block that walks instances must say how many it bound, and
     #    zero must be loud. A block that quietly constrains nothing is
     #    indistinguishable from one that works.
     for var in re.findall(r"incr\s+(\w+_done)\b", src):
@@ -225,6 +265,21 @@ def check_headers():
                  f"{h.name}: a '*/' inside prose ends the block comment and "
                  "the rest of the sentence becomes code",
                  "libad936x stopped compiling; the build never reached timing")
+
+
+# NOT a rule: checking SDC node names against hostedxA4.fit.rpt.
+#
+# Tried, and withdrawn after measuring. The fitter report is not a register
+# inventory -- snap_time and current_time_q are both real registers in
+# time_tamer and neither appears in it, while ad_iqcor appears 672 times
+# despite living in the Qsys system rather than bladerf-hosted.vhd. A rule
+# built on it produces confident, wrong findings.
+#
+# The right source for "does this node exist" is a live query against the
+# fitted netlist (get_keepers in quartus_sta), which needs Quartus and so
+# does not belong in a one-second static check. qgate's CDC inventory counts
+# cover the same ground from the other side: a pattern that matches nothing
+# shows up as a class binding fewer instances than expected.
 
 
 RULES = """
