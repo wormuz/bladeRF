@@ -183,6 +183,72 @@ def check_sdc():
             break
 
 
+def check_handshake_pairs_are_crossings():
+    """Every handshake pair in the SDC must actually cross a clock domain.
+
+    Twice I nearly deleted a correct constraint after concluding "there is no
+    crossing here" -- once because get_timing_paths returned nothing, once
+    because the destination looked like a port. Both times the code settled
+    it: source_holding is clocked by the instance's source_clock and the
+    consumer by its dest_clock, so the crossing was real and the constraint
+    had to stay.
+
+    The reverse mistake is just as easy: constraining two registers that live
+    in the same domain, which is a no-op dressed up as diligence.
+
+    So read the instantiation and compare. A pair whose two ends resolve to
+    the same clock is reported; so is one whose instance cannot be found,
+    because that means the pattern names something that is not there.
+    """
+    if not SDC.exists():
+        return
+    src = code_only(SDC.read_text())
+
+    m = re.search(r"set hs_pairs \[list(.*?)\]\s*\n", src, re.S)
+    if not m:
+        return
+
+    # Where the handshake instances live, so their clocks can be read.
+    vhdl = {}
+    for d in ("hdl/fpga/ip/nuand", "hdl/fpga/platforms/bladerf-micro/vhdl",
+              "hdl/fpga/platforms/common/bladerf/vhdl"):
+        for f in (ROOT / d).rglob("*.vhd"):
+            vhdl[f.name] = f.read_text()
+
+    def clocks_of(instance):
+        """source_clock and dest_clock of a named handshake instantiation."""
+        for body in vhdl.values():
+            i = body.find(f"{instance} : entity work.handshake")
+            if i < 0:
+                i = body.find(f"{instance}: entity work.handshake")
+            if i < 0:
+                continue
+            block = body[i:i + 1200]
+            s = re.search(r"source_clock\s*=>\s*(\w+)", block)
+            d = re.search(r"dest_clock\s*=>\s*(\w+)", block)
+            if s and d:
+                return s.group(1), d.group(1)
+        return None
+
+    # Two forms occur: "handshake:U_current|source_holding" where the entity
+    # is named, and "*U_handshake_timestamp|source_holding" where it is not.
+    insts = set(re.findall(r"[|:](U_\w+)\|source_holding", m.group(1)))
+    for inst in sorted(insts):
+        ck = clocks_of(inst)
+        if ck is None:
+            fail("sdc-handshake-instance-not-found",
+                 f"{inst} is named in hs_pairs but no handshake "
+                 "instantiation by that name exists in the VHDL",
+                 "constraints for absent logic match nothing and say nothing")
+            return
+        if ck[0] == ck[1]:
+            fail("sdc-handshake-not-a-crossing",
+                 f"{inst}: source_clock and dest_clock are both {ck[0]}, so "
+                 "this pair does not cross a domain and needs no exception",
+                 "a no-op constraint reads as diligence and hides the real ones")
+            return
+
+
 # --------------------------------------------------------------- VHDL rules
 
 def check_vhdl():
@@ -341,6 +407,7 @@ def main():
         return 0
 
     check_all_sdcs()
+    check_handshake_pairs_are_crossings()
     check_sdc()
     check_vhdl()
     check_headers()
