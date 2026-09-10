@@ -83,6 +83,17 @@ check "invalid exceptions"     'Invalid (set_|timing)|exception is invalid'
 # constraint being wrong. Two separate regressions here were only visible as
 # a slack number, never as a message, so count them explicitly.
 check "unconstrained paths"    'Unconstrained [A-Za-z ]*Paths? *: *[1-9]'
+# The most dangerous one, and the reason this line exists. A failure while
+# reading the SDC throws away every constraint after the failure point -- but
+# the fitter carries on, produces a .rbf and writes a timing summary. One
+# build reported "Can't fit design" with ALMs at 55% and M10K at 90%, neither
+# full, because read_sdc had aborted and the fitter was working without the
+# constraints. A green fit and a written bitstream are therefore not evidence
+# that the intended timing model was ever applied.
+check "sdc read failed"        'Read_sdc failed|error.*reading.*SDC|Evaluation of Tcl script.*sdc'
+# A skew or delay bound that was accepted and then dropped leaves a multi-bit
+# crossing physically unbounded while the file still claims otherwise.
+check "physical bound ignored" 'No destination clock period was found'
 
 # Timing: any negative slack in the summary is a failure. The .sta.summary
 # sits beside the build directory, so derive it from the log's own report of
