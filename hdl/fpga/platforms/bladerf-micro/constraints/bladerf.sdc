@@ -132,7 +132,7 @@ foreach tamer {rx_tamer tx_tamer} {
     }
 }
 if { $ht_done == 0 } {
-    post_message -type error "tamer hold_time crossing not matched: it would be timed as a single-cycle path"
+    post_message -type critical_warning "tamer hold_time crossing not matched: it would be timed as a single-cycle path"
 } else {
     post_message -type info "tamer hold_time crossing constrained on $ht_done instance(s)"
 }
@@ -225,14 +225,29 @@ if { [file exists $dcfifo_sdc] } {
     # Collect the owning instance of every synchroniser flop first, uniquely:
     # iterating the flops directly would re-apply the same constraint once per
     # bit.
+    # No regexp here on purpose. Hierarchy names contain backslashes from
+    # VHDL generate labels -- "dcfifo:\fifo_gen:U_dcfifo|..." -- and a
+    # backslash in a Tcl regexp is an escape, so a pattern that reads
+    # correctly silently fails to match. Split on the separator instead: it
+    # is exact, and it cannot be defeated by a character in the data.
     proc bladerf_dcfifo_owners { pattern } {
         set owners [list]
         foreach_in_collection n [get_keepers -nowarn $pattern] {
             set name [get_node_info -name $n]
-            if { [regexp {^(.*\|auto_generated)\|} $name -> owner] } {
-                if { [lsearch -exact $owners $owner] < 0 } {
-                    lappend owners $owner
+            set parts [split $name "|"]
+            # The segment is "dcfifo_0p92:auto_generated", not bare
+            # "auto_generated", so match on the suffix rather than equality.
+            set idx -1
+            for { set i 0 } { $i < [llength $parts] } { incr i } {
+                if { [string match "*auto_generated" [lindex $parts $i]] } {
+                    set idx $i
+                    break
                 }
+            }
+            if { $idx < 0 } { continue }
+            set owner [join [lrange $parts 0 $idx] "|"]
+            if { [lsearch -exact $owners $owner] < 0 } {
+                lappend owners $owner
             }
         }
         return $owners
@@ -261,7 +276,7 @@ if { [file exists $dcfifo_sdc] } {
     }
 
     if { $ptr_done == 0 } {
-        post_message -type error "dcfifo pointer crossings: no instance matched, gray-code transfers are unconstrained"
+        post_message -type critical_warning "dcfifo pointer crossings: no instance matched, gray-code transfers are unconstrained"
     } else {
         post_message -type info "dcfifo pointer crossings constrained on $ptr_done instance(s)"
     }
@@ -329,7 +344,7 @@ set hs_pairs [list \
     {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
-    {*U_handshake_timestamp|source_holding[*]}                    {*|fx3_timestamp[*]}                     ]
+    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    ]
 
 set hs_done 0
 foreach { src_pat dst_pat } $hs_pairs {
@@ -343,11 +358,11 @@ foreach { src_pat dst_pat } $hs_pairs {
             -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
         incr hs_done
     } else {
-        post_message -type error "handshake crossing not matched: $src_pat -> $dst_pat"
+        post_message -type critical_warning "handshake crossing not matched: $src_pat -> $dst_pat"
     }
 }
 if { $hs_done == 0 } {
-    post_message -type error "no handshake crossing constrained: bundled-data transfers would be timed as single-cycle"
+    post_message -type critical_warning "no handshake crossing constrained: bundled-data transfers would be timed as single-cycle"
 } else {
     post_message -type info "handshake crossings constrained: $hs_done"
 }
