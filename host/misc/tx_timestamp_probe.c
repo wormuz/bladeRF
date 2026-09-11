@@ -486,7 +486,15 @@ int main(int argc, char *argv[])
                          * lookback across a chunk boundary, without
                          * opening a multi-ms door for leakage to be
                          * mistaken for the burst edge. */
-                        win_lo = tx_meta[cur_burst].timestamp - (bladerf_timestamp)BLOCK_SAMPLES;
+                        /* No pre-roll: an edge before the scheduled timestamp
+                         * is not this burst by definition, and any pre-roll
+                         * lets inter-burst leakage or PA turn-on transients
+                         * masquerade as an early release (measured: a 256 and
+                         * a 10000-sample pre-roll both did exactly that). The
+                         * one-block backward scan in the edge search below
+                         * still needs samples from the previous chunk, which
+                         * it gets from prev_chunk_valid independent of win_lo. */
+                        win_lo = tx_meta[cur_burst].timestamp;
                         win_hi = tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES;
                         if (block_ts < win_lo || block_ts >= win_hi) {
                             /* Outside the current scheduled burst's window;
