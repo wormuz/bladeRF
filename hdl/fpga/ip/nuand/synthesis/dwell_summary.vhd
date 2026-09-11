@@ -210,6 +210,8 @@ begin
     accumulate : process( clock, reset )
         variable window_done : boolean;
         variable over        : std_logic;
+        -- The window total including the sample closing it, computed once.
+        variable win_total   : unsigned(47 downto 0);
     begin
         if( reset = '1' ) then
             window_sum    <= (others => '0');
@@ -311,18 +313,27 @@ begin
                     -- Track the quietest and loudest completed window.
                     -- window_sum does not yet include this last sample, so
                     -- add it here as the trigger comparison does.
-                    if( (window_sum + resize(inst_energy, 48)) < win_min ) then
-                        win_min <= window_sum + resize(inst_energy, 48);
+                    --
+                    -- Computed once into a variable rather than repeated in
+                    -- each expression. Written out five times in one clocked
+                    -- process it is five syntactically distinct 48-bit adds,
+                    -- and the synthesiser has to prove them equivalent before
+                    -- it can share one adder. That proof is the work
+                    -- quartus_map would not finish on this revision.
+                    win_total := window_sum + resize(inst_energy, 48);
+
+                    if( win_total < win_min ) then
+                        win_min <= win_total;
                     end if;
-                    if( (window_sum + resize(inst_energy, 48)) > win_max ) then
-                        win_max <= window_sum + resize(inst_energy, 48);
+                    if( win_total > win_max ) then
+                        win_max <= win_total;
                     end if;
 
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
                     -- what a sensible threshold would be.
                     if( threshold /= 0 and
-                        (window_sum + resize(inst_energy, 48)) > threshold ) then
+                        win_total > threshold ) then
                         over := '1';
                     else
                         over := '0';
