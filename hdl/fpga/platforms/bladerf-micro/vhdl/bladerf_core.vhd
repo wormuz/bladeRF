@@ -40,13 +40,7 @@ entity bladerf_core is
     -- place to turn things on without a second copy of this file.
     ENABLE_SWEEP_ANALYZER  : boolean := false;
     ENABLE_TRIGGER_CAPTURE : boolean := false;
-    ENABLE_GAIN_SEQUENCER  : boolean := false;
-    -- Structural bisect of dwell_summary (architect's a->h decomposition,
-    -- after E1/E2/E3c narrowed the map pathology to dwell_summary's own
-    -- arithmetic cone rather than adc_streams(0) fanout). 8 = full module,
-    -- matches dwell_summary. Delete this generic and dwell_summary_bisect.vhd
-    -- once the offending stage is found and dwell_summary itself is fixed.
-    DWELL_BISECT_STAGE     : natural := 0
+    ENABLE_GAIN_SEQUENCER  : boolean := false
   );
   port (
     -- Main 38.4MHz system clock (3.3 V)
@@ -829,8 +823,7 @@ begin
             end if;
         end process;
 
-        U_dwell_summary : entity work.dwell_summary_bisect
-            generic map ( BISECT_STAGE => DWELL_BISECT_STAGE )
+        U_dwell_summary : entity work.dwell_summary
             port map (
                 clock         => rx_clock,
                 reset         => rx_reset,
