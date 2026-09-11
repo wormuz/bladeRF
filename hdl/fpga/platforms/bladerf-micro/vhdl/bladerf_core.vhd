@@ -790,7 +790,10 @@ begin
             port map (
                 clock         => rx_clock,
                 reset         => rx_reset,
-                sample        => adc_streams(0),
+                -- BISECT ONLY: fed a constant instead of the live stream,
+                -- to tell "this block is expensive" apart from "connecting
+                -- it to the 61.44 MHz datapath is".
+                sample        => ZERO_SAMPLE,
                 dwell_start   => dwell_start,
                 threshold     => dwell_threshold,
                 summary_valid => dwell_summary_valid,
@@ -811,7 +814,10 @@ begin
         -- at a time and a dwell boundary between two of them yields a record
         -- that is half one dwell and half the next -- which looks like a
         -- measurement and is not.
-        U_dwell_readout : entity work.dwell_readout
+        -- BISECT ONLY, not final: readout disabled to tell "the analyser is
+        -- expensive" apart from "latching fourteen words of it is".
+        U_dwell_readout : if false generate
+        U_dwell_readout_i : entity work.dwell_readout
             port map (
                 clock           => rx_clock,
                 reset           => rx_reset,
@@ -833,6 +839,7 @@ begin
                 rd_data         => dwell_rd_data,
                 generation      => dwell_generation
             );
+end generate;
 
     end generate;
 
