@@ -291,7 +291,16 @@ static void NuandRFLinkStart(void)
 
     CyU3PMemSet((uint8_t *)&dmaCfg, 0, sizeof(dmaCfg));
     dmaCfg.size  = size * 8;
-    dmaCfg.count = 11;
+    /* Ring depth. Buffer heap is 224 KB (cyfxtx.c 512 KB map: 0x40040000..
+     * 0x40078000). The sample path creates two channels of this geometry
+     * (U->P and P->U), so each buffer costs 2 x 8192 B of the heap.
+     * count = 12 uses 192 KB and leaves 32 KB free for the UART channels
+     * (2 x 10 x 16 B) and any other DMA buffer allocation. Deeper rings
+     * absorb host-side USB scheduling jitter, which is the usual cause of
+     * RX overruns at high sample rates; it does not change throughput.
+     * Do not raise past 12 without re-checking the heap: 14 would consume
+     * the entire 224 KB and leave nothing for CyU3PDmaBufferAlloc(). */
+    dmaCfg.count = 12;
     dmaCfg.prodSckId = BLADE_RF_SAMPLE_EP_PRODUCER_USB_SOCKET;
     dmaCfg.consSckId = CY_U3P_PIB_SOCKET_3;
     dmaCfg.dmaMode = CY_U3P_DMA_MODE_BYTE;
