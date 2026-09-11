@@ -522,9 +522,16 @@ if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
 # whole record and publishes a generation counter the host reads either
 # side of it; the ring is frozen before it is read. The bound exists so a
 # word cannot be assembled from two different instants.
+# The address direction too. pretrig_addr_word is a system-domain PIO
+# output that feeds dwell_rd_index and pretrig_rd_addr, both read on
+# rx_clock -- sixteen bits crossing the other way. Yesterday only the data
+# direction was constrained, which left half the problem in place; qcheck
+# found the rest once it was pointed at the core instead of the wrapper.
 foreach {dwell_src dwell_dst} {
     {*dwell_readout:*|rd_data[*]}      {*dwell_readout_export*}
     {*pretrigger_buffer:*|rd_data[*]}  {*pretrig_data_export*}
+    {*pretrig_addr_export*}            {*dwell_readout:*|rd_index[*]}
+    {*pretrig_addr_export*}            {*pretrigger_buffer:*|rd_addr[*]}
 } {
     set d_src [get_keepers -nowarn $dwell_src]
     set d_dst [get_keepers -nowarn $dwell_dst]

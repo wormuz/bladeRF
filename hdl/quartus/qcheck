@@ -29,6 +29,17 @@ SDCS = [
 ]
 SDC = SDCS[0]
 HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
+# The core, not just the wrapper.
+#
+# bladerf-hosted.vhd has been 104 lines of port map since the bladerf_core
+# split; the architecture it used to hold is now 2030 lines in
+# bladerf_core.vhd. Every VHDL rule below was written against the old file
+# and kept reading it, so from that commit onward they checked an empty
+# wrapper and reported clean -- including the rule that would have caught
+# the unconstrained PIO crossings.
+#
+# Both are read: a wrapper can still carry a defect, and it costs nothing.
+CORE = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
 HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
 
 findings = []
@@ -343,7 +354,7 @@ def check_handshake_pairs_are_crossings():
 def check_vhdl():
     if not HOSTED.exists():
         return
-    raw = HOSTED.read_text()
+    raw = HOSTED.read_text() + "\n" + (CORE.read_text() if CORE.exists() else "")
 
     # 7. Raw rx_/tx_ signals packed into a word read from another domain.
     #    Reads fine as VHDL; nothing in the line says which domain either
@@ -380,6 +391,83 @@ def check_vhdl():
                  "cross-domain word without a synchroniser",
                  "30 of 32 bits crossed uncrossed; found as a -7.168 ns path")
             break
+
+    # 7b. A bus wired straight into a PIO export, with nothing in the SDC
+    #     naming it.
+    #
+    #     Rule 7 above reads assignments into a status word. It cannot see
+    #     this one: the crossing happens in a port map --
+    #     "dwell_readout_export => dwell_rd_data" -- so there is no "<=" to
+    #     match, and the signal name carries no hint of which domain it came
+    #     from.
+    #
+    #     A PIO export is by definition the system domain. If the signal
+    #     driving it is produced on another clock and no constraint names
+    #     it, every bit is an ordinary timed path the analyser must consider
+    #     against both clock families. Four such buses (two 32-bit, one
+    #     12-bit, one 4-bit) stopped Analysis & Synthesis converging on the
+    #     sweep revision: the blocks behind them synthesise standalone in
+    #     ten seconds, and the same design with them disabled built in
+    #     15:18.
+    #
+    #     Not every export is a crossing -- plenty are driven from
+    #     system-domain logic -- so the rule reports only signals that no
+    #     SDC file mentions at all. Naming it in an SDC is the fix whether
+    #     the answer is a relaxation, a false path, or a synchroniser.
+    sdc_text = ""
+    for sdc in SDCS:
+        try:
+            sdc_text += sdc.read_text(errors="replace")
+        except OSError:
+            pass
+
+    if sdc_text:
+        exported = re.findall(r"(\w+)_export\s*=>\s*(\w+)", raw)
+
+        # A signal handed to the handshake block has crossed properly and
+        # needs no constraint of its own -- the SDC already covers that
+        # block's source/destination pair. Checked by name rather than
+        # assumed: this is the difference between a guard and a nuisance.
+        handshaked = set(re.findall(r"source_data\s*=>\s*(\w+)", raw))
+        handshaked |= set(re.findall(r"dest_data\s*=>\s*(\w+)", raw))
+
+        # Assembled from already-synchronised bits: the assignments into it
+        # all read *_sys or *_sync, so the word itself is system-domain.
+        assembled = {m for m in re.findall(r"(\w+)\s*\([^)]*\)\s*<=\s*\w+_sys",
+                                           raw)}
+
+        # Consumed by a block that runs on sys_clock: no crossing at all.
+        # Found by reading the instance the signal is mapped into and
+        # checking what its clock port is tied to -- not by name, because
+        # nothing in "rf_link_cfg_word" says which domain reads it.
+        for inst in re.finditer(r"entity work\.\w+\s*(?:generic map\s*\([^;]*?\))?"
+                                r"\s*port map\s*\((.*?)\n\s*\);", raw, re.S):
+            body = inst.group(1)
+            if re.search(r"clock\s*=>\s*sys_clock|clk\s*=>\s*sys_clock", body):
+                assembled |= set(re.findall(r"=>\s*(\w+)", body))
+
+        # Driven onto device pins, which the slow-interface false paths at
+        # the top of bladerf.sdc already cover as a group rather than by
+        # signal name.
+        pin_driven = set()
+        for m in re.finditer(r"(\w+)\s*\(i\)\s*<=.*?(\w+)\(i\)", raw):
+            pin_driven.add(m.group(2))
+        pin_driven |= {n for n in re.findall(r"when\s+(\w+)\(i\)\s*=", raw)}
+
+        unnamed = sorted({sig for _, sig in exported
+                          if sig not in sdc_text
+                          and sig not in handshaked
+                          and sig not in assembled
+                          and sig not in pin_driven
+                          and not sig.endswith("_sys")
+                          and not sig.endswith("_sync")})
+        if unnamed:
+            fail("vhdl-pio-export-unconstrained",
+                 f"{', '.join(unnamed[:4])} drive a PIO export but appear in "
+                 "no SDC. If the driver is on another clock, every bit is a "
+                 "timed cross-domain path",
+                 "four such buses stopped Analysis & Synthesis converging; "
+                 "the blocks behind them synthesise in ten seconds")
 
     # 8. Sequential overrides after a case statement. Each one stacks another
     #    multiplexer on the next-state logic, and the LAST one silently wins,
