@@ -36,6 +36,7 @@
 
 #define BLOCK_SAMPLES     256u
 #define POWER_RATIO_THRESH 8.0
+#define ABS_FLOOR         200.0
 
 #define RX_SEARCH_MARGIN_MS 60u
 
@@ -229,7 +230,15 @@ int main(int argc, char *argv[])
     {
         double max_power_seen = 0.0;
         double median_seen     = 0.0;
+        double threshold        = 0.0;
         bool first_chunk        = true;
+        bool have_first_ts      = false;
+        bladerf_timestamp rx_first_chunk_ts = 0;
+        bladerf_timestamp rx_last_chunk_ts  = 0;
+        bladerf_timestamp burst_start_ts    = 0;
+        unsigned long long blocks_above     = 0;
+        unsigned long long burst_len_blocks = 0;
+        bool in_burst_run                   = false;
 
         while (!burst_found) {
             status = bladerf_sync_rx(dev, rx_buf, BUFFER_SIZE, &rx_meta, TIMEOUT_MS);
@@ -245,6 +254,12 @@ int main(int argc, char *argv[])
                 printf("rx_chunk_underrun=1\n");
             }
 
+            if (!have_first_ts) {
+                rx_first_chunk_ts = rx_meta.timestamp;
+                have_first_ts = true;
+            }
+            rx_last_chunk_ts = rx_meta.timestamp + n_blocks_per_chunk * BLOCK_SAMPLES;
+
             if (first_chunk) {
                 double powers[BUFFER_SIZE / BLOCK_SAMPLES];
                 unsigned int b;
@@ -255,8 +270,13 @@ int main(int argc, char *argv[])
                 qsort(powers, n_blocks_per_chunk, sizeof(double), cmp_double);
                 first_chunk_median = powers[n_blocks_per_chunk / 2];
                 median_seen = first_chunk_median;
+                threshold = POWER_RATIO_THRESH * median_seen;
+                if (threshold < ABS_FLOOR) {
+                    threshold = ABS_FLOOR;
+                }
                 first_chunk = false;
                 printf("first_chunk_median_power=%.2f\n", first_chunk_median);
+                printf("threshold=%.2f\n", threshold);
             }
 
             {
@@ -266,16 +286,29 @@ int main(int argc, char *argv[])
                     if (p > max_power_seen) {
                         max_power_seen = p;
                     }
-                    if (median_seen > 0.0 && p > POWER_RATIO_THRESH * median_seen) {
-                        bladerf_timestamp burst_ts = rx_meta.timestamp + b * BLOCK_SAMPLES;
-                        long long diff_samples = (long long)burst_ts - (long long)tx_meta.timestamp;
-                        double diff_us = (double)diff_samples * 1e6 / (double)SAMPLERATE_HZ;
+                    if (threshold > 0.0 && p > threshold) {
+                        bladerf_timestamp block_ts = rx_meta.timestamp + b * BLOCK_SAMPLES;
 
-                        printf("rx_burst_start_timestamp=%llu\n", (unsigned long long)burst_ts);
-                        printf("diff_samples=%lld\n", diff_samples);
-                        printf("diff_us=%.2f\n", diff_us);
-                        burst_found = true;
-                        break;
+                        blocks_above++;
+                        if (!in_burst_run) {
+                            burst_start_ts = block_ts;
+                            in_burst_run = true;
+                            burst_len_blocks = 0;
+                        }
+                        burst_len_blocks++;
+
+                        if (!burst_found) {
+                            long long diff_samples = (long long)burst_start_ts - (long long)tx_meta.timestamp;
+                            double diff_us = (double)diff_samples * 1e6 / (double)SAMPLERATE_HZ;
+
+                            printf("rx_ts_burst_start=%llu\n", (unsigned long long)burst_start_ts);
+                            printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta.timestamp);
+                            printf("delta_samples=%lld\n", diff_samples);
+                            printf("delta_us=%.2f\n", diff_us);
+                            burst_found = true;
+                        }
+                    } else {
+                        in_burst_run = false;
                     }
                 }
             }
@@ -284,7 +317,18 @@ int main(int argc, char *argv[])
                 printf("no burst detected\n");
                 printf("max_block_power=%.2f\n", max_power_seen);
                 printf("median_power=%.2f\n", median_seen);
+                printf("threshold=%.2f\n", threshold);
+                printf("rx_first_chunk_ts=%llu\n", (unsigned long long)rx_first_chunk_ts);
+                printf("rx_last_chunk_ts=%llu\n", (unsigned long long)rx_last_chunk_ts);
+                printf("blocks_above=%llu\n", blocks_above);
                 break;
+            }
+
+            if (burst_found) {
+                printf("burst_len_blocks=%llu\n", burst_len_blocks);
+                printf("rx_first_chunk_ts=%llu\n", (unsigned long long)rx_first_chunk_ts);
+                printf("rx_last_chunk_ts=%llu\n", (unsigned long long)rx_last_chunk_ts);
+                printf("blocks_above=%llu\n", blocks_above);
             }
         }
     }
