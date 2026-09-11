@@ -40,6 +40,29 @@ HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
 #
 # Both are read: a wrapper can still carry a defect, and it costs nothing.
 CORE = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
+
+
+def built_vhdl():
+    """Every VHDL file the sweep revision compiles, read from its qip.
+
+    Not a hand-written list. The previous one named two files and missed
+    twelve, including all four blocks added this week -- so the rules below
+    were not looking at the code most likely to be wrong, and said nothing.
+    A list maintained by hand drifts the moment someone adds a file, which
+    is exactly when a new defect arrives.
+    """
+    qip = ROOT / "hdl/fpga/platforms/bladerf-micro/bladerf-sweep.qip"
+    if not qip.exists():
+        return [HOSTED, CORE]
+    out = []
+    for m in re.finditer(r"\$(\w+)\s+([\w/.-]+\.vhd)\]\]", qip.read_text()):
+        var, rel = m.group(1), m.group(2)
+        base = (ROOT / "hdl/fpga/ip/nuand" if var == "nuand_ip"
+                else ROOT / "hdl/fpga/platforms/bladerf-micro")
+        p = base / rel
+        if p.exists():
+            out.append(p)
+    return out or [HOSTED, CORE]
 HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
 
 findings = []
@@ -354,7 +377,16 @@ def check_handshake_pairs_are_crossings():
 def check_vhdl():
     if not HOSTED.exists():
         return
-    raw = HOSTED.read_text() + "\n" + (CORE.read_text() if CORE.exists() else "")
+    # Everything the revision compiles, discovered from the qip. The old
+    # form read two files by name and so never looked at the twelve others
+    # the build contains, including every block written this week.
+    sources = [HOSTED, CORE] + built_vhdl()
+    seen, parts = set(), []
+    for p in sources:
+        if p.exists() and p not in seen:
+            seen.add(p)
+            parts.append(p.read_text(errors="replace"))
+    raw = "\n".join(parts)
 
     # 7. Raw rx_/tx_ signals packed into a word read from another domain.
     #    Reads fine as VHDL; nothing in the line says which domain either
