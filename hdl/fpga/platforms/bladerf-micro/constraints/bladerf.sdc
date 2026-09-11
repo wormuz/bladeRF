@@ -34,13 +34,22 @@ derive_clock_uncertainty
 # spi.sdc/i2c.sdc derive their generated clocks from system_clock. One
 # unanchored alias here silently dropped 16 multicycle constraints in
 # those two files, which are themselves correct.
-# Entity names included -- the netlist spells these entity:instance at every
-# level, and a path missing them matches nothing. Written without them the
-# aliases silently failed to resolve as pins, which surfaced far away as
-# "adf_sclk_pin was not created" in spi.sdc and i2c.sdc, since both derive
-# their generated clocks from these.
-set fx3_clock    {*fx3_pll:U_fx3_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
-set system_clock {*system_pll:U_system_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+# ⛔ NO entity names here, and this is not an oversight.
+#
+# These aliases are used both as get_pins (spi.sdc:36, i2c.sdc:27) and as
+# get_clocks (spi.sdc:71, i2c.sdc:43, ad9361.sdc:71), and the two namespaces
+# spell the same node differently. The fitter report shows pins as
+# system_pll:U_system_pll|altera_pll:altera_pll_i|...; the timing report
+# shows the derived clock as U_core|U_system_pll|altera_pll_i|... -- instance
+# path only, no entities. derive_pll_clocks names clocks after the instance
+# hierarchy, not the netlist spelling.
+#
+# Adding the entity names fixed get_pins and broke get_clocks, taking
+# ad9361.sdc with it: 8 dropped constraints became 38. The instance form
+# with a leading * satisfies both, because the clock name carries the
+# U_core| prefix the wildcard absorbs.
+set fx3_clock    {*U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+set system_clock {*U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
 # Trace delays between AD9361 and FPGA (bladeRF Micro)
 set adi_spi_clk_trace_delay     0.127
