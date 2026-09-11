@@ -158,14 +158,20 @@ begin
     -- Clipping is judged per COMPONENT, not on the magnitude. The magnitude
     -- of an unclipped sample reaches sqrt(2) times full scale, so a
     -- magnitude test would call healthy samples clipped -- measured at 1.328
-    -- on this hardware. Widen to signed 32 before squaring: abs() of the
-    -- most negative 16-bit value does not fit in 16 bits.
+    -- on this hardware.
+    --
+    -- The clip test widens to 17 bits, the squares do not. Those are two
+    -- different needs: abs() of the most negative 16-bit value does not fit
+    -- in 16 bits, so the comparison must have room; the product does not
+    -- need it, because full scale here is 2048 and I^2+Q^2 reaches 2^23.
+    -- Widening both -- which this did -- asks for 32 x 32 multipliers and
+    -- was why quartus_map would not converge on the sweep revision.
     energy_stage : process( clock, reset )
-        variable i_ext : signed(31 downto 0);
-        variable q_ext : signed(31 downto 0);
-        variable i_sq  : signed(63 downto 0);
-        variable q_sq  : signed(63 downto 0);
-        variable mag   : unsigned(63 downto 0);
+        -- Squares at the sample width: 16 x 16 signed gives 32 bits, which
+        -- is one DSP on Cyclone V.
+        variable i_sq  : signed(31 downto 0);
+        variable q_sq  : signed(31 downto 0);
+        variable mag   : unsigned(31 downto 0);
     begin
         if( reset = '1' ) then
             inst_energy <= (others => '0');
@@ -174,15 +180,25 @@ begin
         elsif( rising_edge(clock) ) then
             inst_valid <= sample.data_v;
 
-            i_ext := resize(sample.data_i, 32);
-            q_ext := resize(sample.data_q, 32);
-            i_sq  := i_ext * i_ext;
-            q_sq  := q_ext * q_ext;
-            mag   := unsigned(i_sq) + unsigned(q_sq);
-            inst_energy <= mag(31 downto 0);
+            -- Squared at the sample's own width, not widened first.
+            --
+            -- 16 x 16 signed is one DSP block on Cyclone V. Resizing to 32
+            -- before multiplying asks for a 32 x 32 multiplier -- a tree of
+            -- DSPs and soft logic producing a 64-bit product that is then
+            -- thrown away above bit 31. quartus_map did not converge on the
+            -- sweep revision with this in place; hosted, where the block is
+            -- absent, built in 15 minutes.
+            --
+            -- The width is provably enough: full scale is 2048 (12-bit ADC
+            -- in 16-bit containers), so a square reaches 2^22 and I^2+Q^2
+            -- reaches 2^23. 32 bits is already generous.
+            i_sq  := sample.data_i * sample.data_i;
+            q_sq  := sample.data_q * sample.data_q;
+            mag   := resize(unsigned(i_sq), 32) + resize(unsigned(q_sq), 32);
+            inst_energy <= mag;
 
-            if( abs(i_ext) >= CLIP_THRESHOLD or
-                abs(q_ext) >= CLIP_THRESHOLD ) then
+            if( abs(resize(sample.data_i, 17)) >= CLIP_THRESHOLD or
+                abs(resize(sample.data_q, 17)) >= CLIP_THRESHOLD ) then
                 inst_clip <= '1';
             else
                 inst_clip <= '0';
