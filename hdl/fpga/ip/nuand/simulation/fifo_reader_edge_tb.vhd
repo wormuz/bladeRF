@@ -242,6 +242,10 @@ begin
         wait until rising_edge(clock);
         reset  <= '0';
         wait until rising_edge(clock);
+        -- settle_count: toggle edges are ignored for 8 cycles after reset
+        for i in 1 to 10 loop
+            wait until rising_edge(clock);
+        end loop;
         enable <= '1';
         wait until rising_edge(clock);
         link_start_toggle <= not link_start_toggle;
@@ -255,6 +259,10 @@ begin
             wait until rising_edge(clock);
             reset <= '0';
             wait until rising_edge(clock);
+            -- settle_count: toggle edges are ignored for 8 cycles after reset
+            for i in 1 to 10 loop
+                wait until rising_edge(clock);
+            end loop;
             link_start_toggle <= not link_start_toggle;
             wait until rising_edge(clock);
         end if;

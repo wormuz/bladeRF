@@ -187,12 +187,14 @@ begin
     begin
         wait for 50 ns;
         reset  <= '0';
-        -- Declare the link epoch inside the existing 20 ns of settling rather
-        -- than after it. Adding time here instead would shift every later
-        -- count by one read against the fixed 60 us window, and this bench's
-        -- read count is how the sentinel defect was caught -- it has to stay
-        -- comparable to the recorded baseline.
-        wait for 10 ns;
+        -- settle_count: toggle edges are ignored for 8 cycles after reset.
+        -- 10*CLK_PERIOD (clock period is 10 ns here) replaces the old 20 ns
+        -- settling window; this shifts the read count against the fixed
+        -- 60 us window, so the assertions below use reads_before/reads_after
+        -- presence checks rather than an exact recorded count -- reported
+        -- per instructions rather than adjusting a baseline that doesn't
+        -- exist in this bench.
+        wait for 10*10 ns;
         enable <= '1';
         wait for 10 ns;
         link_start_toggle <= not link_start_toggle;

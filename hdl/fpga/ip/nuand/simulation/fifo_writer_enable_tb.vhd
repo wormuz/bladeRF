@@ -222,6 +222,10 @@ begin
         wait until rising_edge(clock);
         reset <= '0';
         wait until rising_edge(clock);
+        -- settle_count: toggle edges are ignored for 8 cycles after reset
+        for i in 1 to 10 loop
+            wait until rising_edge(clock);
+        end loop;
 
         -- Enable first, then the epoch: the order stock FX3 imposes and the
         -- only one the writer accepts (a START while disabled is ignored).

@@ -170,6 +170,10 @@ begin
         wait until rising_edge(clock);
         reset <= '0';
         wait until rising_edge(clock);
+        -- settle_count: toggle edges are ignored for 8 cycles after reset
+        for i in 1 to 10 loop
+            wait until rising_edge(clock);
+        end loop;
 
         -- Establish epoch 1, enable the datapath.
         for i in 0 to NSTREAMS-1 loop
