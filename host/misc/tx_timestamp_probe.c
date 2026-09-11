@@ -471,7 +471,22 @@ int main(int argc, char *argv[])
                             continue;
                         }
 
-                        win_lo = tx_meta[cur_burst].timestamp - (bladerf_timestamp)1 * (SAMPLERATE_HZ / 1000u);
+                        /* Window is anchored tightly to the scheduled
+                         * timestamp: for nbursts>1 the inter-burst gap
+                         * carries a steady LO/PA leakage floor (TX module
+                         * stays enabled across the whole burst train) that
+                         * can sit above threshold/2, so a 1ms pre-roll here
+                         * let the block-level check latch onto that leakage
+                         * before the real burst ever starts, then the
+                         * sample-level scan below could only refine within
+                         * the already-wrong block. Single-burst mode never
+                         * saw this because there is no earlier burst to
+                         * leak from. Pre-roll is now one BLOCK_SAMPLES so
+                         * the sample-level scan still has one block of
+                         * lookback across a chunk boundary, without
+                         * opening a multi-ms door for leakage to be
+                         * mistaken for the burst edge. */
+                        win_lo = tx_meta[cur_burst].timestamp - (bladerf_timestamp)BLOCK_SAMPLES;
                         win_hi = tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES;
                         if (block_ts < win_lo || block_ts >= win_hi) {
                             /* Outside the current scheduled burst's window;
@@ -533,7 +548,7 @@ int main(int argc, char *argv[])
                                     qv = src[2 * (local_frame * samples_per_frame + pair_offset) + 1];
                                     mag = (double)labs(iv) + (double)labs(qv);
 
-                                    if (mag > edge_threshold) {
+                                    if (mag > edge_threshold && sample_ts >= win_lo) {
                                         burst_edge_ts = sample_ts;
                                         found_edge = true;
                                         break;
@@ -570,6 +585,7 @@ int main(int argc, char *argv[])
                                     printf("burst_k=%u scheduled=%llu edge=not_found delta_edge_samples=0 delta_edge_us=0.00 found=0\n",
                                            cur_burst, (unsigned long long)tx_meta[cur_burst].timestamp);
                                 }
+                                edge_delta_samples[cur_burst] = diff_samples;
                             }
                             burst_k_found[cur_burst] = true;
                             bursts_found_count++;
