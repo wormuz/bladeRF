@@ -53,7 +53,7 @@ entity dwell_summary is
         -- ones() bit-count function, trig_latched/trig_window/trig_time)
         -- into its own process, removable via generate independently of
         -- the rest of accumulate. true = unchanged behaviour.
-        BISECT_STAGE3   : boolean := true;
+        BISECT_STAGE3   : boolean := false;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
