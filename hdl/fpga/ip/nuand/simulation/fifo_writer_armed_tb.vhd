@@ -9,9 +9,10 @@
 --      abort, link inactive, FIFO held in clear, nothing written.
 --   2. START arrives while enabled: link comes up, clear releases,
 --      samples flow.
---   3. enable drops, then a START arrives with enable low: THAT is the
---      protocol violation -- an epoch declared for a dead datapath --
---      and fault_sticky(3) is set.
+--   3. enable low, STOP, then a START with enable low: ignored (shared
+--      START; the unused direction sees it every session); re-enable and
+--      the next START is taken.
+--   4. disabled on a live epoch: the progress watchdog stays quiet.
 
 library ieee;
     use ieee.std_logic_1164.all;
@@ -54,8 +55,8 @@ architecture tb of fifo_writer_armed_tb is
     signal ovf_led      : std_logic;
     signal ovf_count    : unsigned(63 downto 0);
 
-    signal link_start_toggle  : std_logic := '0';
-    signal link_stop_toggle   : std_logic := '0';
+    signal link_start_toggle  : std_logic := '1';  -- held high through reset: a stale '1' on the synchronised toggle is what the DUT sees after an FX3 fabric reset
+    signal link_stop_toggle   : std_logic := '1';  -- likewise
     signal clear_fault_toggle : std_logic := '0';
     signal usb_speed_mismatch : std_logic;
     signal link_active        : std_logic;

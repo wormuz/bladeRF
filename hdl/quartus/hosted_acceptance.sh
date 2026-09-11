@@ -46,7 +46,9 @@ fi
 # A. in-process cycles with status words
 out=$(BLADERF_LOG_LEVEL=verbose timeout 40 /tmp/probe2 6 2>&1)
 cycles_ok=$(echo "$out" | grep -c "cycle [0-9]*: ok")
-bad=$(echo "$out" | grep -E "status at|status on entry" \
+# Only the words read while the session is up. The entry word of a
+# cycle legitimately carries the previous cycle's STOP (FIFO_ABORT).
+bad=$(echo "$out" | grep -E "status at" \
       | grep -cE "violation=1|rx_fault=1|tx_fault=1|rx_abort=1")
 [ "$cycles_ok" -eq 6 ] && verdict PASS "A: 6/6 in-process cycles" \
                        || verdict FAIL "A: $cycles_ok/6 in-process cycles"

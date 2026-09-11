@@ -8,7 +8,8 @@
 --   1. enable high, no epoch: no violation, no sticky fault, no abort,
 --      no FIFO reads.
 --   2. START: link up, reads flow.
---   3. enable low, then START: protocol violation, fault_sticky(3).
+--   3. enable low, STOP, then START with enable low: ignored; re-enable
+--      and the next START is taken.
 
 library ieee;
     use ieee.std_logic_1164.all;
@@ -50,8 +51,8 @@ architecture tb of fifo_reader_armed_tb is
     signal uf_led     : std_logic;
     signal uf_count   : unsigned(63 downto 0);
 
-    signal link_start_toggle  : std_logic := '0';
-    signal link_stop_toggle   : std_logic := '0';
+    signal link_start_toggle  : std_logic := '1';  -- held high through reset: a stale '1' on the synchronised toggle is what the DUT sees after an FX3 fabric reset
+    signal link_stop_toggle   : std_logic := '1';  -- likewise
     signal link_active        : std_logic;
     signal protocol_start_violation : std_logic;
     signal fault_sticky       : std_logic_vector(4 downto 0);

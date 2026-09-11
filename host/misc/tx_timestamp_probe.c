@@ -7,7 +7,7 @@
  * fire at. That is the number needed to know how much lead time a caller
  * must give bladerf_sync_tx() metadata scheduling to land reliably.
  *
- *   cc -o tx_timestamp_probe tx_timestamp_probe.c -lbladeRF
+ *   cc -o tx_timestamp_probe tx_timestamp_probe.c -lbladeRF -lm
  *   ./tx_timestamp_probe [lead_ms]     # default lead 20 ms
  */
 
@@ -22,8 +22,8 @@
 #define FREQ_HZ        925000000u
 #define SAMPLERATE_HZ  10000000u
 #define BANDWIDTH_HZ   5000000u
-#define RX_GAIN_DB     5
-#define TX_GAIN_DB     (-20)
+#define RX_GAIN_DB     30
+#define TX_GAIN_DB     20
 
 #define NUM_BUFFERS 32u
 #define BUFFER_SIZE 8192u
@@ -110,6 +110,16 @@ int main(int argc, char *argv[])
     if (status != 0) {
         fprintf(stderr, "open: %s\n", bladerf_strerror(status));
         goto out_free;
+    }
+
+    /* Second argument "lb": route TX back to RX inside the AD9361 (BIST
+     * loopback). Over-the-air leakage on one board was too weak to find
+     * the burst (max block power ~2x the median); the digital loopback
+     * still exercises the FPGA TX release path, which is what is being
+     * timed here. */
+    if (argc > 2 && strcmp(argv[2], "lb") == 0) {
+        status = bladerf_set_loopback(dev, BLADERF_LB_RFIC_BIST);
+        printf("loopback=rfic_bist status=%d\n", status);
     }
 
     status = bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(0), FREQ_HZ);

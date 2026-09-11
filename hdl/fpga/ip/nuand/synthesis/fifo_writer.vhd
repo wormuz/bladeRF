@@ -129,6 +129,14 @@ architecture simple of fifo_writer is
     signal protocol_violation  : std_logic := '0';
     signal epoch_counter       : unsigned(7 downto 0) := (others => '0');
     signal link_toggle_prev    : std_logic := '0';
+    -- Toggle inputs arrive through synchronizers that still hold the
+    -- pre-reset value for a few cycles after this block leaves reset,
+    -- while the controller that drives them was reset to zero: every
+    -- toggle that was '1' reads as a falling edge. Measured on hardware
+    -- as rx_abort=1 rx_fault=1 tx_fault=1 at the first status read after
+    -- every FX3-induced fabric reset. Pulses are ignored until this
+    -- counter runs out; prev registers keep tracking meanwhile.
+    signal settle_count    : unsigned(2 downto 0) := (others => '1');
 
     -- Abort path / sticky transport-fault flags (Stage 3): a fault detected
     -- in this clock domain stops the transfer locally (registered FSM
@@ -272,6 +280,7 @@ begin
             protocol_violation <= '0';
             epoch_counter      <= (others => '0');
             link_toggle_prev   <= '0';
+            settle_count       <= (others => '1');
             fault_sticky_i     <= (others => '0');
             progress_count     <= (others => '0');
             wrote_this_epoch   <= '0';
@@ -293,20 +302,24 @@ begin
             -- (Architect decision, 2026-09-11: option 1, in place of a
             -- "START on a dead datapath" fault that fired on TX in every
             -- RX-only session by construction.)
+            if( settle_count /= 0 ) then
+                settle_count <= settle_count - 1;
+            end if;
+
             start_link_pulse := '0';
-            if( link_start_toggle /= link_toggle_prev and enable = '1' ) then
+            if( link_start_toggle /= link_toggle_prev and enable = '1' and settle_count = 0 ) then
                 start_link_pulse := '1';
             end if;
             link_toggle_prev <= link_start_toggle;
 
             stop_link_pulse := '0';
-            if( link_stop_toggle /= stop_toggle_prev ) then
+            if( link_stop_toggle /= stop_toggle_prev and settle_count = 0 ) then
                 stop_link_pulse := '1';
             end if;
             stop_toggle_prev <= link_stop_toggle;
 
             clear_fault_pulse := '0';
-            if( clear_fault_toggle /= clear_toggle_prev ) then
+            if( clear_fault_toggle /= clear_toggle_prev and settle_count = 0 ) then
                 clear_fault_pulse := '1';
             end if;
             clear_toggle_prev <= clear_fault_toggle;
