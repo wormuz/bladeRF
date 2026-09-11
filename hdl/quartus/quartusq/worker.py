@@ -13,6 +13,7 @@ import fcntl
 import json
 import os
 import shlex
+import signal
 import subprocess
 import threading
 import sys
@@ -84,6 +85,33 @@ def build_command(revision: str, seed: int, q25: str = "~/soft/q25") -> list[str
         p.format(q25=q25, revision=rev, size=size, seed=seed)
         for p in REAL_COMMAND_TEMPLATE
     ]
+
+
+def _kill_group(proc: subprocess.Popen, grace_s: float = 20.0) -> None:
+    """Terminate the whole process group, then kill what survives.
+
+    Quartus is a tree: build_bladerf.sh -> quartus_sh -> quartus_map /
+    quartus_fit / quartus_sta plus licence helpers. Signalling only the
+    parent leaves the children holding the project database.
+
+    Falls back to the plain process if the group is already gone -- a race
+    against normal exit must not raise out of a cancellation path.
+    """
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        proc.terminate()
+
+    try:
+        proc.wait(timeout=grace_s)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        proc.kill()
 
 
 def job_build_dir(job: "db.sqlite3.Row") -> Path:
@@ -236,6 +264,13 @@ class Worker:
             wt = self._prepare_worktree(job_id, job["git_commit"], build_dir)
             run_cwd = wt / "hdl" / "quartus"
 
+        # Own process group, so cancelling can kill the whole tree.
+        #
+        # build_bladerf.sh spawns quartus_sh, which spawns quartus_map,
+        # quartus_fit, quartus_sta and licence helpers. Signalling only the
+        # parent leaves those running: they keep the project database open
+        # and the machine busy, which is why every "cancelled" build today
+        # still had to be finished off with pkill by hand.
         proc = subprocess.Popen(
             command,
             cwd=str(run_cwd),
@@ -243,6 +278,7 @@ class Worker:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            start_new_session=True,
         )
         db.mark_running(conn, job_id, proc.pid)
         db.log_event(conn, job_id, "info", f"pid={proc.pid} started", phase="analysis_synthesis")
@@ -271,11 +307,7 @@ class Worker:
                         # terminate, then kill: Quartus spawns children that
                         # outlive a polite signal to the parent, and a
                         # half-killed compile holds the project database.
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=20)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
+                        _kill_group(proc)
                         return
             finally:
                 if watch_conn is not None:
@@ -299,7 +331,7 @@ class Worker:
                 # Kept as well as the watcher thread: when output IS flowing
                 # this reacts within one line instead of up to five seconds.
                 if self._cancel_requested(job_id):
-                    proc.terminate()
+                    _kill_group(proc)
                     cancel_stop.set()
                     db.finish_job(conn, job_id, state="cancelled", exit_code=None)
                     db.log_event(conn, job_id, "info", "cancelled by request")
