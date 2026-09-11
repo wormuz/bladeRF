@@ -44,6 +44,20 @@ run_one() {
     # defect. Everything is analysed into BOTH libraries so either spelling
     # resolves, which costs a second and actually runs the tests instead of
     # declaring them out of scope.
+    # common_dcfifo_p (and through it bladerf_p, and the two vendor benches)
+    # need Altera's altera_mf simulation library. Analysed once into a
+    # cached GHDL library; it needs -fsynopsys because altera_mf.vhd uses
+    # std_logic_arith/std_logic_unsigned. ~3 minutes the first time.
+    local MF=/var/tmp/ghdl-altera_mf
+    if [ ! -r "$MF/altera_mf-obj08.cf" ]; then
+        local SIMLIB="$HOME/altera/25.1std/quartus/eda/sim_lib"
+        mkdir -p "$MF"
+        ghdl -a --std=08 -frelaxed -fsynopsys --work=altera_mf --workdir="$MF" \
+            "$SIMLIB/altera_mf_components.vhd" "$SIMLIB/altera_mf.vhd" \
+            > "$MF/analyse.log" 2>&1 || echo "altera_mf: see $MF/analyse.log"
+    fi
+    GHDL_FLAGS="--std=08 -frelaxed -fsynopsys -P$MF"
+
     local analysed=""
     analyse() {
         local f="$1"
@@ -51,12 +65,20 @@ run_one() {
         [ -r "$f" ] || return
         case " $analysed " in *" $f "*) return ;; esac
         analysed="$analysed $f"
-        ghdl -a --std=08 -frelaxed --work=work  "$f" 2>/dev/null || true
-        ghdl -a --std=08 -frelaxed --work=nuand "$f" 2>/dev/null || true
+        ghdl -a $GHDL_FLAGS --work=work  "$f" 2>/dev/null || true
+        ghdl -a $GHDL_FLAGS --work=nuand "$f" 2>/dev/null || true
     }
 
     analyse "$N/synthesis/fifo_readwrite_p.vhd"
     analyse "$GPIF"
+    # The vendor benches (rfic_spi_tb, sample_stream_tb) reach for packages
+    # outside ip/nuand/synthesis: nuand.util, common_dcfifo_p, bladerf_p.
+    # Without these the TB itself fails to analyse and ghdl reports
+    # "cannot find entity", which read as a scope problem when it was a
+    # missing dependency -- the two benches were being counted as run.
+    analyse "$N/simulation/util.vhd"
+    analyse "$N/../altera/common_dcfifo/common_dcfifo.vhd"
+    analyse "$N/../../platforms/bladerf-micro/vhdl/bladerf_p.vhd"
     analyse "$PWD/sync_nopreserve.vhd"
     for f in "$N"/synthesis/*.vhd; do
         case "$f" in *fifo_readwrite_p.vhd) continue ;; esac
@@ -64,14 +86,14 @@ run_one() {
     done
     analyse "$src"
 
-    if ! ghdl -e --std=08 -frelaxed "$tb" >/dev/null 2>&1; then
+    if ! ghdl -e $GHDL_FLAGS "$tb" >/dev/null 2>&1; then
         printf '%-28s ELABORATION FAILED\n' "$tb"
-        ghdl -e --std=08 -frelaxed "$tb" 2>&1 | grep -i error | head -2
+        ghdl -e $GHDL_FLAGS "$tb" 2>&1 | grep -i error | head -2
         return 1
     fi
 
     local out
-    out=$(ghdl -r --std=08 "$tb" 2>&1)
+    out=$(ghdl -r $GHDL_FLAGS "$tb" 2>&1)
     if echo "$out" | grep -qiE "assertion error|severity error|simulation failed"; then
         printf '%-28s FAILED\n' "$tb"
         echo "$out" | grep -iE "error" | head -3 | cut -c1-120

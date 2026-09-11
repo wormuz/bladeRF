@@ -569,6 +569,25 @@ package body bladerf_p is
         return rv;
     end function;
 
+    -- Defined here, after pack() and before unpack(): unpack() uses it as a
+    -- variable initialiser and it calls pack(), so GHDL needs both orders
+    -- (LRM 4.3.1.1 / 14.4.2). Quartus accepted the original placement.
+    constant RFFE_GPO_DEFAULT : rffe_gpo_t := (
+        reset_n      => '0',
+        enable       => '0',
+        txnrx        => '0',
+        en_agc       => '0',
+        sync_in      => '0',
+        rx_bias_en   => '0',
+        rx_spdt1     => pack(DISABLED),
+        rx_spdt2     => pack(DISABLED),
+        tx_bias_en   => '0',
+        tx_spdt1     => pack(DISABLED),
+        tx_spdt2     => pack(DISABLED),
+        mimo_rx_en   => (others => '0'),
+        mimo_tx_en   => (others => '0'),
+        ctrl_in      => (others => '0')
+    );
     function unpack( x : std_logic_vector(31 downto 0) ) return rffe_gpo_t is
         variable rv : rffe_gpo_t := RFFE_GPO_DEFAULT;
     begin
@@ -591,6 +610,14 @@ package body bladerf_p is
         return rv;
     end function;
 
+    -- Same rule as RFFE_GPO_DEFAULT above: full declaration before the
+    -- unpack() that uses it as an initialiser.
+    constant TRIGGER_T_DEFAULT : trigger_t := (
+        arm       => '0',
+        fire      => '0',
+        master    => '0',
+        trig_line => '0'
+    );
     function unpack( trig_gpo  : std_logic_vector(7 downto 0);
                      trig_line : std_logic ) return trigger_t is
         variable rv : trigger_t := TRIGGER_T_DEFAULT;
@@ -739,22 +766,6 @@ package body bladerf_p is
     -- TYPEDEF RESET CONSTANTS
     -- ========================================================================
 
-    constant RFFE_GPO_DEFAULT : rffe_gpo_t := (
-        reset_n      => '0',
-        enable       => '0',
-        txnrx        => '0',
-        en_agc       => '0',
-        sync_in      => '0',
-        rx_bias_en   => '0',
-        rx_spdt1     => pack(DISABLED),
-        rx_spdt2     => pack(DISABLED),
-        tx_bias_en   => '0',
-        tx_spdt1     => pack(DISABLED),
-        tx_spdt2     => pack(DISABLED),
-        mimo_rx_en   => (others => '0'),
-        mimo_tx_en   => (others => '0'),
-        ctrl_in      => (others => '0')
-    );
 
     constant RFFE_GPI_DEFAULT : rffe_gpi_t := (
         ctrl_out    => (others => '0'),
@@ -878,13 +889,6 @@ package body bladerf_p is
                           valid  => '0',
                           data   => (others => '0')))
             ))
-    );
-
-    constant TRIGGER_T_DEFAULT : trigger_t := (
-        arm       => '0',
-        fire      => '0',
-        master    => '0',
-        trig_line => '0'
     );
 
 end package body;
