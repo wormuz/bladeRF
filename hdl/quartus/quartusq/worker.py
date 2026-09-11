@@ -280,7 +280,13 @@ class Worker:
             bufsize=1,
             start_new_session=True,
         )
-        db.mark_running(conn, job_id, proc.pid)
+        if not db.mark_running(conn, job_id, proc.pid):
+            # Cancelled during prepare: nothing watches for cancel until the
+            # compile loop below, so this is the only place that can honour it.
+            _kill_group(proc)
+            db.finish_job(conn, job_id, state="cancelled", exit_code=None)
+            db.log_event(conn, job_id, "info", "cancelled during prepare")
+            return
         db.log_event(conn, job_id, "info", f"pid={proc.pid} started", phase="analysis_synthesis")
 
         # Cancellation has to be watched on a timer, not between log lines.
@@ -434,7 +440,10 @@ class Worker:
             ("Fitter", "fitter"),
             ("Assembler", "assembler"),
             ("Timing Analyzer", "timequest"),
-            ("Quartus Prime Shell", "reports"),
+            # No "Quartus Prime Shell" marker: quartus_sh prints that banner
+            # at the START of the flow too, so job 32 reported "reports"
+            # while quartus_map was running. The report phase is set
+            # explicitly by _finalize.
         ]
         for needle, phase in markers:
             if needle in line:

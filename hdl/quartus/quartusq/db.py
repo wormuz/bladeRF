@@ -220,8 +220,18 @@ def set_job_fields(conn: sqlite3.Connection, job_id: int, **fields: Any) -> None
     conn.commit()
 
 
-def mark_running(conn: sqlite3.Connection, job_id: int, pid: int) -> None:
-    set_job_fields(conn, job_id, state="running", pid=pid)
+def mark_running(conn: sqlite3.Connection, job_id: int, pid: int) -> bool:
+    """Move preparing -> running. Returns False if the job is no longer
+    'preparing' -- in practice, a cancel arrived while the worktree was
+    being prepared. An unconditional write here overwrote that
+    cancel_requested with 'running', and the compile went on for its full
+    length with the CLI insisting it had been cancelled (job 32)."""
+    upd = conn.execute(
+        "UPDATE jobs SET state='running', pid=? WHERE id=? AND state='preparing'",
+        (pid, job_id),
+    )
+    conn.commit()
+    return upd.rowcount > 0
 
 
 def finish_job(conn: sqlite3.Connection, job_id: int, *, state: str, **fields: Any) -> None:
