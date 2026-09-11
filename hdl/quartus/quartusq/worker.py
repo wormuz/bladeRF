@@ -14,6 +14,7 @@ import json
 import os
 import shlex
 import subprocess
+import threading
 import sys
 import time
 from pathlib import Path
@@ -118,9 +119,17 @@ class SingleInstanceLock:
 
 
 class Worker:
-    def __init__(self, conn, queue_name: str = "quartus-local", fake_command: Optional[str] = None):
+    def __init__(self, conn, queue_name: str = "quartus-local",
+                 fake_command: Optional[str] = None,
+                 db_path: Optional[Path] = None):
         self.conn = conn
         self.queue_name = queue_name
+        # The cancel watcher runs on its own thread and so needs its own
+        # connection -- sqlite3 objects belong to the thread that created
+        # them. Kept as a path rather than a second connection so a Worker
+        # built for a selfcheck, with an in-memory or temporary database,
+        # still works.
+        self.db_path = db_path or db.DEFAULT_DB_PATH
         # fake_command lets selfchecks/tests exercise the whole pipeline
         # (spawn, stream log, parse, qgate) without invoking real Quartus.
         self.fake_command = fake_command or os.environ.get("QUARTUSQ_FAKE_COMMAND")
@@ -238,6 +247,43 @@ class Worker:
         db.mark_running(conn, job_id, proc.pid)
         db.log_event(conn, job_id, "info", f"pid={proc.pid} started", phase="analysis_synthesis")
 
+        # Cancellation has to be watched on a timer, not between log lines.
+        #
+        # The streaming loop below blocks in `for line in proc.stdout` for as
+        # long as the process says nothing, and quartus_map can say nothing
+        # for hours -- that is the exact condition under which someone wants
+        # to cancel. Checking only after a line arrives meant `cancel` was
+        # recorded in the database and never acted on: several builds were
+        # killed by hand while the queue still believed they were running.
+        #
+        # Its own connection: sqlite3 objects belong to the thread that made
+        # them, and this one is read-only apart from the kill it performs.
+        cancel_stop = threading.Event()
+
+        def _watch_cancel() -> None:
+            watch_conn = db.connect(self.db_path) if self.db_path else None
+            try:
+                while not cancel_stop.wait(5.0):
+                    if watch_conn is None:
+                        return
+                    row = db.get_job(watch_conn, job_id)
+                    if row is not None and row["state"] == "cancel_requested":
+                        # terminate, then kill: Quartus spawns children that
+                        # outlive a polite signal to the parent, and a
+                        # half-killed compile holds the project database.
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=20)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        return
+            finally:
+                if watch_conn is not None:
+                    watch_conn.close()
+
+        cancel_thread = threading.Thread(target=_watch_cancel, daemon=True)
+        cancel_thread.start()
+
         with compile_log.open("a") as clog, live_jsonl.open("a") as jlog:
             for line in proc.stdout:
                 clog.write(line)
@@ -250,13 +296,25 @@ class Worker:
                 jlog.write(json.dumps(event) + "\n")
                 jlog.flush()
 
+                # Kept as well as the watcher thread: when output IS flowing
+                # this reacts within one line instead of up to five seconds.
                 if self._cancel_requested(job_id):
                     proc.terminate()
+                    cancel_stop.set()
                     db.finish_job(conn, job_id, state="cancelled", exit_code=None)
                     db.log_event(conn, job_id, "info", "cancelled by request")
                     return
 
         exit_code = proc.wait()
+        cancel_stop.set()
+
+        # The watcher may have killed the process. Recording that as a plain
+        # failure would blame the build for something the operator asked
+        # for, so the requested state wins over the exit code.
+        if self._cancel_requested(job_id):
+            db.finish_job(conn, job_id, state="cancelled", exit_code=exit_code)
+            db.log_event(conn, job_id, "info", "cancelled while quiet")
+            return
         self._finalize(job_id, compile_log, exit_code)
 
     def _infer_phase(self, line: str) -> Optional[str]:
