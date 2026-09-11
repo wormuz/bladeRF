@@ -304,14 +304,42 @@ static inline uint16_t pretrig_index_from_oldest(uint32_t status, uint16_t n)
  * fabric actually did with it.
  *
  * Bits 1..3 are toggles, so the value written depends on what was written
- * last. A read-modify-write cannot recover that -- an output PIO reads back
- * its own register, but nothing guarantees this is the only writer and the
- * toggle state is not derivable from any observable. So the shadow below is
- * the authority, and every helper mutates it and rewrites the whole word.
+ * last. The authority for "what was written last" is the PIO register
+ * itself, read back before every modification -- NOT a static copy here.
+ *
+ * A copy desynchronises: FX3 pulses GPIO_SYS_RST inside the RF_RX/RF_TX
+ * vendor commands (fx3_firmware/src/bladeRF.c) and on RF link start/stop,
+ * which resets the PIO and rf_link_controller to zero while this Nios keeps
+ * running (reset_reset_n is tied high). A static copy then holds stale
+ * toggle bits, and the next full-word write replays every set bit as a
+ * fresh command -- a START arriving as START+STOP, or as nothing. Measured
+ * as captures failing by toggle parity, 1 in 12 enable cycles once the
+ * host ordering was right. The output PIO reads back what it drives, and
+ * this firmware is its only writer.
  *
  * Do not "write 1 to start". A toggle is a transition: writing 1 twice is
  * one command, not two. */
-static uint32_t rf_link_cfg_shadow = 0;
+static inline uint32_t rf_link_cfg_current(void)
+{
+    #ifdef RF_LINK_CFG_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RF_LINK_CFG_BASE);
+    #else
+    return 0;
+    #endif
+}
+
+/* Read-modify-write against the register, so a fabric reset that zeroed the
+ * PIO is seen here as zero rather than papered over by memory. */
+static inline void rf_link_cfg_modify(uint32_t clear, uint32_t set, uint32_t toggle)
+{
+    #ifdef RF_LINK_CFG_BASE
+    uint32_t word = rf_link_cfg_current();
+    word &= ~clear;
+    word |= set;
+    word ^= toggle;
+    IOWR_ALTERA_AVALON_PIO_DATA(RF_LINK_CFG_BASE, word);
+    #endif
+}
 
 #define RF_LINK_CFG_USB_SPEED     (1u << 0)
 #define RF_LINK_CFG_START_TOGGLE  (1u << 1)
@@ -319,53 +347,38 @@ static uint32_t rf_link_cfg_shadow = 0;
 #define RF_LINK_CFG_CLEAR_FAULT   (1u << 3)
 #define RF_LINK_CFG_EPOCH_TAG_LSB 8
 
-static inline void rf_link_cfg_commit(void)
-{
-    #ifdef RF_LINK_CFG_BASE
-    IOWR_ALTERA_AVALON_PIO_DATA(RF_LINK_CFG_BASE, rf_link_cfg_shadow);
-    #endif
-}
-
 /* Speed is a level, not a toggle: it is latched by the fabric at the next
  * start, so setting it twice is harmless and setting it after the start is
  * too late. */
 static inline void rf_link_cfg_set_speed(bool high_speed)
 {
-    if (high_speed) {
-        rf_link_cfg_shadow |= RF_LINK_CFG_USB_SPEED;
-    } else {
-        rf_link_cfg_shadow &= ~RF_LINK_CFG_USB_SPEED;
-    }
-    rf_link_cfg_commit();
+    rf_link_cfg_modify(RF_LINK_CFG_USB_SPEED,
+                       high_speed ? RF_LINK_CFG_USB_SPEED : 0, 0);
 }
 
 static inline void rf_link_cfg_set_epoch_tag(uint8_t tag)
 {
-    rf_link_cfg_shadow &= ~(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB);
-    rf_link_cfg_shadow |= ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB;
-    rf_link_cfg_commit();
+    rf_link_cfg_modify(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB,
+                       ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB, 0);
 }
 
 /* Call only after the FX3 RF link start has actually succeeded. This asserts
  * that it did; it is not evidence about FX3 on its own. */
 static inline void rf_link_cfg_start(void)
 {
-    rf_link_cfg_shadow ^= RF_LINK_CFG_START_TOGGLE;
-    rf_link_cfg_commit();
+    rf_link_cfg_modify(0, 0, RF_LINK_CFG_START_TOGGLE);
 }
 
 static inline void rf_link_cfg_stop(void)
 {
-    rf_link_cfg_shadow ^= RF_LINK_CFG_STOP_TOGGLE;
-    rf_link_cfg_commit();
+    rf_link_cfg_modify(0, 0, RF_LINK_CFG_STOP_TOGGLE);
 }
 
 /* Clears the sticky fault bits. Does not restart anything -- only a new
  * epoch does that. */
 static inline void rf_link_cfg_clear_faults(void)
 {
-    rf_link_cfg_shadow ^= RF_LINK_CFG_CLEAR_FAULT;
-    rf_link_cfg_commit();
+    rf_link_cfg_modify(0, 0, RF_LINK_CFG_CLEAR_FAULT);
 }
 
 static inline uint32_t expansion_port_read(void)

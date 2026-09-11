@@ -792,7 +792,22 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 static void announce_rf_link_epoch(struct bladerf *dev)
 {
     bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
+    uint32_t entry_status   = 0;
     int status;
+
+    /* What the link looked like on arrival, before this session touches it.
+     * Printed unconditionally at verbose because the captures that fail do
+     * so silently, and the question "what state did the previous run leave"
+     * cannot be answered after the fact. */
+    if (nios_rf_link_status_read(dev, &entry_status) == 0) {
+        log_verbose("%s: link status on entry: 0x%08x "
+                    "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                    "epoch_both=%u epoch_count=%u)\n",
+                    __FUNCTION__, entry_status,
+                    (entry_status >> 16) & 1, (entry_status >> 19) & 1,
+                    (entry_status >> 14) & 1, (entry_status >> 15) & 1,
+                    (entry_status >> 10) & 1, (entry_status >> 20) & 0xff);
+    }
 
     status = dev->backend->get_device_speed(dev, &speed);
     if (status != 0) {
@@ -801,26 +816,28 @@ static void announce_rf_link_epoch(struct bladerf *dev)
         return;
     }
 
-    /* Clear faults left by the previous session first.
+    /* Make FX3 restart its RF link before the epoch is declared.
      *
-     * abort_active latches itself and survives the host closing the
-     * device, so a run that aborted poisons the next one. Measured: five
-     * identical captures alternated 200000, 0, 200000, 0, 200000 bytes --
-     * every successful run left the abort set for its successor, and every
-     * failed run cleared nothing because it never got that far.
+     * FX3 samples the USB speed once per RF link start and never rebuilds
+     * pcktSize/burstLen/dmaCfg.size afterwards. Re-entering the RF_LINK alt
+     * setting is the only way to make it start over, and the register
+     * documentation in nios_pkt_8x32.h names it as a required step between
+     * SET_SPEED and START. It was never implemented on this side.
      *
-     * Sent before the epoch, because a new epoch clears the sticky vector
-     * but not an abort that is already asserted.
-     */
-    status = nios_rf_link_cfg_cmd(
-        dev, NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS, 0);
-    if (status != 0) {
-        log_debug("%s: clear-faults not accepted (%s); gateware may predate "
-                  "the RF link epoch mechanism\n",
-                  __FUNCTION__, bladerf_strerror(status));
-        return;
-    }
+     * Without it, whether a capture works depends on which state FX3 happens
+     * to be left in by the previous session -- measured as a strict pass/fail
+     * alternation over six identical captures, with an identical host command
+     * sequence in the passing and failing logs. */
 
+    /* No STOP here. The previous epoch is ended where it ends -- in the
+     * disable path below -- and every command in this register is a toggle,
+     * so sending STOP twice for one stop is two stops, which leaves the
+     * fabric a generation out of step with the host.
+     *
+     * Faults do not need clearing separately either: an accepted START
+     * clears the whole sticky vector and abort_active in the same cycle
+     * (fifo_writer.vhd:359, :414).
+     */
     status = nios_rf_link_cfg_cmd(
         dev, NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED,
         (speed == BLADERF_DEVICE_SPEED_SUPER) ? 0 : 1);
@@ -831,6 +848,11 @@ static void announce_rf_link_epoch(struct bladerf *dev)
         return;
     }
 
+    /* No FX3 RF-link restart here. Cycling the alternate setting (NULL then
+     * RF_LINK) was tried as the documented step between SET_SPEED and
+     * START: the epoch counter kept running across it in every cycle, so
+     * the fabric was never reset and FX3 never re-entered NuandRFLinkStart
+     * (which pulses SYS_RST, fx3_firmware/src/rf.c). The step did nothing. */
     status = nios_rf_link_cfg_cmd(
         dev, NIOS_PKT_8x32_RF_LINK_CMD_START, 0);
     if (status != 0) {
@@ -868,12 +890,40 @@ static void announce_rf_link_epoch(struct bladerf *dev)
         }
 
         if (st & (1u << 10)) {
+            log_verbose("%s: epoch applied after %u polls, status 0x%08x "
+                        "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
+                        __FUNCTION__, attempt + 1, st,
+                        (st >> 19) & 1, (st >> 14) & 1, (st >> 20) & 0xff);
             return;
+        }
+
+        if (attempt == 15) {
+            log_verbose("%s: epoch NOT applied, final status 0x%08x "
+                        "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                        "rx_epoch=%u tx_epoch=%u violation=%u)\n",
+                        __FUNCTION__, st,
+                        (st >> 16) & 1, (st >> 19) & 1, (st >> 14) & 1,
+                        (st >> 15) & 1, (st >> 8) & 1, (st >> 9) & 1,
+                        (st >> 7) & 1);
         }
     }
 
     log_debug("%s: epoch not acknowledged by both directions; the stream "
               "may abort\n", __FUNCTION__);
+}
+
+/* Counterpart to announce_rf_link_epoch: drop link_active so the next
+ * session starts from a link that is down rather than one still standing
+ * from a process that has already exited. Best effort -- a gateware that
+ * predates the command refuses it, which is the same as not calling it. */
+static void end_rf_link_epoch(struct bladerf *dev)
+{
+    int status = nios_rf_link_cfg_cmd(dev, NIOS_PKT_8x32_RF_LINK_CMD_STOP, 0);
+
+    if (status != 0) {
+        log_debug("%s: link stop not accepted (%s)\n", __FUNCTION__,
+                  bladerf_strerror(status));
+    }
 }
 
 static int bladerf2_enable_module(struct bladerf *dev,
@@ -883,15 +933,68 @@ static int bladerf2_enable_module(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    int status;
 
-    /* Before, not after: the fabric samples the epoch state on the rising
-     * edge of enable, so announcing it afterwards is announcing it too
-     * late. */
+    /* After the RFIC path, not before it.
+     *
+     * rfic->enable_module ends in the BLADE_USB_CMD_RF_RX vendor command,
+     * and stock FX3 firmware (fx3_firmware/src/bladeRF.c:397-400) pulses
+     * GPIO_SYS_RST inside that command whenever both RX_EN and TX_EN are
+     * low, then raises RX_EN in the same handler. So on the first enable of
+     * a session the fabric is wiped and its enable input rises within the
+     * same USB transaction -- there is no window for the host to declare
+     * anything in between. An epoch announced before this point is erased
+     * by it; measured as violation=1 at disable in every cycle.
+     *
+     * Announced after, the fabric records one protocol violation for the
+     * enable that arrived first, and the START that follows clears the
+     * sticky vector and abort_active in the same cycle it registers
+     * (fifo_writer.vhd:359, :414), so the datapath leaves ABORTED and
+     * streams. */
     if (enable) {
+        status = board_data->rfic->enable_module(dev, ch, enable);
+        if (status != 0) {
+            return status;
+        }
         announce_rf_link_epoch(dev);
+        return 0;
     }
 
-    return board_data->rfic->enable_module(dev, ch, enable);
+    /* Disable: end the epoch after the datapath is down, so the fabric sees
+     * the stop with nothing still in flight.
+     *
+     * Closing the device is not enough to end an epoch. sys_reset comes
+     * from FX3 on fx3_ctl(7), and FX3 asserts it on some opens and not
+     * others -- measured as a strict pass/fail alternation over six
+     * identical captures, where every failing run began with the previous
+     * epoch still standing (status 0x1011df01, link active, epoch_count=1)
+     * and every passing one began from a reset fabric (0x10000000).
+     *
+     * So the host ends what the host began, rather than relying on a reset
+     * that is not ours to schedule. */
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        uint32_t st = 0;
+
+        /* State of the link as the stream ends, with the epoch still
+         * standing -- this is the only moment the failure is observable
+         * from the host, since a STOP or a new START clears the vector. */
+        if (nios_rf_link_status_read(dev, &st) == 0) {
+            log_verbose("%s: link status at disable: 0x%08x (rx_active=%u "
+                        "rx_abort=%u rx_fault=%u tx_fault=%u violation=%u "
+                        "epoch_count=%u)\n",
+                        __FUNCTION__, st, (st >> 16) & 1, (st >> 19) & 1,
+                        (st >> 14) & 1, (st >> 15) & 1, (st >> 7) & 1,
+                        (st >> 20) & 0xff);
+        }
+    }
+
+    status = board_data->rfic->enable_module(dev, ch, enable);
+
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        end_rf_link_epoch(dev);
+    }
+
+    return status;
 }
 
 

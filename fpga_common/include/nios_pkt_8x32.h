@@ -189,12 +189,23 @@
  * value; keeping that in the firmware means the host cannot desynchronise a
  * shadow copy of them.
  *
- * Required host ordering -- the mechanism does not work otherwise:
- *   stop streaming -> STOP -> poll RF_LINK_STATUS until link_active == 0
- *   -> determine actual USB speed -> SET_SPEED -> restart the FX3 RF link
- *   (alt 0 then alt 1, working around the glUsbAltInterface guard)
- *   -> START -> poll until link_active == 1, speed_latched matches, no
- *   mismatch, and both epoch counters equal -> enable the datapath.
+ * Host ordering, as measured on stock FX3 firmware (not as first designed):
+ *   enable the datapath (BLADE_USB_CMD_RF_RX/RF_TX to FX3) FIRST
+ *   -> determine actual USB speed -> SET_SPEED -> START
+ *   -> poll RF_LINK_STATUS until bit 10 (both directions applied the epoch)
+ *   ... stream ...
+ *   -> disable the datapath -> STOP.
+ *
+ * Enable comes first because FX3 pulses GPIO_SYS_RST inside the RF_RX/RF_TX
+ * vendor command whenever both RX_EN and TX_EN are low, and raises the
+ * enable line in the same handler (fx3_firmware/src/bladeRF.c). Anything
+ * declared before that command is erased by it, and there is no window
+ * between the reset and the enable edge. The fabric therefore records one
+ * protocol-start violation on the first enable of a session; the START that
+ * follows clears the sticky vector and abort in the cycle it registers, and
+ * the datapath streams. Cycling the USB alternate setting does NOT restart
+ * the FX3 RF link (epoch counter continuous across it) and is not part of
+ * the sequence.
  *
  * START asserts that the FX3 link start succeeded. It is not evidence about
  * FX3 by itself; only observed data progress is that. If the requested speed
