@@ -151,6 +151,14 @@ make_revision sweep
 # (not hosted, which never had the block and never stalled).
 project_open -revision sweep ${PROJECT_NAME}
 set_global_assignment -name AUTO_RESOURCE_SHARING OFF
+# AUTO_RESOURCE_SHARING OFF alone did not fix it (job 48: RSS flat at
+# 4246088 KB for 15+ min, 99% CPU -- a fixed-point loop, not a large but
+# finite search). Architect's next hypothesis: FSM extraction/re-encoding
+# misidentifying the K-of-M persistence shift register as a large,
+# unstructured state machine and failing to converge on reachability
+# analysis, which runs in this exact window (right after RAM inference,
+# before Timing-Driven Synthesis).
+set_global_assignment -name STATE_MACHINE_PROCESSING "OFF"
 export_assignments
 
 # Create the adsb
