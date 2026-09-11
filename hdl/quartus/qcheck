@@ -135,7 +135,25 @@ def check_sdc():
     # 3. A false path takes the skew and net-delay bounds down with it: the
     #    following set_max_skew is reported "No path is found" and dropped,
     #    leaving a held-data bus with no bound on bit-to-bit skew.
+    #
+    #    Only fires when a skew or net-delay bound on the SAME pair would be
+    #    dropped by it. A cut with no such bound beside it is not this
+    #    defect: it is a deliberate cut, and there are crossings that need
+    #    one -- the dwell readout and pre-trigger ring are read word by word
+    #    by the host behind a generation counter, so no single strobe
+    #    captures the bus and bit-to-bit skew cannot assemble a value that
+    #    never existed. Those also stall CCPP outright if given a skew
+    #    bound, measured at 57 minutes against a 15-minute build.
+    #
+    #    Without this distinction the rule says "never cut", which is wrong
+    #    and therefore gets ignored -- the failure mode of every guard that
+    #    cries wolf.
     for m in re.finditer(r"set_false_path\s+-from\s+\$(\w+)\s+-to\s+\$(\w+)", src):
+        same_pair = re.search(
+            r"set_(max_skew|net_delay)\s+-from\s+\$" + re.escape(m.group(1))
+            + r"\s+-to\s+\$" + re.escape(m.group(2)), src)
+        if not same_pair:
+            continue
         fail("sdc-false-path-on-bundle",
              f"set_false_path -from ${m.group(1)} -to ${m.group(2)}: use "
              "set_max_delay 100 / set_min_delay -100 with both ends instead, "
