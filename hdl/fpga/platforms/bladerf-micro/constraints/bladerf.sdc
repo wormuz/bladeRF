@@ -51,6 +51,13 @@ derive_clock_uncertainty
 set fx3_clock    {*U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 set system_clock {*U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
+# ...and the same nodes as PINS, which is a different namespace: get_pins
+# wants the entity:instance spelling the fitter report shows. Two aliases
+# rather than one because no single string satisfies both, which is what
+# made this look like an unfixable name for so long.
+set fx3_clock_pin    {*fx3_pll:U_fx3_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+set system_clock_pin {*system_pll:U_system_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+
 # Trace delays between AD9361 and FPGA (bladeRF Micro)
 set adi_spi_clk_trace_delay     0.127
 set adi_spi_di_trace_delay      0.168
