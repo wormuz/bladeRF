@@ -67,3 +67,11 @@ __pycache__/
 # quartusq build queue: local state, not source
 hdl/quartus/quartusq.db*
 hdl/quartus/builds/
+
+# quartusq notification log: local runtime state
+hdl/quartus/quartusq-finished.log
+# qsyn scratch projects
+hdl/quartus/db/
+hdl/quartus/*.qpf
+hdl/quartus/*.map.summary
+hdl/quartus/*.qws
