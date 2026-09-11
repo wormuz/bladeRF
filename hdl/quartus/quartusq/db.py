@@ -6,6 +6,7 @@ goes through this module so the schema is defined exactly once.
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -226,6 +227,46 @@ def mark_running(conn: sqlite3.Connection, job_id: int, pid: int) -> None:
 def finish_job(conn: sqlite3.Connection, job_id: int, *, state: str, **fields: Any) -> None:
     assert state in TERMINAL_STATES, f"finish_job needs a terminal state, got {state!r}"
     set_job_fields(conn, job_id, state=state, finished_at=time.time(), **fields)
+    _announce(conn, job_id, state)
+
+
+# Where a finished job is announced. One line per completion, appended, never
+# rewritten -- a watcher can tail it, and a reader who was away still sees
+# every build that finished while they were gone.
+NOTIFY_LOG = DEFAULT_DB_PATH.parent / "quartusq-finished.log"
+
+
+def _announce(conn: sqlite3.Connection, job_id: int, state: str) -> None:
+    """Record and broadcast that a job reached a terminal state.
+
+    This belongs in finish_job rather than in the worker because the worker
+    has three separate completion paths -- passed, failed, cancelled -- and
+    one of them will eventually be added without a notification beside it.
+    Announcing where the state is written means that cannot happen.
+
+    A build that finishes with nobody watching is the failure this fixes: a
+    sweep build completed after four hours of investigation and nothing said
+    so, because the notification lived in a shell loop that had exited.
+    """
+    try:
+        job = get_job(conn, job_id)
+        label = (job["label"] or "") if job else ""
+        rev = (job["revision"] or "?") if job else "?"
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')} job {job_id} "
+                f"{state} {rev} {label}")
+
+        with open(NOTIFY_LOG, "a") as fh:
+            fh.write(line + "\n")
+
+        # Desktop notification is best-effort: no display, no notify-send,
+        # or a headless session must not turn a finished build into a
+        # crashed worker.
+        subprocess.run(
+            ["notify-send", "-u", "normal", f"quartusq: {state}", line],
+            capture_output=True, timeout=10, check=False,
+        )
+    except Exception:                       # noqa: BLE001
+        pass
 
 
 def get_job(conn: sqlite3.Connection, job_id: int) -> Optional[sqlite3.Row]:
