@@ -46,7 +46,7 @@ entity bladerf_core is
     -- arithmetic cone rather than adc_streams(0) fanout). 8 = full module,
     -- matches dwell_summary. Delete this generic and dwell_summary_bisect.vhd
     -- once the offending stage is found and dwell_summary itself is fixed.
-    DWELL_BISECT_STAGE     : natural := 8
+    DWELL_BISECT_STAGE     : natural := 0
   );
   port (
     -- Main 38.4MHz system clock (3.3 V)
