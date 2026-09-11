@@ -117,8 +117,10 @@ architecture simple of fifo_reader is
     -- means "TX/RX datapath enabled" and can stay '1' across an FX3
     -- restart (USB reconnect, repeated stream-start) that changes speed
     -- without ever dropping enable. The host must signal a new epoch
-    -- explicitly via link_start_toggle; enable rising without a prior
-    -- epoch is a protocol violation, tracked separately from mismatch.
+    -- explicitly via link_start_toggle. Enable high with no epoch is ARMED
+    -- (held, no fault) because stock FX3 raises enable in the same vendor
+    -- command that resets the fabric; the violation is a START while
+    -- enable is low.
     signal   latched_usb_speed  : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
     signal   speed_mismatch     : std_logic := '0';
     signal   link_active_i      : std_logic := '0';
@@ -126,7 +128,6 @@ architecture simple of fifo_reader is
     signal   protocol_violation : std_logic := '0';
     signal   epoch_counter      : unsigned(7 downto 0) := (others => '0');
     signal   link_toggle_prev   : std_logic := '0';
-    signal   enable_prev        : std_logic := '0';
 
     -- Abort path / sticky transport-fault flags (Stage 3): mirrors
     -- fifo_writer's latch_usb_speed extension. See that file for the full
@@ -301,7 +302,6 @@ begin
             protocol_violation <= '0';
             epoch_counter      <= (others => '0');
             link_toggle_prev   <= '0';
-            enable_prev        <= '0';
             fault_sticky_i     <= (others => '0');
             progress_count     <= (others => '0');
             read_this_epoch    <= '0';
@@ -368,12 +368,13 @@ begin
                 end if;
             end if;
 
-            -- enable rising without an established link epoch: sticky
-            -- protocol violation, independent of speed_mismatch.
-            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+            -- Protocol violation: an epoch declared for a dead datapath.
+            -- Same rule as fifo_writer: stock FX3 resets the fabric and
+            -- raises enable in one vendor command (RF_TX), so enable always
+            -- precedes the START; enable high with no epoch is ARMED.
+            if( start_link_pulse = '1' and enable = '0' ) then
                 protocol_violation <= '1';
             end if;
-            enable_prev <= enable;
 
             -- Sticky transport-fault flags: set-dominant, cleared only by
             -- reset / new epoch / explicit clear-fault pulse -- never by
@@ -401,7 +402,7 @@ begin
                 end if;
             end if;
 
-            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+            if( start_link_pulse = '1' and enable = '0' ) then
                 fault_sticky_i(FAULT_BIT_PROTOCOL_ERROR) <= '1';
             end if;
 
@@ -411,7 +412,6 @@ begin
             abort_active_next := '0';
             if( stop_link_pulse = '1'
                 or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
-                or (enable = '1' and enable_prev = '0' and link_active_i = '0')
                 or abort_active_i = '1' ) then
                 abort_active_next := '1';
             end if;
@@ -706,7 +706,8 @@ begin
         if( abort_active_i = '1' ) then
             meta_future.meta_read <= '0';
             meta_future.state     <= ABORTED;
-        elsif( (enable = '0') or (meta_en = '0') ) then
+        elsif( (enable = '0') or (meta_en = '0') or (link_active_i = '0') ) then
+            -- link_active_i = '0' with enable high is ARMED: held until START.
             meta_future <= META_FSM_RESET_VALUE;
         end if;
 
@@ -1099,7 +1100,7 @@ begin
         -- here only steers fifo_future.state/fifo_read, which reaches the
         -- output on the FOLLOWING clock through fifo_current -- the output
         -- assignment below stays a plain mirror of fifo_current, unchanged.
-        if( enable = '0' or abort_active_i = '1' ) then
+        if( enable = '0' or abort_active_i = '1' or link_active_i = '0' ) then
             fifo_future.fifo_read <= '0';
             fifo_future.state     <= FIFO_FSM_RESET_VALUE.state;
             for i in fifo_current.out_samples'range loop
