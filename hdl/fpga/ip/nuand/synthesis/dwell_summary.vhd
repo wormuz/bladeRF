@@ -244,6 +244,16 @@ begin
         variable window_done : boolean;
         -- The window total including the sample closing it, computed once.
         variable win_total   : unsigned(47 downto 0);
+        -- window_sum + resize(inst_energy, 48) was written out twice in
+        -- this process (the per-sample window_sum update, and win_total
+        -- below): two syntactically distinct 48-bit adds over the same
+        -- names, which the synthesiser has to prove equivalent before it
+        -- can share one adder -- the same class of proof win_total's own
+        -- comment already names, just missed for this one. Confirmed by
+        -- running the b31754a1 revision standalone: it still stalled
+        -- quartus_map even with win_total in place, because this second
+        -- instance of the same expression was never hoisted.
+        variable window_sum_next : unsigned(47 downto 0);
     begin
         if( reset = '1' ) then
             window_sum    <= (others => '0');
@@ -309,7 +319,8 @@ begin
                 win_max       <= (others => '0');
 
             elsif( inst_valid = '1' ) then
-                window_sum    <= window_sum + resize(inst_energy, 48);
+                window_sum_next := window_sum + resize(inst_energy, 48);
+                window_sum    <= window_sum_next;
                 window_count  <= window_count + 1;
                 dwell_energy  <= dwell_energy + resize(inst_energy, 64);
                 dwell_samples <= dwell_samples + 1;
@@ -340,7 +351,12 @@ begin
                     -- and the synthesiser has to prove them equivalent before
                     -- it can share one adder. That proof is the work
                     -- quartus_map would not finish on this revision.
-                    win_total := window_sum + resize(inst_energy, 48);
+                    --
+                    -- Reuses window_sum_next computed above, rather than
+                    -- writing the same expression a second time here: that
+                    -- second instance is what actually stalled quartus_map,
+                    -- window_sum_next alone was not enough.
+                    win_total := window_sum_next;
 
                     if( win_total < win_min ) then
                         win_min <= win_total;
