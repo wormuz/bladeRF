@@ -8,8 +8,14 @@
  * must give bladerf_sync_tx() metadata scheduling to land reliably.
  *
  *   cc -o tx_timestamp_probe tx_timestamp_probe.c -lbladeRF -lm
- *   ./tx_timestamp_probe [lead_ms] [lb|air] [channel 0|1] [tx_gain_db] [rx_gain_db]
+ *   ./tx_timestamp_probe [lead_ms] [lb|air] [channel 0|1] [tx_gain_db] [rx_gain_db] [nbursts] [gap_ms]
  *   e.g.  ./tx_timestamp_probe 20 air 1    # TX2 -> 30 dB pad -> RX2
+ *
+ * nbursts (arg 6, default 1) schedules that many BURST_START|BURST_END
+ * bursts back-to-back, each bladerf_sync_tx() issued before any RX read,
+ * at FPGA timestamps T0 + k*(BURST_SAMPLES + gap_samples) for k=0..nbursts-1
+ * (gap_ms is arg 7, default 5). All bursts must fit inside the TX buffer
+ * pool (NUM_BUFFERS x BUFFER_SIZE); with nbursts==1 output is unchanged.
  *
  * channel 1 uses BLADERF_RX_X2 / BLADERF_TX_X2 (MIMO) layouts: per
  * libbladeRF.h (BLADERF_FORMAT_SC16_Q11 docs), samples are interleaved
@@ -110,12 +116,14 @@ int main(int argc, char *argv[])
     unsigned int samples_per_frame = mimo ? 2u : 1u;
     unsigned int tx_gain_db = (argc > 4) ? (unsigned int)atoi(argv[4]) : DEFAULT_TX_GAIN_DB;
     unsigned int rx_gain_db = (argc > 5) ? (unsigned int)atoi(argv[5]) : DEFAULT_RX_GAIN_DB;
+    unsigned int nbursts = (argc > 6) ? (unsigned int)atoi(argv[6]) : 1u;
+    unsigned int gap_ms  = (argc > 7) ? (unsigned int)atoi(argv[7]) : 5u;
     struct bladerf *dev  = NULL;
     int16_t *tone_buf     = NULL;
     int16_t *tx_buf       = NULL;
     int16_t *rx_buf        = NULL;
     unsigned int n_blocks_per_chunk = BUFFER_SIZE / BLOCK_SAMPLES;
-    struct bladerf_metadata tx_meta;
+    struct bladerf_metadata tx_meta[64];
     struct bladerf_metadata rx_meta;
     bladerf_timestamp ts_rx0 = 0, ts_tx0 = 0;
     bladerf_timestamp lead_samples;
@@ -123,9 +131,18 @@ int main(int argc, char *argv[])
     bladerf_timestamp search_start_ts;
     bool overrun_seen  = false;
     bool burst_found    = false;
+    unsigned int bursts_found_count = 0;
     double first_chunk_median = 0.0;
     int status;
     int ret = 1;
+
+    if (nbursts < 1u) {
+        nbursts = 1u;
+    }
+    if (nbursts > 64u) {
+        fprintf(stderr, "nbursts capped at 64\n");
+        nbursts = 64u;
+    }
 
     tone_buf = make_tone(BURST_SAMPLES);
     /* tx_buf/rx_buf hold `samples_per_frame` interleaved channels; buffer
@@ -317,28 +334,45 @@ int main(int argc, char *argv[])
 
     lead_samples = (bladerf_timestamp)lead_ms * (SAMPLERATE_HZ / 1000u);
 
-    memset(&tx_meta, 0, sizeof(tx_meta));
-    tx_meta.timestamp = ts_tx0 + lead_samples;
-    tx_meta.flags = BLADERF_META_FLAG_TX_BURST_START | BLADERF_META_FLAG_TX_BURST_END;
+    {
+        bladerf_timestamp gap_samples = (bladerf_timestamp)gap_ms * (SAMPLERATE_HZ / 1000u);
+        bladerf_timestamp stride = (bladerf_timestamp)BURST_SAMPLES + gap_samples;
+        unsigned int k;
+
+        for (k = 0; k < nbursts; k++) {
+            memset(&tx_meta[k], 0, sizeof(tx_meta[k]));
+            tx_meta[k].timestamp = ts_tx0 + lead_samples + (bladerf_timestamp)k * stride;
+            tx_meta[k].flags = BLADERF_META_FLAG_TX_BURST_START | BLADERF_META_FLAG_TX_BURST_END;
+        }
+    }
 
     printf("lead_ms=%u\n", lead_ms);
-    printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta.timestamp);
+    printf("nbursts=%u\n", nbursts);
+    printf("gap_ms=%u\n", gap_ms);
+    printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta[0].timestamp);
 
-    status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES, &tx_meta, 5000);
-    if (status != 0) {
-        fprintf(stderr, "sync_tx: %s\n", bladerf_strerror(status));
-        goto out_disable_tx;
+    {
+        unsigned int k;
+
+        for (k = 0; k < nbursts; k++) {
+            status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES, &tx_meta[k], 5000);
+            if (status != 0) {
+                fprintf(stderr, "sync_tx burst_k=%u: %s\n", k, bladerf_strerror(status));
+                goto out_disable_tx;
+            }
+        }
     }
-    printf("tx_status=0x%x\n", tx_meta.status);
+    printf("tx_status=0x%x\n", tx_meta[0].status);
 
-    /* Search window is anchored to the scheduled TX timestamp (not to
+    /* Search window is anchored to the scheduled TX timestamps (not to
      * whatever rx_meta.timestamp the first RX chunk happens to report),
      * so a burst landing earlier than expected is still inside the window:
      * one run at lead_ms=50 previously reported "no burst detected" because
      * the loop only checked an upper search_limit with no lower bound tied
-     * to tx_meta.timestamp. */
-    search_start_ts = tx_meta.timestamp - (bladerf_timestamp)RX_SEARCH_MARGIN_PRE_MS * (SAMPLERATE_HZ / 1000u);
-    search_limit    = tx_meta.timestamp + (bladerf_timestamp)RX_SEARCH_MARGIN_MS * (SAMPLERATE_HZ / 1000u);
+     * to tx_meta.timestamp. With multiple bursts the window extends to the
+     * LAST scheduled burst + RX_SEARCH_MARGIN_MS. */
+    search_start_ts = tx_meta[0].timestamp - (bladerf_timestamp)RX_SEARCH_MARGIN_PRE_MS * (SAMPLERATE_HZ / 1000u);
+    search_limit    = tx_meta[nbursts - 1].timestamp + (bladerf_timestamp)RX_SEARCH_MARGIN_MS * (SAMPLERATE_HZ / 1000u);
     printf("search_start_ts=%llu\n", (unsigned long long)search_start_ts);
     printf("search_end_ts=%llu\n", (unsigned long long)search_limit);
 
@@ -360,6 +394,10 @@ int main(int argc, char *argv[])
         int16_t *prev_rx_buf = malloc((size_t)BUFFER_SIZE * samples_per_frame * 2u * sizeof(int16_t));
         bool have_prev_chunk = false;
         bladerf_timestamp prev_chunk_ts = 0;
+        unsigned int cur_burst           = 0;
+        bool burst_k_found[64]           = { false };
+        long long edge_delta_samples[64];
+        bool all_done                    = false;
 
         if (prev_rx_buf == NULL) {
             fprintf(stderr, "alloc failed (prev_rx_buf)\n");
@@ -367,7 +405,7 @@ int main(int argc, char *argv[])
             goto out_disable_tx;
         }
 
-        while (!burst_found) {
+        while (!all_done) {
             status = bladerf_sync_rx(dev, rx_buf, BUFFER_SIZE, &rx_meta, TIMEOUT_MS);
             if (status != 0) {
                 fprintf(stderr, "sync_rx: %s\n", bladerf_strerror(status));
@@ -416,6 +454,32 @@ int main(int argc, char *argv[])
                     }
                     if (threshold > 0.0 && p > threshold) {
                         bladerf_timestamp block_ts = rx_meta.timestamp + b * BLOCK_SAMPLES;
+                        bladerf_timestamp win_lo, win_hi;
+
+                        /* Advance cur_burst past any scheduled burst whose
+                         * window has already been passed without a hit
+                         * (shouldn't normally happen, but keeps windows
+                         * monotonic if a burst is missed). */
+                        while (cur_burst < nbursts &&
+                               block_ts >= tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES &&
+                               burst_k_found[cur_burst]) {
+                            cur_burst++;
+                        }
+
+                        if (cur_burst >= nbursts) {
+                            in_burst_run = false;
+                            continue;
+                        }
+
+                        win_lo = tx_meta[cur_burst].timestamp - (bladerf_timestamp)1 * (SAMPLERATE_HZ / 1000u);
+                        win_hi = tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES;
+                        if (block_ts < win_lo || block_ts >= win_hi) {
+                            /* Outside the current scheduled burst's window;
+                             * not part of it (e.g. tail of previous burst
+                             * bleeding past its window, or gap noise). */
+                            in_burst_run = false;
+                            continue;
+                        }
 
                         blocks_above++;
                         if (!in_burst_run) {
@@ -425,8 +489,8 @@ int main(int argc, char *argv[])
                         }
                         burst_len_blocks++;
 
-                        if (!burst_found) {
-                            long long diff_samples = (long long)burst_start_ts - (long long)tx_meta.timestamp;
+                        if (!burst_k_found[cur_burst]) {
+                            long long diff_samples = (long long)burst_start_ts - (long long)tx_meta[cur_burst].timestamp;
                             double diff_us = (double)diff_samples * 1e6 / (double)SAMPLERATE_HZ;
                             double edge_threshold = threshold / 2.0;
                             bladerf_timestamp burst_edge_ts = block_ts;
@@ -477,21 +541,43 @@ int main(int argc, char *argv[])
                                 }
                             }
 
-                            printf("rx_ts_burst_start=%llu\n", (unsigned long long)burst_start_ts);
-                            printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta.timestamp);
-                            printf("delta_samples=%lld\n", diff_samples);
-                            printf("delta_us=%.2f\n", diff_us);
+                            if (nbursts == 1u) {
+                                printf("rx_ts_burst_start=%llu\n", (unsigned long long)burst_start_ts);
+                                printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta[cur_burst].timestamp);
+                                printf("delta_samples=%lld\n", diff_samples);
+                                printf("delta_us=%.2f\n", diff_us);
+                            }
                             if (found_edge) {
-                                long long edge_diff_samples = (long long)burst_edge_ts - (long long)tx_meta.timestamp;
+                                long long edge_diff_samples = (long long)burst_edge_ts - (long long)tx_meta[cur_burst].timestamp;
                                 double edge_diff_us = (double)edge_diff_samples * 1e6 / (double)SAMPLERATE_HZ;
 
-                                printf("rx_ts_burst_edge=%llu\n", (unsigned long long)burst_edge_ts);
-                                printf("delta_edge_samples=%lld\n", edge_diff_samples);
-                                printf("delta_edge_us=%.2f\n", edge_diff_us);
+                                if (nbursts == 1u) {
+                                    printf("rx_ts_burst_edge=%llu\n", (unsigned long long)burst_edge_ts);
+                                    printf("delta_edge_samples=%lld\n", edge_diff_samples);
+                                    printf("delta_edge_us=%.2f\n", edge_diff_us);
+                                } else {
+                                    printf("burst_k=%u scheduled=%llu edge=%llu delta_edge_samples=%lld delta_edge_us=%.2f found=1\n",
+                                           cur_burst,
+                                           (unsigned long long)tx_meta[cur_burst].timestamp,
+                                           (unsigned long long)burst_edge_ts,
+                                           edge_diff_samples, edge_diff_us);
+                                }
+                                edge_delta_samples[cur_burst] = edge_diff_samples;
                             } else {
-                                printf("rx_ts_burst_edge=not_found\n");
+                                if (nbursts == 1u) {
+                                    printf("rx_ts_burst_edge=not_found\n");
+                                } else {
+                                    printf("burst_k=%u scheduled=%llu edge=not_found delta_edge_samples=0 delta_edge_us=0.00 found=0\n",
+                                           cur_burst, (unsigned long long)tx_meta[cur_burst].timestamp);
+                                }
                             }
+                            burst_k_found[cur_burst] = true;
+                            bursts_found_count++;
                             burst_found = true;
+                            if (nbursts == 1u || bursts_found_count >= nbursts) {
+                                all_done = true;
+                            }
+                            cur_burst++;
                         }
                     } else {
                         in_burst_run = false;
@@ -499,8 +585,10 @@ int main(int argc, char *argv[])
                 }
             }
 
-            if (!burst_found && rx_meta.timestamp > search_limit) {
-                printf("no burst detected\n");
+            if (!all_done && rx_meta.timestamp > search_limit) {
+                if (nbursts == 1u) {
+                    printf("no burst detected\n");
+                }
                 printf("max_block_power=%.2f\n", max_power_seen);
                 printf("median_power=%.2f\n", median_seen);
                 printf("threshold=%.2f\n", threshold);
@@ -510,17 +598,50 @@ int main(int argc, char *argv[])
                 break;
             }
 
-            if (burst_found) {
+            if (all_done && nbursts == 1u) {
                 printf("burst_len_blocks=%llu\n", burst_len_blocks);
                 printf("rx_first_chunk_ts=%llu\n", (unsigned long long)rx_first_chunk_ts);
                 printf("rx_last_chunk_ts=%llu\n", (unsigned long long)rx_last_chunk_ts);
                 printf("blocks_above=%llu\n", blocks_above);
             }
 
-            if (!burst_found) {
+            if (!all_done) {
                 memcpy(prev_rx_buf, rx_buf, (size_t)BUFFER_SIZE * samples_per_frame * 2u * sizeof(int16_t));
                 prev_chunk_ts = rx_meta.timestamp;
                 have_prev_chunk = true;
+            }
+        }
+
+        if (nbursts > 1u) {
+            long long dmin = 0, dmax = 0;
+            bool have_range = false;
+            unsigned int k;
+
+            printf("bursts_found=%u\n", bursts_found_count);
+            for (k = 0; k < nbursts; k++) {
+                if (!burst_k_found[k]) {
+                    continue;
+                }
+                if (!have_range) {
+                    dmin = dmax = edge_delta_samples[k];
+                    have_range = true;
+                } else {
+                    if (edge_delta_samples[k] < dmin) {
+                        dmin = edge_delta_samples[k];
+                    }
+                    if (edge_delta_samples[k] > dmax) {
+                        dmax = edge_delta_samples[k];
+                    }
+                }
+            }
+            if (have_range) {
+                printf("delta_edge_min=%lld\n", dmin);
+                printf("delta_edge_max=%lld\n", dmax);
+                printf("delta_edge_spread=%lld\n", dmax - dmin);
+            } else {
+                printf("delta_edge_min=none\n");
+                printf("delta_edge_max=none\n");
+                printf("delta_edge_spread=none\n");
             }
         }
 
@@ -528,7 +649,7 @@ int main(int argc, char *argv[])
     }
 
     printf("overrun_seen=%d\n", (int)overrun_seen);
-    ret = burst_found ? 0 : 1;
+    ret = (burst_found && (nbursts == 1u || bursts_found_count == nbursts)) ? 0 : 1;
 
 out_disable_tx:
     bladerf_enable_module(dev, BLADERF_CHANNEL_TX(ch), false);
