@@ -280,6 +280,35 @@ begin
             severity error;
         report "case 3 OK: START while disabled ignored; next START taken";
 
+        ------------------------------------------------------------------
+        -- 4. Disabled with the epoch still up (the other direction keeps
+        --    streaming, so no STOP): the progress watchdog must not call
+        --    this a stall, now or when enable returns.
+        ------------------------------------------------------------------
+        enable <= '0';
+        -- One wait, not 4M iterations of "wait until": GHDL mcode takes
+        -- minutes on the loop and seconds on the single delay.
+        wait for (2**22 + 200) * CLK_PERIOD;
+        wait until rising_edge(clock);
+        assert fault_sticky(1) = '0' and fault_sticky(2) = '0'
+            report "case 4: progress fault raised on a disabled direction "
+                 & "whose epoch is still up (rx_fault=1 at TX disable)"
+            severity error;
+
+        writes_at_start := writes_seen;
+        enable <= '1';
+        for i in 1 to 300 loop
+            wait until rising_edge(clock);
+        end loop;
+        assert fault_sticky(1) = '0' and fault_sticky(2) = '0'
+            report "case 4: progress fault fired the instant enable returned "
+                 & "-- the watchdog counted while disabled"
+            severity error;
+        assert writes_seen > writes_at_start
+            report "case 4: no writes after re-enable on a live epoch"
+            severity error;
+        report "case 4 OK: disabled direction holds its watchdog";
+
         report "fifo_writer_armed_tb: all cases passed";
         done <= true;
         wait;

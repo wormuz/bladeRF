@@ -338,7 +338,15 @@ begin
                 -- runs. Only while the link is up: a stopped link is not
                 -- stalled, it is stopped, and flagging that would make the
                 -- fault meaningless.
-                if( fifo_write = '1' ) then
+                if( enable = '0' ) then
+                    -- Disabled while the (shared) epoch is still up, e.g.
+                    -- RX taken down while TX streams: not stalled, simply
+                    -- not part of the stream. Hold the watchdog at zero so
+                    -- it neither fires now nor fires the instant enable
+                    -- returns. Measured before this: rx_fault=1 at TX
+                    -- disable in every RX+TX session, from this counter.
+                    progress_count   <= (others => '0');
+                elsif( fifo_write = '1' ) then
                     progress_count   <= (others => '0');
                     wrote_this_epoch <= '1';
                 elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
@@ -382,7 +390,7 @@ begin
             -- wedged. Guarded on start_link_pulse = '0' like the term
             -- above, so the clear at the top of a new epoch is not undone
             -- by a counter that has not been reset yet in the same cycle.
-            if( link_active_i = '1' and start_link_pulse = '0' and
+            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
                 progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
                 if( wrote_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';

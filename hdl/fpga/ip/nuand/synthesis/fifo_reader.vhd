@@ -360,7 +360,11 @@ begin
                 -- Progress watchdog. A read clears the counter and marks
                 -- the epoch as having moved data; otherwise it runs. Only
                 -- while the link is up: a stopped link is not stalled.
-                if( fifo_read = '1' ) then
+                if( enable = '0' ) then
+                    -- Disabled while the shared epoch is still up (see
+                    -- fifo_writer): hold the watchdog, not a stall.
+                    progress_count  <= (others => '0');
+                elsif( fifo_read = '1' ) then
                     progress_count  <= (others => '0');
                     read_this_epoch <= '1';
                 elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
@@ -391,7 +395,7 @@ begin
             -- epoch ever moved a sample. Guarded on start_link_pulse = '0'
             -- so the clear at the top of a new epoch is not undone by a
             -- counter that has not been reset yet in the same cycle.
-            if( link_active_i = '1' and start_link_pulse = '0' and
+            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
                 progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
                 if( read_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
