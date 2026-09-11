@@ -59,7 +59,7 @@ entity dwell_summary is
         -- to something), but skips the ones()/TRIGGER_K persistence check
         -- and the trig_latched/trig_window/trig_time updates it drives.
         -- Only meaningful when BISECT_STAGE3 = true.
-        BISECT_STAGE3B  : boolean := false;
+        BISECT_STAGE3B  : boolean := true;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
@@ -371,7 +371,19 @@ begin
     -- which are process-local and cannot be shared across processes.
     gen_stage3_on : if( BISECT_STAGE2 and BISECT_STAGE3 ) generate
         trigger_stage : process( clock, reset )
-            variable over : std_logic;
+            variable over        : std_logic;
+            -- Computed once. Written out twice in one clocked process (the
+            -- over_history assignment and the ones() argument) it is two
+            -- syntactically distinct concatenations, and the synthesiser has
+            -- to prove them equivalent before it can share the shift-register
+            -- input -- the same class of proof that stalled quartus_map on
+            -- window_sum + resize(inst_energy, 48) before it was hoisted into
+            -- win_total (see accumulate above). Bisected and confirmed:
+            -- job 44 (ones()/TRIGGER_K cut entirely) converged in 18:45;
+            -- job 45 (only the ones() call cut, over_history/over kept)
+            -- also converged in 17:46 -- so the offending proof is not
+            -- ones() itself, it is this duplicated concatenation.
+            variable next_history : std_logic_vector(TRIGGER_OF-1 downto 0);
         begin
             if( reset = '1' ) then
                 over_history  <= (others => '0');
@@ -401,12 +413,12 @@ begin
                         over := '0';
                     end if;
 
-                    over_history <= over_history(TRIGGER_OF-2 downto 0) & over;
+                    next_history := over_history(TRIGGER_OF-2 downto 0) & over;
+                    over_history <= next_history;
 
                     if( BISECT_STAGE3B ) then
                         if( trig_latched = '0' and
-                            ones(over_history(TRIGGER_OF-2 downto 0) & over)
-                                >= TRIGGER_K ) then
+                            ones(next_history) >= TRIGGER_K ) then
                             trig_latched <= '1';
                             trig_window  <= dwell_windows;
                             -- Sampled here, at the crossing, not at the dwell
