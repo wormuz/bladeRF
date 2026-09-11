@@ -494,3 +494,44 @@ if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
 } else {
     post_message -type warning "fewer than two clock families resolved; not grouping"
 }
+
+# ---------------------------------------------------------------------------
+# Dwell readout and pre-trigger ring: host-paced register windows
+#
+# Four buses cross between rx_clock and the system domain with no
+# synchroniser, because none is wanted: these are held-data registers the
+# host reads at USB rates, not signals that change every cycle.
+#
+#   dwell_rd_data     32 bits  rx -> sys, latched summary word
+#   pretrig_rd_data   32 bits  rx -> sys, one ring entry
+#   dwell_rd_index     4 bits  sys -> rx, which summary word
+#   pretrig_rd_addr   12 bits  sys -> rx, which ring entry
+#
+# Left unconstrained they are ordinary timed paths, and the analyser has to
+# consider every one of them against both clock families. That is what made
+# Analysis & Synthesis stop converging on the sweep revision: the blocks
+# themselves synthesise in seventeen seconds standalone, and the control
+# build with the same code and the generics off completed in 15:18.
+#
+# Same treatment as the other bundled-data crossings above: relax the
+# per-cycle requirement, keep a bound on how far apart the bits may land.
+# Both ends named -- a -from-only form once reached past a crossing and
+# overrode the SPI and I2C multicycles.
+#
+# Correctness does not rest on the timing here. The readout latch holds a
+# whole record and publishes a generation counter the host reads either
+# side of it; the ring is frozen before it is read. The bound exists so a
+# word cannot be assembled from two different instants.
+foreach {dwell_src dwell_dst} {
+    {*dwell_readout:*|rd_data[*]}      {*dwell_readout_export*}
+    {*pretrigger_buffer:*|rd_data[*]}  {*pretrig_data_export*}
+} {
+    set d_src [get_keepers -nowarn $dwell_src]
+    set d_dst [get_keepers -nowarn $dwell_dst]
+    if { [get_collection_size $d_src] > 0 && [get_collection_size $d_dst] > 0 } {
+        set_max_delay 100  -from $d_src -to $d_dst
+        set_min_delay -100 -from $d_src -to $d_dst
+        set_max_skew  -from $d_src -to $d_dst 6.4
+        set_net_delay -from $d_src -to $d_dst -max 6.4
+    }
+}
