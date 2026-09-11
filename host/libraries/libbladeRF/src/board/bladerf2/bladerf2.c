@@ -31,6 +31,8 @@
 #include "logger_id.h"
 #include "rel_assert.h"
 
+#include "backend/usb/nios_access.h"
+#include "nios_pkt_8x32.h"
 #include "../bladerf1/flash.h"
 #include "board/board.h"
 #include "capabilities.h"
@@ -765,6 +767,115 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 /* Enable/disable */
 /******************************************************************************/
 
+/* Declare a new RF link epoch to the FPGA before the datapath is enabled.
+ *
+ * The fabric treats `enable` as a long-lived level, not a start strobe,
+ * because FX3 can restart at a different USB speed without it ever
+ * dropping. So a new generation has to be announced explicitly, and
+ * enable rising without one is a protocol violation the fabric aborts on:
+ *
+ *     enable = 1, enable_prev = 0, link_active = 0  ->  abort
+ *
+ * and the abort latches itself. Measured on hardware: without this call
+ * the RX stream timed out with 0 of 131072 bytes on the very first
+ * transfer, while the RFIC was alive and reporting RSSI.
+ *
+ * Speed is latched with the epoch because FX3 samples it exactly once, in
+ * NuandRFLinkStart, and never rebuilds its DMA geometry afterwards. The
+ * two sides have to agree on which speed this generation runs at.
+ *
+ * Older gateware has no RF_LINK_CFG target and answers the write with a
+ * failure; that must not stop a device from streaming, so the result is
+ * logged and dropped. A device that needs the epoch will fail visibly at
+ * the stream instead, which is the same signal as before this existed.
+ */
+static void announce_rf_link_epoch(struct bladerf *dev)
+{
+    bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
+    int status;
+
+    status = dev->backend->get_device_speed(dev, &speed);
+    if (status != 0) {
+        log_debug("%s: cannot read device speed (%s); epoch not announced\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    /* Clear faults left by the previous session first.
+     *
+     * abort_active latches itself and survives the host closing the
+     * device, so a run that aborted poisons the next one. Measured: five
+     * identical captures alternated 200000, 0, 200000, 0, 200000 bytes --
+     * every successful run left the abort set for its successor, and every
+     * failed run cleared nothing because it never got that far.
+     *
+     * Sent before the epoch, because a new epoch clears the sticky vector
+     * but not an abort that is already asserted.
+     */
+    status = nios_rf_link_cfg_cmd(
+        dev, NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS, 0);
+    if (status != 0) {
+        log_debug("%s: clear-faults not accepted (%s); gateware may predate "
+                  "the RF link epoch mechanism\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    status = nios_rf_link_cfg_cmd(
+        dev, NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED,
+        (speed == BLADERF_DEVICE_SPEED_SUPER) ? 0 : 1);
+    if (status != 0) {
+        log_debug("%s: speed latch not accepted (%s); gateware may predate "
+                  "the RF link epoch mechanism\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    status = nios_rf_link_cfg_cmd(
+        dev, NIOS_PKT_8x32_RF_LINK_CMD_START, 0);
+    if (status != 0) {
+        log_debug("%s: link start not accepted (%s)\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    /* Wait for the fabric to say it consumed this epoch.
+     *
+     * Announcing and enabling are two separate USB transactions, and
+     * nothing orders them inside the FPGA: the toggle still has to cross
+     * into the sample clock domain and be acted on. If enable's rising
+     * edge arrives first, the fabric sees a datapath enabled without an
+     * epoch, which is the protocol violation it aborts on -- and the abort
+     * latches itself.
+     *
+     * Measured before this wait existed: three identical capture attempts
+     * gave 0, 200000 and 0 bytes. The announcement was correct and the
+     * race decided the outcome.
+     *
+     * Bit 10 is "both directions have applied the current epoch". Sixteen
+     * polls is far more than the crossing needs; it bounds the wait if the
+     * gateware never answers, in which case streaming will fail visibly at
+     * the transfer rather than hanging here.
+     */
+    for (unsigned attempt = 0; attempt < 16; attempt++) {
+        uint32_t st = 0;
+
+        status = nios_rf_link_status_read(dev, &st);
+        if (status != 0) {
+            log_debug("%s: cannot read link status (%s)\n",
+                      __FUNCTION__, bladerf_strerror(status));
+            return;
+        }
+
+        if (st & (1u << 10)) {
+            return;
+        }
+    }
+
+    log_debug("%s: epoch not acknowledged by both directions; the stream "
+              "may abort\n", __FUNCTION__);
+}
+
 static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
@@ -772,6 +883,13 @@ static int bladerf2_enable_module(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    /* Before, not after: the fabric samples the epoch state on the rising
+     * edge of enable, so announcing it afterwards is announcing it too
+     * late. */
+    if (enable) {
+        announce_rf_link_epoch(dev);
+    }
 
     return board_data->rfic->enable_module(dev, ch, enable);
 }
