@@ -94,6 +94,18 @@ echo "$out" | grep -q "status at TX disable.*tx_active=1.*tx_fault=0" \
     && verdict PASS "C: TX-01 tone session, tx_active=1 tx_fault=0" \
     || verdict FAIL "C: TX-01 $(echo "$out" | grep -E 'status at TX|Last error' | tail -2 | tr '\n' ' ')"
 
+# C2. TX-02 timestamped burst on the cabled loop TX2 -> 30 dB -> RX2
+#     (channel index 1, X2 layout). Measured baseline 78..81 samples at
+#     10 MS/s; accept 0..200 (never early, within 20 us).
+[ -x /var/tmp/txprobe ] || gcc -o /var/tmp/txprobe "$ROOT/host/misc/tx_timestamp_probe.c" \
+    -I"$ROOT/host/libraries/libbladeRF/include" -L"$ROOT/host/build/output" -lbladeRF -lm
+edge=$(timeout 30 /var/tmp/txprobe 50 air 1 60 40 2>&1 | grep -oE "^delta_edge_samples=-?[0-9]+" | cut -d= -f2)
+if [ -n "$edge" ] && [ "$edge" -ge 0 ] && [ "$edge" -le 200 ]; then
+    verdict PASS "C2: TX-02 scheduled burst edge at +$edge samples"
+else
+    verdict FAIL "C2: TX-02 edge='${edge:-none}' (loop TX2->RX2 connected? TX gain 60)"
+fi
+
 # D. TX-05 concurrent
 rm -f /var/tmp/accrxtx.bin
 out=$(timeout 40 "$CLI" -v verbose -e "set frequency rx1 925M" -e "set frequency tx1 2400M" \
