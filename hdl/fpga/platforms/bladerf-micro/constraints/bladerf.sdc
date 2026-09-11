@@ -29,34 +29,26 @@ derive_pll_clocks
 derive_clock_uncertainty
 
 # Platform-specific clock aliases
-# ⛔ NO entity names here, and this is not an oversight.
+# ⛔ These are CLOCK names, used only with get_clocks. Do not reach for
+# get_pins on them.
 #
-# The same PLL output is spelled two different ways depending on what asks
-# for it, so there are two aliases. Measured from the fitter report, which
-# lists both forms verbatim:
+# derive_pll_clocks above has already created a clock on this PLL output,
+# named after the instance hierarchy: U_core|U_system_pll|altera_pll_i|...
+# The leading * absorbs the U_core| prefix that the bladerf_core split
+# introduced, so the alias works from either wrapper.
 #
-#   as a clock   U_core|U_system_pll|altera_pll_i|...   instance path only,
-#                with the wrapper prefix. derive_pll_clocks names clocks
-#                after the instance hierarchy, so no entity names appear.
-#   as a pin     system_pll:U_system_pll|altera_pll:altera_pll_i|...
-#                entity:instance at every level, and NO wrapper prefix.
+# The same node also exists as a pin, spelled entity:instance at every level
+# and without the wrapper prefix, and three create_generated_clock calls
+# used to take it that way. Every spelling of that pin failed to match here;
+# taking the already-derived clock as -source works and is what those three
+# now do (i2c.sdc:27, spi.sdc:36, ad9361.sdc:44).
 #
-# Hence the leading * on the clock form and none on the pin form. Getting
-# either wrong is silent: the collection comes back empty, the generated
-# clock built on it is dropped, and the failure surfaces in spi.sdc or
-# i2c.sdc as "adf_sclk_pin was not created" -- files that are correct.
-#
-# Three rounds of wrong fixes came from assuming one string could serve
-# both. It cannot.
+# Getting this wrong is silent: the collection comes back empty, the
+# generated clock built on it is dropped, and the failure surfaces far away
+# as "adf_sclk_pin was not created" in files that are themselves correct.
 set fx3_clock    {*U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 set system_clock {*U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
-# ...and the same nodes as PINS, which is a different namespace: get_pins
-# wants the entity:instance spelling the fitter report shows. Two aliases
-# rather than one because no single string satisfies both, which is what
-# made this look like an unfixable name for so long.
-set fx3_clock_pin    {fx3_pll:U_fx3_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
-set system_clock_pin {system_pll:U_system_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
 # Trace delays between AD9361 and FPGA (bladeRF Micro)
 set adi_spi_clk_trace_delay     0.127
