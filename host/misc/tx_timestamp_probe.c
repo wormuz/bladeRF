@@ -8,7 +8,8 @@
  * must give bladerf_sync_tx() metadata scheduling to land reliably.
  *
  *   cc -o tx_timestamp_probe tx_timestamp_probe.c -lbladeRF -lm
- *   ./tx_timestamp_probe [lead_ms]     # default lead 20 ms
+ *   ./tx_timestamp_probe [lead_ms] [lb|air] [channel 0|1]
+ *   e.g.  ./tx_timestamp_probe 20 air 1    # TX2 -> 30 dB pad -> RX2
  */
 
 #include <libbladeRF.h>
@@ -85,6 +86,9 @@ static int cmp_double(const void *a, const void *b)
 int main(int argc, char *argv[])
 {
     unsigned int lead_ms = (argc > 1) ? (unsigned int)atoi(argv[1]) : 20u;
+    /* Third argument: channel index, 0 = RX1/TX1, 1 = RX2/TX2 (cabled loop
+     * through an attenuator lives on channel 2 on the bench). */
+    unsigned int ch = (argc > 3) ? (unsigned int)atoi(argv[3]) : 0u;
     struct bladerf *dev  = NULL;
     int16_t *tx_buf       = NULL;
     int16_t *rx_buf        = NULL;
@@ -123,48 +127,48 @@ int main(int argc, char *argv[])
         printf("loopback=rfic_bist status=%d\n", status);
     }
 
-    status = bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(0), FREQ_HZ);
+    status = bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(ch), FREQ_HZ);
     if (status != 0) {
         fprintf(stderr, "set_frequency rx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
-    status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), FREQ_HZ);
+    status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(ch), FREQ_HZ);
     if (status != 0) {
         fprintf(stderr, "set_frequency tx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
 
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), SAMPLERATE_HZ, NULL);
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(ch), SAMPLERATE_HZ, NULL);
     if (status != 0) {
         fprintf(stderr, "set_sample_rate rx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0), SAMPLERATE_HZ, NULL);
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(ch), SAMPLERATE_HZ, NULL);
     if (status != 0) {
         fprintf(stderr, "set_sample_rate tx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
 
-    status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), BANDWIDTH_HZ, NULL);
+    status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(ch), BANDWIDTH_HZ, NULL);
     if (status != 0) {
         fprintf(stderr, "set_bandwidth rx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
-    status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_TX(0), BANDWIDTH_HZ, NULL);
+    status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_TX(ch), BANDWIDTH_HZ, NULL);
     if (status != 0) {
         fprintf(stderr, "set_bandwidth tx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
 
-    status = bladerf_set_gain_mode(dev, BLADERF_CHANNEL_RX(0), BLADERF_GAIN_MGC);
+    status = bladerf_set_gain_mode(dev, BLADERF_CHANNEL_RX(ch), BLADERF_GAIN_MGC);
     if (status != 0) {
         fprintf(stderr, "set_gain_mode: %s (continuing)\n", bladerf_strerror(status));
     }
-    status = bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), RX_GAIN_DB);
+    status = bladerf_set_gain(dev, BLADERF_CHANNEL_RX(ch), RX_GAIN_DB);
     if (status != 0) {
         fprintf(stderr, "set_gain rx: %s (continuing)\n", bladerf_strerror(status));
     }
-    status = bladerf_set_gain(dev, BLADERF_CHANNEL_TX(0), TX_GAIN_DB);
+    status = bladerf_set_gain(dev, BLADERF_CHANNEL_TX(ch), TX_GAIN_DB);
     if (status != 0) {
         fprintf(stderr, "set_gain tx: %s (continuing)\n", bladerf_strerror(status));
     }
@@ -182,12 +186,12 @@ int main(int argc, char *argv[])
         goto out_close;
     }
 
-    status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true);
+    status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(ch), true);
     if (status != 0) {
         fprintf(stderr, "enable rx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
-    status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
+    status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(ch), true);
     if (status != 0) {
         fprintf(stderr, "enable tx: %s\n", bladerf_strerror(status));
         goto out_disable_rx;
@@ -337,9 +341,9 @@ int main(int argc, char *argv[])
     ret = burst_found ? 0 : 1;
 
 out_disable_tx:
-    bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), false);
+    bladerf_enable_module(dev, BLADERF_CHANNEL_TX(ch), false);
 out_disable_rx:
-    bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+    bladerf_enable_module(dev, BLADERF_CHANNEL_RX(ch), false);
 out_close:
     bladerf_close(dev);
 out_free:
