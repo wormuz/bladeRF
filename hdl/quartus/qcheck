@@ -41,6 +41,11 @@ HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
 # Both are read: a wrapper can still carry a defect, and it costs nothing.
 CORE = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
 
+# Nios firmware. It survives the fabric reset FX3 pulses on every RF link
+# start (reset_reset_n is tied high), so any register value it remembers in
+# C outlives the register itself.
+NIOS_SRC = ROOT / "hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src"
+
 
 def built_vhdl():
     """Every VHDL file the sweep revision compiles, read from its qip.
@@ -653,6 +658,43 @@ def check_headers():
 # shows up as a class binding fewer instances than expected.
 
 
+# --------------------------------------------------------------- Nios rules
+
+def check_nios():
+    # 10. A file-scope static written straight into a PIO, with no read of
+    #     that PIO anywhere in the same file.
+    #
+    #     The Nios is not reset when FX3 resets the fabric, but the PIO and
+    #     the logic behind it are. A C-side copy of the register then holds
+    #     stale bits, and the next full-word write replays them as fresh
+    #     commands. rf_link_cfg_shadow did exactly this: the START toggle
+    #     landed as START+STOP or as nothing depending on the parity of what
+    #     the copy remembered -- 1 capture in 12 failed, by parity, after
+    #     every host-side cause had been removed. Read the register back and
+    #     modify that, or the guard fires.
+    if not NIOS_SRC.is_dir():
+        return
+    static_re = re.compile(r"^static\s+(?!const\b|inline\b)[a-z0-9_]+\s+([a-z_][a-z0-9_]*)\s*(=|;)",
+                           re.MULTILINE)
+    iowr_re = re.compile(r"IOWR_ALTERA_AVALON_PIO_DATA\(\s*([A-Z0-9_]+)\s*,\s*([a-z_][a-z0-9_]*)\s*\)")
+    for src in sorted(list(NIOS_SRC.glob("*.c")) + list(NIOS_SRC.glob("*.h"))):
+        text = code_only(src.read_text(), comment="//")
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        statics = set(static_re.findall(text) and [m[0] for m in static_re.findall(text)])
+        if not statics:
+            continue
+        for base, var in iowr_re.findall(text):
+            if var not in statics:
+                continue
+            if re.search(r"IORD_ALTERA_AVALON_PIO_DATA\(\s*" + re.escape(base), text):
+                continue
+            fail("nios-pio-shadow-without-readback",
+                 f"{src.name}: static '{var}' is written to {base} and that PIO "
+                 f"is never read back; a fabric reset leaves the copy stale",
+                 "toggle commands replayed by parity after every FX3 reset; "
+                 "1 in 12 captures dead (rf_link_cfg_shadow, 2026-09-11)")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -664,6 +706,7 @@ vhdl-stacked-fsm-override  two if blocks both assigning next state; last wins
 vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
 vhdl-cross-domain-or       an OR of two domains has no owning domain
 header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
+nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
 """
 
 
@@ -678,6 +721,7 @@ def main():
     check_sdc()
     check_vhdl()
     check_headers()
+    check_nios()
 
     for n in notes:
         print(f"note  {n}")
