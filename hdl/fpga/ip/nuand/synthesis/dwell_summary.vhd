@@ -48,7 +48,7 @@ entity dwell_summary is
         -- reproduces dwell_summary exactly as before this generic existed.
         -- Delete this generic and BISECT_STAGE2 once the offending
         -- sub-block is found and fixed in place.
-        BISECT_STAGE2   : boolean := true;
+        BISECT_STAGE2   : boolean := false;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
