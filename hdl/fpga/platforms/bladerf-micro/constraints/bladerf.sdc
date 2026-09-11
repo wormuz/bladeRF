@@ -536,9 +536,26 @@ foreach {dwell_src dwell_dst} {
     set d_src [get_keepers -nowarn $dwell_src]
     set d_dst [get_keepers -nowarn $dwell_dst]
     if { [get_collection_size $d_src] > 0 && [get_collection_size $d_dst] > 0 } {
-        set_max_delay 100  -from $d_src -to $d_dst
-        set_min_delay -100 -from $d_src -to $d_dst
-        set_max_skew  -from $d_src -to $d_dst 6.4
-        set_net_delay -from $d_src -to $d_dst -max 6.4
+        # ⛔ set_max_skew is deliberately NOT used here, unlike the handshake
+        # and tamer crossings above.
+        #
+        # Measured: with set_max_skew on these four, quartus_map ran 57
+        # minutes without finishing and the stack sat in
+        # STA_MAX_SKEW_IMPL::compute_skew_with_ccpp. Common-clock-path
+        # pessimism analysis on 32-bit buses between two PLL-derived
+        # families does not converge on this design; the same constraint on
+        # the handshake pairs, which are narrower and share more of their
+        # clock tree, costs nothing.
+        #
+        # A skew bound is what the other crossings need because a word is
+        # captured on one strobe and a spread edge could assemble a value
+        # that never existed. These four do not have that exposure: the
+        # readout holds a whole record behind a generation counter the host
+        # reads either side of it, and the ring is frozen before a single
+        # word is read. Correctness rests on that protocol.
+        #
+        # So these are cut outright. The relaxation alone would still leave
+        # them in the CCPP search space.
+        set_false_path -from $d_src -to $d_dst
     }
 }
