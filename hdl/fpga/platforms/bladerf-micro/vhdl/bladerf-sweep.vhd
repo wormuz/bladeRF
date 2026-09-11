@@ -40,9 +40,9 @@ begin
 
     U_core : entity work.bladerf_core
         generic map (
-            ENABLE_SWEEP_ANALYZER  => true,
-            ENABLE_TRIGGER_CAPTURE => true,
-            ENABLE_GAIN_SEQUENCER  => true
+            ENABLE_SWEEP_ANALYZER  => false,
+            ENABLE_TRIGGER_CAPTURE => false,
+            ENABLE_GAIN_SEQUENCER  => false
         )
         port map (
             c5_clock2      => c5_clock2,
