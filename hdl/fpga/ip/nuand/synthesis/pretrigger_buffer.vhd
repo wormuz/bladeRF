@@ -81,7 +81,12 @@ architecture arch of pretrigger_buffer is
     constant DEPTH : natural := 2 ** DEPTH_LOG2;
 
     type ring_t is array (0 to DEPTH-1) of std_logic_vector(31 downto 0);
-    signal ring        : ring_t := (others => (others => '0'));
+    -- ⛔ No initialiser. Writing := (others => (others => '0')) here asks
+    -- Quartus to materialise 4096 x 32 initial values, which it does during
+    -- synthesis -- two hours and 4.3 GB on this design, for a memory whose
+    -- contents are meaningless until written anyway. Block RAM has no reset
+    -- and needs none: wrapped says whether an entry has been filled.
+    signal ring        : ring_t;
 
     signal wr_ptr      : unsigned(DEPTH_LOG2-1 downto 0) := (others => '0');
     signal frozen_i    : std_logic := '0';
