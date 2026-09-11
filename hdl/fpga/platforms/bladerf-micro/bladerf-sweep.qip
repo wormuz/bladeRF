@@ -29,6 +29,7 @@ set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synth
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/rf_link_controller.vhd]]
 # Sweep revision only: measures every dwell, discards nothing.
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/dwell_summary.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/dwell_summary_bisect.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/gain_sequencer.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/pretrigger_buffer.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/dwell_readout.vhd]]
