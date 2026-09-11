@@ -285,8 +285,16 @@ begin
             epoch_valid_i      <= '0';
         elsif( rising_edge(clock) ) then
 
+            -- The START toggle is shared by both directions (one host
+            -- command, one epoch -- no split-brain). A direction whose
+            -- enable is low is not part of that epoch and ignores the edge
+            -- entirely: no link_active, no ack, no fault. The prev register
+            -- still tracks, so the next START is a fresh edge for it.
+            -- (Architect decision, 2026-09-11: option 1, in place of a
+            -- "START on a dead datapath" fault that fired on TX in every
+            -- RX-only session by construction.)
             start_link_pulse := '0';
-            if( link_start_toggle /= link_toggle_prev ) then
+            if( link_start_toggle /= link_toggle_prev and enable = '1' ) then
                 start_link_pulse := '1';
             end if;
             link_toggle_prev <= link_start_toggle;
@@ -341,18 +349,14 @@ begin
                 end if;
             end if;
 
-            -- Protocol violation: an epoch declared for a dead datapath.
-            --
-            -- NOT "enable rose without an epoch". Stock FX3 firmware pulses
-            -- the fabric reset inside the vendor command that raises enable
-            -- and raises it in the same handler, so enable-before-START is
-            -- the only order the host can achieve; the writer holds in
-            -- ARMED (enable high, no epoch: FIFO in clear, samples
-            -- discarded) until the START arrives. A START while enable is
-            -- low is the one sequencing error a driver can actually make.
-            if( start_link_pulse = '1' and enable = '0' ) then
-                protocol_violation <= '1';
-            end if;
+            -- No protocol violation exists any more. "Enable rose without
+            -- an epoch" is the only order stock FX3 allows (it resets the
+            -- fabric and raises enable in one vendor command), so it is
+            -- ARMED, not a fault; and "START while enable is low" is the
+            -- normal case for the unused direction of a shared START, so it
+            -- is ignored above. protocol_violation stays a port, held low,
+            -- so the status word keeps its layout.
+            protocol_violation <= '0';
 
             -- Sticky transport-fault flags: set-dominant, latched by their
             -- own event, cleared only by reset / new epoch / explicit
@@ -387,11 +391,9 @@ begin
                 end if;
             end if;
 
-            -- Set term wins over the same-cycle clear above, as intended:
-            -- a START on a dead datapath is exactly the fault of that epoch.
-            if( start_link_pulse = '1' and enable = '0' ) then
-                fault_sticky_i(FAULT_BIT_PROTOCOL_ERROR) <= '1';
-            end if;
+            -- FAULT_BIT_PROTOCOL_ERROR is never set: see protocol_violation
+            -- above. The bit position is kept so the vector layout the host
+            -- decodes does not shift.
 
             -- What abort_active_i becomes this cycle absent a new epoch:
             -- computed from LEVEL conditions (stop pulse or any of the

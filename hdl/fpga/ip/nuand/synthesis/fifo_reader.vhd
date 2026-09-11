@@ -315,8 +315,10 @@ begin
             epoch_valid_i      <= '0';
         elsif( rising_edge(clock) ) then
 
+            -- Shared START: a direction whose enable is low ignores the
+            -- edge (see fifo_writer for the rationale). prev still tracks.
             start_link_pulse := '0';
-            if( link_start_toggle /= link_toggle_prev ) then
+            if( link_start_toggle /= link_toggle_prev and enable = '1' ) then
                 start_link_pulse := '1';
             end if;
             link_toggle_prev <= link_start_toggle;
@@ -368,13 +370,9 @@ begin
                 end if;
             end if;
 
-            -- Protocol violation: an epoch declared for a dead datapath.
-            -- Same rule as fifo_writer: stock FX3 resets the fabric and
-            -- raises enable in one vendor command (RF_TX), so enable always
-            -- precedes the START; enable high with no epoch is ARMED.
-            if( start_link_pulse = '1' and enable = '0' ) then
-                protocol_violation <= '1';
-            end if;
+            -- No protocol violation exists any more (see fifo_writer). Port
+            -- kept, held low, so the status word layout is unchanged.
+            protocol_violation <= '0';
 
             -- Sticky transport-fault flags: set-dominant, cleared only by
             -- reset / new epoch / explicit clear-fault pulse -- never by
@@ -402,9 +400,8 @@ begin
                 end if;
             end if;
 
-            if( start_link_pulse = '1' and enable = '0' ) then
-                fault_sticky_i(FAULT_BIT_PROTOCOL_ERROR) <= '1';
-            end if;
+            -- FAULT_BIT_PROTOCOL_ERROR is never set; position kept so the
+            -- vector layout does not shift.
 
             -- What abort_active_i becomes this cycle absent a new epoch:
             -- computed from LEVEL conditions, independent of this same

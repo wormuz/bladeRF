@@ -202,11 +202,19 @@
  * declared before that command is erased by it, and there is no window
  * between the reset and the enable edge. The writer therefore treats enable
  * without an epoch as ARMED -- FIFO held in clear, samples discarded, no
- * fault -- and streams from the START. The protocol-start violation (bit 7
- * / bit 18) now means a START received while that direction's enable is
- * low: an epoch declared for a dead datapath. Cycling the USB alternate
- * setting does NOT restart the FX3 RF link (epoch counter continuous
- * across it) and is not part of the sequence.
+ * fault -- and streams from the START.
+ *
+ * The START toggle is shared by both directions. A direction whose enable
+ * is low ignores it (no link, no ack, no fault), so an RX-only session does
+ * not fault TX; when that direction is enabled later the host announces
+ * again and that START is a fresh edge for it. A START on an already
+ * streaming direction is harmless: it re-latches speed and restarts the
+ * progress watchdogs, and does not touch the FIFO. Bits 7 and 18 (protocol
+ * start violation) therefore always read zero. The host waits on the bit of
+ * the direction it enabled (8 for RX, 9 for TX), not on bit 10.
+ *
+ * Cycling the USB alternate setting does NOT restart the FX3 RF link (epoch
+ * counter continuous across it) and is not part of the sequence.
  *
  * START asserts that the FX3 link start succeeded. It is not evidence about
  * FX3 by itself; only observed data progress is that. If the requested speed

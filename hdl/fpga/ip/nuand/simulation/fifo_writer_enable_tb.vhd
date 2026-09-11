@@ -223,11 +223,8 @@ begin
         reset <= '0';
         wait until rising_edge(clock);
 
-        -- Establish a link epoch before enable, as real firmware does, so
-        -- this bench stays out of the Stage 3 "enable with no epoch" sticky
-        -- protocol-error/abort path (covered separately by
-        -- fifo_writer_abort_tb).
-        link_start_toggle <= not link_start_toggle;
+        -- Enable first, then the epoch: the order stock FX3 imposes and the
+        -- only one the writer accepts (a START while disabled is ignored).
         wait until rising_edge(clock);
 
         -- Bring both channels up: MIMO, which is what the patch guards.
@@ -236,6 +233,9 @@ begin
             sample_ctrls(i).data_req <= '1';
         end loop;
         enable <= '1';
+
+        link_start_toggle <= not link_start_toggle;
+        wait until rising_edge(clock);
 
         -- Let the stream settle and the metadata machinery run at least once.
         for i in 1 to TOGGLE_AT loop

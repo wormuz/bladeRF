@@ -193,9 +193,9 @@ begin
         -- read count is how the sentinel defect was caught -- it has to stay
         -- comparable to the recorded baseline.
         wait for 10 ns;
-        link_start_toggle <= not link_start_toggle;
-        wait for 10 ns;
         enable <= '1';
+        wait for 10 ns;
+        link_start_toggle <= not link_start_toggle;
 
         wait for 60 us;
 

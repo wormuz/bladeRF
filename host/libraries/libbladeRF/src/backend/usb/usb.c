@@ -900,6 +900,12 @@ static int usb_enable_module(struct bladerf *dev, bladerf_direction dir, bool en
                             BLADE_USB_CMD_RF_RX : BLADE_USB_CMD_RF_TX;
 
     status = vendor_cmd_int_wvalue(dev, cmd, val, &fx3_ret);
+    /* FX3 pulses the fabric reset inside this command when both RX_EN and
+     * TX_EN are low, so the exact sequence of these calls decides whether
+     * the FPGA keeps or loses its state -- worth seeing at verbose. */
+    log_verbose("%s: FX3 RF_%s %s -> status %d fx3_ret 0x%x\n", __FUNCTION__,
+                (dir == BLADERF_RX) ? "RX" : "TX", enable ? "enable" : "disable",
+                status, fx3_ret);
     if (status != 0) {
         log_debug("Could not enable RF %s (%d): %s\n",
                     (dir == BLADERF_RX) ? "RX" : "TX",

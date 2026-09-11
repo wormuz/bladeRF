@@ -242,9 +242,9 @@ begin
         wait until rising_edge(clock);
         reset  <= '0';
         wait until rising_edge(clock);
-        link_start_toggle <= not link_start_toggle;
-        wait until rising_edge(clock);
         enable <= '1';
+        wait until rising_edge(clock);
+        link_start_toggle <= not link_start_toggle;
 
         if RESET_AT > 0 then
             for i in 1 to RESET_AT loop

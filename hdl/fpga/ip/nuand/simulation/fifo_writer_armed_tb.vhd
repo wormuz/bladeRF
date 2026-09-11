@@ -226,12 +226,25 @@ begin
              & " samples written";
 
         ------------------------------------------------------------------
-        -- 3. START on a dead datapath: the real violation.
+        -- 3. START while disabled is IGNORED: the START toggle is shared by
+        --    both directions, so the unused one sees it in every session.
+        --    No link, no fault, no writes -- and the next START, once
+        --    enabled again, is a fresh edge.
         ------------------------------------------------------------------
+        -- Disable, then STOP -- the host's order. enable alone does not end
+        -- the epoch (link_active is epoch state, STOP drops it); STOP also
+        -- sets the FIFO_ABORT sticky bit (4) by design.
         enable <= '0';
         for i in 1 to 20 loop
             wait until rising_edge(clock);
         end loop;
+        link_stop_toggle <= not link_stop_toggle;
+        for i in 1 to 20 loop
+            wait until rising_edge(clock);
+        end loop;
+        assert link_active = '0'
+            report "case 3: STOP did not drop link_active"
+            severity error;
         writes_at_start := writes_seen;
 
         link_start_toggle <= not link_start_toggle;
@@ -239,17 +252,33 @@ begin
             wait until rising_edge(clock);
         end loop;
 
-        assert protocol_start_violation = '1'
-            report "case 3: START with enable low not flagged as a violation"
+        assert protocol_start_violation = '0'
+            report "case 3: START with enable low flagged as a violation -- "
+                 & "the unused direction of a shared START would fault every session"
             severity error;
-        assert fault_sticky(3) = '1'
-            report "case 3: fault_sticky(3) (protocol error) not set for a "
-                 & "START on a dead datapath"
+        assert fault_sticky(3) = '0'
+            report "case 3: protocol fault set by a START on a disabled direction"
+            severity error;
+        assert link_active = '0'
+            report "case 3: link came up on a disabled direction -- START must "
+                 & "be ignored while enable is low"
             severity error;
         assert writes_seen = writes_at_start
             report "case 3: samples written with enable low"
             severity error;
-        report "case 3 OK: START while disabled is the protocol violation";
+
+        enable <= '1';
+        for i in 1 to 20 loop
+            wait until rising_edge(clock);
+        end loop;
+        link_start_toggle <= not link_start_toggle;
+        for i in 1 to 50 loop
+            wait until rising_edge(clock);
+        end loop;
+        assert link_active = '1'
+            report "case 3: START after re-enable not accepted as a fresh edge"
+            severity error;
+        report "case 3 OK: START while disabled ignored; next START taken";
 
         report "fifo_writer_armed_tb: all cases passed";
         done <= true;

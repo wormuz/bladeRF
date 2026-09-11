@@ -51,6 +51,7 @@ architecture tb of fifo_reader_armed_tb is
     signal uf_count   : unsigned(63 downto 0);
 
     signal link_start_toggle  : std_logic := '0';
+    signal link_stop_toggle   : std_logic := '0';
     signal link_active        : std_logic;
     signal protocol_start_violation : std_logic;
     signal fault_sticky       : std_logic_vector(4 downto 0);
@@ -100,6 +101,7 @@ begin
             underflow_count       => uf_count,
             underflow_duration    => x"ffff",
             link_start_toggle     => link_start_toggle,
+            link_stop_toggle      => link_stop_toggle,
             link_active           => link_active,
             protocol_start_violation => protocol_start_violation,
             fault_sticky          => fault_sticky,
@@ -176,12 +178,23 @@ begin
              & " reads";
 
         ------------------------------------------------------------------
-        -- 3. START on a dead datapath: the real violation.
+        -- 3. START while disabled is IGNORED (shared START; the unused
+        --    direction sees it every session). Next START after re-enable
+        --    is a fresh edge.
         ------------------------------------------------------------------
+        -- Disable, then STOP -- the host's order; enable alone does not end
+        -- the epoch. STOP sets FIFO_ABORT (bit 4) by design.
         enable <= '0';
         for i in 1 to 20 loop
             wait until rising_edge(clock);
         end loop;
+        link_stop_toggle <= not link_stop_toggle;
+        for i in 1 to 20 loop
+            wait until rising_edge(clock);
+        end loop;
+        assert link_active = '0'
+            report "case 3: STOP did not drop link_active"
+            severity error;
         reads_at_start := reads_seen;
 
         link_start_toggle <= not link_start_toggle;
@@ -189,16 +202,32 @@ begin
             wait until rising_edge(clock);
         end loop;
 
-        assert protocol_start_violation = '1'
-            report "case 3: START with enable low not flagged as a violation"
+        assert protocol_start_violation = '0'
+            report "case 3: START with enable low flagged as a violation"
             severity error;
-        assert fault_sticky(3) = '1'
-            report "case 3: fault_sticky(3) not set for a START on a dead datapath"
+        assert fault_sticky(3) = '0'
+            report "case 3: protocol fault set by a START on a disabled direction"
+            severity error;
+        assert link_active = '0'
+            report "case 3: link came up on a disabled direction -- START must "
+                 & "be ignored while enable is low"
             severity error;
         assert reads_seen = reads_at_start
             report "case 3: FIFO read with enable low"
             severity error;
-        report "case 3 OK: START while disabled is the protocol violation";
+
+        enable <= '1';
+        for i in 1 to 20 loop
+            wait until rising_edge(clock);
+        end loop;
+        link_start_toggle <= not link_start_toggle;
+        for i in 1 to 50 loop
+            wait until rising_edge(clock);
+        end loop;
+        assert link_active = '1'
+            report "case 3: START after re-enable not accepted as a fresh edge"
+            severity error;
+        report "case 3 OK: START while disabled ignored; next START taken";
 
         report "fifo_reader_armed_tb: all cases passed";
         done <= true;

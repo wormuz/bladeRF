@@ -176,9 +176,9 @@ begin
             sample_ctrls(i).enable   <= '1';
             sample_ctrls(i).data_req <= '1';
         end loop;
-        link_start_toggle <= not link_start_toggle;
-        wait until rising_edge(clock);
         enable <= '1';
+        wait until rising_edge(clock);
+        link_start_toggle <= not link_start_toggle;
         wait until rising_edge(clock);
 
         for i in 1 to 100 loop

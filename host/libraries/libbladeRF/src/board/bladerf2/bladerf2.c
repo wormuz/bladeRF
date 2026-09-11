@@ -789,10 +789,15 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
  * logged and dropped. A device that needs the epoch will fail visibly at
  * the stream instead, which is the same signal as before this existed.
  */
-static void announce_rf_link_epoch(struct bladerf *dev)
+static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
 {
     bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
     uint32_t entry_status   = 0;
+    /* The START toggle is shared, but a direction whose enable is low
+     * ignores it, so "both directions applied" (bit 10) never comes true in
+     * a one-direction session. Wait on the bit of the direction just
+     * enabled: 8 for RX, 9 for TX. */
+    uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch) ? (1u << 9) : (1u << 8);
     int status;
 
     /* What the link looked like on arrival, before this session touches it.
@@ -889,7 +894,7 @@ static void announce_rf_link_epoch(struct bladerf *dev)
             return;
         }
 
-        if (st & (1u << 10)) {
+        if (st & applied_bit) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
                         "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
                         __FUNCTION__, attempt + 1, st,
@@ -956,7 +961,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         if (status != 0) {
             return status;
         }
-        announce_rf_link_epoch(dev);
+        announce_rf_link_epoch(dev, ch);
         return 0;
     }
 
