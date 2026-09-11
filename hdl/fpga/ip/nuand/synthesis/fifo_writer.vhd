@@ -117,8 +117,11 @@ architecture simple of fifo_writer is
     -- means "TX/RX datapath enabled" and can stay '1' across an FX3
     -- restart (USB reconnect, repeated stream-start) that changes speed
     -- without ever dropping enable. The host must signal a new epoch
-    -- explicitly via link_start_toggle; enable rising without a prior
-    -- epoch is a protocol violation, tracked separately from mismatch.
+    -- explicitly via link_start_toggle. Enable high with no epoch is the
+    -- ARMED state -- FIFO held in clear, samples discarded, no fault --
+    -- because stock FX3 firmware resets the fabric and raises enable in
+    -- one vendor command, so enable always precedes the START. The
+    -- protocol violation is a START while enable is low.
     signal latched_usb_speed   : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
     signal speed_mismatch      : std_logic := '0';
     signal link_active_i       : std_logic := '0';
@@ -126,7 +129,6 @@ architecture simple of fifo_writer is
     signal protocol_violation  : std_logic := '0';
     signal epoch_counter       : unsigned(7 downto 0) := (others => '0');
     signal link_toggle_prev    : std_logic := '0';
-    signal enable_prev         : std_logic := '0';
 
     -- Abort path / sticky transport-fault flags (Stage 3): a fault detected
     -- in this clock domain stops the transfer locally (registered FSM
@@ -270,7 +272,6 @@ begin
             protocol_violation <= '0';
             epoch_counter      <= (others => '0');
             link_toggle_prev   <= '0';
-            enable_prev        <= '0';
             fault_sticky_i     <= (others => '0');
             progress_count     <= (others => '0');
             wrote_this_epoch   <= '0';
@@ -340,12 +341,18 @@ begin
                 end if;
             end if;
 
-            -- enable rising without an established link epoch: sticky
-            -- protocol violation, independent of speed_mismatch.
-            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+            -- Protocol violation: an epoch declared for a dead datapath.
+            --
+            -- NOT "enable rose without an epoch". Stock FX3 firmware pulses
+            -- the fabric reset inside the vendor command that raises enable
+            -- and raises it in the same handler, so enable-before-START is
+            -- the only order the host can achieve; the writer holds in
+            -- ARMED (enable high, no epoch: FIFO in clear, samples
+            -- discarded) until the START arrives. A START while enable is
+            -- low is the one sequencing error a driver can actually make.
+            if( start_link_pulse = '1' and enable = '0' ) then
                 protocol_violation <= '1';
             end if;
-            enable_prev <= enable;
 
             -- Sticky transport-fault flags: set-dominant, latched by their
             -- own event, cleared only by reset / new epoch / explicit
@@ -380,7 +387,9 @@ begin
                 end if;
             end if;
 
-            if( enable = '1' and enable_prev = '0' and link_active_i = '0' ) then
+            -- Set term wins over the same-cycle clear above, as intended:
+            -- a START on a dead datapath is exactly the fault of that epoch.
+            if( start_link_pulse = '1' and enable = '0' ) then
                 fault_sticky_i(FAULT_BIT_PROTOCOL_ERROR) <= '1';
             end if;
 
@@ -391,7 +400,6 @@ begin
             abort_active_next := '0';
             if( stop_link_pulse = '1'
                 or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
-                or (enable = '1' and enable_prev = '0' and link_active_i = '0')
                 or abort_active_i = '1' ) then
                 abort_active_next := '1';
             end if;
@@ -663,7 +671,9 @@ begin
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= ABORTED;
-        elsif( (enable = '0') or (meta_en = '0') ) then
+        elsif( (enable = '0') or (meta_en = '0') or (link_active_i = '0') ) then
+            -- link_active_i = '0' with enable high is ARMED: held here until
+            -- the epoch arrives, same as not enabled.
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= IDLE;
@@ -1014,7 +1024,10 @@ begin
         -- here only steers fifo_future.state, which reaches fifo_write on
         -- the FOLLOWING clock through fifo_current -- the output assignment
         -- below stays a plain mirror of fifo_current.fifo_write, unchanged.
-        if( enable = '0' or abort_active_i = '1' ) then
+        -- ARMED (enable high, no epoch yet) holds the FIFO in clear too, so
+        -- the first sample written belongs to the epoch, not to the interval
+        -- before it.
+        if( enable = '0' or abort_active_i = '1' or link_active_i = '0' ) then
             fifo_future.fifo_clear <= '1';
             fifo_future.fifo_write <= '0';
             fifo_future.state      <= CLEAR;

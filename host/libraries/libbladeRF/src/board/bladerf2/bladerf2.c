@@ -946,11 +946,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * anything in between. An epoch announced before this point is erased
      * by it; measured as violation=1 at disable in every cycle.
      *
-     * Announced after, the fabric records one protocol violation for the
-     * enable that arrived first, and the START that follows clears the
-     * sticky vector and abort_active in the same cycle it registers
-     * (fifo_writer.vhd:359, :414), so the datapath leaves ABORTED and
-     * streams. */
+     * Announced after, the writer sits ARMED (enable high, FIFO in clear,
+     * samples discarded) until the START, then streams. Gateware older
+     * than that rule recorded one protocol violation here instead, which
+     * the same START cleared (fifo_writer.vhd:359, :414); either way the
+     * datapath streams. */
     if (enable) {
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {

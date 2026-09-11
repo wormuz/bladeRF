@@ -200,12 +200,13 @@
  * vendor command whenever both RX_EN and TX_EN are low, and raises the
  * enable line in the same handler (fx3_firmware/src/bladeRF.c). Anything
  * declared before that command is erased by it, and there is no window
- * between the reset and the enable edge. The fabric therefore records one
- * protocol-start violation on the first enable of a session; the START that
- * follows clears the sticky vector and abort in the cycle it registers, and
- * the datapath streams. Cycling the USB alternate setting does NOT restart
- * the FX3 RF link (epoch counter continuous across it) and is not part of
- * the sequence.
+ * between the reset and the enable edge. The writer therefore treats enable
+ * without an epoch as ARMED -- FIFO held in clear, samples discarded, no
+ * fault -- and streams from the START. The protocol-start violation (bit 7
+ * / bit 18) now means a START received while that direction's enable is
+ * low: an epoch declared for a dead datapath. Cycling the USB alternate
+ * setting does NOT restart the FX3 RF link (epoch counter continuous
+ * across it) and is not part of the sequence.
  *
  * START asserts that the FX3 link start succeeded. It is not evidence about
  * FX3 by itself; only observed data progress is that. If the requested speed
