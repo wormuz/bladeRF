@@ -49,6 +49,11 @@ entity dwell_summary is
         -- Delete this generic and BISECT_STAGE2 once the offending
         -- sub-block is found and fixed in place.
         BISECT_STAGE2   : boolean := true;
+        -- Cuts the K-of-M trigger persistence (over_history shift register,
+        -- ones() bit-count function, trig_latched/trig_window/trig_time)
+        -- into its own process, removable via generate independently of
+        -- the rest of accumulate. true = unchanged behaviour.
+        BISECT_STAGE3   : boolean := true;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
@@ -151,6 +156,13 @@ architecture arch of dwell_summary is
     signal win_min          : unsigned(47 downto 0) := (others => '1');
     signal win_max          : unsigned(47 downto 0) := (others => '0');
 
+    -- Handoff from accumulate to trigger_stage (BISECT_STAGE3 split):
+    -- one-cycle-late copy of the window-boundary event and total, since
+    -- window_done/win_total are process-local variables in accumulate and
+    -- cannot be read by a sibling process.
+    signal window_done_pulse : std_logic := '0';
+    signal window_done_total : unsigned(47 downto 0) := (others => '0');
+
     function ones( v : std_logic_vector ) return natural is
         variable n : natural := 0;
     begin
@@ -224,7 +236,6 @@ begin
     gen_stage2_on : if( BISECT_STAGE2 ) generate
     accumulate : process( clock, reset )
         variable window_done : boolean;
-        variable over        : std_logic;
         -- The window total including the sample closing it, computed once.
         variable win_total   : unsigned(47 downto 0);
     begin
@@ -236,17 +247,13 @@ begin
             dwell_clips   <= (others => '0');
             dwell_samples <= (others => '0');
             dwell_windows <= (others => '0');
-            over_history  <= (others => '0');
-            trig_latched  <= '0';
-            trig_window   <= (others => '0');
-            trig_time     <= (others => '0');
+            window_done_pulse <= '0';
+            window_done_total <= (others => '0');
             summary_valid <= '0';
             energy_sum    <= (others => '0');
             peak          <= (others => '0');
             clip_count    <= (others => '0');
             sample_count  <= (others => '0');
-            triggered     <= '0';
-            first_window  <= (others => '0');
         elsif( rising_edge(clock) ) then
             summary_valid <= '0';
 
@@ -259,10 +266,6 @@ begin
                 peak          <= dwell_peak;
                 clip_count    <= dwell_clips;
                 sample_count  <= dwell_samples;
-                triggered     <= trig_latched;
-                first_window    <= trig_window;
-                first_timestamp <= trig_time;
-
                 -- Mean power per WINDOW, not per sample.
                 --
                 -- Per sample would need dwell_energy / dwell_samples, and
@@ -296,10 +299,6 @@ begin
                 dwell_clips   <= (others => '0');
                 dwell_samples <= (others => '0');
                 dwell_windows <= (others => '0');
-                over_history  <= (others => '0');
-                trig_latched  <= '0';
-                trig_window   <= (others => '0');
-                trig_time     <= (others => '0');
                 win_min       <= (others => '1');
                 win_max       <= (others => '0');
 
@@ -344,11 +343,53 @@ begin
                         win_max <= win_total;
                     end if;
 
+                    -- Handed to trigger_stage below: window_done and win_total
+                    -- are only valid the one cycle this branch runs, so latch
+                    -- them for the sibling process to read on the next edge.
+                    window_done_pulse <= '1';
+                    window_done_total <= win_total;
+                else
+                    window_done_pulse <= '0';
+                end if;
+            else
+                window_done_pulse <= '0';
+            end if;
+        end if;
+    end process;
+    end generate;
+
+    -- Stage 3: K-of-M trigger persistence, split from accumulate so it can
+    -- be cut independently via BISECT_STAGE3. Reads window_done_pulse/
+    -- window_done_total (registered one cycle behind the window-boundary
+    -- event in accumulate) instead of the window_done/win_total variables,
+    -- which are process-local and cannot be shared across processes.
+    gen_stage3_on : if( BISECT_STAGE2 and BISECT_STAGE3 ) generate
+        trigger_stage : process( clock, reset )
+            variable over : std_logic;
+        begin
+            if( reset = '1' ) then
+                over_history  <= (others => '0');
+                trig_latched  <= '0';
+                trig_window   <= (others => '0');
+                trig_time     <= (others => '0');
+                triggered       <= '0';
+                first_window    <= (others => '0');
+                first_timestamp <= (others => '0');
+            elsif( rising_edge(clock) ) then
+                if( dwell_start = '1' ) then
+                    triggered       <= trig_latched;
+                    first_window    <= trig_window;
+                    first_timestamp <= trig_time;
+                    over_history    <= (others => '0');
+                    trig_latched    <= '0';
+                    trig_window     <= (others => '0');
+                    trig_time       <= (others => '0');
+                elsif( window_done_pulse = '1' ) then
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
                     -- what a sensible threshold would be.
                     if( threshold /= 0 and
-                        win_total > threshold ) then
+                        window_done_total > threshold ) then
                         over := '1';
                     else
                         over := '0';
@@ -370,8 +411,15 @@ begin
                     end if;
                 end if;
             end if;
-        end if;
-    end process;
+        end process;
+    end generate;
+
+    -- BISECT_STAGE2 and not BISECT_STAGE3: accumulate runs, trigger_stage
+    -- cut. These ports are trigger_stage's alone, so they need a driver.
+    gen_stage3_off : if( BISECT_STAGE2 and not BISECT_STAGE3 ) generate
+        triggered       <= '0';
+        first_window    <= (others => '0');
+        first_timestamp <= (others => '0');
     end generate;
 
     -- BISECT_STAGE2 = false: accumulate cut, ports it would drive get a
