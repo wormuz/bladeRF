@@ -962,6 +962,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             return status;
         }
         announce_rf_link_epoch(dev, ch);
+        board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = true;
         return 0;
     }
 
@@ -977,25 +978,27 @@ static int bladerf2_enable_module(struct bladerf *dev,
      *
      * So the host ends what the host began, rather than relying on a reset
      * that is not ours to schedule. */
-    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+    {
         uint32_t st = 0;
 
         /* State of the link as the stream ends, with the epoch still
          * standing -- this is the only moment the failure is observable
          * from the host, since a STOP or a new START clears the vector. */
         if (nios_rf_link_status_read(dev, &st) == 0) {
-            log_verbose("%s: link status at disable: 0x%08x (rx_active=%u "
-                        "rx_abort=%u rx_fault=%u tx_fault=%u violation=%u "
-                        "epoch_count=%u)\n",
-                        __FUNCTION__, st, (st >> 16) & 1, (st >> 19) & 1,
-                        (st >> 14) & 1, (st >> 15) & 1, (st >> 7) & 1,
-                        (st >> 20) & 0xff);
+            log_verbose("%s: link status at %s disable: 0x%08x (rx_active=%u "
+                        "tx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                        "rx_epoch=%u tx_epoch=%u epoch_count=%u)\n",
+                        __FUNCTION__, BLADERF_CHANNEL_IS_TX(ch) ? "TX" : "RX",
+                        st, (st >> 16) & 1, st & 1, (st >> 19) & 1,
+                        (st >> 14) & 1, (st >> 15) & 1, (st >> 8) & 1,
+                        (st >> 9) & 1, (st >> 20) & 0xff);
         }
     }
 
     status = board_data->rfic->enable_module(dev, ch, enable);
 
-    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+    board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = false;
+    if (!board_data->rf_link_dir_on[0] && !board_data->rf_link_dir_on[1]) {
         end_rf_link_epoch(dev);
     }
 
