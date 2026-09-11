@@ -38,6 +38,17 @@ library work;
 
 entity dwell_summary is
     generic (
+        -- Structural bisect (architect matrix, 2026-09-12, after
+        -- E1/E2/E3c narrowed the sweep quartus_map stall to dwell_summary's
+        -- own arithmetic seeing non-constant-foldable data, not to
+        -- adc_streams(0) fanout). false cuts the accumulate process
+        -- (window/dwell totals, min/max, K-of-M trigger) out of
+        -- elaboration entirely via generate -- not "if false", the RTL is
+        -- not there for the synthesiser to see below this stage. true
+        -- reproduces dwell_summary exactly as before this generic existed.
+        -- Delete this generic and BISECT_STAGE2 once the offending
+        -- sub-block is found and fixed in place.
+        BISECT_STAGE2   : boolean := true;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
@@ -207,6 +218,10 @@ begin
     end process;
 
     -- Stage 2: window accumulation, dwell totals, trigger persistence.
+    -- Cut entirely by BISECT_STAGE2 = false; the else branch below drives
+    -- every output this process would otherwise drive, so the entity still
+    -- elaborates with all ports connected.
+    gen_stage2_on : if( BISECT_STAGE2 ) generate
     accumulate : process( clock, reset )
         variable window_done : boolean;
         variable over        : std_logic;
@@ -357,5 +372,22 @@ begin
             end if;
         end if;
     end process;
+    end generate;
+
+    -- BISECT_STAGE2 = false: accumulate cut, ports it would drive get a
+    -- fixed idle value instead so the entity elaborates standalone.
+    gen_stage2_off : if( not BISECT_STAGE2 ) generate
+        summary_valid   <= '0';
+        energy_sum      <= (others => '0');
+        peak            <= (others => '0');
+        clip_count      <= (others => '0');
+        sample_count    <= (others => '0');
+        triggered       <= '0';
+        first_window    <= (others => '0');
+        first_timestamp <= (others => '0');
+        mean_power      <= (others => '0');
+        noise_floor     <= (others => '0');
+        peak_window     <= (others => '0');
+    end generate;
 
 end architecture;
