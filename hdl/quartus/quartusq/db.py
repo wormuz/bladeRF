@@ -306,9 +306,14 @@ def reap_stale_running_jobs(conn: sqlite3.Connection) -> list[int]:
     import os
 
     reaped = []
+    # cancel_requested is in this list on purpose. A job cancelled while the
+    # worker was restarting keeps that state with no process behind it, and
+    # nothing else ever resolves it -- claim_next_job only takes 'queued'.
+    # Observed: a cancelled job reappeared as running on the next worker
+    # start, and the build it was meant to replace waited behind it.
     rows = conn.execute(
         "SELECT id, pid, state FROM jobs WHERE state IN "
-        "('preparing','running','timing_analysis','qgate')"
+        "('preparing','running','timing_analysis','qgate','cancel_requested')"
     ).fetchall()
     for row in rows:
         pid = row["pid"]
@@ -320,6 +325,14 @@ def reap_stale_running_jobs(conn: sqlite3.Connection) -> list[int]:
             except (OSError, ProcessLookupError):
                 alive = False
         if not alive:
-            finish_job(conn, row["id"], state="stale", error_summary="worker restarted, no live process for this job")
+            # A cancel that outlived its process was honoured, not lost:
+            # recording it as stale would blame the restart for something
+            # the operator asked for.
+            if row["state"] == "cancel_requested":
+                finish_job(conn, row["id"], state="cancelled",
+                           error_summary="cancelled; process already gone")
+            else:
+                finish_job(conn, row["id"], state="stale",
+                           error_summary="worker restarted, no live process for this job")
             reaped.append(row["id"])
     return reaped
