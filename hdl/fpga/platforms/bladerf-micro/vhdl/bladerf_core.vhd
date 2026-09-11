@@ -361,6 +361,9 @@ architecture core_bladerf of bladerf_core is
     signal dwell_sync_in_r        : std_logic := '0';
     signal dwell_start            : std_logic := '0';
     signal analysis_sample_q      : sample_stream_t := ZERO_SAMPLE;
+    signal e3_tap_activity_q      : std_logic := '0';
+    attribute preserve : boolean;
+    attribute preserve of e3_tap_activity_q : signal is true;
     signal dwell_summary_valid    : std_logic;
     signal dwell_energy_sum       : unsigned(63 downto 0);
     signal dwell_peak             : unsigned(31 downto 0);
@@ -783,6 +786,21 @@ begin
             end if;
         end process;
 
+        -- EXPERIMENT E3c: a live consumer of the tap exists (so it cannot be
+        -- optimised away), but dwell_summary itself stays on a constant --
+        -- isolates "does tapping adc_streams(0) with data+valid alone
+        -- trigger the map pathology" from "does the live tap reaching
+        -- dwell_summary's arithmetic trigger it". One-bit XOR sink, cheapest
+        -- thing that cannot constant-fold.
+        e3_tap_activity_proc : process( rx_clock )
+        begin
+            if( rising_edge( rx_clock ) ) then
+                e3_tap_activity_q <= analysis_sample_q.data_v
+                                     xor analysis_sample_q.data_i(0)
+                                     xor analysis_sample_q.data_q(0);
+            end if;
+        end process;
+
         U_dwell_sync : entity work.synchronizer
             generic map ( RESET_LEVEL => '0' )
             port map (
@@ -809,7 +827,7 @@ begin
             port map (
                 clock         => rx_clock,
                 reset         => rx_reset,
-                sample        => analysis_sample_q,
+                sample        => ZERO_SAMPLE, -- EXPERIMENT E3c: dwell_summary constant, tap still live via e3_tap_activity_q
                 dwell_start   => dwell_start,
                 threshold     => dwell_threshold,
                 summary_valid => dwell_summary_valid,
