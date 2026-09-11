@@ -331,6 +331,7 @@ class Worker:
         cancel_thread.start()
 
         last_output = [time.time()]
+        bt_n = [0]
 
         def _watch_stall() -> None:
             while not cancel_stop.wait(min(30.0, stall_minutes * 20)):
@@ -340,7 +341,7 @@ class Worker:
 
                 # Stack first: it is the only evidence of which pass is
                 # looping, and it needs a live process.
-                bt = build_dir / "logs" / "stall-backtrace.txt"
+                bt = build_dir / "logs" / f"silent-backtrace-{bt_n[0]}.txt"
                 try:
                     with bt.open("w") as fh:
                         subprocess.run(
@@ -353,22 +354,34 @@ class Worker:
                 except Exception:                       # noqa: BLE001
                     pass
 
+                # Alert and record; do NOT kill.
+                #
+                # Quartus has legitimate long silent phases -- synthesis
+                # optimisation, timing-graph construction, CCPP-aware skew
+                # analysis, physical synthesis, fitter routing, STA across
+                # corners. Silence alone is not evidence of a hang; this
+                # project has already seen high CPU with no output turn out
+                # to be real work that would have finished.
+                #
+                # What distinguishes a hang from expensive work is two
+                # identical stacks over time, so a second capture follows
+                # and the decision stays with a person. Killing here would
+                # throw away builds that were going to complete.
                 watch_conn = db.connect(self.db_path)
                 try:
-                    db.log_event(watch_conn, job_id, "error",
-                                 f"no output for {quiet/60:.0f} min; "
-                                 f"stack in {bt.name}", phase="stalled")
-                    _kill_group(proc)
-                    db.finish_job(
-                        watch_conn, job_id, state="failed",
-                        error_summary=(
-                            f"stalled: no log output for {quiet/60:.0f} "
-                            f"minutes (limit {stall_minutes:.0f}); "
-                            f"backtrace saved to {bt}"),
-                    )
+                    db.log_event(
+                        watch_conn, job_id, "warning",
+                        f"silent for {quiet/60:.0f} min at high CPU; "
+                        f"stack captured to {bt.name}. Not cancelled -- "
+                        "compare with a later capture before deciding",
+                        phase="silent_compute")
                 finally:
                     watch_conn.close()
-                return
+
+                # Re-arm so a second snapshot lands one interval later,
+                # which is what makes the comparison possible.
+                last_output[0] = time.time()
+                bt_n[0] += 1
 
         threading.Thread(target=_watch_stall, daemon=True).start()
 
