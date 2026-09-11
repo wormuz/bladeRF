@@ -812,6 +812,10 @@ static int _rfic_host_get_gain_stage(struct bladerf *dev,
     } else {
         struct rf_rx_gain rx_gain;
         CHECK_AD936X(ad9361_get_rx_gain(phy, rfic_ch + 1, &rx_gain));
+        log_verbose("%s: ad9361_get_rx_gain ch%u -> gain_db=%d digital=%u "
+                    "fgt_lmt_index=%u\n",
+                    __FUNCTION__, rfic_ch + 1, rx_gain.gain_db,
+                    rx_gain.digital_gain, rx_gain.fgt_lmt_index);
 
         if (strcmp(stage, "full") == 0) {
             val = rx_gain.gain_db;
