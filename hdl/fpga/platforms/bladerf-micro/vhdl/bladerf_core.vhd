@@ -360,6 +360,7 @@ architecture core_bladerf of bladerf_core is
     signal dwell_sync_in          : std_logic := '0';
     signal dwell_sync_in_r        : std_logic := '0';
     signal dwell_start            : std_logic := '0';
+    signal analysis_sample_q      : sample_stream_t := ZERO_SAMPLE;
     signal dwell_summary_valid    : std_logic;
     signal dwell_energy_sum       : unsigned(63 downto 0);
     signal dwell_peak             : unsigned(31 downto 0);
@@ -764,6 +765,24 @@ begin
     -- rx_clock. A level would restart the dwell for as long as it is held.
     gen_sweep_analyzer : if( ENABLE_SWEEP_ANALYZER ) generate
 
+        -- Registered tap, one cycle behind adc_streams(0). E1 (constant
+        -- ZERO_SAMPLE input to dwell_summary) completed Analysis & Synthesis
+        -- in 90s against a build that otherwise stalled quartus_map for
+        -- hours; the difference is the live connection, not dwell_summary's
+        -- own arithmetic. adc_streams(0) is read combinationally in several
+        -- other places in this file (the RX datapath itself, loopback,
+        -- diagnostics), so an analyser reading it directly sits in the same
+        -- fanout cone the synthesiser has to resolve for all of them
+        -- together. This register is the one thing dwell_summary reads;
+        -- nothing downstream of it feeds back into fifo_writer, meta_current,
+        -- the metadata FIFO, or any transport enable.
+        analysis_tap_proc : process( rx_clock )
+        begin
+            if( rising_edge( rx_clock ) ) then
+                analysis_sample_q <= adc_streams(0);
+            end if;
+        end process;
+
         U_dwell_sync : entity work.synchronizer
             generic map ( RESET_LEVEL => '0' )
             port map (
@@ -790,7 +809,7 @@ begin
             port map (
                 clock         => rx_clock,
                 reset         => rx_reset,
-                sample        => adc_streams(0),
+                sample        => analysis_sample_q,
                 dwell_start   => dwell_start,
                 threshold     => dwell_threshold,
                 summary_valid => dwell_summary_valid,
