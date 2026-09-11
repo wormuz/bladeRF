@@ -229,8 +229,35 @@ class Worker:
         # needs them: the ADI tree lives in one. build_bladerf.sh runs
         # submodule update itself, but from the worktree that is a no-op
         # unless the modules are initialised there first.
+        #
+        # Clone them from the main checkout's own module store, not from
+        # the network. With the recorded URL, a fresh worktree fetched the
+        # whole ADI no-OS repository from GitHub on every job -- job 34 sat
+        # in prepare for five minutes on one clone, and a slow or absent
+        # link would stall the queue for the full 30-minute timeout with
+        # the commit already sitting on disk.
+        subprocess.run(["git", "submodule", "init"], cwd=str(wt), check=False,
+                       capture_output=True, text=True, timeout=60)
+        names = subprocess.run(
+            ["git", "config", "-f", ".gitmodules", "--name-only",
+             "--get-regexp", r"^submodule\..*\.path$"],
+            cwd=str(wt), capture_output=True, text=True, timeout=60,
+        ).stdout.split()
+        for key in names:
+            name = key[len("submodule."):-len(".path")]
+            local = REPO_ROOT / ".git" / "modules" / name
+            if local.is_dir():
+                subprocess.run(
+                    ["git", "config", f"submodule.{name}.url", str(local)],
+                    cwd=str(wt), check=False, capture_output=True, text=True,
+                    timeout=60,
+                )
+        # protocol.file.allow: git >= 2.38 refuses file:// submodule clones
+        # by default (CVE-2022-39253); job 35 built without the ADI tree and
+        # failed in the Nios make because of exactly that.
         subprocess.run(
-            ["git", "submodule", "update", "--init", "--recursive"],
+            ["git", "-c", "protocol.file.allow=always",
+             "submodule", "update", "--init", "--recursive"],
             cwd=str(wt), check=False,
             capture_output=True, text=True, timeout=1800,
         )

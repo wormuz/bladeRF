@@ -14,6 +14,11 @@
 # during the stall, and whether a single synthesis setting removes it. A
 # full-flow queue job answers neither -- it just waits 76 minutes.
 #
+# Blocks the queue while it runs: the worker refuses to claim a job while
+# any quartus_* process it did not start is alive (foreign_quartus_running,
+# by design -- two flows sharing work/ spoil both). Run this only when the
+# queue is idle, or accept that queued jobs wait for it.
+#
 # Output: <work_dir>/probe-<label>.log (quartus_map), probe-<label>.rss
 # (timestamp, RSS MiB, %CPU), and a one-line verdict on stdout.
 # Bounded by MAP_TIMEOUT (default 1500 s = 25 min; a healthy map is ~5 min).
