@@ -97,5 +97,9 @@ set_false_path -from *                        -to [get_ports {fx3_uart_*}]
 # bladerf_core:U_core|fx3_gpif:U_fx3_gpif. Written from the top level the
 # pattern matches nothing and Quartus drops the exception as a warning, so
 # the clear is timed as an ordinary synchronous path that cannot meet it.
-set_false_path -from {*fx3_gpif*rx_enable} -to {*rx_meta_fifo*:wraclr|*}
-set_false_path -from {*fx3_gpif*rx_enable} -to {*rx_fifo*:wraclr|*}
+#
+# Named entity:instance rather than fx3_gpif*rx_enable: the wildcard form
+# could match a namesake in another instance, and qcheck rejects a pair
+# where neither end is pinned to one. There is exactly one fx3_gpif.
+set_false_path -from {*fx3_gpif:U_fx3_gpif|rx_enable} -to {*rx_meta_fifo*:wraclr|*}
+set_false_path -from {*fx3_gpif:U_fx3_gpif|rx_enable} -to {*rx_fifo*:wraclr|*}
