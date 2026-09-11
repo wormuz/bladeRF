@@ -34,8 +34,13 @@ derive_clock_uncertainty
 # spi.sdc/i2c.sdc derive their generated clocks from system_clock. One
 # unanchored alias here silently dropped 16 multicycle constraints in
 # those two files, which are themselves correct.
-set fx3_clock    {*U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
-set system_clock {*U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+# Entity names included -- the netlist spells these entity:instance at every
+# level, and a path missing them matches nothing. Written without them the
+# aliases silently failed to resolve as pins, which surfaced far away as
+# "adf_sclk_pin was not created" in spi.sdc and i2c.sdc, since both derive
+# their generated clocks from these.
+set fx3_clock    {*fx3_pll:U_fx3_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+set system_clock {*system_pll:U_system_pll|altera_pll:altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
 
 # Trace delays between AD9361 and FPGA (bladeRF Micro)
 set adi_spi_clk_trace_delay     0.127
