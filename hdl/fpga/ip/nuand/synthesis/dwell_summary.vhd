@@ -53,7 +53,13 @@ entity dwell_summary is
         -- ones() bit-count function, trig_latched/trig_window/trig_time)
         -- into its own process, removable via generate independently of
         -- the rest of accumulate. true = unchanged behaviour.
-        BISECT_STAGE3   : boolean := false;
+        BISECT_STAGE3   : boolean := true;
+        -- Within trigger_stage: false keeps the over_history shift register
+        -- and threshold compare running (so it still elaborates and pipes
+        -- to something), but skips the ones()/TRIGGER_K persistence check
+        -- and the trig_latched/trig_window/trig_time updates it drives.
+        -- Only meaningful when BISECT_STAGE3 = true.
+        BISECT_STAGE3B  : boolean := false;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
@@ -397,17 +403,19 @@ begin
 
                     over_history <= over_history(TRIGGER_OF-2 downto 0) & over;
 
-                    if( trig_latched = '0' and
-                        ones(over_history(TRIGGER_OF-2 downto 0) & over)
-                            >= TRIGGER_K ) then
-                        trig_latched <= '1';
-                        trig_window  <= dwell_windows;
-                        -- Sampled here, at the crossing, not at the dwell
-                        -- boundary: by then the timestamp has advanced by
-                        -- the rest of the dwell and would name the wrong
-                        -- instant. Latched once, since trig_latched gates
-                        -- this branch.
-                        trig_time    <= timestamp;
+                    if( BISECT_STAGE3B ) then
+                        if( trig_latched = '0' and
+                            ones(over_history(TRIGGER_OF-2 downto 0) & over)
+                                >= TRIGGER_K ) then
+                            trig_latched <= '1';
+                            trig_window  <= dwell_windows;
+                            -- Sampled here, at the crossing, not at the dwell
+                            -- boundary: by then the timestamp has advanced by
+                            -- the rest of the dwell and would name the wrong
+                            -- instant. Latched once, since trig_latched gates
+                            -- this branch.
+                            trig_time    <= timestamp;
+                        end if;
                     end if;
                 end if;
             end if;
