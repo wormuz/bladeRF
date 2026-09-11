@@ -158,7 +158,7 @@ set_global_assignment -name AUTO_RESOURCE_SHARING OFF
 # unstructured state machine and failing to converge on reachability
 # analysis, which runs in this exact window (right after RAM inference,
 # before Timing-Driven Synthesis).
-set_global_assignment -name STATE_MACHINE_PROCESSING "OFF"
+set_global_assignment -name STATE_MACHINE_PROCESSING "User-Encoded"
 export_assignments
 
 # Create the adsb
