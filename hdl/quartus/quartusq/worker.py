@@ -294,6 +294,20 @@ class Worker:
         #
         # Its own connection: sqlite3 objects belong to the thread that made
         # them, and this one is read-only apart from the kill it performs.
+        # A build that stops writing to its log for this long is not slow,
+        # it is stuck. A normal compile of either revision finishes in about
+        # fifteen minutes and never goes quiet for more than a couple.
+        #
+        # The number is not a guess at total runtime -- it is "no output at
+        # all", which is the signature of the Analysis & Synthesis pathology
+        # this project keeps hitting. Waiting 57 minutes to learn what was
+        # visible at 20 cost an evening today.
+        #
+        # It captures a stack before killing, because the stack is the only
+        # thing that says which pass is looping, and the process has to be
+        # alive to give it.
+        stall_minutes = float(os.environ.get("QUARTUSQ_STALL_MINUTES", "20"))
+
         cancel_stop = threading.Event()
 
         def _watch_cancel() -> None:
@@ -315,6 +329,48 @@ class Worker:
 
         cancel_thread = threading.Thread(target=_watch_cancel, daemon=True)
         cancel_thread.start()
+
+        last_output = [time.time()]
+
+        def _watch_stall() -> None:
+            while not cancel_stop.wait(min(30.0, stall_minutes * 20)):
+                quiet = time.time() - last_output[0]
+                if quiet < stall_minutes * 60:
+                    continue
+
+                # Stack first: it is the only evidence of which pass is
+                # looping, and it needs a live process.
+                bt = build_dir / "logs" / "stall-backtrace.txt"
+                try:
+                    with bt.open("w") as fh:
+                        subprocess.run(
+                            ["sudo", "-n", "gdb", "-q", "-p", str(proc.pid),
+                             "-ex", "set pagination off",
+                             "-ex", "thread apply all bt",
+                             "-ex", "detach", "-ex", "quit"],
+                            stdout=fh, stderr=subprocess.STDOUT, timeout=120,
+                        )
+                except Exception:                       # noqa: BLE001
+                    pass
+
+                watch_conn = db.connect(self.db_path)
+                try:
+                    db.log_event(watch_conn, job_id, "error",
+                                 f"no output for {quiet/60:.0f} min; "
+                                 f"stack in {bt.name}", phase="stalled")
+                    _kill_group(proc)
+                    db.finish_job(
+                        watch_conn, job_id, state="failed",
+                        error_summary=(
+                            f"stalled: no log output for {quiet/60:.0f} "
+                            f"minutes (limit {stall_minutes:.0f}); "
+                            f"backtrace saved to {bt}"),
+                    )
+                finally:
+                    watch_conn.close()
+                return
+
+        threading.Thread(target=_watch_stall, daemon=True).start()
 
         with compile_log.open("a") as clog, live_jsonl.open("a") as jlog:
             for line in proc.stdout:
@@ -347,6 +403,16 @@ class Worker:
             db.finish_job(conn, job_id, state="cancelled", exit_code=exit_code)
             db.log_event(conn, job_id, "info", "cancelled while quiet")
             return
+
+        # The stall watcher may already have finished this job. Running
+        # _finalize now would overwrite "stalled: no output for N minutes"
+        # with "qgate rejected the log", which is true but useless -- of
+        # course the log is incomplete, the build was killed. The first
+        # verdict is the one that explains anything.
+        current = db.get_job(conn, job_id)
+        if current is not None and current["state"] in db.TERMINAL_STATES:
+            return
+
         self._finalize(job_id, compile_log, exit_code)
 
     def _infer_phase(self, line: str) -> Optional[str]:
