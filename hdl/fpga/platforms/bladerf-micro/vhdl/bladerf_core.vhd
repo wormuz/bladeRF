@@ -396,7 +396,11 @@ architecture core_bladerf of bladerf_core is
     -- Trigger threshold config: system domain word, its rx_clock copy, and
     -- the decoded 48-bit value.
     signal dwell_cfg_word         : std_logic_vector(31 downto 0);
-    signal dwell_cfg_rx           : std_logic_vector(31 downto 0);
+    -- Wire out of the handshake (source-domain flops) and the rx-domain
+    -- register that captures it. Only dwell_cfg_rx may be read by rx logic.
+    signal dwell_cfg_wire         : std_logic_vector(31 downto 0);
+    signal dwell_cfg_ack_rx       : std_logic;
+    signal dwell_cfg_rx           : std_logic_vector(31 downto 0) := (others => '0');
     signal dwell_shift            : natural range 0 to 24 := 0;
     signal dwell_threshold        : unsigned(47 downto 0) := (others => '0');
 
@@ -945,10 +949,43 @@ begin
             source_data  => dwell_cfg_word,
             dest_reset   => rx_reset,
             dest_clock   => rx_clock,
-            dest_data    => dwell_cfg_rx,
+            dest_data    => dwell_cfg_wire,
             dest_req     => '1',
-            dest_ack     => open
+            dest_ack     => dwell_cfg_ack_rx
         );
+
+    -- Capture register in the rx domain.
+    --
+    -- handshake has no destination register of its own -- handshake.vhd:56
+    -- is `dest_data <= source_holding`, a plain wire from the source-domain
+    -- flops. Consuming that wire combinationally, as this did, means the
+    -- crossing has no capture event at all: there is nothing for
+    -- set_max_skew to bound, which is exactly what Quartus reported
+    -- (`handshake crossing not matched`, 6 instances, 5 pairs written).
+    -- Adding a pattern to the SDC could not have fixed that -- an unbounded
+    -- wire is not made coherent by constraining it.
+    --
+    -- This is bundled data, not telemetry: bits [29:24] are a shift and
+    -- [23:0] a mantissa, and dwell_threshold builds both into ONE
+    -- expression. A word assembled from two different writes -- an old
+    -- mantissa with a new shift -- yields a threshold that was never
+    -- programmed, and the analyser would act on it.
+    --
+    -- dest_ack is already synchronised into this domain by handshake's own
+    -- U_sync_ack, and it rises only after source_holding has been loaded,
+    -- so it is the stable-data indication; no extra synchroniser is needed.
+    -- Config changes between dwells, so capturing on the ack edge costs
+    -- nothing and the value is steady for the whole dwell that reads it.
+    dwell_cfg_capture : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            dwell_cfg_rx <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            if( dwell_cfg_ack_rx = '1' ) then
+                dwell_cfg_rx <= dwell_cfg_wire;
+            end if;
+        end if;
+    end process;
 
     -- Shift saturated at 24, not masked: 24 + the 24-bit mantissa is exactly
     -- the 48-bit field. A larger shift left unclamped would push the value
