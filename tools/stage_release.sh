@@ -66,8 +66,23 @@ stage_fw() {
     printf '  %-24s %8s bytes\n' "bladeRF_fw.img" "$(stat -c%s "$OUT/bladeRF_fw.img")"
 }
 
+# A release has to be reproducible from a commit. host/cmake/modules/
+# Version.cmake stamps "-dirty" onto the firmware and host version strings
+# whenever the worktree has uncommitted changes (Version.cmake:80), so a
+# build made on a dirty tree carries a version nobody can check out. The
+# device reports it too -- "2.6.1-git-a8f68808-dirty" is what libbladeRF
+# showed while agents had edits in flight.
+# Tracked changes only: untracked files do not make git describe report
+# dirty, so listing them here would send someone chasing a build artefact
+# that has nothing to do with the version string.
+if ! git -C "$ROOT" diff-index --quiet HEAD -- 2>/dev/null; then
+    git -C "$ROOT" diff-index --name-status HEAD -- | sed 's/^/    /' >&2
+    die "tracked files are modified; artefacts would be stamped -dirty"
+fi
+
 mkdir -p "$OUT"
-printf 'Staging %s into %s\n' "$VERSION" "${OUT#"$ROOT"/}"
+printf 'Staging %s from %s into %s\n' \
+    "$VERSION" "$(git -C "$ROOT" rev-parse --short HEAD)" "${OUT#"$ROOT"/}"
 
 if [ $# -ge 2 ]; then
     for rbf in "$2"/*.rbf; do
