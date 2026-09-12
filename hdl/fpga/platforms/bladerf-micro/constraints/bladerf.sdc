@@ -570,15 +570,30 @@ if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
 # rx_clock -- sixteen bits crossing the other way. Yesterday only the data
 # direction was constrained, which left half the problem in place; qcheck
 # found the rest once it was pointed at the core instead of the wrapper.
+# ⛔ The destination is the register INSIDE the Nios system, not the export
+# signal name. dwell_readout and pretrig_data are altera_avalon_pio
+# instances, so the capturing flop is <nios_system>_<name>:<name>|readdata[*];
+# `*dwell_readout_export*` matched no keeper at all, the `size > 0` guard
+# below skipped the pair in silence, and the crossing stayed fully timed.
+#
+# That is what made the system PLL domain fail: report_timing on job 54
+# named the worst path as dwell_readout|rd_data[19] ->
+# nios_system_dwell_readout:dwell_readout|readdata[19], launch pll_sclk,
+# latch system_pll, slack -6.665 -- a cross-clock path that gets no
+# common-clock pessimism credit. In hosted the worst path is inside one
+# domain and gets 1.384 ns of it. Same class of defect as the dwell_cfg
+# handshake pair: a pattern aimed at a signal name rather than a register.
+set dwell_pairs_written 0
 foreach {dwell_src dwell_dst} {
-    {*dwell_readout:*|rd_data[*]}      {*dwell_readout_export*}
-    {*pretrigger_buffer:*|rd_data[*]}  {*pretrig_data_export*}
+    {*dwell_readout:*|rd_data[*]}      {*:dwell_readout|readdata[*]}
+    {*pretrigger_buffer:*|rd_data[*]}  {*:pretrig_data|readdata[*]}
     {*pretrig_addr_export*}            {*dwell_readout:*|rd_index[*]}
     {*pretrig_addr_export*}            {*pretrigger_buffer:*|rd_addr[*]}
 } {
     set d_src [get_keepers -nowarn $dwell_src]
     set d_dst [get_keepers -nowarn $dwell_dst]
     if { [get_collection_size $d_src] > 0 && [get_collection_size $d_dst] > 0 } {
+        incr dwell_pairs_written
         # ⛔ set_max_skew is deliberately NOT used here, unlike the handshake
         # and tamer crossings above.
         #
@@ -600,5 +615,19 @@ foreach {dwell_src dwell_dst} {
         # So these are cut outright. The relaxation alone would still leave
         # them in the CCPP search space.
         set_false_path -from $d_src -to $d_dst
+    } elseif { [get_collection_size $d_src] > 0 } {
+        # Source exists but destination did not match: the block IS in this
+        # revision and the crossing is real, so this is a broken pattern,
+        # not an absent feature. Revisions without these blocks match
+        # neither end and say nothing, the same test the handshake counter
+        # above uses.
+        post_message -type critical_warning \
+            "readout crossing NOT cut: {$dwell_src} -> {$dwell_dst} \
+(src [get_collection_size $d_src] keepers, dst 0) \
+-- the path stays timed across clock families"
     }
 }
+# Reported whether or not anything was skipped: a silent skip is how this
+# defect survived a full revision. Four pairs expected in sweep, zero in
+# revisions that do not instantiate the analyser.
+post_message -type info "readout crossings cut: $dwell_pairs_written"
