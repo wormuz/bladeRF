@@ -125,6 +125,27 @@ if { $opts(seed) != "" } {
 set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
 set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
 
+# Routing effort, added 2026-09-12 for the sweep revision.
+#
+# Placement effort alone was already here and is not enough once the design
+# gets dense. Measured on job 60: the worst setup path in the LVDS domain is
+# inside the vendor dcfifo in rx_meta_fifo -- wraclr into the gray write
+# pointer -- at 8.218 ns over FOUR logic levels, slack -0.442. Four levels of
+# LUT on Cyclone V is well under a nanosecond, so essentially all of that is
+# interconnect: a routing problem, not a logic one.
+#
+# The same FIFO, same vendor IP, same clock closes at +0.286 in hosted. What
+# differs is density -- sweep carries the analyser on top, and M10K sits at
+# 282/308 (92%). Note the memory is NOT the analyser's: every one of those
+# blocks belongs to nios_system (caches, RAM, wishbone, JTAG UART), verified
+# against the fitter RAM summary. So there is nothing to shrink in our RTL to
+# buy the fitter room; the lever left is how hard it tries.
+#
+# None of these weaken a constraint. They spend compile time.
+set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
+
 # Save all the options
 export_assignments
 project_close
