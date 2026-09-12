@@ -75,3 +75,4 @@ hdl/quartus/db/
 hdl/quartus/*.qpf
 hdl/quartus/*.map.summary
 hdl/quartus/*.qws
+host/misc/dwell_record_probe

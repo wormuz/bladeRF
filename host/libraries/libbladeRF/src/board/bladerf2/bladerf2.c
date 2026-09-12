@@ -3411,6 +3411,119 @@ int bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value)
     return 0;
 }
 
+/* Bits 31:28 of the dwell status word are the analyzer version marker
+ * (bladerf_core.vhd, dwell_status_word(31 downto 28) <= "0001"). Hosted
+ * gateware shares the same FPGA version number as sweep but does not
+ * implement this block, and those bits read back 0 there -- so the FPGA
+ * version alone cannot tell the two apart. A silent zero would look like
+ * a valid "nothing frozen, nothing triggered" reading and would not be
+ * one, so every dwell entry point checks this first. */
+#define DWELL_STATUS_VERSION_SHIFT 28
+#define DWELL_STATUS_VERSION_MASK  0xfu
+
+int bladerf_set_dwell_sync(struct bladerf *dev, bool value)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    WITH_MUTEX(&dev->lock, {
+        uint32_t reg;
+
+        CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, &reg));
+
+        reg &= ~(1u << RFFE_CONTROL_SYNC_IN);
+        if (value) {
+            reg |= (1u << RFFE_CONTROL_SYNC_IN);
+        }
+
+        log_debug("%s: rffe_control_write %08x\n", __FUNCTION__, reg);
+        CHECK_STATUS_LOCKED(dev->backend->rffe_control_write(dev, reg));
+    });
+
+    return 0;
+}
+
+static int dwell_analyzer_present(struct bladerf *dev)
+{
+    uint32_t status;
+    int rv = nios_dwell_status_read(dev, &status);
+
+    if (rv != 0) {
+        return rv;
+    }
+
+    if (((status >> DWELL_STATUS_VERSION_SHIFT) & DWELL_STATUS_VERSION_MASK) == 0) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    return 0;
+}
+
+int bladerf_get_dwell_status(struct bladerf *dev, uint32_t *value)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(value);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(nios_dwell_status_read(dev, value));
+    });
+
+    return 0;
+}
+
+int bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
+                          uint8_t settle_sel)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(
+            nios_dwell_cfg_write(dev, threshold, settle_sel));
+    });
+
+    return 0;
+}
+
+int bladerf_get_dwell_summary(struct bladerf *dev,
+                              struct bladerf_dwell_summary *summary)
+{
+    uint32_t words[BLADERF_DWELL_WORD_COUNT];
+    uint32_t gen;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(summary);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(nios_dwell_summary_read(dev, words, &gen));
+    });
+
+    summary->energy_sum = ((uint64_t)words[BLADERF_DWELL_WORD_ENERGY_HI] << 32)
+                         | (uint64_t)words[BLADERF_DWELL_WORD_ENERGY_LO];
+    summary->peak = words[BLADERF_DWELL_WORD_PEAK];
+    summary->clip_count = words[BLADERF_DWELL_WORD_CLIP_COUNT];
+    summary->sample_count = words[BLADERF_DWELL_WORD_SAMPLE_COUNT];
+    summary->first_timestamp =
+        ((uint64_t)words[BLADERF_DWELL_WORD_TS_HI] << 32)
+        | (uint64_t)words[BLADERF_DWELL_WORD_TS_LO];
+    summary->mean_power = words[BLADERF_DWELL_WORD_MEAN_POWER];
+    summary->noise_floor = ((uint64_t)words[BLADERF_DWELL_WORD_FLOOR_HI] << 32)
+                          | (uint64_t)words[BLADERF_DWELL_WORD_FLOOR_LO];
+    summary->peak_window =
+        ((uint64_t)words[BLADERF_DWELL_WORD_PEAKWIN_HI] << 32)
+        | (uint64_t)words[BLADERF_DWELL_WORD_PEAKWIN_LO];
+    summary->first_window = words[BLADERF_DWELL_WORD_FIRST_WINDOW];
+    summary->verdict = words[BLADERF_DWELL_WORD_VERDICT];
+    summary->generation = gen;
+
+    return 0;
+}
+
 int bladerf_set_rfic_register(struct bladerf *dev,
                               uint16_t address,
                               uint8_t val)

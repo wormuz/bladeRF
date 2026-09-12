@@ -139,6 +139,137 @@ API_EXPORT
 int CALL_CONV bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value);
 
 /**
+ * Latched summary of one completed dwell, from the sweep-revision spectrum
+ * analyzer block. Fields are the fully-assembled physical/register values
+ * -- the caller does not reassemble lo/hi word pairs.
+ *
+ * No unit conversion to physical quantities (dBFS etc.) is done here: the
+ * library does not know the external RF chain, so these are raw
+ * accumulator/register values as the fabric computed them.
+ */
+struct bladerf_dwell_summary {
+    uint64_t energy_sum;      /**< Summed squared ADC magnitude over dwell */
+    uint32_t peak;             /**< Largest single-sample I^2+Q^2 in the
+                                 *   dwell. Power, not magnitude: full
+                                 *   scale is 2048 per component, so this
+                                 *   tops out at 2^23. */
+    uint32_t clip_count;       /**< Samples with either component at or
+                                 *   past the ADC rail */
+    uint32_t sample_count;     /**< Samples included in this dwell */
+    uint64_t first_timestamp;  /**< Sample timestamp at dwell start */
+    uint32_t mean_power;       /**< Energy per WINDOW, not per sample:
+                                 *   energy_sum >> WINDOW_LOG2. The fabric
+                                 *   shifts rather than divides, because
+                                 *   sample_count is not a power of two and
+                                 *   a real divider is not worth the logic.
+                                 *   Directly comparable with noise_floor
+                                 *   and peak_window, which are also window
+                                 *   sums. Divide by the window size for a
+                                 *   per-sample figure. */
+    uint64_t noise_floor;      /**< The QUIETEST completed window of the
+                                 *   dwell, as a window sum. Not an
+                                 *   estimate: with a signal present for
+                                 *   part of the dwell, this is the part
+                                 *   without it. Zero if no window
+                                 *   completed -- check sample_count. */
+    uint64_t peak_window;      /**< The LOUDEST completed window, same
+                                 *   units. Against noise_floor it gives
+                                 *   the dwell's dynamic range. */
+    uint32_t first_window;     /**< Index of the window where the trigger
+                                 *   first crossed. Meaningless unless
+                                 *   verdict says it triggered. */
+    uint32_t verdict;          /**< Advisory trigger: energy stayed over
+                                 *   threshold for K of the last M windows.
+                                 *   Advisory only -- the fabric never
+                                 *   discards a dwell on it. */
+    uint32_t generation;       /**< Generation this record belongs to; a
+                                 *   device that has just reset may report
+                                 *   generation 0 before any dwell
+                                 *   completes */
+};
+
+/**
+ * Drive the dwell boundary strobe (RFFE control register, SYNC_IN bit).
+ *
+ * A dwell boundary is not automatic: bladerf_core.vhd generates
+ * dwell_start on the RISING EDGE of this bit (dwell_sync_in and not
+ * dwell_sync_in_r), so the host must itself toggle it low->high->low
+ * around each dwell it wants counted. RX must already be enabled and
+ * streaming for the dwell to accumulate any samples.
+ *
+ * @param       dev     Device handle
+ * @param[in]   value   New SYNC_IN level
+ *
+ * @return 0 on success, or a value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_dwell_sync(struct bladerf *dev, bool value);
+
+/**
+ * Read the dwell status word.
+ *
+ * Sweep-revision gateware only. The top 4 bits of the status word carry
+ * the analyzer version marker (bladerf_core.vhd, dwell_status_word(31
+ * downto 28)); hosted-revision gateware has the same FPGA version number
+ * but does not implement this block, and reads back 0 in those bits. This
+ * function checks that marker and returns BLADERF_ERR_UNSUPPORTED rather
+ * than a silent zero when it is absent -- a zero status word is
+ * indistinguishable from "nothing frozen, nothing triggered" otherwise.
+ *
+ * @param       dev     Device handle
+ * @param[out]  value   Status word
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if this gateware does not
+ *         implement the dwell analyzer, or a value from \ref RETCODES
+ *         list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_dwell_status(struct bladerf *dev, uint32_t *value);
+
+/**
+ * Configure the dwell analyzer's advisory trigger threshold and settling
+ * interval.
+ *
+ * @param       dev         Device handle
+ * @param[in]   threshold   Window energy sum to trigger on, in raw summed
+ *                          ADC units. Zero disables the trigger;
+ *                          measurement continues either way -- this only
+ *                          decides which dwells are flagged. Encoded as
+ *                          mantissa and shift, so large values round to
+ *                          about 0.2%.
+ * @param[in]   settle_sel  Settling interval as a shift below the maximum:
+ *                          0 = 8192 samples, 1 = 4096, 2 = 2048,
+ *                          3 = 1024. At 61.44 MHz that spans 133 us down
+ *                          to 17 us.
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if this gateware does not
+ *         implement the dwell analyzer, or a value from \ref RETCODES
+ *         list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
+                                    uint8_t settle_sel);
+
+/**
+ * Read the latched dwell summary for the most recently completed dwell.
+ *
+ * Reads the generation marker before and after the record and retries
+ * internally if a dwell boundary landed in between, so the fields
+ * returned always describe a single dwell rather than a mix of two.
+ *
+ * @param       dev      Device handle
+ * @param[out]  summary  Receives the assembled dwell summary
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if this gateware does not
+ *         implement the dwell analyzer, BLADERF_ERR_UNEXPECTED if the
+ *         record could not be read consistently in four attempts, or a
+ *         value from \ref RETCODES list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_dwell_summary(struct bladerf *dev,
+                                        struct bladerf_dwell_summary *summary);
+
+/**
  * Read the temperature from the RFIC
  *
  * @param       dev         Device handle
