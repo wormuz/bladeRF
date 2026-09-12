@@ -404,21 +404,35 @@ if { $hs_done == 0 } {
     post_message -type info "handshake crossings constrained: $hs_done"
 }
 
-# Every handshake instance in the design is named in the pairs above. This
-# block is the net that catches a future one: a new instance gets a physical
-# bound from the day it appears, rather than silently crossing unconstrained
-# until someone notices. Skew and net delay excuse nothing, so applying them
-# to a superset is safe.
-#
-# The count check below is the part that matters. If the number of instances
+# Every handshake instance in the design is named in the pairs above. The
+# count check below is what catches a future one: if the number of instances
 # ever exceeds the number of pairs, a crossing exists that nobody wrote an
 # endpoint for, and that must be said out loud rather than left to show up as
 # a timing number months later.
 #
-# Deliberately -from only HERE. A -from-only set_max_delay would be a
-# different matter: tried once, it reached far past the crossing and overrode
-# the multicycles on SPI and I2C, which run off the same system PLL,
-# producing eight violations up to -14.061 ns on unrelated domains.
+# ⛔ There used to be a -from-only set_max_skew/set_net_delay blanket over
+# every source_holding[*] here, as a physical safety net for an instance
+# nobody had paired yet. It is gone, and must not come back in that form.
+#
+# An unbounded destination is exactly what makes CCPP expensive: with no
+# -to, common-clock-path-pessimism removal has to trace the clock tree of
+# every keeper in the design against all 363 source registers to find shared
+# trunks. Measured: the sweep revision stalled for hours in
+# STA_MAX_SKEW_IMPL::compute_skew_with_ccpp (GDB stack 2026-09-11, perf
+# profile 41.6% self time 2026-09-12) and completed end to end in 14:29 --
+# the same range as hosted -- once this and the two time_tamer bounds were
+# skipped. Per-constraint cost applied pointwise to a post-map netlist is
+# only 16-17 ms, so the expense is not the constraint itself: it is this
+# search, after physical synthesis, on the larger sweep graph.
+#
+# The safety it was meant to provide now rests entirely on the count check,
+# which fires at constraint-read time rather than asking the fitter to solve
+# a geometric explosion. That is the right place for it.
+#
+# (A -from-only set_max_delay would be worse still: tried once, it reached
+# far past the crossing and overrode the multicycles on SPI and I2C, which
+# run off the same system PLL, producing eight violations up to -14.061 ns
+# on unrelated domains.)
 set hs_all [get_keepers -nowarn {*handshake:*|source_holding[0]}]
 set hs_inst [get_collection_size $hs_all]
 if { $hs_inst > $hs_done } {
@@ -426,15 +440,7 @@ if { $hs_inst > $hs_done } {
         "handshake instances: $hs_inst, endpoint pairs written: $hs_done -- some crossing has no capture endpoint named"
 }
 
-set hs_src [get_keepers -nowarn {*handshake:*|source_holding[*]}]
-if { [get_collection_size $hs_src] > 0 } {
-    if { ![info exists ::env(BLADERF_DIAG_NO_MAX_SKEW)] } {
-        set_max_skew  -from $hs_src \
-            -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
-        set_net_delay -from $hs_src -max \
-            -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
-    }
-} else {
+if { $hs_inst == 0 } {
     post_message -type warning "handshake source_holding registers not found"
 }
 
