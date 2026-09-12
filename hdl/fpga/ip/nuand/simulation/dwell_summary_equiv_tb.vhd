@@ -88,7 +88,7 @@ architecture sim of dwell_summary_equiv_tb is
     -- A variant whose latency differs from this then fails on valid timing,
     -- which is the point -- the number is part of the interface, so it has to
     -- be written down somewhere a change will trip over.
-    constant PUBLISH_SKEW : natural := 1;
+    constant PUBLISH_SKEW : natural := 2;
 
     type rec_t is record
         energy  : unsigned(63 downto 0);
@@ -313,6 +313,26 @@ begin
         --    with CLIP_THRESHOLD deliberately mismatched on the candidate,
         --    this is the case that reports the mismatch.)
         feed(WINDOW_LEN, 1800, 1800);
+        boundary;
+
+        -- 8. Samples continuing through the boundary with no gap at all.
+        --
+        -- Cases 1-7 all let the stream stop at each boundary, so a record is
+        -- always assembled with nothing arriving. That hid a real defect: a
+        -- registered accumulation gate rises a cycle late, and a sample
+        -- landing in that cycle is counted into the record being published.
+        -- With this case a weakened gate reports sample_count 15 vs 16;
+        -- without it the bench passes either way, which is how it was found
+        -- (self-checked by weakening the gate deliberately).
+        feed(WINDOW_LEN, 700, 700);
+        wait until rising_edge(clock);
+        dwell_start <= '1';
+        sample.data_i <= to_signed(700, 16);
+        sample.data_q <= to_signed(700, 16);
+        sample.data_v <= '1';
+        wait until rising_edge(clock);
+        dwell_start <= '0';
+        feed(WINDOW_LEN, 700, 700);
         boundary;
 
         idle(20);

@@ -74,10 +74,36 @@ if grep -q "some crossing has no capture endpoint named" "$LOG"; then
 else
     verdict PASS "sdc: instance-count guard quiet (every handshake instance paired)"
 fi
-if grep -q "DIAGNOSTIC BUILD" "$LOG"; then
-    verdict FAIL "sdc: built with BLADERF_DIAG_NO_MAX_SKEW -- not a release-valid result"
+# The BLADERF_DIAG_NO_MAX_SKEW bypass was removed once CCPP was confirmed as
+# the stall cause; this checks it has not been reintroduced. Reading the SDC
+# rather than the log is deliberate: a bypass that is present but not taken
+# still leaves a way to build an image with no bound on bundled-data skew.
+if grep -q "BLADERF_DIAG_NO_MAX_SKEW" \
+   ../fpga/platforms/bladerf-micro/constraints/bladerf.sdc 2>/dev/null \
+   || grep -q "DIAGNOSTIC BUILD" "$LOG"; then
+    verdict FAIL "sdc: a max_skew bypass exists or was used -- not release-valid"
 else
-    verdict PASS "sdc: no diagnostic bypass in this build"
+    verdict PASS "sdc: no diagnostic bypass present"
+fi
+
+# The readout crossings must be cut, and the count says how many. A silent
+# skip -- pattern matching nothing, guard stepping over it -- is what left the
+# system PLL domain failing for a whole revision.
+rc=$(grep -oE "readout crossings cut: [0-9]+" "$LOG" | tail -1)
+if [ -n "$rc" ] && [ "${rc##* }" -ge 1 ]; then
+    verdict PASS "sdc: $rc"
+else
+    verdict FAIL "sdc: readout crossings not cut (${rc:-counter absent})"
+fi
+if grep -q "readout crossing NOT cut" "$LOG"; then
+    verdict FAIL "sdc: a readout crossing has a source but no destination match"
+else
+    verdict PASS "sdc: every readout crossing with a source found its destination"
+fi
+if grep -qE "(handshake|readout) pair too wide" "$LOG"; then
+    verdict FAIL "sdc: a destination pattern reaches past its crossing"
+else
+    verdict PASS "sdc: no pattern reaches past its crossing"
 fi
 
 # ------------------------------------------------------------- C. timing

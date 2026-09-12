@@ -38,28 +38,6 @@ library work;
 
 entity dwell_summary is
     generic (
-        -- Structural bisect (architect matrix, 2026-09-12, after
-        -- E1/E2/E3c narrowed the sweep quartus_map stall to dwell_summary's
-        -- own arithmetic seeing non-constant-foldable data, not to
-        -- adc_streams(0) fanout). false cuts the accumulate process
-        -- (window/dwell totals, min/max, K-of-M trigger) out of
-        -- elaboration entirely via generate -- not "if false", the RTL is
-        -- not there for the synthesiser to see below this stage. true
-        -- reproduces dwell_summary exactly as before this generic existed.
-        -- Delete this generic and BISECT_STAGE2 once the offending
-        -- sub-block is found and fixed in place.
-        BISECT_STAGE2   : boolean := true;
-        -- Cuts the K-of-M trigger persistence (over_history shift register,
-        -- ones() bit-count function, trig_latched/trig_window/trig_time)
-        -- into its own process, removable via generate independently of
-        -- the rest of accumulate. true = unchanged behaviour.
-        BISECT_STAGE3   : boolean := true;
-        -- Within trigger_stage: false keeps the over_history shift register
-        -- and threshold compare running (so it still elaborates and pipes
-        -- to something), but skips the ones()/TRIGGER_K persistence check
-        -- and the trig_latched/trig_window/trig_time updates it drives.
-        -- Only meaningful when BISECT_STAGE3 = true.
-        BISECT_STAGE3B  : boolean := true;
         -- Samples per analysis window, a power of two so the trigger
         -- comparison needs no divider.
         WINDOW_LOG2     : natural := 10;
@@ -149,6 +127,34 @@ architecture arch of dwell_summary is
     signal dwell_start_pipe : std_logic_vector(PIPE_DEPTH-1 downto 0) := (others => '0');
     signal dwell_start_d    : std_logic := '0';
 
+    -- The dwell boundary again, one cycle later still, for the record only.
+    --
+    -- win_extrema folds a window into win_min/win_max a cycle after the
+    -- boundary that closed it, because it reads the registered
+    -- window_done_total rather than the live sum. So the last window of a
+    -- dwell is still in flight when dwell_start_d arrives: assembling the
+    -- record then would publish extrema that do not include it, and
+    -- clearing them then would throw it away.
+    --
+    -- Delaying the compare without delaying the publish was tried and did
+    -- exactly that -- noise_floor 0 vs 80000, peak_window 0 vs 25920000 in
+    -- the equivalence bench. The two have to move together.
+    --
+    -- Accumulation is NOT gated while this is pending. Publication reads the
+    -- snapshot and touches no accumulator, so the new dwell counts from the
+    -- cycle after the boundary exactly as the unpipelined version does.
+    -- Gating it was tried four different ways and each swallowed the first
+    -- sample of the new dwell -- sample_count 17 vs 16 on a stream running
+    -- straight through a boundary.
+    signal dwell_start_pub  : std_logic := '0';
+
+    -- Dwell totals as they stood at the boundary, held for the publish cycle.
+    signal snap_energy      : unsigned(63 downto 0) := (others => '0');
+    signal snap_peak        : unsigned(31 downto 0) := (others => '0');
+    signal snap_clips       : unsigned(31 downto 0) := (others => '0');
+    signal snap_samples     : unsigned(31 downto 0) := (others => '0');
+    signal snap_windows     : unsigned(15 downto 0) := (others => '0');
+
     -- Stage 1: the two squares, registered before anything sums them.
     signal sq_i             : unsigned(31 downto 0) := (others => '0');
     signal sq_q             : unsigned(31 downto 0) := (others => '0');
@@ -186,7 +192,7 @@ architecture arch of dwell_summary is
     signal win_min          : unsigned(47 downto 0) := (others => '1');
     signal win_max          : unsigned(47 downto 0) := (others => '0');
 
-    -- Handoff from accumulate to trigger_stage (BISECT_STAGE3 split):
+    -- Handoff from accumulate to trigger_stage:
     -- one-cycle-late copy of the window-boundary event and total, since
     -- window_done/win_total are process-local variables in accumulate and
     -- cannot be read by a sibling process.
@@ -253,6 +259,140 @@ begin
     -- sample_count 15 vs 16 in the equivalence bench.
     dwell_start_d <= dwell_start_pipe(PIPE_DEPTH-2);
 
+    publish_delay : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            dwell_start_pub <= '0';
+        elsif( rising_edge(clock) ) then
+            dwell_start_pub <= dwell_start_d;
+        end if;
+    end process;
+
+    -- Exactly the one cycle the reference also refuses a sample on: its
+    -- boundary branch takes priority over accumulation, so a sample arriving
+    -- with the boundary belongs to the new dwell.
+    --
+    -- One cycle, not two. Gating both dwell_start_d and dwell_start_pub was
+    -- tried and swallowed a sample the reference counts -- the bench
+    -- reported sample_count 17 vs 16 on a stream that runs straight through
+    -- a boundary. Combinational, not registered: a registered gate rises a
+    -- cycle late and lets a sample into totals already being published,
+    -- which the same bench caught as 15 vs 16.
+
+    -- Snapshot of the dwell totals, taken on the boundary itself.
+    --
+    -- Publication happens a cycle later (it has to wait for win_extrema to
+    -- fold in the last window), but the accumulators are cleared on the
+    -- boundary and start the next dwell immediately. Reading them at publish
+    -- time therefore misses whatever the new dwell has already added -- the
+    -- bench caught that as sample_count 17 vs 16 on a stream running
+    -- straight through a boundary. Latching here decouples the two.
+    dwell_snapshot : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            snap_energy  <= (others => '0');
+            snap_peak    <= (others => '0');
+            snap_clips   <= (others => '0');
+            snap_samples <= (others => '0');
+            snap_windows <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            if( dwell_start_d = '1' ) then
+                snap_energy  <= dwell_energy;
+                snap_peak    <= dwell_peak;
+                snap_clips   <= dwell_clips;
+                snap_samples <= dwell_samples;
+                snap_windows <= dwell_windows;
+            end if;
+        end if;
+    end process;
+
+    -- Publication, one cycle after the boundary, from the snapshot.
+    --
+    -- Its own process on purpose. It used to be the first branch of the
+    -- accumulate if/elsif chain, which meant the publish cycle also blocked
+    -- accumulation -- and on a stream running through a boundary with no
+    -- gap, that swallowed exactly one sample of the new dwell. The bench
+    -- reported it as sample_count 17 vs 16, constant across four different
+    -- attempts to fix it inside the chain. Publication does not touch the
+    -- accumulators, so it does not belong in a chain that arbitrates them.
+    --
+    -- The extra cycle exists because win_extrema folds a window into
+    -- win_min/win_max one cycle after the boundary that closed it; publishing
+    -- on the boundary itself would miss the last window of the dwell.
+    publish : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            summary_valid <= '0';
+            energy_sum    <= (others => '0');
+            peak          <= (others => '0');
+            clip_count    <= (others => '0');
+            sample_count  <= (others => '0');
+            mean_power    <= (others => '0');
+            noise_floor   <= (others => '0');
+            peak_window   <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            summary_valid <= '0';
+            if( dwell_start_pub = '1' ) then
+                summary_valid <= '1';
+                energy_sum    <= snap_energy;
+                peak          <= snap_peak;
+                clip_count    <= snap_clips;
+                sample_count  <= snap_samples;
+
+                -- Mean power per WINDOW, not per sample: dwell_samples is not
+                -- a power of two, so per-sample would need a real divider,
+                -- while per-window is a fixed shift. It is also directly
+                -- comparable with noise_floor and peak_window, which are
+                -- window sums too. The host can divide by the window size,
+                -- which it knows.
+                mean_power <= resize(shift_right(snap_energy, WINDOW_LOG2), 32);
+
+                -- A dwell with no completed window has no floor to report.
+                -- All ones would read as "very loud", the opposite of the
+                -- truth, so send zero and let sample_count say why.
+                if( snap_windows = 0 ) then
+                    noise_floor <= (others => '0');
+                    peak_window <= (others => '0');
+                else
+                    noise_floor <= win_min;
+                    peak_window <= win_max;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    -- Window extrema, one cycle behind the boundary that closed the window.
+    --
+    -- Split out of the accumulate process because the chain there was
+    -- 48-bit add -> 48-bit compare -> mux -> the same register, all on one
+    -- edge: measured as the worst path in this domain once the CDC
+    -- crossings were constrained (win_max[25] to itself, six logic levels,
+    -- 9.091 ns, slack -1.265 on job 58). Reading the registered
+    -- window_done_total instead of the live sum breaks add from compare.
+    --
+    -- Cleared on dwell_start_pub, not dwell_start_d: the clear has to wait
+    -- for the same cycle the publish does, or the last window of the dwell
+    -- is discarded before it has been folded in.
+    win_extrema : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            win_min <= (others => '1');
+            win_max <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            if( window_done_pulse = '1' ) then
+                if( window_done_total < win_min ) then
+                    win_min <= window_done_total;
+                end if;
+                if( window_done_total > win_max ) then
+                    win_max <= window_done_total;
+                end if;
+            elsif( dwell_start_pub = '1' ) then
+                win_min <= (others => '1');
+                win_max <= (others => '0');
+            end if;
+        end if;
+    end process;
+
     square_stage : process( clock, reset )
     begin
         if( reset = '1' ) then
@@ -291,11 +431,7 @@ begin
     end process;
 
 
-    -- Stage 2: window accumulation, dwell totals, trigger persistence.
-    -- Cut entirely by BISECT_STAGE2 = false; the else branch below drives
-    -- every output this process would otherwise drive, so the entity still
-    -- elaborates with all ports connected.
-    gen_stage2_on : if( BISECT_STAGE2 ) generate
+    -- Stage 2: window accumulation and dwell totals.
     accumulate : process( clock, reset )
         variable window_done : boolean;
         -- The window total including the sample closing it, computed once.
@@ -321,49 +457,24 @@ begin
             dwell_windows <= (others => '0');
             window_done_pulse <= '0';
             window_done_total <= (others => '0');
-            summary_valid <= '0';
-            energy_sum    <= (others => '0');
-            peak          <= (others => '0');
-            clip_count    <= (others => '0');
-            sample_count  <= (others => '0');
         elsif( rising_edge(clock) ) then
-            summary_valid <= '0';
+            -- outputs are driven by the publish process
 
-            -- A dwell boundary publishes what has accumulated and clears.
+            -- A dwell boundary clears the accumulators. It no longer
+            -- publishes: dwell_snapshot latches the totals on this same edge
+            -- and the publish process emits the record a cycle later.
             -- Checked first so a boundary is never lost to a sample arriving
             -- in the same cycle: the sample belongs to the new dwell.
+            -- The boundary clears the accumulators here, exactly as the
+            -- unpipelined version does, so a sample arriving with it belongs
+            -- to the new dwell and the counts stay identical. What the
+            -- boundary no longer does is publish: dwell_snapshot latches the
+            -- totals on this same edge, and the record is assembled a cycle
+            -- later from that latch, once win_extrema has folded in the last
+            -- window. Clearing and publishing are separate events now, and
+            -- keeping the clear on the original edge is what keeps
+            -- sample_count identical to the reference.
             if( dwell_start_d = '1' ) then
-                summary_valid <= '1';
-                energy_sum    <= dwell_energy;
-                peak          <= dwell_peak;
-                clip_count    <= dwell_clips;
-                sample_count  <= dwell_samples;
-                -- Mean power per WINDOW, not per sample.
-                --
-                -- Per sample would need dwell_energy / dwell_samples, and
-                -- dwell_samples is not a power of two, so that is a real
-                -- divider. Per window is dwell_energy >> WINDOW_LOG2, a
-                -- fixed shift and free. It is directly comparable with
-                -- noise_floor and peak_window, which are also window sums,
-                -- and that comparison is the one that matters: is this
-                -- dwell's average near its own floor or well above it.
-                --
-                -- The host can still get per-sample by dividing by the
-                -- window size, which it knows.
-                mean_power <= resize(shift_right(dwell_energy, WINDOW_LOG2),
-                                     32);
-
-                -- A dwell with no completed window has no floor to report.
-                -- All ones would read as "very loud", which is the opposite
-                -- of the truth, so send zero and let sample_count say why.
-                if( dwell_windows = 0 ) then
-                    noise_floor <= (others => '0');
-                    peak_window <= (others => '0');
-                else
-                    noise_floor <= win_min;
-                    peak_window <= win_max;
-                end if;
-
                 window_sum    <= (others => '0');
                 window_count  <= (others => '0');
                 dwell_energy  <= (others => '0');
@@ -371,8 +482,7 @@ begin
                 dwell_clips   <= (others => '0');
                 dwell_samples <= (others => '0');
                 dwell_windows <= (others => '0');
-                win_min       <= (others => '1');
-                win_max       <= (others => '0');
+
 
             elsif( inst_valid = '1' ) then
                 window_sum_next := window_sum + resize(inst_energy, 48);
@@ -425,16 +535,12 @@ begin
                     -- dwell totals on the same edge, so there would be
                     -- nothing left to publish.
                     --
-                    -- Shortening this path therefore needs the record to be
-                    -- latched at the boundary and published from the latch,
-                    -- which is a larger change than the multiply split and is
-                    -- not folded into it.
-                    if( win_total < win_min ) then
-                        win_min <= win_total;
-                    end if;
-                    if( win_total > win_max ) then
-                        win_max <= win_total;
-                    end if;
+                    -- Now done: win_extrema below compares against the
+                    -- already-registered window_done_total, one cycle later,
+                    -- and the dwell boundary is delayed to match so the last
+                    -- window of a dwell still reaches its own record. The
+                    -- earlier attempt moved the compare without moving the
+                    -- clear, which is why it dropped that window.
 
                     -- Handed to trigger_stage below: window_done and win_total
                     -- are only valid the one cycle this branch runs, so latch
@@ -449,14 +555,12 @@ begin
             end if;
         end if;
     end process;
-    end generate;
 
-    -- Stage 3: K-of-M trigger persistence, split from accumulate so it can
-    -- be cut independently via BISECT_STAGE3. Reads window_done_pulse/
+    -- Stage 3: K-of-M trigger persistence, its own process. Reads
+    -- window_done_pulse/
     -- window_done_total (registered one cycle behind the window-boundary
     -- event in accumulate) instead of the window_done/win_total variables,
     -- which are process-local and cannot be shared across processes.
-    gen_stage3_on : if( BISECT_STAGE2 and BISECT_STAGE3 ) generate
         trigger_stage : process( clock, reset )
             variable over        : std_logic;
             -- Computed once. Written out twice in one clocked process (the
@@ -503,63 +607,37 @@ begin
                     next_history := over_history(TRIGGER_OF-2 downto 0) & over;
                     over_history <= next_history;
 
-                    if( BISECT_STAGE3B ) then
-                        if( trig_latched = '0' and
-                            ones(next_history) >= TRIGGER_K ) then
-                            trig_latched <= '1';
-                            trig_window  <= dwell_windows;
-                            -- Sampled here, at the crossing, not at the dwell
-                            -- boundary: by then the timestamp has advanced by
-                            -- the rest of the dwell and would name the wrong
-                            -- instant. Latched once, since trig_latched gates
-                            -- this branch.
-                            --
-                            -- Less PIPE_DEPTH: timestamp is free-running and
-                            -- unpipelined, while the energy that caused this
-                            -- crossing left the ADC PIPE_DEPTH clocks ago.
-                            -- Without the correction the mark names the
-                            -- instant the pipeline noticed, not the instant
-                            -- the signal arrived, and that is the number two
-                            -- receivers are correlated on. The equivalence
-                            -- bench caught it as first_timestamp 44 vs 45.
-                            --
-                            -- The correction is PIPE_DEPTH-1, not PIPE_DEPTH:
-                            -- this process reads window_done_total, which is
-                            -- already registered one clock behind the window
-                            -- boundary, so one of the two stages is spent
-                            -- before the value arrives here. Subtracting the
-                            -- full depth overshoots -- measured, the bench
-                            -- then reported 44 vs 43.
-                            trig_time    <= timestamp - (PIPE_DEPTH - 1);
-                        end if;
+                    if( trig_latched = '0' and
+                        ones(next_history) >= TRIGGER_K ) then
+                        trig_latched <= '1';
+                        trig_window  <= dwell_windows;
+                        -- Sampled here, at the crossing, not at the dwell
+                        -- boundary: by then the timestamp has advanced by
+                        -- the rest of the dwell and would name the wrong
+                        -- instant. Latched once, since trig_latched gates
+                        -- this branch.
+                        --
+                        -- Less PIPE_DEPTH: timestamp is free-running and
+                        -- unpipelined, while the energy that caused this
+                        -- crossing left the ADC PIPE_DEPTH clocks ago.
+                        -- Without the correction the mark names the
+                        -- instant the pipeline noticed, not the instant
+                        -- the signal arrived, and that is the number two
+                        -- receivers are correlated on. The equivalence
+                        -- bench caught it as first_timestamp 44 vs 45.
+                        --
+                        -- The correction is PIPE_DEPTH-1, not PIPE_DEPTH:
+                        -- this process reads window_done_total, which is
+                        -- already registered one clock behind the window
+                        -- boundary, so one of the two stages is spent
+                        -- before the value arrives here. Subtracting the
+                        -- full depth overshoots -- measured, the bench
+                        -- then reported 44 vs 43.
+                        trig_time    <= timestamp - (PIPE_DEPTH - 1);
                     end if;
                 end if;
             end if;
         end process;
-    end generate;
 
-    -- BISECT_STAGE2 and not BISECT_STAGE3: accumulate runs, trigger_stage
-    -- cut. These ports are trigger_stage's alone, so they need a driver.
-    gen_stage3_off : if( BISECT_STAGE2 and not BISECT_STAGE3 ) generate
-        triggered       <= '0';
-        first_window    <= (others => '0');
-        first_timestamp <= (others => '0');
-    end generate;
-
-    -- BISECT_STAGE2 = false: accumulate cut, ports it would drive get a
-    -- fixed idle value instead so the entity elaborates standalone.
-    gen_stage2_off : if( not BISECT_STAGE2 ) generate
-        summary_valid   <= '0';
-        energy_sum      <= (others => '0');
-        peak            <= (others => '0');
-        clip_count      <= (others => '0');
-        sample_count    <= (others => '0');
-        triggered       <= '0';
-        first_window    <= (others => '0');
-        first_timestamp <= (others => '0');
-        mean_power      <= (others => '0');
-        noise_floor     <= (others => '0');
-        peak_window     <= (others => '0');
-    end generate;
 
 end architecture;

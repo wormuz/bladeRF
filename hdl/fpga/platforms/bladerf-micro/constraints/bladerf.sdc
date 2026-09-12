@@ -24,23 +24,6 @@
 create_clock -period "38.4 MHz"  [get_ports c5_clock2]
 create_clock -period "250.0 MHz" [get_ports adi_rx_clock]
 
-# ⛔⛔ DIAGNOSTIC MODE -- NOT FOR RELEASE
-#
-# BLADERF_DIAG_NO_MAX_SKEW drops every set_max_skew/set_net_delay physical
-# bound on the bundled-data crossings (time_tamer hold_time->compare_time,
-# the U_snap handshake pairs, and the handshake source_holding blanket).
-# It exists for exactly one question: does CCPP-aware max-skew evaluation
-# explain the sweep-revision quartus_map stall, which a GDB stack and a
-# perf profile both put in STA_MAX_SKEW_IMPL::compute_skew_with_ccpp?
-#
-# An image built this way has NO bound on how far apart the bits of a
-# bundled-data word may land. It must never be flashed or released. The
-# banner below makes that impossible to miss in a log.
-if { [info exists ::env(BLADERF_DIAG_NO_MAX_SKEW)] } {
-    post_message -type critical_warning \
-        "DIAGNOSTIC BUILD: max_skew/net_delay bounds REMOVED from bundled-data crossings -- NOT FOR RELEASE"
-}
-
 # Generate the appropriate PLL clocks
 derive_pll_clocks
 derive_clock_uncertainty
@@ -182,12 +165,10 @@ foreach tamer {rx_tamer tx_tamer} {
         # run off the same system PLL.
         set_max_delay 100  -from $ht_src -to $ht_dst
         set_min_delay -100 -from $ht_src -to $ht_dst
-        if { ![info exists ::env(BLADERF_DIAG_NO_MAX_SKEW)] } {
-            set_max_skew  -from $ht_src -to $ht_dst \
-                -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
-            set_net_delay -from $ht_src -to $ht_dst -max \
-                -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
-        }
+        set_max_skew  -from $ht_src -to $ht_dst \
+            -get_skew_value_from_clock_period dst_clock_period -skew_value_multiplier 0.8
+        set_net_delay -from $ht_src -to $ht_dst -max \
+            -get_value_from_clock_period dst_clock_period -value_multiplier 0.8
         incr ht_done
     }
 }
@@ -403,10 +384,8 @@ foreach { src_pat dst_pat } $hs_pairs {
         # the protocol holds stable for a full request/acknowledge round
         # trip, so it is conservative by a wide margin -- the value has to be
         # under the stable window, not under one clock.
-        if { ![info exists ::env(BLADERF_DIAG_NO_MAX_SKEW)] } {
-            set_max_skew  -from $src -to $dst 6.4
-            set_net_delay -from $src -to $dst -max 6.4
-        }
+        set_max_skew  -from $src -to $dst 6.4
+        set_net_delay -from $src -to $dst -max 6.4
         # A pattern that matches the WRONG registers is as bad as one that
         # matches none, and the size check above cannot tell them apart.
         # For bundled data the widths are the check: n bits are carried into
