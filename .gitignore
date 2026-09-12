@@ -79,3 +79,6 @@ host/misc/dwell_record_probe
 flash-backups/
 release-staging/
 vendor-images/
+fx3-sdk-extract/
+fx3-sdk-root/
+host/misc/tx_energy_calib
