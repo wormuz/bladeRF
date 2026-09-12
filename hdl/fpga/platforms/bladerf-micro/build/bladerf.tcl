@@ -138,29 +138,6 @@ make_revision hosted
 # without the host in the loop.
 make_revision sweep
 
-# Diagnostic (architect, 2026-09-12): quartus_map stalls 30-40+ minutes on
-# this revision, at a fixed point (right after RAM removal, before
-# Timing-Driven Synthesis), in every configuration tried including two
-# confirmed-real fixes for duplicated expressions inside dwell_summary.vhd.
-# Standalone synthesis of dwell_summary alone is fast (10-20s) in every
-# variant. The remaining suspect is Quartus's cross-partition resource-
-# sharing search once dwell_summary's outputs feed the rest of
-# bladerf_core -- a search that standalone synthesis of the entity in
-# isolation cannot exercise, since it never sees what dwell_summary is
-# wired to. This turns that search off for the sweep revision specifically
-# (not hosted, which never had the block and never stalled).
-project_open -revision sweep ${PROJECT_NAME}
-set_global_assignment -name AUTO_RESOURCE_SHARING OFF
-# AUTO_RESOURCE_SHARING OFF alone did not fix it (job 48: RSS flat at
-# 4246088 KB for 15+ min, 99% CPU -- a fixed-point loop, not a large but
-# finite search). Architect's next hypothesis: FSM extraction/re-encoding
-# misidentifying the K-of-M persistence shift register as a large,
-# unstructured state machine and failing to converge on reachability
-# analysis, which runs in this exact window (right after RAM inference,
-# before Timing-Driven Synthesis).
-set_global_assignment -name STATE_MACHINE_PROCESSING "User-Encoded"
-export_assignments
-
 # Create the adsb
 make_revision adsb
 
