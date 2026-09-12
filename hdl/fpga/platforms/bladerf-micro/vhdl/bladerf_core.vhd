@@ -1026,8 +1026,34 @@ begin
                    when unsigned(dwell_cfg_rx(29 downto 24)) <= 24
                    else 24;
 
-    dwell_threshold <= shift_left(
-        resize(unsigned(dwell_cfg_rx(23 downto 0)), 48), dwell_shift);
+    -- Registered, not combinational.
+    --
+    -- Measured (job 54, Slow 1100mV 85C): all five worst setup paths in the
+    -- LVDS pll_sclk domain started at this crossing and ended in
+    -- dwell_summary's trigger registers, slack -11.858, eight logic levels,
+    -- 13.124 ns of data delay. The chain was
+    --
+    --     source_holding[28] -> dwell_shift -> ShiftLeft0 (48-bit barrel)
+    --                        -> LessThan5 (4 levels) -> trig_window[8]
+    --
+    -- The capture register above cut the crossing itself; this cuts the
+    -- rest, so the barrel shifter and the threshold comparison no longer
+    -- share one edge. Pipelining dwell_summary's arithmetic did nothing for
+    -- this domain because none of it was on this path -- job 54 moved the
+    -- slack by 36 ps, which is placement noise.
+    --
+    -- A cycle of latency is free here: the host reprogrammes between
+    -- dwells, and the analyser compares against a threshold that has been
+    -- steady for the whole dwell either way.
+    dwell_threshold_reg : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            dwell_threshold <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            dwell_threshold <= shift_left(
+                resize(unsigned(dwell_cfg_rx(23 downto 0)), 48), dwell_shift);
+        end if;
+    end process;
 
     -- Read address for the ring, from the host. Only the low DEPTH_LOG2
     -- bits mean anything; the rest are ignored rather than checked, since a
