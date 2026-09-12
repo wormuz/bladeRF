@@ -146,6 +146,7 @@ architecture arch of dwell_summary is
     -- Gating it was tried four different ways and each swallowed the first
     -- sample of the new dwell -- sample_count 17 vs 16 on a stream running
     -- straight through a boundary.
+    signal dwell_start_cmp  : std_logic := '0';
     signal dwell_start_pub  : std_logic := '0';
 
     -- Dwell totals as they stood at the boundary, held for the publish cycle.
@@ -169,7 +170,20 @@ architecture arch of dwell_summary is
 
     -- Per-window accumulator. WINDOW_LOG2 samples of a 32-bit value fits in
     -- 32 + WINDOW_LOG2 bits; 48 covers any window up to 2^16 samples.
-    signal window_sum       : unsigned(47 downto 0) := (others => '0');
+    -- Window sums are carried at the width they can actually reach, not 48.
+    --
+    -- Full scale is 2048, so instantaneous I^2+Q^2 <= 2^23, and a window of
+    -- 2**WINDOW_LOG2 samples sums to at most 2^(23+WINDOW_LOG2): 34 bits at
+    -- the default WINDOW_LOG2 = 10, 36 at 12, 38 at 14. Declaring 48 left
+    -- fourteen bits that are always zero, and three 48-bit comparators
+    -- dragged their carry chains across them for nothing.
+    --
+    -- Measured, so the change is worth a number rather than a feeling: at 48
+    -- bits the worst path in this domain was window_done_total[3] into the
+    -- first comparator, seven logic levels, 9.308 ns, slack -1.485 (job 59).
+    constant WIN_BITS : natural := 24 + WINDOW_LOG2;
+
+    signal window_sum       : unsigned(WIN_BITS-1 downto 0) := (others => '0');
     signal window_count     : unsigned(15 downto 0) := (others => '0');
 
     -- Dwell totals.
@@ -189,15 +203,28 @@ architecture arch of dwell_summary is
 
     -- Quietest and loudest completed window of the dwell. The minimum
     -- starts at all ones so the first window always replaces it.
-    signal win_min          : unsigned(47 downto 0) := (others => '1');
-    signal win_max          : unsigned(47 downto 0) := (others => '0');
+    signal win_min          : unsigned(WIN_BITS-1 downto 0) := (others => '1');
+    signal win_max          : unsigned(WIN_BITS-1 downto 0) := (others => '0');
 
     -- Handoff from accumulate to trigger_stage:
     -- one-cycle-late copy of the window-boundary event and total, since
     -- window_done/win_total are process-local variables in accumulate and
     -- cannot be read by a sibling process.
     signal window_done_pulse : std_logic := '0';
-    signal window_done_total : unsigned(47 downto 0) := (others => '0');
+    signal window_done_total : unsigned(WIN_BITS-1 downto 0) := (others => '0');
+
+    -- Set when the host programmed a threshold no window sum can reach.
+    -- Registered rather than compared inline: it changes only when the host
+    -- writes, so it costs one OR-reduce off the critical path instead of a
+    -- 14-bit compare inside the window-boundary cycle.
+    signal threshold_high    : std_logic := '0';
+
+    -- Registered comparator stage feeding win_extrema. The value travels with
+    -- its flags so the update never has to re-derive which window it is.
+    signal cmp_valid         : std_logic := '0';
+    signal cmp_lt_min        : std_logic := '0';
+    signal cmp_gt_max        : std_logic := '0';
+    signal cmp_total         : unsigned(WIN_BITS-1 downto 0) := (others => '0');
 
     function ones( v : std_logic_vector ) return natural is
         variable n : natural := 0;
@@ -259,12 +286,32 @@ begin
     -- sample_count 15 vs 16 in the equivalence bench.
     dwell_start_d <= dwell_start_pipe(PIPE_DEPTH-2);
 
+    threshold_guard : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            threshold_high <= '0';
+        elsif( rising_edge(clock) ) then
+            if( threshold(47 downto WIN_BITS) /= 0 ) then
+                threshold_high <= '1';
+            else
+                threshold_high <= '0';
+            end if;
+        end if;
+    end process;
+
     publish_delay : process( clock, reset )
     begin
         if( reset = '1' ) then
+            dwell_start_cmp <= '0';
             dwell_start_pub <= '0';
         elsif( rising_edge(clock) ) then
-            dwell_start_pub <= dwell_start_d;
+            -- Two stages, matching the extrema path: window_done_pulse ->
+            -- win_compare -> win_extrema. Publishing any earlier assembles a
+            -- record whose extrema are still one comparator behind, which is
+            -- the failure the equivalence bench reports as noise_floor and
+            -- peak_window reading zero.
+            dwell_start_cmp <= dwell_start_d;
+            dwell_start_pub <= dwell_start_cmp;
         end if;
     end process;
 
@@ -354,8 +401,8 @@ begin
                     noise_floor <= (others => '0');
                     peak_window <= (others => '0');
                 else
-                    noise_floor <= win_min;
-                    peak_window <= win_max;
+                    noise_floor <= resize(win_min, 48);
+                    peak_window <= resize(win_max, 48);
                 end if;
             end if;
         end if;
@@ -373,18 +420,54 @@ begin
     -- Cleared on dwell_start_pub, not dwell_start_d: the clear has to wait
     -- for the same cycle the publish does, or the last window of the dwell
     -- is discarded before it has been folded in.
+    -- Comparator stage, registered, one cycle ahead of the update below.
+    --
+    -- Splitting it out is what takes the wide compare off the path that ends
+    -- at win_min/win_max: those registers now see a flag and a value, not a
+    -- comparator output. Measured before this (job 59, Slow 1100mV 85C):
+    -- window_done_total[3] into the first comparator, seven logic levels,
+    -- 9.308 ns, slack -1.485 -- the whole remaining violation in this domain
+    -- sat in these three compares.
+    --
+    -- Comparing against win_min/win_max as they stand a cycle earlier is
+    -- correct because window boundaries are 2**WINDOW_LOG2 cycles apart:
+    -- the update has long settled before the next window closes. It would be
+    -- wrong only if two boundaries could arrive back to back.
+    win_compare : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            cmp_valid  <= '0';
+            cmp_lt_min <= '0';
+            cmp_gt_max <= '0';
+            cmp_total  <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            cmp_valid <= window_done_pulse;
+            cmp_total <= window_done_total;
+            if( window_done_total < win_min ) then
+                cmp_lt_min <= '1';
+            else
+                cmp_lt_min <= '0';
+            end if;
+            if( window_done_total > win_max ) then
+                cmp_gt_max <= '1';
+            else
+                cmp_gt_max <= '0';
+            end if;
+        end if;
+    end process;
+
     win_extrema : process( clock, reset )
     begin
         if( reset = '1' ) then
             win_min <= (others => '1');
             win_max <= (others => '0');
         elsif( rising_edge(clock) ) then
-            if( window_done_pulse = '1' ) then
-                if( window_done_total < win_min ) then
-                    win_min <= window_done_total;
+            if( cmp_valid = '1' ) then
+                if( cmp_lt_min = '1' ) then
+                    win_min <= cmp_total;
                 end if;
-                if( window_done_total > win_max ) then
-                    win_max <= window_done_total;
+                if( cmp_gt_max = '1' ) then
+                    win_max <= cmp_total;
                 end if;
             elsif( dwell_start_pub = '1' ) then
                 win_min <= (others => '1');
@@ -435,7 +518,7 @@ begin
     accumulate : process( clock, reset )
         variable window_done : boolean;
         -- The window total including the sample closing it, computed once.
-        variable win_total   : unsigned(47 downto 0);
+        variable win_total   : unsigned(WIN_BITS-1 downto 0);
         -- window_sum + resize(inst_energy, 48) was written out twice in
         -- this process (the per-sample window_sum update, and win_total
         -- below): two syntactically distinct 48-bit adds over the same
@@ -445,7 +528,7 @@ begin
         -- running the b31754a1 revision standalone: it still stalled
         -- quartus_map even with win_total in place, because this second
         -- instance of the same expression was never hoisted.
-        variable window_sum_next : unsigned(47 downto 0);
+        variable window_sum_next : unsigned(WIN_BITS-1 downto 0);
     begin
         if( reset = '1' ) then
             window_sum    <= (others => '0');
@@ -485,7 +568,7 @@ begin
 
 
             elsif( inst_valid = '1' ) then
-                window_sum_next := window_sum + resize(inst_energy, 48);
+                window_sum_next := window_sum + resize(inst_energy, WIN_BITS);
                 window_sum    <= window_sum_next;
                 window_count  <= window_count + 1;
                 dwell_energy  <= dwell_energy + resize(inst_energy, 64);
@@ -597,8 +680,14 @@ begin
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
                     -- what a sensible threshold would be.
-                    if( threshold /= 0 and
-                        window_done_total > threshold ) then
+                    -- Compared at WIN_BITS, not 48, so the comparator does
+                    -- not drag a carry chain across bits the sum can never
+                    -- reach. The host's threshold is 48-bit, so a value
+                    -- above the physical maximum has to mean "never
+                    -- triggers" rather than silently truncating into a hit:
+                    -- threshold_high catches exactly that.
+                    if( threshold /= 0 and threshold_high = '0' and
+                        window_done_total > threshold(WIN_BITS-1 downto 0) ) then
                         over := '1';
                     else
                         over := '0';

@@ -88,7 +88,7 @@ architecture sim of dwell_summary_equiv_tb is
     -- A variant whose latency differs from this then fails on valid timing,
     -- which is the point -- the number is part of the interface, so it has to
     -- be written down somewhere a change will trip over.
-    constant PUBLISH_SKEW : natural := 2;
+    constant PUBLISH_SKEW : natural := 3;
 
     type rec_t is record
         energy  : unsigned(63 downto 0);
