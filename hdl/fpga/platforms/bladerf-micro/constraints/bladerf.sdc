@@ -407,6 +407,27 @@ foreach { src_pat dst_pat } $hs_pairs {
             set_max_skew  -from $src -to $dst 6.4
             set_net_delay -from $src -to $dst -max 6.4
         }
+        # A pattern that matches the WRONG registers is as bad as one that
+        # matches none, and the size check above cannot tell them apart.
+        # For bundled data the widths are the check: n bits are carried into
+        # n bits, so a destination wider than its source means the pattern
+        # reached past the crossing into something else.
+        #
+        # Caught exactly that during this work: *dwell_readout*|readdata[*]
+        # returned 65 keepers against 32 sources, having also swept up
+        # dwell_status and rf_link_status -- two unrelated crossings that
+        # would have been constrained by accident. Anchoring to the instance
+        # (*:dwell_readout|readdata[*]) brought it back to 32.
+        #
+        # Not an equality assert: a destination NARROWER than the source is
+        # legitimate (an index selecting one of several words), so only the
+        # wider direction is suspect.
+        if { [get_collection_size $dst] > [get_collection_size $src] } {
+            post_message -type critical_warning \
+                "handshake pair too wide: $src_pat ([get_collection_size $src]) \
+-> $dst_pat ([get_collection_size $dst]) -- destination pattern reaches past \
+the crossing; anchor it to the instance"
+        }
         incr hs_done
     } else {
         post_message -type critical_warning "handshake crossing not matched: $src_pat -> $dst_pat"
@@ -619,6 +640,18 @@ foreach {dwell_src dwell_dst} {
         # So these are cut outright. The relaxation alone would still leave
         # them in the CCPP search space.
         set_false_path -from $d_src -to $d_dst
+
+        # Same width check as the handshake loop above, and it matters more
+        # here: cutting too much removes a real timing requirement in
+        # silence, where cutting too little at least shows up as a violated
+        # path. A destination wider than its source means the pattern
+        # reached past the crossing.
+        if { [get_collection_size $d_dst] > [get_collection_size $d_src] } {
+            post_message -type critical_warning \
+                "readout pair too wide: $dwell_src ([get_collection_size $d_src]) \
+-> $dwell_dst ([get_collection_size $d_dst]) -- destination pattern reaches past \
+the crossing; anchor it to the instance"
+        }
     } elseif { [get_collection_size $d_src] > 0 } {
         # Source exists but destination did not match: the block IS in this
         # revision and the crossing is real, so this is a broken pattern,
