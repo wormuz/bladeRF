@@ -133,6 +133,30 @@ architecture arch of dwell_summary is
 
     -- I^2 + Q^2 for signed(15 downto 0) inputs needs 33 bits: each square is
     -- at most 2^30, and the sum of two is at most 2^31.
+    -- The dwell boundary must travel the same number of stages as the
+    -- samples it delimits. Adding the square stage put inst_valid one clock
+    -- further from the sample; leaving dwell_start where it was made the
+    -- last sample of each dwell arrive after its own boundary, so it was
+    -- counted into the next record. The equivalence bench reported exactly
+    -- that: sample_count 47 vs 46, first_timestamp 44 vs 45, and a dwell
+    -- the reference closed empty coming back with one sample in it.
+    --
+    -- PIPE_DEPTH is the number of register stages between sample.data_v and
+    -- inst_valid: square_stage, then energy_stage. Change the stage count
+    -- and this must change with it, which is what the bench is there to
+    -- catch.
+    constant PIPE_DEPTH     : natural := 2;
+    signal dwell_start_pipe : std_logic_vector(PIPE_DEPTH-1 downto 0) := (others => '0');
+    signal dwell_start_d    : std_logic := '0';
+
+    -- Stage 1: the two squares, registered before anything sums them.
+    signal sq_i             : unsigned(31 downto 0) := (others => '0');
+    signal sq_q             : unsigned(31 downto 0) := (others => '0');
+    signal sq_valid         : std_logic := '0';
+    signal sq_clip          : std_logic := '0';
+
+    -- Stage 2: their sum. valid and clip ride one stage behind the sample
+    -- they describe, which is what keeps a record internally consistent.
     signal inst_energy      : unsigned(31 downto 0) := (others => '0');
     signal inst_valid       : std_logic := '0';
     signal inst_clip        : std_logic := '0';
@@ -195,45 +219,77 @@ begin
     -- need it, because full scale here is 2048 and I^2+Q^2 reaches 2^23.
     -- Widening both -- which this did -- asks for 32 x 32 multipliers and
     -- was why quartus_map would not converge on the sweep revision.
+    -- Split across two clocks, per the architect's staging: the multiply
+    -- lands in a register of its own before anything adds to it.
+    --
+    -- Measured reason (hosted vs sweep, Slow 1100mV 85C Fmax, seed 3,
+    -- builds 000038 and 000052): the LVDS pll_sclk domain that carries this
+    -- block drops from 129.63 MHz in hosted to 97.57 MHz in sweep, setup
+    -- slack +0.286 to -11.822. One clock used to hold two 16x16 multiplies,
+    -- their 32-bit sum, and a 17-bit-widened clip comparison on both
+    -- components -- and the next stage then added a 48-bit accumulate, a
+    -- window-boundary compare, min/max and the K-of-M shift on the same
+    -- edge.
+    --
+    -- Stage 1 here: squares only, registered.
+    -- Stage 2 below: their sum, plus the clip decision.
+    --
+    -- valid and clip travel with the data, one stage per stage: the whole
+    -- point of the equivalence bench is that context must not arrive a
+    -- cycle apart from what it describes.
+    dwell_boundary_delay : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            dwell_start_pipe <= (others => '0');
+        elsif( rising_edge(clock) ) then
+            dwell_start_pipe <= dwell_start_pipe(PIPE_DEPTH-2 downto 0) & dwell_start;
+        end if;
+    end process;
+
+    -- Bit PIPE_DEPTH-2, not PIPE_DEPTH-1: the shift register's own input
+    -- register is already one of the stages. Tapping the top bit delays the
+    -- boundary by PIPE_DEPTH+1 while the samples are delayed by PIPE_DEPTH,
+    -- which puts one sample of every dwell into the wrong record --
+    -- sample_count 15 vs 16 in the equivalence bench.
+    dwell_start_d <= dwell_start_pipe(PIPE_DEPTH-2);
+
+    square_stage : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            sq_i     <= (others => '0');
+            sq_q     <= (others => '0');
+            sq_valid <= '0';
+            sq_clip  <= '0';
+        elsif( rising_edge(clock) ) then
+            sq_valid <= sample.data_v;
+            sq_i     <= unsigned(resize(sample.data_i * sample.data_i, 32));
+            sq_q     <= unsigned(resize(sample.data_q * sample.data_q, 32));
+
+            -- Clip is judged on the sample, so it is decided here and
+            -- carried forward rather than recomputed a stage later from a
+            -- value that no longer exists.
+            if( abs(resize(sample.data_i, 17)) >= CLIP_THRESHOLD or
+                abs(resize(sample.data_q, 17)) >= CLIP_THRESHOLD ) then
+                sq_clip <= '1';
+            else
+                sq_clip <= '0';
+            end if;
+        end if;
+    end process;
+
     energy_stage : process( clock, reset )
-        -- Squares at the sample width: 16 x 16 signed gives 32 bits, which
-        -- is one DSP on Cyclone V.
-        variable i_sq  : signed(31 downto 0);
-        variable q_sq  : signed(31 downto 0);
-        variable mag   : unsigned(31 downto 0);
     begin
         if( reset = '1' ) then
             inst_energy <= (others => '0');
             inst_valid  <= '0';
             inst_clip   <= '0';
         elsif( rising_edge(clock) ) then
-            inst_valid <= sample.data_v;
-
-            -- Squared at the sample's own width, not widened first.
-            --
-            -- 16 x 16 signed is one DSP block on Cyclone V. Resizing to 32
-            -- before multiplying asks for a 32 x 32 multiplier -- a tree of
-            -- DSPs and soft logic producing a 64-bit product that is then
-            -- thrown away above bit 31. quartus_map did not converge on the
-            -- sweep revision with this in place; hosted, where the block is
-            -- absent, built in 15 minutes.
-            --
-            -- The width is provably enough: full scale is 2048 (12-bit ADC
-            -- in 16-bit containers), so a square reaches 2^22 and I^2+Q^2
-            -- reaches 2^23. 32 bits is already generous.
-            i_sq  := sample.data_i * sample.data_i;
-            q_sq  := sample.data_q * sample.data_q;
-            mag   := resize(unsigned(i_sq), 32) + resize(unsigned(q_sq), 32);
-            inst_energy <= mag;
-
-            if( abs(resize(sample.data_i, 17)) >= CLIP_THRESHOLD or
-                abs(resize(sample.data_q, 17)) >= CLIP_THRESHOLD ) then
-                inst_clip <= '1';
-            else
-                inst_clip <= '0';
-            end if;
+            inst_valid  <= sq_valid;
+            inst_clip   <= sq_clip;
+            inst_energy <= sq_i + sq_q;
         end if;
     end process;
+
 
     -- Stage 2: window accumulation, dwell totals, trigger persistence.
     -- Cut entirely by BISECT_STAGE2 = false; the else branch below drives
@@ -276,7 +332,7 @@ begin
             -- A dwell boundary publishes what has accumulated and clears.
             -- Checked first so a boundary is never lost to a sample arriving
             -- in the same cycle: the sample belongs to the new dwell.
-            if( dwell_start = '1' ) then
+            if( dwell_start_d = '1' ) then
                 summary_valid <= '1';
                 energy_sum    <= dwell_energy;
                 peak          <= dwell_peak;
@@ -358,6 +414,21 @@ begin
                     -- window_sum_next alone was not enough.
                     win_total := window_sum_next;
 
+                    -- Deferring these two compares to a later stage was tried
+                    -- and reverted: measured, not assumed. Moving them one
+                    -- cycle out means the last window of a dwell is folded in
+                    -- on the same edge that publishes the record, so it
+                    -- misses it -- the equivalence bench reported
+                    -- noise_floor 0 vs 80000 and peak_window 0 vs 25920000 on
+                    -- dwells ending at a window boundary. Publication cannot
+                    -- simply be held a cycle either: accumulate clears the
+                    -- dwell totals on the same edge, so there would be
+                    -- nothing left to publish.
+                    --
+                    -- Shortening this path therefore needs the record to be
+                    -- latched at the boundary and published from the latch,
+                    -- which is a larger change than the multiply split and is
+                    -- not folded into it.
                     if( win_total < win_min ) then
                         win_min <= win_total;
                     end if;
@@ -410,7 +481,7 @@ begin
                 first_window    <= (others => '0');
                 first_timestamp <= (others => '0');
             elsif( rising_edge(clock) ) then
-                if( dwell_start = '1' ) then
+                if( dwell_start_d = '1' ) then
                     triggered       <= trig_latched;
                     first_window    <= trig_window;
                     first_timestamp <= trig_time;
@@ -442,7 +513,24 @@ begin
                             -- the rest of the dwell and would name the wrong
                             -- instant. Latched once, since trig_latched gates
                             -- this branch.
-                            trig_time    <= timestamp;
+                            --
+                            -- Less PIPE_DEPTH: timestamp is free-running and
+                            -- unpipelined, while the energy that caused this
+                            -- crossing left the ADC PIPE_DEPTH clocks ago.
+                            -- Without the correction the mark names the
+                            -- instant the pipeline noticed, not the instant
+                            -- the signal arrived, and that is the number two
+                            -- receivers are correlated on. The equivalence
+                            -- bench caught it as first_timestamp 44 vs 45.
+                            --
+                            -- The correction is PIPE_DEPTH-1, not PIPE_DEPTH:
+                            -- this process reads window_done_total, which is
+                            -- already registered one clock behind the window
+                            -- boundary, so one of the two stages is spent
+                            -- before the value arrives here. Subtracting the
+                            -- full depth overshoots -- measured, the bench
+                            -- then reported 44 vs 43.
+                            trig_time    <= timestamp - (PIPE_DEPTH - 1);
                         end if;
                     end if;
                 end if;

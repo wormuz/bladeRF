@@ -81,6 +81,35 @@ architecture sim of dwell_summary_equiv_tb is
     signal records_seen : natural := 0;
     signal mismatches   : natural := 0;
 
+    -- The pipelined variant publishes PUBLISH_SKEW cycles after the
+    -- reference. That is a declared property of the variant, not something
+    -- the bench discovers: state it here, delay the reference record by
+    -- exactly that much, and compare contents on the candidate's own pulse.
+    -- A variant whose latency differs from this then fails on valid timing,
+    -- which is the point -- the number is part of the interface, so it has to
+    -- be written down somewhere a change will trip over.
+    constant PUBLISH_SKEW : natural := 1;
+
+    type rec_t is record
+        energy  : unsigned(63 downto 0);
+        pk      : unsigned(31 downto 0);
+        clips   : unsigned(31 downto 0);
+        samples : unsigned(31 downto 0);
+        trig    : std_logic;
+        window  : unsigned(15 downto 0);
+        ts      : unsigned(63 downto 0);
+        mean    : unsigned(31 downto 0);
+        floor_v : unsigned(47 downto 0);
+        pkwin   : unsigned(47 downto 0);
+        valid   : std_logic;
+    end record;
+
+    type rec_pipe_t is array (0 to PUBLISH_SKEW) of rec_t;
+    signal a_hist : rec_pipe_t := (others => (
+        (others => '0'), (others => '0'), (others => '0'), (others => '0'),
+        '0', (others => '0'), (others => '0'), (others => '0'),
+        (others => '0'), (others => '0'), '0'));
+
 begin
 
     clock <= not clock after CLK_PERIOD/2 when not done else '0';
@@ -92,7 +121,7 @@ begin
         end if;
     end process;
 
-    U_reference : entity work.dwell_summary
+    U_reference : entity work.dwell_summary_ref
         generic map ( WINDOW_LOG2 => WINDOW_LOG2, CLIP_THRESHOLD => CLIP_THR )
         port map (
             clock => clock, reset => reset, sample => sample,
@@ -126,65 +155,79 @@ begin
     -- the right thing to see -- the record contents must match AND the
     -- publication must stay aligned with dwell_start, because the host
     -- reads the record against the retune sequence that generated it.
-    compare : process( clock )
+    delay_reference : process( clock )
     begin
         if rising_edge(clock) then
-            if a_valid /= b_valid then
+            a_hist(0) <= (a_energy, a_peak, a_clips, a_samples, a_trig,
+                          a_window, a_ts, a_mean, a_floor, a_peakwin, a_valid);
+            for k in 1 to PUBLISH_SKEW loop
+                a_hist(k) <= a_hist(k-1);
+            end loop;
+        end if;
+    end process;
+
+    compare : process( clock )
+        variable r : rec_t;
+    begin
+        if rising_edge(clock) then
+            r := a_hist(PUBLISH_SKEW-1);
+            if r.valid /= b_valid then
                 mismatches <= mismatches + 1;
-                report "MISMATCH summary_valid: reference=" & std_logic'image(a_valid)
+                report "MISMATCH summary_valid alignment: reference (delayed "
+                     & integer'image(PUBLISH_SKEW) & ")=" & std_logic'image(r.valid)
                      & " pipelined=" & std_logic'image(b_valid)
                      & " at ts=" & integer'image(to_integer(ts_counter(31 downto 0)))
                     severity error;
-            elsif a_valid = '1' then
+            elsif b_valid = '1' then
                 records_seen <= records_seen + 1;
-                if a_energy /= b_energy then
+                if r.energy /= b_energy then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH energy_sum: " & integer'image(to_integer(a_energy(31 downto 0)))
+                    report "MISMATCH energy_sum: " & integer'image(to_integer(r.energy(31 downto 0)))
                          & " vs " & integer'image(to_integer(b_energy(31 downto 0))) severity error;
                 end if;
-                if a_peak /= b_peak then
+                if r.pk /= b_peak then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH peak: " & integer'image(to_integer(a_peak))
+                    report "MISMATCH peak: " & integer'image(to_integer(r.pk))
                          & " vs " & integer'image(to_integer(b_peak)) severity error;
                 end if;
-                if a_clips /= b_clips then
+                if r.clips /= b_clips then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH clip_count: " & integer'image(to_integer(a_clips))
+                    report "MISMATCH clip_count: " & integer'image(to_integer(r.clips))
                          & " vs " & integer'image(to_integer(b_clips)) severity error;
                 end if;
-                if a_samples /= b_samples then
+                if r.samples /= b_samples then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH sample_count: " & integer'image(to_integer(a_samples))
+                    report "MISMATCH sample_count: " & integer'image(to_integer(r.samples))
                          & " vs " & integer'image(to_integer(b_samples)) severity error;
                 end if;
-                if a_trig /= b_trig then
+                if r.trig /= b_trig then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH triggered: " & std_logic'image(a_trig)
+                    report "MISMATCH triggered: " & std_logic'image(r.trig)
                          & " vs " & std_logic'image(b_trig) severity error;
                 end if;
-                if a_window /= b_window then
+                if r.window /= b_window then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH first_window: " & integer'image(to_integer(a_window))
+                    report "MISMATCH first_window: " & integer'image(to_integer(r.window))
                          & " vs " & integer'image(to_integer(b_window)) severity error;
                 end if;
-                if a_ts /= b_ts then
+                if r.ts /= b_ts then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH first_timestamp: " & integer'image(to_integer(a_ts(31 downto 0)))
+                    report "MISMATCH first_timestamp: " & integer'image(to_integer(r.ts(31 downto 0)))
                          & " vs " & integer'image(to_integer(b_ts(31 downto 0))) severity error;
                 end if;
-                if a_mean /= b_mean then
+                if r.mean /= b_mean then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH mean_power: " & integer'image(to_integer(a_mean))
+                    report "MISMATCH mean_power: " & integer'image(to_integer(r.mean))
                          & " vs " & integer'image(to_integer(b_mean)) severity error;
                 end if;
-                if a_floor /= b_floor then
+                if r.floor_v /= b_floor then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH noise_floor: " & integer'image(to_integer(a_floor(31 downto 0)))
+                    report "MISMATCH noise_floor: " & integer'image(to_integer(r.floor_v(31 downto 0)))
                          & " vs " & integer'image(to_integer(b_floor(31 downto 0))) severity error;
                 end if;
-                if a_peakwin /= b_peakwin then
+                if r.pkwin /= b_peakwin then
                     mismatches <= mismatches + 1;
-                    report "MISMATCH peak_window: " & integer'image(to_integer(a_peakwin(31 downto 0)))
+                    report "MISMATCH peak_window: " & integer'image(to_integer(r.pkwin(31 downto 0)))
                          & " vs " & integer'image(to_integer(b_peakwin(31 downto 0))) severity error;
                 end if;
             end if;
