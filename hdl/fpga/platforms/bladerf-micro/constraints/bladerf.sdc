@@ -565,11 +565,15 @@ if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
 # whole record and publishes a generation counter the host reads either
 # side of it; the ring is frozen before it is read. The bound exists so a
 # word cannot be assembled from two different instants.
-# The address direction too. pretrig_addr_word is a system-domain PIO
-# output that feeds dwell_rd_index and pretrig_rd_addr, both read on
-# rx_clock -- sixteen bits crossing the other way. Yesterday only the data
-# direction was constrained, which left half the problem in place; qcheck
-# found the rest once it was pointed at the core instead of the wrapper.
+# The address direction too, and it needs the same correction: the source
+# is the PIO's own register, nios_system_dwell_cfg:pretrig_addr|data_out[*]
+# (34 keepers), not `pretrig_addr_export` (0). The destination is whatever
+# registers the selected word -- dwell_readout's rd_data, since rd_index is
+# an input port and holds nothing. Measured on job 57: with the data
+# direction fixed but this one still unbound, the worst LVDS path became
+# pretrig_addr|data_out[16] -> U_dwell_readout|rd_data[3], slack -8.994 at
+# two logic levels and 10.278 ns of delay. Two levels at ten nanoseconds is
+# an unconstrained crossing, not deep logic.
 # ⛔ The destination is the register INSIDE the Nios system, not the export
 # signal name. dwell_readout and pretrig_data are altera_avalon_pio
 # instances, so the capturing flop is <nios_system>_<name>:<name>|readdata[*];
@@ -587,8 +591,8 @@ set dwell_pairs_written 0
 foreach {dwell_src dwell_dst} {
     {*dwell_readout:*|rd_data[*]}      {*:dwell_readout|readdata[*]}
     {*pretrigger_buffer:*|rd_data[*]}  {*:pretrig_data|readdata[*]}
-    {*pretrig_addr_export*}            {*dwell_readout:*|rd_index[*]}
-    {*pretrig_addr_export*}            {*pretrigger_buffer:*|rd_addr[*]}
+    {*:pretrig_addr|data_out[*]}       {*dwell_readout:*|rd_data[*]}
+    {*:pretrig_addr|data_out[*]}       {*pretrigger_buffer:*|rd_data[*]}
 } {
     set d_src [get_keepers -nowarn $dwell_src]
     set d_dst [get_keepers -nowarn $dwell_dst]
