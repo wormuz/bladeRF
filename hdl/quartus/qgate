@@ -138,8 +138,21 @@ expect_count() {
 # on xA4 and on xA9. A bigger part changes how much fits, not how many
 # crossings exist. If one of these ever differs between sizes, that means the
 # revision instantiates something conditionally and the difference is the news.
+#
+# The handshake count is the one that does differ, exactly as predicted
+# above: sweep instantiates U_dwell_cfg_handshake to carry the analyser's
+# threshold and settle select across to the rx domain, so it has six
+# crossings where hosted has five. That sixth pair went unconstrained until
+# 2026-09-12 -- handshake had no destination register at all and the word was
+# read combinationally, so there was nothing for a bound to attach to. It is
+# real now, and expecting five here would reject the fix.
+if grep -q 'revision sweep' "$f" 2>/dev/null; then
+    hs_expect=6
+else
+    hs_expect=5
+fi
 expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-9]+' 2
-expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        5
+expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
 
 # Timing: any negative slack in the summary is a failure. The .sta.summary
@@ -147,10 +160,17 @@ expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-
 # where it wrote.
 # Device size is not hardcoded: xA4 and xA9 are the same design on different
 # parts, and the artefact names carry the size (hostedxA4, hostedxA9).
-sta=$(grep -oE '/[^ ]*hostedx[A-Z][0-9]\.sta\.summary' "$f" 2>/dev/null | head -1)
+# Any revision, not just hosted. The name used to be hardcoded to
+# hostedx[A-Z][0-9], so on the sweep revision this lookup found nothing and
+# the check reported "not found, not checked" -- a silent skip of the timing
+# gate itself, which is the same failure mode as an SDC pattern that matches
+# nothing. Job 62 passed every other check while its timing was never read.
+sta=$(grep -oE '/[^ ]*\.sta\.summary' "$f" 2>/dev/null | head -1)
 if [ -z "$sta" ]; then
-    d=$(ls -dt "$(dirname "$f")"/../hostedx[A-Z][0-9]-* 2>/dev/null | head -1)
-    [ -n "$d" ] && sta="$d/$(basename "$d" | sed 's/-.*//').sta.summary"
+    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' -newer "$(dirname "$f")" 2>/dev/null | head -1)
+fi
+if [ -z "$sta" ]; then
+    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' 2>/dev/null | head -1)
 fi
 if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
     neg=$(grep -A1 '^Type' "$sta" | grep -cE '^Slack\s*:\s*-' || true)

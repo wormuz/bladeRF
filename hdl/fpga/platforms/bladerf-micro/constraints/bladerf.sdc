@@ -588,12 +588,19 @@ if { ![info exists ::env(BLADERF_ASYNC_CLOCK_GROUPS)] } {
 # domain and gets 1.384 ns of it. Same class of defect as the dwell_cfg
 # handshake pair: a pattern aimed at a signal name rather than a register.
 set dwell_pairs_written 0
-foreach {dwell_src dwell_dst} {
-    {*dwell_readout:*|rd_data[*]}      {*:dwell_readout|readdata[*]}
-    {*pretrigger_buffer:*|rd_data[*]}  {*:pretrig_data|readdata[*]}
-    {*:pretrig_addr|data_out[*]}       {*dwell_readout:*|rd_data[*]}
-    {*:pretrig_addr|data_out[*]}       {*pretrigger_buffer:*|rd_data[*]}
+# Third column: a pattern that exists only if the block this pair belongs to
+# was instantiated. Without it the guard cannot tell "pattern is wrong" from
+# "block is absent" whenever the SOURCE is shared -- pretrig_addr feeds both
+# dwell_readout and pretrigger_buffer, so with ENABLE_TRIGGER_CAPTURE false
+# the source matched, the destination did not, and the guard cried wolf
+# twelve times in job 62 while the build was in fact clean.
+foreach {dwell_src dwell_dst dwell_owner} {
+    {*dwell_readout:*|rd_data[*]}      {*:dwell_readout|readdata[*]}   {*dwell_readout:*}
+    {*pretrigger_buffer:*|rd_data[*]}  {*:pretrig_data|readdata[*]}    {*pretrigger_buffer:*}
+    {*:pretrig_addr|data_out[*]}       {*dwell_readout:*|rd_data[*]}   {*dwell_readout:*}
+    {*:pretrig_addr|data_out[*]}       {*pretrigger_buffer:*|rd_data[*]} {*pretrigger_buffer:*}
 } {
+    set dwell_present [expr {[get_collection_size [get_keepers -nowarn $dwell_owner]] > 0}]
     set d_src [get_keepers -nowarn $dwell_src]
     set d_dst [get_keepers -nowarn $dwell_dst]
     if { [get_collection_size $d_src] > 0 && [get_collection_size $d_dst] > 0 } {
@@ -631,7 +638,7 @@ foreach {dwell_src dwell_dst} {
 -> $dwell_dst ([get_collection_size $d_dst]) -- destination pattern reaches past \
 the crossing; anchor it to the instance"
         }
-    } elseif { [get_collection_size $d_src] > 0 } {
+    } elseif { [get_collection_size $d_src] > 0 && $dwell_present } {
         # Source exists but destination did not match: the block IS in this
         # revision and the crossing is real, so this is a broken pattern,
         # not an absent feature. Revisions without these blocks match
