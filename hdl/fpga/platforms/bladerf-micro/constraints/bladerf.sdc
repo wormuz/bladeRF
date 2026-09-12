@@ -347,7 +347,21 @@ set hs_pairs [list \
     {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
-    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    ]
+    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    \
+    {*U_dwell_cfg_handshake|source_holding[*]}                    {*dwell_cfg_rx[*]}                       ]
+
+# The dwell_cfg pair exists only in the sweep revision, and it is a genuine
+# bundled-data crossing: dwell_cfg_rx[29:24] selects a shift and [23:0] is
+# the mantissa, and dwell_threshold is built from both in one expression. A
+# word assembled from two different writes would produce a threshold that
+# was never programmed -- the shift of one value applied to the mantissa of
+# another. In hosted the pattern matches nothing and the pair is skipped,
+# which is what get_keepers -nowarn plus the size check below is for.
+#
+# It was missing until 2026-09-12, hidden by the -from-only blanket that
+# used to cover every source_holding register in the design. Removing that
+# blanket (the CCPP stall fix) exposed it, and the instance-count guard
+# caught it on the first build: six handshake instances, five pairs.
 
 # vctcxo_tamer.vhd has two more handshake instances, and they are NOT listed
 # above because this revision does not instantiate that entity at all:
