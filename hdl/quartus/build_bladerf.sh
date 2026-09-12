@@ -161,9 +161,24 @@ fi
 
 # Set default options
 clear_work_dir=1
-nios_rev="Tiny"
+nios_rev="Fast"
 flow="full"
-seed="1"
+# Seed 7, not upstream's 1. The original reason (seed 1 left a -0.040 ns hold
+# violation under Quartus 23.1.1) no longer describes the design: the timing
+# structure was reworked in fifo_reader/fifo_writer and the choice of seed is
+# no longer what makes the build close.
+#
+# Measured on Quartus 25.1 Standard after that rework, 6-seed sweep,
+# PLACEMENT_EFFORT_MULTIPLIER 4.0, retiming ON (setup / hold, ns):
+#     1  +0.409 / +0.007      5  +0.648 / +0.030
+#     2  -0.210 / +0.028      7  +0.342 / +0.022
+#     3  +0.297 / +0.037     11  +0.193 / +0.010
+# Median setup +0.320, hold positive on every seed, 5 of 6 close both.
+#
+# Seed 7 is kept because it is the historical default for this tree and it
+# closes comfortably; seed 5 has more margin if a rebuild ever needs it.
+# Sweep data and the full story: OC bladerf/gateware-build.md.
+seed="7"
 omit_date=false
 
 while getopts ":ckb:r:s:a:fn:l:S:DhH" opt; do

@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# Synthesise one entity on its own, against the real device.
+#
+#   ./qsyn ../fpga/ip/nuand/synthesis/dwell_summary.vhd dwell_summary
+#   ./qsyn <file.vhd>... <top_entity>
+#
+# Why this exists: checking one block by running the full bladeRF build
+# costs fifteen minutes of Nios, Qsys, AD9361 and everything else, to look
+# at a module that is a few hundred lines. Today that turned an eight-step
+# bisection into a day. Standalone synthesis of the same entity is under a
+# minute, and it reports the two numbers that matter -- did map converge,
+# and what did it infer.
+#
+# It answers "is this block pathological for Analysis & Synthesis", which
+# is exactly the question the full build was being used for. It does NOT
+# answer placement, timing closure or interaction with the rest of the
+# design; those still need the real build.
+set -uo pipefail
+
+DEV="${QSYN_DEVICE:-5CEBA4F23C8}"
+FAM="${QSYN_FAMILY:-Cyclone V}"
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: qsyn <file.vhd>... <top_entity>" >&2
+    exit 2
+fi
+
+TOP="${!#}"
+FILES=("${@:1:$#-1}")
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+WORK="${QSYN_DIR:-/var/tmp/qsyn-$TOP}"
+rm -rf "$WORK"
+mkdir -p "$WORK"
+
+# Absolute paths: the project is built in $WORK, not next to the sources.
+QSF="$WORK/$TOP.qsf"
+{
+    echo "set_global_assignment -name FAMILY \"$FAM\""
+    echo "set_global_assignment -name DEVICE $DEV"
+    echo "set_global_assignment -name TOP_LEVEL_ENTITY $TOP"
+    echo "set_global_assignment -name VHDL_INPUT_VERSION VHDL_2008"
+    # Same effort settings as the real build. A block that converges only
+    # at a lower effort has not been cleared -- the question is whether it
+    # is pathological for the flow we actually use.
+    echo "set_global_assignment -name FITTER_EFFORT \"STANDARD FIT\""
+    echo "set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0"
+    for f in "${FILES[@]}"; do
+        echo "set_global_assignment -name VHDL_FILE \"$(cd "$(dirname "$f")" && pwd)/$(basename "$f")\""
+    done
+} > "$QSF"
+
+# A .qpf as well: quartus_map locates the revision through the project
+# file, and without it the QSF is never read -- the run fails in seconds
+# with "top-level design entity is undefined", which reads like a missing
+# source rather than a missing project.
+cat > "$WORK/$TOP.qpf" <<QPF
+PROJECT_REVISION = "$TOP"
+QPF
+
+printf 'qsyn %s on %s\n' "$TOP" "$DEV"
+
+# From the project directory: quartus_map resolves the project name
+# relative to the working directory, not to the argument path.
+cd "$WORK" || exit 2
+
+START=$(date +%s)
+# Timeout rather than waiting: the whole point is a fast answer, and a
+# standalone block that needs more than five minutes has already told us
+# what we came to find out.
+timeout "${QSYN_TIMEOUT:-300}" "$HOME/soft/q25" quartus_map \
+    --read_settings_files=on --write_settings_files=off \
+    "$TOP" -c "$TOP" > "$WORK/map.log" 2>&1
+RC=$?
+ELAPSED=$(( $(date +%s) - START ))
+
+if [ "$RC" -eq 124 ]; then
+    printf 'DID NOT CONVERGE in %ss -- this is the pathology, reproduced\n' \
+        "${QSYN_TIMEOUT:-300}"
+    printf 'log: %s\n' "$WORK/map.log"
+    tail -3 "$WORK/map.log" | cut -c1-100
+    exit 1
+fi
+
+if ! grep -q "Quartus Prime Analysis & Synthesis was successful" "$WORK/map.log"; then
+    printf 'FAILED after %ss\n' "$ELAPSED"
+    grep -E "^Error" "$WORK/map.log" | head -5 | cut -c1-140
+    exit 1
+fi
+
+printf 'converged in %ss\n' "$ELAPSED"
+
+# The inference numbers are the point: a block that infers thousands of
+# ALMs where a hundred were expected has not been understood yet.
+grep -E "Implemented [0-9]+ (logic cells|registers|DSP|RAM)|Implemented [0-9]+ device resources" \
+    "$WORK/map.log" | sed 's/^ *//' | head -6
+printf 'log: %s\n' "$WORK/map.log"

@@ -31,6 +31,8 @@
 #include "logger_id.h"
 #include "rel_assert.h"
 
+#include "backend/usb/nios_access.h"
+#include "nios_pkt_8x32.h"
 #include "../bladerf1/flash.h"
 #include "board/board.h"
 #include "capabilities.h"
@@ -765,6 +767,170 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 /* Enable/disable */
 /******************************************************************************/
 
+/* Declare a new RF link epoch to the FPGA before the datapath is enabled.
+ *
+ * The fabric treats `enable` as a long-lived level, not a start strobe,
+ * because FX3 can restart at a different USB speed without it ever
+ * dropping. So a new generation has to be announced explicitly, and
+ * enable rising without one is a protocol violation the fabric aborts on:
+ *
+ *     enable = 1, enable_prev = 0, link_active = 0  ->  abort
+ *
+ * and the abort latches itself. Measured on hardware: without this call
+ * the RX stream timed out with 0 of 131072 bytes on the very first
+ * transfer, while the RFIC was alive and reporting RSSI.
+ *
+ * Speed is latched with the epoch because FX3 samples it exactly once, in
+ * NuandRFLinkStart, and never rebuilds its DMA geometry afterwards. The
+ * two sides have to agree on which speed this generation runs at.
+ *
+ * Older gateware has no RF_LINK_CFG target and answers the write with a
+ * failure; that must not stop a device from streaming, so the result is
+ * logged and dropped. A device that needs the epoch will fail visibly at
+ * the stream instead, which is the same signal as before this existed.
+ */
+static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
+{
+    bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
+    uint32_t entry_status   = 0;
+    /* The START toggle is shared, but a direction whose enable is low
+     * ignores it, so "both directions applied" (bit 10) never comes true in
+     * a one-direction session. Wait on the bit of the direction just
+     * enabled: 8 for RX, 9 for TX. */
+    uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch) ? (1u << 9) : (1u << 8);
+    int status;
+
+    /* What the link looked like on arrival, before this session touches it.
+     * Printed unconditionally at verbose because the captures that fail do
+     * so silently, and the question "what state did the previous run leave"
+     * cannot be answered after the fact. */
+    if (nios_rf_link_status_read(dev, &entry_status) == 0) {
+        log_verbose("%s: link status on entry: 0x%08x "
+                    "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                    "epoch_both=%u epoch_count=%u)\n",
+                    __FUNCTION__, entry_status,
+                    (entry_status >> 16) & 1, (entry_status >> 19) & 1,
+                    (entry_status >> 14) & 1, (entry_status >> 15) & 1,
+                    (entry_status >> 10) & 1, (entry_status >> 20) & 0xff);
+    }
+
+    status = dev->backend->get_device_speed(dev, &speed);
+    if (status != 0) {
+        log_debug("%s: cannot read device speed (%s); epoch not announced\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    /* Make FX3 restart its RF link before the epoch is declared.
+     *
+     * FX3 samples the USB speed once per RF link start and never rebuilds
+     * pcktSize/burstLen/dmaCfg.size afterwards. Re-entering the RF_LINK alt
+     * setting is the only way to make it start over, and the register
+     * documentation in nios_pkt_8x32.h names it as a required step between
+     * SET_SPEED and START. It was never implemented on this side.
+     *
+     * Without it, whether a capture works depends on which state FX3 happens
+     * to be left in by the previous session -- measured as a strict pass/fail
+     * alternation over six identical captures, with an identical host command
+     * sequence in the passing and failing logs. */
+
+    /* No STOP here. The previous epoch is ended where it ends -- in the
+     * disable path below -- and every command in this register is a toggle,
+     * so sending STOP twice for one stop is two stops, which leaves the
+     * fabric a generation out of step with the host.
+     *
+     * Faults do not need clearing separately either: an accepted START
+     * clears the whole sticky vector and abort_active in the same cycle
+     * (fifo_writer.vhd:359, :414).
+     */
+    status = nios_rf_link_cfg_cmd(
+        dev, NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED,
+        (speed == BLADERF_DEVICE_SPEED_SUPER) ? 0 : 1);
+    if (status != 0) {
+        log_debug("%s: speed latch not accepted (%s); gateware may predate "
+                  "the RF link epoch mechanism\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    /* No FX3 RF-link restart here. Cycling the alternate setting (NULL then
+     * RF_LINK) was tried as the documented step between SET_SPEED and
+     * START: the epoch counter kept running across it in every cycle, so
+     * the fabric was never reset and FX3 never re-entered NuandRFLinkStart
+     * (which pulses SYS_RST, fx3_firmware/src/rf.c). The step did nothing. */
+    status = nios_rf_link_cfg_cmd(
+        dev, NIOS_PKT_8x32_RF_LINK_CMD_START, 0);
+    if (status != 0) {
+        log_debug("%s: link start not accepted (%s)\n",
+                  __FUNCTION__, bladerf_strerror(status));
+        return;
+    }
+
+    /* Wait for the fabric to say it consumed this epoch.
+     *
+     * Announcing and enabling are two separate USB transactions, and
+     * nothing orders them inside the FPGA: the toggle still has to cross
+     * into the sample clock domain and be acted on. If enable's rising
+     * edge arrives first, the fabric sees a datapath enabled without an
+     * epoch, which is the protocol violation it aborts on -- and the abort
+     * latches itself.
+     *
+     * Measured before this wait existed: three identical capture attempts
+     * gave 0, 200000 and 0 bytes. The announcement was correct and the
+     * race decided the outcome.
+     *
+     * Bit 10 is "both directions have applied the current epoch". Sixteen
+     * polls is far more than the crossing needs; it bounds the wait if the
+     * gateware never answers, in which case streaming will fail visibly at
+     * the transfer rather than hanging here.
+     */
+    for (unsigned attempt = 0; attempt < 16; attempt++) {
+        uint32_t st = 0;
+
+        status = nios_rf_link_status_read(dev, &st);
+        if (status != 0) {
+            log_debug("%s: cannot read link status (%s)\n",
+                      __FUNCTION__, bladerf_strerror(status));
+            return;
+        }
+
+        if (st & applied_bit) {
+            log_verbose("%s: epoch applied after %u polls, status 0x%08x "
+                        "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
+                        __FUNCTION__, attempt + 1, st,
+                        (st >> 19) & 1, (st >> 14) & 1, (st >> 20) & 0xff);
+            return;
+        }
+
+        if (attempt == 15) {
+            log_verbose("%s: epoch NOT applied, final status 0x%08x "
+                        "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                        "rx_epoch=%u tx_epoch=%u violation=%u)\n",
+                        __FUNCTION__, st,
+                        (st >> 16) & 1, (st >> 19) & 1, (st >> 14) & 1,
+                        (st >> 15) & 1, (st >> 8) & 1, (st >> 9) & 1,
+                        (st >> 7) & 1);
+        }
+    }
+
+    log_debug("%s: epoch not acknowledged by both directions; the stream "
+              "may abort\n", __FUNCTION__);
+}
+
+/* Counterpart to announce_rf_link_epoch: drop link_active so the next
+ * session starts from a link that is down rather than one still standing
+ * from a process that has already exited. Best effort -- a gateware that
+ * predates the command refuses it, which is the same as not calling it. */
+static void end_rf_link_epoch(struct bladerf *dev)
+{
+    int status = nios_rf_link_cfg_cmd(dev, NIOS_PKT_8x32_RF_LINK_CMD_STOP, 0);
+
+    if (status != 0) {
+        log_debug("%s: link stop not accepted (%s)\n", __FUNCTION__,
+                  bladerf_strerror(status));
+    }
+}
+
 static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
@@ -772,8 +938,71 @@ static int bladerf2_enable_module(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    int status;
 
-    return board_data->rfic->enable_module(dev, ch, enable);
+    /* After the RFIC path, not before it.
+     *
+     * rfic->enable_module ends in the BLADE_USB_CMD_RF_RX vendor command,
+     * and stock FX3 firmware (fx3_firmware/src/bladeRF.c:397-400) pulses
+     * GPIO_SYS_RST inside that command whenever both RX_EN and TX_EN are
+     * low, then raises RX_EN in the same handler. So on the first enable of
+     * a session the fabric is wiped and its enable input rises within the
+     * same USB transaction -- there is no window for the host to declare
+     * anything in between. An epoch announced before this point is erased
+     * by it; measured as violation=1 at disable in every cycle.
+     *
+     * Announced after, the writer sits ARMED (enable high, FIFO in clear,
+     * samples discarded) until the START, then streams. Gateware older
+     * than that rule recorded one protocol violation here instead, which
+     * the same START cleared (fifo_writer.vhd:359, :414); either way the
+     * datapath streams. */
+    if (enable) {
+        status = board_data->rfic->enable_module(dev, ch, enable);
+        if (status != 0) {
+            return status;
+        }
+        announce_rf_link_epoch(dev, ch);
+        board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = true;
+        return 0;
+    }
+
+    /* Disable: end the epoch after the datapath is down, so the fabric sees
+     * the stop with nothing still in flight.
+     *
+     * Closing the device is not enough to end an epoch. sys_reset comes
+     * from FX3 on fx3_ctl(7), and FX3 asserts it on some opens and not
+     * others -- measured as a strict pass/fail alternation over six
+     * identical captures, where every failing run began with the previous
+     * epoch still standing (status 0x1011df01, link active, epoch_count=1)
+     * and every passing one began from a reset fabric (0x10000000).
+     *
+     * So the host ends what the host began, rather than relying on a reset
+     * that is not ours to schedule. */
+    {
+        uint32_t st = 0;
+
+        /* State of the link as the stream ends, with the epoch still
+         * standing -- this is the only moment the failure is observable
+         * from the host, since a STOP or a new START clears the vector. */
+        if (nios_rf_link_status_read(dev, &st) == 0) {
+            log_verbose("%s: link status at %s disable: 0x%08x (rx_active=%u "
+                        "tx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
+                        "rx_epoch=%u tx_epoch=%u epoch_count=%u)\n",
+                        __FUNCTION__, BLADERF_CHANNEL_IS_TX(ch) ? "TX" : "RX",
+                        st, (st >> 16) & 1, st & 1, (st >> 19) & 1,
+                        (st >> 14) & 1, (st >> 15) & 1, (st >> 8) & 1,
+                        (st >> 9) & 1, (st >> 20) & 0xff);
+        }
+    }
+
+    status = board_data->rfic->enable_module(dev, ch, enable);
+
+    board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = false;
+    if (!board_data->rf_link_dir_on[0] && !board_data->rf_link_dir_on[1]) {
+        end_rf_link_epoch(dev);
+    }
+
+    return status;
 }
 
 
@@ -3178,6 +3407,119 @@ int bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value)
     WITH_MUTEX(&dev->lock, {
         CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, value));
     });
+
+    return 0;
+}
+
+/* Bits 31:28 of the dwell status word are the analyzer version marker
+ * (bladerf_core.vhd, dwell_status_word(31 downto 28) <= "0001"). Hosted
+ * gateware shares the same FPGA version number as sweep but does not
+ * implement this block, and those bits read back 0 there -- so the FPGA
+ * version alone cannot tell the two apart. A silent zero would look like
+ * a valid "nothing frozen, nothing triggered" reading and would not be
+ * one, so every dwell entry point checks this first. */
+#define DWELL_STATUS_VERSION_SHIFT 28
+#define DWELL_STATUS_VERSION_MASK  0xfu
+
+int bladerf_set_dwell_sync(struct bladerf *dev, bool value)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    WITH_MUTEX(&dev->lock, {
+        uint32_t reg;
+
+        CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, &reg));
+
+        reg &= ~(1u << RFFE_CONTROL_SYNC_IN);
+        if (value) {
+            reg |= (1u << RFFE_CONTROL_SYNC_IN);
+        }
+
+        log_debug("%s: rffe_control_write %08x\n", __FUNCTION__, reg);
+        CHECK_STATUS_LOCKED(dev->backend->rffe_control_write(dev, reg));
+    });
+
+    return 0;
+}
+
+static int dwell_analyzer_present(struct bladerf *dev)
+{
+    uint32_t status;
+    int rv = nios_dwell_status_read(dev, &status);
+
+    if (rv != 0) {
+        return rv;
+    }
+
+    if (((status >> DWELL_STATUS_VERSION_SHIFT) & DWELL_STATUS_VERSION_MASK) == 0) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    return 0;
+}
+
+int bladerf_get_dwell_status(struct bladerf *dev, uint32_t *value)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(value);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(nios_dwell_status_read(dev, value));
+    });
+
+    return 0;
+}
+
+int bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
+                          uint8_t settle_sel)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(
+            nios_dwell_cfg_write(dev, threshold, settle_sel));
+    });
+
+    return 0;
+}
+
+int bladerf_get_dwell_summary(struct bladerf *dev,
+                              struct bladerf_dwell_summary *summary)
+{
+    uint32_t words[BLADERF_DWELL_WORD_COUNT];
+    uint32_t gen;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(summary);
+
+    WITH_MUTEX(&dev->lock, {
+        CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
+        CHECK_STATUS_LOCKED(nios_dwell_summary_read(dev, words, &gen));
+    });
+
+    summary->energy_sum = ((uint64_t)words[BLADERF_DWELL_WORD_ENERGY_HI] << 32)
+                         | (uint64_t)words[BLADERF_DWELL_WORD_ENERGY_LO];
+    summary->peak = words[BLADERF_DWELL_WORD_PEAK];
+    summary->clip_count = words[BLADERF_DWELL_WORD_CLIP_COUNT];
+    summary->sample_count = words[BLADERF_DWELL_WORD_SAMPLE_COUNT];
+    summary->first_timestamp =
+        ((uint64_t)words[BLADERF_DWELL_WORD_TS_HI] << 32)
+        | (uint64_t)words[BLADERF_DWELL_WORD_TS_LO];
+    summary->mean_power = words[BLADERF_DWELL_WORD_MEAN_POWER];
+    summary->noise_floor = ((uint64_t)words[BLADERF_DWELL_WORD_FLOOR_HI] << 32)
+                          | (uint64_t)words[BLADERF_DWELL_WORD_FLOOR_LO];
+    summary->peak_window =
+        ((uint64_t)words[BLADERF_DWELL_WORD_PEAKWIN_HI] << 32)
+        | (uint64_t)words[BLADERF_DWELL_WORD_PEAKWIN_LO];
+    summary->first_window = words[BLADERF_DWELL_WORD_FIRST_WINDOW];
+    summary->verdict = words[BLADERF_DWELL_WORD_VERDICT];
+    summary->generation = gen;
 
     return 0;
 }

@@ -352,6 +352,160 @@ set_instance_parameter_value vctcxo_tamer_0 {writable} {1}
 set_instance_parameter_value vctcxo_tamer_0 {ecc_enabled} {0}
 set_instance_parameter_value vctcxo_tamer_0 {resetrequest_enabled} {1}
 
+# RF link status. Input only: the fabric assembles the word (usb speed latch,
+# epoch counter, protocol violation, mismatch flags) and the host reads it
+# through NIOS_PKT_8x32_TARGET_RF_LINK_STATUS. Without this PIO the whole
+# mechanism was dead weight -- rf_link_status was assigned in
+# bladerf-hosted.vhd and read in pkt_8x32.c, with nothing in between, so
+# Quartus reported "assigned a value but never read" and the host would have
+# read zero forever.
+add_instance rf_link_status altera_avalon_pio
+set_instance_parameter_value rf_link_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rf_link_status {bitModifyingOutReg} {0}
+set_instance_parameter_value rf_link_status {captureEdge} {0}
+set_instance_parameter_value rf_link_status {direction} {Input}
+set_instance_parameter_value rf_link_status {edgeType} {RISING}
+set_instance_parameter_value rf_link_status {generateIRQ} {0}
+set_instance_parameter_value rf_link_status {irqType} {LEVEL}
+set_instance_parameter_value rf_link_status {resetValue} {0.0}
+set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
+set_instance_parameter_value rf_link_status {width} {32}
+
+# Pre-trigger ring drain. Two PIOs, because a memory needs an address and a
+# datum and a PIO carries one word.
+#
+#   pretrig_addr   Output. Low 12 bits select the entry; the ring is 4096
+#                  deep. Bits 31..12 are unused, not reserved for anything.
+#   pretrig_data   Input. The entry, Q in 31..16 and I in 15..0, matching
+#                  the packing the fabric writes.
+#
+# Read sequence: write the address, read the datum. The buffer registers its
+# read port, so the datum is valid the cycle after the address -- and any
+# Avalon read takes longer than that, so no wait state is needed.
+#
+# Deliberately not a burst or DMA path: draining 4096 words happens once per
+# trigger, during a 102.5 ms dwell, while the host has nothing else to do
+# with this register window. A DMA engine here would be more logic than the
+# buffer it serves.
+add_instance pretrig_addr altera_avalon_pio
+set_instance_parameter_value pretrig_addr {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value pretrig_addr {bitModifyingOutReg} {0}
+set_instance_parameter_value pretrig_addr {captureEdge} {0}
+set_instance_parameter_value pretrig_addr {direction} {Output}
+set_instance_parameter_value pretrig_addr {edgeType} {RISING}
+set_instance_parameter_value pretrig_addr {generateIRQ} {0}
+set_instance_parameter_value pretrig_addr {irqType} {LEVEL}
+set_instance_parameter_value pretrig_addr {resetValue} {0.0}
+set_instance_parameter_value pretrig_addr {simDoTestBenchWiring} {0}
+set_instance_parameter_value pretrig_addr {simDrivenValue} {0.0}
+set_instance_parameter_value pretrig_addr {width} {32}
+
+add_instance pretrig_data altera_avalon_pio
+set_instance_parameter_value pretrig_data {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value pretrig_data {bitModifyingOutReg} {0}
+set_instance_parameter_value pretrig_data {captureEdge} {0}
+set_instance_parameter_value pretrig_data {direction} {Input}
+set_instance_parameter_value pretrig_data {edgeType} {RISING}
+set_instance_parameter_value pretrig_data {generateIRQ} {0}
+set_instance_parameter_value pretrig_data {irqType} {LEVEL}
+set_instance_parameter_value pretrig_data {resetValue} {0.0}
+set_instance_parameter_value pretrig_data {simDoTestBenchWiring} {0}
+set_instance_parameter_value pretrig_data {simDrivenValue} {0.0}
+set_instance_parameter_value pretrig_data {width} {32}
+
+# Dwell status. Input only. The summary the host reads to decide whether the
+# ring is worth draining at all:
+#
+#   0       frozen        the ring holds a trigger's history
+#   1       wrapped       it filled once, so all 4096 entries are history
+#   2       triggered     the dwell that just ended crossed the threshold
+#   3       measure_valid the receiver had settled
+#   4       gain_too_high the previous dwell clipped past 100 ppm
+#   16..27  oldest_index  where to start reading when wrapped
+#
+# One word rather than five PIOs: these are read together or not at all, and
+# a single read cannot show two of them from different instants.
+add_instance dwell_cfg altera_avalon_pio
+set_instance_parameter_value dwell_cfg {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value dwell_cfg {bitModifyingOutReg} {0}
+set_instance_parameter_value dwell_cfg {captureEdge} {0}
+set_instance_parameter_value dwell_cfg {direction} {Output}
+set_instance_parameter_value dwell_cfg {edgeType} {RISING}
+set_instance_parameter_value dwell_cfg {generateIRQ} {0}
+set_instance_parameter_value dwell_cfg {irqType} {LEVEL}
+set_instance_parameter_value dwell_cfg {resetValue} {0.0}
+set_instance_parameter_value dwell_cfg {simDoTestBenchWiring} {0}
+set_instance_parameter_value dwell_cfg {simDrivenValue} {0.0}
+set_instance_parameter_value dwell_cfg {width} {32}
+
+add_instance dwell_readout altera_avalon_pio
+set_instance_parameter_value dwell_readout {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value dwell_readout {bitModifyingOutReg} {0}
+set_instance_parameter_value dwell_readout {captureEdge} {0}
+set_instance_parameter_value dwell_readout {direction} {Input}
+set_instance_parameter_value dwell_readout {edgeType} {RISING}
+set_instance_parameter_value dwell_readout {generateIRQ} {0}
+set_instance_parameter_value dwell_readout {irqType} {LEVEL}
+set_instance_parameter_value dwell_readout {resetValue} {0.0}
+set_instance_parameter_value dwell_readout {simDoTestBenchWiring} {0}
+set_instance_parameter_value dwell_readout {simDrivenValue} {0.0}
+set_instance_parameter_value dwell_readout {width} {32}
+
+add_instance dwell_status altera_avalon_pio
+set_instance_parameter_value dwell_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value dwell_status {bitModifyingOutReg} {0}
+set_instance_parameter_value dwell_status {captureEdge} {0}
+set_instance_parameter_value dwell_status {direction} {Input}
+set_instance_parameter_value dwell_status {edgeType} {RISING}
+set_instance_parameter_value dwell_status {generateIRQ} {0}
+set_instance_parameter_value dwell_status {irqType} {LEVEL}
+set_instance_parameter_value dwell_status {resetValue} {0.0}
+set_instance_parameter_value dwell_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value dwell_status {simDrivenValue} {0.0}
+set_instance_parameter_value dwell_status {width} {32}
+
+# RF link config. Output only: the host declares a link generation and the
+# fabric obeys it. This is the write half of the mechanism above.
+#
+# It exists because tx_enable/rx_enable are long-lived LEVELS, not start
+# strobes. If FX3 restarts at a different USB speed while enable stays high,
+# the fabric never sees an edge and keeps the previous speed latch, while FX3
+# rebuilds its DMA geometry from the new speed -- the two sides of one GPIF
+# then disagree and nothing in the control path reports it. FX3 samples the
+# speed exactly once, in NuandRFLinkStart (fx3_firmware/src/rf.c:234), and we
+# cannot rebuild that firmware, so the fabric has to be told explicitly when a
+# new link generation begins.
+#
+# Bits 1..3 are TOGGLES, not levels: every transition is one request. A level
+# would be lost across the clock-domain crossing if the host wrote it and
+# cleared it faster than the destination domain samples.
+#
+#   bit  0      requested usb speed, 0 = SuperSpeed geometry, 1 = Hi-Speed
+#   bit  1      start toggle  -- latch speed, bump the shared epoch, clear
+#                                transport faults, then allow the datapath
+#   bit  2      stop  toggle  -- drop link_active, abort and flush locally,
+#                                keep the diagnostics
+#   bit  3      clear fault toggle -- lab use; does NOT restart the datapath
+#   bits 15:8   host epoch tag, diagnostic only
+#   bits 31:16  reserved, write zero
+#
+# start means "the host asserts that FX3 link start succeeded and asks the
+# fabric to enter this epoch". It is not evidence about FX3 itself -- only
+# observed GPIF progress is that.
+add_instance rf_link_cfg altera_avalon_pio
+set_instance_parameter_value rf_link_cfg {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rf_link_cfg {bitModifyingOutReg} {0}
+set_instance_parameter_value rf_link_cfg {captureEdge} {0}
+set_instance_parameter_value rf_link_cfg {direction} {Output}
+set_instance_parameter_value rf_link_cfg {edgeType} {RISING}
+set_instance_parameter_value rf_link_cfg {generateIRQ} {0}
+set_instance_parameter_value rf_link_cfg {irqType} {LEVEL}
+set_instance_parameter_value rf_link_cfg {resetValue} {0.0}
+set_instance_parameter_value rf_link_cfg {simDoTestBenchWiring} {0}
+set_instance_parameter_value rf_link_cfg {simDrivenValue} {0.0}
+set_instance_parameter_value rf_link_cfg {width} {32}
+
 add_instance xb_gpio altera_avalon_pio
 set_instance_parameter_value xb_gpio {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value xb_gpio {bitModifyingOutReg} {0}
@@ -441,6 +595,13 @@ set_interface_property tx_tamer EXPORT_OF tx_tamer.conduit_end
 add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
+set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
+set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
+set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
+set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
+set_interface_property dwell_readout EXPORT_OF dwell_readout.external_connection
+set_interface_property dwell_cfg EXPORT_OF dwell_cfg.external_connection
+set_interface_property rf_link_cfg EXPORT_OF rf_link_cfg.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
 add_interface xb_gpio_dir conduit end
 set_interface_property xb_gpio_dir EXPORT_OF xb_gpio_dir.external_connection
@@ -538,6 +699,34 @@ set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 baseAddress {0x10000000}
 set_connection_parameter_value nios2.data_master/wishbone_master_0.avalon_slave_0 defaultConnection {0}
 
+add_connection nios2.data_master pretrig_addr.s1
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 baseAddress {0x9560}
+set_connection_parameter_value nios2.data_master/pretrig_addr.s1 defaultConnection {0}
+add_connection nios2.data_master pretrig_data.s1
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 baseAddress {0x9580}
+set_connection_parameter_value nios2.data_master/pretrig_data.s1 defaultConnection {0}
+add_connection nios2.data_master dwell_cfg.s1
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 baseAddress {0x95e0}
+set_connection_parameter_value nios2.data_master/dwell_cfg.s1 defaultConnection {0}
+add_connection nios2.data_master dwell_readout.s1
+set_connection_parameter_value nios2.data_master/dwell_readout.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/dwell_readout.s1 baseAddress {0x95c0}
+set_connection_parameter_value nios2.data_master/dwell_readout.s1 defaultConnection {0}
+add_connection nios2.data_master dwell_status.s1
+set_connection_parameter_value nios2.data_master/dwell_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/dwell_status.s1 baseAddress {0x95a0}
+set_connection_parameter_value nios2.data_master/dwell_status.s1 defaultConnection {0}
+add_connection nios2.data_master rf_link_status.s1
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
+set_connection_parameter_value nios2.data_master/rf_link_status.s1 defaultConnection {0}
+add_connection nios2.data_master rf_link_cfg.s1
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 baseAddress {0x9540}
+set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 defaultConnection {0}
 add_connection nios2.data_master xb_gpio.s1
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/xb_gpio.s1 baseAddress {0x90b0}
@@ -625,6 +814,13 @@ add_connection system_clock.clk tx_trigger_ctl.clk
 
 add_connection system_clock.clk vctcxo_tamer_0.clk1
 
+add_connection system_clock.clk pretrig_addr.clk
+add_connection system_clock.clk pretrig_data.clk
+add_connection system_clock.clk dwell_cfg.clk
+add_connection system_clock.clk dwell_readout.clk
+add_connection system_clock.clk dwell_status.clk
+add_connection system_clock.clk rf_link_status.clk
+add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
 
 add_connection system_clock.clk xb_gpio_dir.clk
@@ -663,6 +859,13 @@ add_connection system_clock.clk_reset tx_trigger_ctl.reset
 
 add_connection system_clock.clk_reset vctcxo_tamer_0.reset1
 
+add_connection system_clock.clk_reset pretrig_addr.reset
+add_connection system_clock.clk_reset pretrig_data.reset
+add_connection system_clock.clk_reset dwell_cfg.reset
+add_connection system_clock.clk_reset dwell_readout.reset
+add_connection system_clock.clk_reset dwell_status.reset
+add_connection system_clock.clk_reset rf_link_status.reset
+add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset
 
 add_connection system_clock.clk_reset xb_gpio_dir.reset

@@ -351,8 +351,8 @@ static struct bladerf_gain_range const bladerf2_rx_gain_ranges[] = {
             FIELD_INIT(.scale,  1),
         }),
         FIELD_INIT(.gain, {
-            FIELD_INIT(.min,    1 - 17),
-            FIELD_INIT(.max,    77 - 17),
+            FIELD_INIT(.min,    -1 - 17),
+            FIELD_INIT(.max,    73 - 17),
             FIELD_INIT(.step,   1),
             FIELD_INIT(.scale,  1),
         }),
@@ -367,7 +367,7 @@ static struct bladerf_gain_range const bladerf2_rx_gain_ranges[] = {
             FIELD_INIT(.scale,  1),
         }),
         FIELD_INIT(.gain, {
-            FIELD_INIT(.min,    -4 - 11),
+            FIELD_INIT(.min,    -3 - 11),
             FIELD_INIT(.max,    71 - 11),
             FIELD_INIT(.step,   1),
             FIELD_INIT(.scale,  1),
@@ -399,8 +399,8 @@ static struct bladerf_gain_range const bladerf2_rx_gain_ranges[] = {
             FIELD_INIT(.scale,  1),
         }),
         FIELD_INIT(.gain, {
-            FIELD_INIT(.min,    1),
-            FIELD_INIT(.max,    77),
+            FIELD_INIT(.min,    -1),
+            FIELD_INIT(.max,    73),
             FIELD_INIT(.step,   1),
             FIELD_INIT(.scale,  1),
         }),
@@ -415,7 +415,7 @@ static struct bladerf_gain_range const bladerf2_rx_gain_ranges[] = {
             FIELD_INIT(.scale,  1),
         }),
         FIELD_INIT(.gain, {
-            FIELD_INIT(.min,    -4),
+            FIELD_INIT(.min,    -3),
             FIELD_INIT(.max,    71),
             FIELD_INIT(.step,   1),
             FIELD_INIT(.scale,  1),

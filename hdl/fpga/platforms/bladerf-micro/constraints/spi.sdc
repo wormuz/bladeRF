@@ -33,7 +33,7 @@
 # is 80 MHz, actual output clock is 8 MHz. Note: the ADF4002 clock is inverted.
 set peri_sclk_divisor 10
 
-create_generated_clock -name peri_sclk_reg -source [get_pins $system_clock] -divide_by $peri_sclk_divisor [get_registers {*peripheral_spi|SCLK_reg}]
+create_generated_clock -name peri_sclk_reg -source [get_clocks $system_clock] -divide_by $peri_sclk_divisor [get_registers {*peripheral_spi|SCLK_reg}]
 create_generated_clock -name adf_sclk_pin  -source [get_registers -no_duplicates {*peripheral_spi|SCLK_reg}] -phase 180 [get_ports {adf_sclk}]
 create_generated_clock -name dac_sclk_pin  -source [get_registers -no_duplicates {*peripheral_spi|SCLK_reg}]            [get_ports {dac_sclk}]
 

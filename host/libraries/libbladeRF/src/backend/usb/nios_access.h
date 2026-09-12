@@ -260,6 +260,132 @@ int nios_rffe_control_read(struct bladerf *dev, uint32_t *value);
 int nios_rffe_control_write(struct bladerf *dev, uint32_t value);
 
 /**
+ * Read the RF link status word.
+ *
+ * Bit layout and its reasoning are in nios_pkt_8x32.h. The bit to wait on
+ * before trusting a stream is 10, epoch applied: both directions have
+ * confirmed the link generation the host asked for.
+ *
+ * @param       dev     Device handle
+ * @param[out]  value   Status word
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
+
+/* Pre-trigger ring depth in samples, fixed by the gateware (DEPTH_LOG2 = 12
+ * in bladerf_core.vhd). Here so callers can size a buffer without guessing;
+ * a mismatch would silently truncate or over-read a drain. */
+#define BLADERF_PRETRIG_DEPTH 4096u
+
+/**
+ * Read the dwell status word: pre-trigger ring state and the verdict on the
+ * dwell that just ended. Sweep revision only -- the hosted image reads 0,
+ * which is the truth there: nothing frozen, nothing triggered.
+ *
+ * Bit layout is documented at NIOS_PKT_8x32_TARGET_DWELL_STATUS.
+ */
+int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
+
+/* Word indices within the latched dwell summary. Wide fields are split low
+ * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
+#define BLADERF_DWELL_WORD_ENERGY_LO    0
+#define BLADERF_DWELL_WORD_ENERGY_HI    1
+#define BLADERF_DWELL_WORD_PEAK         2
+#define BLADERF_DWELL_WORD_CLIP_COUNT   3
+#define BLADERF_DWELL_WORD_SAMPLE_COUNT 4
+#define BLADERF_DWELL_WORD_TS_LO        5
+#define BLADERF_DWELL_WORD_TS_HI        6
+#define BLADERF_DWELL_WORD_MEAN_POWER   7
+#define BLADERF_DWELL_WORD_FLOOR_LO     8
+#define BLADERF_DWELL_WORD_FLOOR_HI     9
+#define BLADERF_DWELL_WORD_PEAKWIN_LO   10
+#define BLADERF_DWELL_WORD_PEAKWIN_HI   11
+#define BLADERF_DWELL_WORD_FIRST_WINDOW 12
+#define BLADERF_DWELL_WORD_VERDICT      13
+#define BLADERF_DWELL_WORD_COUNT        14
+#define BLADERF_DWELL_WORD_GENERATION   15
+
+/**
+ * Read the whole latched dwell summary, consistently.
+ *
+ * Reads the generation before and after the record and retries if a dwell
+ * boundary landed in between. Without that the words can come from two
+ * different dwells -- an energy from one band with a peak from another,
+ * which looks like a measurement and is not.
+ *
+ * @param   words   Array of at least BLADERF_DWELL_WORD_COUNT entries.
+ * @param   gen     Receives the generation the record belongs to. May be
+ *                  NULL. Zero is a valid generation: a device that has just
+ *                  reset has not completed a dwell yet.
+ *
+ * @return 0 on success, BLADERF_ERR_UNEXPECTED if the record could not be
+ *         read consistently in four attempts, or a transport error.
+ */
+int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words,
+                            uint32_t *gen);
+
+/**
+ * Set the advisory trigger threshold and the settling interval.
+ *
+ * @param   threshold   Window energy sum to trigger on, in raw summed ADC
+ *                      units. Zero disables the trigger; measurement
+ *                      continues either way, so this only decides which
+ *                      dwells are flagged, never which are reported.
+ *                      Encoded as mantissa and shift, so large values are
+ *                      rounded to about 0.2% -- fine for a detection
+ *                      threshold, not a calibrated level.
+ * @param   settle_sel  Settling interval as a shift below the maximum:
+ *                      0 = 8192 samples, 1 = 4096, 2 = 2048, 3 = 1024.
+ *                      At 61.44 MHz that spans 133 us down to 17 us.
+ *
+ * @return 0 on success, BLADERF_ERR_* on error.
+ */
+int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
+                         uint8_t settle_sel);
+
+/**
+ * Read one entry of the pre-trigger ring.
+ *
+ * @param   index   Raw ring index, NOT an offset from the oldest sample.
+ *                  The ring wraps, so a capture read from index 0 is
+ *                  rotated -- start from the oldest_index in the dwell
+ *                  status word.
+ *
+ * Costs two transactions (page write, then read). To drain more than a few
+ * entries use nios_pretrig_read_block().
+ */
+int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value);
+
+/**
+ * Read `count` consecutive ring entries starting at `start`, wrapping at
+ * the end of the ring. Writes the page base only when it changes, so a full
+ * drain costs count reads plus seventeen writes rather than 2*count.
+ *
+ * Only meaningful while the status word reports frozen; otherwise the
+ * fabric is still overwriting entries as they are read.
+ */
+int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
+                            uint32_t *buf, size_t count);
+
+/**
+ * Issue an RF link control command.
+ *
+ * Exists because FX3 samples the USB speed exactly once per link start and
+ * never rebuilds its DMA geometry afterwards, while the FPGA re-reads it
+ * continuously. On a renegotiation the two sides of one GPIF disagree and
+ * nothing reports it. We cannot rebuild the FX3 firmware, so the fabric has
+ * to be told explicitly when a new link generation begins.
+ *
+ * @param   dev     Device handle
+ * @param   cmd     NIOS_PKT_8x32_RF_LINK_CMD_*
+ * @param   data    Command argument; ignored by START, STOP, CLEAR_FAULTS
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
+
+/**
  * Save an RFFE fast lock profile to the Nios.
  *
  * @param           dev          Device handle

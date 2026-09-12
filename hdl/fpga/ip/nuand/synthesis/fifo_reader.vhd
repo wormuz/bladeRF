@@ -67,7 +67,33 @@ entity fifo_reader is
 
         underflow_led       :   buffer  std_logic;
         underflow_count     :   buffer  unsigned(63 downto 0);
-        underflow_duration  :   in      unsigned(15 downto 0)
+        underflow_duration  :   in      unsigned(15 downto 0);
+
+        -- Speed Latch & Monitor / link epoch (Stage 2)
+        link_start_toggle          :   in      std_logic := '0';
+        usb_speed_mismatch         :   out     std_logic := '0';
+        link_active                :   out     std_logic := '0';
+        speed_latched              :   out     std_logic := '0';
+        protocol_start_violation   :   out     std_logic := '0';
+        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0');
+
+        -- Abort path / sticky transport-fault flags (Stage 3)
+        link_stop_toggle           :   in      std_logic := '0';
+        clear_fault_toggle         :   in      std_logic := '0';
+        fault_sticky               :   out     std_logic_vector(4 downto 0) := (others => '0');
+        abort_active                :   out     std_logic := '0';
+        -- Proof that THIS direction consumed the current epoch toggle.
+        -- epoch_ack mirrors the toggle it acted on, so the system domain can
+        -- compare it against the toggle it issued; epoch_valid says an epoch
+        -- was ever consumed at all. Both are needed: after reset the toggle
+        -- and a zeroed ack would compare equal, and the host would read
+        -- "epoch applied" before any epoch existed.
+        --
+        -- link_active cannot serve this purpose. It rises with the start but
+        -- also drops on stop and abort while the toggle stands still, so it
+        -- conflates "consumed this epoch" with "still running".
+        epoch_ack                   :   out     std_logic := '0';
+        epoch_valid                 :   out     std_logic := '0'
   );
 end entity;
 
@@ -80,10 +106,79 @@ architecture simple of fifo_reader is
     signal   dma_buf_size       : natural range DMA_BUF_SIZE_HS to DMA_BUF_SIZE_SS := DMA_BUF_SIZE_SS;
     signal   underflow_detected : std_logic := '0';
 
+    -- Speed Latch & Monitor: FX3 samples USB speed once per RF-link epoch
+    -- and never re-derives pcktSize/burstLen/dmaCfg.size afterward. The
+    -- FPGA must mirror that behavior -- freeze usb_speed on each new link
+    -- epoch (host-driven toggle, not a level) and flag (sticky) if the
+    -- link speed changes underneath us within the same epoch, instead of
+    -- silently re-sizing the DMA buffer mid-stream.
+    --
+    -- `enable` alone is NOT a reliable epoch boundary: it is a level that
+    -- means "TX/RX datapath enabled" and can stay '1' across an FX3
+    -- restart (USB reconnect, repeated stream-start) that changes speed
+    -- without ever dropping enable. The host must signal a new epoch
+    -- explicitly via link_start_toggle. Enable high with no epoch is ARMED
+    -- (held, no fault) because stock FX3 raises enable in the same vendor
+    -- command that resets the fabric; the violation is a START while
+    -- enable is low.
+    signal   latched_usb_speed  : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
+    signal   speed_mismatch     : std_logic := '0';
+    signal   link_active_i      : std_logic := '0';
+    signal   speed_latched_i    : std_logic := '0';
+    signal   protocol_violation : std_logic := '0';
+    signal   epoch_counter      : unsigned(7 downto 0) := (others => '0');
+    signal   link_toggle_prev   : std_logic := '0';
+    -- Toggle inputs arrive through synchronizers that still hold the
+    -- pre-reset value for a few cycles after this block leaves reset,
+    -- while the controller that drives them was reset to zero: every
+    -- toggle that was '1' reads as a falling edge. Measured on hardware
+    -- as rx_abort=1 rx_fault=1 tx_fault=1 at the first status read after
+    -- every FX3-induced fabric reset. Pulses are ignored until this
+    -- counter runs out; prev registers keep tracking meanwhile.
+    signal   settle_count   : unsigned(2 downto 0) := (others => '1');
+
+    -- Abort path / sticky transport-fault flags (Stage 3): mirrors
+    -- fifo_writer's latch_usb_speed extension. See that file for the full
+    -- rationale -- set-dominant sticky bits, registered abort_active_i,
+    -- cleared only by reset / new epoch / explicit clear-fault pulse.
+    constant FAULT_BIT_SPEED_MISMATCH     : natural := 0;
+    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- epoch started, nothing ever read
+    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- reads were flowing, then stopped
+    constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
+    constant FAULT_BIT_FIFO_ABORT         : natural := 4;
+
+    signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+
+    -- Progress watchdogs, mirroring fifo_writer. Same two questions, same
+    -- timeout, watching fifo_read instead of fifo_write:
+    --
+    --   start   the epoch began and nothing was ever read out of the FIFO.
+    --           The link came up but the host is not supplying samples, or
+    --           FX3 never armed the OUT endpoint.
+    --   stall   samples were flowing and stopped.
+    --
+    -- Told apart by whether this epoch ever moved a sample. Without that,
+    -- a TX link that never started and one that wedged report identically,
+    -- and they need different actions.
+    --
+    -- ⛔ Both directions must report, not just RX. Leaving these undriven
+    -- here means a wedged transmitter looks healthy while the receiver
+    -- reports the same fault -- an asymmetry that reads as an RX problem.
+    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
+    signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
+                                    := (others => '0');
+    signal read_this_epoch     : std_logic := '0';
+    signal abort_active_i      : std_logic := '0';
+    signal epoch_ack_i         : std_logic := '0';
+    signal epoch_valid_i       : std_logic := '0';
+    signal stop_toggle_prev    : std_logic := '0';
+    signal clear_toggle_prev   : std_logic := '0';
+
     type meta_state_t is (
         META_LOAD,
         META_WAIT,
-        META_DOWNCOUNT
+        META_DOWNCOUNT,
+        ABORTED
     );
 
     type meta_fsm_t is record
@@ -99,6 +194,16 @@ architecture simple of fifo_reader is
         meta_time_go    : std_logic;
         meta_fifo_empty : std_logic;
         meta_fifo_data  : std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
+        -- Halves of the 64-bit "timestamp >= meta_p_time" decision. A single
+        -- 64-bit compare took six logic levels and 9.529 ns against an 8.000 ns
+        -- period on the C8 part; splitting it into two 32-bit compares keeps
+        -- each carry chain short. These are registered one cycle ahead of the
+        -- comparison they feed, so they are computed against meta_p_time_r
+        -- (the value that becomes meta_p_time on the next clock).
+        due_hi_gt       : std_logic;
+        due_hi_eq       : std_logic;
+        due_lo_ge       : std_logic;
+        due_sentinel    : std_logic;
     end record;
 
     constant META_FSM_RESET_VALUE : meta_fsm_t := (
@@ -113,7 +218,11 @@ architecture simple of fifo_reader is
         meta_p_time_r   => (others => '-'),
         meta_time_go    => '0',
         meta_fifo_empty => '1',
-        meta_fifo_data  => (others => '0')
+        meta_fifo_data  => (others => '0'),
+        due_hi_gt       => '0',
+        due_hi_eq       => '0',
+        due_lo_ge       => '0',
+        due_sentinel    => '0'
     );
 
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
@@ -179,13 +288,190 @@ begin
         report "in_sample_controls must have same range as out_samples"
         severity failure;
 
-    -- Determine the DMA buffer size based on USB speed
+    -- Speed Latch & Monitor: fix the USB speed used for buffer-size math
+    -- on each new link epoch (toggle on link_start_toggle, not a level),
+    -- hold it for the duration of the epoch, and sticky-flag any observed
+    -- change so it can be reported via a status register without
+    -- perturbing dma_buf_size mid-epoch. `enable` is checked separately
+    -- as a sanity signal: rising without a prior epoch is a protocol
+    -- violation (sticky, independent of speed_mismatch) -- it never
+    -- "heals" the protocol or clears mismatch by itself.
+    latch_usb_speed : process( clock, reset )
+        variable start_link_pulse  : std_logic;
+        variable stop_link_pulse   : std_logic;
+        variable clear_fault_pulse : std_logic;
+        variable abort_active_next : std_logic;
+    begin
+        if( reset = '1' ) then
+            latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
+            speed_mismatch     <= '0';
+            link_active_i      <= '0';
+            speed_latched_i    <= '0';
+            protocol_violation <= '0';
+            epoch_counter      <= (others => '0');
+            link_toggle_prev   <= '0';
+            settle_count       <= (others => '1');
+            fault_sticky_i     <= (others => '0');
+            progress_count     <= (others => '0');
+            read_this_epoch    <= '0';
+            abort_active_i     <= '0';
+            stop_toggle_prev   <= '0';
+            clear_toggle_prev  <= '0';
+            -- epoch_valid_i MUST clear on reset. Left set, the system domain
+            -- would compare a stale ack against a fresh toggle and could
+            -- report an epoch applied that no direction ever consumed.
+            epoch_ack_i        <= '0';
+            epoch_valid_i      <= '0';
+        elsif( rising_edge(clock) ) then
+
+            -- Shared START: a direction whose enable is low ignores the
+            -- edge (see fifo_writer for the rationale). prev still tracks.
+            if( settle_count /= 0 ) then
+                settle_count <= settle_count - 1;
+            end if;
+
+            start_link_pulse := '0';
+            if( link_start_toggle /= link_toggle_prev and enable = '1' and settle_count = 0 ) then
+                start_link_pulse := '1';
+            end if;
+            link_toggle_prev <= link_start_toggle;
+
+            stop_link_pulse := '0';
+            if( link_stop_toggle /= stop_toggle_prev and settle_count = 0 ) then
+                stop_link_pulse := '1';
+            end if;
+            stop_toggle_prev <= link_stop_toggle;
+
+            clear_fault_pulse := '0';
+            if( clear_fault_toggle /= clear_toggle_prev and settle_count = 0 ) then
+                clear_fault_pulse := '1';
+            end if;
+            clear_toggle_prev <= clear_fault_toggle;
+
+            if( start_link_pulse = '1' ) then
+                latched_usb_speed <= usb_speed;
+                speed_mismatch    <= '0';
+                link_active_i     <= '1';
+                -- Mirror the toggle we just acted on, and record that an
+                -- epoch has now been consumed at least once.
+                epoch_ack_i       <= link_start_toggle;
+                epoch_valid_i     <= '1';
+                -- ⛔ Це ЗАФІКСОВАНА ШВИДКІСТЬ (0=SS, 1=HS), а не «епоха була»:
+                -- хост перевіряє інваріант speed_latched == usb_speed_live, і
+                -- прапорець «щось зафіксовано» зробив би його завжди хибним.
+                -- Факт наявності епохи несе link_active.
+                speed_latched_i   <= usb_speed;
+                epoch_counter     <= epoch_counter + 1;
+                -- A new epoch restarts both watchdogs from nothing-seen.
+                progress_count    <= (others => '0');
+                read_this_epoch   <= '0';
+            elsif( link_active_i = '1' ) then
+                if( usb_speed /= latched_usb_speed ) then
+                    speed_mismatch <= '1';
+                end if;
+
+                -- Progress watchdog. A read clears the counter and marks
+                -- the epoch as having moved data; otherwise it runs. Only
+                -- while the link is up: a stopped link is not stalled.
+                if( enable = '0' ) then
+                    -- Disabled while the shared epoch is still up (see
+                    -- fifo_writer): hold the watchdog, not a stall.
+                    progress_count  <= (others => '0');
+                elsif( fifo_read = '1' ) then
+                    progress_count  <= (others => '0');
+                    read_this_epoch <= '1';
+                elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
+                    -- Saturates rather than wrapping: a wrap would clear
+                    -- the evidence and re-arm the fault every 34 ms.
+                    progress_count <= progress_count + 1;
+                end if;
+            end if;
+
+            -- No protocol violation exists any more (see fifo_writer). Port
+            -- kept, held low, so the status word layout is unchanged.
+            protocol_violation <= '0';
+
+            -- Sticky transport-fault flags: set-dominant, cleared only by
+            -- reset / new epoch / explicit clear-fault pulse -- never by
+            -- the fault condition healing.
+            if( start_link_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            elsif( clear_fault_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            end if;
+
+            if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
+                fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
+            end if;
+
+            -- Progress faults, same timeout told apart by whether this
+            -- epoch ever moved a sample. Guarded on start_link_pulse = '0'
+            -- so the clear at the top of a new epoch is not undone by a
+            -- counter that has not been reset yet in the same cycle.
+            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
+                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                if( read_this_epoch = '0' ) then
+                    fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
+                else
+                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                end if;
+            end if;
+
+            -- FAULT_BIT_PROTOCOL_ERROR is never set; position kept so the
+            -- vector layout does not shift.
+
+            -- What abort_active_i becomes this cycle absent a new epoch:
+            -- computed from LEVEL conditions, independent of this same
+            -- cycle's fault_sticky_i writes.
+            abort_active_next := '0';
+            if( stop_link_pulse = '1'
+                or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
+                or abort_active_i = '1' ) then
+                abort_active_next := '1';
+            end if;
+
+            -- FAULT_BIT_FIFO_ABORT: set on the RISING EDGE of abort_active
+            -- only -- re-testing a held level every cycle would immediately
+            -- re-set this bit right after a clear-fault pulse cleared it
+            -- (self-referential loop).
+            if( abort_active_next = '1' and abort_active_i = '0' ) then
+                fault_sticky_i(FAULT_BIT_FIFO_ABORT) <= '1';
+            end if;
+
+            -- abort_active: set on any fault trigger or a stop pulse;
+            -- cleared only by reset or a new epoch. A stop pulse drops
+            -- link_active_i but leaves sticky faults and epoch_counter
+            -- untouched so the host can read them after stop.
+            if( start_link_pulse = '1' ) then
+                abort_active_i <= '0';
+            else
+                abort_active_i <= abort_active_next;
+            end if;
+
+            if( stop_link_pulse = '1' ) then
+                link_active_i <= '0';
+            end if;
+
+        end if;
+    end process;
+
+    usb_speed_mismatch       <= speed_mismatch;
+    link_active               <= link_active_i;
+    speed_latched             <= speed_latched_i;
+    protocol_start_violation  <= protocol_violation;
+    link_epoch_counter        <= epoch_counter;
+    fault_sticky              <= fault_sticky_i;
+    abort_active              <= abort_active_i;
+    epoch_ack                 <= epoch_ack_i;
+    epoch_valid               <= epoch_valid_i;
+
+    -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )
     begin
         if( reset = '1' ) then
             dma_buf_size <= DMA_BUF_SIZE_SS;
         elsif( rising_edge(clock) ) then
-            if( usb_speed = '0' ) then
+            if( latched_usb_speed = '0' ) then
                 dma_buf_size <= DMA_BUF_SIZE_SS;
             else
                 dma_buf_size <= DMA_BUF_SIZE_HS;
@@ -215,6 +501,8 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
+        variable  ts_next       : unsigned(63 downto 0);
+        variable  cmp_tgt       : unsigned(63 downto 0);
     begin
 
         meta_future <= meta_current;
@@ -231,8 +519,85 @@ begin
         -- MAX_TIMESTAMP and opens the gate immediately, so a burst
         -- scheduled in the future is emitted at once and nothing is left
         -- to send when its timestamp actually arrives.
+        -- ⛔ Do NOT register meta_fifo_data before this subtraction to break
+        -- the "M10K output -> 64-bit borrow chain -> comparator" timing path.
+        -- Tried and reverted: a registered copy is all zeros out of reset,
+        -- "0 - 1" wraps to all ones, which is exactly the META_NOW sentinel,
+        -- and fifo_reader_tb fails with "gate leaked: feed ran before its
+        -- timestamp" (2045 reads before the target instead of 0). This is the
+        -- same defect commit 441b90a9 fixed. The subtraction must consume the
+        -- header the FIFO is presenting now.
         meta_time := unsigned(meta_fifo_data(95 downto 32)) - 1;
         meta_future.meta_p_time_r <= meta_time;
+
+        -- Precompute "timestamp >= meta_p_time" one cycle early, split across
+        -- the 32-bit halves so neither carry chain spans 64 bits.
+        --
+        -- timestamp is a free-running counter incremented by exactly 1 each
+        -- clock (time_tamer.vhd), so the value it will hold when these
+        -- registered results are consumed is timestamp + 1. Comparing against
+        -- timestamp + 1 here therefore yields exactly the same answer the
+        -- unpipelined 64-bit compare would produce on that later cycle -- the
+        -- release cycle is unchanged, not delayed.
+        --
+        -- meta_p_time is constant for the whole of META_WAIT, and equals
+        -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
+        -- one cycle ahead of that capture is consistent for both states.
+        -- Compare against the RAW header, not against (header - 1).
+        --
+        -- The released condition is evaluated one cycle before it is used, so
+        -- the timestamp in force when the registered result is consumed is
+        -- timestamp + 1. Substituting that into the original test:
+        --     (timestamp + 1) >= meta_p_time      where meta_p_time = header - 1
+        --  => (timestamp + 1) >= header - 1
+        --  => (timestamp + 2) >= header
+        -- Hence ts_next is timestamp + 2 here, not + 1. Using + 1 releases one
+        -- cycle late: the bench reported 2000 reads instead of 2001, which is
+        -- the same signature as the deliberate off-by-one negative control.
+        ts_next := timestamp + 2;
+        -- Comparing the raw header keeps
+        -- the 64-bit borrow chain of the subtraction out of this comparison's
+        -- cone: on the worst seed the path was M10K memory output -> subtract
+        -- -> comparator in one cycle, cell-dominated (only 32% interconnect),
+        -- with 1.138 ns spent in the subtract's carry alone.
+        --
+        -- The subtraction itself stays where it is, feeding meta_p_time_r for
+        -- the META_LOAD test and the sentinel. It must keep reading the header
+        -- the FIFO presents now -- see the warning above it.
+        --
+        -- Sentinel: a raw header of 0 means "transmit now". Under the old form
+        -- 0 - 1 wrapped to all ones and META_WAIT matched MAX_TIMESTAMP; under
+        -- this form ts_next >= 0 is unconditionally true, which opens the gate
+        -- on the same cycle. Both encodings are still tested below.
+        cmp_tgt := unsigned(meta_fifo_data(95 downto 32));
+
+        if( ts_next(63 downto 32) > cmp_tgt(63 downto 32) ) then
+            meta_future.due_hi_gt <= '1';
+        else
+            meta_future.due_hi_gt <= '0';
+        end if;
+
+        if( ts_next(63 downto 32) = cmp_tgt(63 downto 32) ) then
+            meta_future.due_hi_eq <= '1';
+        else
+            meta_future.due_hi_eq <= '0';
+        end if;
+
+        if( ts_next(31 downto 0) >= cmp_tgt(31 downto 0) ) then
+            meta_future.due_lo_ge <= '1';
+        else
+            meta_future.due_lo_ge <= '0';
+        end if;
+
+        -- Sentinel test does not depend on the timestamp, so it stays off the
+        -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
+        -- a header of zero here, not MAX_TIMESTAMP -- MAX_TIMESTAMP is what
+        -- zero becomes after the -1 that produces meta_p_time.
+        if( cmp_tgt = 0 ) then
+            meta_future.due_sentinel <= '1';
+        else
+            meta_future.due_sentinel <= '0';
+        end if;
 
         case meta_current.state is
 
@@ -251,7 +616,21 @@ begin
                                (packet_en = '1' and packet_ready = '1') ) ) then
                        meta_future.meta_read <= '1';
                        meta_future.state     <= META_WAIT;
-                       if( packet_en = '1' or (meta_current.meta_p_time_r > timestamp and meta_current.meta_p_time_r /= META_NOW) ) then
+                       -- "not due yet" reuses the registered halves instead of
+                       -- a second 64-bit compare. With H the raw header,
+                       --   meta_p_time_r > timestamp and /= META_NOW
+                       -- is H - 1 > ts and H /= 0, i.e. H >= ts + 2, which is
+                       -- exactly the negation of the due_* result computed
+                       -- against timestamp + 2. Checked against the old form
+                       -- over H in {0,1,2,4000} and ts around the boundary.
+                       --
+                       -- This matters because the old form started its borrow
+                       -- chain at the meta FIFO's M10K output: on seed 7 the
+                       -- worst path was memory -> Add1 -> LessThan2 -> the
+                       -- fifo_read / data_v enables, at -0.502 ns.
+                       if( packet_en = '1' or not (meta_current.due_hi_gt = '1'
+                               or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
+                               or meta_current.due_sentinel = '1') ) then
                              meta_future.meta_time_go  <= '0';
                           else
                              meta_future.meta_time_go  <= '1';
@@ -270,7 +649,13 @@ begin
                    meta_future.dma_downcount <= dma_buf_size - 4;
                 end if;
 
-                if( (timestamp >= meta_current.meta_p_time or meta_current.meta_p_time = MAX_TIMESTAMP)
+                -- (timestamp >= meta_p_time) rebuilt from the registered
+                -- halves: high half greater, or high half equal and low half
+                -- greater-or-equal. Identical truth value to the 64-bit
+                -- compare, computed a cycle earlier against timestamp + 1.
+                if( ( meta_current.due_hi_gt = '1'
+                      or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
+                      or meta_current.due_sentinel = '1' )
                         and ( packet_en = '0' or ( packet_en = '1' and packet_ready = '1' ) ) ) then
                     meta_future.meta_time_go <= '1';
                     meta_future.state        <= META_DOWNCOUNT;
@@ -305,6 +690,16 @@ begin
                    meta_future.skip_padding <= '1';
                 end if;
 
+            when ABORTED =>
+
+                -- Sticky halt: only a new epoch (start pulse) leaves this
+                -- state. abort_active_i clears the same cycle the start
+                -- pulse registers (latch_usb_speed process).
+                meta_future.meta_read <= '0';
+                if( abort_active_i = '0' ) then
+                    meta_future.state <= META_LOAD;
+                end if;
+
             when others =>
 
                 meta_future.state <= META_LOAD;
@@ -312,7 +707,21 @@ begin
         end case;
 
         -- Abort?
-        if( (enable = '0') or (meta_en = '0') ) then
+        -- abort_active_i is registered (latch_usb_speed process); reading
+        -- it here only steers meta_future.state/meta_read, which reaches
+        -- the meta FIFO interface through meta_current on the FOLLOWING
+        -- clock -- the output assignment below stays a plain mirror of
+        -- meta_current.meta_read, unchanged.
+        -- One priority chain, same as fifo_writer. Two sequential overrides
+        -- stack another multiplexer on the next-state logic, and the second
+        -- one wins: with the disable clause separate, dropping enable reset
+        -- the FSM straight out of ABORTED without a new epoch, which defeats
+        -- the sticky halt. Abort wins.
+        if( abort_active_i = '1' ) then
+            meta_future.meta_read <= '0';
+            meta_future.state     <= ABORTED;
+        elsif( (enable = '0') or (meta_en = '0') or (link_active_i = '0') ) then
+            -- link_active_i = '0' with enable high is ARMED: held until START.
             meta_future <= META_FSM_RESET_VALUE;
         end if;
 
@@ -701,7 +1110,11 @@ begin
         end case;
 
         -- Abort?
-        if( enable = '0' ) then
+        -- abort_active_i is registered (latch_usb_speed process); reading it
+        -- here only steers fifo_future.state/fifo_read, which reaches the
+        -- output on the FOLLOWING clock through fifo_current -- the output
+        -- assignment below stays a plain mirror of fifo_current, unchanged.
+        if( enable = '0' or abort_active_i = '1' or link_active_i = '0' ) then
             fifo_future.fifo_read <= '0';
             fifo_future.state     <= FIFO_FSM_RESET_VALUE.state;
             for i in fifo_current.out_samples'range loop

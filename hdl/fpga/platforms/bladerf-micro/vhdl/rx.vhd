@@ -42,6 +42,20 @@ entity rx is
         rx_overflow_led        : out   std_logic := '1';
         rx_timestamp           : in    unsigned(63 downto 0);
 
+        -- Link status (host register RF_LINK_STATUS)
+        link_start_toggle          : in    std_logic := '0';
+        link_stop_toggle           : in    std_logic := '0';
+        clear_fault_toggle         : in    std_logic := '0';
+        usb_speed_mismatch         : out   std_logic := '0';
+        link_active                : out   std_logic := '0';
+        speed_latched               : out   std_logic := '0';
+        protocol_start_violation   : out   std_logic := '0';
+        link_epoch_counter         : out   unsigned(7 downto 0) := (others => '0');
+        fault_sticky               : out   std_logic_vector(4 downto 0) := (others => '0');
+        abort_active               : out   std_logic := '0';
+        epoch_ack                  : out   std_logic := '0';
+        epoch_valid                : out   std_logic := '0';
+
         -- Triggering
         trigger_arm            : in    std_logic;
         trigger_fire           : in    std_logic;
@@ -242,6 +256,19 @@ begin
             packet_en           =>  packet_en,
             timestamp           =>  rx_timestamp,
             mini_exp            =>  mini_exp,
+
+            link_start_toggle          =>  link_start_toggle,
+            link_stop_toggle           =>  link_stop_toggle,
+            clear_fault_toggle         =>  clear_fault_toggle,
+            usb_speed_mismatch         =>  usb_speed_mismatch,
+            link_active                =>  link_active,
+            speed_latched              =>  speed_latched,
+            protocol_start_violation   =>  protocol_start_violation,
+            link_epoch_counter         =>  link_epoch_counter,
+            fault_sticky               =>  fault_sticky,
+            abort_active               =>  abort_active,
+            epoch_ack                  =>  epoch_ack,
+            epoch_valid                =>  epoch_valid,
 
             fifo_full           =>  sample_fifo.wfull,
             fifo_usedw          =>  sample_fifo.wused,

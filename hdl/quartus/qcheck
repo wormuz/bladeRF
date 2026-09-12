@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""Static check for every defect class that has cost a build in this repo.
+
+Runs in under a second and needs no Quartus. Every rule here exists because
+the same mistake shipped, the build died or lied, and the day went into
+finding it again. The point is to never spend that day twice.
+
+    qcheck            check the working tree
+    qcheck --list     explain each rule and the build it cost
+
+Exit 1 if anything fires.
+"""
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+# Every SDC the hosted revision actually reads, not just the one we edit.
+# The same defect classes can sit in the ones we inherited: they are read by
+# the same read_sdc pass, and a fatal message or an unbound exception in any
+# of them costs exactly as much.
+SDCS = [
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc",
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/spi.sdc",
+    ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/i2c.sdc",
+    ROOT / "hdl/fpga/platforms/common/bladerf/constraints/ad9361.sdc",
+    ROOT / "hdl/fpga/platforms/common/bladerf/constraints/fx3.sdc",
+]
+SDC = SDCS[0]
+HOSTED = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf-hosted.vhd"
+# The core, not just the wrapper.
+#
+# bladerf-hosted.vhd has been 104 lines of port map since the bladerf_core
+# split; the architecture it used to hold is now 2030 lines in
+# bladerf_core.vhd. Every VHDL rule below was written against the old file
+# and kept reading it, so from that commit onward they checked an empty
+# wrapper and reported clean -- including the rule that would have caught
+# the unconstrained PIO crossings.
+#
+# Both are read: a wrapper can still carry a defect, and it costs nothing.
+CORE = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
+
+# Nios firmware. It survives the fabric reset FX3 pulses on every RF link
+# start (reset_reset_n is tied high), so any register value it remembers in
+# C outlives the register itself.
+NIOS_SRC = ROOT / "hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src"
+
+
+def built_vhdl():
+    """Every VHDL file the sweep revision compiles, read from its qip.
+
+    Not a hand-written list. The previous one named two files and missed
+    twelve, including all four blocks added this week -- so the rules below
+    were not looking at the code most likely to be wrong, and said nothing.
+    A list maintained by hand drifts the moment someone adds a file, which
+    is exactly when a new defect arrives.
+    """
+    qip = ROOT / "hdl/fpga/platforms/bladerf-micro/bladerf-sweep.qip"
+    if not qip.exists():
+        return [HOSTED, CORE]
+    out = []
+    for m in re.finditer(r"\$(\w+)\s+([\w/.-]+\.vhd)\]\]", qip.read_text()):
+        var, rel = m.group(1), m.group(2)
+        base = (ROOT / "hdl/fpga/ip/nuand" if var == "nuand_ip"
+                else ROOT / "hdl/fpga/platforms/bladerf-micro")
+        p = base / rel
+        if p.exists():
+            out.append(p)
+    return out or [HOSTED, CORE]
+HEADERS = list((ROOT / "fpga_common/include").glob("*.h"))
+
+findings = []
+
+
+notes = []
+
+
+def fail(rule, detail, cost):
+    findings.append((rule, detail, cost))
+
+
+def note(text):
+    """Something worth knowing that is not a defect.
+
+    Kept separate from failures on purpose: a check that fails on things
+    which are usually fine trains people to ignore it.
+    """
+    notes.append(text)
+
+
+def code_only(text, comment="#"):
+    """Strip comments so a rule cannot fire on its own explanation."""
+    return "\n".join(l.split(comment)[0] for l in text.split("\n"))
+
+
+# ---------------------------------------------------------------- SDC rules
+
+def check_all_sdcs():
+    """Rules that apply to any SDC the build reads, ours or inherited.
+
+    A fatal message or an exception spanning instances costs the same
+    whichever file it sits in -- read_sdc processes them in one pass.
+    """
+    for f in SDCS:
+        if not f.exists():
+            continue
+        src = code_only(f.read_text())
+
+        if re.search(r"post_message\s+-type\s+error", src):
+            fail("sdc-fatal-message",
+                 f"{f.name}: post_message -type error aborts read_sdc; every "
+                 "later constraint is discarded, in every file",
+                 "one build reported a bogus 'Can't fit design'")
+
+        pair = re.compile(
+            r"(set_false_path|set_max_skew|set_net_delay|set_multicycle_path"
+            r"|set_max_delay|set_min_delay)\b[^\n]*?"
+            r"-from[^\n]*?\{\s*(\*[^\}]*)\}[^\n]*?-to[^\n]*?\{\s*(\*[^\}]*)\}")
+        inst = re.compile(r"[A-Za-z_]\w*:[A-Za-z_]\w*\|")
+        for m in pair.finditer(src):
+            if not inst.search(m.group(2)) and not inst.search(m.group(3)):
+                fail("sdc-unpinned-pair",
+                     f"{f.name}: {m.group(1)} -from {{{m.group(2)}}} "
+                     f"-to {{{m.group(3)}}} spans instances",
+                     "shipped three times; each cost a build")
+                break
+
+
+def check_sdc():
+    if not SDC.exists():
+        return
+    raw = SDC.read_text()
+    src = code_only(raw)
+
+    # Rules 1 and 2 (fatal message, unpinned pair) moved to
+    # check_all_sdcs: they apply to every SDC the build reads, not only
+    # the one we wrote.
+
+    # 3. A false path takes the skew and net-delay bounds down with it: the
+    #    following set_max_skew is reported "No path is found" and dropped,
+    #    leaving a held-data bus with no bound on bit-to-bit skew.
+    #
+    #    Only fires when a skew or net-delay bound on the SAME pair would be
+    #    dropped by it. A cut with no such bound beside it is not this
+    #    defect: it is a deliberate cut, and there are crossings that need
+    #    one -- the dwell readout and pre-trigger ring are read word by word
+    #    by the host behind a generation counter, so no single strobe
+    #    captures the bus and bit-to-bit skew cannot assemble a value that
+    #    never existed. Those also stall CCPP outright if given a skew
+    #    bound, measured at 57 minutes against a 15-minute build.
+    #
+    #    Without this distinction the rule says "never cut", which is wrong
+    #    and therefore gets ignored -- the failure mode of every guard that
+    #    cries wolf.
+    for m in re.finditer(r"set_false_path\s+-from\s+\$(\w+)\s+-to\s+\$(\w+)", src):
+        same_pair = re.search(
+            r"set_(max_skew|net_delay)\s+-from\s+\$" + re.escape(m.group(1))
+            + r"\s+-to\s+\$" + re.escape(m.group(2)), src)
+        if not same_pair:
+            continue
+        fail("sdc-false-path-on-bundle",
+             f"set_false_path -from ${m.group(1)} -to ${m.group(2)}: use "
+             "set_max_delay 100 / set_min_delay -100 with both ends instead, "
+             "or the skew bound on the same pair is silently dropped",
+             "left five crossings physically unbounded")
+        break
+
+    # 4. A source-only relaxation reaches past the crossing.
+    if re.search(r"set_(max|min)_delay\s+-?\d+\s+-from\s+\$?\w+\s*(\n|$)", src):
+        fail("sdc-source-only-relaxation",
+             "set_max_delay/set_min_delay with -from but no -to reaches every "
+             "fanout of the source",
+             "overrode the SPI and I2C multicycles: eight violations to -14.061 ns")
+
+    # 5. Tcl regexp against Quartus hierarchy names: they contain backslashes
+    #    from VHDL generate labels, and a backslash in a regexp is an escape,
+    #    so a pattern that reads correctly matches nothing.
+    if re.search(r"regexp\s+\{[^}]*\\\|", src):
+        fail("sdc-regexp-on-hierarchy",
+             "regexp against a hierarchy name: \\fifo_gen: style labels make "
+             "it match nothing. Split on the separator instead",
+             "dcfifo pointers bound to zero instances")
+
+    # 6a. An unanchored node pattern picks up deeper namesakes. Both rdptr_g
+    #     and a_graycounter_*:rdptr_g1p exist in every FIFO, and only the
+    #     first feeds the synchroniser; "*rdptr_g*" takes both. Preferring
+    #     the wrong one bound five instances to a register with no
+    #     destination clock.
+    #     The order in a fallback list is what matters: whichever pattern is
+    #     tried first wins, so a wildcard variant ahead of the anchored one
+    #     silently takes precedence.
+    for m in re.finditer(r"first_nonempty\s+\$\w+\s+\{([^}]*)\}", src):
+        alts = [a for a in m.group(1).split() if re.search(r"(rd|wr)ptr_g", a)]
+        if not alts:
+            continue
+        # The first alternative decides, because first_nonempty stops there.
+        # It must be anchored -- no leading wildcard -- or it also matches
+        # the deeper namesakes and the intended register is never reached.
+        if alts[0].startswith("*"):
+            fail("sdc-unanchored-node-name",
+                 f"'{alts[0]}' is tried first and starts with a wildcard, so "
+                 "it also matches the deeper namesakes "
+                 "(a_graycounter_*:...g1p, a_gray2bin_*:...g_gray2bin). "
+                 "Anchor the first alternative on the exact form the fitter "
+                 "reports",
+                 "five FIFOs lost their net-delay bound; "
+                 "warning 17897 went from 2 to 7")
+            break
+
+    # NOT a rule: "is this entity instantiated in this revision".
+    #
+    # Written, then withdrawn after two rounds of false positives. There is no
+    # complete static list of what gets built: bladerf-hosted.vhd covers the
+    # top level, nios_system.tcl covers Qsys, and ad_iqcor is in neither
+    # because it comes from the ADI IP tree -- yet it appears 672 times in the
+    # netlist. Adding sources until the false positive goes away is fitting
+    # the rule to the answer, not checking anything.
+    #
+    # vctcxo_tamer, the case that motivated it, was caught by the count check
+    # instead: constraints for an absent entity bind zero instances and the
+    # block says so. That check works from the build's own report and needs no
+    # guess about what the build contains.
+
+    # 6b. A node name rooted at the top level breaks the moment the module
+    #     moves down a level. These four were written as
+    #     "reset_synchronizer:U_reset_sync_rx|sync" when the architecture
+    #     body was the top level; splitting it into bladerf_core pushed them
+    #     to bladerf_core:U_core|reset_synchronizer:... and all four matched
+    #     nothing. Quartus dropped them with 332174/332049 -- warnings, not
+    #     errors -- and produced a .rbf that looked fine.
+    #     Note this is the opposite of 6a: there a leading wildcard was too
+    #     greedy, here its absence is too brittle. The difference is whether
+    #     deeper namesakes exist. An entity:instance pair is unique, so
+    #     anchoring it on the suffix costs nothing and survives a refactor.
+    #     Two spellings carry the same defect and both must be caught:
+    #       -from {entity:inst|...}       the false paths, 68 warnings
+    #       set clkvar {U_instance|...}   the clock aliases
+    #     The second is worse because it is indirect: bladerf.sdc defines
+    #     system_clock as U_system_pll|... and spi.sdc/i2c.sdc build their
+    #     generated clocks on it, so one unanchored name there took out
+    #     16 multicycle constraints in files that are themselves correct.
+    rooted = [(m.group(1), m.group(2), m.group(0))
+              for m in re.finditer(r"-(?:from|to)\s+\{(\w+):(\w+)\|", src)
+              if m.group(1) not in ("get_clocks", "get_ports", "get_pins")]
+    rooted += [(m.group(1), "", m.group(0))
+               for m in re.finditer(r"^set \w+\s+\{(U_\w+)\|", src, re.M)]
+    if rooted:
+        ent, inst, shown = rooted[0]
+        name = f"{ent}:{inst}" if inst else ent
+        fail("sdc-node-name-rooted-at-top",
+             f"'{name}|...' is written from the top level, so it stops "
+             "matching if that instance is ever moved into a wrapper. "
+             f"Write '*{name}|...' -- the leading wildcard makes the depth "
+             f"irrelevant. {len(rooted)} such name(s), first: {shown.strip()}",
+             "the bladerf_core split silently dropped four vendor false "
+             "paths (68 warnings) and, through the system_clock alias, "
+             "16 multicycle constraints in spi.sdc/i2c.sdc")
+
+    # 6c. Constraining a crossing that vendor IP already cuts. The dcfifo
+    #     megafunction emits its own set_false_path on rdptr_g -> ws_dgrp and
+    #     delayed_wrptr_g -> rs_dgwp, twenty of them, from inside the
+    #     generated IP. Anything layered on top has no path to attach to and
+    #     is dropped with "No path is found" -- which reads like a broken
+    #     pattern and is not.
+    #     The tell is a call to the vendor pointer procedures at all: their
+    #     whole purpose is to constrain crossings the IP has already cut.
+    m = re.search(r"apply_sdc_(mw_)?dcfifo_(for_ptrs|mstable_delay)", src)
+    if m:
+        fail("sdc-constrains-vendor-cut-path",
+             f"{m.group(0)} is called, but the dcfifo megafunction already "
+             "false-paths rdptr_g -> ws_dgrp and delayed_wrptr_g -> rs_dgwp "
+             "itself (Info 332165/332166, twenty of them in this design). "
+             "Anything added there has no path to attach to and is dropped "
+             "with 332182, which reads like a broken pattern and is not",
+             "three rounds of pattern fixes for a crossing that needed "
+             "nothing; the check is one get_timing_paths query")
+
+    # 7. Every block that walks instances must say how many it bound, and
+    #    zero must be loud. A block that quietly constrains nothing is
+    #    indistinguishable from one that works.
+    for var in re.findall(r"incr\s+(\w+_done)\b", src):
+        if not re.search(rf"\${var}\s*==\s*0|\${var}\s*>", src):
+            fail("sdc-unchecked-count",
+                 f"${var} counts bound instances but nothing checks it for zero",
+                 "160 vendor constraints were dropped unnoticed for weeks")
+            break
+
+
+def check_no_hardcoded_device_size():
+    """Our own tooling must not hardcode a device size.
+
+    xA4 and xA9 are the same design on different parts -- the vendor build
+    system has handled both all along (platform.conf lists A2/A4/A5/A9 and
+    derives the part number as 5CEB<size>F23C8). What was hardcoded was
+    everything we wrote on top: qgate looked for hostedxA4.sta.summary, qmem
+    globbed hostedxA4-*, the build skill passed -s A4. On an xA9 board every
+    one of those silently finds nothing or builds the wrong part.
+
+    The constraints themselves were fine, which is the point: the trap is in
+    tooling, where a missing file reads as "no problem found".
+    """
+    ours = [ROOT / "hdl/quartus/qgate",
+            ROOT / "hdl/quartus/qmem",
+            ROOT / "hdl/quartus/qbind.tcl",
+            ROOT / "hdl/quartus/qlog",
+            ROOT / ".claude/skills/fpga-build/SKILL.md"]
+    for f in ours:
+        if not f.exists():
+            continue
+        is_md = f.suffix == ".md"
+        for i, line in enumerate(f.read_text().split("\n"), 1):
+            # In Markdown "#" starts a heading, not a comment, and prose
+            # explaining the rule mentions the very strings it forbids. Only
+            # indented lines are commands there.
+            if is_md:
+                if not line.startswith("    "):
+                    continue
+                code = line
+            else:
+                code = line.split("#")[0]
+            if re.search(r"hostedxA[0-9]|micro-A[0-9]-|-s\s+A[0-9]\b", code):
+                fail("tooling-hardcodes-device-size",
+                     f"{f.name}:{i}: {code.strip()[:70]} -- xA4 and xA9 are "
+                     "the same design on different parts; match hostedx*- or "
+                     "take the size from a variable",
+                     "an xA9 build would have found no artefacts and said "
+                     "nothing was wrong")
+                return
+
+
+def check_handshake_pairs_are_crossings():
+    """Every handshake pair in the SDC must actually cross a clock domain.
+
+    Twice I nearly deleted a correct constraint after concluding "there is no
+    crossing here" -- once because get_timing_paths returned nothing, once
+    because the destination looked like a port. Both times the code settled
+    it: source_holding is clocked by the instance's source_clock and the
+    consumer by its dest_clock, so the crossing was real and the constraint
+    had to stay.
+
+    The reverse mistake is just as easy: constraining two registers that live
+    in the same domain, which is a no-op dressed up as diligence.
+
+    So read the instantiation and compare. A pair whose two ends resolve to
+    the same clock is reported; so is one whose instance cannot be found,
+    because that means the pattern names something that is not there.
+    """
+    if not SDC.exists():
+        return
+    src = code_only(SDC.read_text())
+
+    m = re.search(r"set hs_pairs \[list(.*?)\]\s*\n", src, re.S)
+    if not m:
+        return
+
+    # Where the handshake instances live, so their clocks can be read.
+    vhdl = {}
+    for d in ("hdl/fpga/ip/nuand", "hdl/fpga/platforms/bladerf-micro/vhdl",
+              "hdl/fpga/platforms/common/bladerf/vhdl"):
+        for f in (ROOT / d).rglob("*.vhd"):
+            vhdl[f.name] = f.read_text()
+
+    def clocks_of(instance):
+        """source_clock and dest_clock of a named handshake instantiation."""
+        for body in vhdl.values():
+            i = body.find(f"{instance} : entity work.handshake")
+            if i < 0:
+                i = body.find(f"{instance}: entity work.handshake")
+            if i < 0:
+                continue
+            block = body[i:i + 1200]
+            s = re.search(r"source_clock\s*=>\s*(\w+)", block)
+            d = re.search(r"dest_clock\s*=>\s*(\w+)", block)
+            if s and d:
+                return s.group(1), d.group(1)
+        return None
+
+    # Two forms occur: "handshake:U_current|source_holding" where the entity
+    # is named, and "*U_handshake_timestamp|source_holding" where it is not.
+    insts = set(re.findall(r"[|:](U_\w+)\|source_holding", m.group(1)))
+    for inst in sorted(insts):
+        ck = clocks_of(inst)
+        if ck is None:
+            fail("sdc-handshake-instance-not-found",
+                 f"{inst} is named in hs_pairs but no handshake "
+                 "instantiation by that name exists in the VHDL",
+                 "constraints for absent logic match nothing and say nothing")
+            return
+        if ck[0] == ck[1]:
+            fail("sdc-handshake-not-a-crossing",
+                 f"{inst}: source_clock and dest_clock are both {ck[0]}, so "
+                 "this pair does not cross a domain and needs no exception",
+                 "a no-op constraint reads as diligence and hides the real ones")
+            return
+
+
+# --------------------------------------------------------------- VHDL rules
+
+def check_vhdl():
+    if not HOSTED.exists():
+        return
+    # Everything the revision compiles, discovered from the qip. The old
+    # form read two files by name and so never looked at the twelve others
+    # the build contains, including every block written this week.
+    sources = [HOSTED, CORE] + built_vhdl()
+    seen, parts = set(), []
+    for p in sources:
+        if p.exists() and p not in seen:
+            seen.add(p)
+            parts.append(p.read_text(errors="replace"))
+    raw = "\n".join(parts)
+
+    # 7. Raw rx_/tx_ signals packed into a word read from another domain.
+    #    Reads fine as VHDL; nothing in the line says which domain either
+    #    side is in.
+    target = re.compile(r"^\s*(\w*(?:status|state)\w*)\s*\(", re.I)
+    rawsig = re.compile(r"\b((?:rx|tx)_\w+)\b")
+
+    def derived_locally(name):
+        for line in raw.split("\n"):
+            if "<=" not in line:
+                continue
+            lhs, rhs = line.split("<=", 1)
+            if lhs.strip() != name:
+                continue
+            deps = rawsig.findall(rhs)
+            return bool(deps) and all(
+                d.endswith("_sys") or d.endswith("_sync") for d in deps)
+        return False
+
+    for line in raw.split("\n"):
+        code = line.split("--")[0]
+        if "<=" not in code:
+            continue
+        m = target.match(code)
+        if not m:
+            continue
+        rhs = code.split("<=", 1)[1]
+        bad = [n for n in rawsig.findall(rhs)
+               if not (n.endswith("_sys") or n.endswith("_sync"))
+               and not derived_locally(n)]
+        if bad:
+            fail("vhdl-raw-cdc-in-status",
+                 f"{m.group(1)}: {', '.join(sorted(set(bad)))} reach a "
+                 "cross-domain word without a synchroniser",
+                 "30 of 32 bits crossed uncrossed; found as a -7.168 ns path")
+            break
+
+    # 7b. A bus wired straight into a PIO export, with nothing in the SDC
+    #     naming it.
+    #
+    #     Rule 7 above reads assignments into a status word. It cannot see
+    #     this one: the crossing happens in a port map --
+    #     "dwell_readout_export => dwell_rd_data" -- so there is no "<=" to
+    #     match, and the signal name carries no hint of which domain it came
+    #     from.
+    #
+    #     A PIO export is by definition the system domain. If the signal
+    #     driving it is produced on another clock and no constraint names
+    #     it, every bit is an ordinary timed path the analyser must consider
+    #     against both clock families. Four such buses (two 32-bit, one
+    #     12-bit, one 4-bit) stopped Analysis & Synthesis converging on the
+    #     sweep revision: the blocks behind them synthesise standalone in
+    #     ten seconds, and the same design with them disabled built in
+    #     15:18.
+    #
+    #     Not every export is a crossing -- plenty are driven from
+    #     system-domain logic -- so the rule reports only signals that no
+    #     SDC file mentions at all. Naming it in an SDC is the fix whether
+    #     the answer is a relaxation, a false path, or a synchroniser.
+    sdc_text = ""
+    for sdc in SDCS:
+        try:
+            sdc_text += sdc.read_text(errors="replace")
+        except OSError:
+            pass
+
+    if sdc_text:
+        exported = re.findall(r"(\w+)_export\s*=>\s*(\w+)", raw)
+
+        # A signal handed to the handshake block has crossed properly and
+        # needs no constraint of its own -- the SDC already covers that
+        # block's source/destination pair. Checked by name rather than
+        # assumed: this is the difference between a guard and a nuisance.
+        handshaked = set(re.findall(r"source_data\s*=>\s*(\w+)", raw))
+        handshaked |= set(re.findall(r"dest_data\s*=>\s*(\w+)", raw))
+
+        # Assembled from already-synchronised bits: the assignments into it
+        # all read *_sys or *_sync, so the word itself is system-domain.
+        assembled = {m for m in re.findall(r"(\w+)\s*\([^)]*\)\s*<=\s*\w+_sys",
+                                           raw)}
+
+        # Consumed by a block that runs on sys_clock: no crossing at all.
+        # Found by reading the instance the signal is mapped into and
+        # checking what its clock port is tied to -- not by name, because
+        # nothing in "rf_link_cfg_word" says which domain reads it.
+        for inst in re.finditer(r"entity work\.\w+\s*(?:generic map\s*\([^;]*?\))?"
+                                r"\s*port map\s*\((.*?)\n\s*\);", raw, re.S):
+            body = inst.group(1)
+            if re.search(r"clock\s*=>\s*sys_clock|clk\s*=>\s*sys_clock", body):
+                assembled |= set(re.findall(r"=>\s*(\w+)", body))
+
+        # Driven onto device pins, which the slow-interface false paths at
+        # the top of bladerf.sdc already cover as a group rather than by
+        # signal name.
+        pin_driven = set()
+        for m in re.finditer(r"(\w+)\s*\(i\)\s*<=.*?(\w+)\(i\)", raw):
+            pin_driven.add(m.group(2))
+        pin_driven |= {n for n in re.findall(r"when\s+(\w+)\(i\)\s*=", raw)}
+
+        unnamed = sorted({sig for _, sig in exported
+                          if sig not in sdc_text
+                          and sig not in handshaked
+                          and sig not in assembled
+                          and sig not in pin_driven
+                          and not sig.endswith("_sys")
+                          and not sig.endswith("_sync")})
+        if unnamed:
+            fail("vhdl-pio-export-unconstrained",
+                 f"{', '.join(unnamed[:4])} drive a PIO export but appear in "
+                 "no SDC. If the driver is on another clock, every bit is a "
+                 "timed cross-domain path",
+                 "four such buses stopped Analysis & Synthesis converging; "
+                 "the blocks behind them synthesise in ten seconds")
+
+    # 8. Sequential overrides after a case statement. Each one stacks another
+    #    multiplexer on the next-state logic, and the LAST one silently wins,
+    #    which is rarely the intended priority.
+    for f in (ROOT / "hdl/fpga/ip/nuand/synthesis").glob("fifo_*.vhd"):
+        body = f.read_text()
+        # Two `if ... then` blocks assigning the same record's state, back to
+        # back, with no elsif between them.
+        seq = re.compile(
+            r"\n(\s*)if\([^\n]*\)\s*then\n(?:[^\n]*\n)*?\1end if;\n+"
+            r"\1if\([^\n]*\)\s*then\n(?:[^\n]*\n)*?\1(?:end if;)",
+            re.M)
+        for m in seq.finditer(body):
+            block = m.group(0)
+            # Two blocks in DIFFERENT processes are not stacked overrides.
+            # The first version of this rule matched the tail of one process
+            # against the head of the next and reported a defect that was not
+            # there -- a guard that cries wolf teaches people to ignore it.
+            if re.search(r"\bend process\b|\bprocess\s*\(", block):
+                continue
+            if block.count(".state") >= 2 or block.count("_FSM_RESET_VALUE") >= 1:
+                if ".state" in block or "RESET_VALUE" in block:
+                    line_no = body[:m.start()].count("\n") + 2
+                    fail("vhdl-stacked-fsm-override",
+                         f"{f.name}:{line_no}: two back-to-back if blocks "
+                         "both assign the next FSM state; use one elsif "
+                         "chain so the priority is stated and the logic "
+                         "stays one level deep",
+                         "-0.164 ns setup, and the disable clause silently "
+                         "overrode the abort")
+                    break
+        else:
+            continue
+        break
+
+    # 8b. A signal with an initialiser and no assignment looks like a
+    #     constant, and is one only if every port it connects to is an INPUT.
+    #     Connected to an output port it is the opposite: the instance drives
+    #     it, and reading it as a constant leads straight to "this feature is
+    #     dead, remove it".
+    #
+    #     That is exactly what happened with tx_loopback_enabled. Declared
+    #     ":= '0'", never assigned in bladerf-hosted.vhd, so I concluded the
+    #     digital loopback was disabled by construction. It is an OUT port of
+    #     rx (rx.vhd:97), driven from rx_mux_mode = RX_MUX_DIGITAL_LOOPBACK,
+    #     and the mode is public API: BLADERF_RX_MUX_DIGITAL_LOOPBACK = 0x4.
+    #     I was one step from deleting a working feature to reclaim 4 M10Ks.
+    #     Ten signals in bladerf-hosted.vhd share this shape and all ten are
+    #     legitimate module outputs, so the pattern cannot separate the trap
+    #     from the norm -- there is nothing textual to separate. Failing the
+    #     build on all ten would be noise, and a guard that cries wolf gets
+    #     ignored, so this is a note rather than a failure. The list itself is
+    #     the useful part: these are the signals where "never assigned"
+    #     proves nothing.
+    quiet = []
+    for m in re.finditer(r"^\s*signal\s+(\w+)\s*:[^:=\n]*:=\s*[^;\n]+;",
+                         raw, re.M):
+        name = m.group(1)
+        if re.search(rf"^\s*{name}\s*<=", raw, re.M):
+            continue          # assigned somewhere, nothing to say
+        if not re.search(rf"=>\s*{name}\b", raw):
+            continue          # not wired to any port
+        if not re.search(
+                rf"<=.*\b{name}\b|\bif\b[^\n]*\b{name}\b|\band\s+{name}\b"
+                rf"|\b{name}\s+and\b|\bor\s+{name}\b|\b{name}\s+or\b", raw):
+            continue          # not read in logic, nobody reasons about it
+        quiet.append(name)
+    if quiet:
+        note("driven-from-elsewhere: " + ", ".join(sorted(quiet)) +
+             " -- initialised, never assigned here, but wired to a port and "
+             "read in logic. If the port is an OUT the instance drives it, so "
+             "'never assigned' does NOT mean constant. Check the direction "
+             "before calling anything unreachable.")
+
+    # 9. Two domains ORed combinationally have no owning domain at all, so no
+    #    synchroniser can be attached to the result.
+    for line in raw.split("\n"):
+        code = line.split("--")[0]
+        if "<=" not in code:
+            continue
+        rhs = code.split("<=", 1)[1]
+        if re.search(r"\btx_\w+\s+or\s+rx_\w+|\brx_\w+\s+or\s+tx_\w+", rhs):
+            fail("vhdl-cross-domain-or",
+                 f"{code.strip()}: an OR of two clock domains owns neither",
+                 "two status bits had to be deleted outright")
+            break
+
+
+# ------------------------------------------------------------- header rules
+
+def check_headers():
+    # 9. A wildcard inside a C block comment: "U_sync_tx_*/U_sync_rx_*"
+    #    contains */ and ends the comment, so the rest becomes code.
+    for h in HEADERS:
+        text = h.read_text()
+        depth = 0
+        for i, line in enumerate(text.split("\n"), 1):
+            j = 0
+            while j < len(line) - 1:
+                two = line[j:j + 2]
+                if two == "/*" and depth == 0:
+                    depth = 1
+                    j += 2
+                    continue
+                if two == "*/" and depth == 1:
+                    # A comment terminator immediately after a wildcard is
+                    # almost always an accident.
+                    if j > 0 and line[j - 1] == "*" and not line[:j].strip().endswith("*"):
+                        pass
+                    depth = 0
+                    j += 2
+                    continue
+                j += 1
+        if re.search(r"[A-Za-z_]\*/[A-Za-z_]", text):
+            fail("header-wildcard-ends-comment",
+                 f"{h.name}: a '*/' inside prose ends the block comment and "
+                 "the rest of the sentence becomes code",
+                 "libad936x stopped compiling; the build never reached timing")
+
+
+# NOT a rule: checking SDC node names against hostedxA4.fit.rpt.
+#
+# Tried, and withdrawn after measuring. The fitter report is not a register
+# inventory -- snap_time and current_time_q are both real registers in
+# time_tamer and neither appears in it, while ad_iqcor appears 672 times
+# despite living in the Qsys system rather than bladerf-hosted.vhd. A rule
+# built on it produces confident, wrong findings.
+#
+# The right source for "does this node exist" is a live query against the
+# fitted netlist (get_keepers in quartus_sta), which needs Quartus and so
+# does not belong in a one-second static check. qgate's CDC inventory counts
+# cover the same ground from the other side: a pattern that matches nothing
+# shows up as a class binding fewer instances than expected.
+
+
+# --------------------------------------------------------------- Nios rules
+
+def check_nios():
+    # 10. A file-scope static written straight into a PIO, with no read of
+    #     that PIO anywhere in the same file.
+    #
+    #     The Nios is not reset when FX3 resets the fabric, but the PIO and
+    #     the logic behind it are. A C-side copy of the register then holds
+    #     stale bits, and the next full-word write replays them as fresh
+    #     commands. rf_link_cfg_shadow did exactly this: the START toggle
+    #     landed as START+STOP or as nothing depending on the parity of what
+    #     the copy remembered -- 1 capture in 12 failed, by parity, after
+    #     every host-side cause had been removed. Read the register back and
+    #     modify that, or the guard fires.
+    if not NIOS_SRC.is_dir():
+        return
+    static_re = re.compile(r"^static\s+(?!const\b|inline\b)[a-z0-9_]+\s+([a-z_][a-z0-9_]*)\s*(=|;)",
+                           re.MULTILINE)
+    iowr_re = re.compile(r"IOWR_ALTERA_AVALON_PIO_DATA\(\s*([A-Z0-9_]+)\s*,\s*([a-z_][a-z0-9_]*)\s*\)")
+    for src in sorted(list(NIOS_SRC.glob("*.c")) + list(NIOS_SRC.glob("*.h"))):
+        text = code_only(src.read_text(), comment="//")
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+        statics = set(static_re.findall(text) and [m[0] for m in static_re.findall(text)])
+        if not statics:
+            continue
+        for base, var in iowr_re.findall(text):
+            if var not in statics:
+                continue
+            if re.search(r"IORD_ALTERA_AVALON_PIO_DATA\(\s*" + re.escape(base), text):
+                continue
+            fail("nios-pio-shadow-without-readback",
+                 f"{src.name}: static '{var}' is written to {base} and that PIO "
+                 f"is never read back; a fabric reset leaves the copy stale",
+                 "toggle commands replayed by parity after every FX3 reset; "
+                 "1 in 12 captures dead (rf_link_cfg_shadow, 2026-09-11)")
+
+
+RULES = """
+sdc-fatal-message          post_message -type error aborts read_sdc entirely
+sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
+sdc-false-path-on-bundle   false path drops the skew bound on the same pair
+sdc-source-only-relaxation -from without -to reaches past the crossing
+sdc-regexp-on-hierarchy    backslashes in hierarchy names defeat Tcl regexp
+sdc-unchecked-count        a block that binds zero instances says nothing
+vhdl-stacked-fsm-override  two if blocks both assigning next state; last wins
+vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
+vhdl-cross-domain-or       an OR of two domains has no owning domain
+header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
+nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
+"""
+
+
+def main():
+    if "--list" in sys.argv:
+        print(RULES.strip())
+        return 0
+
+    check_all_sdcs()
+    check_no_hardcoded_device_size()
+    check_handshake_pairs_are_crossings()
+    check_sdc()
+    check_vhdl()
+    check_headers()
+    check_nios()
+
+    for n in notes:
+        print(f"note  {n}")
+    if notes:
+        print()
+
+    if not findings:
+        print("qcheck: clean")
+        return 0
+
+    for rule, detail, cost in findings:
+        print(f"FAIL  {rule}")
+        print(f"      {detail}")
+        print(f"      cost: {cost}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

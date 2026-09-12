@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Who is using the M10K blocks, and what could stop.
+
+M10K is the scarcest resource in this design -- 282 of 308 at the last
+count, 92 per cent, while ALMs sit near half. So "will it fit" is decided
+by memory long before it is decided by logic, and the question "who holds
+the blocks" comes up every time something new needs a buffer.
+
+    qmem                      per-owner totals, largest first
+    qmem --blocks             every RAM instance, largest first
+    qmem --movable            only the ones Quartus says fit in MLABs
+    qmem <build-dir>          a specific build instead of the newest
+
+Reads the Fitter RAM Summary, which lists every RAM the fitter placed
+together with its geometry and, usefully, whether it would fit in MLABs
+instead. Nothing is inferred: every number here is a column in that table.
+"""
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def newest_report():
+    # Any device size: xA4 and xA9 are the same design on different parts.
+    builds = sorted((ROOT / "hdl/quartus").glob("hostedx*-*/hostedx*.fit.rpt"),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    return builds[0] if builds else None
+
+
+def parse(report):
+    """Rows of the Fitter RAM Summary as dicts.
+
+    The report is not UTF-8 -- there are degree signs in the temperature
+    tables -- so decode loosely; only identifiers and integers are read.
+    """
+    text = report.read_text(encoding="utf-8", errors="replace")
+
+    start = text.find("; Fitter RAM Summary")
+    if start < 0:
+        return [], {}
+    # The header row is the one naming the columns.
+    hdr_at = text.find("; Name ", start)
+    if hdr_at < 0:
+        return [], {}
+    hdr_end = text.find("\n", hdr_at)
+    cols = [c.strip() for c in text[hdr_at:hdr_end].split(";")[1:-1]]
+
+    def col(name):
+        for i, c in enumerate(cols):
+            if c.lower() == name.lower():
+                return i
+        return None
+
+    i_name = col("Name")
+    i_m10k = col("M10K blocks")
+    i_mlab = col("MLABs")
+    i_bits = col("Implementation Bits")
+    i_fits = col("Fits in MLABs")
+    i_mode = col("Mode")
+
+    rows = []
+    for line in text[hdr_end:].split("\n"):
+        if line.startswith("+"):
+            if rows:
+                break
+            continue
+        if not line.startswith(";"):
+            continue
+        f = [c.strip() for c in line.split(";")[1:-1]]
+        if len(f) != len(cols) or f[i_name] == "Name":
+            continue
+        try:
+            m10k = int(f[i_m10k] or 0)
+        except ValueError:
+            continue
+        rows.append({
+            "name": f[i_name],
+            "m10k": m10k,
+            "mlab": f[i_mlab] if i_mlab is not None else "",
+            "bits": f[i_bits] if i_bits is not None else "",
+            "fits_mlab": (f[i_fits] if i_fits is not None else ""),
+            "mode": f[i_mode] if i_mode is not None else "",
+        })
+
+    totals = {}
+    m = re.search(r"; M10K blocks\s+;\s*(\d+)\s*/\s*(\d+)\s*;\s*(\d+)\s*%", text)
+    if m:
+        totals = {"used": int(m.group(1)), "avail": int(m.group(2)),
+                  "pct": int(m.group(3))}
+    return rows, totals
+
+
+def owner_of(name):
+    """The instance a RAM belongs to, at a level a person can act on.
+
+    Full hierarchy paths run past two hundred characters and all differ, so
+    grouping on them says nothing. Grouping on the top level says just as
+    little: "nios_system holds 143 blocks" is true and useless, because the
+    decision is about the Nios RAM, or the caches, or the JTAG UART, and
+    those are separate things inside it.
+
+    So take the LAST named instance before the generated wrapper: the RAM
+    you would actually resize, move or delete.
+    """
+    generated = ("altsyncram", "scfifo", "dcfifo", "a_dpfifo", "a_",
+                 "altera_avalon_jtag_uart_scfifo", "common_dcfifo")
+    best = None
+    for p in name.split("|"):
+        if ":" not in p:
+            continue
+        ent, inst = p.split(":", 1)
+        if inst == "auto_generated" or ent.startswith(generated):
+            continue
+        # Keep going: the deepest meaningful name is the actionable one.
+        best = f"{ent}:{inst}"
+    return best or name.split("|")[0]
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+
+    if args:
+        d = Path(args[0])
+        if d.is_file():
+            report = d
+        else:
+            found = sorted(d.glob("hostedx*.fit.rpt"))
+            report = found[0] if found else d / "missing.fit.rpt"
+    else:
+        report = newest_report()
+
+    if not report or not report.exists():
+        print("qmem: no fitter report found", file=sys.stderr)
+        return 2
+
+    rows, totals = parse(report)
+    if not rows:
+        print(f"qmem: no RAM summary in {report}", file=sys.stderr)
+        return 2
+
+    print(f"qmem {report.parent.name}")
+    if totals:
+        print(f"  M10K {totals['used']}/{totals['avail']} "
+              f"({totals['pct']}%)   {len(rows)} RAM instances")
+    print()
+
+    movable = [r for r in rows
+               if r["m10k"] > 0 and r["fits_mlab"].lower().startswith("yes")]
+
+    if "--movable" in flags:
+        if not movable:
+            print("  nothing the fitter reports as MLAB-capable")
+            return 0
+        print(f"  {sum(r['m10k'] for r in movable)} M10K in "
+              f"{len(movable)} instances the fitter says fit in MLABs:")
+        print()
+        for r in sorted(movable, key=lambda r: -r["m10k"]):
+            print(f"  {r['m10k']:>3}  {r['bits']:>8} bits  {r['name'][:96]}")
+        return 0
+
+    if "--blocks" in flags:
+        for r in sorted(rows, key=lambda r: -r["m10k"]):
+            if r["m10k"] == 0:
+                continue
+            flag = " (fits MLAB)" if r["fits_mlab"].lower().startswith("yes") else ""
+            print(f"  {r['m10k']:>3}  {r['name'][:100]}{flag}")
+        return 0
+
+    by_owner = {}
+    for r in rows:
+        if r["m10k"] == 0:
+            continue
+        o = owner_of(r["name"])
+        e = by_owner.setdefault(o, {"m10k": 0, "n": 0, "movable": 0})
+        e["m10k"] += r["m10k"]
+        e["n"] += 1
+        if r["fits_mlab"].lower().startswith("yes"):
+            e["movable"] += r["m10k"]
+
+    print(f"  {'M10K':>5} {'RAMs':>5} {'->MLAB':>7}  owner")
+    for o, e in sorted(by_owner.items(), key=lambda kv: -kv[1]["m10k"]):
+        mv = str(e["movable"]) if e["movable"] else ""
+        print(f"  {e['m10k']:>5} {e['n']:>5} {mv:>7}  {o}")
+
+    if movable:
+        print()
+        print(f"  {sum(r['m10k'] for r in movable)} M10K could move to MLABs "
+              f"-- see --movable")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

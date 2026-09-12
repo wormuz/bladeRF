@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+#
+# Release gate for a Quartus build log.
+#
+#   qgate <logfile>          exit 0 if the build is acceptable, 1 if not
+#   qgate <logfile> --warn   report but always exit 0
+#
+# Exists because a build can report "successful" while the constraints you
+# wrote never bound to anything. That happened here: 160 vendor DCFIFO
+# constraints were dropped with "contains zero elements" for weeks. The
+# compile was green, the timing summary was green, and the gray-code pointer
+# crossings of all five datapath FIFOs were unconstrained the whole time.
+#
+# A timing conclusion is only worth as much as the SDC that produced it, so
+# these are failures, not warnings:
+#
+#   Ignored <assignment>          the constraint parsed and matched nothing
+#   contains zero elements        the collection was empty
+#   No path is found              endpoints exist, no path between them
+#
+# Those last two are different failures and both matter. A guard of the form
+#   if {[get_collection_size $from] > 0 && [get_collection_size $to] > 0}
+# only proves the collections are non-empty; it says nothing about whether a
+# path runs between them. The dcfifo pointer crossings passed that guard and
+# still bound to nothing, because the destination pattern used "|" where the
+# hierarchy has ":" -- it matched a different, real set of registers. Hence
+# "no path for assignment" is a hard failure here, not a warning.
+#   Invalid                       in report_exceptions
+#   Critical Warning / Error      anything Quartus itself calls serious
+#
+# Known-acceptable cases are listed in WAIVED below, each with a reason.
+set -uo pipefail
+
+f="${1:?usage: qgate <logfile> [--warn]}"
+mode="${2:-}"
+[ -r "$f" ] || { echo "qgate: cannot read $f" >&2; exit 2; }
+
+fail=0
+note() { printf '%-6s %s\n' "$1" "$2"; }
+
+# Patterns that are expected and understood. Keep the reason with the
+# pattern: a waiver without one is just a silenced failure.
+WAIVED=(
+    # Skew from a generated pin clock to its own output pin: the clock is
+    # the pin, so there is no internal path to bound. From spi.sdc/i2c.sdc,
+    # predates this work.
+    'set_max_skew -from \[get_clocks \{(adf|adi|dac|pwr)_[a-z]*_pin\}\]'
+)
+
+waived() {
+    local line="$1" p
+    for p in "${WAIVED[@]}"; do
+        [[ "$line" =~ $p ]] && return 0
+    done
+    return 1
+}
+
+check() {
+    local label="$1" pattern="$2" n=0
+    while IFS= read -r line; do
+        waived "$line" && continue
+        n=$((n + 1))
+        [ "$n" -le 3 ] && note "" "$(echo "$line" | sed 's/^\s*//' | cut -c1-110)"
+    done < <(grep -E "$pattern" "$f" 2>/dev/null)
+    if [ "$n" -gt 0 ]; then
+        note FAIL "$label: $n"
+        fail=1
+    else
+        note ok "$label"
+    fi
+}
+
+echo "qgate $(basename "$f")"
+
+# Did the build run at all? Every other check below looks for something bad
+# in the log, so a log that stops early passes all of them. build_bladerf.sh
+# exits 0 when Quartus is not in PATH ("does not appear to be in your PATH")
+# and a killed background job leaves a truncated log with the same status --
+# both happened on 2026-09-10 and both looked like clean builds.
+if grep -qE 'does not appear to be in your PATH' "$f"; then
+    note FAIL "build never started: Quartus not in PATH (use ~/soft/q25)"
+    fail=1
+elif ! grep -qE 'Quartus Prime (Fitter|Timing Analyzer) was successful' "$f"; then
+    note FAIL "build did not finish: no Fitter/STA success line in log"
+    fail=1
+else
+    note ok "build completed"
+fi
+
+check "errors"                 '^\s*Error'
+check "critical warnings"      '^\s*Critical Warning'
+check "constraints ignored"    'Ignored (set_|filter)'
+check "empty collections"      'contains zero elements'
+check "no path for assignment" 'No path is found satisfying'
+# An exception the analyser accepted but could not apply is the same class of
+# defect as one that matched nothing: the intent is recorded and not enforced.
+check "invalid exceptions"     'Invalid (set_|timing)|exception is invalid'
+# Unconstrained paths are how a whole crossing avoids analysis without any
+# constraint being wrong. Two separate regressions here were only visible as
+# a slack number, never as a message, so count them explicitly.
+check "unconstrained paths"    'Unconstrained [A-Za-z ]*Paths? *: *[1-9]'
+# The most dangerous one, and the reason this line exists. A failure while
+# reading the SDC throws away every constraint after the failure point -- but
+# the fitter carries on, produces a .rbf and writes a timing summary. One
+# build reported "Can't fit design" with ALMs at 55% and M10K at 90%, neither
+# full, because read_sdc had aborted and the fitter was working without the
+# constraints. A green fit and a written bitstream are therefore not evidence
+# that the intended timing model was ever applied.
+check "sdc read failed"        'Read_sdc failed|error.*reading.*SDC|Evaluation of Tcl script.*sdc'
+# A skew or delay bound that was accepted and then dropped leaves a multi-bit
+# crossing physically unbounded while the file still claims otherwise.
+check "physical bound ignored" 'No destination clock period was found'
+
+# CDC inventory. The SDC prints how many instances each crossing class bound;
+# these are the numbers a known-good build reports. A change is not
+# automatically wrong -- adding a FIFO legitimately moves one -- but it must
+# be noticed and re-approved rather than drifting.
+#
+# Every number here was once wrong and silent. The dcfifo pointers bound zero
+# instances for weeks while the file looked correct.
+expect_count() {
+    local label="$1" pattern="$2" want="$3"
+    local got
+    got=$(grep -oE "$pattern" "$f" 2>/dev/null | grep -oE '[0-9]+' | tail -1)
+    if [ -z "$got" ]; then
+        note FAIL "$label: never reported (the SDC block did not run)"
+        fail=1
+    elif [ "$got" != "$want" ]; then
+        note FAIL "$label: $got, expected $want"
+        fail=1
+    else
+        note ok "$label: $got"
+    fi
+}
+
+# These counts are structural, not device-dependent: they count instances of
+# time_tamer, handshake and dcfifo in the hosted RTL, which is the same design
+# on xA4 and on xA9. A bigger part changes how much fits, not how many
+# crossings exist. If one of these ever differs between sizes, that means the
+# revision instantiates something conditionally and the difference is the news.
+#
+# The handshake count is the one that does differ, exactly as predicted
+# above: sweep instantiates U_dwell_cfg_handshake to carry the analyser's
+# threshold and settle select across to the rx domain, so it has six
+# crossings where hosted has five. That sixth pair went unconstrained until
+# 2026-09-12 -- handshake had no destination register at all and the word was
+# read combinationally, so there was nothing for a bound to attach to. It is
+# real now, and expecting five here would reject the fix.
+if grep -q 'revision sweep' "$f" 2>/dev/null; then
+    hs_expect=6
+else
+    hs_expect=5
+fi
+expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-9]+' 2
+expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
+expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
+
+# Timing: any negative slack in the summary is a failure. The .sta.summary
+# sits beside the build directory, so derive it from the log's own report of
+# where it wrote.
+# Device size is not hardcoded: xA4 and xA9 are the same design on different
+# parts, and the artefact names carry the size (hostedxA4, hostedxA9).
+# Any revision, not just hosted. The name used to be hardcoded to
+# hostedx[A-Z][0-9], so on the sweep revision this lookup found nothing and
+# the check reported "not found, not checked" -- a silent skip of the timing
+# gate itself, which is the same failure mode as an SDC pattern that matches
+# nothing. Job 62 passed every other check while its timing was never read.
+sta=$(grep -oE '/[^ ]*\.sta\.summary' "$f" 2>/dev/null | head -1)
+if [ -z "$sta" ]; then
+    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' -newer "$(dirname "$f")" 2>/dev/null | head -1)
+fi
+if [ -z "$sta" ]; then
+    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' 2>/dev/null | head -1)
+fi
+if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
+    neg=$(grep -A1 '^Type' "$sta" | grep -cE '^Slack\s*:\s*-' || true)
+    if [ "${neg:-0}" -gt 0 ]; then
+        note FAIL "negative slack entries: $neg"
+        fail=1
+    else
+        note ok "timing (no negative slack)"
+    fi
+else
+    note "?" "timing summary not found, not checked"
+fi
+
+if [ "$mode" = "--warn" ]; then
+    exit 0
+fi
+exit "$fail"

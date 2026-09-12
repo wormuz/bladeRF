@@ -13,7 +13,19 @@ entity handshake is
     dest_reset      :   in  std_logic ;
     dest_clock      :   in  std_logic ;
     dest_data       :   out std_logic_vector(DATA_WIDTH-1 downto 0) ;
+    -- ⛔ Must cycle. Tying this to '1' transfers exactly once: source_ack
+    -- clears only when source_req falls (see grab_source below), so a held
+    -- request latches the ack forever and source_holding is never reloaded.
+    -- Raise it, wait for dest_ack, drop it -- drive_handshake_timestamp in
+    -- bladerf_core.vhd is the reference. A constant here cost the sweep
+    -- revision a silently unprogrammable dwell threshold;
+    -- simulation/handshake_rearm_tb.vhd demonstrates both behaviours.
     dest_req        :   in  std_logic ;
+
+    -- Note there is no destination register: dest_data is a wire from the
+    -- source-domain flops. Anything consuming it in the destination domain
+    -- must register it there, or the crossing has no capture event and no
+    -- skew constraint can bind to it.
     dest_ack        :   out std_logic
   ) ;
 end entity ;

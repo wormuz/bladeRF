@@ -18,6 +18,17 @@ QUARTUS_OUTDIR      := $(QUARTUS_WORKDIR)/output_files
 
 ALT_INCLUDE_DIRS    += ./src
 
+# The no-OS ad9361 driver added ffunction-sections/fdata-sections at the
+# compile step (hdl/fpga/ip/analogdevicesinc/no_OS/CMakeLists.txt); this is
+# the matching linker side, dropping unreferenced no-OS objects/functions
+# (e.g. iio_ad9361.c-only functions like ad9361_parse_fir, which pulls in
+# sscanf that SMALL_C_LIB does not provide) from the final bare-metal image.
+# Plain LDFLAGS, not ALT_LDFLAGS or APP_LDFLAGS_USER: the common Makefile
+# resets both of those with := after this file is included, so a
+# platform-level += to either is discarded before link time. LDFLAGS is
+# never reset downstream and flows into APP_LDFLAGS as-is.
+LDFLAGS             += -Wl,--gc-sections
+
 C_SRCS              += ./src/bladeRF_nios.c
 C_SRCS              += $(FPGA_COMMON_DIR)/src/ad936x_helpers.c
 C_SRCS              += $(FPGA_COMMON_DIR)/src/bladerf2_common.c
@@ -59,9 +70,17 @@ include $(BLADERF_COMMON_DIR)/Makefile
 # - make:   do the actual compile, generate libad936x.a
 
 # if any source file changes, re-run cmake so that patching, etc, occurs
+#
+# Explicit files that actually get compiled, plus the submodule gitlink, not
+# a glob over the driver directory: a bare glob gives "No rule to make
+# target" the moment upstream moves the driver to a new layout (happened
+# when it moved from ad9361/sw/ to drivers/rf-transceiver/ad9361/, see
+# CMakeLists.txt above).
+NO_OS_DIR           := ../../../../../../thirdparty/analogdevicesinc/no-OS
 LIBAD936X_MAKE_DEP  :=  ../../../../ip/analogdevicesinc/no_OS/CMakeLists.txt \
-                        ../../../../../../thirdparty/analogdevicesinc/no-OS/ad9361/sw/* \
-                        ../../../../../../thirdparty/analogdevicesinc/no-OS_local/patches/* \
+                        $(NO_OS_DIR)/.git \
+                        $(NO_OS_DIR)/drivers/rf-transceiver/ad9361/ad9361.c \
+                        $(NO_OS_DIR)/drivers/rf-transceiver/ad9361/ad9361_api.c \
                         ../../../../../../thirdparty/analogdevicesinc/no-OS_local/platform_bladerf2_headless/*
 
 LIBAD936X_BUILD_DEP :=  $(LIBAD936X_BUILDDIR)/Makefile

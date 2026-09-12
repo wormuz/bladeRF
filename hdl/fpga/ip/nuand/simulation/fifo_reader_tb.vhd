@@ -92,6 +92,11 @@ architecture sim of fifo_reader_tb is
     signal reads_after  : natural := 0;
     signal done         : boolean := false;
 
+    -- Link epoch stimulus: real firmware signals a new epoch via
+    -- link_start_toggle before raising enable, else Stage 3's sticky
+    -- protocol-error/abort path (enable with no epoch) halts the datapath.
+    signal link_start_toggle : std_logic := '0';
+
     -- Bits 95 downto 32 of the meta header carry the timestamp.
     function hdr(ts : unsigned(63 downto 0)) return std_logic_vector is
         variable v : std_logic_vector(127 downto 0) := (others => '0');
@@ -174,15 +179,25 @@ begin
             out_samples           => out_smp,
             underflow_led         => uf_led,
             underflow_count       => uf_count,
-            underflow_duration    => uf_dur
+            underflow_duration    => uf_dur,
+            link_start_toggle     => link_start_toggle
         );
 
     stim : process
     begin
         wait for 50 ns;
         reset  <= '0';
-        wait for 20 ns;
+        -- settle_count: toggle edges are ignored for 8 cycles after reset.
+        -- 10*CLK_PERIOD (clock period is 10 ns here) replaces the old 20 ns
+        -- settling window; this shifts the read count against the fixed
+        -- 60 us window, so the assertions below use reads_before/reads_after
+        -- presence checks rather than an exact recorded count -- reported
+        -- per instructions rather than adjusting a baseline that doesn't
+        -- exist in this bench.
+        wait for 10*10 ns;
         enable <= '1';
+        wait for 10 ns;
+        link_start_toggle <= not link_start_toggle;
 
         wait for 60 us;
 

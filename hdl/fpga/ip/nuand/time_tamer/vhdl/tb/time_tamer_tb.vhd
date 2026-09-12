@@ -145,8 +145,21 @@ begin
         write_time( clock, addr, din, write, x"0000_0000_0000_0400" ) ;
         set_intr( clock, addr, din, write ) ;
 
-        -- Wait for an interrupt
+        -- Wait for an interrupt. The compare that decides future-vs-past is
+        -- registered a cycle ahead of the FSM branch, so this is the check
+        -- that the extra cycle did not lose or duplicate the trigger: the
+        -- interrupt must arrive, and it must arrive at or after the armed
+        -- time, never before it.
+        assert intr = '0'
+            report "interrupt asserted before the armed time"
+            severity failure ;
         wait until rising_edge(clock) and intr = '1' ;
+        read_time( clock, addr, dout, read, readack, ts ) ;
+        assert ts >= x"0000_0000_0000_0400"
+            report "interrupt fired early: timestamp " & to_hstring(ts) &
+                   " is below the armed 0x400"
+            severity failure ;
+        report "future compare: fired at timestamp " & to_hstring(ts) ;
         nop( clock, 1000 ) ;
 
         -- Clear the interrupt
@@ -156,8 +169,12 @@ begin
         write_time( clock, addr, din, write, x"0000_0000_0000_0400" ) ;
         set_intr( clock, addr, din, write ) ;
 
-        -- Wait for an interrupt
+        -- Wait for an interrupt. This is the other branch of the same
+        -- decision: the armed time has already gone by, so the FSM must take
+        -- the PAST_TIME path and still raise the interrupt rather than
+        -- waiting for a timestamp that will not come round again.
         wait until rising_edge(clock) and intr = '1' ;
+        report "past compare: interrupt raised" ;
         nop( clock, 1000 ) ;
 
         -- Clear the interrupt

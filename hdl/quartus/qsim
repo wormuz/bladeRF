@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# Run a testbench under GHDL, including the ones GHDL cannot elaborate
+# as-is.
+#
+#   ./qsim fifo_writer_abort_tb
+#   ./qsim dwell_summary_tb
+#   ./qsim --all
+#
+# Exists because two testbenches were never run after the code under them
+# changed. GHDL refuses to elaborate anything pulling in synchronizer.vhd:
+# it carries "attribute PRESERVE of sync", a synthesis directive on an
+# output port that GHDL rejects. Faced with that I checked fifo_writer
+# structurally and moved on, which is not the same as running its tests --
+# and its four cases pass, so the gap was in the tooling, not the design.
+#
+# The attribute is stripped into a scratch copy. The real file is untouched:
+# PRESERVE is load-bearing for synthesis, telling the fitter not to merge
+# the synchroniser flops it exists to keep apart.
+set -uo pipefail
+
+N="$(cd "$(dirname "$0")/../fpga/ip/nuand" && pwd)"
+GPIF=$(find "$(cd "$(dirname "$0")/../fpga" && pwd)" -name fx3_gpif_p.vhd | head -1)
+
+run_one() {
+    local tb="$1"
+    local src="$N/simulation/$tb.vhd"
+    [ -r "$src" ] || { printf '%-28s no such testbench\n' "$tb"; return 1; }
+
+    local work="/var/tmp/qsim-$tb"
+    rm -rf "$work"; mkdir -p "$work"
+    cd "$work" || return 1
+
+    sed 's|attribute PRESERVE of sync|-- attribute PRESERVE of sync|' \
+        "$N/synthesis/synchronizer.vhd" > sync_nopreserve.vhd
+
+    # Packages first, then entities, then the testbench -- and each file
+    # exactly once. Re-analysing a package after the entities that use it
+    # marks them obsolete, so a glob that happens to include the package
+    # again silently breaks every testbench below it. That is what made
+    # five of these look unrunnable when they are not.
+    # Some testbenches reference the sources as library "nuand" rather than
+    # "work" -- that is how the vendor arranges them, and it is not a
+    # defect. Everything is analysed into BOTH libraries so either spelling
+    # resolves, which costs a second and actually runs the tests instead of
+    # declaring them out of scope.
+    # common_dcfifo_p (and through it bladerf_p, and the two vendor benches)
+    # need Altera's altera_mf simulation library. Analysed once into a
+    # cached GHDL library; it needs -fsynopsys because altera_mf.vhd uses
+    # std_logic_arith/std_logic_unsigned. ~3 minutes the first time.
+    local MF=/var/tmp/ghdl-altera_mf
+    if [ ! -r "$MF/altera_mf-obj08.cf" ]; then
+        local SIMLIB="$HOME/altera/25.1std/quartus/eda/sim_lib"
+        mkdir -p "$MF"
+        ghdl -a --std=08 -frelaxed -fsynopsys --work=altera_mf --workdir="$MF" \
+            "$SIMLIB/altera_mf_components.vhd" "$SIMLIB/altera_mf.vhd" \
+            > "$MF/analyse.log" 2>&1 || echo "altera_mf: see $MF/analyse.log"
+    fi
+    GHDL_FLAGS="--std=08 -frelaxed -fsynopsys -P$MF"
+
+    local analysed=""
+    analyse() {
+        local f="$1"
+        case "$f" in *synchronizer.vhd) return ;; esac
+        [ -r "$f" ] || return
+        case " $analysed " in *" $f "*) return ;; esac
+        analysed="$analysed $f"
+        ghdl -a $GHDL_FLAGS --work=work  "$f" 2>/dev/null || true
+        ghdl -a $GHDL_FLAGS --work=nuand "$f" 2>/dev/null || true
+    }
+
+    analyse "$N/synthesis/fifo_readwrite_p.vhd"
+    analyse "$GPIF"
+    # The vendor benches (rfic_spi_tb, sample_stream_tb) reach for packages
+    # outside ip/nuand/synthesis: nuand.util, common_dcfifo_p, bladerf_p.
+    # Without these the TB itself fails to analyse and ghdl reports
+    # "cannot find entity", which read as a scope problem when it was a
+    # missing dependency -- the two benches were being counted as run.
+    analyse "$N/simulation/util.vhd"
+    analyse "$N/../altera/common_dcfifo/common_dcfifo.vhd"
+    analyse "$N/../../platforms/bladerf-micro/vhdl/bladerf_p.vhd"
+    analyse "$PWD/sync_nopreserve.vhd"
+    for f in "$N"/synthesis/*.vhd; do
+        case "$f" in *fifo_readwrite_p.vhd) continue ;; esac
+        analyse "$f"
+    done
+    analyse "$src"
+
+    if ! ghdl -e $GHDL_FLAGS "$tb" >/dev/null 2>&1; then
+        printf '%-28s ELABORATION FAILED\n' "$tb"
+        ghdl -e $GHDL_FLAGS "$tb" 2>&1 | grep -i error | head -2
+        return 1
+    fi
+
+    local out
+    out=$(ghdl -r $GHDL_FLAGS "$tb" 2>&1)
+    if echo "$out" | grep -qiE "assertion error|severity error|simulation failed"; then
+        printf '%-28s FAILED\n' "$tb"
+        echo "$out" | grep -iE "error" | head -3 | cut -c1-120
+        return 1
+    fi
+    printf '%-28s %s\n' "$tb" "$(echo "$out" | grep -c 'OK') cases OK"
+    return 0
+}
+
+if [ "${1:-}" = "--all" ]; then
+    fails=0
+    for f in "$N"/simulation/*_tb.vhd; do
+        run_one "$(basename "$f" .vhd)" || fails=$((fails + 1))
+    done
+    printf '\n%s testbench(es) failed\n' "$fails"
+    exit $(( fails > 0 ))
+fi
+
+[ "$#" -ge 1 ] || { echo "usage: qsim <testbench>|--all" >&2; exit 2; }
+run_one "$1"

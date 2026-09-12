@@ -804,6 +804,187 @@ int nios_rffe_control_write(struct bladerf *dev, uint32_t value)
     return status;
 }
 
+int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, 0,
+                            value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Read 0x%08x\n", __FUNCTION__, *value);
+    }
+#endif
+
+    return status;
+}
+
+int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_STATUS, 0, value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Read 0x%08x\n", __FUNCTION__, *value);
+    }
+#endif
+
+    return status;
+}
+
+int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
+                         uint8_t settle_sel)
+{
+    uint32_t mantissa = 0;
+    uint32_t shift    = 0;
+
+    /* Encode as mantissa << shift. The loop stops at 24 because that is
+     * where the fabric saturates; going further would encode a value the
+     * hardware cannot represent and the two sides would disagree about what
+     * was set. */
+    while ((threshold >> shift) > 0xffffffULL && shift < 24) {
+        shift++;
+    }
+    mantissa = (uint32_t)((threshold >> shift) & 0xffffffULL);
+
+    /* A non-zero threshold that rounds to a zero mantissa would silently
+     * disable the trigger -- zero means disabled. Round up to one instead:
+     * the caller asked for a threshold, and the smallest representable one
+     * is closer to that intent than none at all. */
+    if (threshold != 0 && mantissa == 0) {
+        mantissa = 1;
+    }
+
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
+                           mantissa
+                           | (shift << 24)
+                           | (((uint32_t)(settle_sel & 0x3u)) << 30));
+}
+
+int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
+{
+    int status;
+    unsigned attempt;
+
+    for (attempt = 0; attempt < 4; attempt++) {
+        uint32_t before, after;
+        uint8_t i;
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                BLADERF_DWELL_WORD_GENERATION, &before);
+        if (status != 0) {
+            return status;
+        }
+
+        for (i = 0; i < BLADERF_DWELL_WORD_COUNT; i++) {
+            status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                    i, &words[i]);
+            if (status != 0) {
+                return status;
+            }
+        }
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
+                                BLADERF_DWELL_WORD_GENERATION, &after);
+        if (status != 0) {
+            return status;
+        }
+
+        /* Same generation either side means no dwell boundary landed while
+         * the words were being read, so they describe one measurement. A
+         * differing one is not an error -- it is the mechanism working. */
+        if (before == after) {
+            if (gen != NULL) {
+                *gen = before;
+            }
+            return 0;
+        }
+    }
+
+    /* Dwells are 102.5 ms apart and this is fifteen USB control transfers.
+     * Failing four times means the device is retuning far faster than a
+     * sweep does, or something else is wrong; looping forever would hide
+     * that. */
+    log_debug("%s: summary torn on four consecutive attempts\n",
+              __FUNCTION__);
+    return BLADERF_ERR_UNEXPECTED;
+}
+
+int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value)
+{
+    int status;
+
+    /* Paged: the packet's address field is 8 bits and the ring is 4096
+     * deep. Write the page base, then read the offset within it. Two
+     * transactions per sample would be wasteful, so callers draining the
+     * whole ring should use nios_pretrig_read_block() below. */
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ, 0,
+                             index & ~0xffu);
+    if (status != 0) {
+        return status;
+    }
+
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                          (uint8_t)(index & 0xff), value);
+}
+
+int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
+                            uint32_t *buf, size_t count)
+{
+    int status;
+    size_t i;
+    uint16_t base = 0xffff;   /* impossible, forces the first write */
+
+    for (i = 0; i < count; i++) {
+        uint16_t index = (uint16_t)((start + i) & (BLADERF_PRETRIG_DEPTH - 1));
+        uint16_t page  = index & ~0xffu;
+
+        /* One base write per page rather than per sample. The ring is read
+         * in oldest-first order, which wraps, so the page changes at most
+         * seventeen times over a full drain -- sixteen pages plus the wrap
+         * back to where it started. */
+        if (page != base) {
+            status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                                     0, page);
+            if (status != 0) {
+                return status;
+            }
+            base = page;
+        }
+
+        status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
+                                (uint8_t)(index & 0xff), &buf[i]);
+        if (status != 0) {
+            return status;
+        }
+    }
+
+    return 0;
+}
+
+/* The command goes in the address field, not the data field. The underlying
+ * hardware bits are toggles, so "start" is a transition rather than a value,
+ * and keeping that knowledge in the Nios means the host cannot desynchronise
+ * a shadow copy of them by retrying a write. */
+int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
+{
+    int status;
+
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RF_LINK_CFG, cmd,
+                             data);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: cmd 0x%02x data 0x%08x\n", __FUNCTION__, cmd, data);
+    }
+#endif
+
+    return status;
+}
+
 int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile)
 {

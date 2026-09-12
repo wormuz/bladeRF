@@ -66,7 +66,33 @@ entity fifo_writer is
 
         overflow_led        :   buffer  std_logic;
         overflow_count      :   buffer  unsigned(63 downto 0);
-        overflow_duration   :   in      unsigned(15 downto 0)
+        overflow_duration   :   in      unsigned(15 downto 0);
+
+        -- Speed Latch & Monitor / link epoch (Stage 2)
+        link_start_toggle          :   in      std_logic := '0';
+        usb_speed_mismatch         :   out     std_logic := '0';
+        link_active                :   out     std_logic := '0';
+        speed_latched              :   out     std_logic := '0';
+        protocol_start_violation   :   out     std_logic := '0';
+        link_epoch_counter         :   out     unsigned(7 downto 0) := (others => '0');
+
+        -- Abort path / sticky transport-fault flags (Stage 3)
+        link_stop_toggle           :   in      std_logic := '0';
+        clear_fault_toggle         :   in      std_logic := '0';
+        fault_sticky               :   out     std_logic_vector(4 downto 0) := (others => '0');
+        abort_active                :   out     std_logic := '0';
+        -- Proof that THIS direction consumed the current epoch toggle.
+        -- epoch_ack mirrors the toggle it acted on, so the system domain can
+        -- compare it against the toggle it issued; epoch_valid says an epoch
+        -- was ever consumed at all. Both are needed: after reset the toggle
+        -- and a zeroed ack would compare equal, and the host would read
+        -- "epoch applied" before any epoch existed.
+        --
+        -- link_active cannot serve this purpose. It rises with the start but
+        -- also drops on stop and abort while the toggle stands still, so it
+        -- conflates "consumed this epoch" with "still running".
+        epoch_ack                   :   out     std_logic := '0';
+        epoch_valid                 :   out     std_logic := '0'
     );
 end entity;
 
@@ -80,11 +106,87 @@ architecture simple of fifo_writer is
     signal fifo_enough         : boolean   := false;
     signal overflow_detected   : std_logic := '0';
 
+    -- Speed Latch & Monitor: FX3 samples USB speed once per RF-link epoch
+    -- and never re-derives pcktSize/burstLen/dmaCfg.size afterward. The
+    -- FPGA must mirror that behavior -- freeze usb_speed on each new link
+    -- epoch (host-driven toggle, not a level) and flag (sticky) if the
+    -- link speed changes underneath us within the same epoch, instead of
+    -- silently re-sizing the DMA buffer mid-stream.
+    --
+    -- `enable` alone is NOT a reliable epoch boundary: it is a level that
+    -- means "TX/RX datapath enabled" and can stay '1' across an FX3
+    -- restart (USB reconnect, repeated stream-start) that changes speed
+    -- without ever dropping enable. The host must signal a new epoch
+    -- explicitly via link_start_toggle. Enable high with no epoch is the
+    -- ARMED state -- FIFO held in clear, samples discarded, no fault --
+    -- because stock FX3 firmware resets the fabric and raises enable in
+    -- one vendor command, so enable always precedes the START. The
+    -- protocol violation is a START while enable is low.
+    signal latched_usb_speed   : std_logic := '0';  -- '0' == SS, matches DMA_BUF_SIZE_SS reset value below
+    signal speed_mismatch      : std_logic := '0';
+    signal link_active_i       : std_logic := '0';
+    signal speed_latched_i     : std_logic := '0';
+    signal protocol_violation  : std_logic := '0';
+    signal epoch_counter       : unsigned(7 downto 0) := (others => '0');
+    signal link_toggle_prev    : std_logic := '0';
+    -- Toggle inputs arrive through synchronizers that still hold the
+    -- pre-reset value for a few cycles after this block leaves reset,
+    -- while the controller that drives them was reset to zero: every
+    -- toggle that was '1' reads as a falling edge. Measured on hardware
+    -- as rx_abort=1 rx_fault=1 tx_fault=1 at the first status read after
+    -- every FX3-induced fabric reset. Pulses are ignored until this
+    -- counter runs out; prev registers keep tracking meanwhile.
+    signal settle_count    : unsigned(2 downto 0) := (others => '1');
+
+    -- Abort path / sticky transport-fault flags (Stage 3): a fault detected
+    -- in this clock domain stops the transfer locally (registered FSM
+    -- transition) instead of waiting for Nios to poll a status register and
+    -- issue a stop. `fault_sticky` bits are set-dominant and only clear on
+    -- reset, a new epoch, or an explicit clear-fault pulse -- never merely
+    -- because the fault condition went away, so the host can always read
+    -- what happened even after link_active has dropped.
+    constant FAULT_BIT_SPEED_MISMATCH     : natural := 0;
+    constant FAULT_BIT_START_NO_PROGRESS  : natural := 1;  -- epoch started, nothing ever written
+    constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- writes were flowing, then stopped
+    constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
+    constant FAULT_BIT_FIFO_ABORT         : natural := 4;
+
+    signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+
+    -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
+    -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
+    -- sample FIFO -- but answer different questions:
+    --
+    --   start   the epoch began and nothing was ever written. The link came
+    --           up but no data flows: FX3 never armed, wrong alt-setting,
+    --           the endpoint is not being drained.
+    --   stall   data was flowing and stopped. That is the FX3 defect we
+    --           cannot fix in firmware, so the gateware has to name it.
+    --
+    -- Told apart by whether any write has happened this epoch. Without that
+    -- distinction a silent link and a wedged one report the same fault, and
+    -- they need different actions from the host.
+    --
+    -- The limit is in sample clocks. 2^22 is ~34 ms at 122.88 MHz and ~68 ms
+    -- at 61.44 -- far longer than any legitimate gap between USB buffers,
+    -- short enough that the host learns within one poll. A power of two so
+    -- the comparison is one bit, not a magnitude compare.
+    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
+    signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
+                                    := (others => '0');
+    signal wrote_this_epoch    : std_logic := '0';
+    signal abort_active_i      : std_logic := '0';
+    signal epoch_ack_i         : std_logic := '0';
+    signal epoch_valid_i       : std_logic := '0';
+    signal stop_toggle_prev    : std_logic := '0';
+    signal clear_toggle_prev   : std_logic := '0';
+
     type meta_state_t is (
         IDLE,
         META_WRITE,
         META_DOWNCOUNT,
-        PACKET_WAIT_EOP
+        PACKET_WAIT_EOP,
+        ABORTED
     );
 
     type meta_fsm_t is record
@@ -156,13 +258,219 @@ begin
         report "fifo_data port width too narrow to support " & integer'image(NUM_STREAMS) & " MIMO streams."
         severity failure;
 
-    -- Determine the DMA buffer size based on USB speed
+    -- Speed Latch & Monitor: fix the USB speed used for buffer-size math
+    -- on each new link epoch (toggle on link_start_toggle, not a level),
+    -- hold it for the duration of the epoch, and sticky-flag any observed
+    -- change so it can be reported via a status register without
+    -- perturbing dma_buf_size mid-epoch. `enable` is checked separately
+    -- as a sanity signal: rising without a prior epoch is a protocol
+    -- violation (sticky, independent of speed_mismatch) -- it never
+    -- "heals" the protocol or clears mismatch by itself.
+    latch_usb_speed : process( clock, reset )
+        variable start_link_pulse  : std_logic;
+        variable stop_link_pulse   : std_logic;
+        variable clear_fault_pulse : std_logic;
+        variable abort_active_next : std_logic;
+    begin
+        if( reset = '1' ) then
+            latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
+            speed_mismatch     <= '0';
+            link_active_i      <= '0';
+            speed_latched_i    <= '0';
+            protocol_violation <= '0';
+            epoch_counter      <= (others => '0');
+            link_toggle_prev   <= '0';
+            settle_count       <= (others => '1');
+            fault_sticky_i     <= (others => '0');
+            progress_count     <= (others => '0');
+            wrote_this_epoch   <= '0';
+            abort_active_i     <= '0';
+            stop_toggle_prev   <= '0';
+            clear_toggle_prev  <= '0';
+            -- epoch_valid_i MUST clear on reset. Left set, the system domain
+            -- would compare a stale ack against a fresh toggle and could
+            -- report an epoch applied that no direction ever consumed.
+            epoch_ack_i        <= '0';
+            epoch_valid_i      <= '0';
+        elsif( rising_edge(clock) ) then
+
+            -- The START toggle is shared by both directions (one host
+            -- command, one epoch -- no split-brain). A direction whose
+            -- enable is low is not part of that epoch and ignores the edge
+            -- entirely: no link_active, no ack, no fault. The prev register
+            -- still tracks, so the next START is a fresh edge for it.
+            -- (Architect decision, 2026-09-11: option 1, in place of a
+            -- "START on a dead datapath" fault that fired on TX in every
+            -- RX-only session by construction.)
+            if( settle_count /= 0 ) then
+                settle_count <= settle_count - 1;
+            end if;
+
+            start_link_pulse := '0';
+            if( link_start_toggle /= link_toggle_prev and enable = '1' and settle_count = 0 ) then
+                start_link_pulse := '1';
+            end if;
+            link_toggle_prev <= link_start_toggle;
+
+            stop_link_pulse := '0';
+            if( link_stop_toggle /= stop_toggle_prev and settle_count = 0 ) then
+                stop_link_pulse := '1';
+            end if;
+            stop_toggle_prev <= link_stop_toggle;
+
+            clear_fault_pulse := '0';
+            if( clear_fault_toggle /= clear_toggle_prev and settle_count = 0 ) then
+                clear_fault_pulse := '1';
+            end if;
+            clear_toggle_prev <= clear_fault_toggle;
+
+            if( start_link_pulse = '1' ) then
+                latched_usb_speed <= usb_speed;
+                speed_mismatch    <= '0';
+                link_active_i     <= '1';
+                -- Mirror the toggle we just acted on, and record that an
+                -- epoch has now been consumed at least once.
+                epoch_ack_i       <= link_start_toggle;
+                epoch_valid_i     <= '1';
+                -- ⛔ Це ЗАФІКСОВАНА ШВИДКІСТЬ (0=SS, 1=HS), а не «епоха була»:
+                -- хост перевіряє інваріант speed_latched == usb_speed_live, і
+                -- прапорець «щось зафіксовано» зробив би його завжди хибним.
+                -- Факт наявності епохи несе link_active.
+                speed_latched_i   <= usb_speed;
+                epoch_counter     <= epoch_counter + 1;
+                -- A new epoch restarts both watchdogs from nothing-seen.
+                progress_count    <= (others => '0');
+                wrote_this_epoch  <= '0';
+            elsif( link_active_i = '1' ) then
+                if( usb_speed /= latched_usb_speed ) then
+                    speed_mismatch <= '1';
+                end if;
+
+                -- Progress watchdog. A write clears the counter and marks
+                -- the epoch as having moved data; otherwise the counter
+                -- runs. Only while the link is up: a stopped link is not
+                -- stalled, it is stopped, and flagging that would make the
+                -- fault meaningless.
+                if( enable = '0' ) then
+                    -- Disabled while the (shared) epoch is still up, e.g.
+                    -- RX taken down while TX streams: not stalled, simply
+                    -- not part of the stream. Hold the watchdog at zero so
+                    -- it neither fires now nor fires the instant enable
+                    -- returns. Measured before this: rx_fault=1 at TX
+                    -- disable in every RX+TX session, from this counter.
+                    progress_count   <= (others => '0');
+                elsif( fifo_write = '1' ) then
+                    progress_count   <= (others => '0');
+                    wrote_this_epoch <= '1';
+                elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
+                    -- Saturates instead of wrapping: once the top bit is
+                    -- set the fault is latched, and a wrap would clear the
+                    -- evidence and re-arm the same fault every 34 ms.
+                    progress_count <= progress_count + 1;
+                end if;
+            end if;
+
+            -- No protocol violation exists any more. "Enable rose without
+            -- an epoch" is the only order stock FX3 allows (it resets the
+            -- fabric and raises enable in one vendor command), so it is
+            -- ARMED, not a fault; and "START while enable is low" is the
+            -- normal case for the unused direction of a shared START, so it
+            -- is ignored above. protocol_violation stays a port, held low,
+            -- so the status word keeps its layout.
+            protocol_violation <= '0';
+
+            -- Sticky transport-fault flags: set-dominant, latched by their
+            -- own event, cleared only by reset / new epoch / explicit
+            -- clear-fault pulse -- never by the fault condition healing.
+            -- A new epoch (start pulse) clears the whole vector first so a
+            -- fresh link doesn't inherit the previous epoch's faults; the
+            -- set terms below are checked in the same cycle and win, which
+            -- only matters for FAULT_BIT_PROTOCOL_ERROR (fed from a signal
+            -- that can theoretically coincide with a start pulse).
+            if( start_link_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            elsif( clear_fault_pulse = '1' ) then
+                fault_sticky_i <= (others => '0');
+            end if;
+
+            if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
+                fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
+            end if;
+
+            -- Progress faults. Same timeout, told apart by whether this
+            -- epoch ever moved a sample: nothing written at all is a link
+            -- that never started, writes that stopped is a link that
+            -- wedged. Guarded on start_link_pulse = '0' like the term
+            -- above, so the clear at the top of a new epoch is not undone
+            -- by a counter that has not been reset yet in the same cycle.
+            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
+                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                if( wrote_this_epoch = '0' ) then
+                    fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
+                else
+                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                end if;
+            end if;
+
+            -- FAULT_BIT_PROTOCOL_ERROR is never set: see protocol_violation
+            -- above. The bit position is kept so the vector layout the host
+            -- decodes does not shift.
+
+            -- What abort_active_i becomes this cycle absent a new epoch:
+            -- computed from LEVEL conditions (stop pulse or any of the
+            -- other fault triggers), independent of fault_sticky_i itself,
+            -- so it does not depend on this same cycle's sticky writes.
+            abort_active_next := '0';
+            if( stop_link_pulse = '1'
+                or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
+                or abort_active_i = '1' ) then
+                abort_active_next := '1';
+            end if;
+
+            -- FAULT_BIT_FIFO_ABORT: set on the RISING EDGE of abort_active
+            -- only, i.e. the one cycle an abort actually discards in-flight
+            -- FSM state. Re-testing a held level every cycle would
+            -- immediately re-set this bit right after a clear-fault pulse
+            -- cleared it (self-referential loop) -- the edge form is clean.
+            if( abort_active_next = '1' and abort_active_i = '0' ) then
+                fault_sticky_i(FAULT_BIT_FIFO_ABORT) <= '1';
+            end if;
+
+            -- abort_active: set on any fault trigger or a stop pulse;
+            -- cleared only by reset or a new epoch. A stop pulse drops
+            -- link_active_i but deliberately leaves the sticky faults and
+            -- epoch_counter untouched so the host can still read them
+            -- after the datapath has stopped.
+            if( start_link_pulse = '1' ) then
+                abort_active_i <= '0';
+            else
+                abort_active_i <= abort_active_next;
+            end if;
+
+            if( stop_link_pulse = '1' ) then
+                link_active_i <= '0';
+            end if;
+
+        end if;
+    end process;
+
+    usb_speed_mismatch       <= speed_mismatch;
+    link_active               <= link_active_i;
+    speed_latched             <= speed_latched_i;
+    protocol_start_violation  <= protocol_violation;
+    link_epoch_counter        <= epoch_counter;
+    fault_sticky              <= fault_sticky_i;
+    abort_active              <= abort_active_i;
+    epoch_ack                 <= epoch_ack_i;
+    epoch_valid               <= epoch_valid_i;
+
+    -- Determine the DMA buffer size based on the latched USB speed
     calc_buf_size : process( clock, reset )
     begin
         if( reset = '1' ) then
             dma_buf_size <= DMA_BUF_SIZE_SS;
         elsif( rising_edge(clock) ) then
-            if( usb_speed = '0' ) then
+            if( latched_usb_speed = '0' ) then
                 dma_buf_size <= DMA_BUF_SIZE_SS;
             else
                 dma_buf_size <= DMA_BUF_SIZE_HS;
@@ -313,9 +621,22 @@ begin
                 end if;
 
                 -- Patches the late meta write for MIMO mode
+                --
+                -- Reads the registered copy, not the port. The port arrives
+                -- combinationally from adc_enable in the AD9361 control
+                -- register bundle, through the or/and in adc_assignment_proc
+                -- at the top level, and was the design-wide worst setup path
+                -- (-0.636 ns into state.PACKET_WAIT_EOP / state.META_WRITE).
+                -- The registered copy is written unconditionally every clock
+                -- (see in_sample_controls_r below), so this lags by exactly one
+                -- cycle. That is harmless here: the condition tests whether the
+                -- stream is in MIMO mode, which software sets long before
+                -- samples flow, and it is further gated on dma_downcount being
+                -- within NUM_STREAMS + 2 of the end -- a multi-cycle window,
+                -- not an exact coincidence.
                 if( in_sample_controls'length = 2 and
-                    in_sample_controls(0).enable = '1' and
-                    in_sample_controls(1).enable = '1' and
+                    fifo_current.in_sample_controls_r(0).enable = '1' and
+                    fifo_current.in_sample_controls_r(1).enable = '1' and
                     eight_bit_mode_en = '0' and
                     meta_current.dma_downcount <= NUM_STREAMS + 2 )
                 then
@@ -333,6 +654,19 @@ begin
                    end if;
                 end if;
 
+            when ABORTED =>
+
+                -- Sticky halt: only a new epoch (start pulse) leaves this
+                -- state. abort_active_i clears the same cycle the start
+                -- pulse registers (latch_usb_speed process), so testing it
+                -- here is reading the same registered signal the "Abort?"
+                -- clause below reads to enter this state -- symmetric.
+                meta_future.meta_write   <= '0';
+                meta_future.meta_written <= '0';
+                if( abort_active_i = '0' ) then
+                    meta_future.state <= IDLE;
+                end if;
+
             when others =>
 
                 meta_future.state <= IDLE;
@@ -340,7 +674,29 @@ begin
         end case;
 
         -- Abort?
-        if( (enable = '0') or (meta_en = '0') ) then
+        -- abort_active_i is itself a registered signal (see latch_usb_speed
+        -- process): reading it here to steer the next FSM state is the same
+        -- class of dependency as reading `enable` below, and only reaches
+        -- the FIFO interface through meta_current.state on the FOLLOWING
+        -- clock -- meta_fifo_write/meta_fifo_data stay driven solely by
+        -- meta_current.meta_write / meta_current.meta_data, unchanged.
+        -- One priority chain, not two sequential overrides. Written as two
+        -- separate if statements this cost -0.164 ns on the setup path
+        -- meta_current.meta_written -> meta_current.state.IDLE (measured,
+        -- hostedxA4-2026-09-10_04.09.16): the next-state logic ran through
+        -- two more multiplexers stacked on top of the whole case statement.
+        --
+        -- The order matters as much as the depth. With the disable clause
+        -- second it overrode the abort, so dropping enable walked the FSM
+        -- out of ABORTED into IDLE without a new epoch -- exactly the sticky
+        -- halt the abort exists to provide. Abort wins now.
+        if( abort_active_i = '1' ) then
+            meta_future.meta_write    <= '0';
+            meta_future.meta_written  <= '0';
+            meta_future.state         <= ABORTED;
+        elsif( (enable = '0') or (meta_en = '0') or (link_active_i = '0') ) then
+            -- link_active_i = '0' with enable high is ARMED: held here until
+            -- the epoch arrives, same as not enabled.
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= IDLE;
@@ -687,7 +1043,14 @@ begin
         end case;
 
         -- Abort?
-        if( enable = '0' ) then
+        -- abort_active_i is registered (latch_usb_speed process); reading it
+        -- here only steers fifo_future.state, which reaches fifo_write on
+        -- the FOLLOWING clock through fifo_current -- the output assignment
+        -- below stays a plain mirror of fifo_current.fifo_write, unchanged.
+        -- ARMED (enable high, no epoch yet) holds the FIFO in clear too, so
+        -- the first sample written belongs to the epoch, not to the interval
+        -- before it.
+        if( enable = '0' or abort_active_i = '1' or link_active_i = '0' ) then
             fifo_future.fifo_clear <= '1';
             fifo_future.fifo_write <= '0';
             fifo_future.state      <= CLEAR;

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+#
+# Summarise a Quartus build log.
+#
+#   qlog <logfile>            summary
+#   qlog <logfile> --full     summary plus every warning, deduplicated
+#
+# A full compile writes about 6000 lines of which roughly 30 carry a result.
+# Measured on q25_groups.log (6056 lines): 4239 Info, 385 Warning, and the
+# single largest block is 1996 lines of Info (12134) echoing IP parameters.
+#
+# `rtk log` compresses the same file to 25 lines but drops "Total Build Time"
+# and "Fitter Status" -- the two lines you actually open the log for -- so it
+# is not usable here. This keeps the verdict and throws away the enumeration.
+set -euo pipefail
+
+f="${1:?usage: qlog <logfile> [--full]}"
+full="${2:-}"
+
+[ -r "$f" ] || { echo "qlog: cannot read $f" >&2; exit 1; }
+
+sev() { grep -cE "^\s*$1" "$f" || true; }
+
+printf '%s  (%s lines)\n' "$(basename "$f")" "$(wc -l < "$f")"
+printf 'Error %s   Critical %s   Warning %s   Info %s\n\n' \
+    "$(sev 'Error')" "$(sev 'Critical Warning')" "$(sev 'Warning')" "$(sev 'Info')"
+
+# The verdict lines, in the order the flow produces them.
+grep -hE "Quartus Prime (Analysis & Synthesis|Fitter|Assembler|Timing Analyzer|Shell) (was|is) (successful|unsuccessful)|Fitter Status|Total Build Time|Logic utilization|Total registers|Total RAM Blocks|Total DSP|Total pins|Total PLLs" "$f" \
+    | sed 's/^\s*//' || true
+
+# Anything above Info always gets shown, deduplicated by message id so a
+# warning repeated 300 times for 300 nodes reads as one line with a count.
+echo
+if [ -n "$(grep -E '^\s*(Error|Critical Warning)' "$f" || true)" ]; then
+    echo "ERRORS AND CRITICAL WARNINGS"
+    grep -hE "^\s*(Error|Critical Warning)" "$f" | sed 's/^\s*//' | sort | uniq -c | sort -rn
+    echo
+fi
+
+echo "WARNINGS BY ID"
+grep -hoE "Warning \(([0-9]+)\)[^\"]*" "$f" \
+    | sed -E 's/(Warning \([0-9]+\)).*/\1/' \
+    | sort | uniq -c | sort -rn | head -12
+
+if [ "$full" = "--full" ]; then
+    echo
+    echo "ALL WARNINGS, ONE PER MESSAGE"
+    grep -hE "^\s*Warning" "$f" \
+        | sed -E 's/^\s*//; s/"[^"]*"/"..."/g' \
+        | sort -u
+fi

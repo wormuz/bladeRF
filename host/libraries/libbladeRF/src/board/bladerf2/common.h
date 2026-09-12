@@ -133,6 +133,12 @@ struct controller_fns {
 };
 
 struct bladerf2_board_data {
+    /* RF link epoch bookkeeping. The START/STOP toggles are shared by both
+     * directions, so STOP may only be sent when the LAST enabled direction
+     * goes down -- disabling TX while RX streams must not end RX's epoch.
+     * Index 0 = RX, 1 = TX. */
+    bool rf_link_dir_on[2];
+
     /* Board state */
     enum {
         STATE_UNINITIALIZED,

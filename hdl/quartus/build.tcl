@@ -101,6 +101,51 @@ if { $opts(seed) != "" } {
     set_global_assignment -name SEED "$opts(seed)"
 }
 
+# Worst-case hold slack on the AD9361 RX LVDS deserializer's internal
+# PLL_OUTPUT_COUNTER|divclk was -0.040 ns (Fast 1100mV 0C corner). "All
+# Paths" is Quartus 23.1's default already (confirmed in hosted.fit.rpt,
+# both Setting and Effective columns) and changing nothing produced an
+# identical .rbf checksum, so it buys nothing here.
+#
+# OPTIMIZE_HOLD_TIMING is deliberately NOT set here: "All Paths" is already
+# the Quartus default (hostedxA4.fit.rpt shows it as both Setting and
+# Effective), so an explicit assignment changes nothing - verified by a
+# bit-identical .rbf. A one-off diagnostic run with it OFF was done
+# 2026-09-08 and is written up in OC bladerf/gateware-build.md; do not leave
+# that value in the tree, it makes hold slack ~25x worse.
+
+# Owner-directed 2026-09-08: seed sweep on the AD9361 RX LVDS
+# pll_sclk~PLL_OUTPUT_COUNTER|divclk domain shows the fitter trading setup
+# and hold violations against each other on the same path across seeds
+# (report_timing confirmed the endpoints are ordinary programmable LE
+# registers, not hard-IP internals, so placement can move it). Standard
+# Fit with 4x the normal placement iterations targets the root cause -
+# insufficient data delay margin against clock skew - rather than papering
+# over the report.
+set_global_assignment -name FITTER_EFFORT "STANDARD FIT"
+set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
+
+# Routing effort, added 2026-09-12 for the sweep revision.
+#
+# Placement effort alone was already here and is not enough once the design
+# gets dense. Measured on job 60: the worst setup path in the LVDS domain is
+# inside the vendor dcfifo in rx_meta_fifo -- wraclr into the gray write
+# pointer -- at 8.218 ns over FOUR logic levels, slack -0.442. Four levels of
+# LUT on Cyclone V is well under a nanosecond, so essentially all of that is
+# interconnect: a routing problem, not a logic one.
+#
+# The same FIFO, same vendor IP, same clock closes at +0.286 in hosted. What
+# differs is density -- sweep carries the analyser on top, and M10K sits at
+# 282/308 (92%). Note the memory is NOT the analyser's: every one of those
+# blocks belongs to nios_system (caches, RAM, wishbone, JTAG UART), verified
+# against the fitter RAM summary. So there is nothing to shrink in our RTL to
+# buy the fitter room; the lever left is how hard it tries.
+#
+# None of these weaken a constraint. They spend compile time.
+set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
+set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
+
 # Save all the options
 export_assignments
 project_close

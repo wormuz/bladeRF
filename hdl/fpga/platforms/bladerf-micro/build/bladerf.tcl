@@ -69,10 +69,20 @@ set_global_assignment -name OUTPUT_IO_TIMING_NEAR_END_VMEAS "HALF VCCIO"        
 set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS  "HALF SIGNAL SWING" -rise
 set_global_assignment -name OUTPUT_IO_TIMING_FAR_END_VMEAS  "HALF SIGNAL SWING" -fall
 
+# IP cores come from a licensed Standard installation, so build them for real
+# rather than as tethered OpenCore Plus evaluations. Evaluation mode produces
+# an image that only runs while the host tool keeps the device tethered and
+# stops after a timeout, which is useless for a standalone instrument.
+set_global_assignment -name OCP_HW_EVAL                             OFF
+
 # Synthesis
 set_global_assignment -name OPTIMIZATION_TECHNIQUE                  SPEED
 set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC          ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
+# Retiming is a no-op on Lite (unlicensed) but active on Standard. Measured
+# on 25.1 Standard, seed 7, effort 4.0: ON gives setup -0.636, OFF gives
+# -1.787. It partially pipelines the 64-bit timestamp compare in fifo_reader
+# without touching the RTL, so leave it ON.
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING    ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT            ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS               "SPARSE AUTO"
@@ -114,6 +124,19 @@ export_assignments
 
 # Create the hosted
 make_revision hosted
+
+# Create the sweep revision.
+#
+# Ours, not Nuand's. It starts as a copy of hosted -- same RF link epoch
+# control, same abort path, same metadata handling -- and exists so that
+# work aimed at the spectrum sweep can go on the die without disturbing the
+# revision we rely on to stream.
+#
+# The three vendor revisions stay. They cost nothing: they are separate
+# images, absent from our .rbf, and each is a worked example of the thing we
+# want -- adsb decides on-chip rather than shipping samples, wlan drives AGC
+# without the host in the loop.
+make_revision sweep
 
 # Create the adsb
 make_revision adsb
