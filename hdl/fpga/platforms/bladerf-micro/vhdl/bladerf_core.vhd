@@ -399,6 +399,7 @@ architecture core_bladerf of bladerf_core is
     -- Wire out of the handshake (source-domain flops) and the rx-domain
     -- register that captures it. Only dwell_cfg_rx may be read by rx logic.
     signal dwell_cfg_wire         : std_logic_vector(31 downto 0);
+    signal dwell_cfg_req_rx       : std_logic := '0';
     signal dwell_cfg_ack_rx       : std_logic;
     signal dwell_cfg_rx           : std_logic_vector(31 downto 0) := (others => '0');
     signal dwell_shift            : natural range 0 to 24 := 0;
@@ -938,9 +939,8 @@ begin
     -- already constrains as a pair. Synchronising 30 bits individually
     -- could hand the analyser a threshold that was never written.
     --
-    -- dest_req tied high: the far side has no reason to refuse a value it
-    -- only ever reads, and holding it high means the newest word is always
-    -- on its way across.
+    -- Config word from the Nios export, crossed into the rx domain. See
+    -- drive_handshake_dwell_cfg below for why the request has to cycle.
     U_dwell_cfg_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )
         port map (
@@ -950,9 +950,40 @@ begin
             dest_reset   => rx_reset,
             dest_clock   => rx_clock,
             dest_data    => dwell_cfg_wire,
-            dest_req     => '1',
+            dest_req     => dwell_cfg_req_rx,
             dest_ack     => dwell_cfg_ack_rx
         );
+
+    -- Request must cycle, or the crossing transfers exactly once and stops.
+    --
+    -- Measured, not reasoned: with dest_req tied to '1', handshake clears
+    -- source_ack only on `source_req = '0'` (handshake.vhd:68), and
+    -- source_req is the synchronised dest_req. Held high, source_ack latches
+    -- on the first transfer and never clears, so source_holding is loaded
+    -- once after reset and never reloaded. A testbench driving this instance
+    -- reprogrammed the word from AAAA0001 to BBBB0002 and the destination
+    -- stayed at AAAA0001 for the rest of the run.
+    --
+    -- The effect on the product: the host could set the dwell threshold and
+    -- settle select once, and every later write would be silently ignored --
+    -- the analyser would keep triggering against whatever was programmed
+    -- first. The old comment here claimed the opposite ("holding it high
+    -- means the newest word is always on its way across").
+    --
+    -- Same req/ack cycle as drive_handshake_timestamp above, which is the
+    -- working instance of this protocol in this file.
+    drive_handshake_dwell_cfg : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            dwell_cfg_req_rx <= '0';
+        elsif( rising_edge(rx_clock) ) then
+            if( dwell_cfg_ack_rx = '0' ) then
+                dwell_cfg_req_rx <= '1';
+            else
+                dwell_cfg_req_rx <= '0';
+            end if;
+        end if;
+    end process;
 
     -- Capture register in the rx domain.
     --
