@@ -233,6 +233,15 @@ static void StopApplication()
             NuandFpgaConfig.stop();
         }
     }
+
+    /* The interface we were running has just been torn down, so the cached
+     * alt setting no longer describes the hardware. Leaving it stale made the
+     * SETINTF handler below take the "stop whatever we were doing" path a
+     * second time against freed resources after a host crash. Clearing it
+     * also means the next SET_INTERFACE to RF_LINK is seen as a real change
+     * and rebuilds the sample path, rather than being skipped by the
+     * "same interface" shortcut. */
+    glUsbAltInterface = USB_IF_NULL;
 }
 
 CyBool_t GetStatus(uint16_t endpoint) {
@@ -761,8 +770,20 @@ void CyFxbladeRFApplnUSBEventCB (CyU3PUsbEventType_t evtype, uint16_t evdata)
             /* Only support sets to interface 0 for now */
             if(interface != 0) break;
 
-            /* Don't do anything if we're setting the same interface over */
-            if( alt_interface == glUsbAltInterface ) break ;
+            /* Re-selecting the same interface used to be a no-op. That is
+             * wrong after a host process dies mid-stream: the host driver
+             * re-selects RF_LINK on the next open, and the shortcut left the
+             * stale, half-torn-down sample path in place, so RX delivered
+             * nothing until the firmware was reloaded. Treat a repeat select
+             * as an explicit restart request and fall through to the
+             * stop-then-start sequence below, which is idempotent.
+             * SPI_FLASH is exempt: re-running NuandFlashDeinit/Init around a
+             * flash operation would disturb a transfer the host believes is
+             * still set up. */
+            if (alt_interface == glUsbAltInterface
+                && alt_interface == USB_IF_SPI_FLASH) {
+                break;
+            }
 
             /* Stop whatever we were doing */
             switch(glUsbAltInterface) {

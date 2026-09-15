@@ -37,6 +37,13 @@ static CyU3PDmaChannel glChHandlePtoU;
 static int loopback = 0;
 static int loopback_when_created;
 
+/* Tracks whether the sample-path resources (DMA channels, bulk endpoints,
+ * GPIF, UART bridge) are currently live, so Start and Stop can each be
+ * called more than once without acting on freed resources. */
+static int link_started = 0;
+
+static void NuandRFLinkStop(void);
+
 void NuandRFLinkLoopBack(int lp) {
     loopback = lp;
 }
@@ -233,6 +240,14 @@ static void NuandRFLinkStart(void)
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
     CyU3PUSBSpeed_t usbSpeed = CyU3PUsbGetSpeed();
 
+    /* Never build a second set of channels on top of a live one: creating a
+     * DMA channel over an existing handle leaks its buffers out of the 224 KB
+     * heap and leaves the old sockets bound. If a previous link is still up,
+     * tear it down first so Start is a hard restart from a known state. */
+    if (link_started) {
+        NuandRFLinkStop();
+    }
+
     NuandAllowSuspend(CyFalse);
     NuandGPIOReconfigure(CyTrue, CyTrue);
 
@@ -356,6 +371,7 @@ static void NuandRFLinkStart(void)
     }
 
     UartBridgeStart();
+    link_started = 1;
     glAppMode = MODE_RF_CONFIG;
 
 }
@@ -367,6 +383,22 @@ static void NuandRFLinkStop (void)
 {
     CyU3PEpConfig_t epCfg;
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
+
+    /* Stop must be idempotent. When the host process dies mid-stream the
+     * firmware runs Stop once from the USB RESET/DISCONNECT event, and then
+     * a second time when the next host process issues SET_INTERFACE to alt 0
+     * (glUsbAltInterface still reads RF_LINK at that point). On that second
+     * pass every teardown call below acts on already-freed resources and
+     * returns an error; the original code fed those errors to
+     * CyFxAppErrorHandler, which loops forever and hangs this thread. The
+     * control endpoint keeps answering from its own thread, so the board
+     * still responds to info/set_frequency while the sample DMA path is
+     * never rebuilt - exactly the observed wedge. Guard on link_started so
+     * the redundant pass is a no-op instead. */
+    if (!link_started) {
+        return;
+    }
+    link_started = 0;
 
     CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
     CyU3PGpioSetValue(GPIO_RX_EN, CyFalse);

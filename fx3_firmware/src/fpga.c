@@ -38,6 +38,14 @@
 /* DMA Channel for RF U2P (USB to P-port) transfers */
 static CyU3PDmaChannel glChHandlebladeRFUtoP;
 
+/* Same idempotency guard as the RF link: the config path can now be stopped
+ * twice (USB reset followed by a SET_INTERFACE from the recovering host), and
+ * tearing down freed resources drives CyFxAppErrorHandler, which never
+ * returns. */
+static int config_started = 0;
+
+void NuandFpgaConfigStop(void);
+
 /* Counter to track the number of buffers received from USB during FPGA
  * programming */
 static uint32_t glDMARxCount = 0;
@@ -110,6 +118,11 @@ static void NuandFpgaConfigStart(void)
     CyU3PDmaChannelConfig_t dmaCfg;
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
     CyU3PUSBSpeed_t usbSpeed = CyU3PUsbGetSpeed();
+
+    /* Do not stack a second channel on a live one; see config_started. */
+    if (config_started) {
+        NuandFpgaConfigStop();
+    }
     static int first_call = 1;
     bool doUsb = true;
 
@@ -202,6 +215,7 @@ static void NuandFpgaConfigStart(void)
         CyFxAppErrorHandler(apiRetStatus);
     }
 
+    config_started = 1;
     glAppMode = MODE_FPGA_CONFIG;
 }
 
@@ -209,6 +223,11 @@ void NuandFpgaConfigStop(void)
 {
     CyU3PEpConfig_t epCfg;
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
+
+    if (!config_started) {
+        return;
+    }
+    config_started = 0;
 
     /* Abort and clear the channel */
     CyU3PDmaChannelReset(&glChHandlebladeRFUtoP);
