@@ -404,6 +404,18 @@ static void NuandRFLinkStop (void)
     CyU3PGpioSetValue(GPIO_RX_EN, CyFalse);
     CyU3PGpioSetValue(GPIO_TX_EN, CyFalse);
 
+    /* Abort and clear the channels before tearing them down. The FPGA keeps
+     * pushing samples into PIB socket 0 right up to the GPIF shutdown below,
+     * so at this point the sample channels can hold committed buffers that
+     * no consumer will ever drain. Destroying a channel in that state leaves
+     * its sockets bound, and the next NuandRFLinkStart builds new channels on
+     * top of them - the "buffer committed, consumer not draining" wedge.
+     * NuandFpgaConfigStop has always reset before destroying (fpga.c); the
+     * sample path was the asymmetric one. */
+    CyU3PDmaChannelReset(&glChHandleUtoP);
+    if (!loopback_when_created)
+        CyU3PDmaChannelReset(&glChHandlePtoU);
+
     /* Flush endpoint memory buffers */
     CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_PRODUCER);
     CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_CONSUMER);
