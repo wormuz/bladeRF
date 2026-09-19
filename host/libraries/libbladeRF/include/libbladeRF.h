@@ -2713,6 +2713,36 @@ int CALL_CONV bladerf_get_timestamp(struct bladerf *dev,
                                     bladerf_timestamp *timestamp);
 
 /**
+ * Sample loss counted by the FPGA itself, per direction.
+ *
+ * This is NOT the same thing as ::BLADERF_META_STATUS_OVERRUN. That flag is
+ * derived on the host from the state of the USB transfer queue and from gaps
+ * between timestamps; it never reads the fabric. A loss the FPGA absorbed on
+ * its own -- the sample FIFO was full when a sample arrived, or the transmit
+ * FIFO was empty when the DAC needed one -- does not disturb the USB queue
+ * and produces no timestamp gap, so the metadata flag stays clear while
+ * samples are being dropped.
+ *
+ * Both counters are free-running and monotonic. They clear on fabric reset,
+ * not on stream start, so a caller interested in one capture takes the
+ * difference across it rather than expecting to begin at zero.
+ *
+ * @param       dev         Device handle
+ * @param[in]   dir         Stream direction. ::BLADERF_RX reports samples
+ *                          discarded on receive, ::BLADERF_TX reports reads
+ *                          that found the FIFO empty (a hole on the air).
+ * @param[out]  count       Loss count since the last fabric reset
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure.
+ *         Returns ::BLADERF_ERR_UNSUPPORTED on FPGA revisions that do not
+ *         instantiate the counters.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_sample_loss_count(struct bladerf *dev,
+                                            bladerf_direction dir,
+                                            uint64_t *count);
+
+/**
  * @defgroup FN_STREAMING_SYNC  Synchronous API
  *
  * This group of functions presents synchronous, blocking calls (with optional

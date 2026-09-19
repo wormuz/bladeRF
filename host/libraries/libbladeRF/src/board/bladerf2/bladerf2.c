@@ -2569,6 +2569,36 @@ static int bladerf2_get_timestamp(struct bladerf *dev,
     return dev->backend->get_timestamp(dev, dir, value);
 }
 
+static int bladerf2_get_sample_loss_count(struct bladerf *dev,
+                                          bladerf_direction dir,
+                                          uint64_t *count)
+{
+    int status;
+    uint32_t lo = 0, hi = 0;
+    uint8_t base;
+
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+    NULL_CHECK(count);
+
+    /* Halves 0/1 are RX, 2/3 are TX -- see NIOS_PKT_8x32_TARGET_LOSS_COUNTERS.
+     * Both come from one capture register in the fabric, so the pair cannot
+     * tear and the read order is free. */
+    base = (dir == BLADERF_TX) ? 2 : 0;
+
+    status = nios_loss_counter_read(dev, base, &lo);
+    if (status != 0) {
+        return status;
+    }
+
+    status = nios_loss_counter_read(dev, base + 1, &hi);
+    if (status != 0) {
+        return status;
+    }
+
+    *count = ((uint64_t)hi << 32) | lo;
+    return 0;
+}
+
 
 /******************************************************************************/
 /* FPGA/Firmware Loading/Flashing */
@@ -3276,6 +3306,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.sync_tx, bladerf2_sync_tx),
     FIELD_INIT(.sync_rx, bladerf2_sync_rx),
     FIELD_INIT(.get_timestamp, bladerf2_get_timestamp),
+    FIELD_INIT(.get_sample_loss_count, bladerf2_get_sample_loss_count),
     FIELD_INIT(.load_fpga, bladerf2_load_fpga),
     FIELD_INIT(.flash_fpga, bladerf2_flash_fpga),
     FIELD_INIT(.erase_stored_fpga, bladerf2_erase_stored_fpga),

@@ -465,6 +465,35 @@ set_instance_parameter_value dwell_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value dwell_status {simDrivenValue} {0.0}
 set_instance_parameter_value dwell_status {width} {32}
 
+# Loss counters, 64 bits each, split into low/high PIOs because an
+# altera_avalon_pio is 32 bits wide at most.
+#
+# These exist because the fabric already counted every dropped RX sample
+# and every starved TX read and the numbers never left the chip: rx.vhd
+# and tx.vhd wired overflow_count/underflow_count to `open`, leaving an
+# LED as the only evidence. BLADERF_META_STATUS_OVERRUN does not cover
+# this -- it is computed on the host from USB queue state and never reads
+# the fabric.
+#
+# Both halves of a counter are driven from one 64-bit capture register in
+# the system domain (bladerf_core.vhd), refreshed as a whole by a handshake
+# crossing. The pair cannot tear, and read order does not matter.
+foreach pio {rx_overflow_count_lo rx_overflow_count_hi
+             tx_underflow_count_lo tx_underflow_count_hi} {
+    add_instance $pio altera_avalon_pio
+    set_instance_parameter_value $pio {bitClearingEdgeCapReg} {0}
+    set_instance_parameter_value $pio {bitModifyingOutReg} {0}
+    set_instance_parameter_value $pio {captureEdge} {0}
+    set_instance_parameter_value $pio {direction} {Input}
+    set_instance_parameter_value $pio {edgeType} {RISING}
+    set_instance_parameter_value $pio {generateIRQ} {0}
+    set_instance_parameter_value $pio {irqType} {LEVEL}
+    set_instance_parameter_value $pio {resetValue} {0.0}
+    set_instance_parameter_value $pio {simDoTestBenchWiring} {0}
+    set_instance_parameter_value $pio {simDrivenValue} {0.0}
+    set_instance_parameter_value $pio {width} {32}
+}
+
 # RF link config. Output only: the host declares a link generation and the
 # fabric obeys it. This is the write half of the mechanism above.
 #
@@ -600,6 +629,10 @@ set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
 set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
 set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
 set_interface_property dwell_readout EXPORT_OF dwell_readout.external_connection
+foreach pio {rx_overflow_count_lo rx_overflow_count_hi
+             tx_underflow_count_lo tx_underflow_count_hi} {
+    set_interface_property $pio EXPORT_OF $pio.external_connection
+}
 set_interface_property dwell_cfg EXPORT_OF dwell_cfg.external_connection
 set_interface_property rf_link_cfg EXPORT_OF rf_link_cfg.external_connection
 set_interface_property xb_gpio EXPORT_OF xb_gpio.external_connection
@@ -715,6 +748,16 @@ add_connection nios2.data_master dwell_readout.s1
 set_connection_parameter_value nios2.data_master/dwell_readout.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/dwell_readout.s1 baseAddress {0x95c0}
 set_connection_parameter_value nios2.data_master/dwell_readout.s1 defaultConnection {0}
+# Loss counters. 0x9600..0x9660, continuing the 0x20 stride of this map.
+foreach {pio addr} {rx_overflow_count_lo  0x9600
+                    rx_overflow_count_hi  0x9620
+                    tx_underflow_count_lo 0x9640
+                    tx_underflow_count_hi 0x9660} {
+    add_connection nios2.data_master $pio.s1
+    set_connection_parameter_value nios2.data_master/$pio.s1 arbitrationPriority {1}
+    set_connection_parameter_value nios2.data_master/$pio.s1 baseAddress $addr
+    set_connection_parameter_value nios2.data_master/$pio.s1 defaultConnection {0}
+}
 add_connection nios2.data_master dwell_status.s1
 set_connection_parameter_value nios2.data_master/dwell_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/dwell_status.s1 baseAddress {0x95a0}
@@ -819,6 +862,7 @@ add_connection system_clock.clk pretrig_data.clk
 add_connection system_clock.clk dwell_cfg.clk
 add_connection system_clock.clk dwell_readout.clk
 add_connection system_clock.clk dwell_status.clk
+foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk $pio.clk }
 add_connection system_clock.clk rf_link_status.clk
 add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
@@ -864,6 +908,7 @@ add_connection system_clock.clk_reset pretrig_data.reset
 add_connection system_clock.clk_reset dwell_cfg.reset
 add_connection system_clock.clk_reset dwell_readout.reset
 add_connection system_clock.clk_reset dwell_status.reset
+foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk_reset $pio.reset }
 add_connection system_clock.clk_reset rf_link_status.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset

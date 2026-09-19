@@ -820,6 +820,22 @@ int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, half,
+                            value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: half %u = 0x%08x\n", __FUNCTION__, half, *value);
+    }
+#endif
+
+    return status;
+}
+
 int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
 {
     int status;

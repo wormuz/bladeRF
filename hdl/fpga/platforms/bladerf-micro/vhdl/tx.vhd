@@ -39,6 +39,11 @@ entity tx is
         timestamp_reset      : out   std_logic := '1';
         usb_speed            : in    std_logic;
         tx_underflow_led     : out   std_logic := '1';
+        -- Starved-read counter, carried to the host (TX_UNDERFLOW_COUNT
+        -- PIO). Was `open`, same defect as the RX side: the reader
+        -- counted every time it had to transmit with an empty FIFO --
+        -- a hole on the air -- and the number stayed inside the chip.
+        tx_underflow_count   : out   unsigned(63 downto 0) := (others => '0');
         tx_timestamp         : in    unsigned(63 downto 0);
 
         -- Link status (host register RF_LINK_STATUS)
@@ -267,7 +272,7 @@ begin
             out_samples         =>  dac_streams,
 
             underflow_led       =>  tx_underflow_led,
-            underflow_count     =>  open,
+            underflow_count     =>  tx_underflow_count,
             underflow_duration  =>  x"ffff"
         );
 

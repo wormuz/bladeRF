@@ -287,6 +287,18 @@ int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
  */
 int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
 
+/**
+ * Read one 32-bit half of a fabric sample-loss counter.
+ *
+ * @param       dev     Device handle
+ * @param[in]   half    0 = RX overflow low, 1 = RX overflow high,
+ *                      2 = TX underflow low, 3 = TX underflow high
+ * @param[out]  value   Counter half
+ *
+ * @return 0 on success, BLADERF_ERR_* value on failure
+ */
+int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value);
+
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
 #define BLADERF_DWELL_WORD_ENERGY_LO    0

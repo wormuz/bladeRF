@@ -311,6 +311,30 @@ architecture core_bladerf of bladerf_core is
     signal tx_underflow_led       : std_logic := '1';
     signal rx_overflow_led        : std_logic := '1';
 
+    -- Loss counters on their way to the host. Each lives in its own sample
+    -- domain and is read by Nios in sys_clock, so it crosses through the
+    -- same handshake block the timestamp uses -- not a raw synchronizer:
+    -- 64 bits synchronised bit by bit would hand the reader a word that
+    -- never existed while the counter is incrementing.
+    --
+    -- `_q` is the capture register REQUIRED by handshake.vhd:25 (dest_data
+    -- is a wire, not a flop). Without it the crossing has no capture event
+    -- and no skew constraint can bind to it.
+    signal rx_overflow_count      : unsigned(63 downto 0);
+    signal tx_underflow_count     : unsigned(63 downto 0);
+    signal rx_ovf_sys             : unsigned(63 downto 0);
+    signal tx_unf_sys             : unsigned(63 downto 0);
+    signal rx_ovf_sys_q           : unsigned(63 downto 0) := (others => '0');
+    signal tx_unf_sys_q           : unsigned(63 downto 0) := (others => '0');
+    signal rx_ovf_lo_word         : std_logic_vector(31 downto 0);
+    signal rx_ovf_hi_word         : std_logic_vector(31 downto 0);
+    signal tx_unf_lo_word         : std_logic_vector(31 downto 0);
+    signal tx_unf_hi_word         : std_logic_vector(31 downto 0);
+    signal rx_ovf_req             : std_logic := '0';
+    signal rx_ovf_ack             : std_logic;
+    signal tx_unf_req             : std_logic := '0';
+    signal tx_unf_ack             : std_logic;
+
     signal led1_blink             : std_logic;
 
     signal nios_sdo               : std_logic;
@@ -689,6 +713,12 @@ begin
             ad9361_dac_q1_data              => ad9361.ch(1).dac.q.data,   -- in  slv(15:0)
             ad9361_dac_underflow_unf        => ad9361.dac_underflow,      -- in  sl
             rf_link_status_export           => rf_link_status,
+            -- Both halves come from the same capture register, so the pair
+            -- the host reads is always one whole snapshot.
+            rx_overflow_count_lo_export     => rx_ovf_lo_word,
+            rx_overflow_count_hi_export     => rx_ovf_hi_word,
+            tx_underflow_count_lo_export    => tx_unf_lo_word,
+            tx_underflow_count_hi_export    => tx_unf_hi_word,
             pretrig_addr_export             => pretrig_addr_word,
             pretrig_data_export             => pretrig_rd_data,
             dwell_status_export             => dwell_status_word,
@@ -1283,6 +1313,7 @@ begin
             timestamp_reset      => tx_ts_reset,
             usb_speed            => usb_speed_tx,
             tx_underflow_led     => tx_underflow_led,
+            tx_underflow_count   => tx_underflow_count,
             tx_timestamp         => tx_timestamp,
 
             -- Link status
@@ -1377,6 +1408,7 @@ begin
             usb_speed              => usb_speed_rx,
             rx_mux_sel             => rx_mux_sel,
             rx_overflow_led        => rx_overflow_led,
+            rx_overflow_count      => rx_overflow_count,
             rx_timestamp           => rx_timestamp,
 
             -- Link status
@@ -2155,6 +2187,88 @@ begin
             unsigned(dest_data) =>  fx3_timestamp,
             dest_req            =>  timestamp_req,
             dest_ack            =>  timestamp_ack
+        );
+
+    -- Halves of the same capture register, so a host reading both gets one
+    -- whole snapshot regardless of the order it asks in.
+    rx_ovf_lo_word <= std_logic_vector(rx_ovf_sys_q(31 downto 0));
+    rx_ovf_hi_word <= std_logic_vector(rx_ovf_sys_q(63 downto 32));
+    tx_unf_lo_word <= std_logic_vector(tx_unf_sys_q(31 downto 0));
+    tx_unf_hi_word <= std_logic_vector(tx_unf_sys_q(63 downto 32));
+
+    -- Loss counters into the system domain, one handshake per direction.
+    --
+    -- The request cycles rather than sitting at '1' -- handshake.vhd:16
+    -- says a held request transfers exactly once, which would freeze the
+    -- counter at its first value and look exactly like "no drops ever".
+    -- That is the failure this whole change exists to remove, so it must
+    -- not be reintroduced by the transport.
+    --
+    -- Free-running: the host polls whenever it wants, and each completed
+    -- handshake refreshes the snapshot. A counter is monotonic, so a
+    -- slightly stale read understates the loss and never invents one.
+    drive_handshake_rx_ovf : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_ovf_req   <= '0';
+            rx_ovf_sys_q <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_ovf_ack = '0' ) then
+                rx_ovf_req <= '1';
+            else
+                rx_ovf_req <= '0';
+                -- Capture on ack: the word is guaranteed stable only
+                -- between request and acknowledgement.
+                rx_ovf_sys_q <= rx_ovf_sys;
+            end if;
+        end if;
+    end process;
+
+    U_handshake_rx_overflow : entity work.handshake
+        generic map (
+            DATA_WIDTH          =>  rx_overflow_count'length
+        )
+        port map (
+            source_clock        =>  rx_clock,
+            source_reset        =>  rx_reset,
+            source_data         =>  std_logic_vector(rx_overflow_count),
+
+            dest_clock          =>  sys_clock,
+            dest_reset          =>  sys_reset,
+            unsigned(dest_data) =>  rx_ovf_sys,
+            dest_req            =>  rx_ovf_req,
+            dest_ack            =>  rx_ovf_ack
+        );
+
+    drive_handshake_tx_unf : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            tx_unf_req   <= '0';
+            tx_unf_sys_q <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( tx_unf_ack = '0' ) then
+                tx_unf_req <= '1';
+            else
+                tx_unf_req <= '0';
+                tx_unf_sys_q <= tx_unf_sys;
+            end if;
+        end if;
+    end process;
+
+    U_handshake_tx_underflow : entity work.handshake
+        generic map (
+            DATA_WIDTH          =>  tx_underflow_count'length
+        )
+        port map (
+            source_clock        =>  tx_clock,
+            source_reset        =>  tx_reset,
+            source_data         =>  std_logic_vector(tx_underflow_count),
+
+            dest_clock          =>  sys_clock,
+            dest_reset          =>  sys_reset,
+            unsigned(dest_data) =>  tx_unf_sys,
+            dest_req            =>  tx_unf_req,
+            dest_ack            =>  tx_unf_ack
         );
 
 

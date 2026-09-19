@@ -1279,6 +1279,24 @@ int bladerf_get_timestamp(struct bladerf *dev,
     return status;
 }
 
+int bladerf_get_sample_loss_count(struct bladerf *dev,
+                                  bladerf_direction dir,
+                                  uint64_t *count)
+{
+    int status;
+
+    if (dev->board->get_sample_loss_count == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    MUTEX_LOCK(&dev->lock);
+
+    status = dev->board->get_sample_loss_count(dev, dir, count);
+
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
 int bladerf_interleave_stream_buffer(bladerf_channel_layout layout,
                                      bladerf_format format,
                                      unsigned int buffer_size,

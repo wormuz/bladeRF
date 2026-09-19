@@ -126,6 +126,13 @@ package bladerf_p is
         oc_i2c_sda_pad_o                :   out std_logic;
         oc_i2c_sda_padoen_o             :   out std_logic;
         rf_link_status_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        -- Sample-loss counters, 64 bits each across two PIOs. Both halves
+        -- come from one capture register in bladerf_core, so the pair the
+        -- host reads is always one whole snapshot.
+        rx_overflow_count_lo_export     :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        rx_overflow_count_hi_export     :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        tx_underflow_count_lo_export    :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        tx_underflow_count_hi_export    :   in  std_logic_vector(31 downto 0) := (others => 'X');
         pretrig_addr_export             :   out std_logic_vector(31 downto 0);
         pretrig_data_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');
         dwell_status_export             :   in  std_logic_vector(31 downto 0) := (others => 'X');

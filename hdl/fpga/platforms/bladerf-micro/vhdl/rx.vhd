@@ -40,6 +40,14 @@ entity rx is
         usb_speed              : in    std_logic;
         rx_mux_sel             : in    unsigned;
         rx_overflow_led        : out   std_logic := '1';
+        -- Dropped-sample counter, carried to the host (RX_OVERFLOW_COUNT
+        -- PIO). Was `open` here: the fabric counted every sample the
+        -- writer had to discard and the number never left the chip, so
+        -- the only evidence of a drop was an LED nobody polls. The host
+        -- flag it did have (BLADERF_META_STATUS_OVERRUN) is computed on
+        -- the host from USB queue state, not from this counter, and
+        -- therefore cannot see a drop the fabric absorbed on its own.
+        rx_overflow_count      : out   unsigned(63 downto 0) := (others => '0');
         rx_timestamp           : in    unsigned(63 downto 0);
 
         -- Link status (host register RF_LINK_STATUS)
@@ -290,7 +298,7 @@ begin
             in_samples          =>  mux_streams,
 
             overflow_led        =>  rx_overflow_led,
-            overflow_count      =>  open,
+            overflow_count      =>  rx_overflow_count,
             overflow_duration   =>  x"ffff"
         );
 

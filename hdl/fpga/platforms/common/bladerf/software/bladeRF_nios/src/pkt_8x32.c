@@ -92,6 +92,33 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             *data = dwell_status_read();
             break;
 
+        /* Sample-loss counters, one 32-bit half per packet. Both halves of
+         * a counter come from one 64-bit capture register in the fabric, so
+         * they cannot tear against each other and read order is free.
+         *
+         * Out-of-range addr reads 0 rather than aliasing onto another
+         * counter: a wrong number here would be indistinguishable from a
+         * real one. */
+        case NIOS_PKT_8x32_TARGET_LOSS_COUNTERS:
+            switch (addr) {
+                case 0:
+                    *data = loss_counter_half_read(LOSS_CNT_RX_LO);
+                    break;
+                case 1:
+                    *data = loss_counter_half_read(LOSS_CNT_RX_HI);
+                    break;
+                case 2:
+                    *data = loss_counter_half_read(LOSS_CNT_TX_LO);
+                    break;
+                case 3:
+                    *data = loss_counter_half_read(LOSS_CNT_TX_HI);
+                    break;
+                default:
+                    *data = 0;
+                    break;
+            }
+            break;
+
         /* One word of the latched dwell summary; addr is the word index,
          * 15 being the generation counter.
          *

@@ -304,6 +304,33 @@
  * the first dwell completes. */
 #define NIOS_PKT_8x32_TARGET_DWELL_READOUT   0x85
 
+/* Sample-loss counters (read-only).
+ *
+ * addr selects one 32-bit half of one 64-bit counter:
+ *
+ *   0   RX overflow, low word    samples the writer had to discard
+ *   1   RX overflow, high word
+ *   2   TX underflow, low word   reads that found the FIFO empty
+ *   3   TX underflow, high word
+ *
+ * Why this target exists: the fabric counted both of these all along and
+ * the numbers never left the chip (rx.vhd/tx.vhd wired the counters to
+ * `open`, leaving an LED as the only evidence). BLADERF_META_STATUS_OVERRUN
+ * does NOT cover it -- that flag is computed on the host from USB transfer
+ * queue state and never reads the fabric, so a drop the fabric absorbed on
+ * its own is invisible to it.
+ *
+ * The two halves cannot tear against each other: both PIOs are driven from
+ * ONE 64-bit capture register in the system domain, refreshed as a whole by
+ * a handshake crossing from the sample domain (bladerf_core.vhd,
+ * U_handshake_rx_overflow / U_handshake_tx_underflow). Either half may be
+ * one snapshot stale relative to the counter, never half of one value and
+ * half of another. Read order therefore does not matter.
+ *
+ * Counters are free-running and monotonic; they clear only on fabric reset.
+ * The host takes differences between reads rather than expecting zero. */
+#define NIOS_PKT_8x32_TARGET_LOSS_COUNTERS   0x86
+
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
 #define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02

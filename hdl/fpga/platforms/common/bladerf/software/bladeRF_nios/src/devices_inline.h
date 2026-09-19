@@ -103,6 +103,56 @@ static inline uint32_t rf_link_status_read(void)
     #endif
 }
 
+/* Loss counters, 64 bits each across two PIOs.
+ *
+ * The fabric has always counted these -- every RX sample the writer had to
+ * discard, every TX read that found an empty FIFO -- but rx.vhd/tx.vhd tied
+ * the counters to `open`, so the only outward sign was an LED. The host
+ * flag that does exist, BLADERF_META_STATUS_OVERRUN, is derived on the host
+ * from USB queue state and never reads the fabric, so it cannot see a drop
+ * the fabric absorbed by itself.
+ *
+ * The halves cannot tear against each other: both PIOs are driven from one
+ * 64-bit capture register in the system domain, refreshed as a whole by a
+ * handshake crossing from the sample domain. A half may be one snapshot
+ * stale, never half of one value and half of another.
+ *
+ * Reads 0 on revisions without the PIOs, which is honest there: a revision
+ * that does not instantiate the counter has not dropped anything it knows
+ * about. */
+/* One half per call: the 8x32 packet carries 32 bits, so the host asks for
+ * one half at a time and assembles the pair itself. */
+typedef enum {
+    LOSS_CNT_RX_LO = 0,
+    LOSS_CNT_RX_HI = 1,
+    LOSS_CNT_TX_LO = 2,
+    LOSS_CNT_TX_HI = 3,
+} loss_counter_half_t;
+
+static inline uint32_t loss_counter_half_read(loss_counter_half_t which)
+{
+    switch (which) {
+    #ifdef RX_OVERFLOW_COUNT_LO_BASE
+        case LOSS_CNT_RX_LO:
+            return IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_LO_BASE);
+    #endif
+    #ifdef RX_OVERFLOW_COUNT_HI_BASE
+        case LOSS_CNT_RX_HI:
+            return IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_HI_BASE);
+    #endif
+    #ifdef TX_UNDERFLOW_COUNT_LO_BASE
+        case LOSS_CNT_TX_LO:
+            return IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_LO_BASE);
+    #endif
+    #ifdef TX_UNDERFLOW_COUNT_HI_BASE
+        case LOSS_CNT_TX_HI:
+            return IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_HI_BASE);
+    #endif
+        default:
+            return 0;
+    }
+}
+
 /* Dwell status, sweep revision only.
  *
  * The hosted image does not instantiate these PIOs, so every accessor here

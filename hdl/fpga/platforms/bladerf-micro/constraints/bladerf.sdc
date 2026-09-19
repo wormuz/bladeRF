@@ -329,7 +329,9 @@ set hs_pairs [list \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
     {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    \
-    {*U_dwell_cfg_handshake|source_holding[*]}                    {*bladerf_core:*|dwell_cfg_rx[*]}        ]
+    {*U_dwell_cfg_handshake|source_holding[*]}                    {*bladerf_core:*|dwell_cfg_rx[*]}        \
+    {*U_handshake_rx_overflow|source_holding[*]}                  {*bladerf_core:*|rx_ovf_sys_q[*]}        \
+    {*U_handshake_tx_underflow|source_holding[*]}                 {*bladerf_core:*|tx_unf_sys_q[*]}        ]
 
 # The dwell_cfg pair exists only in the sweep revision, and it is a genuine
 # bundled-data crossing: dwell_cfg_rx[29:24] selects a shift and [23:0] is
