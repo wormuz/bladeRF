@@ -1279,19 +1279,19 @@ int bladerf_get_timestamp(struct bladerf *dev,
     return status;
 }
 
-int bladerf_get_sample_loss_count(struct bladerf *dev,
+int bladerf_get_loss_event_count(struct bladerf *dev,
                                   bladerf_direction dir,
                                   uint64_t *count)
 {
     int status;
 
-    if (dev->board->get_sample_loss_count == NULL) {
+    if (dev->board->get_loss_event_count == NULL) {
         return BLADERF_ERR_UNSUPPORTED;
     }
 
     MUTEX_LOCK(&dev->lock);
 
-    status = dev->board->get_sample_loss_count(dev, dir, count);
+    status = dev->board->get_loss_event_count(dev, dir, count);
 
     MUTEX_UNLOCK(&dev->lock);
     return status;

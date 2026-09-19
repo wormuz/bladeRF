@@ -442,10 +442,6 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         RETURN_ERROR_STATUS("is_fpga_configured", status);
     } else if (1 == status) {
         board_data->state = STATE_FPGA_LOADED;
-    } else if (status != 1 && BLADERF_FPGA_UNKNOWN == board_data->fpga_size) {
-        log_warning("Unknown FPGA size. Skipping FPGA configuration...\n");
-        log_warning("Skipping further initialization...\n");
-        return 0;
     } else if (status != 1) {
         /* Try searching for an FPGA in the config search path */
         switch (board_data->fpga_size) {
@@ -459,6 +455,28 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
 
             case BLADERF_FPGA_A9:
                 full_path = file_find("hostedxA9.rbf");
+                break;
+
+            case BLADERF_FPGA_UNKNOWN:
+                /* The size lives in the flash calibration region, and a board
+                 * whose calibration region has gone unreadable reports
+                 * UNKNOWN forever. This used to return outright, leaving such
+                 * a board with no gateware at all -- it could not even load
+                 * the stock image sitting in the search path.
+                 *
+                 * There are only three sizes for this board, so try each
+                 * name. Guessing the file name is safe; guessing the CONTENT
+                 * is not, and we do not: load_fpga rejects a bitstream that
+                 * does not match the device. */
+                log_warning("Unknown FPGA size; trying each known image "
+                            "name in the search path.\n");
+                full_path = file_find("hostedxA4.rbf");
+                if (NULL == full_path) {
+                    full_path = file_find("hostedxA5.rbf");
+                }
+                if (NULL == full_path) {
+                    full_path = file_find("hostedxA9.rbf");
+                }
                 break;
 
             default:
@@ -2569,7 +2587,7 @@ static int bladerf2_get_timestamp(struct bladerf *dev,
     return dev->backend->get_timestamp(dev, dir, value);
 }
 
-static int bladerf2_get_sample_loss_count(struct bladerf *dev,
+static int bladerf2_get_loss_event_count(struct bladerf *dev,
                                           bladerf_direction dir,
                                           uint64_t *count)
 {
@@ -3306,7 +3324,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.sync_tx, bladerf2_sync_tx),
     FIELD_INIT(.sync_rx, bladerf2_sync_rx),
     FIELD_INIT(.get_timestamp, bladerf2_get_timestamp),
-    FIELD_INIT(.get_sample_loss_count, bladerf2_get_sample_loss_count),
+    FIELD_INIT(.get_loss_event_count, bladerf2_get_loss_event_count),
     FIELD_INIT(.load_fpga, bladerf2_load_fpga),
     FIELD_INIT(.flash_fpga, bladerf2_flash_fpga),
     FIELD_INIT(.erase_stored_fpga, bladerf2_erase_stored_fpga),

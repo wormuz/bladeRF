@@ -2713,32 +2713,43 @@ int CALL_CONV bladerf_get_timestamp(struct bladerf *dev,
                                     bladerf_timestamp *timestamp);
 
 /**
- * Sample loss counted by the FPGA itself, per direction.
+ * Loss EPISODES counted by the FPGA itself, per direction.
  *
- * This is NOT the same thing as ::BLADERF_META_STATUS_OVERRUN. That flag is
- * derived on the host from the state of the USB transfer queue and from gaps
- * between timestamps; it never reads the fabric. A loss the FPGA absorbed on
- * its own -- the sample FIFO was full when a sample arrived, or the transmit
- * FIFO was empty when the DAC needed one -- does not disturb the USB queue
- * and produces no timestamp gap, so the metadata flag stays clear while
- * samples are being dropped.
+ * ⛔ Episodes, not samples. An unbroken run of overflowing cycles increments
+ * the counter once, however long it lasts -- see the comment above
+ * count_overflows in fifo_writer.vhd:1085-1088 and its fifo_reader
+ * counterpart. "10" means loss began ten separate times; it says nothing
+ * about how many samples went missing, so do not scale it into a sample
+ * count or a loss rate.
  *
- * Both counters are free-running and monotonic. They clear on fabric reset,
- * not on stream start, so a caller interested in one capture takes the
- * difference across it rather than expecting to begin at zero.
+ * This is NOT ::BLADERF_META_STATUS_OVERRUN. That flag is derived on the
+ * host from the state of the USB transfer queue and from gaps between
+ * timestamps; it never reads the fabric. A loss the FPGA absorbed on its own
+ * -- the sample FIFO was full when a sample arrived, or the transmit FIFO
+ * was empty when the DAC needed one -- disturbs neither, so the metadata
+ * flag stays clear while samples are being dropped. Measured on hardware
+ * 2026-09-19: 200 buffers at 61.44 MHz through a deliberately tight queue
+ * returned zero errors to the caller while this counter reached 54807.
+ *
+ * ⛔ Cleared by bladerf_enable_module(true), not merely by device open:
+ * enabling the module resets the sample-domain logic that owns the counter
+ * (measured 2026-09-19). Monotonic within one enabled session and preserved
+ * across a disable, so a difference taken ACROSS an enable boundary is
+ * meaningless -- it reads as zero or goes backwards.
  *
  * @param       dev         Device handle
- * @param[in]   dir         Stream direction. ::BLADERF_RX reports samples
- *                          discarded on receive, ::BLADERF_TX reports reads
- *                          that found the FIFO empty (a hole on the air).
- * @param[out]  count       Loss count since the last fabric reset
+ * @param[in]   dir         Stream direction. ::BLADERF_RX counts episodes of
+ *                          samples discarded on receive, ::BLADERF_TX counts
+ *                          episodes of reads that found the FIFO empty (a
+ *                          hole on the air).
+ * @param[out]  count       Episode count since the module was enabled
  *
  * @return 0 on success, value from \ref RETCODES list on failure.
  *         Returns ::BLADERF_ERR_UNSUPPORTED on FPGA revisions that do not
  *         instantiate the counters.
  */
 API_EXPORT
-int CALL_CONV bladerf_get_sample_loss_count(struct bladerf *dev,
+int CALL_CONV bladerf_get_loss_event_count(struct bladerf *dev,
                                             bladerf_direction dir,
                                             uint64_t *count);
 

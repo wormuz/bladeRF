@@ -404,7 +404,7 @@ struct board_fns {
     /* Samples the fabric itself dropped. Distinct from
      * BLADERF_META_STATUS_OVERRUN, which is computed on the host from USB
      * queue state and cannot see a loss the fabric absorbed alone. */
-    int (*get_sample_loss_count)(struct bladerf *dev,
+    int (*get_loss_event_count)(struct bladerf *dev,
                                  bladerf_direction dir,
                                  uint64_t *count);
 

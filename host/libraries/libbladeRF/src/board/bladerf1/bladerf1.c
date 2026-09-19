@@ -3621,9 +3621,9 @@ const struct board_fns bladerf1_board_fns = {
     FIELD_INIT(.sync_rx, bladerf1_sync_rx),
     FIELD_INIT(.get_timestamp, bladerf1_get_timestamp),
     /* NULL on purpose: the loss counters live in the bladeRF 2 micro
-     * gateware. bladerf_get_sample_loss_count() answers UNSUPPORTED here
+     * gateware. bladerf_get_loss_event_count() answers UNSUPPORTED here
      * rather than a zero that would read as "nothing was ever dropped". */
-    FIELD_INIT(.get_sample_loss_count, NULL),
+    FIELD_INIT(.get_loss_event_count, NULL),
     FIELD_INIT(.load_fpga, bladerf1_load_fpga),
     FIELD_INIT(.flash_fpga, bladerf1_flash_fpga),
     FIELD_INIT(.erase_stored_fpga, bladerf1_erase_stored_fpga),

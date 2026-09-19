@@ -173,6 +173,21 @@ bool is_valid_fpga_size(struct bladerf *dev, bladerf_fpga_size fpga, size_t len)
     size_t expected;
     int status;
 
+    /* Provide a means to override this check. This is intended to allow
+     * folks who know what they're doing to work around this quickly without
+     * needing to make a code change. (e.g., someone building a custom FPGA
+     * image that enables compressoin)
+     *
+     * Checked BEFORE querying the size, not after: the query itself fails
+     * when the board cannot report its FPGA type, and an early return there
+     * made the override unreachable in exactly the case it exists for --
+     * loading a locally built image onto a board whose size readback is
+     * unavailable. */
+    if (getenv(env_override)) {
+        log_info("Overriding FPGA size check per %s\n", env_override);
+        return true;
+    }
+
     status = dev->board->get_fpga_bytes(dev, &expected);
     if (status < 0) {
         log_error(
@@ -181,14 +196,7 @@ bool is_valid_fpga_size(struct bladerf *dev, bladerf_fpga_size fpga, size_t len)
         return false;
     }
 
-    /* Provide a means to override this check. This is intended to allow
-     * folks who know what they're doing to work around this quickly without
-     * needing to make a code change. (e.g., someone building a custom FPGA
-     * image that enables compressoin) */
-    if (getenv(env_override)) {
-        log_info("Overriding FPGA size check per %s\n", env_override);
-        valid = true;
-    } else if (expected > 0) {
+    if (expected > 0) {
         valid = (len == expected);
     } else {
         log_debug("Unknown FPGA type (%d). Using relaxed size criteria.\n",
