@@ -102,7 +102,10 @@
 /* Number of RFFE fast lock profiles to store in the Nios.
  * Make sure this matches what is defined in bladerf2.c.
  */
-#define NUM_BBP_FASTLOCK_PROFILES  256
+/* 16, not 256: at 20 bytes per entry per direction the arrays cost 10240
+ * bytes of static data here, out of the 29752 the heap and stack share. See
+ * the matching comment in fpga_common/include/bladerf2_common.h. */
+#define NUM_BBP_FASTLOCK_PROFILES  16
 
 /* Number of fast lock profiles that can be stored in the RFFE */
 #define NUM_RFFE_FASTLOCK_PROFILES 8

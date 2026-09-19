@@ -96,8 +96,20 @@ static bladerf_frequency const RESET_FREQUENCY = 70000000;
 #define TRIMDAC_EN_HIGHZ            0x3
 
 /* Number of fast lock profiles that can be stored in the Nios
- * Make sure this number matches that of the Nios' devices.h */
-#define NUM_BBP_FASTLOCK_PROFILES   256
+ * Make sure this number matches that of the Nios' devices.h
+ *
+ * 16, not 256. The two arrays are 20 bytes per entry per direction, so 256
+ * cost 10240 bytes of the Nios' static data - a third of everything left for
+ * heap and stack together (they share one 29752-byte span). That shortage is
+ * what made ad9361_init return with phy->pdata NULL and kept FPGA tuning mode
+ * from ever initialising.
+ *
+ * Correctness does not depend on the depth: the index is taken modulo this
+ * value before use (bladerf2.c), and the RFIC itself only holds
+ * NUM_RFFE_FASTLOCK_PROFILES=8 slots, which the index wraps into as well. The
+ * depth only decides how many distinct tunes can be recalled before one
+ * overwrites another; 16 still leaves twice the hardware's own reach. */
+#define NUM_BBP_FASTLOCK_PROFILES   16
 
 /* Number of fast lock profiles that can be stored in the RFFE
  * Make sure this number matches that of the Nios' devices.h */
@@ -302,8 +314,29 @@ typedef enum {
 #define BLADERF_RFIC_STATUS_INIT_MASK        0x1
 #define BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT  1
 #define BLADERF_RFIC_STATUS_WQSUCCESS_MASK   0x1
+/* How far _rfic_initialize got. A failed INIT otherwise reports nothing but
+ * "false", which is the same answer for a dead SPI bus and for a chip that
+ * initialised fine but could not be tuned. See BLADERF_RFIC_INIT_STAGE_*. */
+#define BLADERF_RFIC_STATUS_STAGE_SHIFT      2
+#define BLADERF_RFIC_STATUS_STAGE_MASK       0x3f
 #define BLADERF_RFIC_STATUS_WQLEN_SHIFT      8
 #define BLADERF_RFIC_STATUS_WQLEN_MASK       0xff
+
+/* Progress markers written by _rfic_initialize into the stage field above.
+ * The value left behind is the last stage entered, so a stuck or failed
+ * init says where it stopped. */
+#define BLADERF_RFIC_INIT_STAGE_IDLE         0
+#define BLADERF_RFIC_INIT_STAGE_ENTER        1
+#define BLADERF_RFIC_INIT_STAGE_RFFE_CLEARED 2
+#define BLADERF_RFIC_INIT_STAGE_RESET_OUT    3
+#define BLADERF_RFIC_INIT_STAGE_ENABLE_SET   4
+#define BLADERF_RFIC_INIT_STAGE_AD9361_INIT  5
+#define BLADERF_RFIC_INIT_STAGE_PHY_OK       6
+#define BLADERF_RFIC_INIT_STAGE_PHY_NULL     10
+#define BLADERF_RFIC_INIT_STAGE_PDATA_NULL   11
+#define BLADERF_RFIC_INIT_STAGE_PER_MODULE   7
+#define BLADERF_RFIC_INIT_STAGE_PER_CHANNEL  8
+#define BLADERF_RFIC_INIT_STAGE_DONE         9
 
 #define BLADERF_RFIC_RSSI_MULT_SHIFT         32
 #define BLADERF_RFIC_RSSI_MULT_MASK          0xFFFF

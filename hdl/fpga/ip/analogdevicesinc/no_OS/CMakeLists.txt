@@ -94,6 +94,17 @@ target_compile_options(ad936x PRIVATE
     -DBLADERF_NIOS_BUILD -DNUAND_MODIFICATIONS -Wall -Os
 )
 
+# ABLATION, temporary: does the Nios wedge on the AXI ad9361 core?
+# set_tuning_mode(FPGA) leaves the board answering nothing until the
+# bitstream is reloaded, and the suspect is ad9361_init -> axi_adc_init ->
+# IOWR_32DIRECT(0x10000) against a core clocked by if_l_clk. Defining this
+# drops those accesses; if the wedge survives, the suspect is wrong.
+# ⛔ The RX sample path is dead in this build - diagnostic only.
+if(BLADERF_NIOS_ABLATE_AXI_ADC)
+    message(WARNING "libad936x: AXI_ADC_NOT_PRESENT - diagnostic build, RX dead")
+    target_compile_options(ad936x PRIVATE -DAXI_ADC_NOT_PRESENT)
+endif()
+
 if(NOT NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE)
     message(STATUS "libad936x: building with software mul/mulx/div operations")
     target_compile_options(ad936x PRIVATE

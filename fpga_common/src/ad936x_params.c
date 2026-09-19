@@ -19,6 +19,7 @@
  */
 
 // clang-format off
+#ifndef AXI_ADC_NOT_PRESENT
 
 /* FPGA-side ADI AXI interface core (axi_ad9361). Flat address space over
  * NIOS_PKT_32x32_TARGET_ADI_AXI: base 0, DAC-side registers at 0x4000+.
@@ -74,6 +75,7 @@ static struct axi_dac_init bladerf2_tx_dac_init = {
      * the interface at the wrong ratio for the mode the RFIC is actually in. */
     .rate         = 1,
 };
+#endif  /* AXI_ADC_NOT_PRESENT */
 
 AD9361_InitParam bladerf2_rfic_init_params = {
     /* Device selection */
@@ -271,7 +273,21 @@ AD9361_InitParam bladerf2_rfic_init_params = {
     /* Use hardcoded digital interface delay values (production) */
     .digital_interface_tune_skip_mode = 2,	// Skip RX and TX tuning; use hardcoded values below                // digital_interface_tune_skip_mode *** adi,digital-interface-tune-skip-mode
 #endif // ENABLE_AD9361_DIGITAL_INTERFACE_TIMING_VERIFICATION
+#ifdef BLADERF_NIOS_BUILD
+    /* Gates the ad9361_dig_tune() calls in ad9361_set_trx_clock_chain() and
+     * ad9361_validate_enable_fir(). That routine drives test patterns across
+     * the DATA_CLK interface and reads the result back through the FPGA's AXI
+     * ad9361 core - logic in the l_clk domain, clocked by the AD9361 itself.
+     * Run from the Nios during set_tuning_mode(FPGA), before the chip drives
+     * its interface, the domain-crossing read never completes and the
+     * processor stalls with no way back short of reloading the bitstream.
+     *
+     * The host does not need this either way: skip_mode is already 2, so the
+     * hardcoded delays below are what gets used. */
+    .digital_interface_tune_fir_disable = 1,
+#else
     .digital_interface_tune_fir_disable = 0,	// ?? UNDOCUMENTED ??                                               // digital_interface_tune_fir_disable *** adi,digital-interface-tune-fir-disable
+#endif
     .pp_tx_swap_enable = 1,	// Swap I and Q (spectral inversion)                                // pp_tx_swap_enable *** adi,pp-tx-swap-enable
     .pp_rx_swap_enable = 1,	// Swap I and Q (spectral inversion)                                // pp_rx_swap_enable *** adi,pp-rx-swap-enable
     .tx_channel_swap_enable = 0,	// Don't swap TX1 and TX2                                           // tx_channel_swap_enable *** adi,tx-channel-swap-enable
@@ -361,9 +377,13 @@ AD9361_InitParam bladerf2_rfic_init_params = {
      * platform_bladerf2; the handle goes into .extra at init time. */
     .spi_param = { .platform_ops = &bladerf2_spi_ops },
 
-    /* FPGA AXI interface core init (деасерт RSTN у axi_adc_init) */
+    /* FPGA AXI interface core init (деасерт RSTN у axi_adc_init).
+     * The fields only exist when the driver is built with the AXI core
+     * present; the ablation build (AXI_ADC_NOT_PRESENT) drops them. */
+#ifndef AXI_ADC_NOT_PRESENT
     .rx_adc_init = &bladerf2_rx_adc_init,
     .tx_dac_init = &bladerf2_tx_dac_init,
+#endif
 
     .ad9361_rfpll_ext_recalc_rate = NULL,	// Future use (RX_EXT_LO, TX_EXT_LO control)                        // (*ad9361_rfpll_ext_recalc_rate)()
     .ad9361_rfpll_ext_round_rate = NULL,	// Future use (RX_EXT_LO, TX_EXT_LO control)                        // (*ad9361_rfpll_ext_round_rate)()
@@ -569,7 +589,21 @@ AD9361_InitParam bladerf2_rfic_init_params_fastagc_burst = {
     /* Use hardcoded digital interface delay values (production) */
     .digital_interface_tune_skip_mode = 2,	// Skip RX and TX tuning; use hardcoded values below                // digital_interface_tune_skip_mode *** adi,digital-interface-tune-skip-mode
 #endif // ENABLE_AD9361_DIGITAL_INTERFACE_TIMING_VERIFICATION
+#ifdef BLADERF_NIOS_BUILD
+    /* Gates the ad9361_dig_tune() calls in ad9361_set_trx_clock_chain() and
+     * ad9361_validate_enable_fir(). That routine drives test patterns across
+     * the DATA_CLK interface and reads the result back through the FPGA's AXI
+     * ad9361 core - logic in the l_clk domain, clocked by the AD9361 itself.
+     * Run from the Nios during set_tuning_mode(FPGA), before the chip drives
+     * its interface, the domain-crossing read never completes and the
+     * processor stalls with no way back short of reloading the bitstream.
+     *
+     * The host does not need this either way: skip_mode is already 2, so the
+     * hardcoded delays below are what gets used. */
+    .digital_interface_tune_fir_disable = 1,
+#else
     .digital_interface_tune_fir_disable = 0,	// ?? UNDOCUMENTED ??                                               // digital_interface_tune_fir_disable *** adi,digital-interface-tune-fir-disable
+#endif
     .pp_tx_swap_enable = 1,	// Swap I and Q (spectral inversion)                                // pp_tx_swap_enable *** adi,pp-tx-swap-enable
     .pp_rx_swap_enable = 1,	// Swap I and Q (spectral inversion)                                // pp_rx_swap_enable *** adi,pp-rx-swap-enable
     .tx_channel_swap_enable = 0,	// Don't swap TX1 and TX2                                           // tx_channel_swap_enable *** adi,tx-channel-swap-enable
@@ -659,9 +693,13 @@ AD9361_InitParam bladerf2_rfic_init_params_fastagc_burst = {
      * platform_bladerf2; the handle goes into .extra at init time. */
     .spi_param = { .platform_ops = &bladerf2_spi_ops },
 
-    /* FPGA AXI interface core init (деасерт RSTN у axi_adc_init) */
+    /* FPGA AXI interface core init (деасерт RSTN у axi_adc_init).
+     * The fields only exist when the driver is built with the AXI core
+     * present; the ablation build (AXI_ADC_NOT_PRESENT) drops them. */
+#ifndef AXI_ADC_NOT_PRESENT
     .rx_adc_init = &bladerf2_rx_adc_init,
     .tx_dac_init = &bladerf2_tx_dac_init,
+#endif
 
     .ad9361_rfpll_ext_recalc_rate = NULL,	// Future use (RX_EXT_LO, TX_EXT_LO control)                        // (*ad9361_rfpll_ext_recalc_rate)()
     .ad9361_rfpll_ext_round_rate = NULL,	// Future use (RX_EXT_LO, TX_EXT_LO control)                        // (*ad9361_rfpll_ext_round_rate)()

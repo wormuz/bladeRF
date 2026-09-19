@@ -283,6 +283,33 @@ static int nios_8x32_write(struct bladerf *dev, uint8_t id,
     }
 }
 
+/* The Nios answers packets from its main loop, and some RFIC commands own
+ * that loop for a long time: INIT hard-resets the AD9361 and runs the whole
+ * ad9361_init(), calibrations included, which costs about 1.2 s (measured on
+ * this board via bladerf_open, 1.19/1.20/1.20 s). While that runs, nothing is
+ * answered, and a single 250 ms bulk transfer gives up long before the board
+ * is back. The request itself is not lost - the command UART receives on an
+ * interrupt - so retrying the read is what waits this out.
+ *
+ * Only the RFIC target retries: everywhere else a silent peripheral is a
+ * fault worth reporting promptly, not something to sit through. */
+#define RFIC_ACCESS_ATTEMPTS 24  /* x 250 ms transfer timeout = 6 s */
+
+static int nios_rfic_access_retry(struct bladerf *dev, uint8_t *buf)
+{
+    int status = BLADERF_ERR_TIMEOUT;
+    size_t i;
+
+    for (i = 0; i < RFIC_ACCESS_ATTEMPTS; i++) {
+        status = nios_access_quiet(dev, buf);
+        if (status != BLADERF_ERR_TIMEOUT) {
+            return status;
+        }
+    }
+
+    return status;
+}
+
 static int nios_16x64_read(struct bladerf *dev,
                            uint8_t id,
                            uint16_t addr,
@@ -296,7 +323,7 @@ static int nios_16x64_read(struct bladerf *dev,
 
     /* RFIC access times out occasionally, and this is fine. */
     if (NIOS_PKT_16x64_TARGET_RFIC == id) {
-        status = nios_access_quiet(dev, buf);
+        status = nios_rfic_access_retry(dev, buf);
     } else {
         status = nios_access(dev, buf);
     }
@@ -329,7 +356,7 @@ static int nios_16x64_write(struct bladerf *dev,
 
     /* RFIC access times out occasionally, and this is fine. */
     if (NIOS_PKT_16x64_TARGET_RFIC == id) {
-        status = nios_access_quiet(dev, buf);
+        status = nios_rfic_access_retry(dev, buf);
     } else {
         status = nios_access(dev, buf);
     }

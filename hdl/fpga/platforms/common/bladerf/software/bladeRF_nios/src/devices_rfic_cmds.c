@@ -112,8 +112,12 @@ static bool _rfic_deinitialize(struct rfic_state *state)
         state->phy = NULL;
     }
 
-    /* Put RFIC into hardware reset */
-    _reset_rfic(true);
+    /* The chip is deliberately left out of hardware reset, matching
+     * _rfic_host_deinitialize. Holding it in reset stops if_l_clk, and the
+     * FPGA's AXI ad9361 core runs on that clock: the next Avalon access to it
+     * would stall the Nios with no way back short of reloading the
+     * bitstream. _clear_rffe_ctrl() above already dropped the control bits,
+     * which is what "deinitialized" has to mean here. */
 
     /* Update state */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
@@ -137,8 +141,11 @@ static bool _rfic_initialize(struct rfic_state *state)
     bladerf_sample_rate init_samprate;
     size_t i;
 
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_ENTER;
+
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_RFFE_CLEARED;
 
     /* Initialize AD9361 if it isn't initialized */
     if (NULL == state->phy) {
@@ -146,10 +153,48 @@ static bool _rfic_initialize(struct rfic_state *state)
 
         DBG("--- Initializing AD9361 ---\n");
 
-        /* Hard-reset the RFIC */
-        _reset_rfic(true);
-        usleep(1000);
+        /* No hard reset here, deliberately. The host path does not do one
+         * either (_rfic_host_initialize clears the RFFE control bits and goes
+         * straight into ad9361_init), and on this side the reset is actively
+         * harmful: ad9361_init reaches the FPGA's AXI ad9361 core through
+         * IOWR_32DIRECT on the Avalon bus (axi_adc_init -> no_os_axi_io_write
+         * -> adi_axi_write), and that core's logic runs on if_l_clk, the
+         * clock the AD9361 itself supplies. Reset the chip and that clock
+         * stops; the Avalon access then has nobody to answer it, waitrequest
+         * stays asserted, and the Nios freezes on the instruction. No timeout
+         * in C can catch that - the stall is below the code - which is why a
+         * wedged board only came back after reloading the bitstream.
+         *
+         * Release the pin instead: after a cold power-up the part may still
+         * be held in reset, and it has to be running before ad9361_init
+         * touches the AXI core. */
         _reset_rfic(false);
+        usleep(1000);
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_RESET_OUT;
+
+        /* ad9361_init() ends up in axi_adc_init(), which writes the FPGA's
+         * AXI ad9361 core over the Avalon bus. That core runs on if_l_clk,
+         * supplied by the AD9361 itself, and the chip only drives its
+         * interface once ENABLE is asserted - which _clear_rffe_ctrl() above
+         * has just dropped. Write to the core while that clock is silent and
+         * the bus holds waitrequest forever: the Nios stops mid-instruction,
+         * below anything a C timeout can see, and the board answers nothing
+         * until the bitstream is reloaded.
+         *
+         * Measured by ablation: an AXI_ADC_NOT_PRESENT build turned the same
+         * wedge into a plain error return with the board still responding.
+         *
+         * Nothing else in this firmware ever sets ENABLE (the host does it
+         * from enable_module), so raise it here and give the interface time
+         * to come up before the driver touches the core. */
+        {
+            uint32_t reg = rffe_csr_read();
+
+            reg |= (1 << RFFE_CONTROL_ENABLE);
+            rffe_csr_write(reg);
+        }
+        usleep(1000);
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_ENABLE_SET;
 
         /* ad9361_init() used to take the device handle as a third argument
          * and stash it for the SPI and GPIO accessors. On this platform
@@ -158,9 +203,19 @@ static bool _rfic_initialize(struct rfic_state *state)
          * through registers directly, not through desc->extra. Mirrors the
          * host side fix in rfic_host.c, minus the .extra wiring host needs
          * for its USB backend. */
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_AD9361_INIT;
         CHECK_BOOL(ad9361_init(&state->phy, init_param));
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_OK;
 
-        if (NULL == state->phy || NULL == state->phy->pdata) {
+        if (NULL == state->phy) {
+            state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
+            DBG("%s: ad9361_init returned ok but left phy NULL\n",
+                __FUNCTION__);
+            return false;
+        }
+
+        if (NULL == state->phy->pdata) {
+            state->init_stage = BLADERF_RFIC_INIT_STAGE_PDATA_NULL;
             /* Oh no */
             DBG("%s: ad9361_init failed silently\n", __FUNCTION__);
             ad9361_remove(state->phy);
@@ -168,6 +223,8 @@ static bool _rfic_initialize(struct rfic_state *state)
             return false;
         }
     }
+
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_MODULE;
 
     /* Per-module initialization */
     FOR_EACH_DIRECTION(dir)
@@ -198,6 +255,8 @@ static bool _rfic_initialize(struct rfic_state *state)
         }
     }
 
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_CHANNEL;
+
     /* Per-channel initialization */
     FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
     {
@@ -222,6 +281,7 @@ static bool _rfic_initialize(struct rfic_state *state)
 
     /* Update state */
     state->init_state = BLADERF_RFIC_INIT_STATE_ON;
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_DONE;
 
     DBG("*** RFIC Control Initialized ***\n");
 
@@ -298,7 +358,10 @@ bool _rfic_cmd_rd_status(struct rfic_state *state,
                << BLADERF_RFIC_STATUS_WQLEN_SHIFT) |
 
               ((state->write_queue.last_rv & BLADERF_RFIC_STATUS_WQSUCCESS_MASK)
-               << BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT);
+               << BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT) |
+
+              ((state->init_stage & BLADERF_RFIC_STATUS_STAGE_MASK)
+               << BLADERF_RFIC_STATUS_STAGE_SHIFT);
 
     return true;
 }

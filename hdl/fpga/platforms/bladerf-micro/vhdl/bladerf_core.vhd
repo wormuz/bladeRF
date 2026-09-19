@@ -466,6 +466,15 @@ architecture core_bladerf of bladerf_core is
     signal wbm_wb_ack_i           : std_logic;
     signal wbm_wb_cyc_o           : std_logic;
 
+    -- SPI arbiter conduit. Bit 0 is the Nios, which drives its own request
+    -- and ack through the arbiter's control register rather than these
+    -- lines; bit 1 is the second requester, which this revision does not
+    -- have. Both default low so an unconnected input cannot look like a
+    -- pending request.
+    signal arbiter_request        : std_logic_vector(1 downto 0) := (others => '0');
+    signal arbiter_granted        : std_logic_vector(1 downto 0);
+    signal arbiter_ack            : std_logic_vector(1 downto 0) := (others => '0');
+
 begin
 
     U_rx_pkt_gen : entity work.rx_packet_generator
@@ -762,8 +771,25 @@ begin
             wbm_wb_sel_o                    => wbm_wb_sel_o,
             wbm_wb_stb_o                    => wbm_wb_stb_o,
             wbm_wb_ack_i                    => wbm_wb_ack_i,
-            wbm_wb_cyc_o                    => wbm_wb_cyc_o
+            wbm_wb_cyc_o                    => wbm_wb_cyc_o,
+            arbiter_request                 => arbiter_request,
+            arbiter_granted                 => arbiter_granted,
+            arbiter_ack                     => arbiter_ack
         );
+
+    -- The SPI arbiter is built with N=2. Bit 0 is the Nios, which requests
+    -- and acks through the arbiter's own control register, not through this
+    -- conduit (arbiter.vhd: nios_request/nios_ack come from nios_csr). Bit 1
+    -- is a second requester that only the WLAN revision has
+    -- (bladerf-wlan.vhd drives it); this revision has none.
+    --
+    -- Leaving the conduit unconnected is what made Qsys report
+    -- "arbiter_0.conduit_end_1: Interface has no signals", with the VHDL
+    -- input defaulting to 'X'. Drive both bits low: no phantom request, and
+    -- no ack that the FSM could mistake for the grantee it waits on in
+    -- WAIT_FOR_ACK.
+    arbiter_request <= (others => '0');
+    arbiter_ack     <= (others => '0');
 
     -- FX3 UART
     command_serial_in <= fx3_uart_txd       when sys_reset = '0' else '1';

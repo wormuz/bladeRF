@@ -90,8 +90,13 @@ static int _rfic_fpga_get_status(
     status = _rfic_cmd_read(dev, BLADERF_CHANNEL_INVALID,
                             BLADERF_RFIC_COMMAND_STATUS, &sreg);
 
-    rfic_status->rfic_initialized   = ((sreg >> 0) & 0x1);
-    rfic_status->write_queue_length = ((sreg >> 8) & 0xFF);
+    rfic_status->rfic_initialized   = ((sreg >> BLADERF_RFIC_STATUS_INIT_SHIFT) &
+                                     BLADERF_RFIC_STATUS_INIT_MASK);
+    rfic_status->last_write_success =
+        ((sreg >> BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT) &
+         BLADERF_RFIC_STATUS_WQSUCCESS_MASK);
+    rfic_status->write_queue_length = ((sreg >> BLADERF_RFIC_STATUS_WQLEN_SHIFT) &
+                                     BLADERF_RFIC_STATUS_WQLEN_MASK);
 
     return status;
 }
@@ -116,12 +121,34 @@ static int _rfic_fpga_get_status_wqlen(struct bladerf *dev)
     return (int)rfic_status.write_queue_length;
 }
 
-static int _rfic_fpga_spinwait(struct bladerf *dev)
+/* Most RFIC commands are a handful of SPI transactions and retire in well
+ * under a millisecond. INIT is not one of them: it hard-resets the AD9361 and
+ * runs the full ad9361_init(), calibrations included. Measured on this board,
+ * the same initialisation costs 1.20 s on the host (mean of three
+ * bladerf_open() calls, 1.19/1.20/1.20) -- and the Nios is not the faster of
+ * the two. Waiting 3 ms for that guarantees a timeout on a command that was
+ * going to succeed.
+ *
+ * The poll interval matters as much as the budget. Each status read is a
+ * packet the Nios main loop has to service, and the loop only advances the
+ * RFIC queue on iterations where no packet is waiting (bladeRF_nios.c). Poll
+ * too tightly and the polling itself is what keeps the queue from draining,
+ * so the slow path backs off to milliseconds between reads. */
+#define RFIC_SPINWAIT_TRIES        30
+#define RFIC_SPINWAIT_DELAY_US     100
+#define RFIC_SPINWAIT_INIT_TRIES   600
+#define RFIC_SPINWAIT_INIT_DELAY_US 5000  /* 600 x 5 ms = 3 s */
+
+static int _rfic_fpga_spinwait_for(struct bladerf *dev,
+                                   size_t tries,
+                                   unsigned int delay_us)
 {
-    size_t const TRIES       = 30;
-    unsigned int const DELAY = 100;
+    size_t const TRIES       = tries;
+    unsigned int const DELAY = delay_us;
     size_t count             = 0;
     int jobs;
+    int status;
+    struct bladerf_rfic_status_register rfic_status;
 
     /* Poll the CPU and spin until the job has been completed. */
     do {
@@ -137,7 +164,35 @@ static int _rfic_fpga_spinwait(struct bladerf *dev)
         jobs = BLADERF_ERR_TIMEOUT;
     }
 
-    return jobs;
+    if (jobs < 0) {
+        return jobs;
+    }
+
+    /* The queue drained, which is not the same as the command having worked:
+     * the firmware retires failed commands too (devices_rfic.c sets e->rv,
+     * reported as the WQSUCCESS bit). Without this an INIT that ran and
+     * failed is indistinguishable from one that succeeded. */
+    status = _rfic_fpga_get_status(dev, &rfic_status);
+    if (status < 0) {
+        return status;
+    }
+
+    /* Note the firmware masks last_rv down to one bit, so the reset sentinel
+     * 0xFF ("no command has run yet") is indistinguishable from success, and
+     * 0xFE ("no write handler") from failure. Only the failure direction is
+     * actionable here. */
+    if (!rfic_status.last_write_success) {
+        log_debug("%s: queue drained but last command failed\n", __FUNCTION__);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    return 0;
+}
+
+static int _rfic_fpga_spinwait(struct bladerf *dev)
+{
+    return _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_TRIES,
+                                   RFIC_SPINWAIT_DELAY_US);
 }
 
 
@@ -162,7 +217,14 @@ static int _rfic_cmd_write(struct bladerf *dev,
     CHECK_STATUS(
         dev->backend->rfic_command_write(dev, RFIC_ADDRESS(cmd, ch), data));
 
-    /* Block until the job has been completed. */
+    /* Block until the job has been completed. INIT runs a full AD9361
+     * initialisation on the Nios and needs the long budget; see the comment
+     * above _rfic_fpga_spinwait_for. */
+    if (BLADERF_RFIC_COMMAND_INIT == cmd) {
+        return _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_INIT_TRIES,
+                                       RFIC_SPINWAIT_INIT_DELAY_US);
+    }
+
     return _rfic_fpga_spinwait(dev);
 }
 

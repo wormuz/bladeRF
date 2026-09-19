@@ -54,6 +54,11 @@ struct rfic_state {
     /* Initialization state */
     bladerf_rfic_init_state init_state;
 
+    /* Last stage _rfic_initialize entered (BLADERF_RFIC_INIT_STAGE_*),
+     * reported through the STATUS command so a failed init can say where it
+     * stopped instead of only "false". */
+    uint8_t init_stage;
+
     /* AD9361 state structure */
     struct ad9361_rf_phy *phy;
 

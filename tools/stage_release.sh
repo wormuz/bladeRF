@@ -66,6 +66,33 @@ stage_fw() {
     printf '  %-24s %8s bytes\n' "bladeRF_fw.img" "$(stat -c%s "$OUT/bladeRF_fw.img")"
 }
 
+# ---------------------------------------------------------------------- host
+# The gateware and libbladeRF share contracts -- packet formats, the RFIC
+# command set, the status register bit layout. Shipping a new .rbf without
+# the library it was built against leaves an ABI mismatch that nothing
+# catches: both halves load, both look fine, the behaviour is not the one
+# that was tested. So the library ships with the bitstreams, always.
+stage_lib() {
+    local lib=$1
+    [ -r "$lib" ] || { printf 'warning: no libbladeRF at %s, skipping\n' "$lib" >&2; return; }
+    install -D -m 0644 "$lib" "$OUT/libbladeRF.so.2"
+    ( cd "$OUT" \
+      && sha256sum libbladeRF.so.2 > libbladeRF.so.2.sha256sum \
+      && md5sum    libbladeRF.so.2 > libbladeRF.so.2.md5sum )
+    printf '  %-24s %8s bytes\n' "libbladeRF.so.2" "$(stat -c%s "$OUT/libbladeRF.so.2")"
+}
+
+# The Nios executable is not flashed separately -- it is already inside the
+# .rbf. It ships so that a later "does this image carry the RFIC handler?"
+# can be answered with nm instead of a rebuild.
+stage_nios() {
+    local elf=$1 name=$2
+    [ -r "$elf" ] || return
+    install -D -m 0644 "$elf" "$OUT/$name.elf"
+    ( cd "$OUT" && sha256sum "$name.elf" > "$name.elf.sha256sum" )
+    printf '  %-24s %8s bytes\n' "$name.elf" "$(stat -c%s "$OUT/$name.elf")"
+}
+
 # A release has to be reproducible from a commit. host/cmake/modules/
 # Version.cmake stamps "-dirty" onto the firmware and host version strings
 # whenever the worktree has uncommitted changes (Version.cmake:80), so a
@@ -98,6 +125,12 @@ else
 fi
 
 stage_fw "$ROOT/fx3_firmware/build/bladeRF_fw.img"
+stage_lib "$ROOT/host/build/output/libbladeRF.so.2"
+
+for rev in hosted sweep; do
+    stage_nios "$ROOT/hdl/quartus/work/bladerf-micro-A4-$rev/bladeRF_nios/bladeRF_nios.elf" \
+               "bladeRF_nios-$rev"
+done
 
 printf '\nStaged files:\n'
 ( cd "$OUT" && ls -1 )
