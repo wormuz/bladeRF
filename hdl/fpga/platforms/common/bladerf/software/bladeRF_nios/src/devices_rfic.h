@@ -72,6 +72,27 @@ struct rfic_state {
     /* Frequency retrieval is invalid due to fastlock shenanigans */
     bool frequency_invalid[NUM_MODULES];
 
+    /* LO frequency at the last RFDC_CAL run for this direction. ADI
+     * guidance (EngineerZone, RF DC offset calibration timeout thread):
+     * RF DC offset cal is frequency-dependent and must be rerun after
+     * LO jumps larger than 100MHz from the calibrated point, or the
+     * receiver carries a stale DC-offset correction as a residual
+     * image-like artifact at the new frequency. ad9361_setup() only
+     * calibrates once at init; nothing in this driver reran it on
+     * retune before this field was added. 0 means "never calibrated
+     * at this frequency" so the first real tune always calibrates. */
+    bladerf_frequency last_rfdc_calib_freq[NUM_MODULES];
+
+    /* Has the one-shot RX Quadrature Calibration (RX_QUAD_CAL) run
+     * for this direction yet? Unlike RFDC_CAL, this establishes the
+     * quadrature-tracking loop's starting point rather than something
+     * that goes stale with frequency, so it only needs to run once
+     * per power-up, not on every large retune. Nothing in this driver
+     * called it before this field was added -- only the continuous
+     * tracking loop (ad9361_tracking_control) was wired up, which
+     * trims around whatever starting point the loop woke up with. */
+    bool rx_quad_calib_done[NUM_MODULES];
+
     /* TX mute state at standby */
     bool tx_mute_state[2];
 };
