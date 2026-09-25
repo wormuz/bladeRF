@@ -89,6 +89,13 @@ begin
             wait until rising_edge(clock);
         end procedure;
 
+        -- gain_too_high now updates one cycle after summary_valid pulses,
+        -- not on the same edge: the multiply/compare was pipelined to fix
+        -- a setup violation on the LVDS pll_sclk domain (measured
+        -- -0.115..-0.469 ns, shared edge with dwell_start's settle-counter
+        -- reset). One extra tick here matches the new one-cycle-later
+        -- contract; every caller below observes gain_too_high already
+        -- settled, since none of them read it until after this returns.
         procedure report_summary( clips : natural; samples : natural ) is
         begin
             clip_count    <= to_unsigned(clips, 32);
@@ -96,6 +103,7 @@ begin
             summary_valid <= '1';
             wait until rising_edge(clock);
             summary_valid <= '0';
+            wait until rising_edge(clock);
             wait until rising_edge(clock);
         end procedure;
 

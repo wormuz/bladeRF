@@ -98,18 +98,64 @@ architecture arch of gain_sequencer is
     signal settle_count : unsigned(SETTLE_LOG2 downto 0) := (others => '0');
     signal settled      : std_logic := '0';
 
+    -- Registered multiply stage (measured: this block shared the LVDS
+    -- pll_sclk domain with dwell_summary's own critical path -- two
+    -- 32x20-bit multiplies and a 52-bit compare landing on the same edge
+    -- as dwell_start's settle-counter reset drove the worst setup path
+    -- in that domain to -0.115..-0.469 ns, six logic levels, depending on
+    -- fitter seed. Same fix class already applied to dwell_summary.vhd's
+    -- win_compare/win_extrema split: register the products and the
+    -- summary_valid pulse together, compare a cycle later against the
+    -- registered values. This moves gain_too_high one cycle later than
+    -- before (verdict_valid, not summary_valid, gates the compare) --
+    -- the testbench's report_summary procedure was updated to match
+    -- (one extra tick after the pulse) since it drove clip_count/
+    -- sample_count/summary_valid together and asserted on the very next
+    -- edge, which is the previous, unpipelined contract, not this one.
+    signal verdict_valid : std_logic := '0';
+    signal clip_scaled_r : unsigned(51 downto 0) := (others => '0');
+    signal limit_term_r  : unsigned(51 downto 0) := (others => '0');
+    signal sample_count_was_zero : std_logic := '0';
+
 begin
 
     settle_elapsed <= settle_count;
     measure_valid  <= settled;
 
+    -- Stage 1: register the products and the valid pulse together.
+    -- Nothing here reads dwell_start, so it shares no edge with the
+    -- settle-counter reset below.
+    multiply_stage : process( clock )
+    begin
+        if( rising_edge(clock) ) then
+            if( reset = '1' ) then
+                verdict_valid <= '0';
+                clip_scaled_r <= (others => '0');
+                limit_term_r  <= (others => '0');
+                sample_count_was_zero <= '0';
+            else
+                verdict_valid <= summary_valid;
+                -- resize AFTER the multiply, not before. In VHDL the
+                -- product of an n-bit and an m-bit unsigned is n+m bits
+                -- wide, so resizing the operands to 52 first yields a
+                -- 72-bit result and assigning that to a 52-bit variable
+                -- is a bound check failure. 52 bits is the right size for
+                -- the VALUE (32 + 20 for 1e6); the intermediate just has
+                -- to be allowed to be wider before it is trimmed.
+                clip_scaled_r <= resize(
+                    clip_count * to_unsigned(1000000, 20), 52);
+                limit_term_r  <= resize(
+                    sample_count * to_unsigned(CLIP_PPM_LIMIT, 20), 52);
+                if( sample_count = 0 ) then
+                    sample_count_was_zero <= '1';
+                else
+                    sample_count_was_zero <= '0';
+                end if;
+            end if;
+        end if;
+    end process;
+
     seq_proc : process( clock )
-        -- 32-bit clip count scaled by 1e6 needs 52 bits. Sized to fit
-        -- rather than trusting the count to stay small: a stuck receiver
-        -- clips every sample, which is exactly when the arithmetic must
-        -- not wrap and report "fine".
-        variable clip_scaled : unsigned(51 downto 0);
-        variable limit_term  : unsigned(51 downto 0);
     begin
         if( rising_edge(clock) ) then
             if( reset = '1' ) then
@@ -118,30 +164,17 @@ begin
                 gain_too_high <= '0';
 
             else
-                -- Verdict on the dwell that just ended, before the boundary
-                -- clears the counter below. Compared as a product instead of
-                -- a division: clip/sample > limit/1e6 becomes
-                -- clip*1e6 > sample*limit, which is two multipliers and no
-                -- divider. Both sides are exact, so a dwell sitting on the
-                -- threshold is decided the same way every time.
-                if( summary_valid = '1' ) then
-                    -- resize AFTER the multiply, not before. In VHDL the
-                    -- product of an n-bit and an m-bit unsigned is n+m bits
-                    -- wide, so resizing the operands to 52 first yields a
-                    -- 72-bit result and assigning that to a 52-bit variable
-                    -- is a bound check failure -- caught by case 4 of the
-                    -- testbench, not by analysis. 52 bits is the right size
-                    -- for the VALUE (32 + 20 for 1e6); the intermediate just
-                    -- has to be allowed to be wider before it is trimmed.
-                    clip_scaled := resize(clip_count * to_unsigned(1000000, 20), 52);
-                    limit_term  := resize(
-                        sample_count * to_unsigned(CLIP_PPM_LIMIT, 20), 52);
-                    if( sample_count = 0 ) then
+                -- Verdict on the dwell that ended one cycle ago (the
+                -- registered products from multiply_stage above), read
+                -- against the registered values -- no multiply or 52-bit
+                -- compare shares this edge with the settle-counter reset.
+                if( verdict_valid = '1' ) then
+                    if( sample_count_was_zero = '1' ) then
                         -- No samples means no evidence, not a clean dwell.
                         -- Holding the previous verdict would attribute the
                         -- last band's clipping to this one, so clear it.
                         gain_too_high <= '0';
-                    elsif( clip_scaled > limit_term ) then
+                    elsif( clip_scaled_r > limit_term_r ) then
                         gain_too_high <= '1';
                     else
                         gain_too_high <= '0';

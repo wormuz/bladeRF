@@ -204,6 +204,20 @@ architecture simple of fifo_reader is
         due_hi_eq       : std_logic;
         due_lo_ge       : std_logic;
         due_sentinel    : std_logic;
+        -- Pre-computed OR/AND fold of the four due_* bits above, registered
+        -- in the SAME cycle as they are (no added latency -- it folds
+        -- what was already a same-cycle combinational OR-cascade at the
+        -- META_LOAD/META_WAIT consumption sites into one bit computed once,
+        -- here, instead of at every consumer). Measured: on the sweep
+        -- revision this OR-cascade plus the packet_en/packet_ready AND-gate
+        -- downstream landed on the worst setup path in the LVDS pll_sclk
+        -- domain (-0.115/-0.152 ns, six logic levels) once sweep-specific
+        -- modules (dwell_summary, gain_sequencer) elsewhere in the same
+        -- domain used up the margin hosted has to spare. hosted itself
+        -- closes clean on this path; the fold does not change its behaviour
+        -- (due_combined is exactly the same truth table the two META_LOAD/
+        -- META_WAIT consumption sites already computed inline).
+        due_combined    : std_logic;
     end record;
 
     constant META_FSM_RESET_VALUE : meta_fsm_t := (
@@ -222,7 +236,8 @@ architecture simple of fifo_reader is
         due_hi_gt       => '0',
         due_hi_eq       => '0',
         due_lo_ge       => '0',
-        due_sentinel    => '0'
+        due_sentinel    => '0',
+        due_combined    => '0'
     );
 
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
@@ -503,6 +518,10 @@ begin
         variable  packet_len    : integer;
         variable  ts_next       : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
+        variable  v_due_hi_gt   : std_logic;
+        variable  v_due_hi_eq   : std_logic;
+        variable  v_due_lo_ge   : std_logic;
+        variable  v_due_sentinel : std_logic;
     begin
 
         meta_future <= meta_current;
@@ -572,32 +591,42 @@ begin
         cmp_tgt := unsigned(meta_fifo_data(95 downto 32));
 
         if( ts_next(63 downto 32) > cmp_tgt(63 downto 32) ) then
-            meta_future.due_hi_gt <= '1';
+            v_due_hi_gt := '1';
         else
-            meta_future.due_hi_gt <= '0';
+            v_due_hi_gt := '0';
         end if;
+        meta_future.due_hi_gt <= v_due_hi_gt;
 
         if( ts_next(63 downto 32) = cmp_tgt(63 downto 32) ) then
-            meta_future.due_hi_eq <= '1';
+            v_due_hi_eq := '1';
         else
-            meta_future.due_hi_eq <= '0';
+            v_due_hi_eq := '0';
         end if;
+        meta_future.due_hi_eq <= v_due_hi_eq;
 
         if( ts_next(31 downto 0) >= cmp_tgt(31 downto 0) ) then
-            meta_future.due_lo_ge <= '1';
+            v_due_lo_ge := '1';
         else
-            meta_future.due_lo_ge <= '0';
+            v_due_lo_ge := '0';
         end if;
+        meta_future.due_lo_ge <= v_due_lo_ge;
 
         -- Sentinel test does not depend on the timestamp, so it stays off the
         -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
         -- a header of zero here, not MAX_TIMESTAMP -- MAX_TIMESTAMP is what
         -- zero becomes after the -1 that produces meta_p_time.
         if( cmp_tgt = 0 ) then
-            meta_future.due_sentinel <= '1';
+            v_due_sentinel := '1';
         else
-            meta_future.due_sentinel <= '0';
+            v_due_sentinel := '0';
         end if;
+        meta_future.due_sentinel <= v_due_sentinel;
+
+        -- Pre-computed fold of the four due_* bits above -- same cycle,
+        -- same truth table the META_LOAD/META_WAIT consumption sites used
+        -- to compute inline. See the due_combined field comment.
+        meta_future.due_combined <=
+            v_due_hi_gt or (v_due_hi_eq and v_due_lo_ge) or v_due_sentinel;
 
         case meta_current.state is
 
@@ -628,9 +657,7 @@ begin
                        -- chain at the meta FIFO's M10K output: on seed 7 the
                        -- worst path was memory -> Add1 -> LessThan2 -> the
                        -- fifo_read / data_v enables, at -0.502 ns.
-                       if( packet_en = '1' or not (meta_current.due_hi_gt = '1'
-                               or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
-                               or meta_current.due_sentinel = '1') ) then
+                       if( packet_en = '1' or not (meta_current.due_combined = '1') ) then
                              meta_future.meta_time_go  <= '0';
                           else
                              meta_future.meta_time_go  <= '1';
@@ -653,9 +680,7 @@ begin
                 -- halves: high half greater, or high half equal and low half
                 -- greater-or-equal. Identical truth value to the 64-bit
                 -- compare, computed a cycle earlier against timestamp + 1.
-                if( ( meta_current.due_hi_gt = '1'
-                      or (meta_current.due_hi_eq = '1' and meta_current.due_lo_ge = '1')
-                      or meta_current.due_sentinel = '1' )
+                if( meta_current.due_combined = '1'
                         and ( packet_en = '0' or ( packet_en = '1' and packet_ready = '1' ) ) ) then
                     meta_future.meta_time_go <= '1';
                     meta_future.state        <= META_DOWNCOUNT;
