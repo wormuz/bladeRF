@@ -4585,6 +4585,142 @@ const char *CALL_CONV bladerf_strerror(int error);
 
 /** @} (End RETCODES) */
 
+/**
+ * @defgroup RF_TRANSITION Event-driven RF state transitions
+ *
+ * ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: a retune (or any other RF
+ * reconfiguration) is a sequence of observable state transitions, not a
+ * frequency write followed by a guessed sleep. Each transition emits an
+ * immutable ::bladerf_rf_event as soon as its underlying hardware condition
+ * is confirmed (SPI write committed, RFPLL lock bit set, ENSM state
+ * readback matches the requested mode). The caller waits on explicit
+ * events, with a timeout that can only report failure -- a timeout never
+ * implies the data is valid.
+ *
+ * @{
+ */
+
+/**
+ * RF state-machine states (ADR-0207 §RF state machine).
+ *
+ * Allowed transitions:
+ * RF_IDLE -> RF_CONFIG_PENDING -> RFIC_SPI_PROGRAMMING -> RFPLL_ACQUIRING
+ * -> RFPLL_LOCKED -> (RF_CALIBRATING ->) RX_PATH_ARMING -> RX_DATA_INVALID
+ * -> RX_DATA_VALID. Any state may transition to RF_ERROR.
+ */
+typedef enum {
+    BLADERF_RF_STATE_IDLE = 0,
+    BLADERF_RF_STATE_CONFIG_PENDING,
+    BLADERF_RF_STATE_SPI_PROGRAMMING,
+    BLADERF_RF_STATE_PLL_ACQUIRING,
+    BLADERF_RF_STATE_PLL_LOCKED,
+    BLADERF_RF_STATE_CALIBRATING,
+    BLADERF_RF_STATE_RX_PATH_ARMING,
+    BLADERF_RF_STATE_RX_DATA_INVALID,
+    BLADERF_RF_STATE_RX_DATA_VALID,
+    BLADERF_RF_STATE_ERROR
+} bladerf_rf_state;
+
+/** RF transaction event types (ADR-0207 §4 Event contract). */
+typedef enum {
+    BLADERF_RF_EVT_CONFIG_ACCEPTED = 0,
+    BLADERF_RF_EVT_SPI_DONE,
+    BLADERF_RF_EVT_RX_PLL_LOCKED,
+    BLADERF_RF_EVT_ENSM_RX,
+    BLADERF_RF_EVT_RX_BBDC_CAL_DONE,
+    BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
+    BLADERF_RF_EVT_RX_QUAD_CAL_DONE,
+    BLADERF_RF_EVT_RX_DATAPATH_ARMED,
+    BLADERF_RF_EVT_RX_EPOCH_INVALID,
+    BLADERF_RF_EVT_RX_EPOCH_VALID,
+    BLADERF_RF_EVT_ERROR
+} bladerf_rf_event_type;
+
+/** Required-events bitmask for ::bladerf_rx_transition_request. */
+#define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
+#define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
+#define BLADERF_RF_REQUIRE_DATAPATH_ARMED (1U << 2)
+#define BLADERF_RF_REQUIRE_EPOCH_VALID   (1U << 3)
+
+/**
+ * Immutable RF transaction event (ADR-0207 §4).
+ *
+ * Every state transition populates exactly one of these and appends it to
+ * the transaction's event trace. Timestamps are host monotonic nanoseconds
+ * taken at the moment the condition was observed -- never a precomputed or
+ * guessed value.
+ */
+struct bladerf_rf_event {
+    uint64_t host_monotonic_ns;   /**< CLOCK_MONOTONIC ns when observed */
+    uint64_t fpga_timestamp;      /**< FPGA RX sample counter, if available */
+    uint32_t transaction_id;      /**< Owning transaction */
+    uint32_t epoch_id;            /**< RX data epoch, if applicable */
+    uint64_t requested_rx_lo_hz;
+    uint64_t readback_rx_lo_hz;
+    uint32_t rfic_status;         /**< Raw RFIC status register snapshot */
+    bladerf_rf_state fpga_state;
+    bladerf_rf_event_type event_type;
+    uint32_t flags;
+    int32_t error_code;           /**< 0 unless event_type is _ERROR */
+};
+
+/** Request parameters for ::bladerf_rx_transition_begin. */
+struct bladerf_rx_transition_request {
+    uint64_t target_frequency_hz;
+    uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
+    uint32_t timeout_ms;
+    bool require_rx_data_valid;
+};
+
+/**
+ * Begin an event-driven RX retune transaction (ADR-0207 §5).
+ *
+ * This performs the existing host-mode RX LO retune (bladerf_set_frequency
+ * internally) and arms observation of the required RF state transitions. It
+ * does not block; the caller must follow up with
+ * ::bladerf_rx_transition_wait to confirm the transaction reached the
+ * requested state before treating any subsequently captured samples as
+ * valid.
+ *
+ * @param       dev             Device handle
+ * @param[in]   ch              RX channel
+ * @param[in]   request         Transition requirements
+ * @param[out]  transaction_id  Opaque handle for bladerf_rx_transition_wait
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_transition_begin(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    uint32_t *transaction_id);
+
+/**
+ * Block until a transaction reaches its required state, times out, or
+ * errors (ADR-0207 §5).
+ *
+ * A ::BLADERF_ERR_TIMEOUT return means the required state was not
+ * confirmed within timeout_ms -- this is a failure-detection signal only.
+ * It must never be interpreted as "probably valid"; the caller must treat
+ * any samples associated with this transaction as invalid.
+ *
+ * @param       dev             Device handle
+ * @param[in]   transaction_id  Handle from bladerf_rx_transition_begin
+ * @param[out]  final_event     Last event recorded for this transaction
+ * @param[in]   timeout_ms      Maximum time to wait
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_transition_wait(
+    struct bladerf *dev,
+    uint32_t transaction_id,
+    struct bladerf_rf_event *final_event,
+    uint32_t timeout_ms);
+
+/** @} (End RF_TRANSITION) */
+
 #include <bladeRF1.h>
 #include <bladeRF2.h>
 

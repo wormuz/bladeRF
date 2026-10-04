@@ -195,6 +195,18 @@ struct bladerf2_board_data {
     /* If true, RFIC control will be fully de-initialized on close, instead of
      * just put into a standby state. */
     bool rfic_reset_on_close;
+
+    /* ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: last RX transition's
+     * event trace. Single-slot (no concurrent transactions per device) --
+     * bladerf_rx_transition_begin() overwrites it, bladerf_rx_transition_
+     * wait() reads from it. Guarded by dev->lock like everything else in
+     * this struct. */
+    uint32_t rf_transition_next_id;
+    uint32_t rf_transition_current_id;
+    uint32_t rf_transition_required_events_mask;
+    bladerf_rf_state rf_transition_state;
+    struct bladerf_rf_event rf_transition_last_event;
+    bool rf_transition_pending;
 };
 
 struct bladerf_rfic_status_register {
