@@ -139,15 +139,12 @@ expect_count() {
 # crossings exist. If one of these ever differs between sizes, that means the
 # revision instantiates something conditionally and the difference is the news.
 #
-# The handshake count is the one that does differ, exactly as predicted
-# above: sweep instantiates U_dwell_cfg_handshake to carry the analyser's
-# threshold and settle select across to the rx domain, so it has six
-# crossings where hosted has five. That sixth pair went unconstrained until
-# 2026-09-12 -- handshake had no destination register at all and the word was
-# read combinationally, so there was nothing for a bound to attach to. It is
-# real now, and expecting five here would reject the fix.
+# The handshake count differs by revision. Sweep currently has 13 constrained
+# pairs: the hosted crossings plus dwell config, RX epoch control/status and
+# timestamps, and the pre-trigger address bundled-data crossing. Keeping this
+# count exact makes a newly added or dropped CDC pair visible to qgate.
 if grep -q 'revision sweep' "$f" 2>/dev/null; then
-    hs_expect=6
+    hs_expect=13
 else
     hs_expect=5
 fi

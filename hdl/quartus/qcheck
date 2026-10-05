@@ -791,6 +791,18 @@ def check_rx_epoch_has_no_dead_settle_cdc():
              "TimeQuest reports handshake crossing not matched after optimization")
 
 
+def check_qgate_sweep_handshake_count():
+    """Keep qgate's structural handshake expectation aligned with the SDC."""
+    qgate = ROOT / "hdl/quartus/qgate"
+    if not qgate.exists():
+        return
+    text = code_only(qgate.read_text(), comment="#")
+    if not re.search(r"if grep -q 'revision sweep'.*?hs_expect=13", text, re.S):
+        fail("qgate-sweep-handshake-count",
+             "sweep qgate must expect 13 constrained handshake pairs",
+             "valid CDC constraints were rejected solely by a stale count")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -807,6 +819,7 @@ adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune res
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
+qgate-sweep-handshake-count   qgate's sweep CDC count must match the 13 constrained pairs
 """
 
 
@@ -826,6 +839,7 @@ def main():
     check_rx_epoch_is_event_bounded()
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
+    check_qgate_sweep_handshake_count()
 
     for n in notes:
         print(f"note  {n}")
