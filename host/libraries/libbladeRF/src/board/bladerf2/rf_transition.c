@@ -172,6 +172,7 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data;
     int status;
+    uint32_t required_events_mask;
     bladerf_frequency readback_hz = 0;
 
     if (dev == NULL || request == NULL || transaction_id == NULL) {
@@ -179,12 +180,20 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
     }
 
     board_data = dev->board_data;
+    required_events_mask = request->required_events_mask;
+    if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+        /* An admitted RX epoch is meaningful only after the RFIC control
+         * plane is known-good. Make those prerequisites implicit so callers
+         * cannot request epoch success while skipping PLL/ENSM confirmation. */
+        required_events_mask |= BLADERF_RF_REQUIRE_PLL_LOCKED |
+                                BLADERF_RF_REQUIRE_ENSM_RX;
+    }
 
     /* Timestamped RX metadata is required to fence USB/sync buffers that
      * were already queued before the FPGA epoch gate opened. Raw sync
      * formats cannot prove which side of the epoch boundary a sample is on.
      * Reject before arming or touching the RFIC. */
-    if ((request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
+    if ((required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
         board_data->sync[BLADERF_RX].initialized) {
         status = sync_rx_epoch_require_metadata(
             &board_data->sync[BLADERF_RX]);
@@ -196,7 +205,7 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_next_id++;
         board_data->rf_transition_current_id = board_data->rf_transition_next_id;
-        board_data->rf_transition_required_events_mask = request->required_events_mask;
+        board_data->rf_transition_required_events_mask = required_events_mask;
         board_data->rf_transition_pending    = true;
         *transaction_id = board_data->rf_transition_current_id;
 
@@ -219,7 +228,7 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
      * PLL_LOCKED/ENSM_RX below. If arming or configuring the requested
      * fence fails, abort before the RFIC retune; never downgrade the
      * caller's requested data-plane guarantee. */
-    if (request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+    if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
         uint8_t epoch_id =
             (uint8_t)(board_data->rf_transition_current_id & 0xFFu);
         uint32_t epoch_status_word = 0;

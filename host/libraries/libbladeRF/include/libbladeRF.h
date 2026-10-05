@@ -4639,7 +4639,10 @@ typedef enum {
     BLADERF_RF_EVT_LO_SET_RETURNED
 } bladerf_rf_event_type;
 
-/** Required-events bitmask for ::bladerf_rx_transition_request. */
+/** Required-events bitmask for ::bladerf_rx_transition_request.
+ * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and
+ * ENSM RX confirmation; these control-plane prerequisites are added
+ * automatically before FPGA sample admission is opened. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
 #define BLADERF_RF_REQUIRE_DATAPATH_ARMED (1U << 2)

@@ -818,6 +818,11 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "FPGA fence acknowledgement does not validate state and transaction epoch",
              "wait for a matching PENDING state before retuning")
+    if not re.search(r"required_events_mask\s*\|=\s*BLADERF_RF_REQUIRE_PLL_LOCKED\s*\|\s*BLADERF_RF_REQUIRE_ENSM_RX",
+                     transition_text):
+        fail("rx-epoch-host-timestamp-fence",
+             "epoch-valid requests can bypass RFPLL or ENSM prerequisites",
+             "make PLL lock and ENSM RX implicit prerequisites of an admitted epoch")
     if ("BLADERF_FORMAT_SC16_Q11_META" not in sync_text or
             "BLADERF_FORMAT_SC8_Q7_META" not in sync_text or
             "rx_epoch_min_timestamp" not in sync_text):
