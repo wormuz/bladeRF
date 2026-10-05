@@ -239,6 +239,8 @@ int sync_init(struct bladerf_sync *sync,
     sync->stream_config.bytes_per_sample = bytes_per_sample;
 
     sync->meta.state = SYNC_META_STATE_HEADER;
+    sync->meta.rx_epoch_boundary_enabled = false;
+    sync->meta.rx_epoch_min_timestamp = 0;
     sync->meta.msg_size = msg_size;
     sync->meta.msg_per_buf = msg_per_buf(msg_size, buffer_size, bytes_per_sample);
     sync->meta.samples_per_msg = samples_per_msg(msg_size, bytes_per_sample);
@@ -471,6 +473,51 @@ int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms)
     status = sync_worker_wait_for_state(sync->worker,
                                         SYNC_WORKER_STATE_RUNNING,
                                         wait_ms);
+
+    return status;
+}
+
+int sync_rx_epoch_require_metadata(struct bladerf_sync *sync)
+{
+    int status = 0;
+
+    if (sync == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    if (!sync->initialized) {
+        return 0;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (sync->initialized &&
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        sync->stream_config.format != BLADERF_FORMAT_SC16_Q11_META &&
+        sync->stream_config.format != BLADERF_FORMAT_SC8_Q7_META) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    }
+    MUTEX_UNLOCK(&sync->lock);
+
+    return status;
+}
+
+int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
+                                    uint64_t min_timestamp)
+{
+    int status = sync_rx_epoch_require_metadata(sync);
+    if (status != 0 || sync == NULL || !sync->initialized) {
+        return status;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (!sync->initialized ||
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        status = BLADERF_ERR_INVAL;
+    } else {
+        sync->meta.rx_epoch_min_timestamp = min_timestamp;
+        sync->meta.rx_epoch_boundary_enabled = true;
+    }
+    MUTEX_UNLOCK(&sync->lock);
 
     return status;
 }
@@ -851,10 +898,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         s->meta.msg_flags =
                             metadata_get_flags(s->meta.curr_msg);
 
-                        user_meta->status |= s->meta.msg_flags &
-                           (BLADERF_META_FLAG_RX_HW_UNDERFLOW |
-                              BLADERF_META_FLAG_RX_HW_MINIEXP1 |
-                              BLADERF_META_FLAG_RX_HW_MINIEXP2);
+                        if (!s->meta.rx_epoch_boundary_enabled ||
+                            s->meta.msg_timestamp >=
+                                s->meta.rx_epoch_min_timestamp) {
+                            user_meta->status |= s->meta.msg_flags &
+                               (BLADERF_META_FLAG_RX_HW_UNDERFLOW |
+                                  BLADERF_META_FLAG_RX_HW_MINIEXP1 |
+                                  BLADERF_META_FLAG_RX_HW_MINIEXP2);
+                        }
 
                         s->meta.curr_msg_off = 0;
 
@@ -870,7 +921,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                          * to preserve, so the read continues and returns
                          * contiguous samples that start after the gap.
                          */
-                        if (s->meta.have_timestamp &&
+                        const bool epoch_prefix =
+                            s->meta.rx_epoch_boundary_enabled &&
+                            (s->meta.msg_timestamp <
+                                 s->meta.rx_epoch_min_timestamp ||
+                             s->meta.curr_timestamp <
+                                 s->meta.rx_epoch_min_timestamp);
+
+                        if (!epoch_prefix && s->meta.have_timestamp &&
                             s->meta.msg_timestamp != s->meta.curr_timestamp) {
 
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
@@ -896,6 +954,38 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         break;
 
                     case SYNC_META_STATE_SAMPLES:
+                        if (s->meta.rx_epoch_boundary_enabled &&
+                            s->meta.curr_timestamp <
+                                s->meta.rx_epoch_min_timestamp) {
+                            uint64_t timestamps_to_skip =
+                                s->meta.rx_epoch_min_timestamp -
+                                s->meta.curr_timestamp;
+                            unsigned int left = left_in_msg(s);
+                            uint64_t timestamps_to_end =
+                                (left + s->meta.samples_per_ts - 1) /
+                                s->meta.samples_per_ts;
+
+                            if (timestamps_to_skip >= timestamps_to_end) {
+                                s->meta.curr_msg_off += left;
+                                s->meta.curr_timestamp +=
+                                    left / s->meta.samples_per_ts;
+                                s->meta.state = SYNC_META_STATE_HEADER;
+                                s->meta.msg_num++;
+                                if (s->meta.msg_num >= s->meta.msg_per_buf) {
+                                    advance_rx_buffer(b);
+                                    s->meta.msg_num = 0;
+                                    s->state = SYNC_STATE_WAIT_FOR_BUFFER;
+                                }
+                            } else {
+                                const unsigned int skip_samples =
+                                    (unsigned int)(timestamps_to_skip *
+                                                   s->meta.samples_per_ts);
+                                s->meta.curr_msg_off += skip_samples;
+                                s->meta.curr_timestamp += timestamps_to_skip;
+                            }
+                            break;
+                        }
+
                         if (!copied_data &&
                             (user_meta->flags & BLADERF_META_FLAG_RX_NOW) == 0 &&
                             target_timestamp < s->meta.curr_timestamp) {

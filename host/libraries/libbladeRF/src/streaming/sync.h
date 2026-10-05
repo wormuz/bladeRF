@@ -225,6 +225,8 @@ struct sync_meta {
 
     uint64_t curr_timestamp; /* Timestamp at the sample we've
                               * consumed up to */
+    bool rx_epoch_boundary_enabled;
+    uint64_t rx_epoch_min_timestamp;
 };
 
 struct bladerf_sync {
@@ -282,5 +284,11 @@ unsigned int sync_buf2idx(struct buffer_mgmt *b, void *addr);
 void *sync_idx2buf(struct buffer_mgmt *b, unsigned int idx);
 
 int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);
+
+/* RX transition integration. Raw sample formats cannot distinguish queued
+ * old IQ; epoch fencing therefore requires per-message RX timestamps. */
+int sync_rx_epoch_require_metadata(struct bladerf_sync *sync);
+int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
+                                    uint64_t min_timestamp);
 
 #endif

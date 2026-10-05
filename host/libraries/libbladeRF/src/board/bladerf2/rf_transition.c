@@ -38,6 +38,7 @@
 #include "common.h"
 #include "log.h"
 #include "nios_pkt_8x32.h"
+#include "streaming/sync.h"
 
 /* Byte-exact with sdrscanner/driver/tuner_fault.py::FAULT_REGS and
  * sdrscanner/hs_sweep/rf_transaction_trace.py -- same register map
@@ -76,6 +77,47 @@ static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
 
     *val = (uint8_t)ret;
     return 0;
+}
+
+/* A successful NIOS PIO write only confirms that the command reached the
+ * control plane. Wait until the RX-clock-domain gate reports the matching
+ * epoch in PENDING before changing the LO, so the data-plane fence is known
+ * to be active before the RFIC starts moving. */
+static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
+                                 uint32_t timeout_ms, uint32_t *status_word)
+{
+    uint64_t deadline_ns = _monotonic_ns() +
+                           (uint64_t)timeout_ms * 1000000ULL;
+    uint32_t value = 0;
+
+    do {
+        int status = nios_rx_epoch_status_read(dev, &value);
+        if (status != 0) {
+            return status;
+        }
+
+        uint8_t state = (uint8_t)((value >>
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT) &
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
+        uint8_t epoch = (uint8_t)((value >>
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+
+        if (status_word != NULL) {
+            *status_word = value;
+        }
+        if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING &&
+            epoch == expected_epoch) {
+            return 0;
+        }
+
+        usleep(POLL_INTERVAL_US);
+    } while (_monotonic_ns() < deadline_ns);
+
+    return BLADERF_ERR_TIMEOUT;
 }
 
 static void _emit_event_with_timestamp(struct bladerf2_board_data *board_data,
@@ -138,6 +180,19 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
 
     board_data = dev->board_data;
 
+    /* Timestamped RX metadata is required to fence USB/sync buffers that
+     * were already queued before the FPGA epoch gate opened. Raw sync
+     * formats cannot prove which side of the epoch boundary a sample is on.
+     * Reject before arming or touching the RFIC. */
+    if ((request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
+        board_data->sync[BLADERF_RX].initialized) {
+        status = sync_rx_epoch_require_metadata(
+            &board_data->sync[BLADERF_RX]);
+        if (status != 0) {
+            return status;
+        }
+    }
+
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_next_id++;
         board_data->rf_transition_current_id = board_data->rf_transition_next_id;
@@ -165,9 +220,19 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
      * fence fails, abort before the RFIC retune; never downgrade the
      * caller's requested data-plane guarantee. */
     if (request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+        uint8_t epoch_id =
+            (uint8_t)(board_data->rf_transition_current_id & 0xFFu);
+        uint32_t epoch_status_word = 0;
+
         int epoch_status = nios_rx_epoch_ctrl_cmd(dev,
                            NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
-                           (uint8_t)(board_data->rf_transition_current_id & 0xFFu));
+                           epoch_id);
+        if (epoch_status == 0) {
+            epoch_status = _wait_rx_epoch_fenced(
+                dev, epoch_id,
+                request->timeout_ms ? request->timeout_ms : 1000,
+                &epoch_status_word);
+        }
         if (epoch_status != 0) {
             /* EPOCH_VALID is a requested completion condition. Do not
              * silently downgrade it to control-plane success: the caller
@@ -182,6 +247,11 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
                         epoch_status, 0);
             return epoch_status;
         }
+
+        _emit_event(board_data, BLADERF_RF_EVT_RX_EPOCH_INVALID,
+                    BLADERF_RF_STATE_CONFIG_PENDING,
+                    request->target_frequency_hz, 0,
+                    epoch_status_word, 0, epoch_id);
     }
 
     _emit_event(board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
@@ -378,6 +448,22 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         if (status == 0) {
             status = nios_rx_epoch_ts_read(dev, true, &timestamp_hi);
         }
+        if (status != 0) {
+            _emit_event(board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        epoch_status_word, status, 0);
+            if (final_event != NULL) {
+                *final_event = board_data->rf_transition_last_event;
+            }
+            return status;
+        }
+
+        /* FPGA timestamp is the authoritative first admitted sample. Install
+         * it as a lower bound before reporting transition success; sync_rx()
+         * drops stale timestamped messages already queued on USB/host. */
+        status = sync_rx_epoch_set_min_timestamp(
+            &board_data->sync[BLADERF_RX],
+            ((uint64_t)timestamp_hi << 32) | timestamp_lo);
         if (status != 0) {
             _emit_event(board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,

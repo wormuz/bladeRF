@@ -791,6 +791,41 @@ def check_rx_epoch_has_no_dead_settle_cdc():
              "TimeQuest reports handshake crossing not matched after optimization")
 
 
+def check_rx_epoch_host_timestamp_fence():
+    """Require host-side stale-buffer fencing before epoch success."""
+    transition = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c"
+    sync = ROOT / "host/libraries/libbladeRF/src/streaming/sync.c"
+    transition_text = re.sub(
+        r"/\*.*?\*/|//[^\n]*", "",
+        transition.read_text(errors="replace"), flags=re.S)
+    sync_text = re.sub(
+        r"/\*.*?\*/|//[^\n]*", "",
+        sync.read_text(errors="replace"), flags=re.S)
+    begin = transition_text.find("sync_rx_epoch_require_metadata(")
+    fence_ack = transition_text.find("_wait_rx_epoch_fenced(",
+                                   transition_text.find("int bladerf_rx_transition_begin"))
+    retune = transition_text.find("bladerf_set_frequency(",
+                                 transition_text.find("int bladerf_rx_transition_begin"))
+    fence = transition_text.find("sync_rx_epoch_set_min_timestamp(")
+    valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
+    if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or valid < 0 or
+            not (begin < fence_ack < retune and fence < valid)):
+        fail("rx-epoch-host-timestamp-fence",
+             "host does not acknowledge the FPGA fence before retune and filter queued metadata before epoch success",
+             "confirm matching PENDING state before LO change, then drop stale IQ before RX_EPOCH_VALID")
+    if ("state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING" not in transition_text or
+            "epoch == expected_epoch" not in transition_text):
+        fail("rx-epoch-host-timestamp-fence",
+             "FPGA fence acknowledgement does not validate state and transaction epoch",
+             "wait for a matching PENDING state before retuning")
+    if ("BLADERF_FORMAT_SC16_Q11_META" not in sync_text or
+            "BLADERF_FORMAT_SC8_Q7_META" not in sync_text or
+            "rx_epoch_min_timestamp" not in sync_text):
+        fail("rx-epoch-host-timestamp-fence",
+             "sync RX parser lacks the metadata timestamp lower-bound filter",
+             "suppress queued samples preceding the FPGA first-valid timestamp")
+
+
 def check_qgate_sweep_handshake_count():
     """Keep qgate's structural handshake expectation aligned with the SDC."""
     qgate = ROOT / "hdl/quartus/qgate"
@@ -819,6 +854,7 @@ adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune res
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
+rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
 qgate-sweep-handshake-count   qgate's sweep CDC count must match the 13 constrained pairs
 """
 
@@ -839,6 +875,7 @@ def main():
     check_rx_epoch_is_event_bounded()
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
+    check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
 
     for n in notes:
