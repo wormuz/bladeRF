@@ -479,7 +479,9 @@ def check_vhdl():
             pass
 
     if sdc_text:
-        exported = re.findall(r"(\w+)_export\s*=>\s*(\w+)", raw)
+        exported = [(base, sig) for base, sig in
+                    re.findall(r"(\w+)_export\s*=>\s*(\w+)", raw)
+                    if sig != "open"]
 
         # A signal handed to the handshake block has crossed properly and
         # needs no constraint of its own -- the SDC already covers that
@@ -773,6 +775,22 @@ def check_rx_epoch_gate_in_all_rx_projects():
                  "Quartus analysis fails: work.rx_epoch_gate has no primary unit")
 
 
+def check_rx_epoch_has_no_dead_settle_cdc():
+    """A discarded settle bus must not leave an SDC pair Quartus cannot bind."""
+    core = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
+    sdc = ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc"
+    if not core.exists() or not sdc.exists():
+        return
+    core_text = code_only(core.read_text(), comment="--")
+    sdc_text = code_only(sdc.read_text(), comment="#")
+    if ("U_rx_epoch_settle_handshake" in core_text or
+            "U_rx_epoch_settle_handshake" in sdc_text or
+            re.search(r"rx_epoch_settle_samples\s*=>\s*unsigned\(", core_text)):
+        fail("rx-epoch-no-dead-settle-cdc",
+             "unused sample-discard control still has a synthesized CDC/SDC path",
+             "TimeQuest reports handshake crossing not matched after optimization")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -788,6 +806,7 @@ nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that
 adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune result
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
+rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
 """
 
 
@@ -806,6 +825,7 @@ def main():
     check_rfpll_errors_propagate()
     check_rx_epoch_is_event_bounded()
     check_rx_epoch_gate_in_all_rx_projects()
+    check_rx_epoch_has_no_dead_settle_cdc()
 
     for n in notes:
         print(f"note  {n}")

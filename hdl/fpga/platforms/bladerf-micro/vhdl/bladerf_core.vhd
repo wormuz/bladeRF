@@ -265,22 +265,14 @@ architecture core_bladerf of bladerf_core is
     --   bit 2      abort toggle
     --   bits 15:8  host epoch_id
     -- settle_samples does NOT fit in the remaining 16 bits of one 32-bit
-    -- word; it rides in a second PIO/handshake pair (rx_epoch_settle),
-    -- continuously crossed the same way -- quasi-static, not a per-
-    -- transaction value (ADR settle_samples is a calibration constant
-    -- the host sets rarely, not something that changes every retune).
+    -- word. The old sample-discard PIO remains at the NIOS address for
+    -- compatibility but is intentionally not connected to the RX gate.
     signal rx_epoch_ctrl_word       : std_logic_vector(31 downto 0);
     signal rx_epoch_ctrl_req_rx     : std_logic := '0';
     signal rx_epoch_ctrl_ack_rx     : std_logic;
     signal rx_epoch_ctrl_wire_rx    : std_logic_vector(31 downto 0);
     signal rx_epoch_ctrl_rx         : std_logic_vector(31 downto 0) := (others => '0');
     signal rx_epoch_ctrl_prev_rx    : std_logic_vector(2 downto 0) := (others => '0');
-
-    signal rx_epoch_settle_word     : std_logic_vector(31 downto 0);
-    signal rx_epoch_settle_req_rx   : std_logic := '0';
-    signal rx_epoch_settle_ack_rx   : std_logic;
-    signal rx_epoch_settle_wire_rx  : std_logic_vector(31 downto 0);
-    signal rx_epoch_settle_rx       : std_logic_vector(31 downto 0) := (others => '0');
 
     -- Decoded, rx_clock-domain command pulses + fields -- what actually
     -- feeds U_rx_epoch_gate's control ports in rx.vhd.
@@ -815,7 +807,7 @@ begin
             dwell_cfg_export                => dwell_cfg_word,
             rf_link_cfg_export              => rf_link_cfg_word,
             rx_epoch_ctrl_export             => rx_epoch_ctrl_word,
-            rx_epoch_settle_export           => rx_epoch_settle_word,
+            rx_epoch_settle_export           => open,
             rx_epoch_status_export           => rx_epoch_status_sys,
             rx_epoch_ts_lo_export            => rx_epoch_ts_lo_sys,
             rx_epoch_ts_hi_export            => rx_epoch_ts_hi_sys,
@@ -1199,14 +1191,8 @@ begin
         end if;
     end process;
 
-    -- ADR-0207 §6: rx_epoch_ctrl/rx_epoch_settle crossing (sys_clock ->
-    -- rx_clock), identical shape to U_dwell_cfg_handshake/
-    -- drive_handshake_dwell_cfg/dwell_cfg_capture above -- two separate
-    -- 32-bit words because the control word (toggle bits + epoch_id)
-    -- changes per-retune while settle_samples is quasi-static, and they
-    -- do not need to be observed atomically with each other the way
-    -- epoch_id must stay paired with the toggle that named it (that
-    -- pairing lives WITHIN rx_epoch_ctrl_word, not across the two words).
+    -- RX transition commands cross sys_clock -> rx_clock as one bundled
+    -- word so epoch_id stays paired with the toggle that names it.
     U_rx_epoch_ctrl_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )
         port map (
@@ -1240,43 +1226,6 @@ begin
         elsif( rising_edge(rx_clock) ) then
             if( rx_epoch_ctrl_ack_rx = '1' ) then
                 rx_epoch_ctrl_rx <= rx_epoch_ctrl_wire_rx;
-            end if;
-        end if;
-    end process;
-
-    U_rx_epoch_settle_handshake : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
-        port map (
-            source_reset => sys_reset,
-            source_clock => sys_clock,
-            source_data  => rx_epoch_settle_word,
-            dest_reset   => rx_reset,
-            dest_clock   => rx_clock,
-            dest_data    => rx_epoch_settle_wire_rx,
-            dest_req     => rx_epoch_settle_req_rx,
-            dest_ack     => rx_epoch_settle_ack_rx
-        );
-
-    drive_handshake_rx_epoch_settle : process( rx_clock, rx_reset )
-    begin
-        if( rx_reset = '1' ) then
-            rx_epoch_settle_req_rx <= '0';
-        elsif( rising_edge(rx_clock) ) then
-            if( rx_epoch_settle_ack_rx = '0' ) then
-                rx_epoch_settle_req_rx <= '1';
-            else
-                rx_epoch_settle_req_rx <= '0';
-            end if;
-        end if;
-    end process;
-
-    rx_epoch_settle_capture : process( rx_clock, rx_reset )
-    begin
-        if( rx_reset = '1' ) then
-            rx_epoch_settle_rx <= (others => '0');
-        elsif( rising_edge(rx_clock) ) then
-            if( rx_epoch_settle_ack_rx = '1' ) then
-                rx_epoch_settle_rx <= rx_epoch_settle_wire_rx;
             end if;
         end if;
     end process;
@@ -1831,7 +1780,7 @@ begin
             rx_epoch_complete       => rx_epoch_complete_rx,
             rx_epoch_abort          => rx_epoch_abort_rx,
             rx_epoch_id_in          => rx_epoch_id_in_rx,
-            rx_epoch_settle_samples => unsigned(rx_epoch_settle_rx),
+            rx_epoch_settle_samples => (others => '0'),
             rx_epoch_id_out         => rx_epoch_id_out_rx,
             rx_epoch_state          => rx_epoch_state_rx,
             rx_epoch_discard_active => rx_epoch_discard_rx,

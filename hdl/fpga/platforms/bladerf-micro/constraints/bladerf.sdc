@@ -334,7 +334,6 @@ set hs_pairs [list \
     {*U_handshake_rx_overflow|source_holding[*]}                  {*bladerf_core:*|rx_ovf_sys_q[*]}        \
     {*U_handshake_tx_underflow|source_holding[*]}                 {*bladerf_core:*|tx_unf_sys_q[*]}        \
     {*U_rx_epoch_ctrl_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ctrl_rx[*]}    \
-    {*U_rx_epoch_settle_handshake|source_holding[*]}               {*bladerf_core:*|rx_epoch_settle_rx[*]}  \
     {*U_rx_epoch_status_handshake|source_holding[*]}               {*bladerf_core:*|rx_epoch_status_sys[*]} \
     {*U_rx_epoch_ts_lo_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ts_lo_sys[*]}  \
     {*U_rx_epoch_ts_hi_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ts_hi_sys[*]}  ]
