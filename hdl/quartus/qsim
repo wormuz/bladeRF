@@ -99,7 +99,15 @@ run_one() {
         echo "$out" | grep -iE "error" | head -3 | cut -c1-120
         return 1
     fi
-    printf '%-28s %s\n' "$tb" "$(echo "$out" | grep -c 'OK') cases OK"
+    local cases
+    cases=$(echo "$out" | grep -c 'OK')
+    # Assertion-only VHDL benches may emit one terminal PASS report instead
+    # of per-case "OK" lines. Count that as one executed case rather than
+    # misleadingly reporting "0 cases OK" after a successful simulation.
+    if [ "$cases" -eq 0 ] && echo "$out" | grep -q "${tb}: PASS"; then
+        cases=1
+    fi
+    printf '%-28s %s cases OK\n' "$tb" "$cases"
     return 0
 }
 
