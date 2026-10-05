@@ -760,6 +760,19 @@ def check_rx_epoch_is_event_bounded():
              "sample-count discard is not proof of RFIC or analog completion")
 
 
+def check_rx_epoch_gate_in_all_rx_projects():
+    """Every top-level QIP compiling rx.vhd must compile its gate entity."""
+    platform = ROOT / "hdl/fpga/platforms/bladerf-micro"
+    for qip in sorted(platform.glob("bladerf-*.qip")):
+        text = qip.read_text()
+        if not re.search(r"\bvhdl/rx\.vhd", text):
+            continue
+        if not re.search(r"synthesis/rx_epoch_gate\.vhd", text):
+            fail("rx-epoch-gate-in-rx-projects",
+                 f"{qip.name} compiles rx.vhd but omits rx_epoch_gate.vhd",
+                 "Quartus analysis fails: work.rx_epoch_gate has no primary unit")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -774,6 +787,7 @@ header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
 nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
 adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune result
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
+rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
 """
 
 
@@ -791,6 +805,7 @@ def main():
     check_nios()
     check_rfpll_errors_propagate()
     check_rx_epoch_is_event_bounded()
+    check_rx_epoch_gate_in_all_rx_projects()
 
     for n in notes:
         print(f"note  {n}")
