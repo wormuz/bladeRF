@@ -2552,11 +2552,14 @@ struct bladerf_metadata {
      */
     unsigned int actual_count;
 
-    /**
-     * Reserved for future use. This is not used by any functions. It is
-     * recommended that users zero out this field.
-     */
-    uint8_t reserved[32];
+    /** FPGA RX epoch ID for an epoch-tagged SC16/SC8 META RX stream. */
+    uint8_t rx_epoch_id;
+
+    /** Nonzero when rx_epoch_id was present on the RX metadata packet. */
+    uint8_t rx_epoch_id_valid;
+
+    /** Reserved for future use. Callers should zero this field. */
+    uint8_t reserved[30];
 };
 
 /** @} (End of STREAMING_FORMAT_METADATA) */

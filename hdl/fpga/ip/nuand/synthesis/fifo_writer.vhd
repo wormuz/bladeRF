@@ -46,6 +46,9 @@ entity fifo_writer is
         highly_packed_mode_en : in      std_logic;
         timestamp           :   in      unsigned(63 downto 0);
         mini_exp            :   in      std_logic_vector(1 downto 0);
+        -- RX epoch identity is opt-in so legacy META contents stay intact.
+        rx_epoch_meta_enable :  in      std_logic := '0';
+        rx_epoch_id          :  in      unsigned(7 downto 0) := (others => '0');
 
         in_sample_controls  :   in      sample_controls_t(0 to NUM_STREAMS-1) := (others => SAMPLE_CONTROL_DISABLE);
         in_samples          :   in      sample_streams_t(0 to NUM_STREAMS-1)  := (others => ZERO_SAMPLE);
@@ -553,7 +556,16 @@ begin
         meta_future.meta_write <= '0';
         -- currently the GPIF modules overwrites the bottom 16 bits of the flags field
         if( packet_en = '0' ) then
-           meta_future.meta_data  <= x"FFF" & "11" & sync_mini_exp & x"FFFF" & std_logic_vector(timestamp) & x"12344321";
+           if( rx_epoch_meta_enable = '1' ) then
+               -- The first metadata dword is ignored in sample-META mode.
+               -- Preserve its size and carry an explicit marker plus epoch ID.
+               meta_future.meta_data <= x"FFF" & "11" & sync_mini_exp & x"FFFF" &
+                       std_logic_vector(timestamp) & x"800000" &
+                       std_logic_vector(rx_epoch_id);
+           else
+               meta_future.meta_data <= x"FFF" & "11" & sync_mini_exp & x"FFFF" &
+                       std_logic_vector(timestamp) & x"12344321";
+           end if;
         else
            packet_flags := packet_control.pkt_flags;
            meta_future.meta_data  <= x"FFF" & "11" & sync_mini_exp & x"FFFF" & std_logic_vector(timestamp) &

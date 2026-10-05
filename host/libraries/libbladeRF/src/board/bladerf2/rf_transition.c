@@ -112,6 +112,12 @@ static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
         }
         if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING &&
             epoch == expected_epoch) {
+            /* Bit 18 is the FPGA capability/arm acknowledgement for
+             * sample-META epoch identity. Fail before LO programming on
+             * older images that only provide the timestamp boundary. */
+            if ((value & (1u << 18)) == 0) {
+                return BLADERF_ERR_UNSUPPORTED;
+            }
             return 0;
         }
 
@@ -703,7 +709,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
          * drops stale timestamped messages already queued on USB/host. */
         status = sync_rx_epoch_set_min_timestamp(
             &board_data->sync[BLADERF_RX],
-            ((uint64_t)timestamp_hi << 32) | timestamp_lo);
+            ((uint64_t)timestamp_hi << 32) | timestamp_lo,
+            (uint8_t)((epoch_status_word >>
+                NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+                NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK));
         if (status != 0) {
             _emit_event(board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,

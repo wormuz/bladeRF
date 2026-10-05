@@ -423,6 +423,7 @@ static inline void rf_link_cfg_set_epoch_tag(uint8_t tag)
 #define RX_EPOCH_CTRL_COMPLETE_TOGGLE (1u << 1)
 #define RX_EPOCH_CTRL_ABORT_TOGGLE    (1u << 2)
 #define RX_EPOCH_CTRL_ID_LSB          8
+#define RX_EPOCH_CTRL_META_ENABLE     (1u << 16)
 
 static inline uint32_t rx_epoch_ctrl_current(void)
 {
@@ -447,7 +448,8 @@ static inline void rx_epoch_ctrl_modify(uint32_t clear, uint32_t set, uint32_t t
 static inline void rx_epoch_arm(uint8_t epoch_id)
 {
     rx_epoch_ctrl_modify(0xFFu << RX_EPOCH_CTRL_ID_LSB,
-                         ((uint32_t)epoch_id) << RX_EPOCH_CTRL_ID_LSB,
+                         (((uint32_t)epoch_id) << RX_EPOCH_CTRL_ID_LSB) |
+                             RX_EPOCH_CTRL_META_ENABLE,
                          RX_EPOCH_CTRL_ARM_TOGGLE);
 }
 
@@ -477,7 +479,8 @@ static inline void rx_epoch_settle_set(uint32_t settle_samples)
  *   31..24  epoch_id      the active epoch, mirrors what was armed
  *   23..20  state         RX_EPOCH_ACTIVE/PENDING/SETTLING/ACTIVE_NEW/ERROR
  *   19      discard_active samples are being suppressed right now
- *   18..0   reserved, always 0
+ *   18      sample-META epoch tags enabled
+ *   17..0   reserved, always 0
  */
 static inline uint32_t rx_epoch_status_read(void)
 {

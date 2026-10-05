@@ -99,6 +99,28 @@
 
 #define METADATA_HEADER_SIZE (METADATA_FLAGS_OFFSET + METADATA_FLAGS_SIZE)
 
+/* RX sample-META epoch tag occupies the otherwise unused first dword.
+ * Bit 31 distinguishes it from legacy/sample metadata headers; bits 7:0
+ * carry the FPGA's epoch ID. PACKET_META continues to use the dword as its
+ * packet header and must not interpret it as an epoch tag. */
+#define METADATA_RX_EPOCH_TAG_VALID (1u << 31)
+#define METADATA_RX_EPOCH_ID_MASK   0xffu
+
+static inline bool metadata_get_rx_epoch_id(const uint8_t *header,
+                                            uint8_t *epoch_id)
+{
+    uint32_t tag;
+    memcpy(&tag, &header[METADATA_RESV_OFFSET], sizeof(tag));
+    tag = LE32_TO_HOST(tag);
+
+    if ((tag & METADATA_RX_EPOCH_TAG_VALID) == 0) {
+        return false;
+    }
+
+    *epoch_id = (uint8_t)(tag & METADATA_RX_EPOCH_ID_MASK);
+    return true;
+}
+
 static inline uint64_t metadata_get_timestamp(const uint8_t *header)
 {
     uint64_t ret;

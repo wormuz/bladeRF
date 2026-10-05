@@ -63,6 +63,8 @@ architecture tb of fifo_writer_enable_tb is
     signal done         : boolean   := false;
 
     signal timestamp    : unsigned(63 downto 0) := (others => '0');
+    signal epoch_tag_enable : std_logic := '1';
+    signal epoch_id         : unsigned(7 downto 0) := x"2A";
 
     signal sample_ctrls : sample_controls_t(0 to NSTREAMS-1) :=
                               (others => SAMPLE_CONTROL_DISABLE);
@@ -129,6 +131,8 @@ begin
             highly_packed_mode_en => '0',
             timestamp             => timestamp,
             mini_exp              => (others => '0'),
+            rx_epoch_meta_enable  => epoch_tag_enable,
+            rx_epoch_id           => epoch_id,
 
             in_sample_controls    => sample_ctrls,
             in_samples            => samples,
@@ -194,6 +198,9 @@ begin
             end if;
 
             if meta_write = '1' then
+                assert meta_data(31 downto 0) = x"8000002A"
+                    report "RX META epoch tag marker/ID mismatch"
+                    severity failure;
                 metas_total <= metas_total + 1;
                 if toggled then
                     metas_after <= metas_after + 1;
@@ -299,6 +306,7 @@ begin
                "  writes_after = " & integer'image(writes_after) &
                "  orphan_metas = " & integer'image(orphan_metas);
         report "live enable toggle: writer kept progress, metadata paired";
+        report "fifo_writer_enable_tb: PASS" severity note;
 
         done <= true;
         wait;

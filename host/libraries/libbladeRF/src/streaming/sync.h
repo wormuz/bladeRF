@@ -209,6 +209,8 @@ struct sync_meta {
             uint64_t
                 msg_timestamp;  /* Timestamp contained in the current message */
             uint32_t msg_flags; /* Flags for the current message */
+            uint8_t msg_epoch_id;
+            bool msg_epoch_id_valid;
         };
 
         /* Used only for TX */
@@ -227,6 +229,8 @@ struct sync_meta {
                               * consumed up to */
     bool rx_epoch_boundary_enabled;
     uint64_t rx_epoch_min_timestamp;
+    bool rx_epoch_id_filter_enabled;
+    uint8_t rx_epoch_expected_id;
 };
 
 struct bladerf_sync {
@@ -289,6 +293,7 @@ int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);
  * old IQ; epoch fencing therefore requires per-message RX timestamps. */
 int sync_rx_epoch_require_metadata(struct bladerf_sync *sync);
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
-                                    uint64_t min_timestamp);
+                                    uint64_t min_timestamp,
+                                    uint8_t epoch_id);
 
 #endif

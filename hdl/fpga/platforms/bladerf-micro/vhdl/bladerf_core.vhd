@@ -273,6 +273,7 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_ctrl_wire_rx    : std_logic_vector(31 downto 0);
     signal rx_epoch_ctrl_rx         : std_logic_vector(31 downto 0) := (others => '0');
     signal rx_epoch_ctrl_prev_rx    : std_logic_vector(2 downto 0) := (others => '0');
+    signal rx_epoch_meta_enable_rx  : std_logic := '0';
 
     -- Decoded, rx_clock-domain command pulses + fields -- what actually
     -- feeds U_rx_epoch_gate's control ports in rx.vhd.
@@ -1248,6 +1249,7 @@ begin
             rx_epoch_complete_rx  <= '0';
             rx_epoch_abort_rx     <= '0';
             rx_epoch_id_in_rx     <= (others => '0');
+            rx_epoch_meta_enable_rx <= '0';
         elsif( rising_edge(rx_clock) ) then
             rx_epoch_arm_rx      <= '0';
             rx_epoch_complete_rx <= '0';
@@ -1265,6 +1267,7 @@ begin
 
             rx_epoch_ctrl_prev_rx <= rx_epoch_ctrl_rx(2 downto 0);
             rx_epoch_id_in_rx     <= unsigned(rx_epoch_ctrl_rx(15 downto 8));
+            rx_epoch_meta_enable_rx <= rx_epoch_ctrl_rx(16);
         end if;
     end process;
 
@@ -1279,11 +1282,13 @@ begin
     -- because both halves are driven by the same rx_epoch_first_valid_rx
     -- source register, captured by their own independent handshakes but
     -- never written to separately).
-    -- bits [31:24] epoch_id, [23:20] state, [19] discard_active, [18:0] reserved=0
+    -- bits [31:24] epoch_id, [23:20] state, [19] discard_active,
+    -- [18] sample-META epoch tag enabled, [17:0] reserved=0
     rx_epoch_status_word <= std_logic_vector(rx_epoch_id_out_rx)
                            & std_logic_vector(rx_epoch_state_rx)
                            & rx_epoch_discard_rx
-                           & (18 downto 0 => '0');
+                           & rx_epoch_meta_enable_rx
+                           & (17 downto 0 => '0');
 
     U_rx_epoch_status_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )
@@ -1780,6 +1785,7 @@ begin
             rx_epoch_complete       => rx_epoch_complete_rx,
             rx_epoch_abort          => rx_epoch_abort_rx,
             rx_epoch_id_in          => rx_epoch_id_in_rx,
+            rx_epoch_meta_enable    => rx_epoch_meta_enable_rx,
             rx_epoch_settle_samples => (others => '0'),
             rx_epoch_id_out         => rx_epoch_id_out_rx,
             rx_epoch_state          => rx_epoch_state_rx,

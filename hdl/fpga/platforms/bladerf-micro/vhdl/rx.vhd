@@ -72,6 +72,7 @@ entity rx is
         rx_epoch_complete       : in    std_logic := '0';
         rx_epoch_abort          : in    std_logic := '0';
         rx_epoch_id_in          : in    unsigned(7 downto 0) := (others => '0');
+        rx_epoch_meta_enable    : in    std_logic := '0';
         rx_epoch_settle_samples : in    unsigned(31 downto 0) := (others => '0');
         rx_epoch_id_out         : out   unsigned(7 downto 0) := (others => '0');
         rx_epoch_state          : out   unsigned(3 downto 0) := (others => '0');
@@ -166,6 +167,7 @@ architecture arch of rx is
     -- even to be discarded on the host side.
     signal gated_controls           : sample_controls_t(adc_streams'range) := (others => SAMPLE_CONTROL_DISABLE);
     signal gated_streams            : sample_streams_t(adc_streams'range)  := (others => ZERO_SAMPLE);
+    signal rx_epoch_id_local        : unsigned(7 downto 0) := (others => '0');
 
     signal trigger_signal_out       : std_logic;
     signal trigger_signal_out_sync  : std_logic;
@@ -174,6 +176,7 @@ begin
 
     rx_mux_mode            <= rx_mux_mode_t'val(to_integer(rx_mux_sel));
     loopback_fifo_wenabled <= loopback_fifo_wenabled_i;
+    rx_epoch_id_out        <= rx_epoch_id_local;
 
     set_timestamp_reset : process(rx_clock, rx_reset)
     begin
@@ -290,7 +293,7 @@ begin
             out_sample_controls     => gated_controls,
             out_samples             => gated_streams,
 
-            out_epoch_id            => rx_epoch_id_out,
+            out_epoch_id            => rx_epoch_id_local,
             out_state               => rx_epoch_state,
             out_discard_active      => rx_epoch_discard_active,
             epoch_start_event       => rx_epoch_start_event,
@@ -317,6 +320,8 @@ begin
             packet_en           =>  packet_en,
             timestamp           =>  rx_timestamp,
             mini_exp            =>  mini_exp,
+            rx_epoch_meta_enable => rx_epoch_meta_enable,
+            rx_epoch_id          => rx_epoch_id_local,
 
             link_start_toggle          =>  link_start_toggle,
             link_stop_toggle           =>  link_stop_toggle,

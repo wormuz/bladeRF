@@ -241,6 +241,8 @@ int sync_init(struct bladerf_sync *sync,
     sync->meta.state = SYNC_META_STATE_HEADER;
     sync->meta.rx_epoch_boundary_enabled = false;
     sync->meta.rx_epoch_min_timestamp = 0;
+    sync->meta.rx_epoch_id_filter_enabled = false;
+    sync->meta.rx_epoch_expected_id = 0;
     sync->meta.msg_size = msg_size;
     sync->meta.msg_per_buf = msg_per_buf(msg_size, buffer_size, bytes_per_sample);
     sync->meta.samples_per_msg = samples_per_msg(msg_size, bytes_per_sample);
@@ -502,7 +504,8 @@ int sync_rx_epoch_require_metadata(struct bladerf_sync *sync)
 }
 
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
-                                    uint64_t min_timestamp)
+                                    uint64_t min_timestamp,
+                                    uint8_t epoch_id)
 {
     int status = sync_rx_epoch_require_metadata(sync);
     if (status != 0 || sync == NULL || !sync->initialized) {
@@ -516,6 +519,8 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
     } else {
         sync->meta.rx_epoch_min_timestamp = min_timestamp;
         sync->meta.rx_epoch_boundary_enabled = true;
+        sync->meta.rx_epoch_expected_id = epoch_id;
+        sync->meta.rx_epoch_id_filter_enabled = true;
     }
     MUTEX_UNLOCK(&sync->lock);
 
@@ -605,6 +610,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             goto out;
         } else {
             user_meta->status = 0;
+            user_meta->rx_epoch_id = 0;
+            user_meta->rx_epoch_id_valid = 0;
             target_timestamp = user_meta->timestamp;
 
             /* Report an overrun the worker recovered from. Its recovery
@@ -897,6 +904,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
                         s->meta.msg_flags =
                             metadata_get_flags(s->meta.curr_msg);
+                        s->meta.msg_epoch_id_valid =
+                            metadata_get_rx_epoch_id(s->meta.curr_msg,
+                                &s->meta.msg_epoch_id);
 
                         if (!s->meta.rx_epoch_boundary_enabled ||
                             s->meta.msg_timestamp >=
@@ -926,7 +936,29 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             (s->meta.msg_timestamp <
                                  s->meta.rx_epoch_min_timestamp ||
                              s->meta.curr_timestamp <
-                                 s->meta.rx_epoch_min_timestamp);
+                                 s->meta.rx_epoch_min_timestamp ||
+                             (s->meta.rx_epoch_id_filter_enabled &&
+                              (!s->meta.msg_epoch_id_valid ||
+                               s->meta.msg_epoch_id !=
+                                   s->meta.rx_epoch_expected_id)));
+
+                        const bool epoch_id_mismatch =
+                            s->meta.rx_epoch_boundary_enabled &&
+                            s->meta.rx_epoch_id_filter_enabled &&
+                            (!s->meta.msg_epoch_id_valid ||
+                             s->meta.msg_epoch_id !=
+                                 s->meta.rx_epoch_expected_id);
+
+                        if (epoch_id_mismatch && copied_data) {
+                            /* A packet from another epoch after current-epoch
+                             * samples is a real stream discontinuity. Return
+                             * the contiguous prefix and retry this message on
+                             * the next call, where it can be discarded. */
+                            user_meta->status |= BLADERF_META_STATUS_OVERRUN;
+                            exit_early = true;
+                            s->meta.state = SYNC_META_STATE_HEADER;
+                            break;
+                        }
 
                         if (!epoch_prefix && s->meta.have_timestamp &&
                             s->meta.msg_timestamp != s->meta.curr_timestamp) {
@@ -954,6 +986,25 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         break;
 
                     case SYNC_META_STATE_SAMPLES:
+                        if (s->meta.rx_epoch_boundary_enabled &&
+                            s->meta.rx_epoch_id_filter_enabled &&
+                            (!s->meta.msg_epoch_id_valid ||
+                             s->meta.msg_epoch_id !=
+                                 s->meta.rx_epoch_expected_id)) {
+                            unsigned int left = left_in_msg(s);
+                            s->meta.curr_msg_off += left;
+                            s->meta.curr_timestamp +=
+                                left / s->meta.samples_per_ts;
+                            s->meta.state = SYNC_META_STATE_HEADER;
+                            s->meta.msg_num++;
+                            if (s->meta.msg_num >= s->meta.msg_per_buf) {
+                                advance_rx_buffer(b);
+                                s->meta.msg_num = 0;
+                                s->state = SYNC_STATE_WAIT_FOR_BUFFER;
+                            }
+                            break;
+                        }
+
                         if (s->meta.rx_epoch_boundary_enabled &&
                             s->meta.curr_timestamp <
                                 s->meta.rx_epoch_min_timestamp) {
@@ -1013,6 +1064,12 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                    samples2bytes(s, samples_to_copy));
 
                             samples_returned += samples_to_copy;
+                            if (!copied_data &&
+                                s->meta.msg_epoch_id_valid) {
+                                user_meta->rx_epoch_id =
+                                    s->meta.msg_epoch_id;
+                                user_meta->rx_epoch_id_valid = 1;
+                            }
                             s->meta.curr_msg_off += samples_to_copy;
 
                             if (!copied_data &&
