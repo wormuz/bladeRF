@@ -610,31 +610,24 @@ void adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-/* AD9361 Register Map Reference 0x05E (Digital Status / Lock Status):
- * bit[6]=TX PLL lock, bit[5]=RX PLL lock (1=locked). RADIO-RETUNE-
- * SEQUENTIAL-DEGRADATION-001: `adi_fastlock_recall` раніше писала
- * fastlock setup register і поверталась одразу, не чекаючи реального
- * PLL lock -- наступний RX/TX read бачив "leaked" стан (charge pump
- * 0x247/0x287 лишався 0x80, не 0x40 -- коментар у host/libraries/
- * libbladeRF/src/board/bladerf2/rfic_host.c:490 вже документував цей
- * симптом, але не фіксив кореневу причину). Poll-with-timeout тут
- * блокує на апаратному рівні -- незалежно від host-коду (Python/C),
- * ЖОДЕН caller не може випадково пропустити очікування locked. */
-#define AD9361_REG_LOCK_STATUS       0x05e
-#define AD9361_RX_PLL_LOCK_MASK      (1 << 5)
-#define AD9361_TX_PLL_LOCK_MASK      (1 << 6)
+/* AD9361 UG-570 Table 1: RF synthesizer lock is RX 0x247[1] and
+ * TX 0x287[1]. Register 0x05e[7] is BBPLL lock, not RFPLL lock.
+ * Poll the actual RFPLL event. */
+#define AD9361_REG_RX_PLL_LOCK       0x247
+#define AD9361_REG_TX_PLL_LOCK       0x287
+#define AD9361_PLL_LOCK_MASK         (1 << 1)
 #define AD9361_PLL_LOCK_POLL_MAX     2000  /* SPI read ~кілька мкс кожен,
                                             * запас проти 100мкс типового
                                             * fastlock lock-часу */
 
-static bool adi_wait_pll_lock(uint8_t pll_mask)
+static bool adi_wait_pll_lock(uint16_t lock_reg)
 {
-    uint16_t status_addr = (0x0 << 15) | (0x0 << 12) | (AD9361_REG_LOCK_STATUS & 0x3ff);
+    uint16_t status_addr = (0x0 << 15) | (0x0 << 12) | (lock_reg & 0x3ff);
     uint32_t i;
 
     for (i = 0; i < AD9361_PLL_LOCK_POLL_MAX; i++) {
         uint8_t status = (uint8_t)(adi_spi_read(status_addr) >> 56);
-        if ((status & pll_mask) == pll_mask) {
+        if ((status & AD9361_PLL_LOCK_MASK) != 0) {
             return true;
         }
     }
@@ -642,10 +635,12 @@ static bool adi_wait_pll_lock(uint8_t pll_mask)
     return false;
 }
 
-void adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
+bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
 {
     bool is_tx = BLADERF_CHANNEL_IS_TX(m);
     uint16_t fl_setup_reg = is_tx ? 0x29a : 0x25a;
+    uint16_t pll_lock_reg = is_tx ? AD9361_REG_TX_PLL_LOCK
+                                  : AD9361_REG_RX_PLL_LOCK;
     uint16_t addr;
     uint64_t data = 0;
 
@@ -654,11 +649,8 @@ void adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
 
     adi_spi_write(addr, data);
 
-    /* Блокуюче очікування реального PLL lock -- дефект неможливий на
-     * рівні прошивки: caller фізично не отримає керування назад, поки
-     * synth не заблокувався, незалежно від того, скільки разів і як
-     * швидко host викликає retune. */
-    adi_wait_pll_lock(is_tx ? AD9361_TX_PLL_LOCK_MASK : AD9361_RX_PLL_LOCK_MASK);
+    /* Wait for the actual RFPLL lock bit and report a timeout as failure. */
+    return adi_wait_pll_lock(pll_lock_reg);
 }
 #endif  // BOARD_BLADERF_MICRO
 

@@ -24,9 +24,6 @@ architecture test of rx_epoch_gate_tb is
     signal first_valid_timestamp : unsigned(63 downto 0);
 begin
     clock <= not clock after 5 ns;
-    samples_in(0).data_v <= '1';
-    samples_in(1).data_v <= '1';
-
     dut : entity work.rx_epoch_gate
         port map (
             clock => clock, reset => reset,
@@ -50,6 +47,8 @@ begin
 
         wait until falling_edge(clock);
         arm <= '1';
+        samples_in(0).data_v <= '1';
+        samples_in(1).data_v <= '1';
         wait until falling_edge(clock);
         arm <= '0';
         timestamp <= to_unsigned(100, 64);
@@ -66,12 +65,34 @@ begin
 
         wait until falling_edge(clock);
         complete <= '0';
+        samples_in(0).data_v <= '0';
+        samples_in(1).data_v <= '0';
         timestamp <= to_unsigned(201, 64);
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert out_controls(0).enable = '1' report "first post-completion sample not admitted" severity failure;
+        assert out_controls(0).enable = '0' report "epoch opened without a valid RX sample" severity failure;
+        assert start_event = '0' report "epoch start fired without a valid RX sample" severity failure;
+        assert first_valid_timestamp = to_unsigned(0, 64)
+            report "timestamp latched before first valid RX sample" severity failure;
+
+        -- Delay the ADC valid edge after RFIC completion. The gate must
+        -- stay fenced until that edge, then admit and timestamp exactly it.
+        wait until falling_edge(clock);
+        timestamp <= to_unsigned(202, 64);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_controls(0).enable = '0' report "epoch opened during empty RX cycles" severity failure;
+        assert state /= "0000" report "ACTIVE published before first valid sample" severity failure;
+
+        wait until falling_edge(clock);
+        timestamp <= to_unsigned(203, 64);
+        samples_in(0).data_v <= '1';
+        samples_in(1).data_v <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_controls(0).enable = '1' report "first valid post-completion sample not admitted" severity failure;
         assert start_event = '1' report "epoch start event missing" severity failure;
-        assert first_valid_timestamp = to_unsigned(201, 64)
+        assert first_valid_timestamp = to_unsigned(203, 64)
             report "first-valid timestamp does not match first admitted sample" severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
 

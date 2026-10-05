@@ -418,6 +418,11 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         board_data->fpga_size = BLADERF_FPGA_A9;
     }
 
+    if (getenv("BLADERF_FORCE_FPGA_A4")) {
+        log_info("BLADERF_FORCE_FPGA_A4 is set, assuming A4 FPGA\n");
+        board_data->fpga_size = BLADERF_FPGA_A4;
+    }
+
     /* If the flash architecture could not be decoded earlier, try again now
      * that the FPGA size is known. */
     if (dev->flash_arch->status != STATUS_SUCCESS) {
@@ -1848,32 +1853,13 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt));
 
-    /* The Nios recalls the profile by writing the RFIC directly, which
-     * leaves the part in fastlock mode with FORCE_ALC_ENABLE asserted.
-     * ad9361_fastlock_prepare() cannot undo that on its own: it is gated
-     * on this driver's own bookkeeping, and a recall performed by the
-     * FPGA never touches it. Ownership of the RFPLL therefore returns to
-     * host tuning with forced controls still active.
-     *
-     * Measured on a bladeRF 2.0 micro xA4, interleaving a recall with
-     * ordinary tuning every fifth stop of a 242-point sweep:
-     *
-     *   without this exit   49 lock failures in 643 tunes, first at 280
-     *   with it              1 lock failure  in 702 tunes, first at 495
-     *
-     * Without the exit the failures form a series that never recovers,
-     * and 0x247 reads 0x40 throughout: the charge pump has saturated
-     * low. Three runs with it in place gave zero consecutive failures,
-     * and confirmed the leak occurs on every recall without exception.
-     *
-     * Immediate scheduling is the only case handled here. A retune
-     * scheduled for a future timestamp completes inside the FPGA long
-     * after this call returns, so the exit has to happen there instead.
-     */
-    if (BLADERF_RETUNE_NOW == timestamp) {
-        CHECK_AD936X(ad9361_fastlock_exit_foreign(
-            board_data->phy, BLADERF_CHANNEL_IS_TX(ch)));
-    }
+    /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
+     * Exiting after every recall runs the AD9361 force-control/VCO
+     * recovery sequence and removes the latency benefit of fastlock.
+     * Before the next ordinary host tune, _rfic_host_set_frequency()
+     * calls ad9361_fastlock_exit_foreign() and releases those controls.
+     * This is also safe for a future-timestamp recall: host tuning performs
+     * the same exit when it next takes ownership of the RFPLL. */
 
     return 0;
 }

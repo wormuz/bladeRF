@@ -28,6 +28,7 @@
  */
 #include <time.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 #include <libbladeRF.h>
 
@@ -120,6 +121,70 @@ static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
     return BLADERF_ERR_TIMEOUT;
 }
 
+/* FPGA epoch IDs are 8-bit state owned by the fabric and survive a host
+ * close/reopen while the FPGA remains loaded.  They must not be derived from
+ * rf_transition_current_id, whose lifetime is one libbladeRF handle. */
+static int _read_rx_epoch_state(struct bladerf *dev, uint32_t *status_word,
+                                uint8_t *state, uint8_t *epoch)
+{
+    uint32_t value;
+    int status = nios_rx_epoch_status_read(dev, &value);
+    if (status != 0) {
+        return status;
+    }
+
+    *status_word = value;
+    *state = (uint8_t)((value >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
+    *epoch = (uint8_t)((value >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+    return 0;
+}
+
+/* A previous handle may have closed while its FPGA gate was still fenced.
+ * Reclaim that state before arming a fresh transaction, then allocate the
+ * next ID relative to the persistent FPGA epoch rather than the new handle. */
+static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
+                                uint8_t *epoch_id, uint32_t *status_word)
+{
+    uint64_t deadline_ns = _monotonic_ns() +
+                           (uint64_t)timeout_ms * 1000000ULL;
+    uint8_t state, current_epoch;
+    int status = _read_rx_epoch_state(dev, status_word, &state, &current_epoch);
+    if (status != 0) {
+        return status;
+    }
+
+    if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+        status = nios_rx_epoch_ctrl_cmd(
+            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+        if (status != 0) {
+            return status;
+        }
+
+        do {
+            status = _read_rx_epoch_state(dev, status_word, &state,
+                                          &current_epoch);
+            if (status != 0) {
+                return status;
+            }
+            if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+                break;
+            }
+            usleep(POLL_INTERVAL_US);
+        } while (_monotonic_ns() < deadline_ns);
+
+        if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+            return BLADERF_ERR_TIMEOUT;
+        }
+    }
+
+    *epoch_id = (uint8_t)(current_epoch + 1u);
+    return 0;
+}
+
 static void _abort_transition(struct bladerf *dev,
                               struct bladerf2_board_data *board_data)
 {
@@ -131,6 +196,7 @@ static void _abort_transition(struct bladerf *dev,
 
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_pending = false;
+        board_data->rf_transition_waiting = false;
     });
 }
 
@@ -157,6 +223,17 @@ static void _emit_event_with_timestamp(struct bladerf2_board_data *board_data,
                         uint64_t fpga_timestamp)
 {
     struct bladerf_rf_event *evt = &board_data->rf_transition_last_event;
+
+    /* Later events (PLL, ENSM, epoch-valid) are emitted by wait(), which
+     * does not receive the original request again. Keep the verified LO
+     * pair attached to every event in the transaction, including the final
+     * completion record returned to the caller. */
+    if (requested_hz == 0) {
+        requested_hz = board_data->rf_transition_requested_frequency_hz;
+    }
+    if (readback_hz == 0) {
+        readback_hz = board_data->rf_transition_readback_frequency_hz;
+    }
 
     evt->host_monotonic_ns  = _monotonic_ns();
     evt->fpga_timestamp     = fpga_timestamp;
@@ -191,17 +268,23 @@ static void _emit_event(struct bladerf2_board_data *board_data,
                                epoch_id, 0);
 }
 
-int bladerf_rx_transition_begin(struct bladerf *dev,
-                                bladerf_channel ch,
-                                const struct bladerf_rx_transition_request *request,
-                                uint32_t *transaction_id)
+static int _bladerf_rx_transition_begin(
+    struct bladerf *dev, bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t *transaction_id)
 {
     struct bladerf2_board_data *board_data;
     int status;
     uint32_t required_events_mask;
     bladerf_frequency readback_hz = 0;
+    bool transition_busy = false;
+    uint64_t stage_started_ns;
 
     if (dev == NULL || request == NULL || transaction_id == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
         return BLADERF_ERR_INVAL;
     }
 
@@ -229,24 +312,34 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
     }
 
     WITH_MUTEX(&dev->lock, {
-        board_data->rf_transition_next_id++;
-        board_data->rf_transition_current_id = board_data->rf_transition_next_id;
-        board_data->rf_transition_required_events_mask = required_events_mask;
-        board_data->rf_transition_pending    = true;
-        *transaction_id = board_data->rf_transition_current_id;
+        if (board_data->rf_transition_pending) {
+            transition_busy = true;
+        } else {
+            board_data->rf_transition_next_id++;
+            board_data->rf_transition_current_id = board_data->rf_transition_next_id;
+            board_data->rf_transition_required_events_mask = required_events_mask;
+            board_data->rf_transition_requested_frequency_hz =
+                request->target_frequency_hz;
+            board_data->rf_transition_readback_frequency_hz = 0;
+            board_data->rf_transition_pending    = true;
+            board_data->rf_transition_waiting    = false;
+            *transaction_id = board_data->rf_transition_current_id;
 
-        _emit_event(board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
-                   BLADERF_RF_STATE_CONFIG_PENDING,
-                   request->target_frequency_hz, 0, 0, 0, 0);
+            _emit_event(board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
+                       BLADERF_RF_STATE_CONFIG_PENDING,
+                       request->target_frequency_hz, 0, 0, 0, 0);
+        }
     });
+
+    if (transition_busy) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     /* ADR-0207 §6: arm the FPGA data-plane epoch gate BEFORE the retune so
      * pre-retune samples already in flight through the FIFO writer are
-     * suppressed from the moment the SPI write lands, not from whenever
-     * the host gets around to telling the fabric. epoch_id is the low 8
-     * bits of the transaction id -- wraps every 256 transactions, which is
-     * fine: it is a snapshot-pairing token for RX_EPOCH_STATUS, not a
-     * globally unique identifier.
+     * suppressed from the moment the SPI write lands. FPGA epoch state
+     * survives host close/reopen, so allocate its 8-bit ID from the current
+     * FPGA status; transaction_id remains the separate host-side identity.
      *
      * Only armed when the caller actually requires epoch confirmation --
      * BLADERF_RF_REQUIRE_EPOCH_VALID unset means the caller only wants
@@ -255,13 +348,18 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
      * fence fails, abort before the RFIC retune; never downgrade the
      * caller's requested data-plane guarantee. */
     if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
-        uint8_t epoch_id =
-            (uint8_t)(board_data->rf_transition_current_id & 0xFFu);
         uint32_t epoch_status_word = 0;
+        uint8_t epoch_id = 0;
 
-        int epoch_status = nios_rx_epoch_ctrl_cmd(dev,
-                           NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
-                           epoch_id);
+        stage_started_ns = _monotonic_ns();
+        int epoch_status = _prepare_rx_epoch_id(
+            dev, request->timeout_ms ? request->timeout_ms : 1000,
+            &epoch_id, &epoch_status_word);
+        if (epoch_status == 0) {
+            epoch_status = nios_rx_epoch_ctrl_cmd(dev,
+                               NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
+                               epoch_id);
+        }
         if (epoch_status == 0) {
             epoch_status = _wait_rx_epoch_fenced(
                 dev, epoch_id,
@@ -269,6 +367,10 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
                 &epoch_status_word);
         }
         if (epoch_status != 0) {
+            log_error("%s: epoch ARM/fence failed: transaction=%u epoch=%u "
+                      "status=%d FPGA status=0x%08x\n",
+                      __FUNCTION__, board_data->rf_transition_current_id,
+                      epoch_id, epoch_status, epoch_status_word);
             /* EPOCH_VALID is a requested completion condition. Do not
              * silently downgrade it to control-plane success: the caller
              * asked for a data-plane fence, so failure to arm that fence
@@ -279,6 +381,9 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
                         epoch_status, 0);
             return _fail_transition(dev, board_data, epoch_status, NULL);
         }
+        log_debug("%s: epoch ARM/fence transaction=%u took %" PRIu64 " us\n",
+                  __FUNCTION__, board_data->rf_transition_current_id,
+                  (_monotonic_ns() - stage_started_ns) / 1000ULL);
 
         _emit_event(board_data, BLADERF_RF_EVT_RX_EPOCH_INVALID,
                     BLADERF_RF_STATE_CONFIG_PENDING,
@@ -290,27 +395,92 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
                BLADERF_RF_STATE_SPI_PROGRAMMING,
                request->target_frequency_hz, 0, 0, 0, 0);
 
-    /* Reuses the existing, already-correct host-mode retune path
-     * (bladerf2.c -> rfic_host.c::_rfic_host_set_frequency). This API
-     * does NOT reimplement or bypass that logic -- it wraps it with
-     * observability, per ADR-0207 "Phase 1 must not change the retune
-     * mechanism, only expose its state transitions." */
-    status = bladerf_set_frequency(dev, ch, request->target_frequency_hz);
+    /* Keep both established RF tuning mechanisms under the same FPGA
+     * epoch transaction. Fastlock is executed by NIOS and its response
+     * reports whether the profile recall succeeded; the existing board
+     * path also performs ad9361_fastlock_exit_foreign() before returning
+     * ownership to host-side status/readback. */
+    stage_started_ns = _monotonic_ns();
+    if (quick_tune != NULL) {
+        struct bladerf_quick_tune qt = *quick_tune;
+        status = bladerf_schedule_retune(dev, ch, BLADERF_RETUNE_NOW,
+                                         request->target_frequency_hz, &qt);
+        if (status != 0) {
+            log_error("%s: Nios fastlock recall failed: transaction=%u "
+                      "target=%" PRIu64 " nios_profile=%u rffe_profile=%u "
+                      "status=%d\n",
+                      __FUNCTION__, board_data->rf_transition_current_id,
+                      (uint64_t)request->target_frequency_hz,
+                      qt.nios_profile, qt.rffe_profile, status);
+        }
+    } else {
+        /* Existing host-mode path remains unchanged. */
+        status = bladerf_set_frequency(dev, ch,
+                                       request->target_frequency_hz);
+    }
     if (status != 0) {
+        _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+                   request->target_frequency_hz, 0, 0, status, 0);
+        return _fail_transition(dev, board_data, status, NULL);
+    }
+    log_debug("%s: %s RFIC tune transaction=%u took %" PRIu64 " us\n",
+              __FUNCTION__, quick_tune != NULL ? "fastlock" : "host",
+              board_data->rf_transition_current_id,
+              (_monotonic_ns() - stage_started_ns) / 1000ULL);
+
+    /* Real readback, not an assumption that the write succeeded silently
+     * (ADR-0207 event contract requires readback_rx_lo_hz to be the
+     * observed value). */
+    stage_started_ns = _monotonic_ns();
+    if (quick_tune != NULL) {
+        /* Nios performs the RFIC fastlock recall without updating ADI's
+         * host clock-tree cache. Read back the selected RFIC profile's
+         * PLL words directly instead of accepting the previous cached LO. */
+        status = ad9361_rx_fastlock_get_freq(
+            board_data->phy, quick_tune->rffe_profile, &readback_hz);
+        if (status != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+        }
+    } else {
+        status = bladerf_get_frequency(dev, ch, &readback_hz);
+    }
+    log_debug("%s: LO readback transaction=%u took %" PRIu64 " us\n",
+              __FUNCTION__, board_data->rf_transition_current_id,
+              (_monotonic_ns() - stage_started_ns) / 1000ULL);
+    if (status != 0) {
+        log_error("%s: LO readback failed: transaction=%u target=%" PRIu64
+                  " status=%d\n", __FUNCTION__,
+                  board_data->rf_transition_current_id,
+                  (uint64_t)request->target_frequency_hz, status);
         _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                    request->target_frequency_hz, 0, 0, status, 0);
         return _fail_transition(dev, board_data, status, NULL);
     }
 
-    /* Real readback, not an assumption that the write succeeded silently
-     * (ADR-0207 event contract requires readback_rx_lo_hz to be the
-     * observed value). */
-    status = bladerf_get_frequency(dev, ch, &readback_hz);
-    if (status != 0) {
-        _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                   request->target_frequency_hz, 0, 0, status, 0);
-        return _fail_transition(dev, board_data, status, NULL);
+    /* Frequency readback is part of the transaction contract. AD9361
+     * synthesizer quantization can differ slightly from the requested
+     * integer-Hz value; use the same 1 kHz tolerance as the scanner's
+     * quick-profile validation. */
+    if (readback_hz > request->target_frequency_hz
+            ? readback_hz - request->target_frequency_hz > 1000
+            : request->target_frequency_hz - readback_hz > 1000) {
+        log_error("%s: LO readback mismatch: transaction=%u target=%" PRIu64
+                  " readback=%" PRIu64 " quick_tune=%s\n", __FUNCTION__,
+                  board_data->rf_transition_current_id,
+                  (uint64_t)request->target_frequency_hz,
+                  (uint64_t)readback_hz,
+                  quick_tune != NULL ? "yes" : "no");
+        _emit_event(board_data, BLADERF_RF_EVT_ERROR,
+                    BLADERF_RF_STATE_ERROR,
+                    request->target_frequency_hz, readback_hz, 0,
+                    BLADERF_ERR_UNEXPECTED, 0);
+        return _fail_transition(dev, board_data,
+                                BLADERF_ERR_UNEXPECTED, NULL);
     }
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_readback_frequency_hz = readback_hz;
+    });
 
     /* ad9361_set_rx_lo_freq() is synchronous and includes the driver's
      * internal VCO-lock poll. This host timestamp therefore means the LO
@@ -320,6 +490,27 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
                request->target_frequency_hz, readback_hz, 0, 0, 0);
 
     return 0;
+}
+
+int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
+                                const struct bladerf_rx_transition_request *request,
+                                uint32_t *transaction_id)
+{
+    return _bladerf_rx_transition_begin(dev, ch, request, NULL,
+                                        transaction_id);
+}
+
+int bladerf_rx_transition_begin_quick_tune(
+    struct bladerf *dev, bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t *transaction_id)
+{
+    if (quick_tune == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    return _bladerf_rx_transition_begin(dev, ch, request, quick_tune,
+                                        transaction_id);
 }
 
 int bladerf_rx_transition_wait(struct bladerf *dev,
@@ -332,7 +523,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     uint8_t pll_reg, ensm_reg;
     bool pll_locked = false;
     bool ensm_rx    = false;
+    bool transition_busy = false;
+    bool transaction_valid = false;
     int status;
+    uint64_t wait_started_ns;
 
     if (dev == NULL) {
         return BLADERF_ERR_INVAL;
@@ -340,13 +534,29 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
     board_data = dev->board_data;
 
-    if (board_data->rf_transition_current_id != transaction_id) {
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rf_transition_pending &&
+            board_data->rf_transition_current_id == transaction_id) {
+            transaction_valid = true;
+            if (board_data->rf_transition_waiting) {
+                transition_busy = true;
+            } else {
+                board_data->rf_transition_waiting = true;
+            }
+        }
+    });
+
+    if (!transaction_valid) {
         log_error("%s: transaction_id %u does not match current %u\n",
                  __FUNCTION__, transaction_id, board_data->rf_transition_current_id);
         return BLADERF_ERR_INVAL;
     }
+    if (transition_busy) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     deadline_ns = _monotonic_ns() + (uint64_t)timeout_ms * 1000000ULL;
+    wait_started_ns = _monotonic_ns();
     pll_reg = 0;
     ensm_reg = 0;
 
@@ -382,6 +592,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
         }
+        log_debug("%s: PLL-lock transaction=%u cumulative %" PRIu64 " us\n",
+                  __FUNCTION__, transaction_id,
+                  (_monotonic_ns() - wait_started_ns) / 1000ULL);
     }
 
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_ENSM_RX) {
@@ -408,6 +621,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
         }
+        log_debug("%s: ENSM-RX transaction=%u cumulative %" PRIu64 " us\n",
+                  __FUNCTION__, transaction_id,
+                  (_monotonic_ns() - wait_started_ns) / 1000ULL);
     }
 
     /* ADR-0207 §6: the FPGA data-plane epoch gate is now wired up --
@@ -464,6 +680,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
         }
+        log_debug("%s: epoch-valid transaction=%u cumulative %" PRIu64 " us\n",
+                  __FUNCTION__, transaction_id,
+                  (_monotonic_ns() - wait_started_ns) / 1000ULL);
 
         /* The FPGA latches first_valid_timestamp at the exact sample
          * boundary. Read both halves only after ACTIVE_NEW/ACTIVE is
@@ -503,7 +722,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0, 0);
     }
 
-    board_data->rf_transition_pending = false;
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_pending = false;
+        board_data->rf_transition_waiting = false;
+    });
 
     if (final_event != NULL) {
         *final_event = board_data->rf_transition_last_event;

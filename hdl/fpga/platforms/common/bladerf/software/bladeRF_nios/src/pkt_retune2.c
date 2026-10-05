@@ -198,10 +198,10 @@ static inline void profile_load_scheduled(struct queue *q,
     }
 }
 
-static inline void profile_activate(bladerf_module module, fastlock_profile *p)
+static inline bool profile_activate(bladerf_module module, fastlock_profile *p)
 {
     if (p == NULL) {
-        return;
+        return false;
     }
 
 #ifdef BLADERF_NIOS_LIBAD936X
@@ -210,13 +210,16 @@ static inline void profile_activate(bladerf_module module, fastlock_profile *p)
 #endif  // BLADERF_NIOS_LIBAD936X
 
     /* Activate the RFFE fast lock profile */
-    adi_fastlock_recall(module, p);
+    if (!adi_fastlock_recall(module, p)) {
+        return false;
+    }
 
     /* Adjust the RFFE port */
     adi_rfport_select(p);
 
     /* Adjust the RF switches */
     adi_rfspdt_select(module, p);
+    return true;
 }
 
 static inline void retune_isr(struct queue *q)
@@ -309,7 +312,9 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         case ENTRY_STATE_READY:
 
             /* Activate the fast lock profile for this retune */
-            profile_activate(module, e->profile);
+            if (!profile_activate(module, e->profile)) {
+                INCREMENT_ERROR_COUNT();
+            }
 
             /* Drop the item from the queue */
             dequeue_retune(q, NULL);
@@ -381,11 +386,13 @@ void pkt_retune2(struct pkt_buf *b)
                 profile_load(module, profile);
 
                 /* Activate the fast lock profile for this retune */
-                profile_activate(module, profile);
-
-                flags |= NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
-
-                status = 0;
+                if (profile_activate(module, profile)) {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
+                    status = 0;
+                } else {
+                    INCREMENT_ERROR_COUNT();
+                    status = -1;
+                }
                 break;
 
             default:

@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include <time.h>
 
 #include "log.h"
 #include "conversions.h"
@@ -53,11 +54,25 @@ static void print_buf(const char *msg, const uint8_t *buf, size_t len)
 #define print_buf(msg, data, len) do {} while(0)
 #endif
 
+static uint64_t monotonic_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 /* Buf is assumed to be NIOS_PKT_LEN bytes */
 static int nios_access(struct bladerf *dev, uint8_t *buf)
 {
     struct bladerf_usb *usb = dev->backend_data;
     int status;
+    const bool trace_retune2 = buf[0] == NIOS_PKT_RETUNE2_MAGIC;
+    uint64_t transfer_started_ns = 0;
+    uint64_t transfer_out_done_ns = 0;
+
+    if (trace_retune2) {
+        transfer_started_ns = monotonic_ns();
+    }
 
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
@@ -70,12 +85,25 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
         return status;
     }
 
+    if (trace_retune2) {
+        transfer_out_done_ns = monotonic_ns();
+    }
+
     /* Retrieve the request */
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
                                     NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
     if (status != 0) {
         log_error("Failed to receive NIOS II response: %s\n",
                   bladerf_strerror(status));
+    }
+
+    if (trace_retune2) {
+        const uint64_t transfer_done_ns = monotonic_ns();
+        log_debug("NIOS retune2 USB OUT=%" PRIu64 " us IN=%" PRIu64
+                  " us total=%" PRIu64 " us\n",
+                  (transfer_out_done_ns - transfer_started_ns) / 1000ULL,
+                  (transfer_done_ns - transfer_out_done_ns) / 1000ULL,
+                  (transfer_done_ns - transfer_started_ns) / 1000ULL);
     }
 
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
@@ -1513,10 +1541,10 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     nios_pkt_retune2_resp_unpack(buf, &duration, &resp_flags);
 
     if (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) {
-        log_verbose("%s retune operation: duration=%"PRIu64"\n",
+        log_debug("%s retune operation: duration=%"PRIu64"\n",
                     channel2str(ch), duration);
     } else {
-        log_verbose("%s operation duration: %"PRIu64"\n",
+        log_debug("%s operation duration: %"PRIu64"\n",
                     channel2str(ch), duration);
     }
 

@@ -4690,7 +4690,8 @@ struct bladerf_rx_transition_request {
  * does not block; the caller must follow up with
  * ::bladerf_rx_transition_wait to confirm the transaction reached the
  * requested state before treating any subsequently captured samples as
- * valid.
+ * valid. A device supports one outstanding transition; a concurrent begin
+ * returns ::BLADERF_ERR_WOULD_BLOCK without changing the active request.
  *
  * @param       dev             Device handle
  * @param[in]   ch              RX channel
@@ -4707,6 +4708,25 @@ int CALL_CONV bladerf_rx_transition_begin(
     uint32_t *transaction_id);
 
 /**
+ * Begin an event-driven RX transition using an existing fastlock profile.
+ * The FPGA epoch gate is armed before the profile is recalled. The call
+ * schedules the profile for BLADERF_RETUNE_NOW and returns after the NIOS
+ * retune command has completed; use ::bladerf_rx_transition_wait for the
+ * required PLL/ENSM/epoch confirmations. This preserves the fastlock path
+ * while providing the same data-validity fence as the host-tuned API.
+ *
+ * @param[in] quick_tune  Profile previously obtained with
+ *                        ::bladerf_get_quick_tune
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_transition_begin_quick_tune(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t *transaction_id);
+
+/**
  * Block until a transaction reaches its required state, times out, or
  * errors (ADR-0207 §5).
  *
@@ -4714,6 +4734,8 @@ int CALL_CONV bladerf_rx_transition_begin(
  * confirmed within timeout_ms -- this is a failure-detection signal only.
  * It must never be interpreted as "probably valid"; the caller must treat
  * any samples associated with this transaction as invalid.
+ * Only one waiter may consume a transaction at a time; a concurrent wait
+ * returns ::BLADERF_ERR_WOULD_BLOCK.
  *
  * @param       dev             Device handle
  * @param[in]   transaction_id  Handle from bladerf_rx_transition_begin

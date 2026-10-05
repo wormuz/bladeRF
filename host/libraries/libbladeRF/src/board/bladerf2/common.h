@@ -204,9 +204,12 @@ struct bladerf2_board_data {
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;
     uint32_t rf_transition_required_events_mask;
+    uint64_t rf_transition_requested_frequency_hz;
+    uint64_t rf_transition_readback_frequency_hz;
     bladerf_rf_state rf_transition_state;
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_pending;
+    bool rf_transition_waiting;
 };
 
 struct bladerf_rfic_status_register {

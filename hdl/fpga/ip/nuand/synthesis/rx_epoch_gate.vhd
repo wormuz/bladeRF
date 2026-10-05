@@ -141,29 +141,38 @@ begin
                     if( epoch_abort = '1' ) then
                         state <= STATE_ACTIVE;
                     elsif( epoch_complete = '1' ) then
-                        state <= STATE_ACTIVE_NEW;
+                        -- Completion only arms the new epoch.  The RX
+                        -- sample-valid pulse is asynchronous to this
+                        -- control event, so wait for an actual sample
+                        -- before publishing ACTIVE_NEW to the host.
+                        state <= STATE_SETTLING;
                     end if;
 
                 when STATE_SETTLING =>
+                    -- This state is event-waiting, not a fixed settling
+                    -- delay. Admit and timestamp the first real sample on
+                    -- the same edge, then publish ACTIVE_NEW for one cycle
+                    -- so the host cannot observe success before the
+                    -- timestamp latch is valid.
                     out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
                     out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
 
                     if( epoch_abort = '1' ) then
                         state <= STATE_ACTIVE;
                     elsif( any_valid = '1' ) then
+                        out_sample_controls  <= in_sample_controls;
+                        out_samples          <= in_samples;
+                        epoch_start_event    <= '1';
+                        first_valid_timestamp <= rx_timestamp;
                         state <= STATE_ACTIVE_NEW;
                     end if;
 
                 when STATE_ACTIVE_NEW =>
-                    -- This is the first sample admitted to the FIFO.
-                    -- Capture its timestamp on the same edge (not the
-                    -- preceding suppressed edge).
+                    -- The first sample was admitted and timestamped in
+                    -- STATE_SETTLING on the preceding edge. Hold the new
+                    -- epoch active and expose the completion marker.
                     out_sample_controls <= in_sample_controls;
                     out_samples         <= in_samples;
-                    if( any_valid = '1' ) then
-                        epoch_start_event     <= '1';
-                        first_valid_timestamp <= rx_timestamp;
-                    end if;
                     state               <= STATE_ACTIVE;
 
                 when others =>

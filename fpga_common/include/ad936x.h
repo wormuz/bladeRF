@@ -31,6 +31,12 @@
 
 #include <ad9361_api.h>
 
+/* Read the carrier encoded in a stored RX fastlock profile. The normal
+ * get_rx_lo_freq path uses host clock state and can be stale after an FPGA
+ * Nios-owned recall. */
+int32_t ad9361_rx_fastlock_get_freq(struct ad9361_rf_phy *phy,
+				    uint32_t profile, uint64_t *freq_hz);
+
 /**
  * The purpose of this header file is to allow the use of libad9361 without
  * including all of the unnecessary defines, etc, used during compilation.

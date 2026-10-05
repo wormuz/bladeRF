@@ -481,15 +481,14 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
         return BLADERF_ERR_RANGE;
     }
 
-    /* A quick tune scheduled for a future timestamp is recalled by the
-     * FPGA's Nios core, which writes REG_(RX|TX)_FAST_LOCK_SETUP directly
-     * and leaves the part in fastlock mode behind the driver's back. The
-     * exit in bladerf2_schedule_retune() only covers BLADERF_RETUNE_NOW,
-     * because a deferred recall completes long after that call returns.
-     * Tuning ordinarily while the leaked state is in place pins the RF PLL
-     * charge pump (0x247 reads 0x80 during the failed tune, 0x40 after),
-     * so leave fastlock here before touching the synthesizer. The call
-     * reads first and writes nothing when not in fastlock mode. */
+    /* A quick tune is recalled by the FPGA's Nios core, which writes
+     * REG_(RX|TX)_FAST_LOCK_SETUP directly and leaves the part in fastlock
+     * mode behind the driver's bookkeeping. Keep fastlock active across
+     * quick-to-quick hops; when host tuning takes ownership, exit it here
+     * before programming the synthesizer. Without this transition the RFPLL
+     * charge pump can saturate low (0x247 reads 0x40), causing repeated lock
+     * failures. This call reads first and writes nothing when fastlock is
+     * already inactive. */
     CHECK_AD936X(ad9361_fastlock_exit_foreign(phy, BLADERF_CHANNEL_IS_TX(ch)));
 
     /* Set up band selection */

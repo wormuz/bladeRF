@@ -801,11 +801,19 @@ def check_rx_epoch_host_timestamp_fence():
     sync_text = re.sub(
         r"/\*.*?\*/|//[^\n]*", "",
         sync.read_text(errors="replace"), flags=re.S)
-    begin = transition_text.find("sync_rx_epoch_require_metadata(")
+    function_start = transition_text.find(
+        "static int _bladerf_rx_transition_begin(")
+    begin = transition_text.find("sync_rx_epoch_require_metadata(",
+                                 function_start)
     fence_ack = transition_text.find("_wait_rx_epoch_fenced(",
-                                   transition_text.find("int bladerf_rx_transition_begin"))
-    retune = transition_text.find("bladerf_set_frequency(",
-                                 transition_text.find("int bladerf_rx_transition_begin"))
+                                     function_start)
+    retune_host = transition_text.find("bladerf_set_frequency(",
+                                       function_start)
+    retune_fastlock = transition_text.find("bladerf_schedule_retune(",
+                                           function_start)
+    # Both tune modes share the same fence-before-retune contract.
+    retune = min((pos for pos in (retune_host, retune_fastlock) if pos >= 0),
+                 default=-1)
     fence = transition_text.find("sync_rx_epoch_set_min_timestamp(")
     valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
     if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or valid < 0 or
