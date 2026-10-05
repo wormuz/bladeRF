@@ -372,6 +372,95 @@ set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
 set_instance_parameter_value rf_link_status {width} {32}
 
+# ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: RX epoch gate control/
+# status. Separate from rf_link_cfg/status: that pair gates USB-speed
+# epoch (start/stop of the whole RX/TX stream), this set gates data
+# validity across a single-channel RX retune -- the two concepts can be
+# active at the same time and must not share a word.
+#
+# rx_epoch_ctrl (Output, host->fabric): bit0=arm toggle, bit1=complete
+# toggle, bit2=abort toggle, bits[15:8]=host epoch_id. Crossed into
+# rx_clock via work.handshake (bladerf_core.vhd U_rx_epoch_ctrl_handshake),
+# decoded by toggle-edge detection -- same shape as rf_link_controller's
+# start/stop/clear_fault decode.
+#
+# rx_epoch_settle (Output, host->fabric): settle_samples, quasi-static
+# (host sets rarely, not per-retune) -- separate word/handshake from
+# rx_epoch_ctrl because it does not need to be observed atomically with
+# the toggle commands.
+#
+# rx_epoch_status (Input, fabric->host): bits[31:24]=active_epoch_id,
+# bits[23:20]=state (0=ACTIVE,1=PENDING,2=SETTLING,3=ACTIVE_NEW,4=ERROR),
+# bit[19]=discard_active, bits[18:0]=reserved.
+#
+# rx_epoch_ts_lo/rx_epoch_ts_hi (Input, fabric->host): halves of ONE
+# first_valid_timestamp capture register (64 bits), same "read both for
+# one whole snapshot" rationale as rx_overflow_count_lo/hi.
+add_instance rx_epoch_ctrl altera_avalon_pio
+set_instance_parameter_value rx_epoch_ctrl {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_epoch_ctrl {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_epoch_ctrl {captureEdge} {0}
+set_instance_parameter_value rx_epoch_ctrl {direction} {Output}
+set_instance_parameter_value rx_epoch_ctrl {edgeType} {RISING}
+set_instance_parameter_value rx_epoch_ctrl {generateIRQ} {0}
+set_instance_parameter_value rx_epoch_ctrl {irqType} {LEVEL}
+set_instance_parameter_value rx_epoch_ctrl {resetValue} {0.0}
+set_instance_parameter_value rx_epoch_ctrl {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_epoch_ctrl {simDrivenValue} {0.0}
+set_instance_parameter_value rx_epoch_ctrl {width} {32}
+
+add_instance rx_epoch_status altera_avalon_pio
+set_instance_parameter_value rx_epoch_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_epoch_status {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_epoch_status {captureEdge} {0}
+set_instance_parameter_value rx_epoch_status {direction} {Input}
+set_instance_parameter_value rx_epoch_status {edgeType} {RISING}
+set_instance_parameter_value rx_epoch_status {generateIRQ} {0}
+set_instance_parameter_value rx_epoch_status {irqType} {LEVEL}
+set_instance_parameter_value rx_epoch_status {resetValue} {0.0}
+set_instance_parameter_value rx_epoch_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_epoch_status {simDrivenValue} {0.0}
+set_instance_parameter_value rx_epoch_status {width} {32}
+
+add_instance rx_epoch_settle altera_avalon_pio
+set_instance_parameter_value rx_epoch_settle {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_epoch_settle {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_epoch_settle {captureEdge} {0}
+set_instance_parameter_value rx_epoch_settle {direction} {Output}
+set_instance_parameter_value rx_epoch_settle {edgeType} {RISING}
+set_instance_parameter_value rx_epoch_settle {generateIRQ} {0}
+set_instance_parameter_value rx_epoch_settle {irqType} {LEVEL}
+set_instance_parameter_value rx_epoch_settle {resetValue} {0.0}
+set_instance_parameter_value rx_epoch_settle {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_epoch_settle {simDrivenValue} {0.0}
+set_instance_parameter_value rx_epoch_settle {width} {32}
+
+add_instance rx_epoch_ts_lo altera_avalon_pio
+set_instance_parameter_value rx_epoch_ts_lo {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_epoch_ts_lo {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_epoch_ts_lo {captureEdge} {0}
+set_instance_parameter_value rx_epoch_ts_lo {direction} {Input}
+set_instance_parameter_value rx_epoch_ts_lo {edgeType} {RISING}
+set_instance_parameter_value rx_epoch_ts_lo {generateIRQ} {0}
+set_instance_parameter_value rx_epoch_ts_lo {irqType} {LEVEL}
+set_instance_parameter_value rx_epoch_ts_lo {resetValue} {0.0}
+set_instance_parameter_value rx_epoch_ts_lo {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_epoch_ts_lo {simDrivenValue} {0.0}
+set_instance_parameter_value rx_epoch_ts_lo {width} {32}
+
+add_instance rx_epoch_ts_hi altera_avalon_pio
+set_instance_parameter_value rx_epoch_ts_hi {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_epoch_ts_hi {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_epoch_ts_hi {captureEdge} {0}
+set_instance_parameter_value rx_epoch_ts_hi {direction} {Input}
+set_instance_parameter_value rx_epoch_ts_hi {edgeType} {RISING}
+set_instance_parameter_value rx_epoch_ts_hi {generateIRQ} {0}
+set_instance_parameter_value rx_epoch_ts_hi {irqType} {LEVEL}
+set_instance_parameter_value rx_epoch_ts_hi {resetValue} {0.0}
+set_instance_parameter_value rx_epoch_ts_hi {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_epoch_ts_hi {simDrivenValue} {0.0}
+set_instance_parameter_value rx_epoch_ts_hi {width} {32}
+
 # Pre-trigger ring drain. Two PIOs, because a memory needs an address and a
 # datum and a PIO carries one word.
 #
@@ -625,6 +714,11 @@ add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
 set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
+set_interface_property rx_epoch_ctrl EXPORT_OF rx_epoch_ctrl.external_connection
+set_interface_property rx_epoch_status EXPORT_OF rx_epoch_status.external_connection
+set_interface_property rx_epoch_settle EXPORT_OF rx_epoch_settle.external_connection
+set_interface_property rx_epoch_ts_lo EXPORT_OF rx_epoch_ts_lo.external_connection
+set_interface_property rx_epoch_ts_hi EXPORT_OF rx_epoch_ts_hi.external_connection
 set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
 set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
 set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
@@ -766,6 +860,31 @@ add_connection nios2.data_master rf_link_status.s1
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 defaultConnection {0}
+
+add_connection nios2.data_master rx_epoch_ctrl.s1
+set_connection_parameter_value nios2.data_master/rx_epoch_ctrl.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_epoch_ctrl.s1 baseAddress {0x96a0}
+set_connection_parameter_value nios2.data_master/rx_epoch_ctrl.s1 defaultConnection {0}
+
+add_connection nios2.data_master rx_epoch_status.s1
+set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 baseAddress {0x96c0}
+set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 defaultConnection {0}
+
+add_connection nios2.data_master rx_epoch_settle.s1
+set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 baseAddress {0x96e0}
+set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 defaultConnection {0}
+
+add_connection nios2.data_master rx_epoch_ts_lo.s1
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_lo.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_lo.s1 baseAddress {0x9700}
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_lo.s1 defaultConnection {0}
+
+add_connection nios2.data_master rx_epoch_ts_hi.s1
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 baseAddress {0x9720}
+set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 defaultConnection {0}
 add_connection nios2.data_master rf_link_cfg.s1
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 baseAddress {0x9540}
@@ -864,6 +983,11 @@ add_connection system_clock.clk dwell_readout.clk
 add_connection system_clock.clk dwell_status.clk
 foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk $pio.clk }
 add_connection system_clock.clk rf_link_status.clk
+add_connection system_clock.clk rx_epoch_ctrl.clk
+add_connection system_clock.clk rx_epoch_status.clk
+add_connection system_clock.clk rx_epoch_settle.clk
+add_connection system_clock.clk rx_epoch_ts_lo.clk
+add_connection system_clock.clk rx_epoch_ts_hi.clk
 add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
 
@@ -910,6 +1034,11 @@ add_connection system_clock.clk_reset dwell_readout.reset
 add_connection system_clock.clk_reset dwell_status.reset
 foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk_reset $pio.reset }
 add_connection system_clock.clk_reset rf_link_status.reset
+add_connection system_clock.clk_reset rx_epoch_ctrl.reset
+add_connection system_clock.clk_reset rx_epoch_status.reset
+add_connection system_clock.clk_reset rx_epoch_settle.reset
+add_connection system_clock.clk_reset rx_epoch_ts_lo.reset
+add_connection system_clock.clk_reset rx_epoch_ts_hi.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset
 

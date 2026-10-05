@@ -64,6 +64,21 @@ entity rx is
         epoch_ack                  : out   std_logic := '0';
         epoch_valid                : out   std_logic := '0';
 
+        -- ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001 §6: RX data-plane
+        -- epoch gate. Separate from the link-epoch signals above (those
+        -- gate USB-speed/whole-stream start-stop, this gates data validity
+        -- across a single RX retune -- see rx_epoch_gate.vhd header).
+        rx_epoch_arm            : in    std_logic := '0';
+        rx_epoch_complete       : in    std_logic := '0';
+        rx_epoch_abort          : in    std_logic := '0';
+        rx_epoch_id_in          : in    unsigned(7 downto 0) := (others => '0');
+        rx_epoch_settle_samples : in    unsigned(31 downto 0) := (others => '0');
+        rx_epoch_id_out         : out   unsigned(7 downto 0) := (others => '0');
+        rx_epoch_state          : out   unsigned(3 downto 0) := (others => '0');
+        rx_epoch_discard_active : out   std_logic := '0';
+        rx_epoch_start_event    : out   std_logic := '0';
+        rx_epoch_first_valid_ts : out   unsigned(63 downto 0) := (others => '0');
+
         -- Triggering
         trigger_arm            : in    std_logic;
         trigger_fire           : in    std_logic;
@@ -145,6 +160,12 @@ architecture arch of rx is
     signal rx_gen_valid             : std_logic;
 
     signal mux_streams              : sample_streams_t(adc_streams'range) := (others => ZERO_SAMPLE);
+
+    -- ADR-0207 §6.2: rx_epoch_gate sits between the mux output and
+    -- fifo_writer -- stale pre-retune samples never reach the FIFO, not
+    -- even to be discarded on the host side.
+    signal gated_controls           : sample_controls_t(adc_streams'range) := (others => SAMPLE_CONTROL_DISABLE);
+    signal gated_streams            : sample_streams_t(adc_streams'range)  := (others => ZERO_SAMPLE);
 
     signal trigger_signal_out       : std_logic;
     signal trigger_signal_out_sync  : std_logic;
@@ -245,6 +266,38 @@ begin
         );
 
 
+    -- ADR-0207 §6.2: gate between the mux and the sample bridge -- stale
+    -- pre-retune samples are suppressed here, before fifo_writer/rx_fifo,
+    -- not discarded by the host after the fact.
+    U_rx_epoch_gate : entity work.rx_epoch_gate
+        generic map (
+            NUM_STREAMS             => NUM_STREAMS
+        )
+        port map (
+            clock                   => rx_clock,
+            reset                   => rx_reset,
+
+            in_sample_controls      => adc_controls,
+            in_samples              => mux_streams,
+            rx_timestamp            => rx_timestamp,
+
+            epoch_arm               => rx_epoch_arm,
+            epoch_complete          => rx_epoch_complete,
+            epoch_abort             => rx_epoch_abort,
+            epoch_id_in             => rx_epoch_id_in,
+            settle_samples_in       => rx_epoch_settle_samples,
+
+            out_sample_controls     => gated_controls,
+            out_samples             => gated_streams,
+
+            out_epoch_id            => rx_epoch_id_out,
+            out_state               => rx_epoch_state,
+            out_discard_active      => rx_epoch_discard_active,
+            epoch_start_event       => rx_epoch_start_event,
+            first_valid_timestamp   => rx_epoch_first_valid_ts
+        );
+
+
     -- Sample bridge
     U_fifo_writer : entity work.fifo_writer
         generic map (
@@ -294,8 +347,8 @@ begin
             meta_fifo_data      =>  meta_fifo.wdata,
             meta_fifo_write     =>  meta_fifo.wreq,
 
-            in_sample_controls  =>  adc_controls,
-            in_samples          =>  mux_streams,
+            in_sample_controls  =>  gated_controls,
+            in_samples          =>  gated_streams,
 
             overflow_led        =>  rx_overflow_led,
             overflow_count      =>  rx_overflow_count,

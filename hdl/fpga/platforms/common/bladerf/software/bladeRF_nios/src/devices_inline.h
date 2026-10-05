@@ -33,6 +33,7 @@
 #include "altera_avalon_spi.h"
 #include "altera_avalon_jtag_uart_regs.h"
 #include "altera_avalon_pio_regs.h"
+#include "nios_pkt_8x32.h"
 
 
 static inline uint32_t control_reg_read(void)
@@ -410,6 +411,103 @@ static inline void rf_link_cfg_set_epoch_tag(uint8_t tag)
 {
     rf_link_cfg_modify(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB,
                        ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB, 0);
+}
+
+/* RX data-plane epoch gate (ADR-0207 §6). Control word crosses sys_clock ->
+ * rx_clock through a work.handshake instance in bladerf_core.vhd, decoded
+ * there as toggle-edges on bits 0..2 plus a static epoch_id in bits 15..8 --
+ * same read-modify-write discipline as rf_link_cfg above and for the same
+ * reason: bits 0..2 are toggles, so the authority for "what was sent last"
+ * is the PIO readback, not a cached word. */
+#define RX_EPOCH_CTRL_ARM_TOGGLE      (1u << 0)
+#define RX_EPOCH_CTRL_COMPLETE_TOGGLE (1u << 1)
+#define RX_EPOCH_CTRL_ABORT_TOGGLE    (1u << 2)
+#define RX_EPOCH_CTRL_ID_LSB          8
+
+static inline uint32_t rx_epoch_ctrl_current(void)
+{
+    #ifdef RX_EPOCH_CTRL_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_EPOCH_CTRL_BASE);
+    #else
+    return 0;
+    #endif
+}
+
+static inline void rx_epoch_ctrl_modify(uint32_t clear, uint32_t set, uint32_t toggle)
+{
+    #ifdef RX_EPOCH_CTRL_BASE
+    uint32_t word = rx_epoch_ctrl_current();
+    word &= ~clear;
+    word |= set;
+    word ^= toggle;
+    IOWR_ALTERA_AVALON_PIO_DATA(RX_EPOCH_CTRL_BASE, word);
+    #endif
+}
+
+static inline void rx_epoch_arm(uint8_t epoch_id)
+{
+    rx_epoch_ctrl_modify(0xFFu << RX_EPOCH_CTRL_ID_LSB,
+                         ((uint32_t)epoch_id) << RX_EPOCH_CTRL_ID_LSB,
+                         RX_EPOCH_CTRL_ARM_TOGGLE);
+}
+
+static inline void rx_epoch_complete(void)
+{
+    rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_COMPLETE_TOGGLE);
+}
+
+static inline void rx_epoch_abort(void)
+{
+    rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_ABORT_TOGGLE);
+}
+
+/* Settle sample count, latched before epoch_complete -- a plain level value,
+ * no toggle bits, so a direct write is correct (nothing here depends on
+ * "what was written last" the way the ctrl toggles do). */
+static inline void rx_epoch_settle_set(uint32_t settle_samples)
+{
+    #ifdef RX_EPOCH_SETTLE_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(RX_EPOCH_SETTLE_BASE, settle_samples);
+    #endif
+}
+
+/* Status word, rx_clock -> sys_clock through its own work.handshake
+ * instance. Bit layout composed in bladerf_core.vhd:
+ *
+ *   31..24  epoch_id      the active epoch, mirrors what was armed
+ *   23..20  state         RX_EPOCH_ACTIVE/PENDING/SETTLING/ACTIVE_NEW/ERROR
+ *   19      discard_active samples are being suppressed right now
+ *   18..0   reserved, always 0
+ */
+static inline uint32_t rx_epoch_status_read(void)
+{
+    #ifdef RX_EPOCH_STATUS_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_EPOCH_STATUS_BASE);
+    #else
+    return 0;
+    #endif
+}
+
+/* First-valid timestamp, 64 bits across two PIOs, each behind its own
+ * handshake -- same "a half may be one snapshot stale, never half of one
+ * value and half of another" guarantee as the loss counters above, not a
+ * single 64-bit crossing. */
+static inline uint32_t rx_epoch_ts_lo_read(void)
+{
+    #ifdef RX_EPOCH_TS_LO_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_EPOCH_TS_LO_BASE);
+    #else
+    return 0;
+    #endif
+}
+
+static inline uint32_t rx_epoch_ts_hi_read(void)
+{
+    #ifdef RX_EPOCH_TS_HI_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_EPOCH_TS_HI_BASE);
+    #else
+    return 0;
+    #endif
 }
 
 /* Call only after the FX3 RF link start has actually succeeded. This asserts

@@ -149,6 +149,23 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
         case NIOS_PKT_8x32_TARGET_PRETRIG_READ:
             *data = pretrig_read((uint16_t) (pretrig_base + addr));
             break;
+
+        /* RX data-plane epoch gate status and first-valid timestamp. See
+         * nios_pkt_8x32.h for bit layout; each crosses rx_clock -> sys_clock
+         * through its own handshake, so reads 0 on the sweep-only ADR-0207
+         * instance before the gate has ever armed, same as the other
+         * BOARD_BLADERF_MICRO-only targets above. */
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
+            *data = rx_epoch_status_read();
+            break;
+
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:
+            *data = rx_epoch_ts_lo_read();
+            break;
+
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
+            *data = rx_epoch_ts_hi_read();
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
         default:
@@ -233,6 +250,33 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     DBG("Invalid RF link command: 0x%x\n", addr);
                     return false;
             }
+            break;
+
+        /* RX data-plane epoch gate control. addr carries the command, same
+         * reasoning as RF_LINK_CFG above: bits 0..2 of the underlying word
+         * are toggles, so the firmware (not a host shadow copy) decides
+         * what changed. */
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL:
+            switch (addr) {
+                case NIOS_PKT_8x32_RX_EPOCH_CMD_ARM:
+                    rx_epoch_arm((uint8_t)data);
+                    break;
+                case NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE:
+                    rx_epoch_complete();
+                    break;
+                case NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT:
+                    rx_epoch_abort();
+                    break;
+                default:
+                    DBG("Invalid RX epoch command: 0x%x\n", addr);
+                    return false;
+            }
+            break;
+
+        /* RX data-plane epoch gate settle count. Plain level value, written
+         * straight through -- see rx_epoch_settle_set(). */
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
+            rx_epoch_settle_set(data);
             break;
 #endif  // BOARD_BLADERF_MICRO
 

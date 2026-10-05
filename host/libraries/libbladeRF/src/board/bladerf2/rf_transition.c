@@ -32,10 +32,12 @@
 #include <libbladeRF.h>
 
 #include "ad936x.h"
+#include "backend/usb/nios_access.h"
 #include "board/board.h"
 #include "bladerf2_common.h"
 #include "common.h"
 #include "log.h"
+#include "nios_pkt_8x32.h"
 
 /* Byte-exact with sdrscanner/driver/tuner_fault.py::FAULT_REGS and
  * sdrscanner/hs_sweep/rf_transaction_trace.py -- same register map
@@ -82,7 +84,8 @@ static void _emit_event(struct bladerf2_board_data *board_data,
                         uint64_t requested_hz,
                         uint64_t readback_hz,
                         uint32_t rfic_status,
-                        int32_t error_code)
+                        int32_t error_code,
+                        uint32_t epoch_id)
 {
     struct bladerf_rf_event *evt = &board_data->rf_transition_last_event;
 
@@ -91,9 +94,11 @@ static void _emit_event(struct bladerf2_board_data *board_data,
                                   * is out of scope; host timestamps are
                                   * the authoritative trace in this phase. */
     evt->transaction_id     = board_data->rf_transition_current_id;
-    evt->epoch_id           = 0; /* set by the data-plane epoch gate, which
-                                  * is a separate, not-yet-implemented
-                                  * FPGA feature (ADR-0207 §6). */
+    /* 0 unless the FPGA data-plane epoch gate actually reported one
+     * (ADR-0207 §6, BLADERF_RF_EVT_RX_EPOCH_VALID) -- every other event
+     * type passes 0 explicitly, which is honest: there is no epoch to
+     * report before the gate confirms one opened. */
+    evt->epoch_id           = epoch_id;
     evt->requested_rx_lo_hz = requested_hz;
     evt->readback_rx_lo_hz  = readback_hz;
     evt->rfic_status        = rfic_status;
@@ -129,12 +134,48 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
 
         _emit_event(board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
                    BLADERF_RF_STATE_CONFIG_PENDING,
-                   request->target_frequency_hz, 0, 0, 0);
+                   request->target_frequency_hz, 0, 0, 0, 0);
     });
+
+    /* ADR-0207 §6: arm the FPGA data-plane epoch gate BEFORE the retune so
+     * pre-retune samples already in flight through the FIFO writer are
+     * suppressed from the moment the SPI write lands, not from whenever
+     * the host gets around to telling the fabric. epoch_id is the low 8
+     * bits of the transaction id -- wraps every 256 transactions, which is
+     * fine: it is a snapshot-pairing token for RX_EPOCH_STATUS, not a
+     * globally unique identifier.
+     *
+     * Only armed when the caller actually requires epoch confirmation --
+     * BLADERF_RF_REQUIRE_EPOCH_VALID unset means the caller only wants
+     * control-plane (PLL+ENSM) confirmation, same opt-in discipline as
+     * PLL_LOCKED/ENSM_RX below. Failure here is non-fatal to the retune
+     * itself (the control-plane path is unaffected), but it means
+     * RX_EPOCH_VALID can never be confirmed for this transaction, so the
+     * requirement is downgraded to a logged warning rather than aborting a
+     * retune the hardware can still complete correctly on the control
+     * plane. */
+    if (request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+        int epoch_status = nios_rx_epoch_ctrl_cmd(dev,
+                           NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
+                           (uint8_t)(board_data->rf_transition_current_id & 0xFFu));
+        if (epoch_status == 0) {
+            /* Settle count must land before COMPLETE in
+             * bladerf_rx_transition_wait() -- the gate reads it only at
+             * the PENDING -> SETTLING transition, not continuously. */
+            epoch_status = nios_rx_epoch_settle_write(dev,
+                                                      request->epoch_settle_samples);
+        }
+        if (epoch_status != 0) {
+            log_warning("%s: failed to arm RX epoch gate (status=%d); "
+                       "RX_EPOCH_VALID cannot be confirmed for transaction "
+                       "%u\n", __FUNCTION__, epoch_status,
+                       board_data->rf_transition_current_id);
+        }
+    }
 
     _emit_event(board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
                BLADERF_RF_STATE_SPI_PROGRAMMING,
-               request->target_frequency_hz, 0, 0, 0);
+               request->target_frequency_hz, 0, 0, 0, 0);
 
     /* Reuses the existing, already-correct host-mode retune path
      * (bladerf2.c -> rfic_host.c::_rfic_host_set_frequency). This API
@@ -144,7 +185,7 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
     status = bladerf_set_frequency(dev, ch, request->target_frequency_hz);
     if (status != 0) {
         _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                   request->target_frequency_hz, 0, 0, status);
+                   request->target_frequency_hz, 0, 0, status, 0);
         return status;
     }
 
@@ -154,13 +195,13 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
     status = bladerf_get_frequency(dev, ch, &readback_hz);
     if (status != 0) {
         _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                   request->target_frequency_hz, 0, 0, status);
+                   request->target_frequency_hz, 0, 0, status, 0);
         return status;
     }
 
     _emit_event(board_data, BLADERF_RF_EVT_SPI_DONE,
                BLADERF_RF_STATE_PLL_ACQUIRING,
-               request->target_frequency_hz, readback_hz, 0, 0);
+               request->target_frequency_hz, readback_hz, 0, 0, 0);
 
     return 0;
 }
@@ -206,13 +247,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             status = _read_rfic_reg(dev, REG_RX_CP_VCO_LOCK_ADDR, &pll_reg);
             if (status != 0) {
                 _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                           0, 0, 0, status);
+                           0, 0, 0, status, 0);
                 return status;
             }
             if (pll_reg & VCO_LOCK_BIT) {
                 pll_locked = true;
                 _emit_event(board_data, BLADERF_RF_EVT_RX_PLL_LOCKED,
-                           BLADERF_RF_STATE_PLL_LOCKED, 0, 0, pll_reg, 0);
+                           BLADERF_RF_STATE_PLL_LOCKED, 0, 0, pll_reg, 0, 0);
                 break;
             }
             usleep(POLL_INTERVAL_US);
@@ -220,7 +261,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
         if (!pll_locked) {
             _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                       0, 0, pll_reg, BLADERF_ERR_TIMEOUT);
+                       0, 0, pll_reg, BLADERF_ERR_TIMEOUT, 0);
             if (final_event != NULL) {
                 *final_event = board_data->rf_transition_last_event;
             }
@@ -234,14 +275,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             status = _read_rfic_reg(dev, REG_STATE_ADDR, &ensm_reg);
             if (status != 0) {
                 _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                           0, 0, 0, status);
+                           0, 0, 0, status, 0);
                 return status;
             }
             uint8_t ensm_state = ensm_reg & ENSM_STATE_MASK;
             if (ensm_state == ENSM_STATE_RX || ensm_state == ENSM_STATE_FDD) {
                 ensm_rx = true;
                 _emit_event(board_data, BLADERF_RF_EVT_ENSM_RX,
-                           BLADERF_RF_STATE_RX_PATH_ARMING, 0, 0, ensm_reg, 0);
+                           BLADERF_RF_STATE_RX_PATH_ARMING, 0, 0, ensm_reg, 0, 0);
                 break;
             }
             usleep(POLL_INTERVAL_US);
@@ -249,7 +290,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
         if (!ensm_rx) {
             _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
-                       0, 0, ensm_reg, BLADERF_ERR_TIMEOUT);
+                       0, 0, ensm_reg, BLADERF_ERR_TIMEOUT, 0);
             if (final_event != NULL) {
                 *final_event = board_data->rf_transition_last_event;
             }
@@ -257,15 +298,72 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
     }
 
-    /* Phase 1 scope: the data-plane epoch gate (BLADERF_RF_EVT_RX_EPOCH_
-     * VALID) requires an FPGA change that is not part of this change.
-     * Until that lands, RX_DATA_VALID is reported as soon as the
-     * required control-plane events complete -- this is an explicit,
-     * documented narrowing of scope, not a silent one: callers relying
-     * on BLADERF_RF_REQUIRE_EPOCH_VALID do not yet get a stronger
-     * guarantee than control-plane confirmation. */
-    _emit_event(board_data, BLADERF_RF_EVT_RX_DATAPATH_ARMED,
-               BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0);
+    /* ADR-0207 §6: the FPGA data-plane epoch gate is now wired up --
+     * RX_EPOCH_VALID means the fabric itself observed real ADC samples
+     * past the settle count, not just that PLL/ENSM reported completion.
+     * COMPLETE tells the gate the control-plane transition landed (it was
+     * armed with ARM in bladerf_rx_transition_begin, before the retune);
+     * the gate then counts epoch_settle_samples real samples past that
+     * point before opening admission and reporting ACTIVE_NEW here.
+     *
+     * Only polled if the caller actually requires it, same opt-in
+     * discipline as PLL_LOCKED/ENSM_RX above -- a caller that only wants
+     * control-plane confirmation does not pay for this poll, and gets
+     * exactly the control-plane-only guarantee it asked for. */
+    if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+        uint32_t epoch_status_word = 0;
+        bool epoch_opened = false;
+
+        status = nios_rx_epoch_ctrl_cmd(dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
+        if (status != 0) {
+            _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+                       0, 0, 0, status, 0);
+            return status;
+        }
+
+        while (_monotonic_ns() < deadline_ns) {
+            status = nios_rx_epoch_status_read(dev, &epoch_status_word);
+            if (status != 0) {
+                _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+                           0, 0, 0, status, 0);
+                return status;
+            }
+
+            uint8_t epoch_state = (uint8_t)((epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT)
+                                            & NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
+            if (epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW || epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+                epoch_opened = true;
+                break;
+            }
+            if (epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
+                _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+                           0, 0, epoch_status_word, BLADERF_ERR_UNEXPECTED, 0);
+                if (final_event != NULL) {
+                    *final_event = board_data->rf_transition_last_event;
+                }
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            usleep(POLL_INTERVAL_US);
+        }
+
+        if (!epoch_opened) {
+            _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+                       0, 0, epoch_status_word, BLADERF_ERR_TIMEOUT, 0);
+            if (final_event != NULL) {
+                *final_event = board_data->rf_transition_last_event;
+            }
+            /* Failure detection only -- never report this as valid data. */
+            return BLADERF_ERR_TIMEOUT;
+        }
+
+        _emit_event(board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
+                   BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,
+                   (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
+                   & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+    } else {
+        _emit_event(board_data, BLADERF_RF_EVT_RX_DATAPATH_ARMED,
+                   BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0, 0);
+    }
 
     board_data->rf_transition_pending = false;
 

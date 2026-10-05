@@ -4670,6 +4670,13 @@ struct bladerf_rx_transition_request {
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
     uint32_t timeout_ms;
     bool require_rx_data_valid;
+    /** Real ADC samples to discard after the FPGA data-plane epoch gate
+     *  observes PLL/ENSM completion, before admitting new samples to the
+     *  RX FIFO (ADR-0207 §6). Ignored unless
+     *  BLADERF_RF_REQUIRE_EPOCH_VALID is set in required_events_mask;
+     *  callers that do not request epoch confirmation do not pay for a
+     *  settle count the gate will never use. */
+    uint32_t epoch_settle_samples;
 };
 
 /**

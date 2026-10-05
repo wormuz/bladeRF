@@ -331,6 +331,76 @@
  * The host takes differences between reads rather than expecting zero. */
 #define NIOS_PKT_8x32_TARGET_LOSS_COUNTERS   0x86
 
+/* RX data-plane epoch gate control (write-only). ADR-0207 §6: a retune
+ * leaves stale pre-retune samples in flight through the FIFO writer; this
+ * gate suppresses USB-packet admission from epoch_arm until settle_samples
+ * real ADC samples have been counted past epoch_complete, then resumes
+ * admission and reports the event through RX_EPOCH_STATUS below.
+ *
+ * The addr field carries the command, same discipline as RF_LINK_CFG above
+ * and for the same reason: bits 0..2 of the underlying PIO word are
+ * toggles, not levels, so the firmware (not a host-side shadow copy) is the
+ * only thing allowed to decide what changed since the last write.
+ *
+ * ARM carries the new epoch_id in `data` bits 7..0; the fabric mirrors it
+ * back in RX_EPOCH_STATUS once the gate opens, so the host can tell this
+ * epoch's open event apart from an earlier one it never saw close.
+ *
+ * Host ordering: ARM before the retune's bladerf_set_frequency() call ->
+ * (host does the frequency change through the existing control-plane path,
+ * unrelated to this PIO) -> COMPLETE once PLL lock / ENSM confirms the
+ * retune landed -> poll RX_EPOCH_STATUS until state reads ACTIVE_NEW or
+ * ERROR. ABORT returns to ACTIVE without opening a new epoch, for a retune
+ * that failed before COMPLETE. */
+#define NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL   0x87
+
+/* RX data-plane epoch gate settle count (write-only). Plain level value,
+ * not a toggle -- a direct write is correct here, unlike RX_EPOCH_CTRL.
+ * Must be written before RX_EPOCH_CTRL's COMPLETE command; the gate reads
+ * it when the PENDING -> SETTLING transition happens, not continuously. */
+#define NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE 0x88
+
+/* RX data-plane epoch gate status (read-only). One word:
+ *
+ *   bits 31:24  epoch_id        mirrors the ARM that opened this epoch
+ *   bits 23:20  state           0=ACTIVE 1=PENDING 2=SETTLING 3=ACTIVE_NEW
+ *                                4=ERROR
+ *   bit  19     discard_active  samples are being suppressed right now
+ *   bits 18:0   reserved, read as zero
+ *
+ * Crosses rx_clock -> sys_clock through its own work.handshake instance
+ * (bladerf_core.vhd, U_rx_epoch_status_handshake), same single-register
+ * snapshot guarantee as RF_LINK_STATUS above. */
+#define NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS 0x89
+
+/* RX data-plane epoch gate first-valid timestamp (read-only), 64 bits
+ * across two targets -- same "a half may be one snapshot stale, never half
+ * of one value and half of another" guarantee as LOSS_COUNTERS above, each
+ * half behind its own handshake rather than one 64-bit crossing. */
+#define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO   0x8a
+#define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI   0x8b
+
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
+
+/* RX_EPOCH_STATUS word layout, shared between the Nios firmware that
+ * composes it (rx_epoch_gate.vhd via bladerf_core.vhd) and the host that
+ * decodes it (rf_transition.c) -- one definition, not two copies that can
+ * drift apart. See NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS above for the bit
+ * table. */
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT 24
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK  0xFFu
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT    20
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK     0xFu
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE (1u << 19)
+
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE      0x0u
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING     0x1u
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_SETTLING    0x2u
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW  0x3u
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR       0x4u
+
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
 #define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02
@@ -356,6 +426,17 @@ static inline const char* target2str(uint8_t target_id) {
             return "ADF400x Config";
         case NIOS_PKT_8x32_TARGET_FASTLOCK:
             return "AD9361 Fast Lock Profile";
+
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL:
+            return "RX Epoch Gate Control (Write-Only)";
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
+            return "RX Epoch Gate Settle Count (Write-Only)";
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
+            return "RX Epoch Gate Status";
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:
+            return "RX Epoch Gate First-Valid Timestamp, Low Word";
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
+            return "RX Epoch Gate First-Valid Timestamp, High Word";
 
         /* Reserved for user customizations */
         case NIOS_PKT_8x32_TARGET_USR1:

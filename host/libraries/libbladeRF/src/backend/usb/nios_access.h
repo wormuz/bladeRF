@@ -398,6 +398,54 @@ int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
 int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
 
 /**
+ * Issue an RX data-plane epoch gate control command (ADR-0207 §6).
+ *
+ * @param   dev     Device handle
+ * @param   cmd     NIOS_PKT_8x32_RX_EPOCH_CMD_*
+ * @param   data    8-bit epoch_id for ARM; ignored by COMPLETE, ABORT
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
+
+/**
+ * Set the RX data-plane epoch gate settle sample count. Must be written
+ * before issuing NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE.
+ *
+ * @param   dev             Device handle
+ * @param   settle_samples  Real ADC samples to discard after epoch_complete
+ *                          before admitting new samples to the FIFO
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rx_epoch_settle_write(struct bladerf *dev, uint32_t settle_samples);
+
+/**
+ * Read the RX data-plane epoch gate status word.
+ *
+ * Bit layout at NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS.
+ *
+ * @param   dev     Device handle
+ * @param   value   Status word
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value);
+
+/**
+ * Read one 32-bit half of the RX data-plane epoch gate first-valid
+ * timestamp. Each half crosses through its own handshake -- see
+ * NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO/_HI.
+ *
+ * @param   dev     Device handle
+ * @param   is_high True for the high word, false for the low word
+ * @param   value   Timestamp half
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value);
+
+/**
  * Save an RFFE fast lock profile to the Nios.
  *
  * @param           dev          Device handle

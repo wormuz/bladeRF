@@ -1028,6 +1028,75 @@ int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
     return status;
 }
 
+/* Command goes in the address field, same reasoning as
+ * nios_rf_link_cfg_cmd above: bits 0..2 of the underlying word are toggles,
+ * so the Nios decides what changed, not a host-side shadow copy. */
+int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
+{
+    int status;
+
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, cmd,
+                             data);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: cmd 0x%02x data 0x%08x\n", __FUNCTION__, cmd, data);
+    }
+#endif
+
+    return status;
+}
+
+int nios_rx_epoch_settle_write(struct bladerf *dev, uint32_t settle_samples)
+{
+    int status;
+
+    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0,
+                             settle_samples);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Wrote 0x%08x\n", __FUNCTION__, settle_samples);
+    }
+#endif
+
+    return status;
+}
+
+int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status;
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0,
+                            value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: Read 0x%08x\n", __FUNCTION__, *value);
+    }
+#endif
+
+    return status;
+}
+
+int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value)
+{
+    int status;
+    uint8_t target = is_high ? NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI
+                             : NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO;
+
+    status = nios_8x32_read(dev, target, 0, value);
+
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: %s = 0x%08x\n", __FUNCTION__,
+                   is_high ? "hi" : "lo", *value);
+    }
+#endif
+
+    return status;
+}
+
 int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile)
 {

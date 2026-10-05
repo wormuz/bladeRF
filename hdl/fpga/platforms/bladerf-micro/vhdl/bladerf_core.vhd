@@ -243,6 +243,82 @@ architecture core_bladerf of bladerf_core is
     signal rf_link_speed_disagree : std_logic;
     signal rf_link_epoch_tag      : std_logic_vector(7 downto 0);
 
+    -- ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001 §6: RX data-plane epoch
+    -- gate control/status, sys_clock side. Separate PIO pair from
+    -- rf_link_cfg/status (that pair gates USB-speed/whole-stream start-
+    -- stop; this one gates data validity across a single RX retune).
+    --
+    -- Crossed with the SAME work.handshake + continuous-req + capture-on-
+    -- ack pattern that dwell_cfg_word already uses in this file (see
+    -- U_dwell_cfg_handshake/drive_handshake_dwell_cfg/dwell_cfg_capture
+    -- below for the full rationale this mirrors) -- NOT a new one-shot
+    -- "transfer exactly once" protocol. The control word is bundled data
+    -- just like dwell_cfg_word: epoch_id and settle_samples must never be
+    -- observed out of sync with each other, so they ride in the SAME
+    -- 32-bit word, decoded by rf_link_controller-style toggle-edge
+    -- detection on the rx_clock side after the handshake has delivered a
+    -- stable copy.
+    --
+    -- rx_epoch_ctrl bit layout (see nios_system.tcl):
+    --   bit 0      arm toggle
+    --   bit 1      complete toggle
+    --   bit 2      abort toggle
+    --   bits 15:8  host epoch_id
+    -- settle_samples does NOT fit in the remaining 16 bits of one 32-bit
+    -- word; it rides in a second PIO/handshake pair (rx_epoch_settle),
+    -- continuously crossed the same way -- quasi-static, not a per-
+    -- transaction value (ADR settle_samples is a calibration constant
+    -- the host sets rarely, not something that changes every retune).
+    signal rx_epoch_ctrl_word       : std_logic_vector(31 downto 0);
+    signal rx_epoch_ctrl_req_rx     : std_logic := '0';
+    signal rx_epoch_ctrl_ack_rx     : std_logic;
+    signal rx_epoch_ctrl_wire_rx    : std_logic_vector(31 downto 0);
+    signal rx_epoch_ctrl_rx         : std_logic_vector(31 downto 0) := (others => '0');
+    signal rx_epoch_ctrl_prev_rx    : std_logic_vector(2 downto 0) := (others => '0');
+
+    signal rx_epoch_settle_word     : std_logic_vector(31 downto 0);
+    signal rx_epoch_settle_req_rx   : std_logic := '0';
+    signal rx_epoch_settle_ack_rx   : std_logic;
+    signal rx_epoch_settle_wire_rx  : std_logic_vector(31 downto 0);
+    signal rx_epoch_settle_rx       : std_logic_vector(31 downto 0) := (others => '0');
+
+    -- Decoded, rx_clock-domain command pulses + fields -- what actually
+    -- feeds U_rx_epoch_gate's control ports in rx.vhd.
+    signal rx_epoch_arm_rx          : std_logic := '0';
+    signal rx_epoch_complete_rx     : std_logic := '0';
+    signal rx_epoch_abort_rx        : std_logic := '0';
+    signal rx_epoch_id_in_rx        : unsigned(7 downto 0) := (others => '0');
+
+    -- rx_clock -> sys_clock status, same handshake direction as
+    -- U_handshake_rx_overflow below (source=rx_clock, dest=sys_clock).
+    -- first_valid_timestamp is 64 bits and does not fit one PIO word --
+    -- crossed as two 32-bit halves of ONE capture register, same
+    -- rationale as rx_ovf_lo_word/rx_ovf_hi_word ("halves of the same
+    -- capture register, so a host reading both gets one whole snapshot").
+    signal rx_epoch_status_word     : std_logic_vector(31 downto 0);
+    signal rx_epoch_status_req_sys  : std_logic := '0';
+    signal rx_epoch_status_ack_sys  : std_logic;
+    signal rx_epoch_status_wire_sys : std_logic_vector(31 downto 0);
+    signal rx_epoch_status_sys      : std_logic_vector(31 downto 0) := (others => '0');
+
+    signal rx_epoch_ts_lo_req_sys   : std_logic := '0';
+    signal rx_epoch_ts_lo_ack_sys   : std_logic;
+    signal rx_epoch_ts_lo_wire_sys  : std_logic_vector(31 downto 0);
+    signal rx_epoch_ts_lo_sys       : std_logic_vector(31 downto 0) := (others => '0');
+
+    signal rx_epoch_ts_hi_req_sys   : std_logic := '0';
+    signal rx_epoch_ts_hi_ack_sys   : std_logic;
+    signal rx_epoch_ts_hi_wire_sys  : std_logic_vector(31 downto 0);
+    signal rx_epoch_ts_hi_sys       : std_logic_vector(31 downto 0) := (others => '0');
+
+    -- Status fields as produced by U_rx_epoch_gate in rx.vhd (rx_clock
+    -- domain, source side of the three handshakes above).
+    signal rx_epoch_id_out_rx       : unsigned(7 downto 0);
+    signal rx_epoch_state_rx        : unsigned(3 downto 0);
+    signal rx_epoch_discard_rx      : std_logic;
+    signal rx_epoch_start_event_rx  : std_logic;
+    signal rx_epoch_first_valid_rx  : unsigned(63 downto 0);
+
     signal link_stop_toggle_rx    : std_logic;
     signal link_stop_toggle_tx    : std_logic;
     signal clear_fault_toggle_rx  : std_logic;
@@ -734,6 +810,11 @@ begin
             dwell_readout_export            => dwell_rd_data,
             dwell_cfg_export                => dwell_cfg_word,
             rf_link_cfg_export              => rf_link_cfg_word,
+            rx_epoch_ctrl_export             => rx_epoch_ctrl_word,
+            rx_epoch_settle_export           => rx_epoch_settle_word,
+            rx_epoch_status_export           => rx_epoch_status_sys,
+            rx_epoch_ts_lo_export            => rx_epoch_ts_lo_sys,
+            rx_epoch_ts_hi_export            => rx_epoch_ts_hi_sys,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
@@ -1070,6 +1151,254 @@ begin
         elsif( rising_edge(rx_clock) ) then
             if( dwell_cfg_ack_rx = '1' ) then
                 dwell_cfg_rx <= dwell_cfg_wire;
+            end if;
+        end if;
+    end process;
+
+    -- ADR-0207 §6: rx_epoch_ctrl/rx_epoch_settle crossing (sys_clock ->
+    -- rx_clock), identical shape to U_dwell_cfg_handshake/
+    -- drive_handshake_dwell_cfg/dwell_cfg_capture above -- two separate
+    -- 32-bit words because the control word (toggle bits + epoch_id)
+    -- changes per-retune while settle_samples is quasi-static, and they
+    -- do not need to be observed atomically with each other the way
+    -- epoch_id must stay paired with the toggle that named it (that
+    -- pairing lives WITHIN rx_epoch_ctrl_word, not across the two words).
+    U_rx_epoch_ctrl_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => sys_reset,
+            source_clock => sys_clock,
+            source_data  => rx_epoch_ctrl_word,
+            dest_reset   => rx_reset,
+            dest_clock   => rx_clock,
+            dest_data    => rx_epoch_ctrl_wire_rx,
+            dest_req     => rx_epoch_ctrl_req_rx,
+            dest_ack     => rx_epoch_ctrl_ack_rx
+        );
+
+    drive_handshake_rx_epoch_ctrl : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            rx_epoch_ctrl_req_rx <= '0';
+        elsif( rising_edge(rx_clock) ) then
+            if( rx_epoch_ctrl_ack_rx = '0' ) then
+                rx_epoch_ctrl_req_rx <= '1';
+            else
+                rx_epoch_ctrl_req_rx <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_epoch_ctrl_capture : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            rx_epoch_ctrl_rx <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            if( rx_epoch_ctrl_ack_rx = '1' ) then
+                rx_epoch_ctrl_rx <= rx_epoch_ctrl_wire_rx;
+            end if;
+        end if;
+    end process;
+
+    U_rx_epoch_settle_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => sys_reset,
+            source_clock => sys_clock,
+            source_data  => rx_epoch_settle_word,
+            dest_reset   => rx_reset,
+            dest_clock   => rx_clock,
+            dest_data    => rx_epoch_settle_wire_rx,
+            dest_req     => rx_epoch_settle_req_rx,
+            dest_ack     => rx_epoch_settle_ack_rx
+        );
+
+    drive_handshake_rx_epoch_settle : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            rx_epoch_settle_req_rx <= '0';
+        elsif( rising_edge(rx_clock) ) then
+            if( rx_epoch_settle_ack_rx = '0' ) then
+                rx_epoch_settle_req_rx <= '1';
+            else
+                rx_epoch_settle_req_rx <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_epoch_settle_capture : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            rx_epoch_settle_rx <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            if( rx_epoch_settle_ack_rx = '1' ) then
+                rx_epoch_settle_rx <= rx_epoch_settle_wire_rx;
+            end if;
+        end if;
+    end process;
+
+    -- Toggle-edge decode of rx_epoch_ctrl_rx, same shape as
+    -- rf_link_controller's start/stop/clear_fault decode: a changed bit
+    -- produces a one-cycle pulse, a repeated write of the same word
+    -- produces none. epoch_id is captured unconditionally every cycle
+    -- (it is a field, not a command) -- but it is only MEANINGFUL at the
+    -- moment arm/complete/abort pulses, which is exactly when
+    -- rx_epoch_gate reads it (ADR requirement: epoch_id must never be
+    -- observed out of sync with the command that named it -- satisfied
+    -- here because both come from the same captured word on the same
+    -- cycle, never two different handshake transfers).
+    rx_epoch_ctrl_decode : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            rx_epoch_ctrl_prev_rx <= (others => '0');
+            rx_epoch_arm_rx       <= '0';
+            rx_epoch_complete_rx  <= '0';
+            rx_epoch_abort_rx     <= '0';
+            rx_epoch_id_in_rx     <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            rx_epoch_arm_rx      <= '0';
+            rx_epoch_complete_rx <= '0';
+            rx_epoch_abort_rx    <= '0';
+
+            if( rx_epoch_ctrl_rx(0) /= rx_epoch_ctrl_prev_rx(0) ) then
+                rx_epoch_arm_rx <= '1';
+            end if;
+            if( rx_epoch_ctrl_rx(1) /= rx_epoch_ctrl_prev_rx(1) ) then
+                rx_epoch_complete_rx <= '1';
+            end if;
+            if( rx_epoch_ctrl_rx(2) /= rx_epoch_ctrl_prev_rx(2) ) then
+                rx_epoch_abort_rx <= '1';
+            end if;
+
+            rx_epoch_ctrl_prev_rx <= rx_epoch_ctrl_rx(2 downto 0);
+            rx_epoch_id_in_rx     <= unsigned(rx_epoch_ctrl_rx(15 downto 8));
+        end if;
+    end process;
+
+    -- ADR-0207 §6: rx_epoch_status crossing (rx_clock -> sys_clock), same
+    -- direction/shape as U_handshake_rx_overflow below. Three separate
+    -- 32-bit words (status+epoch_id+state+discard, timestamp lo, timestamp
+    -- hi) rather than one combined word: first_valid_timestamp is 64 bits
+    -- and does not fit alongside the other fields in a single PIO word,
+    -- so it gets its own pair -- same reasoning as rx_ovf_lo_word/
+    -- rx_ovf_hi_word being halves of ONE capture register, not two
+    -- independent ones (a host reading both gets one whole snapshot
+    -- because both halves are driven by the same rx_epoch_first_valid_rx
+    -- source register, captured by their own independent handshakes but
+    -- never written to separately).
+    -- bits [31:24] epoch_id, [23:20] state, [19] discard_active, [18:0] reserved=0
+    rx_epoch_status_word <= std_logic_vector(rx_epoch_id_out_rx)
+                           & std_logic_vector(rx_epoch_state_rx)
+                           & rx_epoch_discard_rx
+                           & (18 downto 0 => '0');
+
+    U_rx_epoch_status_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => rx_reset,
+            source_clock => rx_clock,
+            source_data  => rx_epoch_status_word,
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => rx_epoch_status_wire_sys,
+            dest_req     => rx_epoch_status_req_sys,
+            dest_ack     => rx_epoch_status_ack_sys
+        );
+
+    drive_handshake_rx_epoch_status : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_status_req_sys <= '0';
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_status_ack_sys = '0' ) then
+                rx_epoch_status_req_sys <= '1';
+            else
+                rx_epoch_status_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_epoch_status_capture : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_status_sys <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_status_ack_sys = '1' ) then
+                rx_epoch_status_sys <= rx_epoch_status_wire_sys;
+            end if;
+        end if;
+    end process;
+
+    U_rx_epoch_ts_lo_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => rx_reset,
+            source_clock => rx_clock,
+            source_data  => std_logic_vector(rx_epoch_first_valid_rx(31 downto 0)),
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => rx_epoch_ts_lo_wire_sys,
+            dest_req     => rx_epoch_ts_lo_req_sys,
+            dest_ack     => rx_epoch_ts_lo_ack_sys
+        );
+
+    drive_handshake_rx_epoch_ts_lo : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_ts_lo_req_sys <= '0';
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_ts_lo_ack_sys = '0' ) then
+                rx_epoch_ts_lo_req_sys <= '1';
+            else
+                rx_epoch_ts_lo_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_epoch_ts_lo_capture : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_ts_lo_sys <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_ts_lo_ack_sys = '1' ) then
+                rx_epoch_ts_lo_sys <= rx_epoch_ts_lo_wire_sys;
+            end if;
+        end if;
+    end process;
+
+    U_rx_epoch_ts_hi_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => rx_reset,
+            source_clock => rx_clock,
+            source_data  => std_logic_vector(rx_epoch_first_valid_rx(63 downto 32)),
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => rx_epoch_ts_hi_wire_sys,
+            dest_req     => rx_epoch_ts_hi_req_sys,
+            dest_ack     => rx_epoch_ts_hi_ack_sys
+        );
+
+    drive_handshake_rx_epoch_ts_hi : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_ts_hi_req_sys <= '0';
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_ts_hi_ack_sys = '0' ) then
+                rx_epoch_ts_hi_req_sys <= '1';
+            else
+                rx_epoch_ts_hi_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_epoch_ts_hi_capture : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_epoch_ts_hi_sys <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_epoch_ts_hi_ack_sys = '1' ) then
+                rx_epoch_ts_hi_sys <= rx_epoch_ts_hi_wire_sys;
             end if;
         end if;
     end process;
@@ -1450,6 +1779,20 @@ begin
             abort_active               => rx_abort_active,
             epoch_ack                  => rx_epoch_ack,
             epoch_valid                => rx_epoch_valid,
+
+            -- ADR-0207 §6: RX data-plane epoch gate, already-decoded
+            -- rx_clock domain signals (CDC done above via work.handshake
+            -- instances, NOT inside rx.vhd/rx_epoch_gate.vhd).
+            rx_epoch_arm            => rx_epoch_arm_rx,
+            rx_epoch_complete       => rx_epoch_complete_rx,
+            rx_epoch_abort          => rx_epoch_abort_rx,
+            rx_epoch_id_in          => rx_epoch_id_in_rx,
+            rx_epoch_settle_samples => unsigned(rx_epoch_settle_rx),
+            rx_epoch_id_out         => rx_epoch_id_out_rx,
+            rx_epoch_state          => rx_epoch_state_rx,
+            rx_epoch_discard_active => rx_epoch_discard_rx,
+            rx_epoch_start_event    => rx_epoch_start_event_rx,
+            rx_epoch_first_valid_ts => rx_epoch_first_valid_rx,
 
             -- Triggering
             trigger_arm            => rx_trigger_ctl.arm,
