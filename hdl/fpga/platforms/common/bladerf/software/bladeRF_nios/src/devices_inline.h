@@ -480,7 +480,9 @@ static inline void rx_epoch_settle_set(uint32_t settle_samples)
  *   23..20  state         RX_EPOCH_ACTIVE/PENDING/SETTLING/ACTIVE_NEW/ERROR
  *   19      discard_active samples are being suppressed right now
  *   18      sample-META epoch tags enabled
- *   17..0   reserved, always 0
+ *   17      COMPLETE toggle captured in RX clock domain
+ *   16      COMPLETE command decoded by the RX control state machine
+ *   15..0   reserved, always 0
  */
 static inline uint32_t rx_epoch_status_read(void)
 {

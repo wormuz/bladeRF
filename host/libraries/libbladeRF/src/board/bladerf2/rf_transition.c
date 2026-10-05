@@ -680,6 +680,15 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
 
         if (!epoch_opened) {
+            log_error("%s: epoch-valid timeout transaction=%u status=0x%08x "
+                      "state=%u epoch=%u\n", __FUNCTION__, transaction_id,
+                      epoch_status_word,
+                      (unsigned)((epoch_status_word >>
+                          NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT) &
+                          NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK),
+                      (unsigned)((epoch_status_word >>
+                          NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+                          NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK));
             _emit_event(board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                        0, 0, epoch_status_word, BLADERF_ERR_TIMEOUT, 0);
             /* Failure detection only -- never report this as valid data. */
