@@ -45,6 +45,8 @@ CORE = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
 # start (reset_reset_n is tied high), so any register value it remembers in
 # C outlives the register itself.
 NIOS_SRC = ROOT / "hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src"
+AD9361_SRC = ROOT / "thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361"
+RX_EPOCH_GATE = ROOT / "hdl/fpga/ip/nuand/synthesis/rx_epoch_gate.vhd"
 
 
 def built_vhdl():
@@ -490,6 +492,13 @@ def check_vhdl():
         # all read *_sys or *_sync, so the word itself is system-domain.
         assembled = {m for m in re.findall(r"(\w+)\s*\([^)]*\)\s*<=\s*\w+_sys",
                                            raw)}
+        # Full-word PIO exports may be slices of a captured *_sys_q register
+        # (e.g. the low/high halves of one 64-bit counter). These are local
+        # system-domain assignments, not raw sample-domain crossings.
+        exported_names = {sig for _, sig in exported}
+        for lhs, rhs in re.findall(r"(?m)^\s*(\w+)\s*<=\s*([^;]+);", raw):
+            if lhs in exported_names and re.search(r"\b\w+_sys_q\b", rhs):
+                assembled.add(lhs)
 
         # Consumed by a block that runs on sys_clock: no crossing at all.
         # Found by reading the instance the signal is mapped into and
@@ -695,6 +704,62 @@ def check_nios():
                  "1 in 12 captures dead (rf_link_cfg_shadow, 2026-09-11)")
 
 
+def check_rfpll_errors_propagate():
+    """Keep RFPLL SPI/lock failures visible to the host frequency API.
+
+    The AD9361 RFPLL setter used to ignore both ad9361_rfpll_int_set_rate()
+    and ad9361_rfpll_set_rate() return values. A failed SPI write or VCO-lock
+    timeout could therefore be turned into success by clk_set_rate(), exactly
+    the false-success transition that the RX event API must reject.
+    """
+    util = AD9361_SRC / "ad9361_util.c"
+    driver = AD9361_SRC / "ad9361.c"
+    if not util.exists() or not driver.exists():
+        return
+
+    util_text = code_only(util.read_text(), comment="//")
+    driver_text = code_only(driver.read_text(), comment="//")
+
+    # A naked statement is the pre-fix form. Assignment plus a checked error
+    # path must carry the status out of clk_set_rate().
+    if re.search(r"(?m)^\s*ad9361_rfpll_set_rate\s*\(clk_priv,\s*round_rate\s*\);",
+                 util_text):
+        fail("adi-rfpll-errors-propagated",
+             "ad9361_util.c: clk_set_rate() discards ad9361_rfpll_set_rate() status",
+             "RX LO programming/lock failure was reported as a successful retune")
+
+    # The VCO setup and divider SPI writes must be checked before the lock
+    # poll; an already-high lock bit cannot prove that a failed write landed.
+    int_set = driver_text.split("int32_t ad9361_rfpll_int_set_rate(", 1)
+    if len(int_set) == 2:
+        body = int_set[1].split("/**", 1)[0]
+        if (re.search(r"(?m)^\s*ad9361_rfpll_vco_init\s*\(", body) or
+                re.search(r"(?m)^\s*ad9361_spi_(?:write|writef|writem)\s*\(", body)):
+            fail("adi-rfpll-errors-propagated",
+                 "ad9361_rfpll_int_set_rate(): VCO/divider SPI status is discarded",
+                 "failed RFIC programming could be followed by stale PLL-lock status")
+
+    # RX/TX wrapper must propagate the internal RFPLL function's result.
+    rfpll_set = driver_text.split("int32_t ad9361_rfpll_set_rate(", 1)
+    if len(rfpll_set) == 2:
+        body = rfpll_set[1].split("/**", 1)[0]
+        if re.search(r"(?m)^\s*ad9361_rfpll_int_set_rate\s*\(", body):
+            fail("adi-rfpll-errors-propagated",
+                 "ad9361_rfpll_set_rate(): internal RX/TX VCO result is discarded",
+                 "a failed VCO lock did not reach the host retune result")
+
+
+def check_rx_epoch_is_event_bounded():
+    """Do not turn RF transition completion into a guessed discard count."""
+    if not RX_EPOCH_GATE.exists():
+        return
+    gate_text = code_only(RX_EPOCH_GATE.read_text(), comment="--")
+    if "settle_remaining" in gate_text or "settle_target" in gate_text:
+        fail("rx-epoch-event-boundary",
+             "rx_epoch_gate still counts/discards a configured number of samples",
+             "sample-count discard is not proof of RFIC or analog completion")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -707,6 +772,8 @@ vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
 vhdl-cross-domain-or       an OR of two domains has no owning domain
 header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
 nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
+adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune result
+rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 """
 
 
@@ -722,6 +789,8 @@ def main():
     check_vhdl()
     check_headers()
     check_nios()
+    check_rfpll_errors_propagate()
+    check_rx_epoch_is_event_bounded()
 
     for n in notes:
         print(f"note  {n}")

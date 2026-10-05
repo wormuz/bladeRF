@@ -486,6 +486,10 @@ architecture core_bladerf of bladerf_core is
     signal pretrig_rd_addr        : unsigned(11 downto 0) := (others => '0');
     signal pretrig_rd_data        : std_logic_vector(31 downto 0) := (others => '0');
     signal pretrig_addr_word      : std_logic_vector(31 downto 0);
+    signal pretrig_addr_req_rx    : std_logic := '0';
+    signal pretrig_addr_ack_rx    : std_logic;
+    signal pretrig_addr_wire_rx   : std_logic_vector(31 downto 0);
+    signal pretrig_addr_rx        : std_logic_vector(31 downto 0) := (others => '0');
     signal dwell_status_word      : std_logic_vector(31 downto 0);
 
     -- Latched dwell summary read window.
@@ -1048,7 +1052,7 @@ begin
     -- it mid-increment. A mux here would carry a 16-bit rx_clock counter
     -- straight into a system-domain word -- the same trap as oldest_index,
     -- just harder to see.
-    dwell_rd_index <= unsigned(pretrig_addr_word(19 downto 16));
+    dwell_rd_index <= unsigned(pretrig_addr_rx(19 downto 16));
 
     -- Widened rather than truncated: gain_sequencer's counter is
     -- SETTLE_LOG2+1 bits and the readout word holds 16, so this cannot lose
@@ -1151,6 +1155,46 @@ begin
         elsif( rising_edge(rx_clock) ) then
             if( dwell_cfg_ack_rx = '1' ) then
                 dwell_cfg_rx <= dwell_cfg_wire;
+            end if;
+        end if;
+    end process;
+
+    -- NIOS-owned pre-trigger address crosses sys_clock -> rx_clock as
+    -- bundled data. This handshake captures one coherent address before
+    -- either the ring or dwell-summary readout consumes it.
+    U_pretrig_addr_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => sys_reset,
+            source_clock => sys_clock,
+            source_data  => pretrig_addr_word,
+            dest_reset   => rx_reset,
+            dest_clock   => rx_clock,
+            dest_data    => pretrig_addr_wire_rx,
+            dest_req     => pretrig_addr_req_rx,
+            dest_ack     => pretrig_addr_ack_rx
+        );
+
+    drive_handshake_pretrig_addr : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            pretrig_addr_req_rx <= '0';
+        elsif( rising_edge(rx_clock) ) then
+            if( pretrig_addr_ack_rx = '0' ) then
+                pretrig_addr_req_rx <= '1';
+            else
+                pretrig_addr_req_rx <= '0';
+            end if;
+        end if;
+    end process;
+
+    pretrig_addr_capture : process( rx_clock, rx_reset )
+    begin
+        if( rx_reset = '1' ) then
+            pretrig_addr_rx <= (others => '0');
+        elsif( rising_edge(rx_clock) ) then
+            if( pretrig_addr_ack_rx = '1' ) then
+                pretrig_addr_rx <= pretrig_addr_wire_rx;
             end if;
         end if;
     end process;
@@ -1443,7 +1487,7 @@ begin
     -- Read address for the ring, from the host. Only the low DEPTH_LOG2
     -- bits mean anything; the rest are ignored rather than checked, since a
     -- wider write can only select an entry that exists.
-    pretrig_rd_addr <= unsigned(pretrig_addr_word(11 downto 0));
+    pretrig_rd_addr <= unsigned(pretrig_addr_rx(11 downto 0));
 
     -- Dwell status word. Every bit crosses from rx_clock through its own
     -- synchroniser, same rule as RF_LINK_STATUS: no raw rx_* signal is

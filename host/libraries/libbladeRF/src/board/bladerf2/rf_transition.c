@@ -78,21 +78,20 @@ static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
     return 0;
 }
 
-static void _emit_event(struct bladerf2_board_data *board_data,
+static void _emit_event_with_timestamp(struct bladerf2_board_data *board_data,
                         bladerf_rf_event_type type,
                         bladerf_rf_state state,
                         uint64_t requested_hz,
                         uint64_t readback_hz,
                         uint32_t rfic_status,
                         int32_t error_code,
-                        uint32_t epoch_id)
+                        uint32_t epoch_id,
+                        uint64_t fpga_timestamp)
 {
     struct bladerf_rf_event *evt = &board_data->rf_transition_last_event;
 
     evt->host_monotonic_ns  = _monotonic_ns();
-    evt->fpga_timestamp     = 0; /* Phase 1: FPGA sample-counter correlation
-                                  * is out of scope; host timestamps are
-                                  * the authoritative trace in this phase. */
+    evt->fpga_timestamp     = fpga_timestamp;
     evt->transaction_id     = board_data->rf_transition_current_id;
     /* 0 unless the FPGA data-plane epoch gate actually reported one
      * (ADR-0207 §6, BLADERF_RF_EVT_RX_EPOCH_VALID) -- every other event
@@ -108,6 +107,20 @@ static void _emit_event(struct bladerf2_board_data *board_data,
     evt->error_code         = error_code;
 
     board_data->rf_transition_state = state;
+}
+
+static void _emit_event(struct bladerf2_board_data *board_data,
+                        bladerf_rf_event_type type,
+                        bladerf_rf_state state,
+                        uint64_t requested_hz,
+                        uint64_t readback_hz,
+                        uint32_t rfic_status,
+                        int32_t error_code,
+                        uint32_t epoch_id)
+{
+    _emit_event_with_timestamp(board_data, type, state, requested_hz,
+                               readback_hz, rfic_status, error_code,
+                               epoch_id, 0);
 }
 
 int bladerf_rx_transition_begin(struct bladerf *dev,
@@ -148,28 +161,26 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
      * Only armed when the caller actually requires epoch confirmation --
      * BLADERF_RF_REQUIRE_EPOCH_VALID unset means the caller only wants
      * control-plane (PLL+ENSM) confirmation, same opt-in discipline as
-     * PLL_LOCKED/ENSM_RX below. Failure here is non-fatal to the retune
-     * itself (the control-plane path is unaffected), but it means
-     * RX_EPOCH_VALID can never be confirmed for this transaction, so the
-     * requirement is downgraded to a logged warning rather than aborting a
-     * retune the hardware can still complete correctly on the control
-     * plane. */
+     * PLL_LOCKED/ENSM_RX below. If arming or configuring the requested
+     * fence fails, abort before the RFIC retune; never downgrade the
+     * caller's requested data-plane guarantee. */
     if (request->required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
         int epoch_status = nios_rx_epoch_ctrl_cmd(dev,
                            NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
                            (uint8_t)(board_data->rf_transition_current_id & 0xFFu));
-        if (epoch_status == 0) {
-            /* Settle count must land before COMPLETE in
-             * bladerf_rx_transition_wait() -- the gate reads it only at
-             * the PENDING -> SETTLING transition, not continuously. */
-            epoch_status = nios_rx_epoch_settle_write(dev,
-                                                      request->epoch_settle_samples);
-        }
         if (epoch_status != 0) {
-            log_warning("%s: failed to arm RX epoch gate (status=%d); "
-                       "RX_EPOCH_VALID cannot be confirmed for transaction "
-                       "%u\n", __FUNCTION__, epoch_status,
-                       board_data->rf_transition_current_id);
+            /* EPOCH_VALID is a requested completion condition. Do not
+             * silently downgrade it to control-plane success: the caller
+             * asked for a data-plane fence, so failure to arm that fence
+             * must fail the transaction before touching the RFIC. */
+            (void)nios_rx_epoch_ctrl_cmd(dev,
+                           NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+            board_data->rf_transition_pending = false;
+            _emit_event(board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR,
+                        request->target_frequency_hz, 0, 0,
+                        epoch_status, 0);
+            return epoch_status;
         }
     }
 
@@ -199,7 +210,10 @@ int bladerf_rx_transition_begin(struct bladerf *dev,
         return status;
     }
 
-    _emit_event(board_data, BLADERF_RF_EVT_SPI_DONE,
+    /* ad9361_set_rx_lo_freq() is synchronous and includes the driver's
+     * internal VCO-lock poll. This host timestamp therefore means the LO
+     * setter returned; it is not the SPI-programming completion instant. */
+    _emit_event(board_data, BLADERF_RF_EVT_LO_SET_RETURNED,
                BLADERF_RF_STATE_PLL_ACQUIRING,
                request->target_frequency_hz, readback_hz, 0, 0, 0);
 
@@ -299,12 +313,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     }
 
     /* ADR-0207 §6: the FPGA data-plane epoch gate is now wired up --
-     * RX_EPOCH_VALID means the fabric itself observed real ADC samples
-     * past the settle count, not just that PLL/ENSM reported completion.
-     * COMPLETE tells the gate the control-plane transition landed (it was
-     * armed with ARM in bladerf_rx_transition_begin, before the retune);
-     * the gate then counts epoch_settle_samples real samples past that
-     * point before opening admission and reporting ACTIVE_NEW here.
+     * RX_EPOCH_VALID means the fabric opened admission on a sample edge
+     * after the control plane reported transition completion. COMPLETE
+     * tells the gate the RFIC transition landed (the gate was armed before
+     * retuning); the next admitted sample defines the new epoch boundary.
+     * No sample-count discard is used as a correctness condition.
      *
      * Only polled if the caller actually requires it, same opt-in
      * discipline as PLL_LOCKED/ENSM_RX above -- a caller that only wants
@@ -312,6 +325,8 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
      * exactly the control-plane-only guarantee it asked for. */
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
         uint32_t epoch_status_word = 0;
+        uint32_t timestamp_lo = 0;
+        uint32_t timestamp_hi = 0;
         bool epoch_opened = false;
 
         status = nios_rx_epoch_ctrl_cmd(dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
@@ -356,10 +371,29 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             return BLADERF_ERR_TIMEOUT;
         }
 
-        _emit_event(board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
+        /* The FPGA latches first_valid_timestamp at the exact sample
+         * boundary. Read both halves only after ACTIVE_NEW/ACTIVE is
+         * observed; the latched value remains stable until the next ARM. */
+        status = nios_rx_epoch_ts_read(dev, false, &timestamp_lo);
+        if (status == 0) {
+            status = nios_rx_epoch_ts_read(dev, true, &timestamp_hi);
+        }
+        if (status != 0) {
+            _emit_event(board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        epoch_status_word, status, 0);
+            if (final_event != NULL) {
+                *final_event = board_data->rf_transition_last_event;
+            }
+            return status;
+        }
+
+        _emit_event_with_timestamp(
+                   board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,
                    (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
-                   & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+                   & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
+                   ((uint64_t)timestamp_hi << 32) | timestamp_lo);
     } else {
         _emit_event(board_data, BLADERF_RF_EVT_RX_DATAPATH_ARMED,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0, 0);

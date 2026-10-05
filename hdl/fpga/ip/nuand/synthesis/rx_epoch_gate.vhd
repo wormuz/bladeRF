@@ -3,9 +3,9 @@
 -- Placed between the ADC sample stream and rx_fifo (ADR §6.2 preferred
 -- topology: AD9361 RX samples -> timestamp counter attachment ->
 -- rx_epoch_gate -> rx_fifo -> packetizer -> FX3/USB). Suppresses USB-
--- packet admission for the duration of a retune transition, then opens
--- immediately once settle_samples ADC samples have been counted past the
--- epoch_complete event -- a real sample-domain counter, not a wall-clock
+-- packet admission for the duration of a retune transition, then opens on
+-- the first ADC sample after epoch_complete reaches this sample domain.
+-- The epoch boundary is an event, not a sample-count discard or wall-clock
 -- delay, and it never resets or re-derives the global RX timestamp
 -- (epoch_id is a SEPARATE monotonic counter so the host can tell apart
 -- "no new samples yet" from "stream actually broke").
@@ -63,6 +63,9 @@ entity rx_epoch_gate is
         epoch_complete       : in  std_logic := '0';
         epoch_abort          : in  std_logic := '0';
         epoch_id_in          : in  unsigned(7 downto 0) := (others => '0');
+        -- Retained for register-map compatibility with early epoch-gate
+        -- firmware. Deliberately ignored: sample-count discard is not a
+        -- transition-completion condition.
         settle_samples_in    : in  unsigned(31 downto 0) := (others => '0');
 
         -- Sample-domain output (into rx_fifo).
@@ -90,8 +93,6 @@ architecture arch of rx_epoch_gate is
 
     signal state            : unsigned(3 downto 0) := STATE_ACTIVE;
     signal active_epoch_id  : unsigned(7 downto 0)  := (others => '0');
-    signal settle_remaining : unsigned(31 downto 0) := (others => '0');
-    signal settle_target    : unsigned(31 downto 0) := (others => '0');
 
 begin
 
@@ -101,8 +102,6 @@ begin
         if( reset = '1' ) then
             state               <= STATE_ACTIVE;
             active_epoch_id      <= (others => '0');
-            settle_remaining     <= (others => '0');
-            settle_target        <= (others => '0');
             out_sample_controls  <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
             out_samples          <= (in_sample_controls'range => ZERO_SAMPLE);
             out_epoch_id         <= (others => '0');
@@ -113,11 +112,7 @@ begin
         elsif( rising_edge(clock) ) then
             epoch_start_event <= '0'; -- single-cycle pulse by default
 
-            -- Any in-sample_controls(i).enable with data_v tells us whether
-            -- this cycle actually carries a new ADC sample -- the settle
-            -- counter must only advance on real samples, not every clock,
-            -- otherwise settle_samples would silently mean something
-            -- different at different sample rates.
+            -- Any enabled stream carrying data_v marks a real ADC sample.
             any_valid := '0';
             for i in in_sample_controls'range loop
                 if( in_sample_controls(i).enable = '1' and in_samples(i).data_v = '1' ) then
@@ -146,9 +141,7 @@ begin
                     if( epoch_abort = '1' ) then
                         state <= STATE_ACTIVE;
                     elsif( epoch_complete = '1' ) then
-                        state            <= STATE_SETTLING;
-                        settle_target    <= settle_samples_in;
-                        settle_remaining <= settle_samples_in;
+                        state <= STATE_ACTIVE_NEW;
                     end if;
 
                 when STATE_SETTLING =>
@@ -158,22 +151,19 @@ begin
                     if( epoch_abort = '1' ) then
                         state <= STATE_ACTIVE;
                     elsif( any_valid = '1' ) then
-                        if( settle_remaining = 0 ) then
-                            state                 <= STATE_ACTIVE_NEW;
-                            epoch_start_event      <= '1';
-                            first_valid_timestamp  <= rx_timestamp;
-                        else
-                            settle_remaining <= settle_remaining - 1;
-                        end if;
+                        state <= STATE_ACTIVE_NEW;
                     end if;
 
                 when STATE_ACTIVE_NEW =>
-                    -- One cycle in this state is enough to latch the
-                    -- epoch_start_event and first_valid_timestamp; fold
-                    -- straight back into ACTIVE so normal admission
-                    -- resumes without a second gap.
+                    -- This is the first sample admitted to the FIFO.
+                    -- Capture its timestamp on the same edge (not the
+                    -- preceding suppressed edge).
                     out_sample_controls <= in_sample_controls;
                     out_samples         <= in_samples;
+                    if( any_valid = '1' ) then
+                        epoch_start_event     <= '1';
+                        first_valid_timestamp <= rx_timestamp;
+                    end if;
                     state               <= STATE_ACTIVE;
 
                 when others =>

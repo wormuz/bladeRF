@@ -4591,9 +4591,11 @@ const char *CALL_CONV bladerf_strerror(int error);
  * ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: a retune (or any other RF
  * reconfiguration) is a sequence of observable state transitions, not a
  * frequency write followed by a guessed sleep. Each transition emits an
- * immutable ::bladerf_rf_event as soon as its underlying hardware condition
- * is confirmed (SPI write committed, RFPLL lock bit set, ENSM state
- * readback matches the requested mode). The caller waits on explicit
+ * immutable ::bladerf_rf_event as soon as its underlying condition is
+ * observed (LO setter returned, RFPLL lock bit set, ENSM state readback
+ * matches the requested mode). BLADERF_RF_EVT_SPI_DONE is retained for
+ * numeric compatibility but is not emitted: the current AD9361 API does
+ * not expose the exact RFPLL-programming SPI completion boundary. The caller waits on explicit
  * events, with a timeout that can only report failure -- a timeout never
  * implies the data is valid.
  *
@@ -4633,7 +4635,8 @@ typedef enum {
     BLADERF_RF_EVT_RX_DATAPATH_ARMED,
     BLADERF_RF_EVT_RX_EPOCH_INVALID,
     BLADERF_RF_EVT_RX_EPOCH_VALID,
-    BLADERF_RF_EVT_ERROR
+    BLADERF_RF_EVT_ERROR,
+    BLADERF_RF_EVT_LO_SET_RETURNED
 } bladerf_rf_event_type;
 
 /** Required-events bitmask for ::bladerf_rx_transition_request. */
@@ -4670,12 +4673,9 @@ struct bladerf_rx_transition_request {
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
     uint32_t timeout_ms;
     bool require_rx_data_valid;
-    /** Real ADC samples to discard after the FPGA data-plane epoch gate
-     *  observes PLL/ENSM completion, before admitting new samples to the
-     *  RX FIFO (ADR-0207 §6). Ignored unless
-     *  BLADERF_RF_REQUIRE_EPOCH_VALID is set in required_events_mask;
-     *  callers that do not request epoch confirmation do not pay for a
-     *  settle count the gate will never use. */
+    /** Deprecated compatibility field. Ignored. RX epoch correctness is
+     *  based on observed RFIC completion and an FPGA sample boundary, not
+     *  a caller-selected sample discard count. */
     uint32_t epoch_settle_samples;
 };
 
