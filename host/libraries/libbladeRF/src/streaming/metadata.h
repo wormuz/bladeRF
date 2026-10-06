@@ -189,6 +189,33 @@ static inline bool metadata_rx_epoch_snapshot_is_current(
            snapshot_first_valid_timestamp == current_first_valid_timestamp;
 }
 
+/* Commit a successfully parsed transfer only if its certificate snapshot is
+ * still current. Callers hold the epoch-state lock across this decision and
+ * cursor update so invalidation cannot interleave with the commit. */
+static inline bool metadata_rx_epoch_commit_timestamp(
+    bool snapshot_contract_enabled, bool snapshot_certified,
+    uint8_t snapshot_epoch_id, uint64_t snapshot_first_valid_timestamp,
+    bool current_contract_enabled, bool current_certified,
+    uint8_t current_epoch_id, uint64_t current_first_valid_timestamp,
+    uint64_t next_timestamp, bool *have_expected_timestamp,
+    uint8_t *timestamp_epoch_id, uint64_t *expected_timestamp)
+{
+    if (have_expected_timestamp == NULL || timestamp_epoch_id == NULL ||
+        expected_timestamp == NULL ||
+        !metadata_rx_epoch_snapshot_is_current(
+            snapshot_contract_enabled, snapshot_certified,
+            snapshot_epoch_id, snapshot_first_valid_timestamp,
+            current_contract_enabled, current_certified,
+            current_epoch_id, current_first_valid_timestamp)) {
+        return false;
+    }
+
+    *have_expected_timestamp = true;
+    *timestamp_epoch_id = snapshot_epoch_id;
+    *expected_timestamp = next_timestamp;
+    return true;
+}
+
 /* Validate epoch identity, the first-valid lower bound, and timestamp
  * continuity for every message in a USB transfer. timestamp_step is in FPGA
  * sample-clock ticks (divide interleaved RX_X2 samples by two). On a

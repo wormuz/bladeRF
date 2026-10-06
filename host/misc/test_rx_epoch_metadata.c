@@ -17,18 +17,34 @@ int main(void)
 {
     uint8_t header[METADATA_HEADER_SIZE] = {0};
     uint8_t epoch_id = 0xff;
+    bool have_expected = false;
+    uint8_t timestamp_epoch = 3;
+    uint64_t expected_timestamp = 44;
 
     /* Async admission rechecks the same boundary after parsing. A setter can
      * revoke it while the transfer is being inspected, so matching bytes
-     * alone are insufficient if the live certificate changed meanwhile. */
-    assert(metadata_rx_epoch_snapshot_is_current(
-        true, true, 7, 1000, true, true, 7, 1000));
-    assert(!metadata_rx_epoch_snapshot_is_current(
-        true, true, 7, 1000, true, false, 7, 1000));
-    assert(!metadata_rx_epoch_snapshot_is_current(
-        true, true, 7, 1000, true, true, 8, 1000));
-    assert(!metadata_rx_epoch_snapshot_is_current(
-        true, true, 7, 1000, true, true, 7, 1001));
+     * alone are insufficient if the live certificate changed meanwhile.
+     * Exercise the same commit helper used while holding the production lock. */
+    assert(metadata_rx_epoch_commit_timestamp(
+        true, true, 7, 1000, true, true, 7, 1000, 2048,
+        &have_expected, &timestamp_epoch, &expected_timestamp));
+    assert(have_expected && timestamp_epoch == 7 &&
+           expected_timestamp == 2048);
+
+    have_expected = false;
+    timestamp_epoch = 3;
+    expected_timestamp = 44;
+    assert(!metadata_rx_epoch_commit_timestamp(
+        true, true, 7, 1000, true, false, 7, 1000, 2048,
+        &have_expected, &timestamp_epoch, &expected_timestamp));
+    assert(!have_expected && timestamp_epoch == 3 && expected_timestamp == 44);
+    assert(!metadata_rx_epoch_commit_timestamp(
+        true, true, 7, 1000, true, true, 8, 1000, 2048,
+        &have_expected, &timestamp_epoch, &expected_timestamp));
+    assert(!metadata_rx_epoch_commit_timestamp(
+        true, true, 7, 1000, true, true, 7, 1001, 2048,
+        &have_expected, &timestamp_epoch, &expected_timestamp));
+    assert(!have_expected && timestamp_epoch == 3 && expected_timestamp == 44);
 
     /* Epoch zero is a valid tagged identity, distinct from legacy headers. */
     set_tag(header, 0);
