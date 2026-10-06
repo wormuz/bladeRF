@@ -42,6 +42,9 @@ int main(int argc, char **argv)
     };
     struct bladerf *dev = NULL;
     struct bladerf_quick_tune profiles[2];
+    uint32_t first_transaction_id = 0;
+    uint32_t last_transaction_id = 0;
+    bool last_transaction_fastlock = false;
     int status;
     int result = 1;
 
@@ -107,6 +110,11 @@ int main(int argc, char **argv)
             status = bladerf_rx_transition_wait(dev, transaction, &final_event,
                                                 request.timeout_ms);
         }
+        if (first_transaction_id == 0) {
+            first_transaction_id = transaction;
+        }
+        last_transaction_id = transaction;
+        last_transaction_fastlock = use_fastlock;
         if (status == 0) {
             status = bladerf_rx_transition_get_events(
                 dev, transaction, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -185,6 +193,41 @@ int main(int argc, char **argv)
                    (lo_return_ns - spi_done_ns) / 1000.0,
                    (final_event.host_monotonic_ns - config_ns) / 1000.0);
         }
+    }
+
+    if (trials > BLADERF_RF_EVENT_HISTORY_SIZE) {
+        struct bladerf_rx_transition_nios_timing timing = {0};
+
+        status = bladerf_rx_transition_get_nios_timing(
+            dev, first_transaction_id, &timing);
+        if (status != 0 || timing.transaction_retained ||
+            timing.nios_retune_observed || timing.device_duration_valid ||
+            timing.device_duration_ticks != 0) {
+            fprintf(stderr, "old NIOS timing was not cleanly evicted: "
+                    "txn=%u retained=%u observed=%u valid=%u ticks=%llu\n",
+                    first_transaction_id, timing.transaction_retained,
+                    timing.nios_retune_observed, timing.device_duration_valid,
+                    (unsigned long long)timing.device_duration_ticks);
+            goto done;
+        }
+
+        status = bladerf_rx_transition_get_nios_timing(
+            dev, last_transaction_id, &timing);
+        if (status != 0 || !timing.transaction_retained ||
+            timing.nios_retune_observed != last_transaction_fastlock ||
+            (last_transaction_fastlock && !timing.device_duration_valid)) {
+            fprintf(stderr, "newest NIOS timing missing after wrap: "
+                    "txn=%u retained=%u observed=%u valid=%u ticks=%llu\n",
+                    last_transaction_id, timing.transaction_retained,
+                    timing.nios_retune_observed, timing.device_duration_valid,
+                    (unsigned long long)timing.device_duration_ticks);
+            goto done;
+        }
+        printf("timing_history oldest_txn=%u evicted=1 newest_txn=%u "
+               "nios_observed=%u duration_valid=%u ticks=%llu\n",
+               first_transaction_id, last_transaction_id,
+               timing.nios_retune_observed, timing.device_duration_valid,
+               (unsigned long long)timing.device_duration_ticks);
     }
 
     result = 0;
