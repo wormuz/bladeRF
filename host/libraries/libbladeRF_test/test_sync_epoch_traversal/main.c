@@ -72,11 +72,27 @@ struct fixture {
 };
 
 static unsigned int rx_overrun_events;
+static unsigned int async_withheld_events;
+static uint32_t async_withheld_reason;
+static unsigned int async_overrun_events;
 
 static void note_rx_overrun(struct bladerf *dev)
 {
     assert(dev != NULL);
     rx_overrun_events++;
+}
+
+static void note_async_withheld(struct bladerf *dev, uint32_t reason)
+{
+    assert(dev != NULL);
+    async_withheld_events++;
+    async_withheld_reason = reason;
+}
+
+static void note_async_overrun(struct bladerf *dev)
+{
+    assert(dev != NULL);
+    async_overrun_events++;
 }
 
 static unsigned int async_rx_callbacks;
@@ -115,6 +131,8 @@ static void *count_async_rx_callback(struct bladerf *dev,
 
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
+    .rx_async_stream_overrun = note_async_overrun,
+    .rx_async_data_withheld = note_async_withheld,
     .rx_async_buffer_valid = validate_async_rx_buffer,
 };
 
@@ -257,6 +275,23 @@ static void test_async_data_withheld_event(void)
     bladerf2_rx_async_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     assert(board_data->rf_transition_event_count == 2);
+
+    board_data->rf_transition_epoch_contract_enabled = false;
+    MUTEX_LOCK(&dev.lock);
+    bladerf2_rx_async_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    MUTEX_UNLOCK(&dev.lock);
+    assert(board_data->rf_transition_event_count == 3);
+    event = &board_data->rf_transition_events[2];
+    assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(event->flags == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    MUTEX_LOCK(&dev.lock);
+    bladerf2_rx_async_stream_overrun(&dev);
+    MUTEX_UNLOCK(&dev.lock);
+    assert(board_data->rf_transition_event_count == 4);
+    event = &board_data->rf_transition_events[3];
+    assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
+    assert(event->flags == BLADERF_RF_STREAM_STATUS_OVERRUN);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
@@ -514,11 +549,21 @@ int main(void)
     async_stream.user_data = async_samples;
     async_rx_callbacks = 0;
     async_rx_event_wakeups = 0;
+    async_withheld_events = 0;
+    async_withheld_reason = 0;
+    async_overrun_events = 0;
+    assert(MUTEX_INIT(&f.dev.lock) == 0);
+    MUTEX_LOCK(&f.dev.lock);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples) / 2) == async_samples);
-    assert(rx_overrun_events == 3);
+    MUTEX_UNLOCK(&f.dev.lock);
+    assert(MUTEX_DESTROY(&f.dev.lock) == 0);
+    assert(rx_overrun_events == 2);
+    assert(async_overrun_events == 1);
     assert(async_rx_callbacks == 0);
     assert(async_rx_event_wakeups == 1);
+    assert(async_withheld_events == 1);
+    assert(async_withheld_reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     allow_async_rx_buffer = false;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
@@ -530,7 +575,7 @@ int main(void)
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 2);
-    assert(rx_overrun_events == 3);
+    assert(rx_overrun_events == 2);
     allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
@@ -545,7 +590,7 @@ int main(void)
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);
-    assert(rx_overrun_events == 3);
+    assert(rx_overrun_events == 2);
     fixture_destroy(&f);
 
     return 0;

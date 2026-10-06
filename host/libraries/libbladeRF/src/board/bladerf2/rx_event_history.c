@@ -96,8 +96,12 @@ void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
 
     /* This is called from the USB callback; keep it independent of dev->lock. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->rf_transition_epoch_contract_enabled &&
-        !board_data->rx_async_data_withheld_reported) {
+    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER) {
+        /* A short USB transfer is invalid even in legacy mode, where the
+         * epoch gate itself is disabled. Record each occurrence. */
+        should_report = true;
+    } else if (board_data->rf_transition_epoch_contract_enabled &&
+               !board_data->rx_async_data_withheld_reported) {
         board_data->rx_async_data_withheld_reported = true;
         should_report = true;
     }
@@ -155,5 +159,28 @@ void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
     event.error_code = 0;
+    bladerf2_rf_event_append(board_data, &event);
+}
+
+void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* The libusb callback cannot wait for dev->lock: a setter may own it while
+     * blocked on this same USB event loop. Only snapshot lock-safe identity. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = board_data->rf_transition_certified_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
     bladerf2_rf_event_append(board_data, &event);
 }

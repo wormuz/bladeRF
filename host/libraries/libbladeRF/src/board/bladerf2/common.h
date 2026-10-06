@@ -270,6 +270,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev);
+void bladerf2_rx_async_stream_overrun(struct bladerf *dev);
 void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
                               const struct bladerf_rf_event *event);
 void bladerf2_rf_event_append_locked(

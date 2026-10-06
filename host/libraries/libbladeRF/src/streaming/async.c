@@ -45,8 +45,28 @@ void async_notify_rx_overrun(struct bladerf_stream *stream)
     }
 
     dev = stream->dev;
-    if (dev->board != NULL && dev->board->rx_stream_overrun != NULL) {
-        dev->board->rx_stream_overrun(dev);
+    if (dev->board != NULL) {
+        if (dev->board->rx_async_stream_overrun != NULL) {
+            dev->board->rx_async_stream_overrun(dev);
+        } else if (dev->board->rx_stream_overrun != NULL) {
+            dev->board->rx_stream_overrun(dev);
+        }
+    }
+}
+
+static void async_notify_rx_withheld(struct bladerf_stream *stream,
+                                     uint32_t reason)
+{
+    struct bladerf *dev;
+
+    if (stream == NULL || stream->dev == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    dev = stream->dev;
+    if (dev->board != NULL && dev->board->rx_async_data_withheld != NULL) {
+        dev->board->rx_async_data_withheld(dev, reason);
     }
 }
 
@@ -63,6 +83,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
+        async_notify_rx_withheld(stream,
+                                 BLADERF_RF_WITHHELD_SHORT_TRANSFER);
         async_notify_rx_overrun(stream);
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
                                  stream->user_data);

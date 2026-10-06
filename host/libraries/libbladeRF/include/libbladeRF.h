@@ -4717,8 +4717,9 @@ typedef enum {
     /** RX async format cannot carry the epoch identity required by the
      * active data-validity contract. `flags` contains the bladerf_format. */
     BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED,
-    /** Async RX IQ was withheld by the active epoch validity gate. `flags`
-     * identifies the reason; emitted once until valid IQ resumes. */
+    /** Async RX IQ was withheld by a validity or transfer-integrity check.
+     * `flags` identifies the reason; epoch-gate reasons are coalesced until
+     * valid IQ resumes, while each short transfer is recorded separately. */
     BLADERF_RF_EVT_RX_DATA_WITHHELD,
     /** NIOS did not acknowledge aborting an incomplete RX epoch. IQ remains
      * invalid; `error_code` contains the ABORT command failure. */
@@ -4747,6 +4748,8 @@ typedef enum {
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
 #define BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH (1U << 1)
 #define BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY (1U << 2)
+/** This asynchronous USB transfer was short and no IQ from it was delivered. */
+#define BLADERF_RF_WITHHELD_SHORT_TRANSFER (1U << 3)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and
