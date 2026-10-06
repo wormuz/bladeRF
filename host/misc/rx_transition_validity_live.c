@@ -32,6 +32,45 @@ static int check_no_epoch_event(struct bladerf *dev, uint32_t txn)
     return 0;
 }
 
+static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
+                                   int16_t *samples,
+                                   struct bladerf_rf_event *event,
+                                   uint32_t *txn)
+{
+    const struct bladerf_rx_transition_request request = {
+        .target_frequency_hz = frequency_hz,
+        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED,
+        .timeout_ms = 2000,
+        .require_rx_data_valid = true,
+        .epoch_settle_samples = 0,
+    };
+    int status = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+                                             &request, txn);
+    if (status == 0) {
+        status = bladerf_rx_transition_wait(dev, *txn, event, 2000);
+    }
+    if (status != 0) {
+        return status;
+    }
+
+    for (unsigned attempt = 0; attempt < 5; ++attempt) {
+        struct bladerf_metadata metadata = {0};
+        metadata.flags = BLADERF_META_FLAG_RX_NOW;
+        status = bladerf_sync_rx(dev, samples, 8192, &metadata, 2000);
+        if (status == 0 && metadata.rx_epoch_id_valid &&
+            metadata.rx_epoch_id == event->epoch_id &&
+            metadata.actual_count == 8192 &&
+            (metadata.status & BLADERF_META_STATUS_OVERRUN) == 0 &&
+            metadata.timestamp >= event->fpga_timestamp) {
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "event transition did not restore valid IQ at %llu Hz\n",
+            (unsigned long long)frequency_hz);
+    return BLADERF_ERR_UNEXPECTED;
+}
+
 int main(void)
 {
     struct bladerf *dev = NULL;
@@ -128,37 +167,36 @@ int main(void)
         goto cleanup;
     }
 
-    const struct bladerf_rx_transition_request recover_valid = {
-        .target_frequency_hz = 1835300000ULL,
-        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED,
-        .timeout_ms = 2000,
-        .require_rx_data_valid = true,
-        .epoch_settle_samples = 0,
-    };
-    CHECK(bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
-                                     &recover_valid, &txn));
-    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
-    accepted = false;
-    for (unsigned attempt = 0; attempt < 5 && !accepted; ++attempt) {
-        metadata = (struct bladerf_metadata){0};
-        metadata.flags = BLADERF_META_FLAG_RX_NOW;
-        status = bladerf_sync_rx(dev, samples, 8192, &metadata, 2000);
-        accepted = status == 0 && metadata.rx_epoch_id_valid &&
-                   metadata.rx_epoch_id == event.epoch_id &&
-                   metadata.actual_count == 8192 &&
-                   (metadata.status & BLADERF_META_STATUS_OVERRUN) == 0 &&
-                   metadata.timestamp >= event.fpga_timestamp;
-    }
-    if (!accepted) {
-        fprintf(stderr, "event transition did not restore valid IQ after legacy retune\n");
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
+    /* Bandwidth and sample-rate changes also invalidate the old datapath
+     * certificate; each must require a fresh event transition. */
+    CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 4500000, NULL));
+    metadata = (struct bladerf_metadata){0};
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
+        fprintf(stderr, "bandwidth change left RX epoch certified: %s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
-    printf("RX validity policy: PASS control_txn=%u legacy_retune=fenced; "
-           "recovery_txn=%u epoch=%u timestamp=%llu\n",
-           txn - 2, txn, event.epoch_id,
-           (unsigned long long)metadata.timestamp);
+    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 3840000, NULL));
+    metadata = (struct bladerf_metadata){0};
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
+        fprintf(stderr, "sample-rate change left RX epoch certified: %s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
+    printf("RX validity policy: PASS legacy_LO/BW/rate changes=fenced; "
+           "final_txn=%u epoch=%u\n", txn, event.epoch_id);
     status = 0;
 
 cleanup:

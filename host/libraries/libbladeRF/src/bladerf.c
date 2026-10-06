@@ -709,6 +709,18 @@ int bladerf_get_gain_stages(struct bladerf *dev,
 /* Sample Rate */
 /******************************************************************************/
 
+/* Public legacy RF configuration setters do not produce a new certified RX
+ * epoch. Revoke any prior certificate before changing the RX signal path. */
+static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
+                                                bladerf_channel ch)
+{
+    if (!BLADERF_CHANNEL_IS_TX(ch) &&
+        dev->board->invalidate_rx_data != NULL) {
+        return dev->board->invalidate_rx_data(dev, ch);
+    }
+    return 0;
+}
+
 int bladerf_set_sample_rate(struct bladerf *dev,
                             bladerf_channel ch,
                             bladerf_sample_rate rate,
@@ -716,6 +728,11 @@ int bladerf_set_sample_rate(struct bladerf *dev,
 {
     int status;
     bladerf_feature feature = dev->feature;
+
+    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    if (status != 0) {
+        return status;
+    }
 
     MUTEX_LOCK(&dev->lock);
     status = dev->board->set_sample_rate(dev, ch, rate, actual);
@@ -764,6 +781,11 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     int status;
     bladerf_feature feature = dev->feature;
 
+    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
     status = dev->board->set_rational_sample_rate(dev, ch, rate, actual);
     MUTEX_UNLOCK(&dev->lock);
@@ -810,6 +832,12 @@ int bladerf_set_bandwidth(struct bladerf *dev,
                           bladerf_bandwidth *actual)
 {
     int status;
+
+    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_bandwidth(dev, ch, bandwidth, actual);
@@ -865,15 +893,9 @@ int bladerf_set_frequency(struct bladerf *dev,
 {
     int status;
 
-    /* A legacy frequency setter does not produce a confirmed RX epoch.
-     * Revoke any previously certified sync-RX data before touching the RFIC;
-     * a later event-driven transition is required to certify data again. */
-    if (!BLADERF_CHANNEL_IS_TX(ch) &&
-        dev->board->invalidate_rx_data != NULL) {
-        status = dev->board->invalidate_rx_data(dev, ch);
-        if (status != 0) {
-            return status;
-        }
+    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    if (status != 0) {
+        return status;
     }
 
     MUTEX_LOCK(&dev->lock);
