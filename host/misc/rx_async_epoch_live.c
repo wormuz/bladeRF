@@ -250,6 +250,36 @@ static int event_transition(struct bladerf *dev, uint64_t frequency_hz,
     return status;
 }
 
+static int require_first_host_data_event(
+    struct bladerf *dev, const struct bladerf_rf_event *epoch_event)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    bool complete = false;
+    int status = bladerf_rx_transition_get_events(
+        dev, epoch_event->transaction_id, events,
+        BLADERF_RF_EVENT_HISTORY_SIZE, &count, &complete);
+    if (status != 0 || !complete) {
+        fprintf(stderr, "first-host-data trace unavailable txn=%u status=%s "
+                "complete=%u count=%u\n", epoch_event->transaction_id,
+                bladerf_strerror(status), complete, count);
+        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA &&
+            events[i].epoch_id == epoch_event->epoch_id &&
+            events[i].fpga_timestamp >= epoch_event->fpga_timestamp) {
+            return 0;
+        }
+    }
+
+    fprintf(stderr, "no RX_FIRST_VALID_HOST_DATA for async epoch=%u txn=%u "
+            "after %u valid callbacks\n", epoch_event->epoch_id,
+            epoch_event->transaction_id, count);
+    return BLADERF_ERR_UNEXPECTED;
+}
+
 int main(void)
 {
     struct live_stream live = {0};
@@ -422,6 +452,13 @@ int main(void)
         stop_stream(&live, stream_thread);
         goto cleanup;
     }
+    status = require_first_host_data_event(live.dev, &event);
+    if (status != 0) {
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    fprintf(stderr, "async first-host-data event: PASS txn=%u epoch=%u\n",
+            event.transaction_id, event.epoch_id);
 
     /* Overflow the bounded history while paired RX1+RX2 async traffic keeps
      * moving. Resuming callback polling must report the missing cursor range. */

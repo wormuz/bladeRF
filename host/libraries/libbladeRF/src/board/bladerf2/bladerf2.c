@@ -1716,6 +1716,18 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         board_data->rx_async_format_unsupported_reported = false;
         board_data->rx_async_data_withheld_reported = false;
         board_data->rx_async_timestamp_discontinuity_reported = false;
+
+        /* A validated async META transfer is the first host-visible IQ for
+         * this epoch just as a complete sync read is. Record it before
+         * invoking the application callback, atomically with the admission
+         * commit. This path never takes dev->lock from the USB callback. */
+        struct bladerf_metadata first_packet = {0};
+        first_packet.timestamp = metadata_get_timestamp(bytes);
+        first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
+        first_packet.rx_epoch_id = epoch_id;
+        first_packet.rx_epoch_id_valid = 1;
+        bladerf2_rx_transition_note_first_packet_epoch_locked(
+            dev, &first_packet);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return true;
     }

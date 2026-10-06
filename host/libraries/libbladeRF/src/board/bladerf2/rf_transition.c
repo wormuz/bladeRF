@@ -310,8 +310,14 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
         }
+        /* Publish epoch-valid and its certificate atomically with respect to
+         * async admission. Otherwise a first valid USB transfer can observe
+        * the certificate before its RX_EPOCH_VALID history entry exists and
+         * permanently miss RX_FIRST_VALID_HOST_DATA. */
+        MUTEX_LOCK(&board_data->rf_transition_event_lock);
+        bladerf2_rf_event_append_locked(board_data, &event);
+        MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        bladerf2_rf_event_append(board_data, &event);
         board_data->rf_transition_state = state;
     });
 }
@@ -1333,7 +1339,7 @@ static bool _is_terminal_event(bladerf_rf_event_type type)
            type == BLADERF_RF_EVT_ERROR;
 }
 
-void bladerf2_rx_transition_note_first_packet(
+void bladerf2_rx_transition_note_first_packet_epoch_locked(
     struct bladerf *dev, const struct bladerf_metadata *metadata)
 {
     struct bladerf2_board_data *board_data;
@@ -1353,57 +1359,82 @@ void bladerf2_rx_transition_note_first_packet(
         return;
     }
 
-    WITH_MUTEX(&dev->lock, {
-        MUTEX_LOCK(&board_data->rf_transition_event_lock);
-        uint32_t retained = board_data->rf_transition_event_count;
+    /* Caller holds rx_async_epoch_lock so event publication is atomic with
+     * respect to certificate revocation and async buffer admission. */
+    if (!board_data->rf_transition_epoch_contract_enabled ||
+        !board_data->rf_transition_epoch_certified ||
+        board_data->rf_transition_certified_epoch_id !=
+            metadata->rx_epoch_id ||
+        metadata->timestamp < board_data->rf_transition_first_valid_timestamp) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    uint32_t retained = board_data->rf_transition_event_count;
+    for (uint32_t i = 0; i < retained; ++i) {
+        uint32_t slot = (board_data->rf_transition_event_head +
+            BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
+            BLADERF2_RF_EVENT_HISTORY_SIZE;
+        const struct bladerf_rf_event *candidate =
+            &board_data->rf_transition_events[slot];
+        if (candidate->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
+            candidate->epoch_id == metadata->rx_epoch_id &&
+            metadata->timestamp >= candidate->fpga_timestamp) {
+            epoch_event = *candidate;
+            found_epoch = true;
+            break;
+        }
+    }
+
+    if (found_epoch) {
         for (uint32_t i = 0; i < retained; ++i) {
             uint32_t slot = (board_data->rf_transition_event_head +
                 BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
                 BLADERF2_RF_EVENT_HISTORY_SIZE;
             const struct bladerf_rf_event *candidate =
                 &board_data->rf_transition_events[slot];
-            if (candidate->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
-                candidate->epoch_id == metadata->rx_epoch_id &&
-                metadata->timestamp >= candidate->fpga_timestamp) {
-                epoch_event = *candidate;
-                found_epoch = true;
+            if (candidate->transaction_id == epoch_event.transaction_id &&
+                candidate->event_type ==
+                    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
+                already_recorded = true;
                 break;
             }
         }
+    }
 
-        if (found_epoch) {
-            for (uint32_t i = 0; i < retained; ++i) {
-                uint32_t slot = (board_data->rf_transition_event_head +
-                    BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
-                    BLADERF2_RF_EVENT_HISTORY_SIZE;
-                const struct bladerf_rf_event *candidate =
-                    &board_data->rf_transition_events[slot];
-                if (candidate->transaction_id == epoch_event.transaction_id &&
-                    candidate->event_type ==
-                        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
-                    already_recorded = true;
-                    break;
-                }
-            }
-        }
+    if (found_epoch && !already_recorded) {
+        event.host_monotonic_ns = _monotonic_ns();
+        event.fpga_timestamp = metadata->timestamp;
+        event.transaction_id = epoch_event.transaction_id;
+        event.epoch_id = epoch_event.epoch_id;
+        event.requested_rx_lo_hz = epoch_event.requested_rx_lo_hz;
+        event.readback_rx_lo_hz = epoch_event.readback_rx_lo_hz;
+        event.rfic_status = epoch_event.rfic_status;
+        event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
+        event.event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+        event.flags = metadata->status;
+        event.error_code = 0;
 
-        if (found_epoch && !already_recorded) {
-            event.host_monotonic_ns = _monotonic_ns();
-            event.fpga_timestamp = metadata->timestamp;
-            event.transaction_id = epoch_event.transaction_id;
-            event.epoch_id = epoch_event.epoch_id;
-            event.requested_rx_lo_hz = epoch_event.requested_rx_lo_hz;
-            event.readback_rx_lo_hz = epoch_event.readback_rx_lo_hz;
-            event.rfic_status = epoch_event.rfic_status;
-            event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
-            event.event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
-            event.flags = metadata->status;
-            event.error_code = 0;
+        bladerf2_rf_event_append_locked(board_data, &event);
+    }
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+}
 
-            bladerf2_rf_event_append_locked(board_data, &event);
-        }
-        MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-    });
+void bladerf2_rx_transition_note_first_packet(
+    struct bladerf *dev, const struct bladerf_metadata *metadata)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL || metadata == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* Sync RX calls this only after returning from its parser. Async RX uses
+     * the epoch-locked helper at the admission commit point. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_rx_transition_note_first_packet_epoch_locked(dev, metadata);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 int bladerf_rx_transition_get_events(struct bladerf *dev,

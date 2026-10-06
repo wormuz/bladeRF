@@ -4703,6 +4703,9 @@ typedef enum {
     BLADERF_RF_EVT_ERROR,
     BLADERF_RF_EVT_LO_SET_RETURNED,
     BLADERF_RF_EVT_LO_READBACK_MATCH,
+    /** First complete, epoch- and timestamp-validated host RX data was
+     * admitted by sync or async RX. This proves host data-path delivery, not
+     * signal quality or successful application decoding. */
     BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     BLADERF_RF_EVT_SPI_WRITE_BEGIN,
     /** RFIC control conditions completed; does not establish IQ validity. */

@@ -270,6 +270,10 @@ struct bladerf2_board_data {
  * never participates in determining whether the epoch is valid. */
 void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata);
+/* Caller holds rx_async_epoch_lock; lets async admission and host-data event
+ * publication share one linearization point without taking dev->lock. */
+void bladerf2_rx_transition_note_first_packet_epoch_locked(
+    struct bladerf *dev, const struct bladerf_metadata *metadata);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
