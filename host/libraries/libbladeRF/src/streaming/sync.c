@@ -938,16 +938,16 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                              s->meta.curr_timestamp <
                                  s->meta.rx_epoch_min_timestamp ||
                              (s->meta.rx_epoch_id_filter_enabled &&
-                              (!s->meta.msg_epoch_id_valid ||
-                               s->meta.msg_epoch_id !=
-                                   s->meta.rx_epoch_expected_id)));
+                              !metadata_rx_epoch_matches(
+                                  s->meta.curr_msg,
+                                  s->meta.rx_epoch_expected_id)));
 
                         const bool epoch_id_mismatch =
                             s->meta.rx_epoch_boundary_enabled &&
                             s->meta.rx_epoch_id_filter_enabled &&
-                            (!s->meta.msg_epoch_id_valid ||
-                             s->meta.msg_epoch_id !=
-                                 s->meta.rx_epoch_expected_id);
+                            !metadata_rx_epoch_matches(
+                                s->meta.curr_msg,
+                                s->meta.rx_epoch_expected_id);
 
                         if (epoch_id_mismatch && copied_data) {
                             /* A packet from another epoch after current-epoch
@@ -988,9 +988,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     case SYNC_META_STATE_SAMPLES:
                         if (s->meta.rx_epoch_boundary_enabled &&
                             s->meta.rx_epoch_id_filter_enabled &&
-                            (!s->meta.msg_epoch_id_valid ||
-                             s->meta.msg_epoch_id !=
-                                 s->meta.rx_epoch_expected_id)) {
+                            !metadata_rx_epoch_matches(
+                                s->meta.curr_msg,
+                                s->meta.rx_epoch_expected_id)) {
                             unsigned int left = left_in_msg(s);
                             s->meta.curr_msg_off += left;
                             s->meta.curr_timestamp +=

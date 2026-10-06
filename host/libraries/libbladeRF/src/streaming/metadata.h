@@ -121,6 +121,16 @@ static inline bool metadata_get_rx_epoch_id(const uint8_t *header,
     return true;
 }
 
+/* A message is admissible in an epoch-filtered sample-META stream only when
+ * it carries an explicit matching ID. Missing tags fail closed. */
+static inline bool metadata_rx_epoch_matches(const uint8_t *header,
+                                             uint8_t expected_epoch_id)
+{
+    uint8_t epoch_id;
+    return metadata_get_rx_epoch_id(header, &epoch_id) &&
+           epoch_id == expected_epoch_id;
+}
+
 static inline uint64_t metadata_get_timestamp(const uint8_t *header)
 {
     uint64_t ret;
