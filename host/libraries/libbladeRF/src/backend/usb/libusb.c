@@ -103,6 +103,7 @@ struct lusb_stream_data {
     bool rx_status_fault_injected;
     bool rx_event_error_injected;
     bool rx_submit_error_injected;
+    bool rx_api_submit_error_injected;
 #endif
 
 
@@ -1514,9 +1515,14 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
      */
     MUTEX_UNLOCK(&stream->lock);
 #ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
-    if (!stream_data->rx_submit_error_injected &&
-        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
-        getenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR") != NULL) {
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        !stream_data->rx_api_submit_error_injected &&
+        getenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR") != NULL) {
+        stream_data->rx_api_submit_error_injected = true;
+        status = LIBUSB_ERROR_IO;
+    } else if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+               !stream_data->rx_submit_error_injected &&
+               getenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR") != NULL) {
         stream_data->rx_submit_error_injected = true;
         status = LIBUSB_ERROR_IO;
     } else
@@ -1571,6 +1577,7 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream_data->rx_status_fault_injected = false;
     stream_data->rx_event_error_injected = false;
     stream_data->rx_submit_error_injected = false;
+    stream_data->rx_api_submit_error_injected = false;
 #endif
     stream_data->cancel_deadline_ns = 0;
     stream_data->done_flag = 0;

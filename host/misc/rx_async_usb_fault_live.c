@@ -1,4 +1,4 @@
-/* Test-only xA4 check for the real libusb RX terminal-status callback path. */
+/* Test-only xA4 checks for terminal libusb RX failures and notifications. */
 #define _POSIX_C_SOURCE 200809L
 #include <libbladeRF.h>
 
@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct fault_test {
     struct bladerf *dev;
@@ -20,8 +21,12 @@ struct fault_test {
     atomic_uint overrun_events;
     atomic_bool fault_seen;
     atomic_bool data_after_fault;
+    atomic_bool api_submit_requested;
+    atomic_bool api_submit_mode;
+    void *api_buffer;
     uint32_t expected_reason;
     int expected_stream_status;
+    int api_submit_status;
     uint64_t event_cursor;
     int stream_status;
 };
@@ -64,6 +69,11 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         atomic_store(&test->data_after_fault, true);
         return BLADERF_STREAM_SHUTDOWN;
     }
+    if (atomic_load(&test->api_submit_mode)) {
+        test->api_buffer = samples;
+        atomic_store(&test->api_submit_requested, true);
+        return BLADERF_STREAM_NO_DATA;
+    }
     if (atomic_fetch_add(&test->data_callbacks, 1) >= 3) {
         return BLADERF_STREAM_SHUTDOWN;
     }
@@ -74,6 +84,24 @@ static void *run_stream(void *arg)
 {
     struct fault_test *test = arg;
     test->stream_status = bladerf_stream(test->stream, BLADERF_RX_X2);
+    return NULL;
+}
+
+static void *run_api_submit(void *arg)
+{
+    struct fault_test *test = arg;
+    const struct timespec pause = { .tv_sec = 0, .tv_nsec = 1000000 };
+
+    while (!atomic_load(&test->api_submit_requested) &&
+           !atomic_load(&test->fault_seen)) {
+        nanosleep(&pause, NULL);
+    }
+    if (atomic_load(&test->api_submit_requested)) {
+        setenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR", "IO", 1);
+        test->api_submit_status = bladerf_submit_stream_buffer(
+            test->stream, test->api_buffer, 2000);
+        unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
+    }
     return NULL;
 }
 
@@ -107,6 +135,10 @@ int main(void)
     } else if (strcmp(fault_status, "CANCELLED") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
+        atomic_store(&test.api_submit_mode, true);
     } else {
         fprintf(stderr, "unknown transfer status: %s\n", fault_status);
         return 2;
@@ -170,7 +202,17 @@ int main(void)
         goto cleanup;
     }
 
-    if ((strcmp(fault_status, "EVENT_IO") == 0
+    if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
+        pthread_t submit_thread;
+        if (pthread_create(&thread, NULL, run_stream, &test) != 0 ||
+            pthread_create(&submit_thread, NULL, run_api_submit, &test) != 0) {
+            fprintf(stderr, "could not start API submit fault test\n");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto cleanup;
+        }
+        pthread_join(submit_thread, NULL);
+        pthread_join(thread, NULL);
+    } else if ((strcmp(fault_status, "EVENT_IO") == 0
              ? setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR", "IO", 1)
          : strcmp(fault_status, "SUBMIT_IO") == 0
              ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR", "IO", 1)
@@ -185,11 +227,15 @@ int main(void)
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
     unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
     unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
 
     const bool event_loop_fault = strcmp(fault_status, "EVENT_IO") == 0;
     const bool pre_callback_fault = event_loop_fault ||
+                                    strcmp(fault_status, "API_SUBMIT_IO") == 0 ||
                                     strcmp(fault_status, "SUBMIT_IO") == 0;
     if (test.stream_status != test.expected_stream_status ||
+        (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
+         test.api_submit_status != BLADERF_ERR_IO) ||
         atomic_load(&test.withheld_events) != 1 ||
         (pre_callback_fault ? atomic_load(&test.overrun_events) < 1
                             : atomic_load(&test.overrun_events) != 1) ||
@@ -197,13 +243,14 @@ int main(void)
                             : atomic_load(&test.event_callbacks) != 1) ||
         atomic_load(&test.data_after_fault)) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
-                "overrun=%u data_after_fault=%u expected_reason=0x%x\n",
+                "overrun=%u data_after_fault=%u api_submit=%s expected_reason=0x%x\n",
                 bladerf_strerror(test.stream_status),
                 atomic_load(&test.data_callbacks),
                 atomic_load(&test.event_callbacks),
                 atomic_load(&test.withheld_events),
                 atomic_load(&test.overrun_events),
-                atomic_load(&test.data_after_fault), test.expected_reason);
+                atomic_load(&test.data_after_fault),
+                bladerf_strerror(test.api_submit_status), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
     } else {
         printf("PASS libusb RX_X2 %s callback: data=%u event_only=%u "
@@ -222,6 +269,7 @@ cleanup:
         unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
         unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
         unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
+        unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
         bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), false);
         bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), false);
         if (test.stream != NULL) {
