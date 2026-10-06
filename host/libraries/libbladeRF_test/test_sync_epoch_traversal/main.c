@@ -54,8 +54,8 @@ static void write_msg(uint8_t *msg, uint64_t timestamp, uint8_t epoch_id,
 
     int16_t *iq = (int16_t *)(msg + METADATA_HEADER_SIZE);
     for (unsigned int i = 0; i < MSG_SAMPLES; ++i) {
-        iq[2 * i] = marker;
-        iq[2 * i + 1] = (int16_t)-marker;
+        iq[2 * i] = (int16_t)(marker + i);
+        iq[2 * i + 1] = (int16_t)-(marker + i);
     }
 }
 
@@ -122,11 +122,12 @@ static void receive(struct fixture *f, int16_t *out, unsigned int count,
 }
 
 static void assert_marker(const int16_t *iq, unsigned int count,
-                          int16_t marker)
+                          int16_t marker, unsigned int sample_offset)
 {
     for (unsigned int i = 0; i < count; ++i) {
-        assert(iq[2 * i] == marker);
-        assert(iq[2 * i + 1] == (int16_t)-marker);
+        const int16_t expected = (int16_t)(marker + sample_offset + i);
+        assert(iq[2 * i] == expected);
+        assert(iq[2 * i + 1] == (int16_t)-expected);
     }
 }
 
@@ -145,7 +146,7 @@ int main(void)
     assert(meta.timestamp == MSG_SAMPLES);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
-    assert_marker(out, MSG_SAMPLES, 222);
+    assert_marker(out, MSG_SAMPLES, 222, 0);
     fixture_destroy(&f);
 
     /* A stale message after copied current-epoch data returns the valid
@@ -162,12 +163,12 @@ int main(void)
     assert(meta.timestamp == 1000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert(meta.status & BLADERF_META_STATUS_OVERRUN);
-    assert_marker(out, MSG_SAMPLES, 333);
+    assert_marker(out, MSG_SAMPLES, 333, 0);
 
     receive(&f, out, MSG_SAMPLES, &meta);
     assert(meta.timestamp == 1000 + 2 * MSG_SAMPLES);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
-    assert_marker(out, MSG_SAMPLES, 555);
+    assert_marker(out, MSG_SAMPLES, 555, 0);
     fixture_destroy(&f);
 
     /* Enforce the first-valid boundary inside a matching message and report
@@ -178,7 +179,7 @@ int main(void)
     receive(&f, out, 100, &meta);
     assert(meta.timestamp == 1000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
-    assert_marker(out, 100, 666);
+    assert_marker(out, 100, 666, 100);
     fixture_destroy(&f);
 
     return 0;
