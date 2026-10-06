@@ -81,14 +81,19 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                           stream->user_data);
     }
 
-    /* A zero-sample callback is an event-only wakeup. Reuse the original
-     * transfer buffer unless the consumer explicitly shuts down, requests
-     * external submission, or supplies another buffer. */
+    /* A zero-sample callback is an event-only wakeup. It may return a
+     * replacement buffer as usual, or use REUSE_BUFFER to recycle the
+     * withheld transfer without advancing an application buffer pool. */
     if (next_buffer == BLADERF_STREAM_SHUTDOWN ||
         next_buffer == BLADERF_STREAM_NO_DATA) {
         return next_buffer;
     }
-    return next_buffer != NULL ? next_buffer : samples;
+    /* A callback that normally rotates buffers may use this sentinel to
+     * acknowledge that no application buffer was consumed for this wakeup. */
+    if (next_buffer != BLADERF_STREAM_REUSE_BUFFER) {
+        return next_buffer;
+    }
+    return samples;
 }
 
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.

@@ -223,6 +223,10 @@ struct bladerf2_board_data {
     uint8_t rf_transition_epoch_id;
     bool rx_epoch_snapshot_capability_checked;
     bool rx_epoch_snapshot_supported;
+    /* Async USB callback threads must snapshot epoch policy without taking
+     * dev->lock: host setters hold dev->lock while waiting on USB control I/O. */
+    MUTEX rx_async_epoch_lock;
+    bool rx_async_epoch_lock_initialized;
     uint64_t rf_transition_requested_frequency_hz;
     uint64_t rf_transition_readback_frequency_hz;
     bladerf_rf_state rf_transition_state;

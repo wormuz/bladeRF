@@ -103,7 +103,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
         assert(samples == NULL);
         assert(user_data != NULL);
         async_rx_event_wakeups++;
-        return user_data;
+        return BLADERF_STREAM_REUSE_BUFFER;
     } else {
         assert(samples != NULL);
         async_rx_callbacks++;

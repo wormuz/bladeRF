@@ -280,6 +280,8 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         RETURN_ERROR_STATUS("calloc board_data", BLADERF_ERR_MEM);
     }
     dev->board_data = board_data;
+    (void)MUTEX_INIT(&board_data->rx_async_epoch_lock);
+    board_data->rx_async_epoch_lock_initialized = true;
     board_data->phy = NULL;
     board_data->rfic_init_params = (void *)&bladerf2_rfic_init_params;
 
@@ -615,6 +617,11 @@ static void bladerf2_close(struct bladerf *dev)
                      */
                     rfic->standby(dev);
                 }
+            }
+
+            if (board_data->rx_async_epoch_lock_initialized) {
+                MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+                board_data->rx_async_epoch_lock_initialized = false;
             }
 
             free(board_data);
@@ -1624,15 +1631,13 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     }
 
     board_data = dev->board_data;
-    MUTEX_LOCK(&dev->lock);
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     contract_enabled = board_data->rf_transition_epoch_contract_enabled;
-    epoch_valid = board_data->rf_transition_epoch_certified &&
-                  board_data->rf_transition_state ==
-                      BLADERF_RF_STATE_RX_DATA_VALID;
+    epoch_valid = board_data->rf_transition_epoch_certified;
     epoch_id = board_data->rf_transition_certified_epoch_id;
     first_valid_timestamp = board_data->rf_transition_first_valid_timestamp;
     message_size = board_data->msg_size;
-    MUTEX_UNLOCK(&dev->lock);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!contract_enabled) {
         return true;

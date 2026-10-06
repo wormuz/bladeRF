@@ -270,6 +270,7 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         event.readback_rx_lo_hz = readback_hz;
 
         board_data->rf_transition_last_event = event;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         if (type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
             state == BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = true;
@@ -280,6 +281,7 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
         }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_events[board_data->rf_transition_event_head] =
             event;
         board_data->rf_transition_event_sequence++;
@@ -365,7 +367,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_epoch_certified = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_events[board_data->rf_transition_event_head] =
             event;
         board_data->rf_transition_event_sequence++;
@@ -613,7 +617,9 @@ static int _bladerf_rx_transition_begin(
             }
             board_data->rf_transition_required_events_mask = required_events_mask;
             if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rf_transition_epoch_contract_enabled = true;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             }
             board_data->rf_transition_requested_frequency_hz =
                 request->target_frequency_hz;

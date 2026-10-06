@@ -2970,6 +2970,13 @@ int CALL_CONV bladerf_sync_rx(struct bladerf *dev,
  */
 #define BLADERF_STREAM_NO_DATA ((void *)(-1))
 
+/**
+ * For an event-only RX callback (samples == NULL and num_samples == 0),
+ * recycle the transfer buffer that was withheld from the callback. This is
+ * useful for callbacks that normally rotate among application-owned buffers.
+ */
+#define BLADERF_STREAM_REUSE_BUFFER ((void *)(-2))
+
 /** This opaque structure is used to keep track of stream information */
 struct bladerf_stream;
 
@@ -3028,7 +3035,12 @@ struct bladerf_stream;
  *       buffers produce an event-only callback with `samples == NULL` and
  *       `num_samples == 0`; no IQ is exposed. Short-transfer notifications
  *       use BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow reports the same
- *       event before stream shutdown. PACKET_META remains caller-framed.
+ *       event before stream shutdown. For event-only wakeups, callbacks may
+ *       return an ordinary replacement buffer, SHUTDOWN, or NO_DATA as usual.
+ *       REUSE_BUFFER explicitly recycles the withheld transfer and is
+ *       recommended when the callback normally rotates among application-owned
+ *       buffers.
+ *       PACKET_META remains caller-framed.
  */
 typedef void *(*bladerf_stream_cb)(struct bladerf *dev,
                                    struct bladerf_stream *stream,
