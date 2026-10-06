@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 struct fault_test {
     struct bladerf *dev;
@@ -19,6 +20,8 @@ struct fault_test {
     atomic_uint overrun_events;
     atomic_bool fault_seen;
     atomic_bool data_after_fault;
+    uint32_t expected_reason;
+    int expected_stream_status;
     uint64_t event_cursor;
     int stream_status;
 };
@@ -45,7 +48,7 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         test->event_cursor = next;
         for (uint32_t i = 0; i < count; ++i) {
             if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
-                events[i].flags == BLADERF_RF_WITHHELD_USB_OVERFLOW) {
+                events[i].flags == test->expected_reason) {
                 atomic_fetch_add(&test->withheld_events, 1);
                 atomic_store(&test->fault_seen, true);
             } else if (events[i].event_type ==
@@ -78,6 +81,28 @@ int main(void)
 {
     struct fault_test test = {0};
     pthread_t thread;
+    const char *fault_status = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+    if (fault_status == NULL) {
+        fault_status = "OVERFLOW";
+    }
+    if (strcmp(fault_status, "OVERFLOW") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_OVERFLOW;
+        test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "ERROR") == 0 ||
+               strcmp(fault_status, "STALL") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "TIMEOUT") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TIMEOUT;
+        test.expected_stream_status = BLADERF_ERR_TIMEOUT;
+    } else if (strcmp(fault_status, "NO_DEVICE") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_DEVICE_LOST;
+        test.expected_stream_status = BLADERF_ERR_NODEV;
+    } else {
+        fprintf(stderr, "unknown transfer status: %s\n", fault_status);
+        return 2;
+    }
+
     int status = bladerf_open(&test.dev, NULL);
     if (status != 0) {
         fprintf(stderr, "open failed: %s\n", bladerf_strerror(status));
@@ -136,7 +161,7 @@ int main(void)
         goto cleanup;
     }
 
-    if (setenv("BLADERF_TEST_LIBUSB_RX_STATUS", "OVERFLOW", 1) != 0 ||
+    if (setenv("BLADERF_TEST_LIBUSB_RX_STATUS", fault_status, 1) != 0 ||
         pthread_create(&thread, NULL, run_stream, &test) != 0) {
         fprintf(stderr, "could not arm/start test stream\n");
         status = BLADERF_ERR_UNEXPECTED;
@@ -146,23 +171,24 @@ int main(void)
     pthread_join(thread, NULL);
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
 
-    if (test.stream_status != BLADERF_ERR_IO ||
+    if (test.stream_status != test.expected_stream_status ||
         atomic_load(&test.withheld_events) != 1 ||
         atomic_load(&test.overrun_events) != 1 ||
         atomic_load(&test.event_callbacks) != 1 ||
         atomic_load(&test.data_after_fault)) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
-                "overrun=%u data_after_fault=%u\n",
+                "overrun=%u data_after_fault=%u expected_reason=0x%x\n",
                 bladerf_strerror(test.stream_status),
                 atomic_load(&test.data_callbacks),
                 atomic_load(&test.event_callbacks),
                 atomic_load(&test.withheld_events),
                 atomic_load(&test.overrun_events),
-                atomic_load(&test.data_after_fault));
+                atomic_load(&test.data_after_fault), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
     } else {
-        printf("PASS libusb RX_X2 overflow callback: data=%u event_only=%u "
+        printf("PASS libusb RX_X2 %s callback: data=%u event_only=%u "
                "withheld=%u overrun=%u post_fault_IQ=0 stream=%s\n",
+               fault_status,
                atomic_load(&test.data_callbacks),
                atomic_load(&test.event_callbacks),
                atomic_load(&test.withheld_events),

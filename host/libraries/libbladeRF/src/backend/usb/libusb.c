@@ -1160,10 +1160,22 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
         transfer->status == LIBUSB_TRANSFER_COMPLETED) {
         const char *fault = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
-        if (fault != NULL && strcmp(fault, "OVERFLOW") == 0) {
-            stream_data->rx_status_fault_injected = true;
-            transfer->status = LIBUSB_TRANSFER_OVERFLOW;
-            transfer->actual_length = 0;
+        if (fault != NULL) {
+            if (strcmp(fault, "OVERFLOW") == 0) {
+                transfer->status = LIBUSB_TRANSFER_OVERFLOW;
+            } else if (strcmp(fault, "ERROR") == 0) {
+                transfer->status = LIBUSB_TRANSFER_ERROR;
+            } else if (strcmp(fault, "STALL") == 0) {
+                transfer->status = LIBUSB_TRANSFER_STALL;
+            } else if (strcmp(fault, "TIMEOUT") == 0) {
+                transfer->status = LIBUSB_TRANSFER_TIMED_OUT;
+            } else if (strcmp(fault, "NO_DEVICE") == 0) {
+                transfer->status = LIBUSB_TRANSFER_NO_DEVICE;
+            }
+            if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
+                stream_data->rx_status_fault_injected = true;
+                transfer->actual_length = 0;
+            }
         }
     }
 #endif
