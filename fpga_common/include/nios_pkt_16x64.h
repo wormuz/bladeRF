@@ -105,6 +105,7 @@
 #define NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW 0x02 /* AD9361 ordered row commit */
 #define NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH 0x03 /* Up to 3 ordered byte writes */
 #define NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS 0x04 /* Atomic byte RMW */
+#define NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT 0x05 /* status + first-valid TS low */
 
 /* UPDATE_BITS request data: marker[63:56]=0xa6, mask[55:48], masked value
  * [47:40], reserved[39:0]=0. Success response data is the resulting byte.

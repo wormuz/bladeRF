@@ -18,6 +18,11 @@ static unsigned int calls;
 static unsigned int update_calls;
 static bool update_success = true;
 
+uint64_t rx_epoch_status_snapshot_read(void)
+{
+    return UINT64_C(0x123456789abcdef0);
+}
+
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
 {
@@ -121,13 +126,39 @@ static int run_update_bits_case(bool requested_success,
     return 0;
 }
 
+static int run_epoch_snapshot_case(void)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT,
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = true, success = false;
+
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+    if (target != NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT || write ||
+        addr != 0 || response != UINT64_C(0x123456789abcdef0) || !success) {
+        fprintf(stderr, "epoch snapshot response mismatch: target=%u "
+                        "write=%u addr=0x%x data=0x%016llx success=%u\n",
+                target, write, addr, (unsigned long long)response, success);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
         run_update_bits_case(true, true) ||
-        run_update_bits_case(false, false) || update_calls != 2) {
+        run_update_bits_case(false, false) || update_calls != 2 ||
+        run_epoch_snapshot_case()) {
         return 1;
     }
 

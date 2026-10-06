@@ -16,6 +16,8 @@ enum response_mode {
     RESPONSE_UPDATE_SUCCESS,
     RESPONSE_UPDATE_OLD_FIRMWARE_ECHO,
     RESPONSE_UPDATE_FAILURE,
+    RESPONSE_SNAPSHOT_SUCCESS,
+    RESPONSE_SNAPSHOT_UNSUPPORTED,
 };
 
 static enum response_mode response_mode;
@@ -49,11 +51,21 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     }
 
     nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
+    in_count++;
+    if (target == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT && !write) {
+        if (response_mode == RESPONSE_SNAPSHOT_SUCCESS) {
+            nios_pkt_16x64_resp_pack(bytes, target, false, count,
+                                     UINT64_C(0x10203040a0b0c0d0), true);
+        } else if (response_mode == RESPONSE_SNAPSHOT_UNSUPPORTED) {
+            nios_pkt_16x64_resp_pack(bytes, target, false, count, 0, false);
+        } else {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        return 0;
+    }
     if (!write) {
         return BLADERF_ERR_UNEXPECTED;
     }
-
-    in_count++;
     if (target == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH &&
         response_mode <= RESPONSE_PARTIAL_FAILURE) {
         if (response_mode == RESPONSE_SUCCESS) {
@@ -141,6 +153,27 @@ static int expect_update(enum response_mode mode, int expected_status)
     return 0;
 }
 
+static int expect_snapshot(enum response_mode mode, int expected_status)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint32_t status_word = 0, timestamp_lo = 0;
+    int status;
+
+    response_mode = mode;
+    status = nios_rx_epoch_status_snapshot_read(&dev, &status_word,
+                                                &timestamp_lo);
+    if (status != expected_status ||
+        (expected_status == 0 &&
+         (status_word != 0x10203040 || timestamp_lo != 0xa0b0c0d0))) {
+        fprintf(stderr, "snapshot mismatch: mode=%d status=%d "
+                        "status_word=0x%08x timestamp=0x%08x\n",
+                mode, status, status_word, timestamp_lo);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -150,7 +183,10 @@ int main(void)
         expect_update(RESPONSE_UPDATE_OLD_FIRMWARE_ECHO,
                       BLADERF_ERR_UNSUPPORTED) ||
         expect_update(RESPONSE_UPDATE_FAILURE, BLADERF_ERR_FPGA_OP) ||
-        out_count != 6 || in_count != 6) {
+        expect_snapshot(RESPONSE_SNAPSHOT_SUCCESS, 0) ||
+        expect_snapshot(RESPONSE_SNAPSHOT_UNSUPPORTED,
+                        BLADERF_ERR_UNSUPPORTED) ||
+        out_count != 8 || in_count != 8) {
         return 1;
     }
 

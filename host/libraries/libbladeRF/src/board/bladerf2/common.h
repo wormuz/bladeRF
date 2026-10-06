@@ -218,6 +218,8 @@ struct bladerf2_board_data {
     uint32_t rf_transition_current_id;
     uint32_t rf_transition_required_events_mask;
     uint8_t rf_transition_epoch_id;
+    bool rx_epoch_snapshot_capability_checked;
+    bool rx_epoch_snapshot_supported;
     uint64_t rf_transition_requested_frequency_hz;
     uint64_t rf_transition_readback_frequency_hz;
     bladerf_rf_state rf_transition_state;

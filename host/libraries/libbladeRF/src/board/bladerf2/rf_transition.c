@@ -910,6 +910,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         uint32_t epoch_status_word = 0;
         uint32_t timestamp_lo = 0;
         uint32_t timestamp_hi = 0;
+        uint32_t status_reads = 0;
+        uint32_t status_poll_sleeps = 0;
+        uint64_t status_read_total_ns = 0;
+        uint64_t status_read_max_ns = 0;
         bool epoch_opened = false;
 
         status = nios_rx_epoch_ctrl_cmd(dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
@@ -920,7 +924,31 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
 
         while (_monotonic_ns() < deadline_ns) {
-            status = nios_rx_epoch_status_read(dev, &epoch_status_word);
+            const uint64_t read_begin_ns = _monotonic_ns();
+            if (!board_data->rx_epoch_snapshot_capability_checked ||
+                board_data->rx_epoch_snapshot_supported) {
+                status = nios_rx_epoch_status_snapshot_read(
+                    dev, &epoch_status_word, &timestamp_lo);
+                status_reads++;
+                if (status == BLADERF_ERR_UNSUPPORTED) {
+                    board_data->rx_epoch_snapshot_capability_checked = true;
+                    board_data->rx_epoch_snapshot_supported = false;
+                    status = nios_rx_epoch_status_read(
+                        dev, &epoch_status_word);
+                    status_reads++;
+                } else if (status == 0) {
+                    board_data->rx_epoch_snapshot_capability_checked = true;
+                    board_data->rx_epoch_snapshot_supported = true;
+                }
+            } else {
+                status = nios_rx_epoch_status_read(dev, &epoch_status_word);
+                status_reads++;
+            }
+            const uint64_t read_elapsed_ns = _monotonic_ns() - read_begin_ns;
+            status_read_total_ns += read_elapsed_ns;
+            if (read_elapsed_ns > status_read_max_ns) {
+                status_read_max_ns = read_elapsed_ns;
+            }
             if (status != 0) {
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                            0, 0, 0, status, 0);
@@ -958,8 +986,16 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                 return _fail_transition(dev, board_data,
                                         BLADERF_ERR_UNEXPECTED, final_event);
             }
+            status_poll_sleeps++;
             usleep(POLL_INTERVAL_US);
         }
+
+        log_debug("%s: FPGA epoch status transaction=%u reads=%u sleeps=%u "
+                  "read_total_us=%.3f read_max_us=%.3f opened=%u status=0x%08x\n",
+                  __FUNCTION__, transaction_id, status_reads,
+                  status_poll_sleeps, status_read_total_ns / 1000.0,
+                  status_read_max_ns / 1000.0, epoch_opened,
+                  epoch_status_word);
 
         if (!epoch_opened) {
             log_error("%s: epoch-valid timeout transaction=%u status=0x%08x "
@@ -984,7 +1020,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         /* The FPGA latches first_valid_timestamp at the exact sample
          * boundary. Read both halves only after ACTIVE_NEW/ACTIVE is
          * observed; the latched value remains stable until the next ARM. */
-        status = nios_rx_epoch_ts_read(dev, false, &timestamp_lo);
+        if (!board_data->rx_epoch_snapshot_supported) {
+            status = nios_rx_epoch_ts_read(dev, false, &timestamp_lo);
+        }
         if (status == 0) {
             status = nios_rx_epoch_ts_read(dev, true, &timestamp_hi);
         }

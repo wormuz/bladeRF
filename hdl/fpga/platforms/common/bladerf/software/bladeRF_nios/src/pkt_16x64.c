@@ -119,6 +119,13 @@ void pkt_16x64(struct pkt_buf *b)
 #else
         success = false;
 #endif
+    } else if (!is_write && id == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT) {
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+        data = rx_epoch_status_snapshot_read();
+        success = true;
+#else
+        success = false;
+#endif
     } else if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         const uint8_t marker = (uint8_t)(data >> 56);

@@ -36,6 +36,9 @@ int main(int argc, char **argv)
     const unsigned trials = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 20;
     const char *mode = argc > 2 ? argv[2] : "fastlock";
     const bool cross_band = argc > 3 && strcmp(argv[3], "--cross-band") == 0;
+    if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL) {
+        bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
+    }
     const uint64_t frequencies[2] = {
         cross_band ? CROSS_FREQ_A : LOCAL_FREQ_A,
         cross_band ? CROSS_FREQ_B : LOCAL_FREQ_B,
@@ -172,6 +175,17 @@ int main(int argc, char **argv)
                 fprintf(stderr, "NIOS transport error trial=%u code=%d status=%u\n",
                         i, events[j].error_code, events[j].rfic_status);
                 goto done;
+            }
+        }
+        if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL) {
+            for (uint32_t j = 0; j < count; ++j) {
+                printf("event txn=%u index=%u type=%u state=%u "
+                       "since_config_us=%.3f fpga_ts=%llu flags=0x%x\n",
+                       transaction, j, events[j].event_type,
+                       events[j].fpga_state,
+                       (events[j].host_monotonic_ns - config_ns) / 1000.0,
+                       (unsigned long long)events[j].fpga_timestamp,
+                       events[j].flags);
             }
         }
         if (use_fastlock) {

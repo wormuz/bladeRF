@@ -515,6 +515,11 @@ static inline uint32_t rx_epoch_ts_hi_read(void)
     #endif
 }
 
+static inline uint64_t rx_epoch_status_snapshot_read(void)
+{
+    return ((uint64_t)rx_epoch_status_read() << 32) | rx_epoch_ts_lo_read();
+}
+
 /* Call only after the FX3 RF link start has actually succeeded. This asserts
  * that it did; it is not evidence about FX3 on its own. */
 static inline void rf_link_cfg_start(void)

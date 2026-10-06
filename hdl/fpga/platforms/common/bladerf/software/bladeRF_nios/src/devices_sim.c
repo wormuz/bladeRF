@@ -83,6 +83,11 @@ uint64_t adi_spi_read(uint16_t addr) {
     return ret;
 }
 
+uint64_t rx_epoch_status_snapshot_read(void)
+{
+    return UINT64_C(0x123456789abcdef0);
+}
+
 bool adi_spi_write(uint16_t addr, uint64_t data)
 {
     DBG("%s: addr=0x%04x, data=0x%04x\n", __FUNCTION__, addr, data);

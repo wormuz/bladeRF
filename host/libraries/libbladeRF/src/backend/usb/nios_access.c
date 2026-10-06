@@ -1219,6 +1219,36 @@ int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_rx_epoch_status_snapshot_read(struct bladerf *dev,
+                                       uint32_t *status_word,
+                                       uint32_t *timestamp_lo)
+{
+    int status;
+    uint8_t buf[NIOS_PKT_LEN];
+    uint64_t data = 0;
+    bool success = false;
+
+    if (dev == NULL || status_word == NULL || timestamp_lo == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT,
+                        false, 0, 0);
+    status = nios_access(dev, buf);
+    if (status != 0) {
+        return status;
+    }
+
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &data, &success);
+    if (!success) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    *status_word = (uint32_t)(data >> 32);
+    *timestamp_lo = (uint32_t)data;
+    return 0;
+}
+
 int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value)
 {
     int status;

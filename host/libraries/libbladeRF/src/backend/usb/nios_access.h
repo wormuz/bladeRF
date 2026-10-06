@@ -444,6 +444,12 @@ int nios_rx_epoch_settle_write(struct bladerf *dev, uint32_t settle_samples);
  */
 int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value);
 
+/** Read epoch status and the latched first-valid timestamp low word in one
+ * NIOS transaction. Returns BLADERF_ERR_UNSUPPORTED on older FPGA images. */
+int nios_rx_epoch_status_snapshot_read(struct bladerf *dev,
+                                       uint32_t *status_word,
+                                       uint32_t *timestamp_lo);
+
 /**
  * Read one 32-bit half of the RX data-plane epoch gate first-valid
  * timestamp. Each half crosses through its own handshake -- see

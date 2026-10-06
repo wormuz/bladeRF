@@ -629,6 +629,7 @@ bool rfic_command_write(uint16_t addr, uint64_t data);
  * @return bool (true = success)
  */
 bool rfic_command_read(uint16_t addr, uint64_t *data);
+
 #endif  // BLADERF_NIOS_LIBAD936X
 
 /* A number of rountines define here are implemented as just a register
@@ -640,6 +641,9 @@ bool rfic_command_read(uint16_t addr, uint64_t *data);
  */
 #ifndef BLADERF_NIOS_PC_SIMULATION
 #   include "devices_inline.h"
+#else
+/* Deterministic counterpart to the FPGA PIO snapshot for packet tests. */
+uint64_t rx_epoch_status_snapshot_read(void);
 #endif
 
 
