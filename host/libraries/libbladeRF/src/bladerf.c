@@ -2659,7 +2659,7 @@ int bladerf_get_gain_target(struct bladerf *dev, bladerf_channel ch, int *gain_t
         goto error;
     }
 
-    dev->board->get_gain_mode(dev, ch, &gain_mode);
+    CHECK_STATUS(dev->board->get_gain_mode(dev, ch, &gain_mode));
 
     if (gain_mode == BLADERF_GAIN_MGC) {
         *gain_target = cal_table->gain_target;

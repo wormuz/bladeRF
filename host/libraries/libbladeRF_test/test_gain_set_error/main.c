@@ -5,6 +5,7 @@
 #include "board/board.h"
 
 struct mock_state {
+    int gain_mode_status;
     int frequency_status;
     bladerf_frequency frequency;
     unsigned int set_gain_calls;
@@ -15,8 +16,9 @@ static int mock_get_gain_mode(struct bladerf *dev, bladerf_channel ch,
 {
     (void)dev;
     (void)ch;
+    struct mock_state *state = dev->board_data;
     *mode = BLADERF_GAIN_MGC;
-    return 0;
+    return state->gain_mode_status;
 }
 
 static int mock_get_frequency(struct bladerf *dev, bladerf_channel ch,
@@ -48,6 +50,7 @@ int main(void)
 {
     struct bladerf dev;
     struct mock_state state = {
+        .gain_mode_status = 0,
         .frequency_status = BLADERF_ERR_IO,
         .frequency = 0,
         .set_gain_calls = 0,
@@ -67,6 +70,17 @@ int main(void)
     assert(status == BLADERF_ERR_IO);
     assert(state.set_gain_calls == 0);
     assert(dev.gain_tbls[ch].gain_target == initial_target);
+
+    /* A failed gain-mode read must not produce a successful target query. */
+    dev.gain_tbls[ch].state = BLADERF_GAIN_CAL_LOADED;
+    state.gain_mode_status = BLADERF_ERR_IO;
+    {
+        bladerf_gain target = -123;
+        status = bladerf_get_gain_target(&dev, ch, &target);
+        assert(status == BLADERF_ERR_IO);
+        assert(target == -123);
+    }
+    state.gain_mode_status = 0;
 
     /* A successful frequency read followed by an empty calibration table
      * makes get_gain_correction() fail. That error must also be propagated. */
