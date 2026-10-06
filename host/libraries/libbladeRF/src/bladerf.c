@@ -42,6 +42,12 @@
 #include "backend/backend.h"
 #include "backend/usb/usb.h"
 #include "board/board.h"
+
+static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
+                                                bladerf_channel ch,
+                                                uint32_t reason);
+static void rx_reconfigure_complete(struct bladerf *dev,
+                                   bladerf_channel ch);
 #include "conversions.h"
 #include "driver/fx3_fw.h"
 #include "device_calibration.h"
@@ -537,11 +543,17 @@ void bladerf_version(struct bladerf_version *version)
 int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_MODULE);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->enable_module(dev, ch, enable);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -557,6 +569,11 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     bool restore_gain_mode       = false;
     bladerf_frequency freq;
     bladerf_gain assigned_gain = gain;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     /* The RFIC only accepts a manual gain value while it is in MGC: the
@@ -607,6 +624,7 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 
 error:
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -626,11 +644,17 @@ int bladerf_set_gain_mode(struct bladerf *dev,
                           bladerf_gain_mode mode)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN_MODE);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_gain_mode(dev, ch, mode);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -667,11 +691,17 @@ int bladerf_set_gain_stage(struct bladerf *dev,
                            bladerf_gain gain)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_gain_stage(dev, ch, stage, gain);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -712,13 +742,22 @@ int bladerf_get_gain_stages(struct bladerf *dev,
 /* Public legacy RF configuration setters do not produce a new certified RX
  * epoch. Revoke any prior certificate before changing the RX signal path. */
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
-                                                bladerf_channel ch)
+                                                bladerf_channel ch,
+                                                uint32_t reason)
 {
     if (!BLADERF_CHANNEL_IS_TX(ch) &&
         dev->board->invalidate_rx_data != NULL) {
-        return dev->board->invalidate_rx_data(dev, ch);
+        return dev->board->invalidate_rx_data(dev, ch, reason);
     }
     return 0;
+}
+
+static void rx_reconfigure_complete(struct bladerf *dev, bladerf_channel ch)
+{
+    if (!BLADERF_CHANNEL_IS_TX(ch) &&
+        dev->board->rx_reconfigure_complete != NULL) {
+        dev->board->rx_reconfigure_complete(dev, ch);
+    }
 }
 
 int bladerf_set_sample_rate(struct bladerf *dev,
@@ -729,7 +768,8 @@ int bladerf_set_sample_rate(struct bladerf *dev,
     int status;
     bladerf_feature feature = dev->feature;
 
-    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
     if (status != 0) {
         return status;
     }
@@ -749,6 +789,8 @@ int bladerf_set_sample_rate(struct bladerf *dev,
             log_error("Oversample register config failure\n");
         }
     }
+
+    rx_reconfigure_complete(dev, ch);
 
     return status;
 }
@@ -781,7 +823,8 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     int status;
     bladerf_feature feature = dev->feature;
 
-    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
     if (status != 0) {
         return status;
     }
@@ -805,6 +848,8 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
             log_error("Oversample register config failure\n");
         }
     }
+
+    rx_reconfigure_complete(dev, ch);
 
     return status;
 }
@@ -833,7 +878,8 @@ int bladerf_set_bandwidth(struct bladerf *dev,
 {
     int status;
 
-    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_BANDWIDTH);
     if (status != 0) {
         return status;
     }
@@ -843,6 +889,7 @@ int bladerf_set_bandwidth(struct bladerf *dev,
     status = dev->board->set_bandwidth(dev, ch, bandwidth, actual);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -893,7 +940,8 @@ int bladerf_set_frequency(struct bladerf *dev,
 {
     int status;
 
-    status = invalidate_rx_data_before_reconfigure(dev, ch);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_FREQUENCY);
     if (status != 0) {
         return status;
     }
@@ -901,6 +949,7 @@ int bladerf_set_frequency(struct bladerf *dev,
     MUTEX_LOCK(&dev->lock);
     status = bladerf_set_frequency_locked(dev, ch, frequency);
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -929,11 +978,17 @@ int bladerf_select_band(struct bladerf *dev,
                         bladerf_frequency frequency)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->select_band(dev, ch, frequency);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -946,11 +1001,17 @@ int bladerf_set_rf_port(struct bladerf *dev,
                         const char *port)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_rf_port(dev, ch, port);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -1083,11 +1144,17 @@ int bladerf_set_correction(struct bladerf *dev,
                            bladerf_correction_value value)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_CORRECTION);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_correction(dev, ch, corr, value);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -1501,11 +1568,17 @@ bool bladerf_is_loopback_mode_supported(struct bladerf *dev,
 int bladerf_set_loopback(struct bladerf *dev, bladerf_loopback l)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_LOOPBACK);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_loopback(dev, l);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -1527,11 +1600,17 @@ int bladerf_get_loopback(struct bladerf *dev, bladerf_loopback *l)
 int bladerf_set_rx_mux(struct bladerf *dev, bladerf_rx_mux mux)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RX_MUX);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_rx_mux(dev, mux);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -1554,11 +1633,17 @@ int bladerf_set_vctcxo_tamer_mode(struct bladerf *dev,
                                   bladerf_vctcxo_tamer_mode mode)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_vctcxo_tamer_mode(dev, mode);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -1603,11 +1688,17 @@ int bladerf_trim_dac_read(struct bladerf *dev, uint16_t *trim)
 int bladerf_trim_dac_write(struct bladerf *dev, uint16_t trim)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->trim_dac_write(dev, trim);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 

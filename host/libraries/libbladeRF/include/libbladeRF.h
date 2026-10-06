@@ -4671,8 +4671,31 @@ typedef enum {
     /** NIOS retune command USB OUT transfer completed. */
     BLADERF_RF_EVT_NIOS_RETUNE_USB_OUT_DONE,
     /** NIOS retune response USB IN transfer completed. */
-    BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE
+    BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE,
+    /** Existing certified RX IQ was revoked by a legacy RF reconfiguration.
+     * `flags` contains one BLADERF_RF_INVALIDATE_* reason. This event has
+     * transaction_id=0 because it is not a completed event-driven request. */
+    BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+    /** RX returned a discontinuity/overrun marker in bladerf_metadata. */
+    BLADERF_RF_EVT_RX_STREAM_OVERRUN
 } bladerf_rf_event_type;
+
+#define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
+
+/** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
+#define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)
+#define BLADERF_RF_INVALIDATE_SAMPLE_RATE (1U << 1)
+#define BLADERF_RF_INVALIDATE_BANDWIDTH  (1U << 2)
+#define BLADERF_RF_INVALIDATE_GAIN       (1U << 3)
+#define BLADERF_RF_INVALIDATE_GAIN_MODE  (1U << 4)
+#define BLADERF_RF_INVALIDATE_RF_PORT    (1U << 5)
+#define BLADERF_RF_INVALIDATE_CORRECTION (1U << 6)
+#define BLADERF_RF_INVALIDATE_RX_MUX     (1U << 7)
+#define BLADERF_RF_INVALIDATE_LOOPBACK   (1U << 8)
+#define BLADERF_RF_INVALIDATE_MODULE     (1U << 9)
+#define BLADERF_RF_INVALIDATE_RFIC_REG   (1U << 10)
+#define BLADERF_RF_INVALIDATE_RX_FIR     (1U << 11)
+#define BLADERF_RF_INVALIDATE_CLOCK      (1U << 12)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and
@@ -4835,6 +4858,23 @@ int CALL_CONV bladerf_rx_transition_get_events(
     struct bladerf_rf_event *events,
     uint32_t capacity,
     uint32_t *event_count,
+    bool *history_complete);
+
+/** Read all device RF events newer than an event-ring cursor. This includes
+ * transaction events, unscoped RX_DATA_INVALIDATED notifications, and RX
+ * stream overrun/discontinuity notifications.
+ *
+ * The cursor is the sequence returned in `next_sequence`, not a transaction
+ * ID. If `history_complete` is false, one or more events after
+ * `after_sequence` were overwritten before this call. If the caller's buffer
+ * is too small, BLADERF_ERR_MEM is returned and next_sequence advances only
+ * through the events copied to the caller.
+ */
+API_EXPORT
+int CALL_CONV bladerf_rf_events_get_since(
+    struct bladerf *dev, uint64_t after_sequence,
+    struct bladerf_rf_event *events, uint32_t capacity,
+    uint32_t *event_count, uint64_t *next_sequence,
     bool *history_complete);
 
 /**

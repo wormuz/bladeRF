@@ -272,6 +272,10 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         board_data->rf_transition_last_event = event;
         board_data->rf_transition_events[board_data->rf_transition_event_head] =
             event;
+        board_data->rf_transition_event_sequence++;
+        board_data->rf_transition_event_sequences[
+            board_data->rf_transition_event_head] =
+                board_data->rf_transition_event_sequence;
         board_data->rf_transition_event_head =
             (board_data->rf_transition_event_head + 1) %
             BLADERF2_RF_EVENT_HISTORY_SIZE;
@@ -296,6 +300,133 @@ static void _emit_event(struct bladerf *dev,
     _emit_event_with_timestamp(dev, board_data, type, state, requested_hz,
                                readback_hz, rfic_status, error_code,
                                epoch_id, 0, 0, 0);
+}
+
+int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
+                                uint32_t reason)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    bool data_epoch_enabled;
+    int status;
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        return 0;
+    }
+    if (dev == NULL || dev->board_data == NULL || reason == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+
+    /* Serialize the entire public setter, not just this notification. A
+     * transition begin must not slip between invalidation and the RFIC write. */
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rf_transition_pending ||
+            board_data->rf_transition_setter_active) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            board_data->rf_transition_setter_active = true;
+            status = 0;
+        }
+    });
+    if (status != 0) {
+        return status;
+    }
+
+    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    data_epoch_enabled = sync_rx_epoch_filter_enabled(
+        &board_data->sync[BLADERF_RX]);
+    if (status == 0 && data_epoch_enabled) {
+        /* The FPGA gate must stop admitting the old epoch before the legacy
+         * setter mutates the RFIC. ABORT is fail-closed (gate ERROR). */
+        status = nios_rx_epoch_ctrl_cmd(
+            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+    }
+
+    event.host_monotonic_ns = _monotonic_ns();
+    event.transaction_id = 0; /* invalidation is not a transition transaction */
+    event.epoch_id = board_data->rf_transition_epoch_id;
+    event.requested_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
+    event.readback_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
+    event.flags = reason;
+    event.error_code = status;
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+        board_data->rf_transition_events[board_data->rf_transition_event_head] =
+            event;
+        board_data->rf_transition_event_sequence++;
+        board_data->rf_transition_event_sequences[
+            board_data->rf_transition_event_head] =
+                board_data->rf_transition_event_sequence;
+        board_data->rf_transition_event_head =
+            (board_data->rf_transition_event_head + 1) %
+            BLADERF2_RF_EVENT_HISTORY_SIZE;
+        if (board_data->rf_transition_event_count <
+            BLADERF2_RF_EVENT_HISTORY_SIZE) {
+            board_data->rf_transition_event_count++;
+        }
+        /* Keep the reservation through the actual legacy setter only when
+         * the invalidation/fence succeeded. */
+        if (status != 0) {
+            board_data->rf_transition_setter_active = false;
+        }
+    });
+
+    return status;
+}
+
+void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
+                                      bladerf_channel ch)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || BLADERF_CHANNEL_IS_TX(ch) || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_setter_active = false;
+    });
+}
+
+void bladerf2_rx_stream_overrun(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    event.host_monotonic_ns = _monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    WITH_MUTEX(&dev->lock, {
+        event.transaction_id = 0;
+        event.epoch_id = board_data->rf_transition_epoch_id;
+        event.requested_rx_lo_hz =
+            board_data->rf_transition_requested_frequency_hz;
+        event.readback_rx_lo_hz =
+            board_data->rf_transition_readback_frequency_hz;
+        event.fpga_state = board_data->rf_transition_state;
+        board_data->rf_transition_events[board_data->rf_transition_event_head] =
+            event;
+        board_data->rf_transition_event_sequence++;
+        board_data->rf_transition_event_sequences[
+            board_data->rf_transition_event_head] =
+                board_data->rf_transition_event_sequence;
+        board_data->rf_transition_event_head =
+            (board_data->rf_transition_event_head + 1) %
+            BLADERF2_RF_EVENT_HISTORY_SIZE;
+        if (board_data->rf_transition_event_count <
+            BLADERF2_RF_EVENT_HISTORY_SIZE) {
+            board_data->rf_transition_event_count++;
+        }
+        board_data->rf_transition_last_event = event;
+    });
 }
 
 /* Called by the AD9361 SPI platform adapter while bladerf_set_frequency()
@@ -453,7 +584,8 @@ static int _bladerf_rx_transition_begin(
     }
 
     WITH_MUTEX(&dev->lock, {
-        if (board_data->rf_transition_pending) {
+        if (board_data->rf_transition_pending ||
+            board_data->rf_transition_setter_active) {
             transition_busy = true;
         } else {
             board_data->rf_transition_next_id++;
@@ -1180,6 +1312,10 @@ void bladerf2_rx_transition_note_first_packet(
 
             board_data->rf_transition_events[
                 board_data->rf_transition_event_head] = event;
+            board_data->rf_transition_event_sequence++;
+            board_data->rf_transition_event_sequences[
+                board_data->rf_transition_event_head] =
+                    board_data->rf_transition_event_sequence;
             board_data->rf_transition_event_head =
                 (board_data->rf_transition_event_head + 1) %
                 BLADERF2_RF_EVENT_HISTORY_SIZE;
@@ -1208,6 +1344,7 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
         history_complete == NULL || (capacity != 0 && events == NULL)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_BOARD_IS_BLADERF2(dev);
 
     board_data = dev->board_data;
     if (board_data == NULL) {
@@ -1253,6 +1390,62 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
         return 0;
     }
     return found > capacity ? BLADERF_ERR_MEM : 0;
+}
+
+int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
+                                struct bladerf_rf_event *events,
+                                uint32_t capacity, uint32_t *event_count,
+                                uint64_t *next_sequence,
+                                bool *history_complete)
+{
+    struct bladerf2_board_data *board_data;
+    uint32_t copied = 0;
+    bool complete = true;
+
+    if (dev == NULL || event_count == NULL || next_sequence == NULL ||
+        history_complete == NULL || (capacity != 0 && events == NULL)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_BOARD_IS_BLADERF2(dev);
+    board_data = dev->board_data;
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    *next_sequence = after_sequence;
+    WITH_MUTEX(&dev->lock, {
+        uint32_t retained = board_data->rf_transition_event_count;
+        uint32_t oldest = (board_data->rf_transition_event_head +
+                           BLADERF2_RF_EVENT_HISTORY_SIZE - retained) %
+                          BLADERF2_RF_EVENT_HISTORY_SIZE;
+        uint64_t oldest_sequence = retained != 0 ?
+            board_data->rf_transition_event_sequences[oldest] :
+            board_data->rf_transition_event_sequence + 1;
+
+        if (retained != 0 && after_sequence < oldest_sequence - 1) {
+            complete = false;
+        }
+
+        for (uint32_t i = 0; i < retained; ++i) {
+            uint32_t slot = (oldest + i) % BLADERF2_RF_EVENT_HISTORY_SIZE;
+            uint64_t sequence =
+                board_data->rf_transition_event_sequences[slot];
+            if (sequence <= after_sequence) {
+                continue;
+            }
+            if (copied < capacity) {
+                events[copied++] = board_data->rf_transition_events[slot];
+                *next_sequence = sequence;
+            } else {
+                complete = false;
+                break;
+            }
+        }
+    });
+
+    *event_count = copied;
+    *history_complete = complete;
+    return complete ? 0 : BLADERF_ERR_MEM;
 }
 
 int bladerf_rx_transition_get_nios_timing(

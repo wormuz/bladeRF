@@ -311,8 +311,16 @@ struct board_fns {
     int (*set_frequency)(struct bladerf *dev,
                          bladerf_channel ch,
                          bladerf_frequency frequency);
-    /* Revoke certified RX data before an out-of-band RF retune. */
-    int (*invalidate_rx_data)(struct bladerf *dev, bladerf_channel ch);
+    /* Revoke certified RX data before legacy RF reconfiguration and report
+     * the exact public BLADERF_RF_INVALIDATE_* reason to observers. */
+    int (*invalidate_rx_data)(struct bladerf *dev, bladerf_channel ch,
+                              uint32_t reason);
+    /* Release the RF-configuration reservation acquired by
+     * invalidate_rx_data after the legacy setter has fully returned. */
+    void (*rx_reconfigure_complete)(struct bladerf *dev,
+                                    bladerf_channel ch);
+    /* Report a discontinuity surfaced by sync RX metadata. */
+    void (*rx_stream_overrun)(struct bladerf *dev);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,
                                const struct bladerf_range **range);
@@ -517,6 +525,7 @@ struct bladerf_flash_arch {
 
 /* Boards */
 extern const struct board_fns *bladerf_boards[];
+extern const struct board_fns bladerf2_board_fns;
 extern const unsigned int bladerf_boards_len;
 
 #endif

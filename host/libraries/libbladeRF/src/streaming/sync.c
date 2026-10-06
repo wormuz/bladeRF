@@ -540,6 +540,24 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     return 0;
 }
 
+bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)
+{
+    bool enabled = false;
+
+    if (sync == NULL) {
+        return false;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    enabled = sync->initialized &&
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        (sync->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         sync->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
+        sync->meta.rx_epoch_id_filter_enabled;
+    MUTEX_UNLOCK(&sync->lock);
+    return enabled;
+}
+
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id)
@@ -1281,6 +1299,19 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
 out:
     MUTEX_UNLOCK(&s->lock);
+
+    /* Keep stream discontinuities in the same device event history as RF
+     * invalidation. Invoke only after dropping sync->lock: RF setters acquire
+     * dev->lock before touching sync state. */
+    if (user_meta != NULL &&
+        (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
+         s->stream_config.format == BLADERF_FORMAT_PACKET_META) &&
+        (user_meta->status & BLADERF_META_STATUS_OVERRUN) != 0 &&
+        s->dev != NULL && s->dev->board != NULL &&
+        s->dev->board->rx_stream_overrun != NULL) {
+        s->dev->board->rx_stream_overrun(s->dev);
+    }
 
     return status;
 }

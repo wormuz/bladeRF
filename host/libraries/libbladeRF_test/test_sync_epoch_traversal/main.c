@@ -8,6 +8,7 @@
 #include "streaming/sync.h"
 #include "streaming/sync_worker.h"
 #include "streaming/metadata.h"
+#include "board/board.h"
 
 #define MSG_BYTES 8192u
 #define MSG_SAMPLES ((MSG_BYTES - METADATA_HEADER_SIZE) / 4u)
@@ -61,9 +62,22 @@ static void write_msg(uint8_t *msg, uint64_t timestamp, uint8_t epoch_id,
 
 struct fixture {
     struct bladerf_sync sync;
+    struct bladerf dev;
     uint8_t *buffers[2];
     size_t lengths[2];
     sync_buffer_status states[2];
+};
+
+static unsigned int rx_overrun_events;
+
+static void note_rx_overrun(struct bladerf *dev)
+{
+    assert(dev != NULL);
+    rx_overrun_events++;
+}
+
+static const struct board_fns test_board = {
+    .rx_stream_overrun = note_rx_overrun,
 };
 
 static void fixture_init(struct fixture *f)
@@ -78,6 +92,8 @@ static void fixture_init(struct fixture *f)
     assert(COND_INIT(&f->sync.buf_mgmt.buf_ready) == 0);
 
     f->sync.initialized = true;
+    f->dev.board = &test_board;
+    f->sync.dev = &f->dev;
     f->sync.state = SYNC_STATE_WAIT_FOR_BUFFER;
     f->sync.stream_config.format = BLADERF_FORMAT_SC16_Q11_META;
     f->sync.stream_config.layout = BLADERF_RX_X1;
@@ -163,6 +179,7 @@ int main(void)
     assert(meta.timestamp == 1000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert(meta.status & BLADERF_META_STATUS_OVERRUN);
+    assert(rx_overrun_events == 1);
     assert_marker(out, MSG_SAMPLES, 333, 0);
 
     receive(&f, out, MSG_SAMPLES, &meta);

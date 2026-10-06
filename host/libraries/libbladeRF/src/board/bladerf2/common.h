@@ -201,8 +201,11 @@ struct bladerf2_board_data {
 #define BLADERF2_RF_EVENT_HISTORY_SIZE BLADERF_RF_EVENT_HISTORY_SIZE
     struct bladerf_rf_event rf_transition_events[
         BLADERF2_RF_EVENT_HISTORY_SIZE];
+    uint64_t rf_transition_event_sequences[
+        BLADERF2_RF_EVENT_HISTORY_SIZE];
     uint32_t rf_transition_event_head;
     uint32_t rf_transition_event_count;
+    uint64_t rf_transition_event_sequence;
 
     /* NIOS time-tamer duration is separate from host monotonic event times.
      * Keep it by transaction without changing the public event struct ABI. */
@@ -244,6 +247,11 @@ struct bladerf2_board_data {
  * never participates in determining whether the epoch is valid. */
 void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata);
+int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
+                                uint32_t reason);
+void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
+                                      bladerf_channel ch);
+void bladerf2_rx_stream_overrun(struct bladerf *dev);
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
 void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
