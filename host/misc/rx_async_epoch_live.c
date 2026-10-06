@@ -50,7 +50,7 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
 static void *run_stream(void *arg)
 {
     struct live_stream *live = arg;
-    live->stream_status = bladerf_stream(live->stream, BLADERF_RX_X1);
+    live->stream_status = bladerf_stream(live->stream, BLADERF_RX_X2);
     return NULL;
 }
 
@@ -96,7 +96,7 @@ static int event_transition(struct bladerf *dev, uint64_t frequency_hz,
     };
     uint32_t transaction_id;
     int status = bladerf_rx_transition_begin(
-        dev, BLADERF_CHANNEL_RX(0), &request, &transaction_id);
+        dev, BLADERF_CHANNEL_RX(1), &request, &transaction_id);
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, transaction_id, result, 2000);
     }
@@ -123,11 +123,22 @@ int main(void)
     status = bladerf_set_sample_rate(live.dev, BLADERF_CHANNEL_RX(0),
                                      4000000, NULL);
     if (status == 0) {
+        status = bladerf_set_sample_rate(live.dev, BLADERF_CHANNEL_RX(1),
+                                         4000000, NULL);
+    }
+    if (status == 0) {
         status = bladerf_set_bandwidth(live.dev, BLADERF_CHANNEL_RX(0),
                                        5000000, NULL);
     }
     if (status == 0) {
+        status = bladerf_set_bandwidth(live.dev, BLADERF_CHANNEL_RX(1),
+                                       5000000, NULL);
+    }
+    if (status == 0) {
         status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(0), 30);
+    }
+    if (status == 0) {
+        status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
     }
     if (status == 0) {
         status = bladerf_init_stream(&live.stream, live.dev, rx_callback,
@@ -137,6 +148,9 @@ int main(void)
     }
     if (status == 0) {
         status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), true);
+    }
+    if (status == 0) {
+        status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), true);
     }
     if (status == 0) {
         status = event_transition(live.dev, 1835000000ULL, &event);
@@ -165,7 +179,7 @@ int main(void)
 
     /* Same-value configuration still invalidates a prior RX certificate. */
     fprintf(stderr, "issuing invalidating gain setter\n");
-    status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(0), 30);
+    status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
     fprintf(stderr, "gain setter returned %d\n", status);
     if (status != 0 ||
         !wait_for_count(&live.event_only_callbacks, 2, 3000)) {
@@ -204,6 +218,7 @@ int main(void)
 
 cleanup:
     if (live.dev != NULL) {
+        bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), false);
         bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), false);
         if (live.stream != NULL) {
             bladerf_deinit_stream(live.stream);
