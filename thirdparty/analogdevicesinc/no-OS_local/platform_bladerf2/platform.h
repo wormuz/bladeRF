@@ -157,6 +157,8 @@ extern const struct no_os_gpio_platform_ops bladerf2_gpio_ops;
 struct bladerf;
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
+void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
+                                                 uint32_t write_count);
 
 void udelay(unsigned long usecs);
 void mdelay(unsigned long msecs);

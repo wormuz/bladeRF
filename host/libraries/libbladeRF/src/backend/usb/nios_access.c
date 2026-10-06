@@ -735,6 +735,53 @@ int nios_ad9361_spi_write(struct bladerf *dev, uint16_t cmd, uint64_t data)
     return status;
 }
 
+int nios_ad9361_spi_write_batch(struct bladerf *dev,
+                                const uint16_t *regs,
+                                const uint8_t *values, uint8_t count)
+{
+    const uint8_t max_count = 3;
+    const uint8_t unsupported_marker = 0xa5;
+    uint8_t buf[NIOS_PKT_LEN];
+    uint64_t data = (uint64_t)unsupported_marker << 56;
+    uint64_t response_data = 0;
+    bool success = false;
+    uint8_t i;
+    int status;
+
+    if (dev == NULL || regs == NULL || values == NULL || count == 0 ||
+        count > max_count) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    for (i = 0; i < count; i++) {
+        if (regs[i] > 0x3ff) {
+            return BLADERF_ERR_INVAL;
+        }
+        data |= ((uint64_t)(regs[i] | ((uint16_t)values[i] << 10)))
+                << (18 * i);
+    }
+
+    nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH,
+                        true, count, data);
+    status = nios_access(dev, buf);
+    if (status != 0) {
+        return status;
+    }
+
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
+                               &success);
+    if (!success && (response_data >> 56) == unsupported_marker) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (!success || response_data != count) {
+        log_debug("AD9361 SPI script failed after %" PRIu64
+                  " of %u writes\n", response_data, count);
+        return BLADERF_ERR_FPGA_OP;
+    }
+
+    return 0;
+}
+
 int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
                                uint8_t data1, uint8_t data2, uint8_t data3,
                                uint8_t config, uint32_t delay_us)

@@ -54,8 +54,11 @@ const char *module2str(bladerf_module m)
     }
 }
 
-void bladerf_nios_init(struct pkt_buf *pkt)
+void bladerf_nios_init(struct pkt_buf *pkt,
+                       struct vctcxo_tamer_pkt_buf *vctcxo_tamer_pkt)
 {
+    (void)pkt;
+    (void)vctcxo_tamer_pkt;
     DBG("%s()\n", __FUNCTION__);
 }
 
@@ -80,11 +83,47 @@ uint64_t adi_spi_read(uint16_t addr) {
     return ret;
 }
 
-void adi_spi_write(uint16_t addr, uint64_t data)
+bool adi_spi_write(uint16_t addr, uint64_t data)
 {
     DBG("%s: addr=0x%04x, data=0x%04x\n", __FUNCTION__, addr, data);
     ASSERT(addr == 0x0707);
     ASSERT(data == 0x09);
+    return true;
+}
+
+bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
+                                  uint8_t *completed)
+{
+    static const uint16_t expected_regs[] = { 0x23b, 0x23c, 0x23d };
+    static const uint8_t expected_values[] = { 0x11, 0x22, 0x33 };
+    uint16_t i;
+
+    if (completed == NULL || count != ARRAY_SIZE(expected_regs)) {
+        return false;
+    }
+
+    *completed = 0;
+    for (i = 0; i < count; i++) {
+        const uint64_t entry = (data >> (18 * i)) & 0x3ffff;
+        if ((entry & 0x3ff) != expected_regs[i] ||
+            ((entry >> 10) & 0xff) != expected_values[i]) {
+            return false;
+        }
+        (*completed)++;
+    }
+
+    return true;
+}
+
+bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
+                                  uint8_t *completed)
+{
+    (void)count;
+    (void)data;
+    if (completed != NULL) {
+        *completed = 0;
+    }
+    return false;
 }
 
 uint8_t si5338_read(uint8_t addr)

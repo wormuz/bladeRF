@@ -35,8 +35,7 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data)
     switch (id) {
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_16x64_TARGET_AD9361:
-            adi_spi_write(addr, data);
-            break;
+            return adi_spi_write(addr, data);
         case NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW:
             success = adi_spi_gain_table_row(
                 addr, (uint8_t)(data & 0xff),
@@ -112,7 +111,15 @@ void pkt_16x64(struct pkt_buf *b)
 
     nios_pkt_16x64_unpack(b->req, &id, &is_write, &addr, &data);
 
-    if (is_write) {
+    if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH) {
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+        uint8_t completed = 0;
+        success = adi_spi_write_register_batch(addr, data, &completed);
+        data = completed;
+#else
+        success = false;
+#endif
+    } else if (is_write) {
         success = perform_write(id, addr, data);
     } else {
         success = perform_read(id, addr, &data);

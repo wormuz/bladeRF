@@ -69,9 +69,16 @@ enum gain_table_batch_state {
     GAIN_TABLE_BATCH_UNSUPPORTED,
 };
 
+enum register_batch_state {
+    REGISTER_BATCH_UNKNOWN,
+    REGISTER_BATCH_SUPPORTED,
+    REGISTER_BATCH_UNSUPPORTED,
+};
+
 struct bladerf2_spi_context {
     struct bladerf *dev;
     enum gain_table_batch_state gain_table_batch;
+    enum register_batch_state register_batch;
 };
 
 static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
@@ -105,6 +112,13 @@ static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
         if (disable_batch != NULL && disable_batch[0] != '\0' &&
             strcmp(disable_batch, "0") != 0) {
             ctx->gain_table_batch = GAIN_TABLE_BATCH_UNSUPPORTED;
+        }
+    }
+    {
+        const char *disable_batch = getenv("BLADERF_DISABLE_RFPLL_SPI_BATCH");
+        if (disable_batch != NULL && disable_batch[0] != '\0' &&
+            strcmp(disable_batch, "0") != 0) {
+            ctx->register_batch = REGISTER_BATCH_UNSUPPORTED;
         }
     }
     d->extra = ctx;
@@ -258,9 +272,67 @@ static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
     return 0;
 }
 
+static int32_t bladerf2_spi_write_register_batch(
+    struct no_os_spi_desc *desc, const uint16_t *regs,
+    const uint8_t *values, uint8_t count)
+{
+    struct bladerf2_spi_context *ctx;
+    struct bladerf *dev;
+    int status = 0;
+    uint8_t i;
+
+    if (desc == NULL || desc->extra == NULL || desc->bus == NULL ||
+        regs == NULL || values == NULL || count == 0 || count > 3) {
+        return -EINVAL;
+    }
+
+    ctx = desc->extra;
+    dev = ctx->dev;
+    no_os_mutex_lock(desc->bus->mutex);
+
+    if (ctx->register_batch != REGISTER_BATCH_UNSUPPORTED) {
+        for (i = 0; i < count; i++) {
+            bladerf2_rx_transition_spi_observe(dev, true, 0);
+        }
+        status = nios_ad9361_spi_write_batch(dev, regs, values, count);
+        bladerf2_rx_transition_spi_observe(dev, false, status);
+
+        if (status == 0) {
+            ctx->register_batch = REGISTER_BATCH_SUPPORTED;
+            no_os_mutex_unlock(desc->bus->mutex);
+            return 0;
+        }
+
+        if (status != BLADERF_ERR_UNSUPPORTED) {
+            no_os_mutex_unlock(desc->bus->mutex);
+            return -EIO;
+        }
+
+        bladerf2_rx_transition_spi_observe_rollback(dev, count);
+        ctx->register_batch = REGISTER_BATCH_UNSUPPORTED;
+        log_debug("RFPLL SPI script unavailable; using scalar writes\n");
+    }
+
+    for (i = 0; i < count; i++) {
+        uint8_t buf[3] = {
+            (uint8_t)(BLADERF2_SPI_CMD_WRITE | ((regs[i] >> 8) & 0x7f)),
+            (uint8_t)regs[i],
+            values[i],
+        };
+        status = bladerf2_spi_write_and_read(desc, buf, sizeof(buf));
+        if (status < 0) {
+            break;
+        }
+    }
+
+    no_os_mutex_unlock(desc->bus->mutex);
+    return status;
+}
+
 const struct no_os_spi_platform_ops bladerf2_spi_ops = {
     .init = bladerf2_spi_init,
     .write_and_read = bladerf2_spi_write_and_read,
     .write_gain_table_row = bladerf2_spi_write_gain_table_row,
+    .write_register_batch = bladerf2_spi_write_register_batch,
     .remove = bladerf2_spi_remove,
 };

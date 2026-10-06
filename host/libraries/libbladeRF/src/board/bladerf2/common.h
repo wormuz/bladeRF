@@ -229,6 +229,8 @@ void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata);
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
+void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
+                                                 uint32_t write_count);
 
 struct bladerf_rfic_status_register {
     bool rfic_initialized;

@@ -321,6 +321,29 @@ void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
     }
 }
 
+void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
+                                                 uint32_t write_count)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    if (!board_data->rf_transition_spi_trace_enabled ||
+        !board_data->rf_transition_pending) {
+        return;
+    }
+
+    if (write_count >= board_data->rf_transition_spi_write_count) {
+        board_data->rf_transition_spi_write_count = 0;
+        board_data->rf_transition_spi_first_write_ns = 0;
+        board_data->rf_transition_spi_last_write_ns = 0;
+    } else {
+        board_data->rf_transition_spi_write_count -= write_count;
+    }
+}
+
 static int _bladerf_rx_transition_begin(
     struct bladerf *dev, bladerf_channel ch,
     const struct bladerf_rx_transition_request *request,

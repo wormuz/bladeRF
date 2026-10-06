@@ -194,7 +194,9 @@ uint64_t adi_spi_read(uint16_t addr);
  * @param   addr    Register address to write to
  * @param   data    Data to write
  */
-void adi_spi_write(uint16_t addr, uint64_t data);
+bool adi_spi_write(uint16_t addr, uint64_t data);
+bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
+                                  uint8_t *completed);
 
 /* Ordered AD9361 indirect gain-table row transaction. This keeps the five
  * SPI writes and post-commit delay inside one NIOS protocol request. */

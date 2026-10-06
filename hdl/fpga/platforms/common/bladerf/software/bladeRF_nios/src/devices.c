@@ -455,14 +455,47 @@ static bool adi_spi_write_unlocked(uint16_t addr, uint64_t data)
     return status >= 0;
 }
 
-void adi_spi_write(uint16_t addr, uint64_t data)
+bool adi_spi_write(uint16_t addr, uint64_t data)
 {
+    bool success;
     if (!spi_arbiter_lock()) {
-        return;
+        return false;
     }
 
-    (void)adi_spi_write_unlocked(addr, data);
+    success = adi_spi_write_unlocked(addr, data);
     spi_arbiter_unlock();
+    return success;
+}
+
+bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
+                                  uint8_t *completed)
+{
+    uint16_t i;
+    bool success = false;
+
+    if (completed == NULL || count == 0 || count > 3 ||
+        !spi_arbiter_lock()) {
+        return false;
+    }
+
+    *completed = 0;
+    for (i = 0; i < count; i++) {
+        const uint64_t entry = (data >> (18 * i)) & 0x3ffff;
+        const uint16_t reg = entry & 0x3ff;
+        const uint8_t value = (entry >> 10) & 0xff;
+
+        if (!adi_spi_write_unlocked(0x8000 | reg,
+                                    (uint64_t)value << 56)) {
+            goto done_batch;
+        }
+        (*completed)++;
+    }
+
+    success = true;
+
+done_batch:
+    spi_arbiter_unlock();
+    return success;
 }
 
 bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
