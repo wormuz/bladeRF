@@ -1338,12 +1338,27 @@ int bladerf_sync_config(struct bladerf *dev,
                         unsigned int stream_timeout)
 {
     int status;
+    const bool is_rx =
+        (layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
+
+    if (is_rx) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, BLADERF_CHANNEL_RX(0),
+            BLADERF_RF_INVALIDATE_STREAM_CONFIG);
+        if (status != 0) {
+            return status;
+        }
+    }
+
     MUTEX_LOCK(&dev->lock);
 
     if (format == BLADERF_FORMAT_SC8_Q7 || format == BLADERF_FORMAT_SC8_Q7_META) {
         if (strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
             log_error("bladeRF 2.0 required for 8bit format\n");
             MUTEX_UNLOCK(&dev->lock);
+            if (is_rx) {
+                rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+            }
             return BLADERF_ERR_UNSUPPORTED;
         }
     }
@@ -1353,6 +1368,9 @@ int bladerf_sync_config(struct bladerf *dev,
                                 num_transfers, stream_timeout);
 
     MUTEX_UNLOCK(&dev->lock);
+    if (is_rx) {
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    }
     return status;
 }
 

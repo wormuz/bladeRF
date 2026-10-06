@@ -558,6 +558,32 @@ bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)
     return enabled;
 }
 
+/* A stream parser replacement loses packet state and metadata queued under
+ * the previous stream. Keep certified RX fail-closed until a fresh hardware
+ * transition supplies the new epoch ID and first-valid timestamp. */
+int sync_rx_epoch_require_transition(struct bladerf_sync *sync)
+{
+    int status = sync_rx_epoch_require_metadata(sync);
+    if (status != 0 || sync == NULL || !sync->initialized) {
+        return status;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (!sync->initialized ||
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        status = BLADERF_ERR_INVAL;
+    } else {
+        sync->meta.rx_epoch_min_timestamp = 0;
+        sync->meta.rx_epoch_boundary_enabled = true;
+        sync->meta.rx_epoch_expected_id = 0;
+        sync->meta.rx_epoch_id_filter_enabled = true;
+        sync->meta.rx_epoch_data_invalidated = true;
+        sync->meta.have_timestamp = false;
+    }
+    MUTEX_UNLOCK(&sync->lock);
+    return status;
+}
+
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id)

@@ -286,6 +286,29 @@ int main(void)
                   (int16_t)(1444 + MSG_SAMPLES), 0);
     fixture_destroy(&f);
 
+    /* Replacing a certified RX_X2 parser must poison both interleaved
+     * channels until a fresh transition installs the new epoch boundary. */
+    fixture_init(&f);
+    f.sync.stream_config.layout = BLADERF_RX_X2;
+    f.sync.meta.samples_per_ts = 2;
+    assert(sync_rx_epoch_require_transition(&f.sync) == 0);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    write_msg(f.buffers[0], 2000, 7, 1555);
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 2, &meta, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(meta.actual_count == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 3000, 8) == 0);
+    write_msg(f.buffers[0] + MSG_BYTES, 3000, 8, 1666);
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 2, &meta, 0) == 0);
+    assert(meta.actual_count == 2);
+    assert(meta.timestamp == 3000);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 8);
+    assert_marker(out, 2, 1666, 0);
+    fixture_destroy(&f);
+
     /* A USB worker overrun must reach the board event path even when the
      * application selected a sample-only format with no metadata status
      * field. */

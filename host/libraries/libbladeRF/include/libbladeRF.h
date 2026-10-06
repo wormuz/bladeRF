@@ -4705,6 +4705,7 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_REG   (1U << 10)
 #define BLADERF_RF_INVALIDATE_RX_FIR     (1U << 11)
 #define BLADERF_RF_INVALIDATE_CLOCK      (1U << 12)
+#define BLADERF_RF_INVALIDATE_STREAM_CONFIG (1U << 13)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and

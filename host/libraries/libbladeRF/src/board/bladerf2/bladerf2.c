@@ -2526,7 +2526,20 @@ static int bladerf2_sync_config(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
 
     bladerf_direction dir = layout & BLADERF_DIRECTION_MASK;
+    bool preserve_rx_epoch_contract =
+        dir == BLADERF_RX &&
+        sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
     int status;
+
+    /* Replacing a certified META stream discards the parser's epoch filter.
+     * Refuse formats that cannot carry the identity, and reinstall a
+     * fail-closed filter after META reconfiguration so only a later
+     * transition can certify samples on the new stream. */
+    if (preserve_rx_epoch_contract &&
+        format != BLADERF_FORMAT_SC16_Q11_META &&
+        format != BLADERF_FORMAT_SC8_Q7_META) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
 
     if (dev->feature == BLADERF_FEATURE_OVERSAMPLE
         && (format == BLADERF_FORMAT_SC16_Q11 || format == BLADERF_FORMAT_SC16_Q11_META)) {
@@ -2549,6 +2562,10 @@ static int bladerf2_sync_config(struct bladerf *dev,
         status = sync_init(&board_data->sync[dir], dev, layout, format,
                            num_buffers, buffer_size, board_data->msg_size,
                            num_transfers, stream_timeout);
+        if (status == 0 && preserve_rx_epoch_contract) {
+            status = sync_rx_epoch_require_transition(
+                &board_data->sync[BLADERF_RX]);
+        }
         if (status != 0) {
             perform_format_deconfig(dev, dir);
         }
