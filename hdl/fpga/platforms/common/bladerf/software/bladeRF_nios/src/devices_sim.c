@@ -115,17 +115,6 @@ bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
     return true;
 }
 
-bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
-                                  uint8_t *completed)
-{
-    (void)count;
-    (void)data;
-    if (completed != NULL) {
-        *completed = 0;
-    }
-    return false;
-}
-
 uint8_t si5338_read(uint8_t addr)
 {
     const uint8_t ret = 0x88;
