@@ -53,6 +53,31 @@ static int transition(struct bladerf *dev, uint64_t frequency_hz,
     return status;
 }
 
+static void dump_recent_rx_events(struct bladerf *dev)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = 0;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count,
+        &next_sequence, &complete);
+
+    fprintf(stderr, "recent RF events: status=%s count=%u next=%" PRIu64
+            " complete=%u\n", bladerf_strerror(status), count,
+            next_sequence, complete);
+    if (status != 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        fprintf(stderr, "  event[%u] type=%u txn=%u epoch=%u flags=0x%x "
+                "state=%u ts=%" PRIu64 " error=%d\n", i,
+                events[i].event_type, events[i].transaction_id,
+                events[i].epoch_id, events[i].flags, events[i].fpga_state,
+                events[i].fpga_timestamp, events[i].error_code);
+    }
+}
+
 static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
                             uint8_t expected_epoch, uint64_t min_timestamp)
 {
@@ -72,6 +97,7 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
                     expected_epoch, min_timestamp, metadata.actual_count,
                     metadata.rx_epoch_id, metadata.rx_epoch_id_valid,
                     metadata.timestamp, metadata.status);
+            dump_recent_rx_events(dev);
             return status;
         }
         if (!metadata.rx_epoch_id_valid ||
