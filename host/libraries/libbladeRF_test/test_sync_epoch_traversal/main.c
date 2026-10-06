@@ -265,5 +265,17 @@ int main(void)
     assert_marker(out, 100, 1333, 0);
     fixture_destroy(&f);
 
+    /* A USB worker overrun must reach the board event path even when the
+     * application selected a sample-only format with no metadata status
+     * field. */
+    fixture_init(&f);
+    f.sync.stream_config.format = BLADERF_FORMAT_SC16_Q11;
+    f.sync.stream_config.samples_per_buffer = 2048;
+    f.sync.buf_mgmt.overrun_pending = true;
+    assert(sync_rx(&f.sync, out, 8, NULL, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(rx_overrun_events == 2);
+    assert(!f.sync.buf_mgmt.overrun_pending);
+    fixture_destroy(&f);
+
     return 0;
 }

@@ -671,6 +671,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     int status = 0;
     bool exit_early = false;
     bool copied_data = false;
+    bool notify_overrun = false;
     unsigned int samples_returned = 0;
     uint8_t *samples_dest = (uint8_t*)samples;
     uint8_t *buf_src = NULL;
@@ -715,6 +716,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             if (s->buf_mgmt.overrun_pending) {
                 user_meta->status |= BLADERF_META_STATUS_OVERRUN;
                 s->buf_mgmt.overrun_pending = false;
+                notify_overrun = true;
             }
             MUTEX_UNLOCK(&s->buf_mgmt.lock);
         }
@@ -948,6 +950,17 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
             case SYNC_STATE_USING_BUFFER: /* SC16Q11 buffers w/o metadata */
                 MUTEX_LOCK(&b->lock);
+
+                /* A sample-only stream cannot attach an overrun status bit
+                 * to returned IQ. Once the worker reports a dropped USB
+                 * buffer, fail this read before exposing more samples; the
+                 * deferred board event is dispatched after both stream locks
+                 * are released below. */
+                if (b->overrun_pending) {
+                    status = BLADERF_ERR_WOULD_BLOCK;
+                    MUTEX_UNLOCK(&b->lock);
+                    break;
+                }
 
                 buf_src = (uint8_t*)b->buffers[b->cons_i];
 
@@ -1298,16 +1311,34 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
 out:
+    /* The worker can detect a USB overrun in every sync format. Metadata
+     * callers also receive the status bit above; the RF event must not depend
+     * on that optional format, otherwise ordinary SC16_Q11 streams silently
+     * lose the only invalidation notification. Defer the board callback until
+     * after sync->lock is released because it takes dev->lock. */
+    MUTEX_LOCK(&s->buf_mgmt.lock);
+    if (s->buf_mgmt.overrun_pending) {
+        s->buf_mgmt.overrun_pending = false;
+        notify_overrun = true;
+        if (user_meta != NULL &&
+            (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+             s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
+             s->stream_config.format == BLADERF_FORMAT_PACKET_META)) {
+            user_meta->status |= BLADERF_META_STATUS_OVERRUN;
+        }
+    }
+    MUTEX_UNLOCK(&s->buf_mgmt.lock);
     MUTEX_UNLOCK(&s->lock);
 
     /* Keep stream discontinuities in the same device event history as RF
      * invalidation. Invoke only after dropping sync->lock: RF setters acquire
      * dev->lock before touching sync state. */
-    if (user_meta != NULL &&
-        (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
-         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
-         s->stream_config.format == BLADERF_FORMAT_PACKET_META) &&
-        (user_meta->status & BLADERF_META_STATUS_OVERRUN) != 0 &&
+    if ((notify_overrun ||
+         (user_meta != NULL &&
+          (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+           s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
+           s->stream_config.format == BLADERF_FORMAT_PACKET_META) &&
+          (user_meta->status & BLADERF_META_STATUS_OVERRUN) != 0)) &&
         s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_stream_overrun != NULL) {
         s->dev->board->rx_stream_overrun(s->dev);

@@ -2916,6 +2916,10 @@ int CALL_CONV bladerf_sync_tx(struct bladerf *dev,
  *       ::BLADERF_ERR_WOULD_BLOCK with zero samples until a later successful
  *       event-driven RX transition confirms a new epoch. This avoids waiting
  *       indefinitely while discarding continuously arriving uncertified IQ.
+ * @note For sample-only RX formats, a detected USB overrun returns
+ *       ::BLADERF_ERR_WOULD_BLOCK instead of exposing samples whose continuity
+ *       cannot be reported through metadata. The RX stream overrun is also
+ *       recorded in the device RF event history when supported.
  *
  * @return 0 on success,
  *         ::BLADERF_ERR_UNSUPPORTED if libbladeRF is not built with support

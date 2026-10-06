@@ -93,6 +93,12 @@ transmits a response.
 Since metadata is not being used, a `NULL` pointer is provided to the ::bladerf_metadata
 parameter of the bladerf_sync_rx and bladerf_sync_tx calls.
 
+If the RX stream detects a USB overrun, a sample-only ::bladerf_sync_rx() call
+returns ::BLADERF_ERR_WOULD_BLOCK rather than returning IQ without a way to
+report the discontinuity. The dropped-buffer event is recorded in the device
+RF event history on boards that provide that event interface. The caller
+should discard the failed read and resume with a later call.
+
 The timeout (in ms) parameter defines how long bladerf_sync_rx() and bladerf_sync_tx()
 may block.  This value should be greater than the timeout provided to bladerf_sync_config()
 to ensure these functions do not time out before the underlying data stream times out
