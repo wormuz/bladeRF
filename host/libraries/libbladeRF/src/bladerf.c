@@ -773,7 +773,7 @@ int bladerf_set_sample_rate(struct bladerf *dev,
                             bladerf_sample_rate *actual)
 {
     int status;
-    bladerf_feature feature = dev->feature;
+    bladerf_feature feature;
 
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
@@ -782,6 +782,7 @@ int bladerf_set_sample_rate(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+    feature = dev->feature;
     status = dev->board->set_sample_rate(dev, ch, rate, actual);
     MUTEX_UNLOCK(&dev->lock);
 
@@ -820,7 +821,11 @@ int bladerf_get_sample_rate_range(struct bladerf *dev,
                                   bladerf_channel ch,
                                   const struct bladerf_range **range)
 {
-    return dev->board->get_sample_rate_range(dev, ch, range);
+    int status;
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->get_sample_rate_range(dev, ch, range);
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
 }
 
 int bladerf_set_rational_sample_rate(struct bladerf *dev,
@@ -829,7 +834,7 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
                                      struct bladerf_rational_rate *actual)
 {
     int status;
-    bladerf_feature feature = dev->feature;
+    bladerf_feature feature;
 
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
@@ -838,6 +843,7 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+    feature = dev->feature;
     status = dev->board->set_rational_sample_rate(dev, ch, rate, actual);
     MUTEX_UNLOCK(&dev->lock);
 
@@ -2354,12 +2360,16 @@ int bladerf_enable_feature(struct bladerf *dev, bladerf_feature feature, bool en
     const char *board_name = bladerf_get_board_name(dev);
 
     if (enable == false) {
+        MUTEX_LOCK(&dev->lock);
         dev->feature = BLADERF_FEATURE_DEFAULT;
+        MUTEX_UNLOCK(&dev->lock);
         return 0;
     }
 
     CHECK_STATUS(validate_board_compatibility(board_name, feature));
+    MUTEX_LOCK(&dev->lock);
     dev->feature = feature;
+    MUTEX_UNLOCK(&dev->lock);
 
 error:
     return status;
