@@ -14,4 +14,4 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
   -L"$build_dir/output" -Wl,-rpath,"$build_dir/output" \
   -lbladeRF -o "$binary"
 
-"$binary" "${1:-20}"
+"$binary" "${1:-20}" "${2:-fastlock}"
