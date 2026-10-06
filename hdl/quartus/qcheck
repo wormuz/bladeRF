@@ -807,6 +807,48 @@ def check_rx_epoch_has_no_dead_settle_cdc():
              "the only valid epoch boundary is the first observed sample after completion")
 
 
+def check_public_rf_lifecycle_calls_invalidate_rx():
+    """Guard public operations that replace RF/FPGA/device ownership."""
+    source = ROOT / "host/libraries/libbladeRF/src/bladerf.c"
+    if not source.exists():
+        return
+    text = source.read_text(errors="replace")
+    contracts = {
+        "bladerf_jump_to_bootloader": (
+            "BLADERF_RF_INVALIDATE_BOOTLOADER",
+            "dev->backend->jump_to_bootloader(dev)",
+            "rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0))",
+        ),
+        "bladerf_load_fpga": (
+            "BLADERF_RF_INVALIDATE_FPGA_RELOAD",
+            "dev->board->load_fpga(dev, buf, buf_size)",
+            "rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0))",
+        ),
+        "bladerf_device_reset": (
+            "BLADERF_RF_INVALIDATE_DEVICE_RESET",
+            "dev->board->device_reset(dev)",
+            "rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0))",
+        ),
+        "bladerf_set_tuning_mode": (
+            "BLADERF_RF_INVALIDATE_TUNING_MODE",
+            "dev->board->set_tuning_mode(dev, mode)",
+            "rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0))",
+        ),
+    }
+    for name, ordered_tokens in contracts.items():
+        start = text.find("int " + name + "(")
+        end = text.find("\nint ", start + 1) if start >= 0 else -1
+        body = text[start:end if end >= 0 else None]
+        positions = [body.find(token) for token in ordered_tokens]
+        if (start < 0 or any(pos < 0 for pos in positions) or
+                positions != sorted(positions)):
+            fail("rx-epoch-lifecycle-invalidation",
+                 f"{name} must invalidate RX before mutation and release its "
+                 "reservation afterward",
+                 "every RF ownership/device lifecycle operation must preserve "
+                 "the event-driven RX validity contract")
+
+
 def check_rx_epoch_host_timestamp_fence():
     """Require host-side stale-buffer fencing before epoch success."""
     transition = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c"
@@ -932,6 +974,7 @@ def main():
     check_rx_epoch_is_event_bounded()
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
+    check_public_rf_lifecycle_calls_invalidate_rx()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
 

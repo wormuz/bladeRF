@@ -245,11 +245,18 @@ int bladerf_jump_to_bootloader(struct bladerf *dev)
         return BLADERF_ERR_UNSUPPORTED;
     }
 
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_BOOTLOADER);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
 
     status = dev->backend->jump_to_bootloader(dev);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
 
     return status;
 }
@@ -1456,7 +1463,14 @@ int bladerf_load_fpga(struct bladerf *dev, const char *fpga_file)
         goto exit;
     }
 
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_FPGA_RELOAD);
+    if (status != 0) {
+        goto exit;
+    }
+
     status = dev->board->load_fpga(dev, buf, buf_size);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
 
 exit:
     free(buf);
