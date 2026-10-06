@@ -129,6 +129,13 @@ int main(void)
     } else if (strcmp(fault_status, "EVENT_IO") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "EVENT_NODEV") == 0 ||
+               strcmp(fault_status, "SUBMIT_NODEV") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_DEVICE_LOST;
+        test.expected_stream_status = BLADERF_ERR_NODEV;
+    } else if (strcmp(fault_status, "SUBMIT_TIMEOUT") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TIMEOUT;
+        test.expected_stream_status = BLADERF_ERR_TIMEOUT;
     } else if (strcmp(fault_status, "SUBMIT_IO") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
@@ -212,10 +219,16 @@ int main(void)
         }
         pthread_join(submit_thread, NULL);
         pthread_join(thread, NULL);
-    } else if ((strcmp(fault_status, "EVENT_IO") == 0
-             ? setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR", "IO", 1)
-         : strcmp(fault_status, "SUBMIT_IO") == 0
-             ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR", "IO", 1)
+    } else if (((strcmp(fault_status, "EVENT_IO") == 0 ||
+                 strcmp(fault_status, "EVENT_NODEV") == 0)
+             ? setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR",
+                      strcmp(fault_status, "EVENT_NODEV") == 0 ? "NO_DEVICE" : "IO", 1)
+         : (strcmp(fault_status, "SUBMIT_IO") == 0 ||
+            strcmp(fault_status, "SUBMIT_NODEV") == 0 ||
+            strcmp(fault_status, "SUBMIT_TIMEOUT") == 0)
+             ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR",
+                      strcmp(fault_status, "SUBMIT_NODEV") == 0 ? "NO_DEVICE" :
+                      strcmp(fault_status, "SUBMIT_TIMEOUT") == 0 ? "TIMEOUT" : "IO", 1)
              : setenv("BLADERF_TEST_LIBUSB_RX_STATUS", fault_status, 1)) != 0 ||
         pthread_create(&thread, NULL, run_stream, &test) != 0) {
         fprintf(stderr, "could not arm/start test stream\n");
@@ -229,10 +242,12 @@ int main(void)
     unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
     unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
 
-    const bool event_loop_fault = strcmp(fault_status, "EVENT_IO") == 0;
+    const bool event_loop_fault = strncmp(fault_status, "EVENT_", 6) == 0;
     const bool pre_callback_fault = event_loop_fault ||
                                     strcmp(fault_status, "API_SUBMIT_IO") == 0 ||
-                                    strcmp(fault_status, "SUBMIT_IO") == 0;
+                                    strcmp(fault_status, "SUBMIT_IO") == 0 ||
+                                    strcmp(fault_status, "SUBMIT_NODEV") == 0 ||
+                                    strcmp(fault_status, "SUBMIT_TIMEOUT") == 0;
     if (test.stream_status != test.expected_stream_status ||
         (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
          test.api_submit_status != BLADERF_ERR_IO) ||

@@ -1158,6 +1158,22 @@ static void fail_rx_stream(struct bladerf_stream *stream,
     stream->state = STREAM_SHUTTING_DOWN;
 }
 
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+static int test_libusb_error_from_env(const char *name)
+{
+    const char *fault = getenv(name);
+
+    if (fault == NULL) {
+        return 0;
+    } else if (strcmp(fault, "TIMEOUT") == 0) {
+        return LIBUSB_ERROR_TIMEOUT;
+    } else if (strcmp(fault, "NO_DEVICE") == 0) {
+        return LIBUSB_ERROR_NO_DEVICE;
+    }
+    return LIBUSB_ERROR_IO;
+}
+#endif
+
 static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 {
     struct bladerf_stream *stream = transfer->user_data;
@@ -1515,19 +1531,32 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
      */
     MUTEX_UNLOCK(&stream->lock);
 #ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
-    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
-        !stream_data->rx_api_submit_error_injected &&
-        getenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR") != NULL) {
-        stream_data->rx_api_submit_error_injected = true;
-        status = LIBUSB_ERROR_IO;
-    } else if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
-               !stream_data->rx_submit_error_injected &&
-               getenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR") != NULL) {
-        stream_data->rx_submit_error_injected = true;
-        status = LIBUSB_ERROR_IO;
-    } else
-#endif
+    {
+        int injected_status = 0;
+
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+            !stream_data->rx_api_submit_error_injected) {
+            injected_status = test_libusb_error_from_env(
+                "BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
+            if (injected_status != 0) {
+                stream_data->rx_api_submit_error_injected = true;
+            }
+        }
+        if (injected_status == 0 &&
+            (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+            !stream_data->rx_submit_error_injected) {
+            injected_status = test_libusb_error_from_env(
+                "BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
+            if (injected_status != 0) {
+                stream_data->rx_submit_error_injected = true;
+            }
+        }
+        status = injected_status != 0 ? injected_status
+                                     : libusb_submit_transfer(transfer);
+    }
+#else
     status = libusb_submit_transfer(transfer);
+#endif
     MUTEX_LOCK(&stream->lock);
 
     if (status != 0) {
@@ -1728,9 +1757,9 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
          * the system libusb or requiring a physical controller fault. */
         if (!stream_data->rx_event_error_injected &&
             (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
-            getenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR") != NULL) {
+            (status = test_libusb_error_from_env(
+                 "BLADERF_TEST_LIBUSB_RX_EVENT_ERROR")) != 0) {
             stream_data->rx_event_error_injected = true;
-            status = LIBUSB_ERROR_IO;
         }
 #endif
 
