@@ -116,6 +116,13 @@ static inline bool metadata_rx_format_has_epoch_tag(bladerf_format format)
            format == BLADERF_FORMAT_SC8_Q7_META;
 }
 
+static inline bool metadata_rx_format_allowed_for_epoch_contract(
+    bool epoch_contract_enabled, bladerf_format format)
+{
+    return !epoch_contract_enabled ||
+           metadata_rx_format_has_epoch_tag(format);
+}
+
 static inline bool metadata_get_rx_epoch_id(const uint8_t *header,
                                             uint8_t *epoch_id)
 {

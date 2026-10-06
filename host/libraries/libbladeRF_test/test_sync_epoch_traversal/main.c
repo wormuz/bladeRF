@@ -372,6 +372,18 @@ int main(void)
     assert(metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_SC8_Q7_META));
     assert(!metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_PACKET_META));
     assert(!metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_SC16_Q11));
+    assert(metadata_rx_format_allowed_for_epoch_contract(
+        false, BLADERF_FORMAT_SC16_Q11));
+    assert(metadata_rx_format_allowed_for_epoch_contract(
+        true, BLADERF_FORMAT_SC16_Q11_META));
+    assert(metadata_rx_format_allowed_for_epoch_contract(
+        true, BLADERF_FORMAT_SC8_Q7_META));
+    assert(!metadata_rx_format_allowed_for_epoch_contract(
+        true, BLADERF_FORMAT_SC16_Q11));
+    assert(!metadata_rx_format_allowed_for_epoch_contract(
+        true, BLADERF_FORMAT_SC8_Q7));
+    assert(!metadata_rx_format_allowed_for_epoch_contract(
+        true, BLADERF_FORMAT_PACKET_META));
     write_msg(epoch_messages, 5000, 8, 1111);
     write_msg(epoch_messages + MSG_BYTES, 5000 + MSG_SAMPLES, 8, 1222);
     assert(metadata_rx_buffer_matches_epoch(epoch_messages,

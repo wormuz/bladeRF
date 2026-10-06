@@ -2682,18 +2682,29 @@ static int bladerf2_sync_config(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
 
     bladerf_direction dir = layout & BLADERF_DIRECTION_MASK;
-    bool preserve_rx_epoch_contract =
-        dir == BLADERF_RX &&
-        sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
+    bool preserve_rx_epoch_contract = false;
     int status;
+
+    if (dir == BLADERF_RX) {
+        bool epoch_contract_enabled;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        epoch_contract_enabled =
+            board_data->rf_transition_epoch_contract_enabled;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+        /* The contract can be enabled by transition_begin() before a sync
+         * stream exists. Preserve it across stream creation/replacement so
+         * raw formats cannot bypass the metadata fence in that call order. */
+        preserve_rx_epoch_contract = epoch_contract_enabled ||
+            sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
+    }
 
     /* Replacing a certified META stream discards the parser's epoch filter.
      * Refuse formats that cannot carry the identity, and reinstall a
      * fail-closed filter after META reconfiguration so only a later
      * transition can certify samples on the new stream. */
-    if (preserve_rx_epoch_contract &&
-        format != BLADERF_FORMAT_SC16_Q11_META &&
-        format != BLADERF_FORMAT_SC8_Q7_META) {
+    if (!metadata_rx_format_allowed_for_epoch_contract(
+            preserve_rx_epoch_contract, format)) {
         return BLADERF_ERR_UNSUPPORTED;
     }
 
