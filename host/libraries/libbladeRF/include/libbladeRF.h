@@ -3282,6 +3282,10 @@ int CALL_CONV bladerf_flash_firmware(struct bladerf *dev, const char *firmware);
  * Load device's FPGA.
  *
  * @note This FPGA configuration will be reset at the next power cycle.
+ * On bladeRF2, RX/TX modules must be disabled before loading; an active RF
+ * direction returns ::BLADERF_ERR_WOULD_BLOCK. The prior RX data-valid epoch
+ * is revoked before the load, and a fresh event-driven RX transition is
+ * required before IQ is accepted again.
  *
  * @param       dev         Device handle
  * @param[in]   fpga        Full path to FPGA bitstream

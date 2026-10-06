@@ -849,6 +849,31 @@ def check_public_rf_lifecycle_calls_invalidate_rx():
                  "the event-driven RX validity contract")
 
 
+def check_fpga_reload_quiesces_and_reinitializes_rfic():
+    """Keep live FPGA reload from retaining stale RFIC/stream state."""
+    source = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c"
+    if not source.exists():
+        return
+    text = source.read_text(errors="replace")
+    start = text.find("static int bladerf2_load_fpga(")
+    end = text.find("static int bladerf2_flash_fpga(", start + 1)
+    body = text[start:end if end >= 0 else None]
+    tokens = (
+        "rffe_control_read",
+        "RFFE_CONTROL_ENABLE",
+        "rfic->deinitialize(dev)",
+        "dev->backend->load_fpga(dev, buf, length)",
+        "rfic->initialize(dev)",
+        "_bladerf2_initialize(dev)",
+    )
+    positions = [body.find(token) for token in tokens]
+    if start < 0 or any(pos < 0 for pos in positions) or positions != sorted(positions):
+        fail("rx-epoch-fpga-reload-reinit",
+             "FPGA reload must require inactive RF, release stale RFIC state, "
+             "and initialize a new RFIC controller",
+             "a successful FPGA load must not leave host-side RFIC state stale")
+
+
 def check_rx_epoch_host_timestamp_fence():
     """Require host-side stale-buffer fencing before epoch success."""
     transition = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c"
@@ -975,6 +1000,7 @@ def main():
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
     check_public_rf_lifecycle_calls_invalidate_rx()
+    check_fpga_reload_quiesces_and_reinitializes_rfic()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
 

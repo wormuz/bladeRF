@@ -2822,16 +2822,55 @@ static int bladerf2_load_fpga(struct bladerf *dev,
                               uint8_t const *buf,
                               size_t length)
 {
+    struct bladerf2_board_data *board_data;
+    struct controller_fns const *rfic = NULL;
+    bladerf_rfic_init_state rfic_state = BLADERF_RFIC_INIT_STATE_OFF;
+    uint32_t rffe_control;
+    int restore_status;
+
     CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
     NULL_CHECK(buf);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
+    board_data = dev->board_data;
 
     if (!is_valid_fpga_size(dev, board_data->fpga_size, length)) {
         RETURN_INVAL("fpga file", "incorrect file size");
     }
 
-    CHECK_STATUS(dev->backend->load_fpga(dev, buf, length));
+    if (board_data->state >= STATE_FPGA_LOADED) {
+        /* Replacing the FPGA while an RF direction is active tears down the
+         * USB stream underneath its worker. Require RX/TX to be disabled.
+         * This check is only available when an FPGA is already loaded. */
+        CHECK_STATUS(dev->backend->rffe_control_read(dev, &rffe_control));
+        if (rffe_control & (1u << RFFE_CONTROL_ENABLE)) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+
+        /* FPGA reload resets RFIC-side state. Drop the old controller's
+         * software cache before loading, otherwise _bladerf2_initialize()
+         * sees a stale "already initialized" PHY and skips rebuilding it. */
+        rfic = board_data->rfic;
+        if (rfic != NULL) {
+            CHECK_STATUS(rfic->get_init_state(dev, &rfic_state));
+            if (rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
+                CHECK_STATUS(rfic->deinitialize(dev));
+            }
+        }
+    }
+
+    int status = dev->backend->load_fpga(dev, buf, length);
+    if (status != 0) {
+        /* The previous image may still be running. Try to restore its RFIC
+         * controller, while returning the primary FPGA-load failure. */
+        if (rfic != NULL && rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
+            restore_status = rfic->initialize(dev);
+            if (restore_status != 0) {
+                log_error("Failed to restore RFIC controller after FPGA load "
+                          "failure: %s\n", bladerf_strerror(restore_status));
+            }
+        }
+        return status;
+    }
 
     /* Update device state */
     board_data->state = STATE_FPGA_LOADED;
