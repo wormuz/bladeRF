@@ -1365,6 +1365,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
 out:
+    /* A sync read can time out without any USB completion callback (for
+     * example, after FPGA epoch-valid but before the first host RX buffer).
+     * Report that failed data wait through the same device event history as
+     * callback-level transport faults. A timeout is never evidence of valid
+     * IQ; partial data remains accompanied by the error and metadata count. */
+    if (status == BLADERF_ERR_TIMEOUT) {
+        withheld_reason = BLADERF_RF_WITHHELD_SYNC_TIMEOUT;
+    }
+
     /* The worker can detect a USB overrun in every sync format. Metadata
      * callers also receive the status bit above; the RF event must not depend
      * on that optional format, otherwise ordinary SC16_Q11 streams silently

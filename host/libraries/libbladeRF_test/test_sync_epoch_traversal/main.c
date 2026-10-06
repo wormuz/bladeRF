@@ -475,8 +475,12 @@ int main(void)
      * latch, the already-open old message remains marked for discard. */
     memset(&meta, 0, sizeof(meta));
     meta.flags = BLADERF_META_FLAG_RX_NOW;
+    sync_withheld_events = 0;
+    sync_withheld_reason = 0;
     assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
     assert(meta.actual_count == 0);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
     fixture_destroy(&f);
 
     /* A transition poisons the entire parser epoch before ARM. Even a packet

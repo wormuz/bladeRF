@@ -4766,6 +4766,8 @@ typedef enum {
 #define BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR (1U << 5)
 #define BLADERF_RF_WITHHELD_USB_TIMEOUT (1U << 6)
 #define BLADERF_RF_WITHHELD_DEVICE_LOST (1U << 7)
+/** The synchronous RX read timed out before the requested IQ was complete. */
+#define BLADERF_RF_WITHHELD_SYNC_TIMEOUT (1U << 8)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and

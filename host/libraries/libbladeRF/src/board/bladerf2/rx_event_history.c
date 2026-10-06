@@ -101,7 +101,8 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
         reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
         reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
         reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
-        reason == BLADERF_RF_WITHHELD_DEVICE_LOST) {
+        reason == BLADERF_RF_WITHHELD_DEVICE_LOST ||
+        reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
         /* A USB transport failure is invalid even in legacy mode, where the
          * epoch gate itself is disabled. Record each occurrence. */
         should_report = true;
