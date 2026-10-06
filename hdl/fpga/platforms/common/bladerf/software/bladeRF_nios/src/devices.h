@@ -31,6 +31,10 @@
 #include "fpga_version.h"
 #include "pkt_handler.h"
 
+/* These storage sizes must match the embedded NIOS and PC simulation builds. */
+#define NUM_BBP_FASTLOCK_PROFILES 16
+#define NUM_RFFE_FASTLOCK_PROFILES 8
+
 /* Detect if we are in NIOS Build tools */
 #ifdef BLADERF_NIOS_BUILD
 #   ifdef BLADERF_NIOS_PC_SIMULATION
@@ -105,11 +109,6 @@
 /* 16, not 256: at 20 bytes per entry per direction the arrays cost 10240
  * bytes of static data here, out of the 29752 the heap and stack share. See
  * the matching comment in fpga_common/include/bladerf2_common.h. */
-#define NUM_BBP_FASTLOCK_PROFILES  16
-
-/* Number of fast lock profiles that can be stored in the RFFE */
-#define NUM_RFFE_FASTLOCK_PROFILES 8
-
 /* Enable libad936x if we have enough RAM. Note that it is very important
  * that all calls to ad9361_* be ifdef-wrapped! */
 #   if RAM_SPAN >= 131072

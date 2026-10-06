@@ -39,7 +39,9 @@
 /* libbladeRF code uses a FIELD_INIT macro as an MSVC workaround */
 #define FIELD_INIT(param, ...) param = __VA_ARGS__
 
-#define ARRAY_SIZE(n) (sizeof(n) / sizeof(n[0]))
+#ifndef ARRAY_SIZE
+#   define ARRAY_SIZE(n) (sizeof(n) / sizeof(n[0]))
+#endif
 
 /* For >= 1.5 GHz uses the high band should be used. Otherwise, the low
  * band should be selected */
@@ -93,4 +95,3 @@ struct bladerf;
 /* Stub out pthread type */
 
 #endif
-
