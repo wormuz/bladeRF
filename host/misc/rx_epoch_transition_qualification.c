@@ -1,10 +1,12 @@
 #include <libbladeRF.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
 int main(int argc, char **argv) {
     unsigned n = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 1000;
+    const bool cross_band = argc > 2 && strcmp(argv[2], "--cross-band") == 0;
     struct bladerf *dev = NULL;
     int16_t *samples = calloc(8192 * 2, sizeof(*samples));
     if (!samples) return 2;
@@ -22,7 +24,9 @@ int main(int argc, char **argv) {
     unsigned first_read_faults = 0;
     unsigned recovered_reads = 0;
     for (unsigned i=0; i<n; ++i) {
-        uint64_t freq = (i & 1) ? 1835000000ULL : 1835400000ULL;
+        uint64_t freq = cross_band ?
+            ((i & 1) ? 1835000000ULL : 947500000ULL) :
+            ((i & 1) ? 1835000000ULL : 1835400000ULL);
         struct bladerf_rx_transition_request req = {
             .target_frequency_hz = freq,
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX | BLADERF_RF_REQUIRE_EPOCH_VALID,
