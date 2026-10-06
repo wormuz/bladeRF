@@ -142,6 +142,18 @@ static void *rx_callback(struct bladerf *dev,
         return NULL;
     }
 
+    /* Event-only RX callbacks carry no buffer address. They signal an
+     * invalidated/withheld transfer; never pass NULL to sync_buf2idx() or
+     * mark an empty ring slot ready. Wake a blocked sync_rx() so it can return
+     * WOULD_BLOCK, and recycle the actual USB buffer in async.c. */
+    if (samples == NULL && num_samples == 0) {
+        MUTEX_LOCK(&b->lock);
+        b->rx_data_withheld_pending = true;
+        COND_SIGNAL(&b->buf_ready);
+        MUTEX_UNLOCK(&b->lock);
+        return BLADERF_STREAM_REUSE_BUFFER;
+    }
+
     MUTEX_LOCK(&b->lock);
 
     /* Get the index of the buffer that was just filled */

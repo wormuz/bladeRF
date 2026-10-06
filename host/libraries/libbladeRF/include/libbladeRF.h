@@ -4719,7 +4719,10 @@ typedef enum {
     BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED,
     /** Async RX IQ was withheld by the active epoch validity gate. `flags`
      * identifies the reason; emitted once until valid IQ resumes. */
-    BLADERF_RF_EVT_RX_DATA_WITHHELD
+    BLADERF_RF_EVT_RX_DATA_WITHHELD,
+    /** NIOS did not acknowledge aborting an incomplete RX epoch. IQ remains
+     * invalid; `error_code` contains the ABORT command failure. */
+    BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)

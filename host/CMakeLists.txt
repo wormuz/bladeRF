@@ -62,6 +62,13 @@ if(ENABLE_TEST_SPI_FAULT_INJECTION)
     add_definitions(-DBLADERF_ENABLE_TEST_SPI_FAULT_INJECTION=1)
 endif()
 
+option(ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+       "Enable test-only NIOS RX epoch ABORT fault injection."
+       OFF)
+if(ENABLE_TEST_RX_ABORT_FAULT_INJECTION)
+    add_definitions(-DBLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION=1)
+endif()
+
 if(ENABLE_LOG_FILE_INFO)
     add_definitions(-DLOG_INCLUDE_FILE_INFO)
 endif()

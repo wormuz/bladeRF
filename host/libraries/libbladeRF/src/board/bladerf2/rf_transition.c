@@ -54,6 +54,16 @@
 #define ENSM_STATE_RX 0x8
 #define ENSM_STATE_FDD 0xA
 
+static void _emit_event(struct bladerf *dev,
+                        struct bladerf2_board_data *board_data,
+                        bladerf_rf_event_type type,
+                        bladerf_rf_state state,
+                        uint64_t requested_hz,
+                        uint64_t readback_hz,
+                        uint32_t rfic_status,
+                        int32_t error_code,
+                        uint32_t epoch_id);
+
 /* Poll interval while waiting for PLL lock / ENSM confirmation. Matches
  * the AD9361 driver's own ad9361_check_cal_done() cadence
  * (thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/
@@ -200,10 +210,29 @@ static void _abort_transition(struct bladerf *dev,
                               struct bladerf2_board_data *board_data,
                               struct bladerf_rf_event *final_event)
 {
+    int abort_status = 0;
+
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_EPOCH_VALID) {
-        (void)nios_rx_epoch_ctrl_cmd(dev,
-                    NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+        /* Test-only NIOS command fault; normal builds have no injection path. */
+        if (getenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT") != NULL &&
+            getenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT")[0] != '\0') {
+            abort_status = BLADERF_ERR_UNEXPECTED;
+        } else
+#endif
+        {
+            abort_status = nios_rx_epoch_ctrl_cmd(
+                dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+        }
+    }
+
+    if (abort_status != 0) {
+        /* Preserve the primary transition error returned to the caller, but
+         * make failed FPGA cleanup explicit in the device-wide event history. */
+        _emit_event(dev, board_data, BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED,
+                    BLADERF_RF_STATE_ERROR, 0, 0, 0, abort_status,
+                    board_data->rf_transition_epoch_id);
     }
 
     WITH_MUTEX(&dev->lock, {
@@ -1244,6 +1273,7 @@ static bool _is_terminal_event(bladerf_rf_event_type type)
            type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
            type == BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
            type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
+           type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
            type == BLADERF_RF_EVT_ERROR;
 }
 

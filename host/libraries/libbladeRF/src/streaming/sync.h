@@ -98,6 +98,11 @@ struct buffer_mgmt {
      * is otherwise invisible to the caller. */
     bool overrun_pending;
 
+    /* Async epoch gating can wake the sync worker without a sample buffer.
+     * The next sync_rx() must fail closed instead of treating that callback
+     * as a completed ring buffer. */
+    bool rx_data_withheld_pending;
+
     /* Also set by the RX worker on an overrun, cleared once the consumer
      * has dropped the buffers that were already full at that moment. Those
      * buffers hold the OLDEST samples: everything the hardware produced

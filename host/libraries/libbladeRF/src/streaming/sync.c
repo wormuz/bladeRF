@@ -311,6 +311,7 @@ int sync_init(struct bladerf_sync *sync,
             sync->meta.msg_flags = 0;
             sync->meta.have_timestamp = false;
             sync->buf_mgmt.overrun_pending = false;
+            sync->buf_mgmt.rx_data_withheld_pending = false;
             sync->buf_mgmt.stale_pending = false;
 
             sync_reset_sequence_tracking(&sync->buf_mgmt, num_transfers);
@@ -853,6 +854,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
             case SYNC_STATE_WAIT_FOR_BUFFER:
                 MUTEX_LOCK(&b->lock);
+
+                if (b->rx_data_withheld_pending) {
+                    b->rx_data_withheld_pending = false;
+                    status = BLADERF_ERR_WOULD_BLOCK;
+                    MUTEX_UNLOCK(&b->lock);
+                    break;
+                }
 
                 /* An overrun means every buffer that is full right now was
                  * produced BEFORE the gap: the worker stopped storing when

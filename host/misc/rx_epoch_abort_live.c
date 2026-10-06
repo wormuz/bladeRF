@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static int transition(struct bladerf *dev, uint64_t frequency_hz,
                       struct bladerf_rf_event *result)
@@ -52,6 +53,10 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
         metadata.flags = BLADERF_META_FLAG_RX_NOW;
         int status = bladerf_sync_rx(dev, samples, 4096, &metadata, 2000);
         if (status != 0) {
+            if (status == BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "RX data withheld; retrying explicit read\n");
+                continue;
+            }
             fprintf(stderr, "sync_rx: %s\n", bladerf_strerror(status));
             return status;
         }
@@ -129,6 +134,45 @@ static int check_failed_trace(struct bladerf *dev, uint32_t transaction_id)
                 "readback=%u pll=%u ensm=%u events=%u\n",
                 transaction_id, invalidated, errored, valid,
                 spi_started, spi_done, lo_readback, pll_locked, ensm_rx, count);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
+}
+
+static int check_abort_failed_trace(struct bladerf *dev,
+                                    uint32_t transaction_id)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    bool complete = false;
+    bool transition_error = false;
+    int status = bladerf_rx_transition_get_events(
+        dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &complete);
+
+    if (status != 0 || !complete || count < 2) {
+        fprintf(stderr, "ABORT trace query txn=%u status=%d complete=%u count=%u\n",
+                transaction_id, status, complete, count);
+        return status ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].transaction_id != transaction_id) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        transition_error |= events[i].event_type == BLADERF_RF_EVT_ERROR;
+    }
+    if (!transition_error ||
+        events[count - 1].event_type != BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
+        events[count - 1].error_code != BLADERF_ERR_UNEXPECTED) {
+        fprintf(stderr, "ABORT failure missing from trace txn=%u count=%u "
+                "transition_error=%u last=%u error=%d\n", transaction_id,
+                count, transition_error, events[count - 1].event_type,
+                events[count - 1].error_code);
+        for (uint32_t i = 0; i < count; ++i) {
+            fprintf(stderr, "  event[%u]=%u error=%d flags=0x%x txn=%u\n",
+                    i, events[i].event_type, events[i].error_code,
+                    events[i].flags, events[i].transaction_id);
+        }
         return BLADERF_ERR_UNEXPECTED;
     }
     return 0;
@@ -344,6 +388,40 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
+
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    /* Fail only the NIOS cleanup command after FPGA ARM. The event trace must
+     * distinguish failed cleanup, IQ must remain blocked, and the next
+     * explicit transition must recover the still-pending FPGA gate. */
+    uint32_t abort_failed_transaction_id = 0;
+    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    status = bladerf_rx_transition_begin(
+        dev, BLADERF_CHANNEL_RX(0), &invalid_request,
+        &abort_failed_transaction_id);
+    unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
+    if (status != BLADERF_ERR_RANGE || abort_failed_transaction_id == 0) {
+        fprintf(stderr, "ABORT-fault transition returned %s txn=%u\n",
+                bladerf_strerror(status), abort_failed_transaction_id);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    CHECK(check_abort_failed_trace(dev, abort_failed_transaction_id));
+
+    memset(&metadata, 0, sizeof(metadata));
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
+        fprintf(stderr, "failed NIOS ABORT admitted IQ: status=%s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    printf("RX epoch ABORT fault: PASS txn=%u IQ withheld; recovery follows\n",
+           abort_failed_transaction_id);
+#endif
 
     CHECK(transition(dev, recovery_frequency_hz, &recovered));
     if (recovered.epoch_id == initial.epoch_id) {
