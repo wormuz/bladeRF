@@ -527,6 +527,34 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
     return status;
 }
 
+/* Fence queued USB messages as soon as an RX epoch transition is requested.
+ * The FPGA's first-valid timestamp is not available until the transition
+ * completes, but the new epoch ID is known before ARM. Installing this
+ * filter first prevents old-epoch samples from escaping during a failed or
+ * still-pending RFIC transition. sync_rx_epoch_set_min_timestamp() tightens
+ * the same filter after FPGA reports the exact boundary. */
+int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id)
+{
+    int status = sync_rx_epoch_require_metadata(sync);
+    if (status != 0 || sync == NULL || !sync->initialized) {
+        return status;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (!sync->initialized ||
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        status = BLADERF_ERR_INVAL;
+    } else {
+        sync->meta.rx_epoch_min_timestamp = 0;
+        sync->meta.rx_epoch_boundary_enabled = true;
+        sync->meta.rx_epoch_expected_id = epoch_id;
+        sync->meta.rx_epoch_id_filter_enabled = true;
+    }
+    MUTEX_UNLOCK(&sync->lock);
+
+    return status;
+}
+
 /* Returns # of timestamps (or time steps) left in a message.
  *
  * curr_msg_off counts SAMPLES (it is advanced by samples_to_copy and

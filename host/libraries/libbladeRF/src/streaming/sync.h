@@ -293,6 +293,7 @@ int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);
 /* RX transition integration. Raw sample formats cannot distinguish queued
  * old IQ; epoch fencing therefore requires per-message RX timestamps. */
 int sync_rx_epoch_require_metadata(struct bladerf_sync *sync);
+int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id);
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id);

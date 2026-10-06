@@ -438,6 +438,15 @@ static int _bladerf_rx_transition_begin(
         int epoch_status = _prepare_rx_epoch_id(
             dev, request->timeout_ms ? request->timeout_ms : 1000,
             &epoch_id, &epoch_status_word);
+        /* Fence the host-side parser before changing the FPGA gate. Old USB
+         * buffers may already be queued, and the first-valid timestamp is
+         * only available after successful RFIC/FPGA completion. Keep the
+         * filter installed on every failure path: an uncompleted epoch must
+         * never make old IQ visible as current data. */
+        if (epoch_status == 0 && board_data->sync[BLADERF_RX].initialized) {
+            epoch_status = sync_rx_epoch_expect_id(
+                &board_data->sync[BLADERF_RX], epoch_id);
+        }
         if (epoch_status == 0) {
             epoch_status = nios_rx_epoch_ctrl_cmd(dev,
                                NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,

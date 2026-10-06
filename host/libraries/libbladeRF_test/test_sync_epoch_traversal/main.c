@@ -182,5 +182,20 @@ int main(void)
     assert_marker(out, 100, 666, 100);
     fixture_destroy(&f);
 
+    /* A transition installs its expected epoch ID before FPGA ARM. This
+     * models the host-side fail-closed interval: queued old-epoch USB data
+     * is rejected even though the exact first-valid timestamp is not known
+     * yet. */
+    fixture_init(&f);
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    write_msg(f.buffers[0], 0, 7, 888);
+    write_msg(f.buffers[0] + MSG_BYTES, 100, 8, 999);
+    receive(&f, out, 100, &meta);
+    assert(meta.timestamp == 100);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 8);
+    assert_marker(out, 100, 999, 0);
+
+    fixture_destroy(&f);
+
     return 0;
 }
