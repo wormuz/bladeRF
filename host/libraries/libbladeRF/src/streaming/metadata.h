@@ -168,6 +168,48 @@ static inline bool metadata_rx_buffer_matches_epoch(
     return true;
 }
 
+enum metadata_rx_buffer_epoch_result {
+    METADATA_RX_BUFFER_INVALID,
+    METADATA_RX_BUFFER_CONTIGUOUS,
+    METADATA_RX_BUFFER_DISCONTINUITY,
+};
+
+/* Validate epoch identity, the first-valid lower bound, and timestamp
+ * continuity for every message in a USB transfer. timestamp_step is in FPGA
+ * sample-clock ticks (divide interleaved RX_X2 samples by two). On a
+ * discontinuity, next_timestamp still follows the last observed message so a
+ * caller can withhold this transfer and resume at the next contiguous one. */
+static inline enum metadata_rx_buffer_epoch_result
+metadata_rx_buffer_epoch_contiguous(
+    const uint8_t *buffer, size_t length, size_t message_size,
+    uint8_t expected_epoch_id, uint64_t minimum_timestamp,
+    bool have_expected_timestamp, uint64_t expected_timestamp,
+    uint64_t timestamp_step, uint64_t *next_timestamp)
+{
+    size_t offset;
+    bool discontinuity = false;
+
+    if (timestamp_step == 0 || next_timestamp == NULL ||
+        !metadata_rx_buffer_matches_epoch(buffer, length, message_size,
+                                          expected_epoch_id,
+                                          minimum_timestamp)) {
+        return METADATA_RX_BUFFER_INVALID;
+    }
+
+    for (offset = 0; offset < length; offset += message_size) {
+        const uint64_t timestamp = metadata_get_timestamp(buffer + offset);
+        if (have_expected_timestamp && timestamp != expected_timestamp) {
+            discontinuity = true;
+        }
+        expected_timestamp = timestamp + timestamp_step;
+        have_expected_timestamp = true;
+    }
+
+    *next_timestamp = expected_timestamp;
+    return discontinuity ? METADATA_RX_BUFFER_DISCONTINUITY :
+                           METADATA_RX_BUFFER_CONTIGUOUS;
+}
+
 /* Header-level disposition used by sync RX. Keeping this decision pure lets
  * tests exercise the same stale-epoch, timestamp-prefix, and discontinuity
  * branches used by the stream parser. */

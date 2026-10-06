@@ -115,3 +115,45 @@ void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
     event.flags = reason;
     bladerf2_rf_event_append(board_data, &event);
 }
+
+void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    uint8_t epoch_id;
+    bool should_report = false;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* This runs in the asynchronous USB callback. Keep it independent of
+     * dev->lock, which may be held by a setter waiting for USB progress. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->rf_transition_epoch_contract_enabled &&
+        !board_data->rx_async_timestamp_discontinuity_reported) {
+        board_data->rx_async_timestamp_discontinuity_reported = true;
+        should_report = true;
+    }
+    epoch_id = board_data->rf_transition_certified_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (!should_report) {
+        return;
+    }
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.epoch_id = epoch_id;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
+    event.flags = BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY;
+    event.error_code = BLADERF_ERR_UNEXPECTED;
+    bladerf2_rf_event_append(board_data, &event);
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.error_code = 0;
+    bladerf2_rf_event_append(board_data, &event);
+}

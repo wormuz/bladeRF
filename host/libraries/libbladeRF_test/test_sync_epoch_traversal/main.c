@@ -264,6 +264,42 @@ static void test_async_data_withheld_event(void)
     free(board_data);
 }
 
+static void test_async_timestamp_continuity(void)
+{
+    uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
+    uint64_t next_timestamp = 0;
+    assert(buffer != NULL);
+
+    write_msg(buffer, 5000, 7, 10);
+    write_msg(buffer + MSG_BYTES, 5000 + MSG_SAMPLES, 7, 20);
+    assert(metadata_rx_buffer_epoch_contiguous(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000, false, 0,
+               MSG_SAMPLES, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
+    assert(next_timestamp == 5000 + 2 * MSG_SAMPLES);
+
+    write_msg(buffer, next_timestamp, 7, 30);
+    write_msg(buffer + MSG_BYTES, next_timestamp + MSG_SAMPLES + 2, 7, 40);
+    assert(metadata_rx_buffer_epoch_contiguous(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000, true, next_timestamp,
+               MSG_SAMPLES, &next_timestamp) ==
+           METADATA_RX_BUFFER_DISCONTINUITY);
+    assert(next_timestamp == 5000 + 4 * MSG_SAMPLES + 2);
+
+    write_msg(buffer, next_timestamp, 7, 50);
+    write_msg(buffer + MSG_BYTES, next_timestamp + MSG_SAMPLES, 7, 60);
+    assert(metadata_rx_buffer_epoch_contiguous(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000, true, next_timestamp,
+               MSG_SAMPLES, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
+
+    write_msg(buffer, 9000, 7, 70);
+    write_msg(buffer + MSG_BYTES, 9000 + MSG_SAMPLES / 2, 7, 80);
+    assert(metadata_rx_buffer_epoch_contiguous(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 9000, false, 0,
+               MSG_SAMPLES / 2, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
+    assert(next_timestamp == 9000 + MSG_SAMPLES);
+    free(buffer);
+}
+
 int main(void)
 {
     int16_t out[4 * MSG_SAMPLES];
@@ -271,6 +307,7 @@ int main(void)
 
     test_async_unsupported_format_event();
     test_async_data_withheld_event();
+    test_async_timestamp_continuity();
 
 
     uint8_t epoch_messages[BYTES_PER_BUFFER];

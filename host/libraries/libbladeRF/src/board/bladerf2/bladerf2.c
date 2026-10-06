@@ -1626,8 +1626,13 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     uint8_t epoch_id;
     uint64_t first_valid_timestamp;
     size_t message_size;
+    size_t bytes_per_sample;
+    size_t timestamp_step;
+    bool have_expected_timestamp;
+    uint64_t expected_timestamp;
+    uint64_t next_timestamp = 0;
     const uint8_t *bytes = buffer;
-    bool matches;
+    enum metadata_rx_buffer_epoch_result validation;
 
     if ((layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
         return true;
@@ -1643,6 +1648,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     epoch_id = board_data->rf_transition_certified_epoch_id;
     first_valid_timestamp = board_data->rf_transition_first_valid_timestamp;
     message_size = board_data->msg_size;
+    have_expected_timestamp = board_data->rx_async_have_expected_timestamp &&
+        board_data->rx_async_timestamp_epoch_id == epoch_id;
+    expected_timestamp = board_data->rx_async_expected_timestamp;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!contract_enabled) {
@@ -1657,23 +1665,57 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         return false;
     }
     if (!epoch_valid) {
+        /* The interval is already fenced from callers. Do not reinterpret
+         * the intentionally suppressed transition interval as USB loss; the
+         * next certified epoch establishes a fresh timestamp baseline. */
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_have_expected_timestamp = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rx_async_data_withheld(
             dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
         return false;
     }
 
-    matches = metadata_rx_buffer_matches_epoch(
-        bytes, length, message_size, epoch_id, first_valid_timestamp);
-    if (matches) {
+    bytes_per_sample = samples_to_bytes(format, 1);
+    if (message_size <= METADATA_HEADER_SIZE || bytes_per_sample == 0) {
+        bladerf2_rx_async_format_unsupported(dev, format);
+        return false;
+    }
+    timestamp_step = (message_size - METADATA_HEADER_SIZE) / bytes_per_sample;
+    if (layout == BLADERF_RX_X2) {
+        timestamp_step /= 2;
+    }
+    validation = metadata_rx_buffer_epoch_contiguous(
+        bytes, length, message_size, epoch_id, first_valid_timestamp,
+        have_expected_timestamp, expected_timestamp, timestamp_step,
+        &next_timestamp);
+
+    if (validation == METADATA_RX_BUFFER_CONTIGUOUS) {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_have_expected_timestamp = true;
+        board_data->rx_async_timestamp_epoch_id = epoch_id;
+        board_data->rx_async_expected_timestamp = next_timestamp;
         board_data->rx_async_format_unsupported_reported = false;
         board_data->rx_async_data_withheld_reported = false;
+        board_data->rx_async_timestamp_discontinuity_reported = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return true;
+    }
+
+    if (validation == METADATA_RX_BUFFER_DISCONTINUITY) {
+        /* Rebase after withholding this transfer. A subsequent contiguous
+         * transfer can resume without accepting the discontinuous samples. */
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_have_expected_timestamp = true;
+        board_data->rx_async_timestamp_epoch_id = epoch_id;
+        board_data->rx_async_expected_timestamp = next_timestamp;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        bladerf2_rx_async_timestamp_discontinuity(dev);
     } else {
         bladerf2_rx_async_data_withheld(
             dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     }
-    return matches;
+    return false;
 }
 
 

@@ -8,7 +8,15 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <string.h>
 #include <time.h>
+
+#include "host_config.h"
+#include "streaming/metadata.h"
+
+#define LIVE_RX_META_MESSAGE_SIZE 8192u
+#define LIVE_RX_X2_SAMPLES_PER_TIMESTAMP 2u
 
 struct live_stream {
     struct bladerf *dev;
@@ -21,8 +29,14 @@ struct live_stream {
     uint64_t event_cursor;
     atomic_uint events_drained_from_callback;
     atomic_uint data_withheld_events;
+    atomic_uint timestamp_withheld_events;
+    atomic_uint stream_overrun_events;
     atomic_uint event_history_gaps;
     atomic_bool pause_event_poll;
+    atomic_uint timestamp_discontinuities;
+    bool have_expected_timestamp;
+    uint8_t timestamp_epoch_id;
+    uint64_t expected_timestamp;
     int stream_status;
 };
 
@@ -63,6 +77,14 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                     if (events[i].event_type ==
                         BLADERF_RF_EVT_RX_DATA_WITHHELD) {
                         atomic_fetch_add(&live->data_withheld_events, 1);
+                        if (events[i].flags ==
+                            BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY) {
+                            atomic_fetch_add(&live->timestamp_withheld_events,
+                                             1);
+                        }
+                    } else if (events[i].event_type ==
+                               BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
+                        atomic_fetch_add(&live->stream_overrun_events, 1);
                     }
                 }
             }
@@ -73,6 +95,49 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     }
     if (samples == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
+    }
+
+    /* The xA4 USB3 META stream uses 8 KiB messages. RX_X2 interleaves two
+     * channel samples per FPGA timestamp tick. Validate continuity across
+     * every message and USB callback. The expected timestamp survives
+     * event-only callbacks; a different epoch establishes a fresh baseline. */
+    const uint8_t *bytes = samples;
+    const size_t received_bytes = num_samples * sizeof(int32_t);
+    const size_t message_samples =
+        (LIVE_RX_META_MESSAGE_SIZE - METADATA_HEADER_SIZE) / sizeof(int32_t);
+    for (size_t offset = 0; offset + LIVE_RX_META_MESSAGE_SIZE <= received_bytes;
+         offset += LIVE_RX_META_MESSAGE_SIZE) {
+        const uint8_t *header = bytes + offset;
+        uint8_t epoch_id;
+        if (!metadata_get_rx_epoch_id(header, &epoch_id)) {
+            atomic_store(&live->event_query_status, BLADERF_ERR_UNEXPECTED);
+            return BLADERF_STREAM_SHUTDOWN;
+        }
+        const uint64_t timestamp = metadata_get_timestamp(header);
+        if (epoch_id == 1 && offset < 4 * LIVE_RX_META_MESSAGE_SIZE) {
+            fprintf(stderr, "initial META epoch=1 msg=%zu timestamp=%llu\n",
+                    offset / LIVE_RX_META_MESSAGE_SIZE,
+                    (unsigned long long)timestamp);
+        }
+        if (live->have_expected_timestamp &&
+            epoch_id == live->timestamp_epoch_id &&
+            timestamp != live->expected_timestamp) {
+            atomic_fetch_add(&live->timestamp_discontinuities, 1);
+            fprintf(stderr, "async META timestamp delta epoch=%u previous=%llu "
+                    "expected_delta=%zu actual_delta=%llu message=%zu\n",
+                    epoch_id,
+                    (unsigned long long)(live->expected_timestamp -
+                        message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP),
+                    message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP,
+                    (unsigned long long)(timestamp -
+                        (live->expected_timestamp - message_samples /
+                         LIVE_RX_X2_SAMPLES_PER_TIMESTAMP)),
+                    offset / LIVE_RX_META_MESSAGE_SIZE);
+        }
+        live->timestamp_epoch_id = epoch_id;
+        live->expected_timestamp = timestamp +
+            message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP;
+        live->have_expected_timestamp = true;
     }
     atomic_fetch_add(&live->valid_callbacks, 1);
     return samples;
@@ -287,6 +352,24 @@ int main(void)
         goto cleanup;
     }
 
+    if (atomic_load(&live.timestamp_discontinuities) != 0) {
+        fprintf(stderr, "library exposed %u noncontiguous META buffers as IQ\n",
+                atomic_load(&live.timestamp_discontinuities));
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    if (atomic_load(&live.timestamp_withheld_events) !=
+        atomic_load(&live.stream_overrun_events)) {
+        fprintf(stderr, "timestamp discontinuity notification was incomplete "
+                "(withheld=%u overrun=%u)\n",
+                atomic_load(&live.timestamp_withheld_events),
+                atomic_load(&live.stream_overrun_events));
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+
     stop_stream(&live, stream_thread);
     if (live.stream_status != 0) {
         status = live.stream_status;
@@ -295,10 +378,14 @@ int main(void)
         goto cleanup;
     }
 
-    printf("async RX epoch gate: PASS valid=%u event_only=%u history_gaps=%u "
-           "epoch=%u\n",
+    printf("async RX epoch gate: PASS valid=%u event_only=%u "
+           "timestamp_discontinuities=%u timestamp_withheld=%u "
+           "overrun_events=%u history_gaps=%u epoch=%u\n",
            atomic_load(&live.valid_callbacks),
            atomic_load(&live.event_only_callbacks),
+           atomic_load(&live.timestamp_discontinuities),
+           atomic_load(&live.timestamp_withheld_events),
+           atomic_load(&live.stream_overrun_events),
            atomic_load(&live.event_history_gaps), event.epoch_id);
     if (atomic_load(&live.event_query_status) != 0 ||
         atomic_load(&live.events_drained_from_callback) == 0) {

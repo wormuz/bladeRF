@@ -4746,6 +4746,7 @@ typedef enum {
 /** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
 #define BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH (1U << 1)
+#define BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY (1U << 2)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and
