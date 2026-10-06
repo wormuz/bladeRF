@@ -227,6 +227,10 @@ struct bladerf2_board_data {
     uint64_t rf_transition_readback_frequency_hz;
     bladerf_rf_state rf_transition_state;
     struct bladerf_rf_event rf_transition_last_event;
+    bool rf_transition_epoch_contract_enabled;
+    bool rf_transition_epoch_certified;
+    uint8_t rf_transition_certified_epoch_id;
+    uint64_t rf_transition_first_valid_timestamp;
     bool rf_transition_pending;
     bool rf_transition_waiting;
     bool rf_transition_spi_trace_enabled;

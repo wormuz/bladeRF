@@ -50,6 +50,7 @@
 #include "backend/usb/usb.h"
 
 #include "streaming/async.h"
+#include "streaming/metadata.h"
 #include "streaming/sync.h"
 
 #include "conversions.h"
@@ -1598,6 +1599,52 @@ static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
 static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev)
 {
     bladerf2_rx_stream_overrun(dev);
+}
+
+static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
+                                           bladerf_channel_layout layout,
+                                           bladerf_format format,
+                                           const void *buffer,
+                                           size_t length)
+{
+    struct bladerf2_board_data *board_data;
+    bool contract_enabled;
+    bool epoch_valid;
+    uint8_t epoch_id;
+    uint64_t first_valid_timestamp;
+    size_t message_size;
+    const uint8_t *bytes = buffer;
+
+    if ((layout & BLADERF_DIRECTION_MASK) != BLADERF_RX ||
+        format == BLADERF_FORMAT_PACKET_META) {
+        return true;
+    }
+    if (dev == NULL || dev->board_data == NULL || buffer == NULL) {
+        return false;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&dev->lock);
+    contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    epoch_valid = board_data->rf_transition_epoch_certified &&
+                  board_data->rf_transition_state ==
+                      BLADERF_RF_STATE_RX_DATA_VALID;
+    epoch_id = board_data->rf_transition_certified_epoch_id;
+    first_valid_timestamp = board_data->rf_transition_first_valid_timestamp;
+    message_size = board_data->msg_size;
+    MUTEX_UNLOCK(&dev->lock);
+
+    if (!contract_enabled) {
+        return true;
+    }
+    if (!epoch_valid ||
+        (format != BLADERF_FORMAT_SC16_Q11_META &&
+         format != BLADERF_FORMAT_SC8_Q7_META)) {
+        return false;
+    }
+
+    return metadata_rx_buffer_matches_epoch(
+        bytes, length, message_size, epoch_id, first_valid_timestamp);
 }
 
 
@@ -3356,6 +3403,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
+    FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),
     FIELD_INIT(.set_rf_port, bladerf2_set_rf_port),

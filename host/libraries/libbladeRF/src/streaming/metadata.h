@@ -19,6 +19,8 @@
 #ifndef STREAMING_METADATA_H_
 #define STREAMING_METADATA_H_
 
+#include <stddef.h>
+
 /*
  *  Metadata layout
  * ~~~~~~~~~~~~~~~~~~~~~~~
@@ -129,6 +131,33 @@ static inline bool metadata_rx_epoch_matches(const uint8_t *header,
     uint8_t epoch_id;
     return metadata_get_rx_epoch_id(header, &epoch_id) &&
            epoch_id == expected_epoch_id;
+}
+
+static inline uint64_t metadata_get_timestamp(const uint8_t *header);
+
+/* Validate every sample-META message in an async RX transfer against the
+ * certified epoch and first-valid timestamp. Reject partial message buffers
+ * and missing tags rather than guessing where valid IQ begins. */
+static inline bool metadata_rx_buffer_matches_epoch(
+    const uint8_t *buffer, size_t length, size_t message_size,
+    uint8_t expected_epoch_id, uint64_t minimum_timestamp)
+{
+    size_t offset;
+
+    if (buffer == NULL || message_size <= METADATA_HEADER_SIZE || length == 0 ||
+        length % message_size != 0) {
+        return false;
+    }
+
+    for (offset = 0; offset < length; offset += message_size) {
+        const uint8_t *header = buffer + offset;
+        if (!metadata_rx_epoch_matches(header, expected_epoch_id) ||
+            metadata_get_timestamp(header) < minimum_timestamp) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /* Header-level disposition used by sync RX. Keeping this decision pure lets

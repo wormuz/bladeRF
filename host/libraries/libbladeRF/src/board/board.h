@@ -322,6 +322,12 @@ struct board_fns {
     /* Report an RX discontinuity surfaced by sync metadata or an async USB
      * transfer (short transfer / overflow). */
     void (*rx_stream_overrun)(struct bladerf *dev);
+    /* Return whether an asynchronous RX META buffer belongs to the current
+     * certified epoch. NULL preserves legacy, unfiltered behavior. */
+    bool (*rx_async_buffer_valid)(struct bladerf *dev,
+                                  bladerf_channel_layout layout,
+                                  bladerf_format format,
+                                  const void *buffer, size_t length);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,
                                const struct bladerf_range **range);

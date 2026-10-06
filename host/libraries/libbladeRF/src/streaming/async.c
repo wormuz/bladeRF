@@ -65,6 +65,16 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
         return samples;
     }
 
+    if (stream->dev != NULL && stream->dev->board != NULL &&
+        stream->dev->board->rx_async_buffer_valid != NULL &&
+        !stream->dev->board->rx_async_buffer_valid(
+            stream->dev, stream->layout, stream->format, samples,
+            received_bytes)) {
+        /* A stale or uncertified buffer is drained by recycling it. The
+         * transition/invalidation event already explains why no IQ arrived. */
+        return samples;
+    }
+
     return stream->cb(stream->dev, stream, metadata, samples,
                       bytes_to_samples(stream->format, received_bytes),
                       stream->user_data);

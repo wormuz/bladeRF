@@ -3019,6 +3019,15 @@ struct bladerf_stream;
  *  - Return value:     The user specifies the next buffer to fill with RX data,
  *                      which should be `num_samples` in size,
  *                      ::BLADERF_STREAM_SHUTDOWN, or ::BLADERF_STREAM_NO_DATA.
+ *
+ * @note On bladeRF 2, after an RX transition requiring
+ *       BLADERF_RF_REQUIRE_EPOCH_VALID, continuous-IQ async RX callbacks are
+ *       fail-closed: use a META format, and a buffer reaches the callback only
+ *       when every message carries the certified epoch ID and is at or after
+ *       the FPGA first-valid timestamp. Short completed transfers are
+ *       recycled without callback delivery and reported as
+ *       BLADERF_RF_EVT_RX_STREAM_OVERRUN; a USB overflow also reports that
+ *       event before the stream shuts down. PACKET_META remains caller-framed.
  */
 typedef void *(*bladerf_stream_cb)(struct bladerf *dev,
                                    struct bladerf_stream *stream,

@@ -78,6 +78,18 @@ static void note_rx_overrun(struct bladerf *dev)
 }
 
 static unsigned int async_rx_callbacks;
+static bool allow_async_rx_buffer = true;
+
+static bool validate_async_rx_buffer(struct bladerf *dev,
+                                     bladerf_channel_layout layout,
+                                     bladerf_format format,
+                                     const void *buffer, size_t length)
+{
+    assert(dev != NULL && buffer != NULL && length > 0);
+    assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX);
+    (void)format;
+    return allow_async_rx_buffer;
+}
 
 static void *count_async_rx_callback(struct bladerf *dev,
                                     struct bladerf_stream *stream,
@@ -93,6 +105,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
 
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
+    .rx_async_buffer_valid = validate_async_rx_buffer,
 };
 
 static void fixture_init(struct fixture *f)
@@ -166,6 +179,22 @@ int main(void)
 {
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
+
+    uint8_t epoch_messages[BYTES_PER_BUFFER];
+    write_msg(epoch_messages, 5000, 8, 1111);
+    write_msg(epoch_messages + MSG_BYTES, 5000 + MSG_SAMPLES, 8, 1222);
+    assert(metadata_rx_buffer_matches_epoch(epoch_messages,
+                                            sizeof(epoch_messages), MSG_BYTES,
+                                            8, 5000));
+    assert(!metadata_rx_buffer_matches_epoch(epoch_messages,
+                                             sizeof(epoch_messages) - 1,
+                                             MSG_BYTES, 8, 5000));
+    assert(!metadata_rx_buffer_matches_epoch(epoch_messages,
+                                             sizeof(epoch_messages), MSG_BYTES,
+                                             9, 5000));
+    assert(!metadata_rx_buffer_matches_epoch(epoch_messages,
+                                             sizeof(epoch_messages), MSG_BYTES,
+                                             8, 5001));
     struct fixture f;
 
     /* Traverse two messages in one USB buffer: discard the stale epoch at
@@ -353,6 +382,12 @@ int main(void)
                                    sizeof(async_samples) / 2) == async_samples);
     assert(rx_overrun_events == 3);
     assert(async_rx_callbacks == 0);
+    allow_async_rx_buffer = false;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_callbacks == 0);
+    allow_async_rx_buffer = true;
+    async_stream.layout = BLADERF_RX_X1;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
