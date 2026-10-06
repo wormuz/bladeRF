@@ -741,9 +741,19 @@ static int _bladerf_rx_transition_begin(
                 &board_data->sync[BLADERF_RX], epoch_id);
         }
         if (epoch_status == 0) {
-            epoch_status = nios_rx_epoch_ctrl_cmd(dev,
-                               NIOS_PKT_8x32_RX_EPOCH_CMD_ARM,
-                               epoch_id);
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+            /* Test-only failure at the FPGA fence boundary. This exercises
+             * the fail-closed path before any RFIC write; production builds
+             * compile out the environment-variable check entirely. */
+            const char *fail_arm = getenv("BLADERF_TEST_FAIL_RX_EPOCH_ARM");
+            if (fail_arm != NULL && fail_arm[0] != '\0') {
+                epoch_status = BLADERF_ERR_UNEXPECTED;
+            } else
+#endif
+            {
+                epoch_status = nios_rx_epoch_ctrl_cmd(
+                    dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, epoch_id);
+            }
         }
         if (epoch_status == 0) {
             epoch_status = _wait_rx_epoch_fenced(

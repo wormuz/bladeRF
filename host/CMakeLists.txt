@@ -63,7 +63,7 @@ if(ENABLE_TEST_SPI_FAULT_INJECTION)
 endif()
 
 option(ENABLE_TEST_RX_ABORT_FAULT_INJECTION
-       "Enable test-only NIOS RX epoch ABORT fault injection."
+       "Enable test-only NIOS RX epoch ARM/ABORT fault injection."
        OFF)
 if(ENABLE_TEST_RX_ABORT_FAULT_INJECTION)
     add_definitions(-DBLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION=1)
