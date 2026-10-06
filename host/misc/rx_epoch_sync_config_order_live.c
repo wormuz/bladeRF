@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 #include <libbladeRF.h>
+
+static bladerf_channel rx_channel = BLADERF_CHANNEL_RX(0);
+static bladerf_channel_layout rx_layout = BLADERF_RX_X1;
 
 static int transition(struct bladerf *dev)
 {
@@ -13,7 +17,7 @@ static int transition(struct bladerf *dev)
     req.required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID;
     req.require_rx_data_valid = true;
     req.timeout_ms = 3000;
-    s = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0), &req, &id);
+    s = bladerf_rx_transition_begin(dev, rx_channel, &req, &id);
     if (s != 0) return s;
     s = bladerf_rx_transition_wait(dev, id, &final, 3000);
     if (s == 0) {
@@ -26,24 +30,32 @@ static int transition(struct bladerf *dev)
     return s;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct bladerf *dev = NULL;
     struct bladerf_metadata meta = { .flags = BLADERF_META_FLAG_RX_NOW };
     int16_t samples[4096 * 2];
     int s, raw_status;
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
+                                   strcmp(argv[1], "RX2") != 0)) {
+        fprintf(stderr, "usage: %s [RX1|RX2]\n", argv[0]);
+        return 1;
+    }
+    if (argc == 2 && strcmp(argv[1], "RX2") == 0) {
+        rx_channel = BLADERF_CHANNEL_RX(1);
+    }
     s = bladerf_open(&dev, NULL);
     if (s != 0) { fprintf(stderr, "open: %s\n", bladerf_strerror(s)); return 1; }
-    s = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true);
+    s = bladerf_enable_module(dev, rx_channel, true);
     if (s != 0) { fprintf(stderr, "enable: %s\n", bladerf_strerror(s)); goto fail; }
     s = transition(dev);
     if (s != 0) { fprintf(stderr, "first transition: %s\n", bladerf_strerror(s)); goto fail; }
-    raw_status = bladerf_sync_config(dev, BLADERF_RX_X1,
+    raw_status = bladerf_sync_config(dev, rx_layout,
                                      BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, 3000);
     printf("raw sync config status=%d (%s), expected %d\n", raw_status,
            bladerf_strerror(raw_status), BLADERF_ERR_UNSUPPORTED);
     if (raw_status != BLADERF_ERR_UNSUPPORTED) goto fail;
-    s = bladerf_sync_config(dev, BLADERF_RX_X1,
+    s = bladerf_sync_config(dev, rx_layout,
                             BLADERF_FORMAT_SC16_Q11_META, 8, 4096, 4, 3000);
     if (s != 0) { fprintf(stderr, "META sync config: %s\n", bladerf_strerror(s)); goto fail; }
     s = bladerf_sync_rx(dev, samples, 4096, &meta, 1000);
@@ -67,7 +79,7 @@ int main(void)
            meta.actual_count, meta.rx_epoch_id_valid, meta.rx_epoch_id,
            (unsigned long long)meta.timestamp);
     if (!meta.rx_epoch_id_valid || meta.actual_count != 4096) goto fail;
-    bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+    bladerf_enable_module(dev, rx_channel, false);
     bladerf_close(dev);
     return 0;
 fail:
