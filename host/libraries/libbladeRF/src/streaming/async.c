@@ -45,12 +45,8 @@ void async_notify_rx_overrun(struct bladerf_stream *stream)
     }
 
     dev = stream->dev;
-    if (dev->board != NULL) {
-        if (dev->board->rx_async_stream_overrun != NULL) {
-            dev->board->rx_async_stream_overrun(dev);
-        } else if (dev->board->rx_stream_overrun != NULL) {
-            dev->board->rx_stream_overrun(dev);
-        }
+    if (dev->board != NULL && dev->board->rx_async_stream_overrun != NULL) {
+        dev->board->rx_async_stream_overrun(dev);
     }
 }
 
