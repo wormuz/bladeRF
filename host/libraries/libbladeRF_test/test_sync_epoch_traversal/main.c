@@ -78,6 +78,7 @@ static void note_rx_overrun(struct bladerf *dev)
 }
 
 static unsigned int async_rx_callbacks;
+static unsigned int async_rx_event_wakeups;
 static bool allow_async_rx_buffer = true;
 
 static bool validate_async_rx_buffer(struct bladerf *dev,
@@ -98,8 +99,15 @@ static void *count_async_rx_callback(struct bladerf *dev,
                                     void *user_data)
 {
     assert(dev != NULL && stream != NULL && metadata != NULL);
-    assert(samples != NULL && num_samples > 0 && user_data == NULL);
-    async_rx_callbacks++;
+    if (num_samples == 0) {
+        assert(samples == NULL);
+        assert(user_data != NULL);
+        async_rx_event_wakeups++;
+        return user_data;
+    } else {
+        assert(samples != NULL);
+        async_rx_callbacks++;
+    }
     return samples;
 }
 
@@ -377,25 +385,31 @@ int main(void)
     async_stream.format = BLADERF_FORMAT_SC16_Q11_META;
     async_stream.samples_per_buffer = 1024;
     async_stream.cb = count_async_rx_callback;
+    async_stream.user_data = async_samples;
     async_rx_callbacks = 0;
+    async_rx_event_wakeups = 0;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples) / 2) == async_samples);
     assert(rx_overrun_events == 3);
     assert(async_rx_callbacks == 0);
+    assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = false;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 0);
+    assert(async_rx_event_wakeups == 2);
     allow_async_rx_buffer = true;
     async_stream.layout = BLADERF_RX_X1;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
+    assert(async_rx_event_wakeups == 2);
     assert(rx_overrun_events == 3);
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples) / 2) == async_samples);
     assert(async_rx_callbacks == 2);
+    assert(async_rx_event_wakeups == 2);
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);

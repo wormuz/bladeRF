@@ -3024,10 +3024,11 @@ struct bladerf_stream;
  *       BLADERF_RF_REQUIRE_EPOCH_VALID, continuous-IQ async RX callbacks are
  *       fail-closed: use a META format, and a buffer reaches the callback only
  *       when every message carries the certified epoch ID and is at or after
- *       the FPGA first-valid timestamp. Short completed transfers are
- *       recycled without callback delivery and reported as
- *       BLADERF_RF_EVT_RX_STREAM_OVERRUN; a USB overflow also reports that
- *       event before the stream shuts down. PACKET_META remains caller-framed.
+ *       the FPGA first-valid timestamp. Short transfers and rejected epoch
+ *       buffers produce an event-only callback with `samples == NULL` and
+ *       `num_samples == 0`; no IQ is exposed. Short-transfer notifications
+ *       use BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow reports the same
+ *       event before stream shutdown. PACKET_META remains caller-framed.
  */
 typedef void *(*bladerf_stream_cb)(struct bladerf *dev,
                                    struct bladerf_stream *stream,

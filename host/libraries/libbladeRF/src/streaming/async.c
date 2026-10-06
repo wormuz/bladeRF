@@ -55,6 +55,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                               void *samples,
                               size_t received_bytes)
 {
+    void *next_buffer;
+
     if (stream == NULL || stream->cb == NULL || samples == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
     }
@@ -62,22 +64,31 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
         async_notify_rx_overrun(stream);
-        return samples;
+        next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
+                                 stream->user_data);
+    } else if (stream->dev != NULL && stream->dev->board != NULL &&
+               stream->dev->board->rx_async_buffer_valid != NULL &&
+               !stream->dev->board->rx_async_buffer_valid(
+                   stream->dev, stream->layout, stream->format, samples,
+                   received_bytes)) {
+        /* Notify the consumer without handing it IQ. Invalidation/transition
+         * events already explain why no valid samples are available. */
+        next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
+                                 stream->user_data);
+    } else {
+        return stream->cb(stream->dev, stream, metadata, samples,
+                          bytes_to_samples(stream->format, received_bytes),
+                          stream->user_data);
     }
 
-    if (stream->dev != NULL && stream->dev->board != NULL &&
-        stream->dev->board->rx_async_buffer_valid != NULL &&
-        !stream->dev->board->rx_async_buffer_valid(
-            stream->dev, stream->layout, stream->format, samples,
-            received_bytes)) {
-        /* A stale or uncertified buffer is drained by recycling it. The
-         * transition/invalidation event already explains why no IQ arrived. */
-        return samples;
+    /* A zero-sample callback is an event-only wakeup. Reuse the original
+     * transfer buffer unless the consumer explicitly shuts down, requests
+     * external submission, or supplies another buffer. */
+    if (next_buffer == BLADERF_STREAM_SHUTDOWN ||
+        next_buffer == BLADERF_STREAM_NO_DATA) {
+        return next_buffer;
     }
-
-    return stream->cb(stream->dev, stream, metadata, samples,
-                      bytes_to_samples(stream->format, received_bytes),
-                      stream->user_data);
+    return next_buffer != NULL ? next_buffer : samples;
 }
 
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.
