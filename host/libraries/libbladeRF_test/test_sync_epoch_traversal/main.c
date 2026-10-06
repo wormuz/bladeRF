@@ -149,7 +149,7 @@ static void assert_marker(const int16_t *iq, unsigned int count,
 
 int main(void)
 {
-    int16_t out[2 * MSG_SAMPLES];
+    int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
     struct fixture f;
 
@@ -263,6 +263,27 @@ int main(void)
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 8);
     assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
     assert_marker(out, 100, 1333, 0);
+    fixture_destroy(&f);
+
+    /* RX_X2 metadata counts interleaved channel samples, while the FPGA
+     * timestamp advances once per paired sample. Two adjacent META messages
+     * must therefore remain contiguous across the message boundary. */
+    fixture_init(&f);
+    f.sync.stream_config.layout = BLADERF_RX_X2;
+    f.sync.meta.samples_per_ts = 2;
+    write_msg(f.buffers[0], 1000, 7, 1444);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES / 2, 7,
+              (int16_t)(1444 + MSG_SAMPLES));
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 2 * MSG_SAMPLES, &meta, 0) == 0);
+    assert(meta.actual_count == 2 * MSG_SAMPLES);
+    assert(meta.timestamp == 1000);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
+    assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
+    assert_marker(out, MSG_SAMPLES, 1444, 0);
+    assert_marker(out + 2 * MSG_SAMPLES, MSG_SAMPLES,
+                  (int16_t)(1444 + MSG_SAMPLES), 0);
     fixture_destroy(&f);
 
     /* A USB worker overrun must reach the board event path even when the
