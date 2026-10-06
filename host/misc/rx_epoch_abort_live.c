@@ -146,6 +146,8 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
     bool spi_failed = false;
     bool errored = false;
     bool forbidden_success_event = false;
+    uint32_t spi_begin_count = 0;
+    uint32_t spi_done_count = 0;
     uint64_t previous_timestamp = 0;
     int status = bladerf_rx_transition_get_events(
         dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -162,10 +164,14 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
         }
         previous_timestamp = event->host_monotonic_ns;
         invalidated |= event->event_type == BLADERF_RF_EVT_RX_EPOCH_INVALID;
-        spi_begin |= event->event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN;
+        if (event->event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN) {
+            spi_begin = true;
+            spi_begin_count = event->flags;
+        }
         if (event->event_type == BLADERF_RF_EVT_SPI_DONE) {
             spi_failed |= event->error_code != 0 &&
                           (int32_t)event->rfic_status < 0;
+            spi_done_count = event->flags;
         }
         errored |= event->event_type == BLADERF_RF_EVT_ERROR;
         forbidden_success_event |=
@@ -177,12 +183,15 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
     }
 
     if (!invalidated || !spi_begin || !spi_failed || !errored ||
+        spi_begin_count == 0 || spi_done_count == 0 ||
         forbidden_success_event ||
         events[count - 1].event_type != BLADERF_RF_EVT_ERROR) {
         fprintf(stderr, "SPI fault trace invalid txn=%u events=%u "
                 "invalidated=%u spi_begin=%u spi_failed=%u error=%u "
-                "success_event=%u\n", transaction_id, count, invalidated,
-                spi_begin, spi_failed, errored, forbidden_success_event);
+                "success_event=%u spi_flags=%u/%u\n",
+                transaction_id, count, invalidated,
+                spi_begin, spi_failed, errored, forbidden_success_event,
+                spi_begin_count, spi_done_count);
         return BLADERF_ERR_UNEXPECTED;
     }
     return 0;
