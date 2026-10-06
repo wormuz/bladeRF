@@ -826,11 +826,17 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "FPGA fence acknowledgement does not validate state and transaction epoch",
              "wait for a matching PENDING state before retuning")
-    if not re.search(r"required_events_mask\s*\|=\s*BLADERF_RF_REQUIRE_PLL_LOCKED\s*\|\s*BLADERF_RF_REQUIRE_ENSM_RX",
-                     transition_text):
+    policy = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition_policy.h"
+    policy_text = re.sub(
+        r"/\*.*?\*/|//[^\n]*", "",
+        policy.read_text(errors="replace"), flags=re.S)
+    if ("BLADERF_RF_REQUIRE_EPOCH_VALID" not in policy_text or
+            "BLADERF_RF_REQUIRE_PLL_LOCKED" not in policy_text or
+            "BLADERF_RF_REQUIRE_ENSM_RX" not in policy_text or
+            "BLADERF_RF_REQUIRE_DATAPATH_ARMED" not in policy_text):
         fail("rx-epoch-host-timestamp-fence",
              "epoch-valid requests can bypass RFPLL or ENSM prerequisites",
-             "make PLL lock and ENSM RX implicit prerequisites of an admitted epoch")
+             "normalize data-valid/datapath requirements to epoch, PLL, and ENSM events")
     if ("BLADERF_FORMAT_SC16_Q11_META" not in sync_text or
             "BLADERF_FORMAT_SC8_Q7_META" not in sync_text or
             "rx_epoch_min_timestamp" not in sync_text):
@@ -842,6 +848,16 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "host can accept ACTIVE status for an epoch other than the one it armed",
              "require the FPGA-reported epoch ID to match the pending transaction")
+    if ("bladerf2_rf_transition_normalize_requirements" not in transition_text or
+            "request->require_rx_data_valid" not in transition_text):
+        fail("rx-epoch-valid-requirement",
+             "require_rx_data_valid is not enforced by the C transition API",
+             "make data-valid requests require FPGA epoch confirmation")
+    if ("BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED" not in transition_text or
+            "BLADERF_RF_STATE_RX_DATA_INVALID" not in transition_text):
+        fail("rx-epoch-valid-requirement",
+             "control-only transition can report data-valid state",
+             "complete control-only requests without claiming IQ validity")
 
 
 def check_qgate_sweep_handshake_count():

@@ -39,6 +39,7 @@
 #include "common.h"
 #include "log.h"
 #include "nios_pkt_8x32.h"
+#include "rf_transition_policy.h"
 #include "streaming/sync.h"
 
 /* Byte-exact with sdrscanner/driver/tuner_fault.py::FAULT_REGS and
@@ -371,13 +372,11 @@ static int _bladerf_rx_transition_begin(
     }
 
     board_data = dev->board_data;
-    required_events_mask = request->required_events_mask;
-    if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
-        /* An admitted RX epoch is meaningful only after the RFIC control
-         * plane is known-good. Make those prerequisites implicit so callers
-         * cannot request epoch success while skipping PLL/ENSM confirmation. */
-        required_events_mask |= BLADERF_RF_REQUIRE_PLL_LOCKED |
-                                BLADERF_RF_REQUIRE_ENSM_RX;
+    if (!bladerf2_rf_transition_normalize_requirements(
+            request->required_events_mask,
+            request->require_rx_data_valid,
+            &required_events_mask)) {
+        return BLADERF_ERR_INVAL;
     }
 
     /* Timestamped RX metadata is required to fence USB/sync buffers that
@@ -881,8 +880,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
                    0, ((uint64_t)timestamp_hi << 32) | timestamp_lo, 0);
     } else {
-        _emit_event(dev, board_data, BLADERF_RF_EVT_RX_DATAPATH_ARMED,
-                   BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0, 0);
+        /* This caller requested control-plane completion only. There was no
+         * FPGA sample-boundary proof, so keep the state explicitly invalid. */
+        _emit_event(dev, board_data,
+                    BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED,
+                    BLADERF_RF_STATE_RX_DATA_INVALID, 0, 0, 0, 0, 0);
     }
 
     WITH_MUTEX(&dev->lock, {
@@ -901,6 +903,7 @@ static bool _is_terminal_event(bladerf_rf_event_type type)
 {
     return type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
            type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+           type == BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
            type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
            type == BLADERF_RF_EVT_ERROR;
 }

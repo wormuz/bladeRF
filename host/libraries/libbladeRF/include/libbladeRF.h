@@ -4600,7 +4600,8 @@ const char *CALL_CONV bladerf_strerror(int error);
  * numeric compatibility but is not emitted: the current AD9361 API does
  * not expose the exact RFPLL-programming SPI completion boundary. The caller waits on explicit
  * events, with a timeout that can only report failure -- a timeout never
- * implies the data is valid.
+ * implies the data is valid. Only RX_EPOCH_VALID establishes application-
+ * usable IQ; a control-plane-only request completes in RX_DATA_INVALID.
  *
  * @{
  */
@@ -4650,7 +4651,9 @@ typedef enum {
     BLADERF_RF_EVT_LO_SET_RETURNED,
     BLADERF_RF_EVT_LO_READBACK_MATCH,
     BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
-    BLADERF_RF_EVT_SPI_WRITE_BEGIN
+    BLADERF_RF_EVT_SPI_WRITE_BEGIN,
+    /** RFIC control conditions completed; does not establish IQ validity. */
+    BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED
 } bladerf_rf_event_type;
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
@@ -4659,6 +4662,7 @@ typedef enum {
  * automatically before FPGA sample admission is opened. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
+/** Requires a sample-backed FPGA RX epoch (stronger than software arm). */
 #define BLADERF_RF_REQUIRE_DATAPATH_ARMED (1U << 2)
 #define BLADERF_RF_REQUIRE_EPOCH_VALID   (1U << 3)
 
@@ -4691,6 +4695,9 @@ struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
     uint32_t timeout_ms;
+    /** Require FPGA epoch confirmation before the call reports data-valid.
+     *  When true, BLADERF_RF_REQUIRE_EPOCH_VALID and its PLL/ENSM
+     *  prerequisites are added automatically. */
     bool require_rx_data_valid;
     /** Deprecated compatibility field. Ignored. RX epoch correctness is
      *  based on observed RFIC completion and an FPGA sample boundary, not
@@ -4705,8 +4712,11 @@ struct bladerf_rx_transition_request {
  * internally) and arms observation of the required RF state transitions. It
  * does not block; the caller must follow up with
  * ::bladerf_rx_transition_wait to confirm the transaction reached the
- * requested state before treating any subsequently captured samples as
- * valid. A device supports one outstanding transition; a concurrent begin
+ * requested state. Only a request with require_rx_data_valid=true or
+ * BLADERF_RF_REQUIRE_EPOCH_VALID establishes valid IQ. Otherwise wait may
+ * report control-plane completion while the final state remains
+ * BLADERF_RF_STATE_RX_DATA_INVALID. A device supports one outstanding
+ * transition; a concurrent begin
  * returns ::BLADERF_ERR_WOULD_BLOCK without changing the active request.
  *
  * @param       dev             Device handle
