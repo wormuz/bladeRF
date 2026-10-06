@@ -5,8 +5,9 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#define RX_CHANNEL BLADERF_CHANNEL_RX(0)
+static bladerf_channel rx_channel = BLADERF_CHANNEL_RX(0);
 #define RX_RATE 1920000
 #define RX_BANDWIDTH 1500000
 #define RX_READ_SAMPLES 8192
@@ -39,6 +40,9 @@ int main(int argc, char **argv)
         (unsigned)strtoul(argv[2], NULL, 10) : 131072;
     const unsigned transfers = argc > 3 ?
         (unsigned)strtoul(argv[3], NULL, 10) : 2;
+    const unsigned rx_index = argc > 4 ? (unsigned)strtoul(argv[4], NULL, 10) : 0;
+    const bladerf_channel_layout layout = argc > 5 && strcmp(argv[5], "x2") == 0
+        ? BLADERF_RX_X2 : BLADERF_RX_X1;
     const unsigned buffers = transfers * 2 < 16 ? 16 : transfers * 2;
     const unsigned read_samples = buffer_samples < RX_READ_SAMPLES ?
         buffer_samples : RX_READ_SAMPLES;
@@ -51,10 +55,18 @@ int main(int argc, char **argv)
     if (trials == 0 || buffer_samples < 1024 || transfers == 0 ||
         transfers > 32 ||
         buffer_samples % 1024 != 0) {
-        fputs("usage: rx_epoch_host_handoff_live [trials] [buffer_samples] [transfers]\n",
+        fputs("usage: rx_epoch_host_handoff_live [trials] [buffer_samples] "
+              "[transfers] [rx_channel:0|1] [x1|x2]\n",
               stderr);
         return 2;
     }
+    if (rx_index > 1 ||
+        (argc > 5 && strcmp(argv[5], "x1") != 0 &&
+         strcmp(argv[5], "x2") != 0)) {
+        fputs("RX channel must be 0 or 1; layout must be x1 or x2\n", stderr);
+        return 2;
+    }
+    rx_channel = BLADERF_CHANNEL_RX(rx_index);
 
     status = bladerf_open(&dev, NULL);
     if (status != 0) return fail("open", status);
@@ -63,22 +75,22 @@ int main(int argc, char **argv)
         status = (call); \
         if (status != 0) { fail((name), status); goto done; } \
     } while (0)
-    CHECK(bladerf_set_sample_rate(dev, RX_CHANNEL, RX_RATE, NULL),
+    CHECK(bladerf_set_sample_rate(dev, rx_channel, RX_RATE, NULL),
           "set sample rate");
-    CHECK(bladerf_set_bandwidth(dev, RX_CHANNEL, RX_BANDWIDTH, NULL),
+    CHECK(bladerf_set_bandwidth(dev, rx_channel, RX_BANDWIDTH, NULL),
           "set bandwidth");
-    CHECK(bladerf_set_frequency(dev, RX_CHANNEL, FREQ_A), "set LO A");
-    CHECK(bladerf_get_quick_tune(dev, RX_CHANNEL, &profiles[0]),
+    CHECK(bladerf_set_frequency(dev, rx_channel, FREQ_A), "set LO A");
+    CHECK(bladerf_get_quick_tune(dev, rx_channel, &profiles[0]),
           "get quick tune A");
-    CHECK(bladerf_set_frequency(dev, RX_CHANNEL, FREQ_B), "set LO B");
-    CHECK(bladerf_get_quick_tune(dev, RX_CHANNEL, &profiles[1]),
+    CHECK(bladerf_set_frequency(dev, rx_channel, FREQ_B), "set LO B");
+    CHECK(bladerf_get_quick_tune(dev, rx_channel, &profiles[1]),
           "get quick tune B");
-    CHECK(bladerf_set_frequency(dev, RX_CHANNEL, FREQ_A), "restore LO A");
-    CHECK(bladerf_sync_config(dev, BLADERF_RX_X1,
+    CHECK(bladerf_set_frequency(dev, rx_channel, FREQ_A), "restore LO A");
+    CHECK(bladerf_sync_config(dev, layout,
           BLADERF_FORMAT_SC16_Q11_META, buffers, buffer_samples,
           transfers, 1000),
           "sync config");
-    CHECK(bladerf_enable_module(dev, RX_CHANNEL, true), "enable RX");
+    CHECK(bladerf_enable_module(dev, rx_channel, true), "enable RX");
 #undef CHECK
 
     samples = calloc((size_t)read_samples * 2, sizeof(*samples));
@@ -104,7 +116,7 @@ int main(int argc, char **argv)
         struct bladerf_metadata metadata;
         bool warmed = false;
         status = bladerf_rx_transition_begin_quick_tune(
-            dev, RX_CHANNEL, &request, &profiles[0], &transaction);
+            dev, rx_channel, &request, &profiles[0], &transaction);
         if (status == 0) {
             status = bladerf_rx_transition_wait(dev, transaction, &event,
                                                 request.timeout_ms);
@@ -134,8 +146,9 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("host-data handoff trials=%u rate=%u buffer=%u buffers=%u "
-           "transfers=%u read=%u\n", trials, RX_RATE, buffer_samples,
+    printf("host-data handoff trials=%u channel=%u layout=%s rate=%u "
+           "buffer=%u buffers=%u transfers=%u read=%u\n", trials, rx_index,
+           layout == BLADERF_RX_X2 ? "x2" : "x1", RX_RATE, buffer_samples,
            buffers, transfers, read_samples);
 
     for (unsigned i = 0; i < trials; ++i) {
@@ -158,7 +171,7 @@ int main(int argc, char **argv)
         bool complete = false;
 
         status = bladerf_rx_transition_begin_quick_tune(
-            dev, RX_CHANNEL, &request, &profiles[target], &transaction);
+            dev, rx_channel, &request, &profiles[target], &transaction);
         if (status == 0) {
             status = bladerf_rx_transition_wait(dev, transaction, &final_event,
                                                 request.timeout_ms);
@@ -168,8 +181,15 @@ int main(int argc, char **argv)
             goto done;
         }
 
-        metadata.flags = BLADERF_META_FLAG_RX_NOW;
-        status = bladerf_sync_rx(dev, samples, read_samples, &metadata, 2000);
+        for (unsigned attempt = 0; attempt < 16; ++attempt) {
+            metadata = (struct bladerf_metadata){0};
+            metadata.flags = BLADERF_META_FLAG_RX_NOW;
+            status = bladerf_sync_rx(dev, samples, read_samples, &metadata,
+                                     2000);
+            if (status != BLADERF_ERR_WOULD_BLOCK) {
+                break;
+            }
+        }
         if (status != 0) {
             fail("first sync RX", status);
             goto done;
@@ -220,7 +240,7 @@ int main(int argc, char **argv)
     result = 0;
 
 done:
-    if (dev != NULL) (void)bladerf_enable_module(dev, RX_CHANNEL, false);
+    if (dev != NULL) (void)bladerf_enable_module(dev, rx_channel, false);
     free(samples);
     bladerf_close(dev);
     return result;
