@@ -5,11 +5,13 @@
 #include <string.h>
 
 #include "host_config.h"
+#include "bladeRF.h"
 #include "streaming/sync.h"
 #include "streaming/sync_worker.h"
 #include "streaming/async.h"
 #include "streaming/metadata.h"
 #include "board/board.h"
+#include "board/bladerf2/common.h"
 
 #define MSG_BYTES 8192u
 #define MSG_SAMPLES ((MSG_BYTES - METADATA_HEADER_SIZE) / 4u)
@@ -183,10 +185,50 @@ static void assert_marker(const int16_t *iq, unsigned int count,
     }
 }
 
+static void test_async_unsupported_format_event(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data *board_data =
+        calloc(1, sizeof(*board_data));
+    assert(board_data != NULL);
+    dev.board_data = board_data;
+    assert(MUTEX_INIT(&dev.lock) == 0);
+    assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+    board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_epoch_id = 7;
+
+    /* Callback-side publication must not wait for dev->lock. */
+    MUTEX_LOCK(&dev.lock);
+    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
+    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
+    MUTEX_UNLOCK(&dev.lock);
+    assert(board_data->rf_transition_event_count == 1);
+    const struct bladerf_rf_event *event =
+        &board_data->rf_transition_events[0];
+    assert(event->event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED);
+    assert(event->epoch_id == 7);
+    assert(event->flags == BLADERF_FORMAT_PACKET_META);
+    assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rx_async_format_unsupported_reported = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11);
+    assert(board_data->rf_transition_event_count == 2);
+
+    MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+    MUTEX_DESTROY(&dev.lock);
+    free(board_data);
+}
+
 int main(void)
 {
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
+
+    test_async_unsupported_format_event();
 
 
     uint8_t epoch_messages[BYTES_PER_BUFFER];

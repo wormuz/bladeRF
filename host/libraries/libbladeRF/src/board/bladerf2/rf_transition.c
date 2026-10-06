@@ -69,33 +69,6 @@ static uint64_t _monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-static void _event_history_append_locked(
-    struct bladerf2_board_data *board_data,
-    const struct bladerf_rf_event *event)
-{
-    board_data->rf_transition_events[board_data->rf_transition_event_head] =
-        *event;
-    board_data->rf_transition_event_sequence++;
-    board_data->rf_transition_event_sequences[
-        board_data->rf_transition_event_head] =
-            board_data->rf_transition_event_sequence;
-    board_data->rf_transition_event_head =
-        (board_data->rf_transition_event_head + 1) %
-        BLADERF2_RF_EVENT_HISTORY_SIZE;
-    if (board_data->rf_transition_event_count <
-        BLADERF2_RF_EVENT_HISTORY_SIZE) {
-        board_data->rf_transition_event_count++;
-    }
-}
-
-static void _event_history_append(struct bladerf2_board_data *board_data,
-                                  const struct bladerf_rf_event *event)
-{
-    MUTEX_LOCK(&board_data->rf_transition_event_lock);
-    _event_history_append_locked(board_data, event);
-    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-}
-
 static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -309,7 +282,7 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
             board_data->rf_transition_epoch_certified = false;
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        _event_history_append(board_data, &event);
+        bladerf2_rf_event_append(board_data, &event);
         board_data->rf_transition_state = state;
     });
 }
@@ -385,7 +358,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_epoch_certified = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        _event_history_append(board_data, &event);
+        bladerf2_rf_event_append(board_data, &event);
         /* Keep the reservation through the actual legacy setter only when
          * the invalidation/fence succeeded. */
         if (status != 0) {
@@ -430,47 +403,9 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev)
         event.readback_rx_lo_hz =
             board_data->rf_transition_readback_frequency_hz;
         event.fpga_state = board_data->rf_transition_state;
-        _event_history_append(board_data, &event);
+        bladerf2_rf_event_append(board_data, &event);
         board_data->rf_transition_last_event = event;
     });
-}
-
-void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
-                                          bladerf_format format)
-{
-    struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event event = {0};
-    uint8_t epoch_id;
-    bool should_report = false;
-
-    if (dev == NULL || dev->board_data == NULL) {
-        return;
-    }
-    board_data = dev->board_data;
-
-    /* This runs on the async USB callback thread. Do not take dev->lock:
-     * setters may hold it while waiting for this same USB event loop. */
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->rf_transition_epoch_contract_enabled &&
-        !board_data->rx_async_format_unsupported_reported) {
-        board_data->rx_async_format_unsupported_reported = true;
-        should_report = true;
-    }
-    epoch_id = board_data->rf_transition_epoch_id;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
-    if (!should_report) {
-        return;
-    }
-
-    event.host_monotonic_ns = _monotonic_ns();
-    event.transaction_id = 0;
-    event.epoch_id = epoch_id;
-    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-    event.event_type = BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED;
-    event.flags = (uint32_t)format;
-    event.error_code = BLADERF_ERR_UNSUPPORTED;
-    _event_history_append(board_data, &event);
 }
 
 /* Called by the AD9361 SPI platform adapter while bladerf_set_frequency()
@@ -1379,7 +1314,7 @@ void bladerf2_rx_transition_note_first_packet(
             event.flags = metadata->status;
             event.error_code = 0;
 
-            _event_history_append_locked(board_data, &event);
+            bladerf2_rf_event_append_locked(board_data, &event);
         }
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
     });

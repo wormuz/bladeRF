@@ -312,6 +312,7 @@ set(LIBBLADERF_SOURCE_BLADERF2
         src/board/bladerf2/compatibility.c
         src/board/bladerf2/rfic_fpga.c
         src/board/bladerf2/rfic_host.c
+        src/board/bladerf2/rx_event_history.c
         src/board/bladerf2/rf_transition.c
 )
 
