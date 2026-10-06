@@ -1187,22 +1187,6 @@ int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
     return status;
 }
 
-int nios_rx_epoch_settle_write(struct bladerf *dev, uint32_t settle_samples)
-{
-    int status;
-
-    status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0,
-                             settle_samples);
-
-#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
-    if (status == 0) {
-        log_verbose("%s: Wrote 0x%08x\n", __FUNCTION__, settle_samples);
-    }
-#endif
-
-    return status;
-}
-
 int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value)
 {
     int status;

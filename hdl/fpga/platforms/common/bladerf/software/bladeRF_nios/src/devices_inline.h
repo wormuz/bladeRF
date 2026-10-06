@@ -463,21 +463,12 @@ static inline void rx_epoch_abort(void)
     rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_ABORT_TOGGLE);
 }
 
-/* Settle sample count, latched before epoch_complete -- a plain level value,
- * no toggle bits, so a direct write is correct (nothing here depends on
- * "what was written last" the way the ctrl toggles do). */
-static inline void rx_epoch_settle_set(uint32_t settle_samples)
-{
-    #ifdef RX_EPOCH_SETTLE_BASE
-    IOWR_ALTERA_AVALON_PIO_DATA(RX_EPOCH_SETTLE_BASE, settle_samples);
-    #endif
-}
-
 /* Status word, rx_clock -> sys_clock through its own work.handshake
  * instance. Bit layout composed in bladerf_core.vhd:
  *
  *   31..24  epoch_id      the active epoch, mirrors what was armed
- *   23..20  state         RX_EPOCH_ACTIVE/PENDING/SETTLING/ACTIVE_NEW/ERROR
+ *   23..20  state         RX_EPOCH_ACTIVE/PENDING/WAIT_FIRST_SAMPLE/
+ *                         ACTIVE_NEW/ERROR
  *   19      discard_active samples are being suppressed right now
  *   18      sample-META epoch tags enabled
  *   17      COMPLETE toggle captured in RX clock domain

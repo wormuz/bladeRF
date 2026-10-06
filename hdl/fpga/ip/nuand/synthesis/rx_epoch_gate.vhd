@@ -63,10 +63,6 @@ entity rx_epoch_gate is
         epoch_complete       : in  std_logic := '0';
         epoch_abort          : in  std_logic := '0';
         epoch_id_in          : in  unsigned(7 downto 0) := (others => '0');
-        -- Retained for register-map compatibility with early epoch-gate
-        -- firmware. Deliberately ignored: sample-count discard is not a
-        -- transition-completion condition.
-        settle_samples_in    : in  unsigned(31 downto 0) := (others => '0');
 
         -- Sample-domain output (into rx_fifo).
         out_sample_controls : out sample_controls_t(0 to NUM_STREAMS-1);
@@ -87,7 +83,7 @@ architecture arch of rx_epoch_gate is
     -- matches RX_EPOCH_STATUS debug states documented in §9.
     constant STATE_ACTIVE     : unsigned(3 downto 0) := "0000";
     constant STATE_PENDING    : unsigned(3 downto 0) := "0001";
-    constant STATE_SETTLING   : unsigned(3 downto 0) := "0010";
+    constant STATE_WAIT_FIRST_SAMPLE : unsigned(3 downto 0) := "0010";
     constant STATE_ACTIVE_NEW : unsigned(3 downto 0) := "0011";
     constant STATE_ERROR      : unsigned(3 downto 0) := "0100";
 
@@ -154,10 +150,10 @@ begin
                         -- sample-valid pulse is asynchronous to this
                         -- control event, so wait for an actual sample
                         -- before publishing ACTIVE_NEW to the host.
-                        state <= STATE_SETTLING;
+                        state <= STATE_WAIT_FIRST_SAMPLE;
                     end if;
 
-                when STATE_SETTLING =>
+                when STATE_WAIT_FIRST_SAMPLE =>
                     -- This state is event-waiting, not a fixed settling
                     -- delay. Admit and timestamp the first real sample on
                     -- the same edge, then publish ACTIVE_NEW for one cycle
@@ -178,7 +174,7 @@ begin
 
                 when STATE_ACTIVE_NEW =>
                     -- The first sample was admitted and timestamped in
-                    -- STATE_SETTLING on the preceding edge. Hold the new
+                    -- STATE_WAIT_FIRST_SAMPLE on the preceding edge. Hold the new
                     -- epoch active and expose the completion marker.
                     if( epoch_abort = '1' ) then
                         out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
@@ -206,7 +202,7 @@ begin
 
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;
-            if( state = STATE_PENDING or state = STATE_SETTLING or
+            if( state = STATE_PENDING or state = STATE_WAIT_FIRST_SAMPLE or
                 state = STATE_ERROR ) then
                 out_discard_active <= '1';
             else

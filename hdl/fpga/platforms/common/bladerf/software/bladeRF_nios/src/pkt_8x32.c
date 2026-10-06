@@ -273,10 +273,11 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             }
             break;
 
-        /* RX data-plane epoch gate settle count. Plain level value, written
-         * straight through -- see rx_epoch_settle_set(). */
+        /* Deprecated ABI target retained for old host packets. Fixed sample
+         * discard is not part of RX epoch validity and this target has no
+         * backing PIO or effect. */
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
-            rx_epoch_settle_set(data);
+            (void)data;
             break;
 #endif  // BOARD_BLADERF_MICRO
 

@@ -140,7 +140,6 @@ package bladerf_p is
         dwell_cfg_export                :   out std_logic_vector(31 downto 0);
         rf_link_cfg_export              :   out std_logic_vector(31 downto 0);
         rx_epoch_ctrl_export            :   out std_logic_vector(31 downto 0);
-        rx_epoch_settle_export          :   out std_logic_vector(31 downto 0);
         rx_epoch_status_export          :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rx_epoch_ts_lo_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rx_epoch_ts_hi_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');

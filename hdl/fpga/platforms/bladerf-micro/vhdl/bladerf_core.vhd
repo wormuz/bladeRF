@@ -249,24 +249,16 @@ architecture core_bladerf of bladerf_core is
     -- stop; this one gates data validity across a single RX retune).
     --
     -- Crossed with the SAME work.handshake + continuous-req + capture-on-
-    -- ack pattern that dwell_cfg_word already uses in this file (see
-    -- U_dwell_cfg_handshake/drive_handshake_dwell_cfg/dwell_cfg_capture
-    -- below for the full rationale this mirrors) -- NOT a new one-shot
-    -- "transfer exactly once" protocol. The control word is bundled data
-    -- just like dwell_cfg_word: epoch_id and settle_samples must never be
-    -- observed out of sync with each other, so they ride in the SAME
-    -- 32-bit word, decoded by rf_link_controller-style toggle-edge
-    -- detection on the rx_clock side after the handshake has delivered a
-    -- stable copy.
+    -- ack pattern that dwell_cfg_word already uses in this file. The
+    -- control word carries only epoch identity and arm/complete/abort
+    -- toggles; validity opens on the first actual ADC sample after COMPLETE.
     --
     -- rx_epoch_ctrl bit layout (see nios_system.tcl):
     --   bit 0      arm toggle
     --   bit 1      complete toggle
     --   bit 2      abort toggle
     --   bits 15:8  host epoch_id
-    -- settle_samples does NOT fit in the remaining 16 bits of one 32-bit
-    -- word. The old sample-discard PIO remains at the NIOS address for
-    -- compatibility but is intentionally not connected to the RX gate.
+    -- No sample-count discard control exists in this path.
     signal rx_epoch_ctrl_word       : std_logic_vector(31 downto 0);
     signal rx_epoch_ctrl_req_rx     : std_logic := '0';
     signal rx_epoch_ctrl_ack_rx     : std_logic;
@@ -809,7 +801,6 @@ begin
             dwell_cfg_export                => dwell_cfg_word,
             rf_link_cfg_export              => rf_link_cfg_word,
             rx_epoch_ctrl_export             => rx_epoch_ctrl_word,
-            rx_epoch_settle_export           => open,
             rx_epoch_status_export           => rx_epoch_status_sys,
             rx_epoch_ts_lo_export            => rx_epoch_ts_lo_sys,
             rx_epoch_ts_hi_export            => rx_epoch_ts_hi_sys,
@@ -1797,7 +1788,6 @@ begin
             rx_epoch_abort          => rx_epoch_abort_rx,
             rx_epoch_id_in          => rx_epoch_id_in_rx,
             rx_epoch_meta_enable    => rx_epoch_meta_enable_rx,
-            rx_epoch_settle_samples => (others => '0'),
             rx_epoch_id_out         => rx_epoch_id_out_rx,
             rx_epoch_state          => rx_epoch_state_rx,
             rx_epoch_discard_active => rx_epoch_discard_rx,

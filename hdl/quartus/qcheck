@@ -776,19 +776,35 @@ def check_rx_epoch_gate_in_all_rx_projects():
 
 
 def check_rx_epoch_has_no_dead_settle_cdc():
-    """A discarded settle bus must not leave an SDC pair Quartus cannot bind."""
-    core = ROOT / "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd"
-    sdc = ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc"
-    if not core.exists() or not sdc.exists():
+    """Fixed sample discard is absent from the epoch hardware and NIOS path."""
+    paths = (
+        "hdl/fpga/ip/nuand/synthesis/rx_epoch_gate.vhd",
+        "hdl/fpga/platforms/bladerf-micro/vhdl/rx.vhd",
+        "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_core.vhd",
+        "hdl/fpga/platforms/bladerf-micro/vhdl/bladerf_p.vhd",
+        "hdl/fpga/platforms/bladerf-micro/build/nios_system.tcl",
+        "hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/devices_inline.h",
+    )
+    sources = [ROOT / path for path in paths]
+    if not all(path.exists() for path in sources):
         return
-    core_text = code_only(core.read_text(), comment="--")
-    sdc_text = code_only(sdc.read_text(), comment="#")
-    if ("U_rx_epoch_settle_handshake" in core_text or
-            "U_rx_epoch_settle_handshake" in sdc_text or
-            re.search(r"rx_epoch_settle_samples\s*=>\s*unsigned\(", core_text)):
+    contents = "\n".join(
+        code_only(path.read_text(errors="replace"), comment="--")
+        for path in sources
+    )
+    forbidden = (
+        "settle_samples_in",
+        "rx_epoch_settle_samples",
+        "rx_epoch_settle_export",
+        "RX_EPOCH_SETTLE_BASE",
+        "rx_epoch_settle",
+        "rx_epoch_settle_set",
+    )
+    found = [name for name in forbidden if name in contents]
+    if found:
         fail("rx-epoch-no-dead-settle-cdc",
-             "unused sample-discard control still has a synthesized CDC/SDC path",
-             "TimeQuest reports handshake crossing not matched after optimization")
+             "fixed sample-discard hardware/NIOS path remains: " + ", ".join(found),
+             "the only valid epoch boundary is the first observed sample after completion")
 
 
 def check_rx_epoch_host_timestamp_fence():

@@ -353,17 +353,15 @@
  * from ERROR; it never reopens the failed epoch. */
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL   0x87
 
-/* RX data-plane epoch gate settle count (write-only). Plain level value,
- * not a toggle -- a direct write is correct here, unlike RX_EPOCH_CTRL.
- * Must be written before RX_EPOCH_CTRL's COMPLETE command; the gate reads
- * it when the PENDING -> SETTLING transition happens, not continuously. */
+/* Deprecated legacy target retained for old host packets. NIOS accepts but
+ * ignores writes; epoch validity never uses fixed sample discard. */
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE 0x88
 
 /* RX data-plane epoch gate status (read-only). One word:
  *
  *   bits 31:24  epoch_id        mirrors the ARM that opened this epoch
- *   bits 23:20  state           0=ACTIVE 1=PENDING 2=SETTLING 3=ACTIVE_NEW
- *                                4=ERROR
+ *   bits 23:20  state           0=ACTIVE 1=PENDING
+ *                                2=WAIT_FIRST_SAMPLE 3=ACTIVE_NEW 4=ERROR
  *   bit  19     discard_active  samples are being suppressed right now
  *   bits 18:0   reserved, read as zero
  *
@@ -396,7 +394,11 @@
 
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE      0x0u
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING     0x1u
-#define NIOS_PKT_8x32_RX_EPOCH_STATE_SETTLING    0x2u
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_WAIT_FIRST_SAMPLE 0x2u
+/* Source compatibility only: state 2 waits for an ADC valid event; it does
+ * not count or discard a fixed number of samples. */
+#define NIOS_PKT_8x32_RX_EPOCH_STATE_SETTLING \
+    NIOS_PKT_8x32_RX_EPOCH_STATE_WAIT_FIRST_SAMPLE
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW  0x3u
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR       0x4u
 
@@ -447,7 +449,7 @@ static inline const char* target2str(uint8_t target_id) {
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL:
             return "RX Epoch Gate Control (Write-Only)";
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
-            return "RX Epoch Gate Settle Count (Write-Only)";
+            return "Deprecated RX Epoch Sample-Discard Target (Ignored)";
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
             return "RX Epoch Gate Status";
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:

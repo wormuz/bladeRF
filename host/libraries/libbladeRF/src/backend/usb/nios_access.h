@@ -421,18 +421,6 @@ int nios_rf_link_cfg_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
 int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
 
 /**
- * Set the RX data-plane epoch gate settle sample count. Must be written
- * before issuing NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE.
- *
- * @param   dev             Device handle
- * @param   settle_samples  Real ADC samples to discard after epoch_complete
- *                          before admitting new samples to the FIFO
- *
- * @return 0 on success, BLADERF_ERR_* on failure
- */
-int nios_rx_epoch_settle_write(struct bladerf *dev, uint32_t settle_samples);
-
-/**
  * Read the RX data-plane epoch gate status word.
  *
  * Bit layout at NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS.

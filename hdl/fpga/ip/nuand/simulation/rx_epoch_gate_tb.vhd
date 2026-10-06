@@ -32,9 +32,6 @@ begin
             rx_timestamp => timestamp,
             epoch_arm => arm, epoch_complete => complete,
             epoch_abort => abort, epoch_id_in => epoch_id_in,
-            -- The legacy count is intentionally nonzero. It must neither
-            -- gate validity nor delay opening after the first real sample.
-            settle_samples_in => to_unsigned(1000000, 32),
             out_sample_controls => out_controls, out_samples => out_samples,
             out_epoch_id => epoch_id, out_state => state,
             out_discard_active => discard_active,
@@ -129,9 +126,8 @@ begin
             report "first-valid timestamp does not match first admitted sample" severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
 
-        -- The count above is one million, but the next real ADC sample opens
-        -- the epoch. This is an explicit guard against reintroducing fixed
-        -- sample discard as a correctness condition.
+        -- The epoch opens on the first real ADC sample after COMPLETE; there
+        -- is no sample-count discard input or delay in this gate.
         wait until rising_edge(clock);
         wait for 1 ns;
         assert state = "0011" and out_controls(0).enable = '1'

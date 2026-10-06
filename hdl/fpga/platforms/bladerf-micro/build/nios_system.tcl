@@ -384,13 +384,10 @@ set_instance_parameter_value rf_link_status {width} {32}
 # decoded by toggle-edge detection -- same shape as rf_link_controller's
 # start/stop/clear_fault decode.
 #
-# rx_epoch_settle (Output, host->fabric): settle_samples, quasi-static
-# (host sets rarely, not per-retune) -- separate word/handshake from
-# rx_epoch_ctrl because it does not need to be observed atomically with
-# the toggle commands.
 #
 # rx_epoch_status (Input, fabric->host): bits[31:24]=active_epoch_id,
-# bits[23:20]=state (0=ACTIVE,1=PENDING,2=SETTLING,3=ACTIVE_NEW,4=ERROR),
+# bits[23:20]=state (0=ACTIVE,1=PENDING,2=WAIT_FIRST_SAMPLE,
+# 3=ACTIVE_NEW,4=ERROR),
 # bit[19]=discard_active, bits[18:0]=reserved.
 #
 # rx_epoch_ts_lo/rx_epoch_ts_hi (Input, fabric->host): halves of ONE
@@ -421,19 +418,6 @@ set_instance_parameter_value rx_epoch_status {resetValue} {0.0}
 set_instance_parameter_value rx_epoch_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rx_epoch_status {simDrivenValue} {0.0}
 set_instance_parameter_value rx_epoch_status {width} {32}
-
-add_instance rx_epoch_settle altera_avalon_pio
-set_instance_parameter_value rx_epoch_settle {bitClearingEdgeCapReg} {0}
-set_instance_parameter_value rx_epoch_settle {bitModifyingOutReg} {0}
-set_instance_parameter_value rx_epoch_settle {captureEdge} {0}
-set_instance_parameter_value rx_epoch_settle {direction} {Output}
-set_instance_parameter_value rx_epoch_settle {edgeType} {RISING}
-set_instance_parameter_value rx_epoch_settle {generateIRQ} {0}
-set_instance_parameter_value rx_epoch_settle {irqType} {LEVEL}
-set_instance_parameter_value rx_epoch_settle {resetValue} {0.0}
-set_instance_parameter_value rx_epoch_settle {simDoTestBenchWiring} {0}
-set_instance_parameter_value rx_epoch_settle {simDrivenValue} {0.0}
-set_instance_parameter_value rx_epoch_settle {width} {32}
 
 add_instance rx_epoch_ts_lo altera_avalon_pio
 set_instance_parameter_value rx_epoch_ts_lo {bitClearingEdgeCapReg} {0}
@@ -716,7 +700,6 @@ add_interface xb_gpio conduit end
 set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
 set_interface_property rx_epoch_ctrl EXPORT_OF rx_epoch_ctrl.external_connection
 set_interface_property rx_epoch_status EXPORT_OF rx_epoch_status.external_connection
-set_interface_property rx_epoch_settle EXPORT_OF rx_epoch_settle.external_connection
 set_interface_property rx_epoch_ts_lo EXPORT_OF rx_epoch_ts_lo.external_connection
 set_interface_property rx_epoch_ts_hi EXPORT_OF rx_epoch_ts_hi.external_connection
 set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
@@ -871,10 +854,6 @@ set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 arbitrationP
 set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 baseAddress {0x96c0}
 set_connection_parameter_value nios2.data_master/rx_epoch_status.s1 defaultConnection {0}
 
-add_connection nios2.data_master rx_epoch_settle.s1
-set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 baseAddress {0x96e0}
-set_connection_parameter_value nios2.data_master/rx_epoch_settle.s1 defaultConnection {0}
 
 add_connection nios2.data_master rx_epoch_ts_lo.s1
 set_connection_parameter_value nios2.data_master/rx_epoch_ts_lo.s1 arbitrationPriority {1}
@@ -985,7 +964,6 @@ foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_
 add_connection system_clock.clk rf_link_status.clk
 add_connection system_clock.clk rx_epoch_ctrl.clk
 add_connection system_clock.clk rx_epoch_status.clk
-add_connection system_clock.clk rx_epoch_settle.clk
 add_connection system_clock.clk rx_epoch_ts_lo.clk
 add_connection system_clock.clk rx_epoch_ts_hi.clk
 add_connection system_clock.clk rf_link_cfg.clk
@@ -1036,7 +1014,6 @@ foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_
 add_connection system_clock.clk_reset rf_link_status.reset
 add_connection system_clock.clk_reset rx_epoch_ctrl.reset
 add_connection system_clock.clk_reset rx_epoch_status.reset
-add_connection system_clock.clk_reset rx_epoch_settle.reset
 add_connection system_clock.clk_reset rx_epoch_ts_lo.reset
 add_connection system_clock.clk_reset rx_epoch_ts_hi.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset

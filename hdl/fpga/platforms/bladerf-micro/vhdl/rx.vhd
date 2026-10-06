@@ -73,7 +73,6 @@ entity rx is
         rx_epoch_abort          : in    std_logic := '0';
         rx_epoch_id_in          : in    unsigned(7 downto 0) := (others => '0');
         rx_epoch_meta_enable    : in    std_logic := '0';
-        rx_epoch_settle_samples : in    unsigned(31 downto 0) := (others => '0');
         rx_epoch_id_out         : out   unsigned(7 downto 0) := (others => '0');
         rx_epoch_state          : out   unsigned(3 downto 0) := (others => '0');
         rx_epoch_discard_active : out   std_logic := '0';
@@ -288,7 +287,6 @@ begin
             epoch_complete          => rx_epoch_complete,
             epoch_abort             => rx_epoch_abort,
             epoch_id_in             => rx_epoch_id_in,
-            settle_samples_in       => rx_epoch_settle_samples,
 
             out_sample_controls     => gated_controls,
             out_samples             => gated_streams,
