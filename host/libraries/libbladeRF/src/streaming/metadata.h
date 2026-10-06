@@ -174,6 +174,21 @@ enum metadata_rx_buffer_epoch_result {
     METADATA_RX_BUFFER_DISCONTINUITY,
 };
 
+/* The async RX parser validates a whole transfer outside its state mutex.
+ * Recheck the certificate snapshot under that mutex immediately before
+ * advancing the timestamp cursor/admitting the transfer. */
+static inline bool metadata_rx_epoch_snapshot_is_current(
+    bool snapshot_contract_enabled, bool snapshot_certified,
+    uint8_t snapshot_epoch_id, uint64_t snapshot_first_valid_timestamp,
+    bool current_contract_enabled, bool current_certified,
+    uint8_t current_epoch_id, uint64_t current_first_valid_timestamp)
+{
+    return snapshot_contract_enabled && snapshot_certified &&
+           current_contract_enabled && current_certified &&
+           snapshot_epoch_id == current_epoch_id &&
+           snapshot_first_valid_timestamp == current_first_valid_timestamp;
+}
+
 /* Validate epoch identity, the first-valid lower bound, and timestamp
  * continuity for every message in a USB transfer. timestamp_step is in FPGA
  * sample-clock ticks (divide interleaved RX_X2 samples by two). On a

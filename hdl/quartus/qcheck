@@ -807,9 +807,9 @@ def check_rx_epoch_host_timestamp_fence():
                                  function_start)
     fence_ack = transition_text.find("_wait_rx_epoch_fenced(",
                                      function_start)
-    retune_host = transition_text.find("bladerf_set_frequency(",
+    retune_host = transition_text.find("bladerf_set_frequency_locked(",
                                        function_start)
-    retune_fastlock = transition_text.find("bladerf_schedule_retune(",
+    retune_fastlock = transition_text.find("dev->board->schedule_retune(",
                                            function_start)
     # Both tune modes share the same fence-before-retune contract.
     retune = min((pos for pos in (retune_host, retune_fastlock) if pos >= 0),

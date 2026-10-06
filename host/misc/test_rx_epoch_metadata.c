@@ -18,6 +18,18 @@ int main(void)
     uint8_t header[METADATA_HEADER_SIZE] = {0};
     uint8_t epoch_id = 0xff;
 
+    /* Async admission rechecks the same boundary after parsing. A setter can
+     * revoke it while the transfer is being inspected, so matching bytes
+     * alone are insufficient if the live certificate changed meanwhile. */
+    assert(metadata_rx_epoch_snapshot_is_current(
+        true, true, 7, 1000, true, true, 7, 1000));
+    assert(!metadata_rx_epoch_snapshot_is_current(
+        true, true, 7, 1000, true, false, 7, 1000));
+    assert(!metadata_rx_epoch_snapshot_is_current(
+        true, true, 7, 1000, true, true, 8, 1000));
+    assert(!metadata_rx_epoch_snapshot_is_current(
+        true, true, 7, 1000, true, true, 7, 1001));
+
     /* Epoch zero is a valid tagged identity, distinct from legacy headers. */
     set_tag(header, 0);
     assert(metadata_get_rx_epoch_id(header, &epoch_id));

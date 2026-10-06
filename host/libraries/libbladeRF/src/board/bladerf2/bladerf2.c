@@ -1692,6 +1692,23 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
 
     if (validation == METADATA_RX_BUFFER_CONTIGUOUS) {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        /* Parsing the metadata can take long enough for a concurrent RFIC
+         * setter to revoke this certificate. Recheck at the commit point so
+         * a buffer validated against a stale snapshot cannot be admitted or
+         * move the timestamp cursor past the invalidation. This lock is the
+         * linearization point between async admission and epoch invalidation. */
+        if (!metadata_rx_epoch_snapshot_is_current(
+                contract_enabled, epoch_valid, epoch_id,
+                first_valid_timestamp,
+                board_data->rf_transition_epoch_contract_enabled,
+                board_data->rf_transition_epoch_certified,
+                board_data->rf_transition_certified_epoch_id,
+                board_data->rf_transition_first_valid_timestamp)) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_rx_async_data_withheld(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            return false;
+        }
         board_data->rx_async_have_expected_timestamp = true;
         board_data->rx_async_timestamp_epoch_id = epoch_id;
         board_data->rx_async_expected_timestamp = next_timestamp;
