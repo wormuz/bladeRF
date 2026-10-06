@@ -233,9 +233,9 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
     struct bladerf_rf_event event = {0};
 
     /* Later events (PLL, ENSM, epoch-valid) are emitted by wait(), which
-     * does not receive the original request again. Keep the verified LO
-     * pair attached to every event in the transaction, including the final
-     * completion record returned to the caller. */
+     * does not receive the original request again. Preserve the requested
+     * frequency and the readback value known at this point in the
+     * transaction; zero readback means verification has not happened yet. */
     event.fpga_timestamp    = fpga_timestamp;
     /* 0 unless the FPGA data-plane epoch gate actually reported one
      * (ADR-0207 §6, BLADERF_RF_EVT_RX_EPOCH_VALID) -- every other event
@@ -445,6 +445,12 @@ static int _bladerf_rx_transition_begin(
                    request->target_frequency_hz, 0, 0, status, 0);
         return _fail_transition(dev, board_data, status, NULL);
     }
+
+    /* This timestamp is the return of the selected host/NIOS tune path.
+     * It deliberately does not claim raw SPI completion or PLL lock. */
+    _emit_event(dev, board_data, BLADERF_RF_EVT_LO_SET_RETURNED,
+                BLADERF_RF_STATE_PLL_ACQUIRING,
+                request->target_frequency_hz, 0, 0, 0, 0);
     log_debug("%s: %s RFIC tune transaction=%u took %" PRIu64 " us\n",
               __FUNCTION__, quick_tune != NULL ? "fastlock" : "host",
               board_data->rf_transition_current_id,
@@ -504,12 +510,9 @@ static int _bladerf_rx_transition_begin(
         board_data->rf_transition_readback_frequency_hz = readback_hz;
     });
 
-    /* ad9361_set_rx_lo_freq() is synchronous and includes the driver's
-     * internal VCO-lock poll. This host timestamp therefore means the LO
-     * setter returned; it is not the SPI-programming completion instant. */
-    _emit_event(dev, board_data, BLADERF_RF_EVT_LO_SET_RETURNED,
-               BLADERF_RF_STATE_PLL_ACQUIRING,
-               request->target_frequency_hz, readback_hz, 0, 0, 0);
+    _emit_event(dev, board_data, BLADERF_RF_EVT_LO_READBACK_MATCH,
+                BLADERF_RF_STATE_PLL_ACQUIRING,
+                request->target_frequency_hz, readback_hz, 0, 0, 0);
 
     return 0;
 }

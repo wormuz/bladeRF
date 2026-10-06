@@ -4639,7 +4639,8 @@ typedef enum {
     BLADERF_RF_EVT_RX_EPOCH_INVALID,
     BLADERF_RF_EVT_RX_EPOCH_VALID,
     BLADERF_RF_EVT_ERROR,
-    BLADERF_RF_EVT_LO_SET_RETURNED
+    BLADERF_RF_EVT_LO_SET_RETURNED,
+    BLADERF_RF_EVT_LO_READBACK_MATCH
 } bladerf_rf_event_type;
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
