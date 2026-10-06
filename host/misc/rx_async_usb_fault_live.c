@@ -98,6 +98,12 @@ int main(void)
     } else if (strcmp(fault_status, "NO_DEVICE") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_DEVICE_LOST;
         test.expected_stream_status = BLADERF_ERR_NODEV;
+    } else if (strcmp(fault_status, "EVENT_IO") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "SUBMIT_IO") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
     } else {
         fprintf(stderr, "unknown transfer status: %s\n", fault_status);
         return 2;
@@ -161,7 +167,11 @@ int main(void)
         goto cleanup;
     }
 
-    if (setenv("BLADERF_TEST_LIBUSB_RX_STATUS", fault_status, 1) != 0 ||
+    if ((strcmp(fault_status, "EVENT_IO") == 0
+             ? setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR", "IO", 1)
+         : strcmp(fault_status, "SUBMIT_IO") == 0
+             ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR", "IO", 1)
+             : setenv("BLADERF_TEST_LIBUSB_RX_STATUS", fault_status, 1)) != 0 ||
         pthread_create(&thread, NULL, run_stream, &test) != 0) {
         fprintf(stderr, "could not arm/start test stream\n");
         status = BLADERF_ERR_UNEXPECTED;
@@ -170,11 +180,18 @@ int main(void)
 
     pthread_join(thread, NULL);
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
 
+    const bool event_loop_fault = strcmp(fault_status, "EVENT_IO") == 0;
+    const bool pre_callback_fault = event_loop_fault ||
+                                    strcmp(fault_status, "SUBMIT_IO") == 0;
     if (test.stream_status != test.expected_stream_status ||
         atomic_load(&test.withheld_events) != 1 ||
-        atomic_load(&test.overrun_events) != 1 ||
-        atomic_load(&test.event_callbacks) != 1 ||
+        (pre_callback_fault ? atomic_load(&test.overrun_events) < 1
+                            : atomic_load(&test.overrun_events) != 1) ||
+        (pre_callback_fault ? atomic_load(&test.event_callbacks) < 1
+                            : atomic_load(&test.event_callbacks) != 1) ||
         atomic_load(&test.data_after_fault)) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
                 "overrun=%u data_after_fault=%u expected_reason=0x%x\n",
@@ -200,6 +217,8 @@ int main(void)
 cleanup:
     if (test.dev != NULL) {
         unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+        unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
+        unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
         bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), false);
         bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), false);
         if (test.stream != NULL) {

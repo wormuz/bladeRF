@@ -101,6 +101,8 @@ struct lusb_stream_data {
 
 #ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
     bool rx_status_fault_injected;
+    bool rx_event_error_injected;
+    bool rx_submit_error_injected;
 #endif
 
 
@@ -1135,6 +1137,26 @@ static void notify_rx_terminal_failure_once(
     }
 }
 
+static void fail_rx_stream(struct bladerf_stream *stream,
+                           struct lusb_stream_data *stream_data,
+                           int status, uint32_t reason)
+{
+    if ((stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    if (stream->error_code == 0) {
+        stream->error_code = status;
+    }
+    if (status == BLADERF_ERR_NODEV) {
+        reason = BLADERF_RF_WITHHELD_DEVICE_LOST;
+    } else if (status == BLADERF_ERR_TIMEOUT) {
+        reason = BLADERF_RF_WITHHELD_USB_TIMEOUT;
+    }
+    notify_rx_terminal_failure_once(stream, stream_data, reason);
+    stream->state = STREAM_SHUTTING_DOWN;
+}
+
 static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 {
     struct bladerf_stream *stream = transfer->user_data;
@@ -1375,7 +1397,12 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             if (status != 0) {
                 /* If this fails, we probably have a serious problem...so just
                  * shut it down. */
-                stream->state = STREAM_SHUTTING_DOWN;
+                fail_rx_stream(stream, stream_data, status,
+                               BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+                if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+                    stream->state = STREAM_SHUTTING_DOWN;
+                    stream->error_code = status;
+                }
             }
         }
     }
@@ -1470,6 +1497,14 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
      *       lock schemes.
      */
     MUTEX_UNLOCK(&stream->lock);
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+    if (!stream_data->rx_submit_error_injected &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        getenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR") != NULL) {
+        stream_data->rx_submit_error_injected = true;
+        status = LIBUSB_ERROR_IO;
+    } else
+#endif
     status = libusb_submit_transfer(transfer);
     MUTEX_LOCK(&stream->lock);
 
@@ -1518,6 +1553,8 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream_data->rx_terminal_failure_reported = false;
 #ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
     stream_data->rx_status_fault_injected = false;
+    stream_data->rx_event_error_injected = false;
+    stream_data->rx_submit_error_injected = false;
 #endif
     stream_data->cancel_deadline_ns = 0;
     stream_data->done_flag = 0;
@@ -1637,7 +1674,10 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
              * have libusb fire off callbacks with the cancelled status*/
             if (status < 0) {
                 stream->error_code = status;
+                fail_rx_stream(stream, stream_data, status,
+                               BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 cancel_all_transfers(stream);
+                break;
             }
         }
     }
@@ -1660,11 +1700,33 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
         status = libusb_handle_events_timeout_completed(
             lusb->context, &tv, &stream_data->done_flag);
 
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+        /* Exercise event-loop failure handling on hardware without altering
+         * the system libusb or requiring a physical controller fault. */
+        if (!stream_data->rx_event_error_injected &&
+            (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+            getenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR") != NULL) {
+            stream_data->rx_event_error_injected = true;
+            status = LIBUSB_ERROR_IO;
+        }
+#endif
+
         if (status < 0 && status != LIBUSB_ERROR_INTERRUPTED &&
             status != LIBUSB_ERROR_TIMEOUT) {
             log_warning("unexpected value from events processing: "
                         "%d: %s\n", status, libusb_error_name(status));
             status = error_conv(status);
+            MUTEX_LOCK(&stream->lock);
+            if (stream->state != STREAM_DONE &&
+                stream->state != STREAM_SHUTTING_DOWN) {
+                fail_rx_stream(stream, stream_data, status,
+                               BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+                if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+                    stream->error_code = status;
+                    stream->state = STREAM_SHUTTING_DOWN;
+                }
+            }
+            MUTEX_UNLOCK(&stream->lock);
         }
 
         /* Finish a shutdown that has nothing left to complete.
