@@ -467,6 +467,45 @@ bool adi_spi_write(uint16_t addr, uint64_t data)
     return success;
 }
 
+/* Atomic single-byte RMW used by the host no-OS transport to avoid a
+ * separate NIOS/USB read and write request. Keep the SPI arbiter locked
+ * across both physical transactions so another RFIC client cannot alter the
+ * register between read and write. */
+bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
+                         uint8_t *result)
+{
+    alt_u8 addr8[2];
+    alt_u8 current = 0;
+    alt_u8 write_buf[3];
+    int status;
+    bool success = false;
+
+    if (mask == 0 || result == NULL || addr > 0x03ff ||
+        !spi_arbiter_lock()) {
+        return false;
+    }
+
+    addr8[0] = (alt_u8)(addr >> 8);
+    addr8[1] = (alt_u8)addr;
+    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, sizeof(addr8), addr8,
+                                    1, &current, 0);
+    if (status < 0) {
+        goto done;
+    }
+
+    *result = (uint8_t)((current & (uint8_t)~mask) | (value & mask));
+    write_buf[0] = (alt_u8)((addr >> 8) | 0x80);
+    write_buf[1] = (alt_u8)addr;
+    write_buf[2] = *result;
+    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, sizeof(write_buf),
+                                    write_buf, 0, NULL, 0);
+    success = status >= 0;
+
+done:
+    spi_arbiter_unlock();
+    return success;
+}
+
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
 {

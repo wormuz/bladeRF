@@ -15,6 +15,8 @@ enum batch_mode {
 
 static enum batch_mode mode;
 static unsigned int calls;
+static unsigned int update_calls;
+static bool update_success = true;
 
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
@@ -36,6 +38,20 @@ bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
     }
 
     return false;
+}
+
+bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
+                         uint8_t *result)
+{
+    update_calls++;
+    if (addr != 0x23b || mask != 0x30 || value != 0x10 || result == NULL) {
+        return false;
+    }
+    if (!update_success) {
+        return false;
+    }
+    *result = 0x95;
+    return true;
 }
 
 static int run_case(enum batch_mode requested_mode, bool expected_success,
@@ -73,14 +89,48 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
     return 0;
 }
 
+static int run_update_bits_case(bool requested_success,
+                                bool expected_success)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS,
+                 NIOS_PKT_16x64_FLAG_WRITE, 0x00, 0x3b, 0x02,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x30, 0xa6,
+                 0x00, 0x00 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false, success = false;
+
+    update_success = requested_success;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+
+    if (target != NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS || !write ||
+        addr != 0x23b || success != expected_success ||
+        (expected_success ? response != 0x95 :
+         response != ((uint64_t)NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER << 56))) {
+        fprintf(stderr, "update-bits response mismatch: target=%u write=%u "
+                        "addr=0x%x data=0x%016llx success=%u\n",
+                target, write, addr, (unsigned long long)response, success);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
-        run_case(BATCH_PARTIAL, false, 1) || calls != 3) {
+        run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
+        run_update_bits_case(true, true) ||
+        run_update_bits_case(false, false) || update_calls != 2) {
         return 1;
     }
 
-    puts("NIOS RFPLL batch packet success/failure/partial: PASS");
+    puts("NIOS RFPLL batch and atomic RMW packet paths: PASS");
     return 0;
 }

@@ -782,6 +782,40 @@ int nios_ad9361_spi_write_batch(struct bladerf *dev,
     return 0;
 }
 
+int nios_ad9361_spi_update_bits(struct bladerf *dev, uint16_t reg,
+                                uint8_t mask, uint8_t value)
+{
+    const uint64_t request_data =
+        NIOS_PKT_16x64_UPDATE_BITS_REQUEST(
+            NIOS_PKT_16x64_UPDATE_BITS_MARKER, mask, value);
+    uint8_t buf[NIOS_PKT_LEN];
+    uint64_t response_data = 0;
+    bool success = false;
+    int status;
+
+    if (dev == NULL || reg > 0x03ff || mask == 0 || (value & ~mask) != 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS,
+                        true, reg, request_data);
+    status = nios_access(dev, buf);
+    if (status != 0) {
+        return status;
+    }
+
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
+                               &success);
+    if (!success && response_data == request_data) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (!success || response_data > UINT8_MAX) {
+        return BLADERF_ERR_FPGA_OP;
+    }
+
+    return 0;
+}
+
 int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
                                uint8_t data1, uint8_t data2, uint8_t data3,
                                uint8_t config, uint32_t delay_us)

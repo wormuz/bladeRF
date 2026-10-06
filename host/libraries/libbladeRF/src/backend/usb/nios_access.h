@@ -173,6 +173,8 @@ int nios_ad9361_spi_write(struct bladerf *dev, uint16_t cmd, uint64_t data);
 int nios_ad9361_spi_write_batch(struct bladerf *dev,
                                 const uint16_t *regs,
                                 const uint8_t *values, uint8_t count);
+int nios_ad9361_spi_update_bits(struct bladerf *dev, uint16_t reg,
+                                uint8_t mask, uint8_t value);
 
 /* Execute the five ordered SPI writes that commit one AD9361 gain-table row
  * in one host/NIOS transaction. Firmware preserves the required delay after

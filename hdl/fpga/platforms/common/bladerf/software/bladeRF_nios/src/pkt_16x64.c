@@ -119,6 +119,27 @@ void pkt_16x64(struct pkt_buf *b)
 #else
         success = false;
 #endif
+    } else if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS) {
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+        const uint8_t marker = (uint8_t)(data >> 56);
+        const uint8_t mask = (uint8_t)(data >> 48);
+        const uint8_t value = (uint8_t)(data >> 40);
+        uint8_t result = 0;
+
+        success = marker == NIOS_PKT_16x64_UPDATE_BITS_MARKER &&
+                  mask != 0 && addr <= 0x03ff &&
+                  (data & NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK) == 0 &&
+                  adi_spi_update_bits(addr, mask, value, &result);
+        if (success) {
+            data = result;
+        } else {
+            /* Distinguish a supported command that failed at SPI from an
+             * old firmware echo, which must be the only fallback signal. */
+            data = (uint64_t)NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER << 56;
+        }
+#else
+        success = false;
+#endif
     } else if (is_write) {
         success = perform_write(id, addr, data);
     } else {

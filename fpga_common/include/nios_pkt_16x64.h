@@ -104,6 +104,18 @@
 #define NIOS_PKT_16x64_TARGET_RFIC    0x01 /* RFIC control */
 #define NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW 0x02 /* AD9361 ordered row commit */
 #define NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH 0x03 /* Up to 3 ordered byte writes */
+#define NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS 0x04 /* Atomic byte RMW */
+
+/* UPDATE_BITS request data: marker[63:56]=0xa6, mask[55:48], masked value
+ * [47:40], reserved[39:0]=0. Success response data is the resulting byte.
+ * Older firmware echoes the request with success clear, allowing host-side
+ * fallback to the original read+write sequence. */
+#define NIOS_PKT_16x64_UPDATE_BITS_MARKER 0xa6u
+#define NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER 0x5au
+#define NIOS_PKT_16x64_UPDATE_BITS_REQUEST(marker, mask, value) \
+    (((uint64_t)(marker) << 56) | ((uint64_t)(mask) << 48) | \
+     ((uint64_t)(value) << 40))
+#define NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK UINT64_C(0x000000ffffffffff)
 
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */

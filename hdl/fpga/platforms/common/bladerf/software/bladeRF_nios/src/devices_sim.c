@@ -91,6 +91,19 @@ bool adi_spi_write(uint16_t addr, uint64_t data)
     return true;
 }
 
+bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
+                         uint8_t *result)
+{
+    DBG("%s: addr=0x%04x mask=0x%02x value=0x%02x\n", __FUNCTION__,
+        addr, mask, value);
+    ASSERT(addr == 0x2f2f);
+    ASSERT(mask == 0x0f);
+    ASSERT(value == 0x05);
+    ASSERT(result != NULL);
+    *result = 0x15;
+    return true;
+}
+
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
 {

@@ -13,6 +13,9 @@ enum response_mode {
     RESPONSE_SUCCESS,
     RESPONSE_OLD_FIRMWARE_ECHO,
     RESPONSE_PARTIAL_FAILURE,
+    RESPONSE_UPDATE_SUCCESS,
+    RESPONSE_UPDATE_OLD_FIRMWARE_ECHO,
+    RESPONSE_UPDATE_FAILURE,
 };
 
 static enum response_mode response_mode;
@@ -46,17 +49,38 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     }
 
     nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
-    if (target != NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH || !write) {
+    if (!write) {
         return BLADERF_ERR_UNEXPECTED;
     }
 
     in_count++;
-    if (response_mode == RESPONSE_SUCCESS) {
-        nios_pkt_16x64_resp_pack(bytes, target, true, count, count, true);
-    } else if (response_mode == RESPONSE_OLD_FIRMWARE_ECHO) {
-        nios_pkt_16x64_resp_pack(bytes, target, true, count, data, false);
+    if (target == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH &&
+        response_mode <= RESPONSE_PARTIAL_FAILURE) {
+        if (response_mode == RESPONSE_SUCCESS) {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count, count, true);
+        } else if (response_mode == RESPONSE_OLD_FIRMWARE_ECHO) {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count, data, false);
+        } else {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count, 1, false);
+        }
+    } else if (target == NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS &&
+               response_mode >= RESPONSE_UPDATE_SUCCESS) {
+        const uint64_t expected = NIOS_PKT_16x64_UPDATE_BITS_REQUEST(
+            NIOS_PKT_16x64_UPDATE_BITS_MARKER, 0x30, 0x10);
+        if (count != 0x23b || data != expected) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (response_mode == RESPONSE_UPDATE_SUCCESS) {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count, 0x95, true);
+        } else if (response_mode == RESPONSE_UPDATE_OLD_FIRMWARE_ECHO) {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count, data, false);
+        } else {
+            nios_pkt_16x64_resp_pack(bytes, target, true, count,
+                (uint64_t)NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER << 56,
+                false);
+        }
     } else {
-        nios_pkt_16x64_resp_pack(bytes, target, true, count, 1, false);
+        return BLADERF_ERR_UNEXPECTED;
     }
 
     return 0;
@@ -101,15 +125,35 @@ static int expect(enum response_mode mode, int expected_status)
     return 0;
 }
 
+static int expect_update(enum response_mode mode, int expected_status)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    int status;
+
+    response_mode = mode;
+    status = nios_ad9361_spi_update_bits(&dev, 0x23b, 0x30, 0x10);
+    if (status != expected_status) {
+        fprintf(stderr, "RMW status mismatch: mode=%d got=%d expected=%d\n",
+                mode, status, expected_status);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
         expect(RESPONSE_OLD_FIRMWARE_ECHO, BLADERF_ERR_UNSUPPORTED) ||
         expect(RESPONSE_PARTIAL_FAILURE, BLADERF_ERR_FPGA_OP) ||
-        out_count != 3 || in_count != 3) {
+        expect_update(RESPONSE_UPDATE_SUCCESS, 0) ||
+        expect_update(RESPONSE_UPDATE_OLD_FIRMWARE_ECHO,
+                      BLADERF_ERR_UNSUPPORTED) ||
+        expect_update(RESPONSE_UPDATE_FAILURE, BLADERF_ERR_FPGA_OP) ||
+        out_count != 6 || in_count != 6) {
         return 1;
     }
 
-    puts("libbladeRF RFPLL batch success/old-firmware/partial: PASS");
+    puts("libbladeRF RFPLL batch and atomic RMW mappings: PASS");
     return 0;
 }

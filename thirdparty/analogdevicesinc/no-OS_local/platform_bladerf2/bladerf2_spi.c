@@ -43,6 +43,7 @@
 
 #include <errno.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "board/board.h"
@@ -75,10 +76,17 @@ enum register_batch_state {
     REGISTER_BATCH_UNSUPPORTED,
 };
 
+enum register_bits_update_state {
+    REGISTER_BITS_UPDATE_UNKNOWN,
+    REGISTER_BITS_UPDATE_SUPPORTED,
+    REGISTER_BITS_UPDATE_UNSUPPORTED,
+};
+
 struct bladerf2_spi_context {
     struct bladerf *dev;
     enum gain_table_batch_state gain_table_batch;
     enum register_batch_state register_batch;
+    enum register_bits_update_state register_bits_update;
 };
 
 static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
@@ -119,6 +127,13 @@ static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
         if (disable_batch != NULL && disable_batch[0] != '\0' &&
             strcmp(disable_batch, "0") != 0) {
             ctx->register_batch = REGISTER_BATCH_UNSUPPORTED;
+        }
+    }
+    {
+        const char *disable_update = getenv("BLADERF_DISABLE_SPI_RMW");
+        if (disable_update != NULL && disable_update[0] != '\0' &&
+            strcmp(disable_update, "0") != 0) {
+            ctx->register_bits_update = REGISTER_BITS_UPDATE_UNSUPPORTED;
         }
     }
     d->extra = ctx;
@@ -329,10 +344,51 @@ static int32_t bladerf2_spi_write_register_batch(
     return status;
 }
 
+static int32_t bladerf2_spi_update_register_bits(struct no_os_spi_desc *desc,
+                                                 uint16_t reg, uint8_t mask,
+                                                 uint8_t value)
+{
+    struct bladerf2_spi_context *ctx;
+    struct bladerf *dev;
+    int status;
+
+    if (desc == NULL || desc->extra == NULL || desc->bus == NULL ||
+        reg > 0x03ff || mask == 0 ||
+        (value & (uint8_t)~mask) != 0) {
+        return -EINVAL;
+    }
+
+    ctx = desc->extra;
+    if (ctx->register_bits_update == REGISTER_BITS_UPDATE_UNSUPPORTED) {
+        return -ENOTSUP;
+    }
+
+    dev = ctx->dev;
+    no_os_mutex_lock(desc->bus->mutex);
+    bladerf2_rx_transition_spi_observe(dev, true, 0);
+    status = nios_ad9361_spi_update_bits(dev, reg, mask, value);
+    bladerf2_rx_transition_spi_observe(dev, false, status);
+    no_os_mutex_unlock(desc->bus->mutex);
+
+    if (status == BLADERF_ERR_UNSUPPORTED) {
+        bladerf2_rx_transition_spi_observe_rollback(dev, 1);
+        ctx->register_bits_update = REGISTER_BITS_UPDATE_UNSUPPORTED;
+        log_debug("Atomic AD9361 SPI bit update unavailable; using RMW fallback\n");
+        return -ENOTSUP;
+    }
+    if (status != 0) {
+        return -EIO;
+    }
+
+    ctx->register_bits_update = REGISTER_BITS_UPDATE_SUPPORTED;
+    return 0;
+}
+
 const struct no_os_spi_platform_ops bladerf2_spi_ops = {
     .init = bladerf2_spi_init,
     .write_and_read = bladerf2_spi_write_and_read,
     .write_gain_table_row = bladerf2_spi_write_gain_table_row,
     .write_register_batch = bladerf2_spi_write_register_batch,
+    .update_register_bits = bladerf2_spi_update_register_bits,
     .remove = bladerf2_spi_remove,
 };

@@ -194,6 +194,8 @@ uint64_t adi_spi_read(uint16_t addr);
  * @param   data    Data to write
  */
 bool adi_spi_write(uint16_t addr, uint64_t data);
+bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
+                         uint8_t *result);
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed);
 
