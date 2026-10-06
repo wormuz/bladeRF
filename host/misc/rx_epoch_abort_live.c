@@ -405,6 +405,10 @@ int main(void)
         goto out;
     }
 
+    /* Keep the recovery reproduction actionable: expose backend events from
+     * the moment the failed epoch is followed by a new transition. */
+    bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
+
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
     /* Fail only the NIOS cleanup command after FPGA ARM. The event trace must
      * distinguish failed cleanup, IQ must remain blocked, and the next
