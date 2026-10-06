@@ -6,7 +6,9 @@
 -- admission for the duration of a retune transition, then opens on the first
 -- ADC sample after epoch_complete reaches this sample domain. While fenced,
 -- zero-IQ keepalive samples preserve USB stream liveness; libbladeRF rejects
--- them because no RX epoch is certified.
+-- them because no RX epoch is certified. The epoch opens only when every
+-- enabled RX lane presents its first valid sample, so RX_X2 cannot certify a
+-- paired epoch from RX1 or RX2 alone.
 -- The epoch boundary is an event, not a sample-count discard or wall-clock
 -- delay, and it never resets or re-derives the global RX timestamp
 -- (epoch_id is a SEPARATE monotonic counter so the host can tell apart
@@ -95,7 +97,8 @@ architecture arch of rx_epoch_gate is
 begin
 
     gate : process(clock, reset)
-        variable any_valid : std_logic;
+        variable any_enabled : std_logic;
+        variable all_enabled_valid : std_logic;
     begin
         if( reset = '1' ) then
             state               <= STATE_ACTIVE;
@@ -110,13 +113,19 @@ begin
         elsif( rising_edge(clock) ) then
             epoch_start_event <= '0'; -- single-cycle pulse by default
 
-            -- Any enabled stream carrying data_v marks a real ADC sample.
-            any_valid := '0';
+            -- A common epoch boundary must be a real sample on every enabled
+            -- ADC lane. RX_X1 enables one lane; RX_X2 requires both lanes.
+            any_enabled := '0';
+            all_enabled_valid := '1';
             for i in in_sample_controls'range loop
-                if( in_sample_controls(i).enable = '1' and in_samples(i).data_v = '1' ) then
-                    any_valid := '1';
+                if( in_sample_controls(i).enable = '1' ) then
+                    any_enabled := '1';
+                    if( in_samples(i).data_v /= '1' ) then
+                        all_enabled_valid := '0';
+                    end if;
                 end if;
             end loop;
+            all_enabled_valid := all_enabled_valid and any_enabled;
 
             case state is
                 when STATE_ACTIVE =>
@@ -178,7 +187,7 @@ begin
 
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
-                    elsif( any_valid = '1' ) then
+                    elsif( all_enabled_valid = '1' ) then
                         out_sample_controls  <= in_sample_controls;
                         out_samples          <= in_samples;
                         epoch_start_event    <= '1';

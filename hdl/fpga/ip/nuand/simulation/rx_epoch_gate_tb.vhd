@@ -140,6 +140,22 @@ begin
             report "epoch forwarded IQ during empty RX cycles" severity failure;
         assert state /= "0000" report "ACTIVE published before first valid sample" severity failure;
 
+        -- RX_X2 must not certify the shared epoch from RX1's first sample
+        -- while RX2 is still invalid. Both enabled lanes must be valid on
+        -- the admitted boundary sample.
+        wait until falling_edge(clock);
+        timestamp <= to_unsigned(202, 64);
+        samples_in(0).data_v <= '1';
+        samples_in(1).data_v <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0010" and start_event = '0' and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16) and
+               first_valid_timestamp = to_unsigned(0, 64)
+            report "RX_X2 epoch opened before both enabled channels were valid"
+            severity failure;
+
         wait until falling_edge(clock);
         timestamp <= to_unsigned(203, 64);
         samples_in(0).data_v <= '1';
@@ -194,6 +210,28 @@ begin
                out_samples(0).data_i = to_signed(0, 16) and
                out_samples(0).data_q = to_signed(0, 16) and start_event = '0'
             report "ABORT after COMPLETE exposed IQ or stopped transport" severity failure;
+
+        -- RX_X1 operation must not wait for the disabled lane. The same
+        -- enabled-lane rule supports either physical input selected alone.
+        wait until falling_edge(clock);
+        abort <= '0';
+        controls_in(1).enable <= '0';
+        samples_in(0).data_v <= '1';
+        epoch_id_in <= x"2C";
+        arm <= '1';
+        wait until falling_edge(clock);
+        arm <= '0';
+        wait until falling_edge(clock);
+        complete <= '1';
+        wait until falling_edge(clock);
+        complete <= '0';
+        timestamp <= to_unsigned(300, 64);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert start_event = '1' and
+               first_valid_timestamp = to_unsigned(300, 64) and
+               epoch_id = x"2C"
+            report "RX_X1 epoch waited for a disabled RX lane" severity failure;
 
         report "rx_epoch_gate_tb: PASS" severity note;
         stop;
