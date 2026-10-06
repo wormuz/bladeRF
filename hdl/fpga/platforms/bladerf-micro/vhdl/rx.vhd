@@ -162,8 +162,9 @@ architecture arch of rx is
     signal mux_streams              : sample_streams_t(adc_streams'range) := (others => ZERO_SAMPLE);
 
     -- ADR-0207 §6.2: rx_epoch_gate sits between the mux output and
-    -- fifo_writer -- stale pre-retune samples never reach the FIFO, not
-    -- even to be discarded on the host side.
+    -- fifo_writer -- stale pre-retune IQ never reaches the FIFO. Fenced
+    -- states emit zero-IQ keepalives to preserve the USB stream; libbladeRF
+    -- withholds those frames until a new epoch is certified.
     signal gated_controls           : sample_controls_t(adc_streams'range) := (others => SAMPLE_CONTROL_DISABLE);
     signal gated_streams            : sample_streams_t(adc_streams'range)  := (others => ZERO_SAMPLE);
     signal rx_epoch_id_local        : unsigned(7 downto 0) := (others => '0');
@@ -269,8 +270,9 @@ begin
 
 
     -- ADR-0207 §6.2: gate between the mux and the sample bridge -- stale
-    -- pre-retune samples are suppressed here, before fifo_writer/rx_fifo,
-    -- not discarded by the host after the fact.
+    -- pre-retune IQ is suppressed before fifo_writer/rx_fifo. During the
+    -- fence, zero-IQ keepalives retain transport liveness; host epoch checks
+    -- keep these frames from application consumers.
     U_rx_epoch_gate : entity work.rx_epoch_gate
         generic map (
             NUM_STREAMS             => NUM_STREAMS

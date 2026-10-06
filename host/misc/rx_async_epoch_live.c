@@ -31,6 +31,8 @@ struct live_stream {
     void **buffers;
     atomic_uint valid_callbacks;
     atomic_uint event_only_callbacks;
+    atomic_bool invalidation_call_active;
+    atomic_uint valid_callbacks_during_invalidation;
     atomic_bool stop;
     atomic_int event_query_status;
     uint64_t event_cursor;
@@ -106,6 +108,10 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     }
     if (samples == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
+    }
+
+    if (atomic_load(&live->invalidation_call_active)) {
+        atomic_fetch_add(&live->valid_callbacks_during_invalidation, 1);
     }
 
     /* The xA4 USB3 META stream uses 8 KiB messages. RX_X2 interleaves two
@@ -333,7 +339,26 @@ int main(void)
     }
     fprintf(stderr, "async stream started\n");
     if (!wait_for_count(&live.valid_callbacks, 2, 3000)) {
-        fprintf(stderr, "no certified async RX buffers reached callback\n");
+        struct bladerf_rf_event pending[BLADERF_RF_EVENT_HISTORY_SIZE];
+        uint32_t pending_count = 0;
+        uint64_t next_sequence = 0;
+        bool history_complete = false;
+        (void)bladerf_rf_events_get_since(
+            live.dev, 0, pending, BLADERF_RF_EVENT_HISTORY_SIZE,
+            &pending_count, &next_sequence, &history_complete);
+        fprintf(stderr, "no certified async RX buffers reached callback "
+                "(event_only=%u withheld=%u overrun=%u events=%u complete=%u)\n",
+                atomic_load(&live.event_only_callbacks),
+                atomic_load(&live.data_withheld_events),
+                atomic_load(&live.stream_overrun_events), pending_count,
+                history_complete);
+        for (uint32_t i = 0; i < pending_count; ++i) {
+            fprintf(stderr, "  event type=%u state=%u epoch=%u flags=0x%x "
+                    "error=%d ts=%llu\n", pending[i].event_type,
+                    pending[i].fpga_state, pending[i].epoch_id,
+                    pending[i].flags, pending[i].error_code,
+                    (unsigned long long)pending[i].fpga_timestamp);
+        }
         status = BLADERF_ERR_TIMEOUT;
         stop_stream(&live, stream_thread);
         goto cleanup;
@@ -343,7 +368,31 @@ int main(void)
 
     /* Same-value configuration still invalidates a prior RX certificate. */
     fprintf(stderr, "issuing invalidating gain setter\n");
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    /* Make the host-revoke/FPGA-ABORT window deterministic. Async callbacks
+     * must switch to event-only before the delayed NIOS control command. */
+    if (setenv("BLADERF_TEST_DELAY_RX_EPOCH_ABORT_MS", "250", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    atomic_store(&live.invalidation_call_active, true);
+#endif
     status = bladerf_set_gain(live.dev, live.transition_channel, 30);
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    atomic_store(&live.invalidation_call_active, false);
+    unsetenv("BLADERF_TEST_DELAY_RX_EPOCH_ABORT_MS");
+    if (atomic_load(&live.valid_callbacks_during_invalidation) != 0) {
+        fprintf(stderr, "async IQ escaped during invalidation/ABORT window: "
+                "%u callbacks\n",
+                atomic_load(&live.valid_callbacks_during_invalidation));
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    fprintf(stderr, "host revoke race: PASS valid callbacks during "
+            "250ms ABORT delay=0\n");
+#endif
     fprintf(stderr, "gain setter returned %d\n", status);
     if (status != 0 ||
         !wait_for_count(&live.event_only_callbacks, 2, 3000)) {

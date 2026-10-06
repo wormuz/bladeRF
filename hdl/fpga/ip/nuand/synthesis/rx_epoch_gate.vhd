@@ -2,9 +2,11 @@
 --
 -- Placed between the ADC sample stream and rx_fifo (ADR §6.2 preferred
 -- topology: AD9361 RX samples -> timestamp counter attachment ->
--- rx_epoch_gate -> rx_fifo -> packetizer -> FX3/USB). Suppresses USB-
--- packet admission for the duration of a retune transition, then opens on
--- the first ADC sample after epoch_complete reaches this sample domain.
+-- rx_epoch_gate -> rx_fifo -> packetizer -> FX3/USB). Suppresses IQ
+-- admission for the duration of a retune transition, then opens on the first
+-- ADC sample after epoch_complete reaches this sample domain. While fenced,
+-- zero-IQ keepalive samples preserve USB stream liveness; libbladeRF rejects
+-- them because no RX epoch is certified.
 -- The epoch boundary is an event, not a sample-count discard or wall-clock
 -- delay, and it never resets or re-derives the global RX timestamp
 -- (epoch_id is a SEPARATE monotonic counter so the host can tell apart
@@ -134,11 +136,17 @@ begin
 
                 when STATE_PENDING =>
                     -- Keep servicing the stream (ADR §6.3 step 1/8: never
-                    -- stop consuming USB buffers during retune), but
-                    -- suppress admission -- these are pre-retune samples
-                    -- still arriving from the old LO.
-                    out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-                    out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                    -- stop consuming USB buffers during retune), but replace
+                    -- old-LO IQ with zero-IQ keepalives so async USB does not
+                    -- time out while the host waits for transition events.
+                    out_sample_controls <= in_sample_controls;
+                    for i in in_samples'range loop
+                        out_samples(i) <= (
+                            data_i => (others => '0'),
+                            data_q => (others => '0'),
+                            data_v => in_samples(i).data_v
+                        );
+                    end loop;
 
                     if( epoch_abort = '1' ) then
                         -- The RFIC may already have changed even when the
@@ -159,8 +167,14 @@ begin
                     -- the same edge, then publish ACTIVE_NEW for one cycle
                     -- so the host cannot observe success before the
                     -- timestamp latch is valid.
-                    out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-                    out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                    out_sample_controls <= in_sample_controls;
+                    for i in in_samples'range loop
+                        out_samples(i) <= (
+                            data_i => (others => '0'),
+                            data_q => (others => '0'),
+                            data_v => in_samples(i).data_v
+                        );
+                    end loop;
 
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
@@ -187,11 +201,19 @@ begin
                     end if;
 
                 when others =>
-                    -- STATE_ERROR is fail-closed. A later explicit ARM starts
-                    -- a new recovery transaction; no samples are admitted in
-                    -- the gap after a failed transition.
-                    out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-                    out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                    -- STATE_ERROR is fail-closed for IQ: only zero-IQ
+                    -- keepalives continue to the USB transport so an
+                    -- invalidated continuous stream remains restartable.
+                    -- The host epoch certificate is revoked until a later
+                    -- explicit ARM/COMPLETE transaction admits real samples.
+                    out_sample_controls <= in_sample_controls;
+                    for i in in_samples'range loop
+                        out_samples(i) <= (
+                            data_i => (others => '0'),
+                            data_q => (others => '0'),
+                            data_v => in_samples(i).data_v
+                        );
+                    end loop;
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
                     elsif( epoch_arm = '1' ) then

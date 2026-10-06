@@ -362,16 +362,21 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
         return status;
     }
 
-    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    /* Revoke async admission before any USB control transaction. The sync
+     * parser has its own fence, but async RX does not necessarily have an
+     * initialized sync stream; using sync_rx_epoch_filter_enabled() here
+     * skipped the FPGA ABORT for async-only META consumers. This lock is the
+     * linearization point shared with async buffer admission, so a buffer
+     * parsed before this point is rejected at its commit check. The RX LO and
+     * epoch are shared by RX1/RX2, so revoke the common certificate. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    data_epoch_enabled = board_data->rf_transition_epoch_contract_enabled;
+    board_data->rf_transition_epoch_certified = false;
+    board_data->rx_async_have_expected_timestamp = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_data_withheld_reset(dev);
-    data_epoch_enabled = sync_rx_epoch_filter_enabled(
-        &board_data->sync[BLADERF_RX]);
-    if (status == 0 && data_epoch_enabled) {
-        /* The FPGA gate must stop admitting the old epoch before the legacy
-         * setter mutates the RFIC. ABORT is fail-closed (gate ERROR). */
-        status = nios_rx_epoch_ctrl_cmd(
-            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
-    }
+
+    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
 
     event.host_monotonic_ns = _monotonic_ns();
     event.transaction_id = 0; /* invalidation is not a transition transaction */
@@ -385,9 +390,6 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->rf_transition_epoch_certified = false;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rf_event_append(board_data, &event);
         /* Keep the reservation through the actual legacy setter only when
          * the invalidation/fence succeeded. */
@@ -395,6 +397,36 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
             board_data->rf_transition_setter_active = false;
         }
     });
+
+    if (status == 0 && data_epoch_enabled) {
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+        /* Hold the hardware fence open after host revocation so a live async
+         * stream can verify that no stale IQ crosses this race window. */
+        const char *delay_setting =
+            getenv("BLADERF_TEST_DELAY_RX_EPOCH_ABORT_MS");
+        if (delay_setting != NULL && delay_setting[0] != '\0') {
+            char *end = NULL;
+            unsigned long delay_ms = strtoul(delay_setting, &end, 10);
+            if (end != delay_setting && *end == '\0' && delay_ms <= 5000) {
+                usleep((useconds_t)(delay_ms * 1000UL));
+            }
+        }
+#endif
+        /* Close the FPGA gate for both sync and async epoch consumers before
+         * the legacy setter mutates the RFIC. ABORT is fail-closed (ERROR). */
+        status = nios_rx_epoch_ctrl_cmd(
+            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+        if (status != 0) {
+            event.host_monotonic_ns = _monotonic_ns();
+            event.event_type = BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED;
+            event.error_code = status;
+            WITH_MUTEX(&dev->lock, {
+                board_data->rf_transition_setter_active = false;
+                bladerf2_rf_event_append(board_data, &event);
+            });
+            return status;
+        }
+    }
 
     return status;
 }
