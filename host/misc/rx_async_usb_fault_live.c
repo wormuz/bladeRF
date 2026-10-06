@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <libbladeRF.h>
 
+#include <assert.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -10,6 +11,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#include "host_config.h"
+#include "streaming/metadata.h"
+
+#define RX_META_MESSAGE_BYTES 8192u
+#define RX_X2_IQ_COMPLEX_PER_TIMESTAMP 2u
 
 struct fault_test {
     struct bladerf *dev;
@@ -24,9 +31,14 @@ struct fault_test {
     atomic_bool api_submit_requested;
     atomic_bool api_submit_mode;
     atomic_bool recoverable_short_mode;
+    atomic_uint rx1_samples;
+    atomic_uint rx2_samples;
+    atomic_uint invalid_pair_buffers;
     void *api_buffer;
     uint32_t expected_reason;
     int expected_stream_status;
+    uint8_t expected_epoch_id;
+    uint64_t first_valid_timestamp;
     int api_submit_status;
     uint64_t event_cursor;
     int stream_status;
@@ -75,6 +87,29 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         test->api_buffer = samples;
         atomic_store(&test->api_submit_requested, true);
         return BLADERF_STREAM_NO_DATA;
+    }
+    const size_t received_bytes = num_samples * sizeof(uint32_t);
+    if (received_bytes == 0 || received_bytes % RX_META_MESSAGE_BYTES != 0) {
+        atomic_fetch_add(&test->invalid_pair_buffers, 1);
+        return BLADERF_STREAM_SHUTDOWN;
+    }
+    for (size_t offset = 0; offset < received_bytes;
+         offset += RX_META_MESSAGE_BYTES) {
+        const uint8_t *message = (const uint8_t *)samples + offset;
+        uint8_t epoch_id = 0;
+        if (!metadata_get_rx_epoch_id(message, &epoch_id) ||
+            epoch_id != test->expected_epoch_id ||
+            metadata_get_timestamp(message) < test->first_valid_timestamp) {
+            atomic_fetch_add(&test->invalid_pair_buffers, 1);
+            return BLADERF_STREAM_SHUTDOWN;
+        }
+        const size_t payload_bytes =
+            RX_META_MESSAGE_BYTES - METADATA_HEADER_SIZE;
+        const unsigned channel_samples = (unsigned)(
+            payload_bytes / sizeof(uint32_t) /
+            RX_X2_IQ_COMPLEX_PER_TIMESTAMP);
+        atomic_fetch_add(&test->rx1_samples, channel_samples);
+        atomic_fetch_add(&test->rx2_samples, channel_samples);
     }
     if (atomic_fetch_add(&test->data_callbacks, 1) >=
         (atomic_load(&test->recoverable_short_mode) ? 1 : 3)) {
@@ -212,6 +247,10 @@ int main(void)
         if (status == 0) {
             status = bladerf_rx_transition_wait(
                 test.dev, transaction_id, &transition_event, 2000);
+            if (status == 0) {
+                test.expected_epoch_id = transition_event.epoch_id;
+                test.first_valid_timestamp = transition_event.fpga_timestamp;
+            }
         }
     }
     if (status != 0) {
@@ -260,7 +299,9 @@ int main(void)
                                     strcmp(fault_status, "SUBMIT_TIMEOUT") == 0;
     if (test.stream_status != test.expected_stream_status ||
         (atomic_load(&test.recoverable_short_mode) &&
-         atomic_load(&test.data_callbacks) == 0) ||
+         (atomic_load(&test.data_callbacks) == 0 ||
+          atomic_load(&test.rx1_samples) == 0 ||
+          atomic_load(&test.rx1_samples) != atomic_load(&test.rx2_samples))) ||
         (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
          test.api_submit_status != BLADERF_ERR_IO) ||
         atomic_load(&test.withheld_events) != 1 ||
@@ -268,32 +309,45 @@ int main(void)
                             : atomic_load(&test.overrun_events) != 1) ||
         (pre_callback_fault ? atomic_load(&test.event_callbacks) < 1
                             : atomic_load(&test.event_callbacks) != 1) ||
-        atomic_load(&test.data_after_fault)) {
+        atomic_load(&test.data_after_fault) ||
+        atomic_load(&test.invalid_pair_buffers) != 0) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
-                "overrun=%u data_after_fault=%u api_submit=%s expected_reason=0x%x\n",
+                "overrun=%u rx1_slots=%u rx2_slots=%u invalid_pair=%u "
+                "data_after_fault=%u api_submit=%s expected_reason=0x%x\n",
                 bladerf_strerror(test.stream_status),
                 atomic_load(&test.data_callbacks),
                 atomic_load(&test.event_callbacks),
                 atomic_load(&test.withheld_events),
                 atomic_load(&test.overrun_events),
+                atomic_load(&test.rx1_samples),
+                atomic_load(&test.rx2_samples),
+                atomic_load(&test.invalid_pair_buffers),
                 atomic_load(&test.data_after_fault),
                 bladerf_strerror(test.api_submit_status), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
     } else if (atomic_load(&test.recoverable_short_mode)) {
         printf("PASS libusb RX_X2 %s callback: resumed_valid_IQ=%u "
-               "event_only=%u withheld=%u overrun=%u stream=%s\n",
+               "rx1_slots=%u rx2_slots=%u invalid_pair=%u event_only=%u "
+               "withheld=%u overrun=%u stream=%s\n",
                fault_status,
                atomic_load(&test.data_callbacks),
+               atomic_load(&test.rx1_samples),
+               atomic_load(&test.rx2_samples),
+               atomic_load(&test.invalid_pair_buffers),
                atomic_load(&test.event_callbacks),
                atomic_load(&test.withheld_events),
                atomic_load(&test.overrun_events),
                bladerf_strerror(test.stream_status));
         status = 0;
     } else {
-        printf("PASS libusb RX_X2 %s callback: data=%u event_only=%u "
-               "withheld=%u overrun=%u post_fault_IQ=0 stream=%s\n",
+        printf("PASS libusb RX_X2 %s callback: data=%u rx1_slots=%u "
+               "rx2_slots=%u invalid_pair=%u event_only=%u withheld=%u "
+               "overrun=%u post_fault_IQ=0 stream=%s\n",
                fault_status,
                atomic_load(&test.data_callbacks),
+               atomic_load(&test.rx1_samples),
+               atomic_load(&test.rx2_samples),
+               atomic_load(&test.invalid_pair_buffers),
                atomic_load(&test.event_callbacks),
                atomic_load(&test.withheld_events),
                atomic_load(&test.overrun_events),
