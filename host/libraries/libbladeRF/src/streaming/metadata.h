@@ -20,6 +20,8 @@
 #define STREAMING_METADATA_H_
 
 #include <stddef.h>
+#include <stdbool.h>
+#include <libbladeRF.h>
 
 /*
  *  Metadata layout
@@ -107,6 +109,12 @@
  * packet header and must not interpret it as an epoch tag. */
 #define METADATA_RX_EPOCH_TAG_VALID (1u << 31)
 #define METADATA_RX_EPOCH_ID_MASK   0xffu
+
+static inline bool metadata_rx_format_has_epoch_tag(bladerf_format format)
+{
+    return format == BLADERF_FORMAT_SC16_Q11_META ||
+           format == BLADERF_FORMAT_SC8_Q7_META;
+}
 
 static inline bool metadata_get_rx_epoch_id(const uint8_t *header,
                                             uint8_t *epoch_id)

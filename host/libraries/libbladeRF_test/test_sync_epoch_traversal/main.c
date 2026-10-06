@@ -188,7 +188,12 @@ int main(void)
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
 
+
     uint8_t epoch_messages[BYTES_PER_BUFFER];
+    assert(metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_SC16_Q11_META));
+    assert(metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_SC8_Q7_META));
+    assert(!metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_PACKET_META));
+    assert(!metadata_rx_format_has_epoch_tag(BLADERF_FORMAT_SC16_Q11));
     write_msg(epoch_messages, 5000, 8, 1111);
     write_msg(epoch_messages + MSG_BYTES, 5000 + MSG_SAMPLES, 8, 1222);
     assert(metadata_rx_buffer_matches_epoch(epoch_messages,
@@ -405,11 +410,17 @@ int main(void)
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 2);
     assert(rx_overrun_events == 3);
+    allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples) / 2) == async_samples);
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_callbacks == 1);
+    assert(async_rx_event_wakeups == 3);
+    allow_async_rx_buffer = true;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 2);
-    assert(async_rx_event_wakeups == 2);
+    assert(async_rx_event_wakeups == 3);
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);

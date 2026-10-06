@@ -282,6 +282,8 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
     dev->board_data = board_data;
     (void)MUTEX_INIT(&board_data->rx_async_epoch_lock);
     board_data->rx_async_epoch_lock_initialized = true;
+    (void)MUTEX_INIT(&board_data->rf_transition_event_lock);
+    board_data->rf_transition_event_lock_initialized = true;
     board_data->phy = NULL;
     board_data->rfic_init_params = (void *)&bladerf2_rfic_init_params;
 
@@ -622,6 +624,10 @@ static void bladerf2_close(struct bladerf *dev)
             if (board_data->rx_async_epoch_lock_initialized) {
                 MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
                 board_data->rx_async_epoch_lock_initialized = false;
+            }
+            if (board_data->rf_transition_event_lock_initialized) {
+                MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+                board_data->rf_transition_event_lock_initialized = false;
             }
 
             free(board_data);
@@ -1621,9 +1627,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     uint64_t first_valid_timestamp;
     size_t message_size;
     const uint8_t *bytes = buffer;
+    bool matches;
 
-    if ((layout & BLADERF_DIRECTION_MASK) != BLADERF_RX ||
-        format == BLADERF_FORMAT_PACKET_META) {
+    if ((layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
         return true;
     }
     if (dev == NULL || dev->board_data == NULL || buffer == NULL) {
@@ -1642,14 +1648,26 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     if (!contract_enabled) {
         return true;
     }
-    if (!epoch_valid ||
-        (format != BLADERF_FORMAT_SC16_Q11_META &&
-         format != BLADERF_FORMAT_SC8_Q7_META)) {
+    /* PACKET_META reuses the epoch-tag word for its packet header, and raw
+     * sample formats carry no epoch identity. Once callers require an epoch,
+     * do not let either format bypass the gate. The event-only callback tells
+     * asynchronous consumers that this transfer was withheld. */
+    if (!metadata_rx_format_has_epoch_tag(format)) {
+        bladerf2_rx_async_format_unsupported(dev, format);
+        return false;
+    }
+    if (!epoch_valid) {
         return false;
     }
 
-    return metadata_rx_buffer_matches_epoch(
+    matches = metadata_rx_buffer_matches_epoch(
         bytes, length, message_size, epoch_id, first_valid_timestamp);
+    if (matches) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_format_unsupported_reported = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+    return matches;
 }
 
 

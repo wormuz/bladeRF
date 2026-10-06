@@ -17,6 +17,9 @@ struct live_stream {
     atomic_uint valid_callbacks;
     atomic_uint event_only_callbacks;
     atomic_bool stop;
+    atomic_int event_query_status;
+    uint64_t event_cursor;
+    atomic_uint events_drained_from_callback;
     int stream_status;
 };
 
@@ -25,7 +28,6 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                          size_t num_samples, void *user_data)
 {
     struct live_stream *live = user_data;
-    (void)dev;
     (void)stream;
     (void)metadata;
 
@@ -35,6 +37,19 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     if (num_samples == 0) {
         if (samples != NULL) {
             return BLADERF_STREAM_SHUTDOWN;
+        }
+        struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+        uint32_t event_count = 0;
+        uint64_t next_sequence = live->event_cursor;
+        bool history_complete = false;
+        int query_status = bladerf_rf_events_get_since(
+            dev, live->event_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+            &event_count, &next_sequence, &history_complete);
+        if (query_status != 0) {
+            atomic_store(&live->event_query_status, query_status);
+        } else {
+            live->event_cursor = next_sequence;
+            atomic_fetch_add(&live->events_drained_from_callback, event_count);
         }
         atomic_fetch_add(&live->event_only_callbacks, 1);
         /* The library recycles the withheld transfer after this wakeup. */
@@ -214,6 +229,12 @@ int main(void)
     printf("async RX epoch gate: PASS valid=%u event_only=%u epoch=%u\n",
            atomic_load(&live.valid_callbacks),
            atomic_load(&live.event_only_callbacks), event.epoch_id);
+    if (atomic_load(&live.event_query_status) != 0 ||
+        atomic_load(&live.events_drained_from_callback) == 0) {
+        fprintf(stderr, "callback-side RF event history query failed\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
     status = 0;
 
 cleanup:

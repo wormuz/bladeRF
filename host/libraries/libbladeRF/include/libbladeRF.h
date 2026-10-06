@@ -3033,14 +3033,17 @@ struct bladerf_stream;
  *       when every message carries the certified epoch ID and is at or after
  *       the FPGA first-valid timestamp. Short transfers and rejected epoch
  *       buffers produce an event-only callback with `samples == NULL` and
- *       `num_samples == 0`; no IQ is exposed. Short-transfer notifications
- *       use BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow reports the same
- *       event before stream shutdown. For event-only wakeups, callbacks may
- *       return an ordinary replacement buffer, SHUTDOWN, or NO_DATA as usual.
- *       REUSE_BUFFER explicitly recycles the withheld transfer and is
- *       recommended when the callback normally rotates among application-owned
- *       buffers.
- *       PACKET_META remains caller-framed.
+ *       `num_samples == 0`; no IQ is exposed. RX PACKET_META and raw sample
+ *       formats cannot prove epoch identity and are withheld after an epoch
+ *       contract is enabled. C callbacks receive the zero-sample event-only
+ *       notification; the Python wrapper reports `rx_data_withheld` to RF-event
+ *       subscribers once per continuous withholding interval. Short-transfer
+ *       notifications use BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow
+ *       reports the same event before stream shutdown. For event-only wakeups,
+ *       callbacks may return an ordinary replacement buffer, SHUTDOWN, or
+ *       NO_DATA as usual. REUSE_BUFFER explicitly recycles the withheld
+ *       transfer and is recommended when the callback normally rotates among
+ *       application-owned buffers.
  */
 typedef void *(*bladerf_stream_cb)(struct bladerf *dev,
                                    struct bladerf_stream *stream,
@@ -4710,7 +4713,10 @@ typedef enum {
     /** RX discontinuity: sync metadata/queue overrun, or an asynchronous
      * USB RX short transfer/overflow. IQ from a discontinuous read must not
      * be treated as a contiguous capture. */
-    BLADERF_RF_EVT_RX_STREAM_OVERRUN
+    BLADERF_RF_EVT_RX_STREAM_OVERRUN,
+    /** RX async format cannot carry the epoch identity required by the
+     * active data-validity contract. `flags` contains the bladerf_format. */
+    BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)

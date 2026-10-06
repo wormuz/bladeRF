@@ -197,8 +197,11 @@ struct bladerf2_board_data {
     bool rfic_reset_on_close;
 
     /* ADR-0207: bounded chronological history of host-observed RX
-     * transition events. All access is guarded by dev->lock. */
+     * transition events. Event readers must not take dev->lock because the
+     * async USB callback dispatches events while setters may hold that lock. */
 #define BLADERF2_RF_EVENT_HISTORY_SIZE BLADERF_RF_EVENT_HISTORY_SIZE
+    MUTEX rf_transition_event_lock;
+    bool rf_transition_event_lock_initialized;
     struct bladerf_rf_event rf_transition_events[
         BLADERF2_RF_EVENT_HISTORY_SIZE];
     uint64_t rf_transition_event_sequences[
@@ -233,6 +236,7 @@ struct bladerf2_board_data {
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
     bool rf_transition_epoch_certified;
+    bool rx_async_format_unsupported_reported;
     uint8_t rf_transition_certified_epoch_id;
     uint64_t rf_transition_first_valid_timestamp;
     bool rf_transition_pending;
@@ -261,6 +265,8 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev);
+void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
+                                          bladerf_format format);
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
 void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
