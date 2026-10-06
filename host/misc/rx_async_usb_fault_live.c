@@ -18,9 +18,17 @@
 #define RX_META_MESSAGE_BYTES 8192u
 #define RX_X2_IQ_COMPLEX_PER_TIMESTAMP 2u
 
+enum rx_fault_layout {
+    RX_FAULT_LAYOUT_X2,
+    RX_FAULT_LAYOUT_RX1,
+    RX_FAULT_LAYOUT_RX2,
+};
+
 struct fault_test {
     struct bladerf *dev;
     struct bladerf_stream *stream;
+    enum rx_fault_layout layout;
+    bladerf_channel transition_channel;
     void **buffers;
     atomic_uint data_callbacks;
     atomic_uint event_callbacks;
@@ -33,7 +41,7 @@ struct fault_test {
     atomic_bool recoverable_short_mode;
     atomic_uint rx1_samples;
     atomic_uint rx2_samples;
-    atomic_uint invalid_pair_buffers;
+    atomic_uint invalid_meta_buffers;
     void *api_buffer;
     uint32_t expected_reason;
     int expected_stream_status;
@@ -90,7 +98,7 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     }
     const size_t received_bytes = num_samples * sizeof(uint32_t);
     if (received_bytes == 0 || received_bytes % RX_META_MESSAGE_BYTES != 0) {
-        atomic_fetch_add(&test->invalid_pair_buffers, 1);
+        atomic_fetch_add(&test->invalid_meta_buffers, 1);
         return BLADERF_STREAM_SHUTDOWN;
     }
     for (size_t offset = 0; offset < received_bytes;
@@ -100,16 +108,23 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         if (!metadata_get_rx_epoch_id(message, &epoch_id) ||
             epoch_id != test->expected_epoch_id ||
             metadata_get_timestamp(message) < test->first_valid_timestamp) {
-            atomic_fetch_add(&test->invalid_pair_buffers, 1);
+            atomic_fetch_add(&test->invalid_meta_buffers, 1);
             return BLADERF_STREAM_SHUTDOWN;
         }
         const size_t payload_bytes =
             RX_META_MESSAGE_BYTES - METADATA_HEADER_SIZE;
-        const unsigned channel_samples = (unsigned)(
-            payload_bytes / sizeof(uint32_t) /
-            RX_X2_IQ_COMPLEX_PER_TIMESTAMP);
-        atomic_fetch_add(&test->rx1_samples, channel_samples);
-        atomic_fetch_add(&test->rx2_samples, channel_samples);
+        const unsigned complex_samples = (unsigned)(
+            payload_bytes / sizeof(uint32_t));
+        if (test->layout == RX_FAULT_LAYOUT_X2) {
+            const unsigned channel_samples =
+                complex_samples / RX_X2_IQ_COMPLEX_PER_TIMESTAMP;
+            atomic_fetch_add(&test->rx1_samples, channel_samples);
+            atomic_fetch_add(&test->rx2_samples, channel_samples);
+        } else if (test->layout == RX_FAULT_LAYOUT_RX1) {
+            atomic_fetch_add(&test->rx1_samples, complex_samples);
+        } else {
+            atomic_fetch_add(&test->rx2_samples, complex_samples);
+        }
     }
     if (atomic_fetch_add(&test->data_callbacks, 1) >=
         (atomic_load(&test->recoverable_short_mode) ? 1 : 3)) {
@@ -121,7 +136,9 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
 static void *run_stream(void *arg)
 {
     struct fault_test *test = arg;
-    test->stream_status = bladerf_stream(test->stream, BLADERF_RX_X2);
+    const bladerf_channel_layout stream_layout =
+        test->layout == RX_FAULT_LAYOUT_X2 ? BLADERF_RX_X2 : BLADERF_RX_X1;
+    test->stream_status = bladerf_stream(test->stream, stream_layout);
     return NULL;
 }
 
@@ -148,6 +165,19 @@ int main(void)
     struct fault_test test = {0};
     pthread_t thread;
     const char *fault_status = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+    const char *layout = getenv("BLADERF_TEST_RX_LAYOUT");
+    test.layout = RX_FAULT_LAYOUT_X2;
+    test.transition_channel = BLADERF_CHANNEL_RX(1);
+    if (layout != NULL && strcmp(layout, "RX1") == 0) {
+        test.layout = RX_FAULT_LAYOUT_RX1;
+        test.transition_channel = BLADERF_CHANNEL_RX(0);
+    } else if (layout != NULL && strcmp(layout, "RX2") == 0) {
+        test.layout = RX_FAULT_LAYOUT_RX2;
+        test.transition_channel = BLADERF_CHANNEL_RX(1);
+    } else if (layout != NULL && strcmp(layout, "BOTH") != 0) {
+        fprintf(stderr, "BLADERF_TEST_RX_LAYOUT must be RX1, RX2, or BOTH\n");
+        return 2;
+    }
     if (fault_status == NULL) {
         fault_status = "OVERFLOW";
     }
@@ -225,10 +255,10 @@ int main(void)
                                      BLADERF_FORMAT_SC16_Q11_META,
                                      8192, 8, &test);
     }
-    if (status == 0) {
+    if (status == 0 && test.layout != RX_FAULT_LAYOUT_RX2) {
         status = bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), true);
     }
-    if (status == 0) {
+    if (status == 0 && test.layout != RX_FAULT_LAYOUT_RX1) {
         status = bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), true);
     }
     if (status == 0) {
@@ -243,7 +273,7 @@ int main(void)
         uint32_t transaction_id = 0;
         struct bladerf_rf_event transition_event;
         status = bladerf_rx_transition_begin(
-            test.dev, BLADERF_CHANNEL_RX(1), &request, &transaction_id);
+            test.dev, test.transition_channel, &request, &transaction_id);
         if (status == 0) {
             status = bladerf_rx_transition_wait(
                 test.dev, transaction_id, &transition_event, 2000);
@@ -300,8 +330,13 @@ int main(void)
     if (test.stream_status != test.expected_stream_status ||
         (atomic_load(&test.recoverable_short_mode) &&
          (atomic_load(&test.data_callbacks) == 0 ||
-          atomic_load(&test.rx1_samples) == 0 ||
-          atomic_load(&test.rx1_samples) != atomic_load(&test.rx2_samples))) ||
+          (test.layout == RX_FAULT_LAYOUT_RX2
+               ? atomic_load(&test.rx2_samples) == 0
+               : atomic_load(&test.rx1_samples) == 0) ||
+          (test.layout == RX_FAULT_LAYOUT_X2 &&
+           atomic_load(&test.rx1_samples) != atomic_load(&test.rx2_samples)) ||
+          (test.layout == RX_FAULT_LAYOUT_RX2 &&
+           atomic_load(&test.rx2_samples) == 0))) ||
         (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
          test.api_submit_status != BLADERF_ERR_IO) ||
         atomic_load(&test.withheld_events) != 1 ||
@@ -310,9 +345,9 @@ int main(void)
         (pre_callback_fault ? atomic_load(&test.event_callbacks) < 1
                             : atomic_load(&test.event_callbacks) != 1) ||
         atomic_load(&test.data_after_fault) ||
-        atomic_load(&test.invalid_pair_buffers) != 0) {
+        atomic_load(&test.invalid_meta_buffers) != 0) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
-                "overrun=%u rx1_slots=%u rx2_slots=%u invalid_pair=%u "
+                "overrun=%u rx1_slots=%u rx2_slots=%u invalid_meta=%u "
                 "data_after_fault=%u api_submit=%s expected_reason=0x%x\n",
                 bladerf_strerror(test.stream_status),
                 atomic_load(&test.data_callbacks),
@@ -321,33 +356,35 @@ int main(void)
                 atomic_load(&test.overrun_events),
                 atomic_load(&test.rx1_samples),
                 atomic_load(&test.rx2_samples),
-                atomic_load(&test.invalid_pair_buffers),
+                atomic_load(&test.invalid_meta_buffers),
                 atomic_load(&test.data_after_fault),
                 bladerf_strerror(test.api_submit_status), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
     } else if (atomic_load(&test.recoverable_short_mode)) {
-        printf("PASS libusb RX_X2 %s callback: resumed_valid_IQ=%u "
-               "rx1_slots=%u rx2_slots=%u invalid_pair=%u event_only=%u "
+        printf("PASS libusb %s %s callback: resumed_valid_IQ=%u "
+               "rx1_slots=%u rx2_slots=%u invalid_meta=%u event_only=%u "
                "withheld=%u overrun=%u stream=%s\n",
+               test.layout == RX_FAULT_LAYOUT_X2 ? "RX_X2" : "RX_X1",
                fault_status,
                atomic_load(&test.data_callbacks),
                atomic_load(&test.rx1_samples),
                atomic_load(&test.rx2_samples),
-               atomic_load(&test.invalid_pair_buffers),
+               atomic_load(&test.invalid_meta_buffers),
                atomic_load(&test.event_callbacks),
                atomic_load(&test.withheld_events),
                atomic_load(&test.overrun_events),
                bladerf_strerror(test.stream_status));
         status = 0;
     } else {
-        printf("PASS libusb RX_X2 %s callback: data=%u rx1_slots=%u "
-               "rx2_slots=%u invalid_pair=%u event_only=%u withheld=%u "
+        printf("PASS libusb %s %s callback: data=%u rx1_slots=%u "
+               "rx2_slots=%u invalid_meta=%u event_only=%u withheld=%u "
                "overrun=%u post_fault_IQ=0 stream=%s\n",
+               test.layout == RX_FAULT_LAYOUT_X2 ? "RX_X2" : "RX_X1",
                fault_status,
                atomic_load(&test.data_callbacks),
                atomic_load(&test.rx1_samples),
                atomic_load(&test.rx2_samples),
-               atomic_load(&test.invalid_pair_buffers),
+               atomic_load(&test.invalid_meta_buffers),
                atomic_load(&test.event_callbacks),
                atomic_load(&test.withheld_events),
                atomic_load(&test.overrun_events),
@@ -361,8 +398,12 @@ cleanup:
         unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
         unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
         unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
-        bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), false);
-        bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), false);
+        if (test.layout != RX_FAULT_LAYOUT_RX2) {
+            bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), false);
+        }
+        if (test.layout != RX_FAULT_LAYOUT_RX1) {
+            bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), false);
+        }
         if (test.stream != NULL) {
             bladerf_deinit_stream(test.stream);
         }
