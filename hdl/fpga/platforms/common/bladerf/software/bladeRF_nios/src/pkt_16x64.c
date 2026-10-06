@@ -37,6 +37,13 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data)
         case NIOS_PKT_16x64_TARGET_AD9361:
             adi_spi_write(addr, data);
             break;
+        case NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW:
+            success = adi_spi_gain_table_row(
+                addr, (uint8_t)(data & 0xff),
+                (uint8_t)((data >> 8) & 0xff),
+                (uint8_t)((data >> 16) & 0xff),
+                (uint8_t)((data >> 24) & 0xff), 2);
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BLADERF_NIOS_LIBAD936X

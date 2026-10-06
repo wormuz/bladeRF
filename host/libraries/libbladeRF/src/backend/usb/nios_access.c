@@ -735,6 +735,25 @@ int nios_ad9361_spi_write(struct bladerf *dev, uint16_t cmd, uint64_t data)
     return status;
 }
 
+int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
+                               uint8_t data1, uint8_t data2, uint8_t data3,
+                               uint8_t config, uint32_t delay_us)
+{
+    uint64_t data;
+
+    /* This packet command represents the AD9361 gain-table row sequence,
+     * including its required post-commit delay. Reject requests that would
+     * silently change that hardware timing contract. */
+    if (delay_us != 2) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    data = (uint64_t)data1 | ((uint64_t)data2 << 8) |
+           ((uint64_t)data3 << 16) | ((uint64_t)config << 24);
+    return nios_16x64_write(dev, NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW,
+                            row, data);
+}
+
 int nios_adi_axi_read(struct bladerf *dev, uint32_t addr, uint32_t *data)
 {
     int status;

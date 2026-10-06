@@ -196,6 +196,12 @@ uint64_t adi_spi_read(uint16_t addr);
  */
 void adi_spi_write(uint16_t addr, uint64_t data);
 
+/* Ordered AD9361 indirect gain-table row transaction. This keeps the five
+ * SPI writes and post-commit delay inside one NIOS protocol request. */
+bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
+                            uint8_t data3, uint8_t config,
+                            uint32_t delay_us);
+
 /**
  * Read from ADI AXI space
  *

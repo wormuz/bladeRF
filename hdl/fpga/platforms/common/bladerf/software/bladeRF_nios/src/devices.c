@@ -428,15 +428,12 @@ uint64_t adi_spi_read(uint16_t addr)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_spi_write(uint16_t addr, uint64_t data)
+static bool adi_spi_write_unlocked(uint16_t addr, uint64_t data)
 {
     alt_u8 data8[10];
     alt_u8 bytes;
     uint8_t i;
-
-    if (!spi_arbiter_lock()) {
-        return;
-    }
+    int status;
 
     // The alt_avalon_spi_command expects parameters to be arrays of bytes
 
@@ -453,8 +450,48 @@ void adi_spi_write(uint16_t addr, uint64_t data)
     bytes = (((addr >> 12) & 0x7) + 1) + 2;
 
     // Send down the command and the data
-    alt_avalon_spi_command(RFFE_SPI_BASE, 0, bytes, &data8[0], 0, 0, 0);
+    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, bytes, &data8[0],
+                                    0, 0, 0);
+    return status >= 0;
+}
+
+void adi_spi_write(uint16_t addr, uint64_t data)
+{
+    if (!spi_arbiter_lock()) {
+        return;
+    }
+
+    (void)adi_spi_write_unlocked(addr, data);
     spi_arbiter_unlock();
+}
+
+bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
+                            uint8_t data3, uint8_t config,
+                            uint32_t delay_us)
+{
+    bool success = false;
+
+    if (row >= 128 || delay_us != 2 || !spi_arbiter_lock()) {
+        return false;
+    }
+
+    /* AD9361 REG_GAIN_TABLE_ADDRESS/WRITE_DATA1/2/3/CONFIG are 0x130-0x133
+     * and 0x137. Keep the row programming indivisible with respect to other
+     * users of the shared RFIC SPI bus. */
+    if (!adi_spi_write_unlocked(0x130, (uint64_t)row << 56) ||
+        !adi_spi_write_unlocked(0x131, (uint64_t)data1 << 56) ||
+        !adi_spi_write_unlocked(0x132, (uint64_t)data2 << 56) ||
+        !adi_spi_write_unlocked(0x133, (uint64_t)data3 << 56) ||
+        !adi_spi_write_unlocked(0x137, (uint64_t)config << 56)) {
+        goto done;
+    }
+
+    usleep(delay_us);
+    success = true;
+
+done:
+    spi_arbiter_unlock();
+    return success;
 }
 #endif  // BOARD_BLADERF_MICRO
 

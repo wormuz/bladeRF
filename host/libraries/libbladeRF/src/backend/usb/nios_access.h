@@ -171,6 +171,13 @@ int nios_ad9361_spi_read(struct bladerf *dev, uint16_t cmd, uint64_t *data);
  */
 int nios_ad9361_spi_write(struct bladerf *dev, uint16_t cmd, uint64_t data);
 
+/* Execute the five ordered SPI writes that commit one AD9361 gain-table row
+ * in one host/NIOS transaction. Firmware preserves the required delay after
+ * the row commit and returns a completion status for the sequence. */
+int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
+                               uint8_t data1, uint8_t data2, uint8_t data3,
+                               uint8_t config, uint32_t delay_us);
+
 /**
  * Read the ADI AXI memory mapped region.
  *

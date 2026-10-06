@@ -17,6 +17,12 @@ static int fail_read_reg = -1;
 static unsigned fail_after_commits;
 static unsigned table_commits;
 static bool cleanup_clock_stop_seen;
+static const uint8_t (*expected_table)[3];
+static unsigned batch_row_calls;
+static unsigned batch_commits;
+static unsigned batch_fail_row;
+static bool batch_bad_payload;
+static bool batch_bad_delay;
 
 uint32_t find_first_bit(uint32_t word)
 {
@@ -72,6 +78,34 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     return 0;
 }
 
+static int32_t fake_write_gain_table_row(struct no_os_spi_desc *desc,
+                                         uint16_t row, uint8_t data1,
+                                         uint8_t data2, uint8_t data3,
+                                         uint8_t config, uint32_t delay_us)
+{
+    (void)desc;
+    if (row != batch_row_calls || row >= SIZE_FULL_TABLE ||
+        data1 != expected_table[row][0] || data2 != expected_table[row][1] ||
+        data3 != expected_table[row][2] ||
+        config != (START_GAIN_TABLE_CLOCK | WRITE_GAIN_TABLE |
+                   RECEIVER_SELECT(GT_RX1 + GT_RX2))) {
+        batch_bad_payload = true;
+    }
+    if (delay_us != 2) {
+        batch_bad_delay = true;
+    }
+    ++batch_row_calls;
+    if (row == batch_fail_row) {
+        return -EIO;
+    }
+    ++batch_commits;
+    return 0;
+}
+
+static const struct no_os_spi_platform_ops batch_spi_ops = {
+    .write_gain_table_row = fake_write_gain_table_row,
+};
+
 static void setup_phy(struct ad9361_rf_phy *phy,
                       struct ad9361_phy_platform_data *pdata,
                       struct no_os_spi_desc *spi)
@@ -86,6 +120,12 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     fail_after_commits = 0;
     table_commits = 0;
     cleanup_clock_stop_seen = false;
+    expected_table = NULL;
+    batch_row_calls = 0;
+    batch_commits = 0;
+    batch_fail_row = UINT_MAX;
+    batch_bad_payload = false;
+    batch_bad_delay = false;
 }
 
 static int test_mid_table_write_failure(void)
@@ -170,12 +210,62 @@ static int test_retry_reloads_complete_table(void)
     return 0;
 }
 
+static int test_batched_rows_preserve_payload_and_delay(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+
+    setup_phy(&phy, &pdata, &spi);
+    expected_table = phy.gt_info[TBL_1300_4000_MHZ].tab;
+    spi.platform_ops = &batch_spi_ops;
+
+    int status = ad9361_load_gt(&phy, 1301000000ULL, GT_RX1 + GT_RX2);
+    if (status != 0 || phy.current_table != TBL_1300_4000_MHZ ||
+        batch_row_calls != SIZE_FULL_TABLE ||
+        batch_commits != SIZE_FULL_TABLE || batch_bad_payload ||
+        batch_bad_delay) {
+        fprintf(stderr,
+                "batched rows: status=%d table=%u calls=%u commits=%u bad_payload=%d bad_delay=%d\n",
+                status, phy.current_table, batch_row_calls, batch_commits,
+                batch_bad_payload, batch_bad_delay);
+        return -1;
+    }
+    return 0;
+}
+
+static int test_batched_row_failure_invalidates_cache(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+
+    setup_phy(&phy, &pdata, &spi);
+    expected_table = phy.gt_info[TBL_1300_4000_MHZ].tab;
+    batch_fail_row = 7;
+    spi.platform_ops = &batch_spi_ops;
+
+    int status = ad9361_load_gt(&phy, 1301000000ULL, GT_RX1 + GT_RX2);
+    if (status != -EIO || phy.current_table != NO_GAIN_TABLE ||
+        batch_row_calls != 8 || batch_commits != 7 ||
+        !cleanup_clock_stop_seen) {
+        fprintf(stderr,
+                "batched row failure: status=%d table=%u calls=%u commits=%u cleanup=%d\n",
+                status, phy.current_table, batch_row_calls, batch_commits,
+                cleanup_clock_stop_seen);
+        return -1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (test_mid_table_write_failure() != 0 ||
         test_failed_read_before_table_programming() != 0 ||
         test_gain_index_write_failure_invalidates_cache() != 0 ||
-        test_retry_reloads_complete_table() != 0) {
+        test_retry_reloads_complete_table() != 0 ||
+        test_batched_rows_preserve_payload_and_delay() != 0 ||
+        test_batched_row_failure_invalidates_cache() != 0) {
         return EXIT_FAILURE;
     }
 

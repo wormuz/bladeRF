@@ -46,6 +46,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "backend/usb/nios_access.h"
 
 #include "no_os_spi.h"
 
@@ -155,8 +156,30 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
     return 0;
 }
 
+static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
+                                                  uint16_t row,
+                                                  uint8_t data1,
+                                                  uint8_t data2,
+                                                  uint8_t data3,
+                                                  uint8_t config,
+                                                  uint32_t delay_us)
+{
+    struct bladerf *dev;
+    int status;
+
+    if (desc == NULL || desc->extra == NULL) {
+        return -EINVAL;
+    }
+
+    dev = desc->extra;
+    status = nios_ad9361_gain_table_row(dev, row, data1, data2, data3,
+                                        config, delay_us);
+    return status == 0 ? 0 : -EIO;
+}
+
 const struct no_os_spi_platform_ops bladerf2_spi_ops = {
     .init = bladerf2_spi_init,
     .write_and_read = bladerf2_spi_write_and_read,
+    .write_gain_table_row = bladerf2_spi_write_gain_table_row,
     .remove = bladerf2_spi_remove,
 };

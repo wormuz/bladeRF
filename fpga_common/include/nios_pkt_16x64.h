@@ -102,6 +102,7 @@
 /* Target IDs */
 #define NIOS_PKT_16x64_TARGET_AD9361  0x00
 #define NIOS_PKT_16x64_TARGET_RFIC    0x01 /* RFIC control */
+#define NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW 0x02 /* AD9361 ordered row commit */
 
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */
