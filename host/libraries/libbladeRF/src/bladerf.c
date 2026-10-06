@@ -1517,11 +1517,19 @@ exit:
 int bladerf_device_reset(struct bladerf *dev)
 {
     int status;
+
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_DEVICE_RESET);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->device_reset(dev);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -1532,11 +1540,19 @@ int bladerf_device_reset(struct bladerf *dev)
 int bladerf_set_tuning_mode(struct bladerf *dev, bladerf_tuning_mode mode)
 {
     int status;
+
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_TUNING_MODE);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_tuning_mode(dev, mode);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
