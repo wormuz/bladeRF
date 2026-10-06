@@ -1164,6 +1164,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     struct bladerf_metadata metadata;
     struct lusb_stream_data *stream_data = stream->backend_data;
     size_t transfer_i;
+    bool unexpected_cancel;
 
     /* Currently unused - zero out for out own debugging sanity... */
     memset(&metadata, 0, sizeof(metadata));
@@ -1193,6 +1194,8 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 transfer->status = LIBUSB_TRANSFER_TIMED_OUT;
             } else if (strcmp(fault, "NO_DEVICE") == 0) {
                 transfer->status = LIBUSB_TRANSFER_NO_DEVICE;
+            } else if (strcmp(fault, "CANCELLED") == 0) {
+                transfer->status = LIBUSB_TRANSFER_CANCELLED;
             }
             if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
                 stream_data->rx_status_fault_injected = true;
@@ -1298,11 +1301,20 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     /* Check to see if the transfer has been cancelled or errored */
     if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
         /* Errored out for some reason .. */
+        unexpected_cancel = transfer->status == LIBUSB_TRANSFER_CANCELLED &&
+                            stream->state == STREAM_RUNNING;
         stream->state = STREAM_SHUTTING_DOWN;
 
         switch (transfer->status) {
             case LIBUSB_TRANSFER_CANCELLED:
                 /* We expect this case when we begin tearing down the stream */
+                if (unexpected_cancel) {
+                    log_error("USB transfer was cancelled while stream was running\n");
+                    stream->error_code = BLADERF_ERR_IO;
+                    notify_rx_terminal_failure_once(
+                        stream, stream_data,
+                        BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+                }
                 break;
 
             case LIBUSB_TRANSFER_STALL:
@@ -1358,6 +1370,10 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
             default:
                 log_error("Unexpected transfer status: %d\n\r", transfer->status);
+                stream->error_code = BLADERF_ERR_IO;
+                notify_rx_terminal_failure_once(
+                    stream, stream_data,
+                    BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 break;
         }
     }

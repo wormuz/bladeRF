@@ -104,6 +104,9 @@ int main(void)
     } else if (strcmp(fault_status, "SUBMIT_IO") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "CANCELLED") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
     } else {
         fprintf(stderr, "unknown transfer status: %s\n", fault_status);
         return 2;
