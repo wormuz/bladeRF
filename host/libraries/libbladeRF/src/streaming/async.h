@@ -47,6 +47,9 @@ struct bladerf_stream {
     unsigned int transfer_timeout;
     bladerf_stream_cb cb;
     void *user_data;
+    /* Optional sync-RX bookkeeping hook. Called for each transfer rejected
+     * before the sample callback so sequence tracking can retire its slot. */
+    void (*rx_buffer_rejected)(void *user_data, void *buffer);
     size_t samples_per_buffer;
     size_t num_buffers;
     void **buffers;

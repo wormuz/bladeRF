@@ -77,6 +77,7 @@ static unsigned int async_withheld_events;
 static uint32_t async_withheld_reason;
 static unsigned int sync_withheld_events;
 static uint32_t sync_withheld_reason;
+static uint32_t sync_withheld_reasons[8];
 static unsigned int async_overrun_events;
 
 static void note_rx_overrun(struct bladerf *dev)
@@ -97,6 +98,10 @@ static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
     assert(dev != NULL);
     sync_withheld_events++;
     sync_withheld_reason = reason;
+    if (sync_withheld_events <=
+        sizeof(sync_withheld_reasons) / sizeof(sync_withheld_reasons[0])) {
+        sync_withheld_reasons[sync_withheld_events - 1] = reason;
+    }
 }
 
 static void note_async_overrun(struct bladerf *dev)
@@ -158,6 +163,7 @@ static void fixture_init(struct fixture *f)
     memset(f, 0, sizeof(*f));
     sync_withheld_events = 0;
     sync_withheld_reason = 0;
+    memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
     f->buffers[0] = calloc(1, BYTES_PER_BUFFER);
     f->buffers[1] = calloc(1, BYTES_PER_BUFFER);
     assert(f->buffers[0] != NULL && f->buffers[1] != NULL);
@@ -479,8 +485,10 @@ int main(void)
     sync_withheld_reason = 0;
     assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
     assert(meta.actual_count == 0);
-    assert(sync_withheld_events == 1);
-    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(sync_withheld_events == 2);
+    assert(sync_withheld_reasons[0] ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(sync_withheld_reasons[1] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
     fixture_destroy(&f);
 
     /* A transition poisons the entire parser epoch before ARM. Even a packet

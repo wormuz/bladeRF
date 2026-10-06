@@ -107,6 +107,9 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
+        if (stream->rx_buffer_rejected != NULL) {
+            stream->rx_buffer_rejected(stream->user_data, samples);
+        }
         async_notify_rx_data_withheld(stream,
                                       BLADERF_RF_WITHHELD_SHORT_TRANSFER);
         async_notify_rx_overrun(stream);
@@ -128,7 +131,13 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
          * returned explicitly. */
         if (stream->rx_withheld_notice_active &&
             async_stream_owns_buffer(stream, samples)) {
+            if (stream->rx_buffer_rejected != NULL) {
+                stream->rx_buffer_rejected(stream->user_data, samples);
+            }
             return samples;
+        }
+        if (stream->rx_buffer_rejected != NULL) {
+            stream->rx_buffer_rejected(stream->user_data, samples);
         }
         stream->rx_withheld_notice_active = true;
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,

@@ -282,8 +282,15 @@ int sync_init(struct bladerf_sync *sync,
             status = BLADERF_ERR_MEM;
             goto error;
         }
+        sync->buf_mgmt.buffer_dropped =
+            (bool *)calloc(num_buffers, sizeof(bool));
+        if (sync->buf_mgmt.buffer_dropped == NULL) {
+            status = BLADERF_ERR_MEM;
+            goto error;
+        }
     } else {
         sync->buf_mgmt.buffer_seq = NULL;
+        sync->buf_mgmt.buffer_dropped = NULL;
     }
 
     sync->buf_mgmt.expected_seq = 0;
@@ -300,6 +307,9 @@ int sync_init(struct bladerf_sync *sync,
             sync->buf_mgmt.partial_off = 0;
 
             for (i = 0; i < num_buffers; i++) {
+                if (sync->buf_mgmt.buffer_dropped != NULL) {
+                    sync->buf_mgmt.buffer_dropped[i] = false;
+                }
                 if (i < num_transfers) {
                     sync->buf_mgmt.status[i] = SYNC_BUFFER_IN_FLIGHT;
                 } else {
@@ -386,6 +396,11 @@ void sync_deinit(struct bladerf_sync *sync)
         if (sync->buf_mgmt.buffer_seq) {
             free(sync->buf_mgmt.buffer_seq);
             sync->buf_mgmt.buffer_seq = NULL;
+        }
+
+        if (sync->buf_mgmt.buffer_dropped) {
+            free(sync->buf_mgmt.buffer_dropped);
+            sync->buf_mgmt.buffer_dropped = NULL;
         }
 
         MUTEX_DESTROY(&sync->lock);
@@ -604,6 +619,7 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
         sync->meta.rx_epoch_expected_id = epoch_id;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = false;
+        sync->buf_mgmt.rx_epoch_trace_remaining = 4;
     }
     MUTEX_UNLOCK(&sync->lock);
 
@@ -862,6 +878,25 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     status = BLADERF_ERR_WOULD_BLOCK;
                     MUTEX_UNLOCK(&b->lock);
                     break;
+                }
+
+                /* A rejected USB transfer never reached the normal RX
+                 * callback, so its ring slot cannot become FULL. Skip only
+                 * slots explicitly marked by that rejection path; transport
+                 * ownership remains IN_FLIGHT until the buffer is reused. */
+                if (b->buffer_dropped != NULL) {
+                    unsigned int skipped = 0;
+                    while (skipped < b->num_buffers &&
+                           b->buffer_dropped[b->cons_i]) {
+                        b->buffer_dropped[b->cons_i] = false;
+                        b->cons_i = (b->cons_i + 1) % b->num_buffers;
+                        skipped++;
+                    }
+                    if (skipped != 0) {
+                        log_debug("%s: skipped %u rejected RX ring slot%s\n",
+                                  __FUNCTION__, skipped,
+                                  skipped == 1 ? "" : "s");
+                    }
                 }
 
                 /* An overrun means every buffer that is full right now was
@@ -1365,15 +1400,6 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
 out:
-    /* A sync read can time out without any USB completion callback (for
-     * example, after FPGA epoch-valid but before the first host RX buffer).
-     * Report that failed data wait through the same device event history as
-     * callback-level transport faults. A timeout is never evidence of valid
-     * IQ; partial data remains accompanied by the error and metadata count. */
-    if (status == BLADERF_ERR_TIMEOUT) {
-        withheld_reason = BLADERF_RF_WITHHELD_SYNC_TIMEOUT;
-    }
-
     /* The worker can detect a USB overrun in every sync format. Metadata
      * callers also receive the status bit above; the RF event must not depend
      * on that optional format, otherwise ordinary SC16_Q11 streams silently
@@ -1410,6 +1436,17 @@ out:
     if (withheld_reason != 0 && s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_data_withheld != NULL) {
         s->dev->board->rx_data_withheld(s->dev, withheld_reason);
+    }
+
+    /* Preserve both facts when a parser rejects data and the caller then
+     * reaches its deadline: the first reason explains why IQ was withheld;
+     * SYNC_TIMEOUT describes the failed read. Do not replace the more
+     * specific parser/epoch reason with the read outcome. A timeout is never
+     * evidence of valid IQ. */
+    if (status == BLADERF_ERR_TIMEOUT && s->dev != NULL &&
+        s->dev->board != NULL && s->dev->board->rx_data_withheld != NULL) {
+        s->dev->board->rx_data_withheld(
+            s->dev, BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
     }
 
     return status;

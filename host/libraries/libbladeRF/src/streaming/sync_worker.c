@@ -62,8 +62,10 @@ static void flush_reorder_entries(struct buffer_mgmt *b)
 
         for (size_t i = 0; i < b->reorder_len; ++i) {
             if (b->reorder[i].seq == b->expected_seq) {
-                mark_buffer_ready(b, b->reorder[i].buf_idx,
-                                  b->reorder[i].num_samples);
+                if (!b->reorder[i].dropped) {
+                    mark_buffer_ready(b, b->reorder[i].buf_idx,
+                                      b->reorder[i].num_samples);
+                }
                 b->expected_seq++;
 
                 for (size_t j = i; j + 1 < b->reorder_len; ++j) {
@@ -81,7 +83,8 @@ static void flush_reorder_entries(struct buffer_mgmt *b)
 static bool hold_out_of_order_buffer(struct buffer_mgmt *b,
                                      uint32_t seq,
                                      unsigned int idx,
-                                     size_t num_samples)
+                                     size_t num_samples,
+                                     bool dropped)
 {
     if (b->reorder_limit == 0 || b->reorder_len >= b->reorder_limit) {
         return false;
@@ -108,9 +111,87 @@ static bool hold_out_of_order_buffer(struct buffer_mgmt *b,
     b->reorder[insert_pos].seq         = seq;
     b->reorder[insert_pos].buf_idx     = idx;
     b->reorder[insert_pos].num_samples = num_samples;
+    b->reorder[insert_pos].dropped     = dropped;
     b->reorder_len++;
 
     return true;
+}
+
+static bool hold_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
+{
+    if (b->reorder_len >= SYNC_RX_MAX_REORDER) {
+        return false;
+    }
+
+    const uint32_t distance = seq - b->expected_seq;
+    size_t insert_pos = 0;
+    while (insert_pos < b->reorder_len &&
+           b->reorder[insert_pos].seq - b->expected_seq <= distance) {
+        insert_pos++;
+    }
+
+    for (size_t i = b->reorder_len; i > insert_pos; --i) {
+        b->reorder[i] = b->reorder[i - 1];
+    }
+
+    b->reorder[insert_pos].seq = seq;
+    b->reorder[insert_pos].buf_idx = BUFFER_MGMT_INVALID_INDEX;
+    b->reorder[insert_pos].num_samples = 0;
+    b->reorder[insert_pos].dropped = true;
+    b->reorder_len++;
+    return true;
+}
+
+void sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
+{
+    struct bladerf_sync *s = user_data;
+    struct buffer_mgmt *b;
+    unsigned int idx;
+    uint32_t seq;
+
+    if (s == NULL || buffer == NULL ||
+        (s->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    b = &s->buf_mgmt;
+    if (b->buffer_seq == NULL) {
+        return;
+    }
+
+    MUTEX_LOCK(&b->lock);
+    for (idx = 0; idx < b->num_buffers && b->buffers[idx] != buffer; ++idx) {
+        /* Find the ring slot without depending on sync.c's address helper. */
+    }
+    if (idx >= b->num_buffers ||
+        b->status[idx] != SYNC_BUFFER_IN_FLIGHT) {
+        log_warning("Rejected RX buffer %p has no in-flight sync slot\n",
+                    buffer);
+        MUTEX_UNLOCK(&b->lock);
+        return;
+    }
+
+    seq = b->buffer_seq[idx];
+    if (b->buffer_dropped != NULL) {
+        b->buffer_dropped[idx] = true;
+    }
+    COND_SIGNAL(&b->buf_ready);
+    if (seq == b->expected_seq) {
+        b->expected_seq++;
+        flush_reorder_entries(b);
+    } else {
+        const uint32_t distance = seq - b->expected_seq;
+        if (distance != 0 && !hold_dropped_sequence(b, seq)) {
+            log_warning("RX dropped-sequence queue full: seq=%u expected=%u\n",
+                        seq, b->expected_seq);
+        }
+    }
+
+    /* The USB layer recycles this same buffer. Give its next completion a
+     * fresh sequence so an invalid epoch or short transfer cannot leave a
+     * permanent hole in sync's completion order. */
+    b->buffer_seq[idx] = b->next_seq++;
+    MUTEX_UNLOCK(&b->lock);
 }
 
 static void *rx_callback(struct bladerf *dev,
@@ -156,8 +237,24 @@ static void *rx_callback(struct bladerf *dev,
 
     MUTEX_LOCK(&b->lock);
 
+    if (b->rx_epoch_trace_remaining != 0) {
+        const unsigned int idx = sync_buf2idx(b, samples);
+        log_debug("RX epoch worker callback: buffer=%u samples=%zu "
+                  "prod_i=%u cons_i=%u slot_state=%u seq=%u expected_seq=%u\n",
+                  idx, num_samples, b->prod_i, b->cons_i,
+                  (unsigned)b->status[b->prod_i],
+                  b->buffer_seq != NULL ? b->buffer_seq[idx] : 0,
+                  b->expected_seq);
+        (void)idx; /* log_debug arguments disappear in non-debug builds. */
+        b->rx_epoch_trace_remaining--;
+    }
+
     /* Get the index of the buffer that was just filled */
     samples_idx = sync_buf2idx(b, samples);
+    if (b->buffer_dropped != NULL) {
+        /* A later valid completion supersedes the empty-slot marker. */
+        b->buffer_dropped[samples_idx] = false;
+    }
 
     if (b->resubmit_count == 0) {
         if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
@@ -173,7 +270,7 @@ static void *rx_callback(struct bladerf *dev,
 
                     if (distance != 0 && distance <= b->reorder_limit) {
                         if (hold_out_of_order_buffer(b, seq, samples_idx,
-                                                     num_samples)) {
+                                                     num_samples, false)) {
                             release_now = false;
                             log_verbose("%s worker: buf[%u] held for reorder "
                                         "(seq=%u expect=%u)\n",
@@ -368,6 +465,11 @@ int sync_worker_init(struct bladerf_sync *s)
         log_debug("%s worker: Failed to set transfer timeout: %s\n",
                   worker2str(s), bladerf_strerror(status));
         goto worker_init_out;
+    }
+
+    if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        s->worker->stream->rx_buffer_rejected =
+            sync_worker_rx_buffer_rejected;
     }
 
     MUTEX_INIT(&s->worker->state_lock);

@@ -56,6 +56,7 @@ struct rx_reorder_entry {
     uint32_t seq;
     unsigned int buf_idx;
     size_t num_samples;
+    bool dropped;
 };
 
 typedef enum {
@@ -118,11 +119,18 @@ struct buffer_mgmt {
 
     /* RX-specific tracking for out-of-order completions */
     uint32_t *buffer_seq;
+    /* Rejected RX transfers still own their USB buffers, but the sync
+     * consumer must be able to skip the corresponding empty ring slots. */
+    bool *buffer_dropped;
     uint32_t expected_seq;
     uint32_t next_seq;
     struct rx_reorder_entry reorder[SYNC_RX_MAX_REORDER];
     size_t reorder_len;
     unsigned int reorder_limit;
+
+    /* At DEBUG verbosity, trace only a few RX callbacks after each boundary
+     * to localize worker handoff problems without hot-path log floods. */
+    unsigned int rx_epoch_trace_remaining;
 
 
     MUTEX lock;
