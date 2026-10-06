@@ -209,6 +209,18 @@ int main(void)
     struct live_stream live = {0};
     pthread_t stream_thread;
     struct bladerf_rf_event event = {0};
+    unsigned int cross_band_cycles = 70;
+    const char *cycles_env = getenv("BLADERF_ASYNC_EPOCH_CYCLES");
+    if (cycles_env != NULL && cycles_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long requested = strtoul(cycles_env, &end, 10);
+        if (end == cycles_env || *end != '\0' || requested < 70 ||
+            requested > 4096) {
+            fprintf(stderr, "BLADERF_ASYNC_EPOCH_CYCLES must be 70..4096\n");
+            return 2;
+        }
+        cross_band_cycles = (unsigned int)requested;
+    }
     int status = bladerf_open(&live.dev, NULL);
     if (status != 0) {
         fprintf(stderr, "bladerf_open: %s\n", bladerf_strerror(status));
@@ -310,7 +322,7 @@ int main(void)
     atomic_store(&live.pause_event_poll, true);
     unsigned int wrap_valid_target = atomic_load(&live.valid_callbacks);
     unsigned int wrap_event_target = atomic_load(&live.event_only_callbacks);
-    for (unsigned int i = 0; i < 70; ++i) {
+    for (unsigned int i = 0; i < cross_band_cycles; ++i) {
         status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
         if (status != 0 ||
             !wait_for_count(&live.event_only_callbacks, ++wrap_event_target,
@@ -324,7 +336,18 @@ int main(void)
         /* Alternate VCO bands on every transition: 947.5 MHz and 1835 MHz. */
         const uint64_t target_frequency = (i % 2) == 0 ?
             947500000ULL : 1835000000ULL;
+        const uint32_t previous_transaction_id = event.transaction_id;
+        const uint8_t previous_epoch_id = event.epoch_id;
         status = event_transition(live.dev, target_frequency, &event);
+        if (status == 0 &&
+            (event.transaction_id != previous_transaction_id + 1 ||
+             event.epoch_id == previous_epoch_id)) {
+            fprintf(stderr, "transition identity did not advance at cycle %u "
+                    "(transaction=%u epoch=%u, previous=%u/%u)\n",
+                    i, event.transaction_id, event.epoch_id,
+                    previous_transaction_id, previous_epoch_id);
+            status = BLADERF_ERR_UNEXPECTED;
+        }
         if (status != 0 ||
             !wait_for_count(&live.valid_callbacks, ++wrap_valid_target, 3000)) {
             fprintf(stderr, "ring-wrap recovery %u failed: %s\n", i,
@@ -333,9 +356,12 @@ int main(void)
             stop_stream(&live, stream_thread);
             goto cleanup;
         }
-        if ((i + 1) % 10 == 0) {
-            fprintf(stderr, "paired cross-band invalidation/recovery=%u/70\n",
-                    i + 1);
+        const unsigned int progress_interval =
+            cross_band_cycles > 100 ? 100 : 10;
+        if ((i + 1) % progress_interval == 0) {
+            fprintf(stderr,
+                    "paired cross-band invalidation/recovery=%u/%u\n",
+                    i + 1, cross_band_cycles);
         }
     }
 
@@ -378,10 +404,10 @@ int main(void)
         goto cleanup;
     }
 
-    printf("async RX epoch gate: PASS valid=%u event_only=%u "
+    printf("async RX epoch gate: PASS cross_band_cycles=%u valid=%u event_only=%u "
            "timestamp_discontinuities=%u timestamp_withheld=%u "
            "overrun_events=%u history_gaps=%u epoch=%u\n",
-           atomic_load(&live.valid_callbacks),
+           cross_band_cycles, atomic_load(&live.valid_callbacks),
            atomic_load(&live.event_only_callbacks),
            atomic_load(&live.timestamp_discontinuities),
            atomic_load(&live.timestamp_withheld_events),
