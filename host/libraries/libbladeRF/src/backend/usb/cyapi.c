@@ -34,7 +34,6 @@ extern "C" {
 #include "backend/backend.h"
 #include "backend/usb/usb.h"
 #include "streaming/async.h"
-#include "helpers/timeout.h"
 #include "log.h"
 }
 
@@ -67,6 +66,7 @@ struct stream_data {
     size_t avail_i;             /* Index of next available transfer slot */
     size_t inflight_i;          /* Index of in-flight transfer that is
                                  * expected to finish next */
+    bool rx_terminal_failure_reported;
 };
 
 static inline struct bladerf_cyapi * get_backend_data(void *driver)
@@ -591,6 +591,32 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
     return status;
 }
 
+/* Called with stream->lock held. Match the libusb backend contract: a
+ * terminal RX transport failure gets one reason-coded event and one
+ * event-only callback before stream shutdown. */
+static void notify_rx_terminal_failure_once(struct bladerf_stream *stream,
+                                            struct stream_data *data,
+                                            int status)
+{
+    uint32_t reason;
+
+    if ((stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_RX ||
+        data->rx_terminal_failure_reported) {
+        return;
+    }
+
+    if (status == BLADERF_ERR_TIMEOUT) {
+        reason = BLADERF_RF_WITHHELD_USB_TIMEOUT;
+    } else if (status == BLADERF_ERR_NODEV) {
+        reason = BLADERF_RF_WITHHELD_DEVICE_LOST;
+    } else {
+        reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+    }
+
+    data->rx_terminal_failure_reported = true;
+    async_notify_rx_transport_failure(stream, reason);
+}
+
 static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                         bladerf_channel_layout layout)
 {
@@ -603,6 +629,10 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
     struct stream_data *data = get_stream_data(stream);
     struct bladerf_cyapi *cyapi = get_backend_data(driver);
     struct bladerf_metadata meta;
+
+    MUTEX_LOCK(&stream->lock);
+    data->rx_terminal_failure_reported = false;
+    MUTEX_UNLOCK(&stream->lock);
 
     assert(stream->transfer_timeout <= ULONG_MAX);
     if (stream->transfer_timeout == 0) {
@@ -623,6 +653,9 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 
     if (data->ep == NULL) {
         log_debug("Failed to get EP handle.\n");
+        MUTEX_LOCK(&stream->lock);
+        notify_rx_terminal_failure_once(stream, data, BLADERF_ERR_IO);
+        MUTEX_UNLOCK(&stream->lock);
         return BLADERF_ERR_UNEXPECTED;
     }
 
@@ -734,7 +767,15 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 out:
 
     MUTEX_LOCK(&stream->lock);
-    stream->error_code = status;
+    /* A caller may already have recorded an RX submit failure and aborted
+     * the endpoint. Preserve that original error when WaitForXfer then wakes
+     * with the expected timeout/cancellation caused by the abort. */
+    if (stream->error_code == 0) {
+        stream->error_code = status;
+    }
+    if (status != 0 && stream->state == STREAM_RUNNING) {
+        notify_rx_terminal_failure_once(stream, data, status);
+    }
     stream->state = STREAM_SHUTTING_DOWN;
 
     data->ep->Abort();
@@ -770,7 +811,6 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
                                unsigned int timeout_ms, bool nonblock)
 {
     int status = 0;
-    struct timespec timeout_abs;
     struct stream_data *data = get_stream_data(stream);
 
     if (buffer == BLADERF_STREAM_SHUTDOWN) {
@@ -792,15 +832,10 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
         }
 
         if (timeout_ms != 0) {
-            status = populate_abs_timeout(&timeout_abs, timeout_ms);
-            if (status != 0) {
-                return BLADERF_ERR_UNEXPECTED;
-            }
-
             while (data->num_avail == 0 && status == THREAD_SUCCESS) {
                 status = COND_TIMED_WAIT(&stream->can_submit_buffer,
                                                 &stream->lock,
-                                                &timeout_abs);
+                                                timeout_ms);
             }
         } else {
             while (data->num_avail == 0 && status == THREAD_SUCCESS) {
@@ -815,7 +850,17 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
     } else if (status != 0) {
         return BLADERF_ERR_UNEXPECTED;
     } else {
-        return submit_transfer(stream, buffer, *length);
+        status = submit_transfer(stream, buffer, *length);
+        if (status != 0 &&
+            (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+            stream->error_code = status;
+            stream->state = STREAM_SHUTTING_DOWN;
+            notify_rx_terminal_failure_once(stream, data, status);
+            if (data->ep != NULL) {
+                data->ep->Abort();
+            }
+        }
+        return status;
     }
 }
 
