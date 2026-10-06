@@ -1652,6 +1652,12 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
 
     nios_pkt_retune2_resp_unpack(buf, &duration, &resp_flags);
 
+    if (dev->nios_retune_trace.valid) {
+        dev->nios_retune_trace.device_duration_ticks = duration;
+        dev->nios_retune_trace.device_duration_valid =
+            (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0;
+    }
+
     if (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) {
         log_debug("%s retune operation: duration=%"PRIu64"\n",
                     channel2str(ch), duration);

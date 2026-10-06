@@ -91,6 +91,7 @@ int main(int argc, char **argv)
         };
         struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
         struct bladerf_rf_event final_event = {0};
+        struct bladerf_rx_transition_nios_timing nios_timing = {0};
         uint32_t transaction = 0, count = 0;
         bool complete = false;
         uint64_t begin_ns = 0, out_ns = 0, response_ns = 0;
@@ -111,6 +112,10 @@ int main(int argc, char **argv)
                 dev, transaction, events, BLADERF_RF_EVENT_HISTORY_SIZE,
                 &count, &complete);
         }
+        if (status == 0) {
+            status = bladerf_rx_transition_get_nios_timing(
+                dev, transaction, &nios_timing);
+        }
         const bool nios_events =
             event_time(events, count, BLADERF_RF_EVT_NIOS_RETUNE_BEGIN,
                        &begin_ns) == 0 &&
@@ -129,6 +134,9 @@ int main(int argc, char **argv)
             event_time(events, count, BLADERF_RF_EVT_CONFIG_ACCEPTED,
                        &config_ns) == 0;
         if (status != 0 || !complete || !have_config ||
+            !nios_timing.transaction_retained ||
+            nios_timing.nios_retune_observed != use_fastlock ||
+            (use_fastlock && !nios_timing.device_duration_valid) ||
             (use_fastlock && (!nios_events || begin_ns > out_ns ||
                               out_ns > response_ns || host_events)) ||
             (!use_fastlock && (!host_events || nios_events ||
@@ -161,10 +169,13 @@ int main(int argc, char **argv)
         if (use_fastlock) {
             printf("trial=%u mode=fastlock txn=%u epoch=%u usb_out_us=%.3f "
                    "usb_in_us=%.3f retune_roundtrip_us=%.3f "
+                   "nios_duration_valid=%u nios_duration_ticks=%llu "
                    "total_to_epoch_us=%.3f\n", i, transaction,
                    final_event.epoch_id, (out_ns - begin_ns) / 1000.0,
                    (response_ns - out_ns) / 1000.0,
                    (response_ns - begin_ns) / 1000.0,
+                   nios_timing.device_duration_valid,
+                   (unsigned long long)nios_timing.device_duration_ticks,
                    (final_event.host_monotonic_ns - config_ns) / 1000.0);
         } else {
             printf("trial=%u mode=host txn=%u epoch=%u spi_write_us=%.3f "

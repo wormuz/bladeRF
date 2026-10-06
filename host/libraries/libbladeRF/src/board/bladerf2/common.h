@@ -204,6 +204,15 @@ struct bladerf2_board_data {
     uint32_t rf_transition_event_head;
     uint32_t rf_transition_event_count;
 
+    /* NIOS time-tamer duration is separate from host monotonic event times.
+     * Keep it by transaction without changing the public event struct ABI. */
+    struct {
+        uint32_t transaction_id;
+        uint64_t duration_ticks;
+        bool nios_retune_observed;
+        bool duration_valid;
+    } rf_transition_nios_timing[BLADERF2_RF_EVENT_HISTORY_SIZE];
+
     /* Latest event is retained for the synchronous wait API. */
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;

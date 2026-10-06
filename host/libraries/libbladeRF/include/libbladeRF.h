@@ -4708,6 +4708,17 @@ struct bladerf_rf_event {
 /** Maximum number of recent RF transition events retained per device. */
 #define BLADERF_RF_EVENT_HISTORY_SIZE 64
 
+/** NIOS-owned fastlock timing in addition to host-monotonic RF events.
+ * `device_duration_ticks` is the RX/TX time-tamer delta reported by NIOS for
+ * a RETUNE2 NOW command. It is valid only when `device_duration_valid` is
+ * true; zero can mean the module timestamp counter was not running. */
+struct bladerf_rx_transition_nios_timing {
+    bool transaction_retained;
+    bool nios_retune_observed;
+    bool device_duration_valid;
+    uint64_t device_duration_ticks;
+};
+
 /** Request parameters for ::bladerf_rx_transition_begin. */
 struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
@@ -4825,6 +4836,20 @@ int CALL_CONV bladerf_rx_transition_get_events(
     uint32_t capacity,
     uint32_t *event_count,
     bool *history_complete);
+
+/**
+ * Retrieve NIOS-reported duration for a fastlock RX transaction. The value
+ * is a raw module time-tamer tick delta, separate from host USB OUT/IN
+ * monotonic timestamps in the normal event history. The transaction record
+ * is retained for the same bounded history window; `transaction_retained`
+ * is false after it has been overwritten. Host-tuned transitions are
+ * retained but report `nios_retune_observed=false`.
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_transition_get_nios_timing(
+    struct bladerf *dev,
+    uint32_t transaction_id,
+    struct bladerf_rx_transition_nios_timing *timing);
 
 /** @} (End RF_TRANSITION) */
 

@@ -419,8 +419,10 @@ static int _bladerf_rx_transition_begin(
     uint64_t nios_begin_ns = 0;
     uint64_t nios_out_done_ns = 0;
     uint64_t nios_response_done_ns = 0;
+    uint64_t nios_duration_ticks = 0;
     int nios_transport_status = 0;
     bool nios_trace_valid = false;
+    bool nios_duration_valid = false;
 
     if (dev == NULL || request == NULL || transaction_id == NULL) {
         return BLADERF_ERR_INVAL;
@@ -456,6 +458,16 @@ static int _bladerf_rx_transition_begin(
         } else {
             board_data->rf_transition_next_id++;
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
+            {
+                const uint32_t timing_slot =
+                    board_data->rf_transition_current_id %
+                    BLADERF2_RF_EVENT_HISTORY_SIZE;
+                board_data->rf_transition_nios_timing[timing_slot].transaction_id =
+                    board_data->rf_transition_current_id;
+                board_data->rf_transition_nios_timing[timing_slot].duration_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].nios_retune_observed = false;
+                board_data->rf_transition_nios_timing[timing_slot].duration_valid = false;
+            }
             board_data->rf_transition_required_events_mask = required_events_mask;
             board_data->rf_transition_requested_frequency_hz =
                 request->target_frequency_hz;
@@ -580,8 +592,22 @@ static int _bladerf_rx_transition_begin(
             nios_begin_ns = dev->nios_retune_trace.request_begin_ns;
             nios_out_done_ns = dev->nios_retune_trace.usb_out_done_ns;
             nios_response_done_ns = dev->nios_retune_trace.response_done_ns;
+            nios_duration_ticks = dev->nios_retune_trace.device_duration_ticks;
             nios_transport_status = dev->nios_retune_trace.status;
             nios_trace_valid = dev->nios_retune_trace.valid;
+            nios_duration_valid = dev->nios_retune_trace.device_duration_valid;
+            if (nios_trace_valid) {
+                const uint32_t timing_slot =
+                    board_data->rf_transition_current_id %
+                    BLADERF2_RF_EVENT_HISTORY_SIZE;
+                board_data->rf_transition_nios_timing[timing_slot].transaction_id =
+                    board_data->rf_transition_current_id;
+                board_data->rf_transition_nios_timing[timing_slot].duration_ticks =
+                    nios_duration_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].nios_retune_observed = true;
+                board_data->rf_transition_nios_timing[timing_slot].duration_valid =
+                    nios_duration_valid;
+            }
         });
         if (nios_trace_valid && nios_begin_ns != 0) {
             _emit_event_with_timestamp(dev, board_data,
@@ -1161,4 +1187,36 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
         return 0;
     }
     return found > capacity ? BLADERF_ERR_MEM : 0;
+}
+
+int bladerf_rx_transition_get_nios_timing(
+    struct bladerf *dev, uint32_t transaction_id,
+    struct bladerf_rx_transition_nios_timing *timing)
+{
+    struct bladerf2_board_data *board_data;
+    uint32_t slot;
+
+    if (dev == NULL || transaction_id == 0 || timing == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    memset(timing, 0, sizeof(*timing));
+    slot = transaction_id % BLADERF2_RF_EVENT_HISTORY_SIZE;
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rf_transition_nios_timing[slot].transaction_id ==
+            transaction_id) {
+            timing->transaction_retained = true;
+            timing->nios_retune_observed =
+                board_data->rf_transition_nios_timing[slot].nios_retune_observed;
+            timing->device_duration_valid =
+                board_data->rf_transition_nios_timing[slot].duration_valid;
+            timing->device_duration_ticks =
+                board_data->rf_transition_nios_timing[slot].duration_ticks;
+        }
+    });
+    return 0;
 }

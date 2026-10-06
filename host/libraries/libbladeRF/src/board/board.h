@@ -196,8 +196,10 @@ struct bladerf {
         uint64_t request_begin_ns;
         uint64_t usb_out_done_ns;
         uint64_t response_done_ns;
+        uint64_t device_duration_ticks;
         int status;
         bool valid;
+        bool device_duration_valid;
     } nios_retune_trace;
 
     /* XB attached */
