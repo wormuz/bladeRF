@@ -102,7 +102,7 @@ static inline uint8_t dequeue_retune(struct queue *q, struct queue_entry *e)
     }
 
     if (e != NULL) {
-        memcpy(&e, &q->entries[q->rem_idx], sizeof(e[0]));
+        memcpy(e, &q->entries[q->rem_idx], sizeof(*e));
     }
 
     q->rem_idx = (q->rem_idx + 1) & (RETUNE_QUEUE_MAX - 1);

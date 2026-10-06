@@ -4,7 +4,8 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 test_bin=$(mktemp)
 host_test_bin=$(mktemp)
-trap 'rm -f "$test_bin" "$host_test_bin"' EXIT
+queue_test_bin=$(mktemp)
+trap 'rm -f "$test_bin" "$host_test_bin" "$queue_test_bin"' EXIT
 
 cc -Wall -Wextra -Werror -Wno-unused-parameter \
     -DBLADERF_NIOS_PC_SIMULATION \
@@ -30,3 +31,14 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
     -Wl,--gc-sections -o "$host_test_bin"
 
 "$host_test_bin"
+
+cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
+    -ffunction-sections -fdata-sections \
+    -DBLADERF_NIOS_PC_SIMULATION \
+    -I"$repo_root/fpga_common/include" \
+    -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
+    -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \
+    "$repo_root/host/misc/test_nios_retune2_queue.c" \
+    -Wl,--gc-sections -o "$queue_test_bin"
+
+"$queue_test_bin"
