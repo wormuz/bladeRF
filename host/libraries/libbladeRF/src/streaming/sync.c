@@ -38,6 +38,7 @@
 
 #include "board/board.h"
 #include "helpers/timeout.h"
+#include "helpers/wallclock.h"
 #include "helpers/have_cap.h"
 #include "backend/usb/usb.h"
 
@@ -229,8 +230,6 @@ int sync_init(struct bladerf_sync *sync,
     sync->state = SYNC_STATE_CHECK_WORKER;
 
     sync->buf_mgmt.num_buffers = num_buffers;
-    sync->buf_mgmt.resubmit_count = 0;
-
     sync->stream_config.layout = layout;
     sync->stream_config.format = format;
     sync->stream_config.samples_per_buffer = (unsigned int)buffer_size;
@@ -440,12 +439,16 @@ static int wait_for_buffer(struct buffer_mgmt *b,
         }
         log_error("%s: Timed out waiting for buf_ready after %d ms "
                   "(submitter=%s, in_flight=%u full=%u empty=%u of %u, "
-                  "prod_i=%u cons_i=%u)\n",
+                  "prod_i=%u cons_i=%u stale_pending=%u overrun_pending=%u "
+                  "cons_state=%u cons_dropped=%u)\n",
                   __FUNCTION__, timeout_ms,
                   b->submitter == SYNC_TX_SUBMITTER_CALLBACK ? "CALLBACK"
                       : (b->submitter == SYNC_TX_SUBMITTER_FN ? "FN" : "-"),
                   in_flight, full, empty, (unsigned)b->num_buffers,
-                  b->prod_i, b->cons_i);
+                  b->prod_i, b->cons_i, b->stale_pending,
+                  b->overrun_pending,
+                  (unsigned)b->status[b->cons_i],
+                  b->buffer_dropped != NULL ? b->buffer_dropped[b->cons_i] : 0);
         status = BLADERF_ERR_TIMEOUT;
     } else if (status != 0) {
         status = BLADERF_ERR_UNEXPECTED;
@@ -723,6 +726,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     unsigned int samples_per_buffer = 0;
     uint64_t target_timestamp = UINT64_MAX;
     unsigned int pkt_len_dwords = 0;
+    uint64_t call_start_ns = 0;
 
     if (s == NULL || samples == NULL) {
         log_debug("NULL pointer passed to %s\n", __FUNCTION__);
@@ -735,6 +739,10 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         log_debug("%s: %u samples %% %u channels != 0\n",
                   __FUNCTION__, num_samples, s->meta.samples_per_ts);
         return BLADERF_ERR_INVAL;
+    }
+
+    if (timeout_ms != 0) {
+        call_start_ns = wallclock_get_current_nsec();
     }
 
     MUTEX_LOCK(&s->lock);
@@ -909,24 +917,60 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                  * never PARTIAL, so the contiguous FULL run is safe to walk;
                  * the producer resumes storing at the slots freed here.
                  *
-                 * Metadata formats are exempt: their consumers see the gap
-                 * in the timestamps and may legitimately want the backlog -
-                 * a scheduled capture seeks THROUGH these buffers to reach
-                 * its target timestamp, and dropping them under that seek
-                 * loses the samples the caller asked for (measured: a sweep
-                 * that overruns on every stop went from hundreds of
-                 * detections to zero with an unconditional drop here). */
+                 * Timestamp-targeted metadata reads retain the backlog
+                 * because a scheduled capture may seek through it to reach
+                 * its requested time. RX_NOW asks for the live edge, so
+                 * retaining stale pre-gap buffers only delays recovery and
+                 * can fill the ring again while waiting for fresh samples. */
+                const bool metadata_rx_now = user_meta != NULL &&
+                    (user_meta->flags & BLADERF_META_FLAG_RX_NOW) != 0 &&
+                    (s->stream_config.format ==
+                         BLADERF_FORMAT_SC16_Q11_META ||
+                     s->stream_config.format ==
+                         BLADERF_FORMAT_SC8_Q7_META);
                 if (b->stale_pending &&
-                    s->stream_config.format != BLADERF_FORMAT_SC16_Q11_META &&
-                    s->stream_config.format != BLADERF_FORMAT_SC8_Q7_META &&
-                    s->stream_config.format != BLADERF_FORMAT_PACKET_META) {
+                    sync_rx_should_drop_stale(
+                        s->stream_config.format,
+                        user_meta != NULL ? user_meta->flags : 0)) {
                     unsigned int dropped = 0;
 
-                    while (b->status[b->cons_i] == SYNC_BUFFER_FULL &&
-                           dropped < b->num_buffers) {
-                        b->status[b->cons_i] = SYNC_BUFFER_EMPTY;
-                        b->cons_i = (b->cons_i + 1) % b->num_buffers;
-                        dropped++;
+                    if (metadata_rx_now) {
+                        /* After recovery, completion order and ring indices
+                         * need not line up. Every FULL slot present when the
+                         * overrun was observed is stale; clear them all so
+                         * one out-of-order FULL slot cannot keep prod_i
+                         * blocked while cons_i waits on an IN_FLIGHT slot. */
+                        for (unsigned int i = 0; i < b->num_buffers; ++i) {
+                            if (b->status[i] == SYNC_BUFFER_FULL) {
+                                b->status[i] = SYNC_BUFFER_EMPTY;
+                                dropped++;
+                            }
+                        }
+
+                        /* A partially consumed buffer also predates the
+                         * overrun. Drop its remainder and restart metadata
+                         * parsing at the next ring slot. */
+                        if (b->status[b->cons_i] == SYNC_BUFFER_PARTIAL) {
+                            b->status[b->cons_i] = SYNC_BUFFER_EMPTY;
+                            b->cons_i = (b->cons_i + 1) % b->num_buffers;
+                            s->meta.state = SYNC_META_STATE_HEADER;
+                            s->meta.msg_num = 0;
+                            s->meta.curr_msg_off = 0;
+                            s->state = SYNC_STATE_WAIT_FOR_BUFFER;
+                            if (samples_returned != 0) {
+                                user_meta->status |=
+                                    BLADERF_META_STATUS_OVERRUN;
+                                exit_early = true;
+                            }
+                            dropped++;
+                        }
+                    } else {
+                        while (b->status[b->cons_i] == SYNC_BUFFER_FULL &&
+                               dropped < b->num_buffers) {
+                            b->status[b->cons_i] = SYNC_BUFFER_EMPTY;
+                            b->cons_i = (b->cons_i + 1) % b->num_buffers;
+                            dropped++;
+                        }
                     }
 
                     b->stale_pending = false;
@@ -945,7 +989,21 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     log_verbose("%s: buffer %u is ready to consume\n",
                                 __FUNCTION__, b->cons_i);
                 } else {
-                    status = wait_for_buffer(b, timeout_ms,
+                    unsigned int wait_timeout_ms = timeout_ms;
+                    if (timeout_ms != 0 && call_start_ns != 0) {
+                        const uint64_t now_ns = wallclock_get_current_nsec();
+                        if (now_ns >= call_start_ns) {
+                            const uint64_t elapsed_ms =
+                                (now_ns - call_start_ns) / 1000000u;
+                            if (elapsed_ms >= timeout_ms) {
+                                status = BLADERF_ERR_TIMEOUT;
+                                break;
+                            }
+                            wait_timeout_ms = timeout_ms -
+                                (unsigned int)elapsed_ms;
+                        }
+                    }
+                    status = wait_for_buffer(b, wait_timeout_ms,
                                              __FUNCTION__, b->cons_i);
 
                     if (status == 0) {

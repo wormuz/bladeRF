@@ -128,6 +128,6 @@ sync_worker_state sync_worker_get_state(struct sync_worker *w, int *err_code);
 void sync_worker_submit_request(struct sync_worker *w, unsigned int request);
 
 /* async.c calls this for each RX transfer withheld before rx_callback(). */
-void sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
+void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
 
 #endif

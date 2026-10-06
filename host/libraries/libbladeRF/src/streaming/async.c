@@ -100,6 +100,7 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                               size_t received_bytes)
 {
     void *next_buffer;
+    void *rejected_replacement = samples;
 
     if (stream == NULL || stream->cb == NULL || samples == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
@@ -108,7 +109,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
         if (stream->rx_buffer_rejected != NULL) {
-            stream->rx_buffer_rejected(stream->user_data, samples);
+            rejected_replacement = stream->rx_buffer_rejected(
+                stream->user_data, samples);
         }
         async_notify_rx_data_withheld(stream,
                                       BLADERF_RF_WITHHELD_SHORT_TRANSFER);
@@ -132,12 +134,16 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
         if (stream->rx_withheld_notice_active &&
             async_stream_owns_buffer(stream, samples)) {
             if (stream->rx_buffer_rejected != NULL) {
-                stream->rx_buffer_rejected(stream->user_data, samples);
+                rejected_replacement = stream->rx_buffer_rejected(
+                    stream->user_data, samples);
             }
-            return samples;
+            return rejected_replacement != NULL &&
+                   rejected_replacement != BLADERF_STREAM_REUSE_BUFFER
+                ? rejected_replacement : samples;
         }
         if (stream->rx_buffer_rejected != NULL) {
-            stream->rx_buffer_rejected(stream->user_data, samples);
+            rejected_replacement = stream->rx_buffer_rejected(
+                stream->user_data, samples);
         }
         stream->rx_withheld_notice_active = true;
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
@@ -161,7 +167,9 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     if (next_buffer != BLADERF_STREAM_REUSE_BUFFER) {
         return next_buffer;
     }
-    return samples;
+    return rejected_replacement != NULL &&
+           rejected_replacement != BLADERF_STREAM_REUSE_BUFFER
+        ? rejected_replacement : samples;
 }
 
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.

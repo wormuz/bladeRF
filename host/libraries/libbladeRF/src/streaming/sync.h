@@ -88,11 +88,6 @@ struct buffer_mgmt {
     unsigned int cons_i;      /**< Consumer index - next buffer to empty */
     unsigned int partial_off; /**< Current index into partial buffer */
 
-    /* In the event of a SW RX overrun, this count is used to determine
-     * how many more transfers should be considered invalid and require
-     * resubmission */
-    unsigned int resubmit_count;
-
     /* Set by the RX worker when it detects an overrun, cleared once the
      * condition has been reported to a bladerf_sync_rx() caller. The worker
      * recovers by resubmitting buffers, so the sample stream has a gap that
@@ -184,6 +179,21 @@ static inline void sync_reset_sequence_tracking(struct buffer_mgmt *b,
     } else {
         b->reorder_limit = 0;
     }
+}
+
+/* On RX_NOW, stale buffers are older than the requested live edge and may be
+ * dropped after an overrun. Timestamp-targeted META reads must retain them. */
+static inline bool sync_rx_should_drop_stale(bladerf_format format,
+                                             uint32_t metadata_flags)
+{
+    if (format == BLADERF_FORMAT_PACKET_META) {
+        return false;
+    }
+    if (format == BLADERF_FORMAT_SC16_Q11_META ||
+        format == BLADERF_FORMAT_SC8_Q7_META) {
+        return (metadata_flags & BLADERF_META_FLAG_RX_NOW) != 0;
+    }
+    return true;
 }
 
 /* State of API-side sync interface */

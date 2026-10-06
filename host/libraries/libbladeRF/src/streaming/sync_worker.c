@@ -142,21 +142,45 @@ static bool hold_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
     return true;
 }
 
-void sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
+static void retire_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
+{
+    if (seq == b->expected_seq) {
+        b->expected_seq++;
+        flush_reorder_entries(b);
+    } else if (seq - b->expected_seq != 0 &&
+               !hold_dropped_sequence(b, seq)) {
+        log_warning("RX dropped-sequence queue full: seq=%u expected=%u\n",
+                    seq, b->expected_seq);
+    }
+}
+
+static void note_rx_overrun(struct buffer_mgmt *b)
+{
+    b->overrun_pending = true;
+    if (!b->stale_pending) {
+        b->stale_pending = true;
+        /* Wake the consumer once to discard stale data and resume at live
+         * edge. Repeated overrun callbacks must not reset its timeout. */
+        COND_SIGNAL(&b->buf_ready);
+    }
+}
+
+void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
 {
     struct bladerf_sync *s = user_data;
     struct buffer_mgmt *b;
-    unsigned int idx;
+    unsigned int idx, next_idx;
     uint32_t seq;
+    void *next_buffer;
 
     if (s == NULL || buffer == NULL ||
         (s->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
-        return;
+        return buffer;
     }
 
     b = &s->buf_mgmt;
     if (b->buffer_seq == NULL) {
-        return;
+        return buffer;
     }
 
     MUTEX_LOCK(&b->lock);
@@ -168,30 +192,41 @@ void sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
         log_warning("Rejected RX buffer %p has no in-flight sync slot\n",
                     buffer);
         MUTEX_UNLOCK(&b->lock);
-        return;
+        return buffer;
     }
 
     seq = b->buffer_seq[idx];
+    retire_dropped_sequence(b, seq);
     if (b->buffer_dropped != NULL) {
         b->buffer_dropped[idx] = true;
     }
-    COND_SIGNAL(&b->buf_ready);
-    if (seq == b->expected_seq) {
-        b->expected_seq++;
-        flush_reorder_entries(b);
-    } else {
-        const uint32_t distance = seq - b->expected_seq;
-        if (distance != 0 && !hold_dropped_sequence(b, seq)) {
-            log_warning("RX dropped-sequence queue full: seq=%u expected=%u\n",
-                        seq, b->expected_seq);
-        }
+    /* Wake only when the sync consumer is waiting on this exact slot. A
+     * continuous epoch fence can reject many other transfers; waking on each
+     * one would repeatedly restart sync_rx's wait and defeat its timeout. */
+    if (idx == b->cons_i) {
+        COND_SIGNAL(&b->buf_ready);
     }
 
-    /* The USB layer recycles this same buffer. Give its next completion a
-     * fresh sequence so an invalid epoch or short transfer cannot leave a
-     * permanent hole in sync's completion order. */
-    b->buffer_seq[idx] = b->next_seq++;
+    /* A rejected completion still consumed one submitted ring buffer. Rotate
+     * to the same next slot that rx_callback() would have selected, so
+     * producer indices and USB ownership cannot drift during an epoch fence. */
+    b->status[idx] = SYNC_BUFFER_EMPTY;
+    if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
+        next_idx = b->prod_i;
+        b->status[next_idx] = SYNC_BUFFER_IN_FLIGHT;
+        b->buffer_seq[next_idx] = b->next_seq++;
+        b->prod_i = (next_idx + 1) % b->num_buffers;
+        next_buffer = b->buffers[next_idx];
+    } else {
+        /* No ring slot is available. Keep this transport buffer in flight,
+         * but retire its invalid sequence and make overrun recovery visible. */
+        note_rx_overrun(b);
+        b->status[idx] = SYNC_BUFFER_IN_FLIGHT;
+        b->buffer_seq[idx] = b->next_seq++;
+        next_buffer = buffer;
+    }
     MUTEX_UNLOCK(&b->lock);
+    return next_buffer;
 }
 
 static void *rx_callback(struct bladerf *dev,
@@ -256,8 +291,7 @@ static void *rx_callback(struct bladerf *dev,
         b->buffer_dropped[samples_idx] = false;
     }
 
-    if (b->resubmit_count == 0) {
-        if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
+    if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
 
             bool release_now = true;
             uint32_t seq     = 0;
@@ -320,7 +354,7 @@ static void *rx_callback(struct bladerf *dev,
                             worker2str(s), next_idx);
             }
 
-        } else {
+    } else {
             if (b->reorder_len > 0) {
                 /* We're holding buffers to restore order. Skip submitting a
                  * new transfer this time to avoid overwriting held data. */
@@ -330,26 +364,17 @@ static void *rx_callback(struct bladerf *dev,
             } else {
                 log_debug("RX overrun @ buffer %u\r\n", samples_idx);
 
-                /* Recovery resubmits buffers, which leaves a gap in the
-                 * sample stream. Record it so the next bladerf_sync_rx()
-                 * can report BLADERF_META_STATUS_OVERRUN to the caller. */
-                b->overrun_pending = true;
-                /* The buffers that are full right now predate the gap;
-                 * flag them so the consumer resumes at the live edge
-                 * instead of reading history first. */
-                b->stale_pending = true;
-
+                /* This completed transfer is withheld. Retire its sequence
+                 * and recycle the same transport buffer; stale FULL slots
+                 * are removed by the RX_NOW consumer before admission resumes. */
+                retire_dropped_sequence(b, b->buffer_seq[samples_idx]);
+                if (b->buffer_dropped != NULL) {
+                    b->buffer_dropped[samples_idx] = true;
+                }
+                b->buffer_seq[samples_idx] = b->next_seq++;
+                note_rx_overrun(b);
                 next_buf = samples;
-                b->resubmit_count = s->stream_config.num_xfers - 1;
             }
-        }
-    } else {
-        /* We're still recovering from an overrun at this point. Just
-         * turn around and resubmit this buffer */
-        next_buf = samples;
-        b->resubmit_count--;
-        log_verbose("Resubmitting buffer %u (%u resubmissions left)\r\n",
-                    samples_idx, b->resubmit_count);
     }
 
 

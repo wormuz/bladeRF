@@ -56,25 +56,19 @@ int main(void)
         assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
         assert(COND_INIT(&sync.buf_mgmt.buf_ready) == 0);
 
-        /* Complete out of order: seq 3 is withheld before seq 1 and 2. */
-        sync_worker_rx_buffer_rejected(&sync, ring[3]);
+        /* A withheld completion retires its sequence and hands async.c the
+         * next producer slot, matching the normal RX callback rotation. */
+        void *replacement = sync_worker_rx_buffer_rejected(&sync, ring[3]);
+        assert(replacement == ring[0]);
         assert(dropped[3]);
         assert(sync.buf_mgmt.expected_seq == 1);
         assert(sync.buf_mgmt.reorder_len == 1);
         assert(sync.buf_mgmt.reorder[0].dropped);
-        assert(sequences[3] == 4);
-
-        sync_worker_rx_buffer_rejected(&sync, ring[1]);
-        assert(dropped[1]);
-        assert(sync.buf_mgmt.expected_seq == 2);
-        sync_worker_rx_buffer_rejected(&sync, ring[2]);
-        assert(dropped[2]);
-        assert(sync.buf_mgmt.expected_seq == 4);
-        assert(sync.buf_mgmt.reorder_len == 0);
-        assert(sequences[1] == 5 && sequences[2] == 6);
-        assert(states[1] == SYNC_BUFFER_IN_FLIGHT &&
-               states[2] == SYNC_BUFFER_IN_FLIGHT &&
-               states[3] == SYNC_BUFFER_IN_FLIGHT);
+        assert(sequences[0] == 4);
+        assert(sync.buf_mgmt.prod_i == 1);
+        assert(states[0] == SYNC_BUFFER_IN_FLIGHT);
+        assert(states[3] == SYNC_BUFFER_EMPTY);
+        assert(!sync.buf_mgmt.overrun_pending);
         assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
     }
     return 0;

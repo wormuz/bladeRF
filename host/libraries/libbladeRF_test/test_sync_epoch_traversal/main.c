@@ -113,6 +113,13 @@ static void note_async_overrun(struct bladerf *dev)
 static unsigned int async_rx_callbacks;
 static unsigned int async_rx_event_wakeups;
 static bool allow_async_rx_buffer = true;
+static void *async_rejected_replacement;
+
+static void *replace_rejected_async_buffer(void *user_data, void *buffer)
+{
+    assert(user_data != NULL && buffer != NULL);
+    return async_rejected_replacement;
+}
 
 static bool validate_async_rx_buffer(struct bladerf *dev,
                                      bladerf_channel_layout layout,
@@ -366,6 +373,16 @@ static void test_async_timestamp_continuity(void)
 
 int main(void)
 {
+    assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
+    assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META,
+                                     BLADERF_META_FLAG_RX_NOW));
+    assert(!sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META, 0));
+    assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC8_Q7_META,
+                                     BLADERF_META_FLAG_RX_NOW));
+    assert(!sync_rx_should_drop_stale(BLADERF_FORMAT_SC8_Q7_META, 0));
+    assert(!sync_rx_should_drop_stale(BLADERF_FORMAT_PACKET_META,
+                                      BLADERF_META_FLAG_RX_NOW));
+
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
 
@@ -612,6 +629,9 @@ int main(void)
     async_stream.num_buffers = ARRAY_SIZE(async_buffers);
     async_stream.cb = count_async_rx_callback;
     async_stream.user_data = async_samples;
+    int16_t async_replacement[2048] = {0};
+    async_rejected_replacement = async_replacement;
+    async_stream.rx_buffer_rejected = replace_rejected_async_buffer;
     async_rx_callbacks = 0;
     async_rx_event_wakeups = 0;
     async_withheld_events = 0;
@@ -620,7 +640,8 @@ int main(void)
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples) / 2) == async_samples);
+                                   sizeof(async_samples) / 2) ==
+           async_replacement);
     MUTEX_UNLOCK(&f.dev.lock);
     assert(MUTEX_DESTROY(&f.dev.lock) == 0);
     assert(rx_overrun_events == 2);
@@ -632,7 +653,8 @@ int main(void)
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples) / 2) == async_samples);
+                                   sizeof(async_samples) / 2) ==
+           async_replacement);
     MUTEX_UNLOCK(&f.dev.lock);
     assert(MUTEX_DESTROY(&f.dev.lock) == 0);
     assert(async_rx_event_wakeups == 2);
@@ -655,11 +677,13 @@ int main(void)
     assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = false;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples)) == async_samples);
+                                   sizeof(async_samples)) ==
+           async_replacement);
     assert(async_rx_callbacks == 0);
     assert(async_rx_event_wakeups == 1);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples)) == async_samples);
+                                   sizeof(async_samples)) ==
+           async_replacement);
     assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = true;
     async_stream.layout = BLADERF_RX_X1;
@@ -671,7 +695,8 @@ int main(void)
     allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
-                                   sizeof(async_samples)) == async_samples);
+                                   sizeof(async_samples)) ==
+           async_replacement);
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 2);
     allow_async_rx_buffer = true;

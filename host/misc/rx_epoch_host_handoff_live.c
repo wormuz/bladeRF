@@ -43,9 +43,10 @@ int main(int argc, char **argv)
     const unsigned rx_index = argc > 4 ? (unsigned)strtoul(argv[4], NULL, 10) : 0;
     const bladerf_channel_layout layout = argc > 5 && strcmp(argv[5], "x2") == 0
         ? BLADERF_RX_X2 : BLADERF_RX_X1;
+    const unsigned read_samples = argc > 6 ?
+        (unsigned)strtoul(argv[6], NULL, 10) :
+        (buffer_samples < RX_READ_SAMPLES ? buffer_samples : RX_READ_SAMPLES);
     const unsigned buffers = transfers * 2 < 16 ? 16 : transfers * 2;
-    const unsigned read_samples = buffer_samples < RX_READ_SAMPLES ?
-        buffer_samples : RX_READ_SAMPLES;
     struct bladerf *dev = NULL;
     struct bladerf_quick_tune profiles[2];
     int16_t *samples = NULL;
@@ -54,9 +55,9 @@ int main(int argc, char **argv)
 
     if (trials == 0 || buffer_samples < 1024 || transfers == 0 ||
         transfers > 32 ||
-        buffer_samples % 1024 != 0) {
+        buffer_samples % 1024 != 0 || read_samples == 0) {
         fputs("usage: rx_epoch_host_handoff_live [trials] [buffer_samples] "
-              "[transfers] [rx_channel:0|1] [x1|x2]\n",
+              "[transfers] [rx_channel:0|1] [x1|x2] [read_samples]\n",
               stderr);
         return 2;
     }
@@ -70,6 +71,9 @@ int main(int argc, char **argv)
 
     status = bladerf_open(&dev, NULL);
     if (status != 0) return fail("open", status);
+    if (getenv("BLADERF_TEST_RX_EPOCH_DEBUG") != NULL) {
+        bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
+    }
 
 #define CHECK(call, name) do { \
         status = (call); \
@@ -169,6 +173,7 @@ int main(int argc, char **argv)
         struct bladerf_metadata metadata = {0};
         uint32_t transaction = 0, count = 0;
         bool complete = false;
+        bool clean_read = false;
 
         status = bladerf_rx_transition_begin_quick_tune(
             dev, rx_channel, &request, &profiles[target], &transaction);
@@ -186,11 +191,32 @@ int main(int argc, char **argv)
             metadata.flags = BLADERF_META_FLAG_RX_NOW;
             status = bladerf_sync_rx(dev, samples, read_samples, &metadata,
                                      2000);
-            if (status != BLADERF_ERR_WOULD_BLOCK) {
+            if (status == BLADERF_ERR_WOULD_BLOCK) {
+                continue;
+            }
+            if (status != 0) {
+                break;
+            }
+            if (metadata.actual_count == read_samples &&
+                !(metadata.status & BLADERF_META_STATUS_OVERRUN) &&
+                metadata.rx_epoch_id_valid &&
+                metadata.rx_epoch_id == final_event.epoch_id &&
+                metadata.timestamp >= final_event.fpga_timestamp) {
+                clean_read = true;
                 break;
             }
         }
-        if (status != 0) {
+        if (status != 0 || !clean_read) {
+            if (status == 0) {
+                fprintf(stderr, "no clean read after 16 metadata-checked "
+                        "attempts: count=%u/%u status=0x%x epoch=%u/%u "
+                        "valid=%u timestamp=%" PRIu64 " boundary=%" PRIu64 "\n",
+                        metadata.actual_count, read_samples, metadata.status,
+                        metadata.rx_epoch_id, final_event.epoch_id,
+                        metadata.rx_epoch_id_valid, metadata.timestamp,
+                        final_event.fpga_timestamp);
+                status = BLADERF_ERR_UNEXPECTED;
+            }
             fail("first sync RX", status);
             goto done;
         }
