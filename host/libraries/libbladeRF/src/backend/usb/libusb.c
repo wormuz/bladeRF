@@ -95,6 +95,13 @@ struct lusb_stream_data {
 
     /* Report a stalled feed once per stream, not once per transfer. */
     bool timeout_reported;
+    /* A terminal RX transfer failure shuts the whole stream down. Other
+     * in-flight transfers can then report the same failure during teardown. */
+    bool rx_terminal_failure_reported;
+
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+    bool rx_status_fault_injected;
+#endif
 
 
     /* Completion flag for libusb_handle_events_timeout_completed(). libusb
@@ -1117,6 +1124,17 @@ static inline size_t transfer_idx(struct lusb_stream_data *stream_data,
 
 static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t len);
 
+static void notify_rx_terminal_failure_once(
+    struct bladerf_stream *stream, struct lusb_stream_data *stream_data,
+    uint32_t reason)
+{
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        !stream_data->rx_terminal_failure_reported) {
+        stream_data->rx_terminal_failure_reported = true;
+        async_notify_rx_transport_failure(stream, reason);
+    }
+}
+
 static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 {
     struct bladerf_stream *stream = transfer->user_data;
@@ -1133,6 +1151,22 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     transfer_i = transfer_idx(stream_data, transfer);
     assert(stream_data->transfer_status[transfer_i] == TRANSFER_IN_FLIGHT ||
            stream_data->transfer_status[transfer_i] == TRANSFER_CANCEL_PENDING);
+
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+    /* Exercise the real libusb completion callback and terminal-error path on
+     * hardware without depending on a physical bus fault. Never compiled in
+     * production builds. The harness arms this only immediately before RX. */
+    if (!stream_data->rx_status_fault_injected &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        transfer->status == LIBUSB_TRANSFER_COMPLETED) {
+        const char *fault = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+        if (fault != NULL && strcmp(fault, "OVERFLOW") == 0) {
+            stream_data->rx_status_fault_injected = true;
+            transfer->status = LIBUSB_TRANSFER_OVERFLOW;
+            transfer->actual_length = 0;
+        }
+    }
+#endif
 
     if (transfer_i >= stream_data->num_transfers) {
         log_error("Unable to find transfer\n");
@@ -1239,16 +1273,18 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
             case LIBUSB_TRANSFER_STALL:
                 log_error("Hit stall for buffer %p\n\r", transfer->buffer);
-                async_notify_rx_transport_failure(
-                    stream, BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+                notify_rx_terminal_failure_once(
+                    stream, stream_data,
+                    BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
             case LIBUSB_TRANSFER_ERROR:
                 log_error("Got transfer error for buffer %p\n\r",
                           transfer->buffer);
-                async_notify_rx_transport_failure(
-                    stream, BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+                notify_rx_terminal_failure_once(
+                    stream, stream_data,
+                    BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
@@ -1256,8 +1292,8 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 log_error("Got transfer over for buffer %p, "
                           "transfer \"actual_length\" = %d\n\r",
                           transfer->buffer, transfer->actual_length);
-                async_notify_rx_transport_failure(
-                    stream, BLADERF_RF_WITHHELD_USB_OVERFLOW);
+                notify_rx_terminal_failure_once(
+                    stream, stream_data, BLADERF_RF_WITHHELD_USB_OVERFLOW);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
@@ -1275,14 +1311,14 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                           transfer->buffer, transfer->actual_length,
                           (int)transfer->length,
                           (unsigned)stream_data->num_complete);
-                async_notify_rx_transport_failure(
-                    stream, BLADERF_RF_WITHHELD_USB_TIMEOUT);
+                notify_rx_terminal_failure_once(
+                    stream, stream_data, BLADERF_RF_WITHHELD_USB_TIMEOUT);
                 stream->error_code = BLADERF_ERR_TIMEOUT;
                 break;
 
             case LIBUSB_TRANSFER_NO_DEVICE:
-                async_notify_rx_transport_failure(
-                    stream, BLADERF_RF_WITHHELD_DEVICE_LOST);
+                notify_rx_terminal_failure_once(
+                    stream, stream_data, BLADERF_RF_WITHHELD_DEVICE_LOST);
                 stream->error_code = BLADERF_ERR_NODEV;
                 break;
 
@@ -1467,6 +1503,10 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream_data->out_of_order_event = false;
     stream_data->num_complete = 0;
     stream_data->timeout_reported = false;
+    stream_data->rx_terminal_failure_reported = false;
+#ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
+    stream_data->rx_status_fault_injected = false;
+#endif
     stream_data->cancel_deadline_ns = 0;
     stream_data->done_flag = 0;
 
