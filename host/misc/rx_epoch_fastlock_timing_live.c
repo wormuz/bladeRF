@@ -1,5 +1,6 @@
 #include <libbladeRF.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,8 +8,10 @@
 #define RX_CHANNEL BLADERF_CHANNEL_RX(0)
 #define RX_SAMPLE_RATE 4000000
 #define RX_BANDWIDTH 5000000
-#define FREQ_A 1835000000ULL
-#define FREQ_B 1835400000ULL
+#define LOCAL_FREQ_A 1835000000ULL
+#define LOCAL_FREQ_B 1835400000ULL
+#define CROSS_FREQ_A 947500000ULL
+#define CROSS_FREQ_B 1835000000ULL
 
 static int fail_status(const char *what, int status)
 {
@@ -32,6 +35,11 @@ int main(int argc, char **argv)
 {
     const unsigned trials = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 20;
     const char *mode = argc > 2 ? argv[2] : "fastlock";
+    const bool cross_band = argc > 3 && strcmp(argv[3], "--cross-band") == 0;
+    const uint64_t frequencies[2] = {
+        cross_band ? CROSS_FREQ_A : LOCAL_FREQ_A,
+        cross_band ? CROSS_FREQ_B : LOCAL_FREQ_B,
+    };
     struct bladerf *dev = NULL;
     struct bladerf_quick_tune profiles[2];
     int status;
@@ -40,7 +48,8 @@ int main(int argc, char **argv)
     if (trials == 0 || (strcmp(mode, "fastlock") != 0 &&
                         strcmp(mode, "host") != 0 &&
                         strcmp(mode, "ab") != 0)) {
-        fputs("usage: rx_epoch_fastlock_timing_live [trials] [fastlock|host|ab]\n",
+        fputs("usage: rx_epoch_fastlock_timing_live [trials] [fastlock|host|ab] "
+              "[--cross-band]\n",
               stderr);
         return 2;
     }
@@ -49,11 +58,11 @@ int main(int argc, char **argv)
 
     if ((status = bladerf_set_sample_rate(dev, RX_CHANNEL, RX_SAMPLE_RATE, NULL)) != 0 ||
         (status = bladerf_set_bandwidth(dev, RX_CHANNEL, RX_BANDWIDTH, NULL)) != 0 ||
-        (status = bladerf_set_frequency(dev, RX_CHANNEL, FREQ_A)) != 0 ||
+        (status = bladerf_set_frequency(dev, RX_CHANNEL, frequencies[0])) != 0 ||
         (status = bladerf_get_quick_tune(dev, RX_CHANNEL, &profiles[0])) != 0 ||
-        (status = bladerf_set_frequency(dev, RX_CHANNEL, FREQ_B)) != 0 ||
+        (status = bladerf_set_frequency(dev, RX_CHANNEL, frequencies[1])) != 0 ||
         (status = bladerf_get_quick_tune(dev, RX_CHANNEL, &profiles[1])) != 0 ||
-        (status = bladerf_set_frequency(dev, RX_CHANNEL, FREQ_A)) != 0 ||
+        (status = bladerf_set_frequency(dev, RX_CHANNEL, frequencies[0])) != 0 ||
         (status = bladerf_sync_config(dev, BLADERF_RX_X1,
                                       BLADERF_FORMAT_SC16_Q11_META,
                                       16, 8192, 8, 1000)) != 0 ||
@@ -64,14 +73,15 @@ int main(int argc, char **argv)
 
     printf("transition timing mode=%s trials=%u profiles=%u/%u frequencies=%llu/%llu\n",
            mode, trials, profiles[0].rffe_profile, profiles[1].rffe_profile,
-           (unsigned long long)FREQ_A, (unsigned long long)FREQ_B);
+           (unsigned long long)frequencies[0],
+           (unsigned long long)frequencies[1]);
 
     for (unsigned i = 0; i < trials; ++i) {
         const unsigned target = (i + 1) & 1u;
         const bool use_fastlock = strcmp(mode, "fastlock") == 0 ||
                                   (strcmp(mode, "ab") == 0 && (i & 1u));
         const struct bladerf_rx_transition_request request = {
-            .target_frequency_hz = target ? FREQ_B : FREQ_A,
+            .target_frequency_hz = frequencies[target],
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                     BLADERF_RF_REQUIRE_ENSM_RX |
                                     BLADERF_RF_REQUIRE_EPOCH_VALID,
