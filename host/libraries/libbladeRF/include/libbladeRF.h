@@ -1892,6 +1892,11 @@ struct bladerf_quick_tune {
  *       requests occurs.
 
  * @note NULL quick_tune parameters are not supported by the bladeRF 2.0 micro.
+ * @note On bladeRF 2 when RX sample-META epoch filtering is active,
+ *       independently scheduled RX retunes return ::BLADERF_ERR_WOULD_BLOCK.
+ *       Use ::bladerf_rx_transition_begin() / ::bladerf_rx_transition_wait()
+ *       so the FPGA fence and RX-valid event cover the retune. A transition
+ *       also cancels RX retunes queued before it began.
  */
 API_EXPORT
 int CALL_CONV bladerf_schedule_retune(struct bladerf *dev,

@@ -37,4 +37,15 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
+/* An independently queued RX recall has no transaction completion event or
+ * epoch boundary. Only the fastlock request issued from inside the active
+ * transition may pass while the event-driven contract owns the channel. */
+static inline bool bladerf2_rx_scheduled_retune_blocked(
+    bool is_rx, bool transition_pending, bool epoch_filter_enabled,
+    bool transaction_fastlock)
+{
+    return is_rx && !transaction_fastlock &&
+           (transition_pending || epoch_filter_enabled);
+}
+
 #endif

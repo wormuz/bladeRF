@@ -62,6 +62,7 @@
 
 #include "bladerf2_common.h"
 #include "common.h"
+#include "rf_transition_policy.h"
 
 
 /******************************************************************************/
@@ -1854,6 +1855,18 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     NULL_CHECK(quick_tune);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    /* Once sample-META epoch filtering is active, an ordinary scheduled
+     * retune has no completion event or first-valid boundary. Only the
+     * quick-tune recall issued inside rx_transition_begin() is allowed; it
+     * is fenced by that transaction's FPGA epoch gate. */
+    if (bladerf2_rx_scheduled_retune_blocked(
+            !BLADERF_CHANNEL_IS_TX(ch), board_data->rf_transition_pending,
+            board_data->sync[BLADERF_RX].initialized &&
+                sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]),
+            board_data->rf_transition_scheduling_quick_tune)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     if (!have_cap(board_data->capabilities, BLADERF_CAP_SCHEDULED_RETUNE)) {
         log_debug("This FPGA version (%u.%u.%u) does not support "

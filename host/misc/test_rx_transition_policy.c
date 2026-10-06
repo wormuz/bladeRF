@@ -43,5 +43,19 @@ int main(void)
     assert(!bladerf2_rf_transition_normalize_requirements(
         1U << 31, false, &effective));
     assert(!bladerf2_rf_transition_normalize_requirements(0, false, NULL));
+
+    /* A queued RX recall has no epoch completion. It is blocked whenever an
+     * event transaction owns the channel or the host epoch filter is active;
+     * only the quick-tune substep inside that transaction is allowed. */
+    assert(!bladerf2_rx_scheduled_retune_blocked(
+        false, true, true, false));
+    assert(bladerf2_rx_scheduled_retune_blocked(
+        true, true, false, false));
+    assert(bladerf2_rx_scheduled_retune_blocked(
+        true, false, true, false));
+    assert(!bladerf2_rx_scheduled_retune_blocked(
+        true, true, true, true));
+    assert(!bladerf2_rx_scheduled_retune_blocked(
+        true, false, false, false));
     return 0;
 }

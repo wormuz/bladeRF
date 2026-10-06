@@ -627,6 +627,22 @@ static int _bladerf_rx_transition_begin(
         return _fail_transition(dev, board_data, status, NULL);
     }
 
+    /* A legacy scheduled RX recall can outlive this handle-side transaction
+     * and move the LO after the newly certified epoch opens. Retire all
+     * previously queued RX recalls before arming the next epoch. Older FPGA
+     * images without the queue capability have nothing to cancel. */
+    if (dev->board->cancel_scheduled_retunes != NULL) {
+        WITH_MUTEX(&dev->lock, {
+            status = dev->board->cancel_scheduled_retunes(dev, ch);
+        });
+        if (status != 0 && status != BLADERF_ERR_UNSUPPORTED) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR,
+                        request->target_frequency_hz, 0, 0, status, 0);
+            return _fail_transition(dev, board_data, status, NULL);
+        }
+    }
+
     _emit_event(dev, board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
                 BLADERF_RF_STATE_CONFIG_PENDING,
                 request->target_frequency_hz, 0, 0, 0, 0);
@@ -718,9 +734,11 @@ static int _bladerf_rx_transition_begin(
         WITH_MUTEX(&dev->lock, {
             memset(&dev->nios_retune_trace, 0,
                    sizeof(dev->nios_retune_trace));
+            board_data->rf_transition_scheduling_quick_tune = true;
             status = dev->board->schedule_retune(
                 dev, ch, BLADERF_RETUNE_NOW,
                 request->target_frequency_hz, &qt);
+            board_data->rf_transition_scheduling_quick_tune = false;
             nios_begin_ns = dev->nios_retune_trace.request_begin_ns;
             nios_out_done_ns = dev->nios_retune_trace.usb_out_done_ns;
             nios_response_done_ns = dev->nios_retune_trace.response_done_ns;
@@ -787,6 +805,7 @@ static int _bladerf_rx_transition_begin(
             status = bladerf_set_frequency_locked(
                 dev, ch, request->target_frequency_hz);
             board_data->rf_transition_setter_active = false;
+            board_data->rf_transition_scheduling_quick_tune = false;
             board_data->rf_transition_spi_trace_enabled = false;
         });
     }
