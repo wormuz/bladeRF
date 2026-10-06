@@ -41,6 +41,14 @@ static int transition(struct bladerf *dev, uint64_t frequency_hz,
     if (status != 0) {
         fprintf(stderr, "transition wait %.3f MHz: %s txn=%u\n",
                 frequency_hz / 1e6, bladerf_strerror(status), transaction_id);
+    } else {
+        fprintf(stderr, "transition complete txn=%u event=%u state=%u epoch=%u "
+                "requested=%" PRIu64 " readback=%" PRIu64
+                " first_ts=%" PRIu64 " error=%d\n",
+                result->transaction_id, result->event_type,
+                result->fpga_state, result->epoch_id,
+                result->requested_rx_lo_hz, result->readback_rx_lo_hz,
+                result->fpga_timestamp, result->error_code);
     }
     return status;
 }
@@ -58,6 +66,12 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
                 continue;
             }
             fprintf(stderr, "sync_rx: %s\n", bladerf_strerror(status));
+            fprintf(stderr, "read_valid_epoch: expected_epoch=%u boundary=%"
+                    PRIu64 " actual_count=%u meta_epoch=%u epoch_valid=%u "
+                    "metadata_timestamp=%" PRIu64 " metadata_status=0x%x\n",
+                    expected_epoch, min_timestamp, metadata.actual_count,
+                    metadata.rx_epoch_id, metadata.rx_epoch_id_valid,
+                    metadata.timestamp, metadata.status);
             return status;
         }
         if (!metadata.rx_epoch_id_valid ||
