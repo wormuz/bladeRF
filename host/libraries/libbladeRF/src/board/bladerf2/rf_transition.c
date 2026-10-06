@@ -438,6 +438,11 @@ static int _bladerf_rx_transition_begin(
         int epoch_status = _prepare_rx_epoch_id(
             dev, request->timeout_ms ? request->timeout_ms : 1000,
             &epoch_id, &epoch_status_word);
+        if (epoch_status == 0) {
+            WITH_MUTEX(&dev->lock, {
+                board_data->rf_transition_epoch_id = epoch_id;
+            });
+        }
         /* Fence the host-side parser before changing the FPGA gate. Old USB
          * buffers may already be queued, and the first-valid timestamp is
          * only available after successful RFIC/FPGA completion. Keep the
@@ -650,6 +655,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     bool ensm_rx    = false;
     bool transition_busy = false;
     bool transaction_valid = false;
+    uint8_t expected_epoch_id = 0;
     int status;
     uint64_t wait_started_ns;
 
@@ -663,6 +669,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         if (board_data->rf_transition_pending &&
             board_data->rf_transition_current_id == transaction_id) {
             transaction_valid = true;
+            expected_epoch_id = board_data->rf_transition_epoch_id;
             if (board_data->rf_transition_waiting) {
                 transition_busy = true;
             } else {
@@ -785,7 +792,26 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
             uint8_t epoch_state = (uint8_t)((epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT)
                                             & NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
-            if (epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW || epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+            if (epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW ||
+                epoch_state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+                uint8_t reported_epoch_id = (uint8_t)((epoch_status_word >>
+                    NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+                    NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+                if (!nios_pkt_8x32_rx_epoch_status_is_active(
+                        epoch_status_word, expected_epoch_id)) {
+                    log_error("%s: FPGA reported active stale epoch: "
+                              "transaction=%u expected=%u reported=%u "
+                              "state=%u status=0x%08x\n",
+                              __FUNCTION__, transaction_id,
+                              expected_epoch_id, reported_epoch_id,
+                              epoch_state, epoch_status_word);
+                    _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                                BLADERF_RF_STATE_ERROR, 0, 0,
+                                epoch_status_word, BLADERF_ERR_UNEXPECTED, 0);
+                    return _fail_transition(dev, board_data,
+                                            BLADERF_ERR_UNEXPECTED,
+                                            final_event);
+                }
                 epoch_opened = true;
                 break;
             }

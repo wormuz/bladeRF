@@ -400,6 +400,24 @@
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW  0x3u
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR       0x4u
 
+/* A transition is complete only when the gate is open for the exact epoch
+ * armed by the host. ACTIVE alone is insufficient: it can describe a prior
+ * epoch if status is stale or a control command was lost. */
+static inline bool nios_pkt_8x32_rx_epoch_status_is_active(
+    uint32_t status, uint8_t expected_epoch_id)
+{
+    const uint8_t state = (uint8_t)((status >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
+    const uint8_t epoch_id = (uint8_t)((status >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+
+    return epoch_id == expected_epoch_id &&
+        (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW ||
+         state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE);
+}
+
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED     0x00 /* data: 0 = SS, 1 = HS */
 #define NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG       0x01 /* data: 8-bit host tag */
 #define NIOS_PKT_8x32_RF_LINK_CMD_START         0x02

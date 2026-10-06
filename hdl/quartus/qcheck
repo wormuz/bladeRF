@@ -837,6 +837,11 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "sync RX parser lacks the metadata timestamp lower-bound filter",
              "suppress queued samples preceding the FPGA first-valid timestamp")
+    if ("nios_pkt_8x32_rx_epoch_status_is_active" not in transition_text or
+            "expected_epoch_id" not in transition_text):
+        fail("rx-epoch-host-timestamp-fence",
+             "host can accept ACTIVE status for an epoch other than the one it armed",
+             "require the FPGA-reported epoch ID to match the pending transaction")
 
 
 def check_qgate_sweep_handshake_count():
