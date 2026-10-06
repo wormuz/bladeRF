@@ -231,5 +231,22 @@ int main(void)
 
     fixture_destroy(&f);
 
+    /* Timestamp continuity resets at a new certified epoch. Stale queued
+     * packets are drained without becoming the baseline for the first
+     * matching packet, whose timestamp is unrelated to the old epoch. */
+    fixture_init(&f);
+    f.sync.meta.have_timestamp = true;
+    f.sync.meta.curr_timestamp = 1000 + MSG_SAMPLES;
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 5000, 8) == 0);
+    write_msg(f.buffers[0], 2000, 7, 1222);
+    write_msg(f.buffers[0] + MSG_BYTES, 5000, 8, 1333);
+    receive(&f, out, 100, &meta);
+    assert(meta.timestamp == 5000);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 8);
+    assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
+    assert_marker(out, 100, 1333, 0);
+    fixture_destroy(&f);
+
     return 0;
 }

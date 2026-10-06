@@ -588,6 +588,10 @@ int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id)
         sync->meta.rx_epoch_expected_id = epoch_id;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
+        /* Timestamp continuity is scoped to an RX epoch. The first packet
+         * admitted for the next epoch must not be compared with the prior
+         * epoch's final sample coordinate. */
+        sync->meta.have_timestamp = false;
         if (sync->state == SYNC_STATE_USING_BUFFER_META &&
             sync->meta.state == SYNC_META_STATE_SAMPLES) {
             sync->meta.msg_epoch_filtered_out = true;
@@ -1069,8 +1073,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                         s->meta.curr_timestamp);
                         }
 
-                        s->meta.curr_timestamp = s->meta.msg_timestamp;
-                        s->meta.have_timestamp = true;
+                        /* Old-epoch messages are drained while a new epoch
+                         * is pending. Their timestamps cannot seed continuity
+                         * for the first matching packet of the new epoch. */
+                        if (!s->meta.msg_epoch_filtered_out) {
+                            s->meta.curr_timestamp = s->meta.msg_timestamp;
+                            s->meta.have_timestamp = true;
+                        }
                         s->meta.state = SYNC_META_STATE_SAMPLES;
                         break;
 
