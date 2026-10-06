@@ -13,6 +13,7 @@ set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../..)
 
 add_executable(libbladeRF_test_sync_epoch_traversal
     main.c
+    ${SRC_ROOT}/streaming/async.c
     ${SRC_ROOT}/streaming/sync.c
     ${BLADERF_HOST_COMMON_SOURCE_DIR}/log.c
 )

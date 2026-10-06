@@ -692,10 +692,15 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                                            xfer->handle);
 
         if (success) {
-            next_buffer = stream->cb(stream->dev, stream, &meta,
-                                     data->transfers[i].buffer,
-                                     bytes_to_samples(stream->format, (LONG &)len),
-                                     stream->user_data);
+            if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+                next_buffer = async_rx_process_buffer(
+                    stream, &meta, data->transfers[i].buffer, (size_t)len);
+            } else {
+                next_buffer = stream->cb(stream->dev, stream, &meta,
+                                         data->transfers[i].buffer,
+                                         bytes_to_samples(stream->format, (LONG &)len),
+                                         stream->user_data);
+            }
 
         } else {
             done = true;

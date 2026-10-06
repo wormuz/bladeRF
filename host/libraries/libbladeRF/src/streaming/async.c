@@ -32,6 +32,44 @@
 #include "helpers/timeout.h"
 #include "helpers/have_cap.h"
 
+/* Keep async RX discontinuities in the device-wide RF event history, just as
+ * sync RX does. The backend invokes this only for a short RX transfer or a
+ * USB overflow; it must not be called for TX or normal stream teardown. */
+void async_notify_rx_overrun(struct bladerf_stream *stream)
+{
+    struct bladerf *dev;
+
+    if (stream == NULL || stream->dev == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    dev = stream->dev;
+    if (dev->board != NULL && dev->board->rx_stream_overrun != NULL) {
+        dev->board->rx_stream_overrun(dev);
+    }
+}
+
+void *async_rx_process_buffer(struct bladerf_stream *stream,
+                              struct bladerf_metadata *metadata,
+                              void *samples,
+                              size_t received_bytes)
+{
+    if (stream == NULL || stream->cb == NULL || samples == NULL) {
+        return BLADERF_STREAM_SHUTDOWN;
+    }
+
+    if (stream->format != BLADERF_FORMAT_PACKET_META &&
+        received_bytes != async_stream_buf_bytes(stream)) {
+        async_notify_rx_overrun(stream);
+        return samples;
+    }
+
+    return stream->cb(stream->dev, stream, metadata, samples,
+                      bytes_to_samples(stream->format, received_bytes),
+                      stream->user_data);
+}
+
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.
  * Used when the sysfs entry cannot be read (non-Linux, restricted /sys). */
 #define USBFS_MEMORY_MB_DEFAULT 16
@@ -346,4 +384,3 @@ void async_deinit_stream(struct bladerf_stream *stream)
     /* Free up the stream itself */
     free(stream);
 }
-

@@ -1252,6 +1252,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 log_error("Got transfer over for buffer %p, "
                           "transfer \"actual_length\" = %d\n\r",
                           transfer->buffer, transfer->actual_length);
+                async_notify_rx_overrun(stream);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
@@ -1283,7 +1284,11 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     }
 
     if (stream->state == STREAM_RUNNING) {
-        if (stream->format == BLADERF_FORMAT_PACKET_META) {
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+            next_buffer = async_rx_process_buffer(
+                stream, &metadata, transfer->buffer,
+                (size_t)transfer->actual_length);
+        } else if (stream->format == BLADERF_FORMAT_PACKET_META) {
             /* Call user callback requesting more data to transmit */
             next_buffer = stream->cb(
                 stream->dev, stream, &metadata, transfer->buffer,

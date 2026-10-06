@@ -77,6 +77,17 @@ int async_init_stream(struct bladerf_stream **stream,
                       size_t num_transfers,
                       void *user_data);
 
+/* Publish a receive discontinuity detected by an asynchronous backend. */
+void async_notify_rx_overrun(struct bladerf_stream *stream);
+
+/* Deliver a complete continuous-IQ RX transfer, or recycle a partial one
+ * without exposing its samples. Packet-meta payloads are caller-framed and
+ * may be variable length, so they are passed through unchanged. */
+void *async_rx_process_buffer(struct bladerf_stream *stream,
+                              struct bladerf_metadata *metadata,
+                              void *samples,
+                              size_t received_bytes);
+
 /* Set the transfer timeout. This acquires stream->lock. */
 int async_set_transfer_timeout(struct bladerf_stream *stream,
                                unsigned int transfer_timeout_ms);

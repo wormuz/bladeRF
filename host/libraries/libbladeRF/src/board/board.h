@@ -319,7 +319,8 @@ struct board_fns {
      * invalidate_rx_data after the legacy setter has fully returned. */
     void (*rx_reconfigure_complete)(struct bladerf *dev,
                                     bladerf_channel ch);
-    /* Report a discontinuity surfaced by sync RX metadata. */
+    /* Report an RX discontinuity surfaced by sync metadata or an async USB
+     * transfer (short transfer / overflow). */
     void (*rx_stream_overrun)(struct bladerf *dev);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,

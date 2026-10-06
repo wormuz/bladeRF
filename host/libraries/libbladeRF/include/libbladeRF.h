@@ -4685,7 +4685,9 @@ typedef enum {
      * `flags` contains one BLADERF_RF_INVALIDATE_* reason. This event has
      * transaction_id=0 because it is not a completed event-driven request. */
     BLADERF_RF_EVT_RX_DATA_INVALIDATED,
-    /** RX returned a discontinuity/overrun marker in bladerf_metadata. */
+    /** RX discontinuity: sync metadata/queue overrun, or an asynchronous
+     * USB RX short transfer/overflow. IQ from a discontinuous read must not
+     * be treated as a contiguous capture. */
     BLADERF_RF_EVT_RX_STREAM_OVERRUN
 } bladerf_rf_event_type;
 

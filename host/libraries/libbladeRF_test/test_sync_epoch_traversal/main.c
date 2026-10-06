@@ -7,6 +7,7 @@
 #include "host_config.h"
 #include "streaming/sync.h"
 #include "streaming/sync_worker.h"
+#include "streaming/async.h"
 #include "streaming/metadata.h"
 #include "board/board.h"
 
@@ -74,6 +75,20 @@ static void note_rx_overrun(struct bladerf *dev)
 {
     assert(dev != NULL);
     rx_overrun_events++;
+}
+
+static unsigned int async_rx_callbacks;
+
+static void *count_async_rx_callback(struct bladerf *dev,
+                                    struct bladerf_stream *stream,
+                                    struct bladerf_metadata *metadata,
+                                    void *samples, size_t num_samples,
+                                    void *user_data)
+{
+    assert(dev != NULL && stream != NULL && metadata != NULL);
+    assert(samples != NULL && num_samples > 0 && user_data == NULL);
+    async_rx_callbacks++;
+    return samples;
 }
 
 static const struct board_fns test_board = {
@@ -319,6 +334,37 @@ int main(void)
     assert(sync_rx(&f.sync, out, 8, NULL, 0) == BLADERF_ERR_WOULD_BLOCK);
     assert(rx_overrun_events == 2);
     assert(!f.sync.buf_mgmt.overrun_pending);
+    fixture_destroy(&f);
+
+    /* The async USB backend recycles incomplete continuous-IQ transfers
+     * without exposing their prefix to application callbacks, and publishes
+     * the same device event used by sync RX. */
+    fixture_init(&f);
+    struct bladerf_stream async_stream = {0};
+    struct bladerf_metadata async_meta = {0};
+    int16_t async_samples[2048] = {0};
+    async_stream.dev = &f.dev;
+    async_stream.layout = BLADERF_RX_X2;
+    async_stream.format = BLADERF_FORMAT_SC16_Q11_META;
+    async_stream.samples_per_buffer = 1024;
+    async_stream.cb = count_async_rx_callback;
+    async_rx_callbacks = 0;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples) / 2) == async_samples);
+    assert(rx_overrun_events == 3);
+    assert(async_rx_callbacks == 0);
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_callbacks == 1);
+    assert(rx_overrun_events == 3);
+    async_stream.format = BLADERF_FORMAT_PACKET_META;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples) / 2) == async_samples);
+    assert(async_rx_callbacks == 2);
+    async_stream.layout = BLADERF_TX_X2;
+    async_notify_rx_overrun(&async_stream);
+    async_notify_rx_overrun(NULL);
+    assert(rx_overrun_events == 3);
     fixture_destroy(&f);
 
     return 0;
