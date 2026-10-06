@@ -2456,6 +2456,8 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
     char *full_path = NULL;
     char *full_path_bin = NULL;
     char *ext;
+    bool lock_held = false;
+    bladerf_gain gain_target_after_load;
 
     size_t filename_len = PATH_MAX;
     char *filename = (char *)calloc(1, filename_len + 1);
@@ -2465,6 +2467,7 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
 
     log_debug("Loading gain calibration\n");
     MUTEX_LOCK(&dev->lock);
+    lock_held = true;
 
     board_name = bladerf_get_board_name(dev);
     if (strcmp(board_name, "bladerf2") != 0) {
@@ -2527,14 +2530,26 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
         goto error;
     }
 
+    gain_target_after_load = dev->gain_tbls[ch].gain_target;
     MUTEX_UNLOCK(&dev->lock);
+    lock_held = false;
 
     /* Save current gain mode before gain reset */
-    if (BLADERF_CHANNEL_IS_TX(ch) == false)
-        dev->board->get_gain_mode(dev, ch, &gain_mode_before_gain_reset);
+    if (BLADERF_CHANNEL_IS_TX(ch) == false) {
+        MUTEX_LOCK(&dev->lock);
+        lock_held = true;
+        status = dev->board->get_gain_mode(dev, ch,
+                                            &gain_mode_before_gain_reset);
+        MUTEX_UNLOCK(&dev->lock);
+        lock_held = false;
+        if (status != 0) {
+            log_error("Failed to get gain mode before calibration reset\n");
+            goto error;
+        }
+    }
 
     /* Reset gain to ensure calibration adjustment is applied after loading */
-    status = bladerf_set_gain(dev, ch, dev->gain_tbls[ch].gain_target);
+    status = bladerf_set_gain(dev, ch, gain_target_after_load);
     if (status != 0) {
         log_error("%s: Failed to reset gain.\n", __FUNCTION__);
         goto error;
@@ -2557,7 +2572,9 @@ error:
     if (filename)
         free(filename);
 
-    MUTEX_UNLOCK(&dev->lock);
+    if (lock_held) {
+        MUTEX_UNLOCK(&dev->lock);
+    }
     return status;
 }
 
