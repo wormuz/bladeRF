@@ -655,6 +655,8 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         log_debug("Failed to get EP handle.\n");
         MUTEX_LOCK(&stream->lock);
         notify_rx_terminal_failure_once(stream, data, BLADERF_ERR_IO);
+        stream->error_code = BLADERF_ERR_UNEXPECTED;
+        stream->state = STREAM_DONE;
         MUTEX_UNLOCK(&stream->lock);
         return BLADERF_ERR_UNEXPECTED;
     }
