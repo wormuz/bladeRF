@@ -23,6 +23,7 @@ struct fault_test {
     atomic_bool data_after_fault;
     atomic_bool api_submit_requested;
     atomic_bool api_submit_mode;
+    atomic_bool recoverable_short_mode;
     void *api_buffer;
     uint32_t expected_reason;
     int expected_stream_status;
@@ -65,7 +66,8 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         return BLADERF_STREAM_REUSE_BUFFER;
     }
 
-    if (atomic_load(&test->fault_seen)) {
+    if (atomic_load(&test->fault_seen) &&
+        !atomic_load(&test->recoverable_short_mode)) {
         atomic_store(&test->data_after_fault, true);
         return BLADERF_STREAM_SHUTDOWN;
     }
@@ -74,7 +76,8 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         atomic_store(&test->api_submit_requested, true);
         return BLADERF_STREAM_NO_DATA;
     }
-    if (atomic_fetch_add(&test->data_callbacks, 1) >= 3) {
+    if (atomic_fetch_add(&test->data_callbacks, 1) >=
+        (atomic_load(&test->recoverable_short_mode) ? 1 : 3)) {
         return BLADERF_STREAM_SHUTDOWN;
     }
     return samples;
@@ -142,6 +145,13 @@ int main(void)
     } else if (strcmp(fault_status, "CANCELLED") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "UNKNOWN") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
+        test.expected_stream_status = BLADERF_ERR_IO;
+    } else if (strcmp(fault_status, "SHORT") == 0) {
+        test.expected_reason = BLADERF_RF_WITHHELD_SHORT_TRANSFER;
+        test.expected_stream_status = 0;
+        atomic_store(&test.recoverable_short_mode, true);
     } else if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
@@ -249,6 +259,8 @@ int main(void)
                                     strcmp(fault_status, "SUBMIT_NODEV") == 0 ||
                                     strcmp(fault_status, "SUBMIT_TIMEOUT") == 0;
     if (test.stream_status != test.expected_stream_status ||
+        (atomic_load(&test.recoverable_short_mode) &&
+         atomic_load(&test.data_callbacks) == 0) ||
         (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
          test.api_submit_status != BLADERF_ERR_IO) ||
         atomic_load(&test.withheld_events) != 1 ||
@@ -267,6 +279,16 @@ int main(void)
                 atomic_load(&test.data_after_fault),
                 bladerf_strerror(test.api_submit_status), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
+    } else if (atomic_load(&test.recoverable_short_mode)) {
+        printf("PASS libusb RX_X2 %s callback: resumed_valid_IQ=%u "
+               "event_only=%u withheld=%u overrun=%u stream=%s\n",
+               fault_status,
+               atomic_load(&test.data_callbacks),
+               atomic_load(&test.event_callbacks),
+               atomic_load(&test.withheld_events),
+               atomic_load(&test.overrun_events),
+               bladerf_strerror(test.stream_status));
+        status = 0;
     } else {
         printf("PASS libusb RX_X2 %s callback: data=%u event_only=%u "
                "withheld=%u overrun=%u post_fault_IQ=0 stream=%s\n",

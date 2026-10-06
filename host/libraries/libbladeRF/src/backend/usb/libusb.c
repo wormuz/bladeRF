@@ -1213,6 +1213,11 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 transfer->status = LIBUSB_TRANSFER_NO_DEVICE;
             } else if (strcmp(fault, "CANCELLED") == 0) {
                 transfer->status = LIBUSB_TRANSFER_CANCELLED;
+            } else if (strcmp(fault, "UNKNOWN") == 0) {
+                transfer->status = (enum libusb_transfer_status)99;
+            } else if (strcmp(fault, "SHORT") == 0) {
+                stream_data->rx_status_fault_injected = true;
+                transfer->actual_length = transfer->length / 2;
             }
             if (transfer->status != LIBUSB_TRANSFER_COMPLETED) {
                 stream_data->rx_status_fault_injected = true;
