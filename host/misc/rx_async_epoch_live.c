@@ -256,9 +256,10 @@ int main(void)
             stop_stream(&live, stream_thread);
             goto cleanup;
         }
-        status = event_transition(live.dev,
-                                  1835000000ULL + (i % 2) * 400000ULL,
-                                  &event);
+        /* Alternate VCO bands on every transition: 947.5 MHz and 1835 MHz. */
+        const uint64_t target_frequency = (i % 2) == 0 ?
+            947500000ULL : 1835000000ULL;
+        status = event_transition(live.dev, target_frequency, &event);
         if (status != 0 ||
             !wait_for_count(&live.valid_callbacks, ++wrap_valid_target, 3000)) {
             fprintf(stderr, "ring-wrap recovery %u failed: %s\n", i,
@@ -268,7 +269,7 @@ int main(void)
             goto cleanup;
         }
         if ((i + 1) % 10 == 0) {
-            fprintf(stderr, "paired invalidation/recovery stress=%u/70\n",
+            fprintf(stderr, "paired cross-band invalidation/recovery=%u/70\n",
                     i + 1);
         }
     }
