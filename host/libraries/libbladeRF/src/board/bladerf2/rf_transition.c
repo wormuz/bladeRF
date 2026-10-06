@@ -26,9 +26,11 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this program.
  */
+#include <errno.h>
 #include <time.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <stdlib.h>
 
 #include <libbladeRF.h>
 
@@ -324,6 +326,57 @@ void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
     }
 }
 
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+/* Deliberately absent from normal builds. Tests set the 1-based ordinal in
+ * BLADERF_TEST_SPI_FAIL_RX_TRANSITION_WRITE; exactly one backend write in the
+ * next active RX transition is then skipped and reported as -EIO. */
+int bladerf2_rx_transition_spi_test_should_fail(struct bladerf *dev)
+{
+    const char *setting = getenv("BLADERF_TEST_SPI_FAIL_RX_TRANSITION_WRITE");
+    struct bladerf2_board_data *board_data;
+    char *end = NULL;
+    unsigned long fail_ordinal;
+
+    if (dev == NULL || dev->board_data == NULL || setting == NULL ||
+        setting[0] == '\0') {
+        return 0;
+    }
+
+    errno = 0;
+    fail_ordinal = strtoul(setting, &end, 10);
+    if (errno != 0 || end == setting || *end != '\0' || fail_ordinal == 0 ||
+        fail_ordinal > UINT32_MAX) {
+        return 0;
+    }
+
+    board_data = dev->board_data;
+    if (!board_data->rf_transition_pending ||
+        !board_data->rf_transition_spi_trace_enabled) {
+        return 0;
+    }
+
+    if (board_data->rf_transition_test_fault_transaction_id !=
+        board_data->rf_transition_current_id) {
+        board_data->rf_transition_test_fault_transaction_id =
+            board_data->rf_transition_current_id;
+        board_data->rf_transition_test_fault_write_ordinal = 0;
+        board_data->rf_transition_test_fault_consumed = false;
+    }
+
+    if (board_data->rf_transition_test_fault_consumed) {
+        return 0;
+    }
+
+    board_data->rf_transition_test_fault_write_ordinal++;
+    if (board_data->rf_transition_test_fault_write_ordinal == fail_ordinal) {
+        board_data->rf_transition_test_fault_consumed = true;
+        return 1;
+    }
+
+    return 0;
+}
+#endif
+
 void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
                                                  uint32_t write_count)
 {
@@ -526,10 +579,18 @@ static int _bladerf_rx_transition_begin(
          * setter entry through LO programming. Ordinary RX retunes are
          * rejected until wait/abort clears rf_transition_pending. */
         WITH_MUTEX(&dev->lock, {
+            /* Observe the complete host retune, including fastlock exit and
+             * RF band selection writes that happen before the LO setter. */
+            board_data->rf_transition_spi_write_count = 0;
+            board_data->rf_transition_spi_first_write_ns = 0;
+            board_data->rf_transition_spi_last_write_ns = 0;
+            board_data->rf_transition_spi_last_status = 0;
+            board_data->rf_transition_spi_trace_enabled = true;
             board_data->rf_transition_setter_active = true;
             status = bladerf_set_frequency_locked(
                 dev, ch, request->target_frequency_hz);
             board_data->rf_transition_setter_active = false;
+            board_data->rf_transition_spi_trace_enabled = false;
         });
     }
 

@@ -88,6 +88,9 @@ struct bladerf2_spi_context {
     enum register_batch_state register_batch;
     enum register_bits_update_state register_bits_update;
 };
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+extern int bladerf2_rx_transition_spi_test_should_fail(struct bladerf *dev);
+#endif
 
 static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
                                  const struct no_os_spi_init_param *param)
@@ -202,6 +205,11 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
         }
 
         bladerf2_rx_transition_spi_observe(dev, true, 0);
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+        if (bladerf2_rx_transition_spi_test_should_fail(dev)) {
+            status = -EIO;
+        } else
+#endif
         status = dev->backend->ad9361_spi_write(dev, cmd, word);
         bladerf2_rx_transition_spi_observe(dev, false, status);
         if (status < 0) {

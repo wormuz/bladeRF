@@ -4602,12 +4602,15 @@ const char *CALL_CONV bladerf_strerror(int error);
  * frequency write followed by a guessed sleep. Each transition emits an
  * immutable ::bladerf_rf_event as soon as its underlying condition is
  * observed (LO setter returned, RFPLL lock bit set, ENSM state readback
- * matches the requested mode). BLADERF_RF_EVT_SPI_DONE is retained for
- * numeric compatibility but is not emitted: the current AD9361 API does
- * not expose the exact RFPLL-programming SPI completion boundary. The caller waits on explicit
- * events, with a timeout that can only report failure -- a timeout never
- * implies the data is valid. Only RX_EPOCH_VALID establishes application-
- * usable IQ; a control-plane-only request completes in RX_DATA_INVALID.
+ * matches the requested mode). Host-mode transitions also emit
+ * BLADERF_RF_EVT_SPI_WRITE_BEGIN/BLADERF_RF_EVT_SPI_DONE around all writes
+ * observed during the RX retune operation, including band selection and LO
+ * programming. They are host request/response timestamps, not SCLK-edge
+ * timestamps; NIOS-owned fastlock writes are not included. The caller waits
+ * on explicit events, with a timeout that can only report failure -- a
+ * timeout never implies the data is valid. Only RX_EPOCH_VALID establishes
+ * application-usable IQ; a control-plane-only request completes in
+ * RX_DATA_INVALID.
  *
  * @{
  */
@@ -4636,11 +4639,12 @@ typedef enum {
 /** RF transaction event types (ADR-0207 §4 Event contract).
  *
  * BLADERF_RF_EVT_SPI_WRITE_BEGIN and BLADERF_RF_EVT_SPI_DONE delimit the
- * host-observed first RX RFPLL write request and final write response inside
- * the AD9361 SPI platform adapter. Their timestamps include NIOS/USB command
- * transport; they are not SCLK-edge timestamps. `flags` on either event
- * carries the number of writes observed in that tune operation. These events
- * are not emitted for NIOS fastlock recall, whose SPI owner is the NIOS core.
+ * host-observed first RX retune SPI write request and final write response
+ * inside the AD9361 SPI platform adapter, including band selection and LO
+ * programming. Their timestamps include NIOS/USB command transport; they are
+ * not SCLK-edge timestamps. `flags` on either event carries the number of
+ * writes observed in that tune operation. These events are not emitted for
+ * NIOS fastlock recall, whose SPI owner is the NIOS core.
  */
 typedef enum {
     BLADERF_RF_EVT_CONFIG_ACCEPTED = 0,

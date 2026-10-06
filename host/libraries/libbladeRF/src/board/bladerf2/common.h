@@ -221,6 +221,11 @@ struct bladerf2_board_data {
     uint64_t rf_transition_spi_last_write_ns;
     uint32_t rf_transition_spi_write_count;
     int rf_transition_spi_last_status;
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+    uint32_t rf_transition_test_fault_transaction_id;
+    uint32_t rf_transition_test_fault_write_ordinal;
+    bool rf_transition_test_fault_consumed;
+#endif
 };
 
 /* Internal sync-RX hook: record when the first post-epoch META samples are
@@ -232,6 +237,9 @@ void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
 void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
                                                  uint32_t write_count);
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+int bladerf2_rx_transition_spi_test_should_fail(struct bladerf *dev);
+#endif
 
 struct bladerf_rfic_status_register {
     bool rfic_initialized;

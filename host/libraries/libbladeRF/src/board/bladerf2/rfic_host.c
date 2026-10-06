@@ -504,14 +504,7 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         CHECK_AD936X(ad9361_set_tx_lo_freq(phy, frequency));
     } else {
-        board_data->rf_transition_spi_write_count = 0;
-        board_data->rf_transition_spi_first_write_ns = 0;
-        board_data->rf_transition_spi_last_write_ns = 0;
-        board_data->rf_transition_spi_last_status = 0;
-        board_data->rf_transition_spi_trace_enabled =
-            board_data->rf_transition_pending;
         lo_status = ad9361_set_rx_lo_freq(phy, frequency);
-        board_data->rf_transition_spi_trace_enabled = false;
         CHECK_AD936X(lo_status);
     }
 

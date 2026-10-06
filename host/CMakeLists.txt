@@ -55,6 +55,13 @@ option(TREAT_WARNINGS_AS_ERRORS
        "Treat compiler warnings as errors."
        ON)
 
+option(ENABLE_TEST_SPI_FAULT_INJECTION
+       "Enable test-only AD9361 SPI write fault injection via environment variable."
+       OFF)
+if(ENABLE_TEST_SPI_FAULT_INJECTION)
+    add_definitions(-DBLADERF_ENABLE_TEST_SPI_FAULT_INJECTION=1)
+endif()
+
 if(ENABLE_LOG_FILE_INFO)
     add_definitions(-DLOG_INCLUDE_FILE_INFO)
 endif()

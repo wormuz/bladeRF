@@ -134,6 +134,61 @@ static int check_failed_trace(struct bladerf *dev, uint32_t transaction_id)
     return 0;
 }
 
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+static int check_injected_spi_failure_trace(struct bladerf *dev,
+                                            uint32_t transaction_id)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    bool complete = false;
+    bool invalidated = false;
+    bool spi_begin = false;
+    bool spi_failed = false;
+    bool errored = false;
+    bool forbidden_success_event = false;
+    uint64_t previous_timestamp = 0;
+    int status = bladerf_rx_transition_get_events(
+        dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &complete);
+
+    if (status != 0 || !complete || count == 0) {
+        return status ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        const struct bladerf_rf_event *event = &events[i];
+        if (event->transaction_id != transaction_id ||
+            event->host_monotonic_ns < previous_timestamp) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        previous_timestamp = event->host_monotonic_ns;
+        invalidated |= event->event_type == BLADERF_RF_EVT_RX_EPOCH_INVALID;
+        spi_begin |= event->event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN;
+        if (event->event_type == BLADERF_RF_EVT_SPI_DONE) {
+            spi_failed |= event->error_code != 0 &&
+                          (int32_t)event->rfic_status < 0;
+        }
+        errored |= event->event_type == BLADERF_RF_EVT_ERROR;
+        forbidden_success_event |=
+            event->event_type == BLADERF_RF_EVT_LO_SET_RETURNED ||
+            event->event_type == BLADERF_RF_EVT_LO_READBACK_MATCH ||
+            event->event_type == BLADERF_RF_EVT_RX_PLL_LOCKED ||
+            event->event_type == BLADERF_RF_EVT_ENSM_RX ||
+            event->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID;
+    }
+
+    if (!invalidated || !spi_begin || !spi_failed || !errored ||
+        forbidden_success_event ||
+        events[count - 1].event_type != BLADERF_RF_EVT_ERROR) {
+        fprintf(stderr, "SPI fault trace invalid txn=%u events=%u "
+                "invalidated=%u spi_begin=%u spi_failed=%u error=%u "
+                "success_event=%u\n", transaction_id, count, invalidated,
+                spi_begin, spi_failed, errored, forbidden_success_event);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
+}
+#endif
+
 int main(void)
 {
     const uint64_t recovery_frequency_hz = 1835400000ULL;
@@ -172,6 +227,66 @@ int main(void)
     CHECK(transition(dev, recovery_frequency_hz, &initial));
     CHECK(read_valid_epoch(dev, samples, initial.epoch_id,
                            initial.fpga_timestamp));
+
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+    const uint32_t fault_ordinals[] = { 1, 5 };
+    for (size_t i = 0; i < sizeof(fault_ordinals) / sizeof(fault_ordinals[0]);
+         ++i) {
+        struct bladerf_rx_transition_request injected_failure_request = {
+            .target_frequency_hz = 1835500000ULL + i * 100000ULL,
+            .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                                    BLADERF_RF_REQUIRE_ENSM_RX |
+                                    BLADERF_RF_REQUIRE_EPOCH_VALID,
+            .timeout_ms = 2000,
+            .require_rx_data_valid = true,
+            .epoch_settle_samples = 0,
+        };
+        char ordinal[16];
+        uint32_t injected_failure_txn = 0;
+        snprintf(ordinal, sizeof(ordinal), "%u", fault_ordinals[i]);
+        if (setenv("BLADERF_TEST_SPI_FAIL_RX_TRANSITION_WRITE", ordinal, 1) != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+            goto out;
+        }
+        status = bladerf_rx_transition_begin(
+            dev, BLADERF_CHANNEL_RX(0), &injected_failure_request,
+            &injected_failure_txn);
+        unsetenv("BLADERF_TEST_SPI_FAIL_RX_TRANSITION_WRITE");
+        if (status == 0 || injected_failure_txn == 0) {
+            fprintf(stderr, "injected SPI write %u failure unexpectedly succeeded\n",
+                    fault_ordinals[i]);
+            status = BLADERF_ERR_UNEXPECTED;
+            goto out;
+        }
+        CHECK(check_injected_spi_failure_trace(dev, injected_failure_txn));
+
+        struct bladerf_metadata failed_metadata = {0};
+        failed_metadata.flags = BLADERF_META_FLAG_RX_NOW;
+        status = bladerf_sync_rx(dev, samples, 4096, &failed_metadata, 300);
+        if (status != BLADERF_ERR_WOULD_BLOCK ||
+            failed_metadata.actual_count != 0) {
+            fprintf(stderr, "SPI failure admitted IQ: status=%s count=%u\n",
+                    bladerf_strerror(status), failed_metadata.actual_count);
+            status = BLADERF_ERR_UNEXPECTED;
+            goto out;
+        }
+
+        struct bladerf_rf_event spi_recovered = {0};
+        CHECK(transition(dev, recovery_frequency_hz, &spi_recovered));
+        if (spi_recovered.epoch_id == initial.epoch_id) {
+            fprintf(stderr, "SPI failure recovery reused old epoch %u\n",
+                    initial.epoch_id);
+            status = BLADERF_ERR_UNEXPECTED;
+            goto out;
+        }
+        CHECK(read_valid_epoch(dev, samples, spi_recovered.epoch_id,
+                               spi_recovered.fpga_timestamp));
+        initial = spi_recovered;
+        printf("RX SPI fault injection: PASS ordinal=%u failed_txn=%u "
+               "recovered_epoch=%u\n", fault_ordinals[i],
+               injected_failure_txn, spi_recovered.epoch_id);
+    }
+#endif
 
     struct bladerf_range const *range = NULL;
     CHECK(bladerf_get_frequency_range(dev, BLADERF_CHANNEL_RX(0), &range));
