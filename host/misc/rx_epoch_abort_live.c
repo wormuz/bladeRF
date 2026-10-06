@@ -97,6 +97,12 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
                     expected_epoch, min_timestamp, metadata.actual_count,
                     metadata.rx_epoch_id, metadata.rx_epoch_id_valid,
                     metadata.timestamp, metadata.status);
+            bladerf_timestamp current_rx_timestamp = 0;
+            int timestamp_status = bladerf_get_timestamp(
+                dev, BLADERF_RX, &current_rx_timestamp);
+            fprintf(stderr, "device RX timestamp after failed read: %s "
+                    "value=%" PRIu64 "\n",
+                    bladerf_strerror(timestamp_status), current_rx_timestamp);
             dump_recent_rx_events(dev);
             return status;
         }
