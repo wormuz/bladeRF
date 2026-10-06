@@ -931,6 +931,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
         while (_monotonic_ns() < deadline_ns) {
             const uint64_t read_begin_ns = _monotonic_ns();
+            if (!board_data->rx_epoch_snapshot_capability_checked &&
+                getenv("BLADERF_TEST_RX_EPOCH_FORCE_LEGACY_SNAPSHOT") != NULL) {
+                board_data->rx_epoch_snapshot_capability_checked = true;
+                board_data->rx_epoch_snapshot_supported = false;
+                log_debug("%s: forcing legacy epoch status/timestamp reads "
+                          "for qualification\n", __FUNCTION__);
+            }
             if (!board_data->rx_epoch_snapshot_capability_checked ||
                 board_data->rx_epoch_snapshot_supported) {
                 status = nios_rx_epoch_status_snapshot_read(
