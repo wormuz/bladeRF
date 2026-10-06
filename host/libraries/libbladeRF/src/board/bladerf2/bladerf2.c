@@ -2524,6 +2524,26 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             return -EINVAL;
     }
 
+    /* Reject formats that cannot carry RX epoch identity before starting
+     * USB transfers. Some formats (notably PACKET_META) may never produce a
+     * completed transfer, so callback-side withholding cannot notify users. */
+    if (dir == BLADERF_RX &&
+        !metadata_rx_format_has_epoch_tag(stream->format)) {
+        struct bladerf2_board_data *board_data = stream->dev->board_data;
+        bool epoch_contract_enabled;
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        epoch_contract_enabled =
+            board_data->rf_transition_epoch_contract_enabled;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+        if (epoch_contract_enabled) {
+            bladerf2_rx_async_format_unsupported(stream->dev,
+                                                 stream->format);
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+    }
+
     WITH_MUTEX(&stream->dev->lock, {
         CHECK_STATUS_LOCKED(
             perform_format_config(stream->dev, dir, stream->format));
