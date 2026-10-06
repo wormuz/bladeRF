@@ -160,6 +160,19 @@ static void *run_api_submit(void *arg)
     return NULL;
 }
 
+static const char *fault_layout_name(enum rx_fault_layout layout)
+{
+    switch (layout) {
+        case RX_FAULT_LAYOUT_RX1:
+            return "RX1";
+        case RX_FAULT_LAYOUT_RX2:
+            return "RX2";
+        case RX_FAULT_LAYOUT_X2:
+            return "RX_X2";
+    }
+    return "unknown";
+}
+
 int main(void)
 {
     struct fault_test test = {0};
@@ -340,10 +353,12 @@ int main(void)
         (strcmp(fault_status, "API_SUBMIT_IO") == 0 &&
          test.api_submit_status != BLADERF_ERR_IO) ||
         atomic_load(&test.withheld_events) != 1 ||
-        (pre_callback_fault ? atomic_load(&test.overrun_events) < 1
-                            : atomic_load(&test.overrun_events) != 1) ||
-        (pre_callback_fault ? atomic_load(&test.event_callbacks) < 1
-                            : atomic_load(&test.event_callbacks) != 1) ||
+        (pre_callback_fault || atomic_load(&test.recoverable_short_mode)
+             ? atomic_load(&test.overrun_events) < 1
+             : atomic_load(&test.overrun_events) != 1) ||
+        (pre_callback_fault || atomic_load(&test.recoverable_short_mode)
+             ? atomic_load(&test.event_callbacks) < 1
+             : atomic_load(&test.event_callbacks) != 1) ||
         atomic_load(&test.data_after_fault) ||
         atomic_load(&test.invalid_meta_buffers) != 0) {
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
@@ -364,7 +379,7 @@ int main(void)
         printf("PASS libusb %s %s callback: resumed_valid_IQ=%u "
                "rx1_slots=%u rx2_slots=%u invalid_meta=%u event_only=%u "
                "withheld=%u overrun=%u stream=%s\n",
-               test.layout == RX_FAULT_LAYOUT_X2 ? "RX_X2" : "RX_X1",
+               fault_layout_name(test.layout),
                fault_status,
                atomic_load(&test.data_callbacks),
                atomic_load(&test.rx1_samples),
@@ -379,7 +394,7 @@ int main(void)
         printf("PASS libusb %s %s callback: data=%u rx1_slots=%u "
                "rx2_slots=%u invalid_meta=%u event_only=%u withheld=%u "
                "overrun=%u post_fault_IQ=0 stream=%s\n",
-               test.layout == RX_FAULT_LAYOUT_X2 ? "RX_X2" : "RX_X1",
+               fault_layout_name(test.layout),
                fault_status,
                atomic_load(&test.data_callbacks),
                atomic_load(&test.rx1_samples),
