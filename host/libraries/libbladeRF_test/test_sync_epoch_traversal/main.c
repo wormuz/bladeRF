@@ -591,10 +591,13 @@ int main(void)
     struct bladerf_stream async_stream = {0};
     struct bladerf_metadata async_meta = {0};
     int16_t async_samples[2048] = {0};
+    void *async_buffers[] = { async_samples };
     async_stream.dev = &f.dev;
     async_stream.layout = BLADERF_RX_X2;
     async_stream.format = BLADERF_FORMAT_SC16_Q11_META;
     async_stream.samples_per_buffer = 1024;
+    async_stream.buffers = async_buffers;
+    async_stream.num_buffers = ARRAY_SIZE(async_buffers);
     async_stream.cb = count_async_rx_callback;
     async_stream.user_data = async_samples;
     async_rx_callbacks = 0;
@@ -614,6 +617,15 @@ int main(void)
     assert(async_rx_event_wakeups == 1);
     assert(async_withheld_events == 1);
     assert(async_withheld_reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    assert(MUTEX_INIT(&f.dev.lock) == 0);
+    MUTEX_LOCK(&f.dev.lock);
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples) / 2) == async_samples);
+    MUTEX_UNLOCK(&f.dev.lock);
+    assert(MUTEX_DESTROY(&f.dev.lock) == 0);
+    assert(async_rx_event_wakeups == 2);
+    assert(async_withheld_events == 2);
+    assert(async_overrun_events == 2);
     async_withheld_events = 0;
     async_withheld_reason = 0;
     async_rx_event_wakeups = 0;
@@ -627,31 +639,34 @@ int main(void)
     assert(MUTEX_DESTROY(&f.dev.lock) == 0);
     assert(async_withheld_events == 1);
     assert(async_withheld_reason == BLADERF_RF_WITHHELD_USB_OVERFLOW);
-    assert(async_overrun_events == 2);
+    assert(async_overrun_events == 3);
     assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = false;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 0);
-    assert(async_rx_event_wakeups == 2);
+    assert(async_rx_event_wakeups == 1);
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = true;
     async_stream.layout = BLADERF_RX_X1;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
-    assert(async_rx_event_wakeups == 2);
+    assert(async_rx_event_wakeups == 1);
     assert(rx_overrun_events == 2);
     allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
-    assert(async_rx_event_wakeups == 3);
+    assert(async_rx_event_wakeups == 2);
     allow_async_rx_buffer = true;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 2);
-    assert(async_rx_event_wakeups == 3);
+    assert(async_rx_event_wakeups == 2);
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);

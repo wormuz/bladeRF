@@ -56,6 +56,9 @@ struct bladerf_stream {
     /* The following items must be accessed atomically */
     int error_code;
     bladerf_stream_state state;
+    /* Protected by lock; coalesces event-only callbacks while continuous RX
+     * data is withheld. */
+    bool rx_withheld_notice_active;
     COND can_submit_buffer;
     COND stream_started;
     void *backend_data;

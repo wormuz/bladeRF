@@ -76,10 +76,22 @@ void async_notify_rx_transport_failure(struct bladerf_stream *stream,
         return;
     }
 
+    stream->rx_withheld_notice_active = true;
     async_notify_rx_data_withheld(stream, reason);
     async_notify_rx_overrun(stream);
     (void)stream->cb(stream->dev, stream, &metadata, NULL, 0,
                      stream->user_data);
+}
+
+static bool async_stream_owns_buffer(const struct bladerf_stream *stream,
+                                    const void *buffer)
+{
+    for (size_t i = 0; i < stream->num_buffers; ++i) {
+        if (stream->buffers[i] == buffer) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void *async_rx_process_buffer(struct bladerf_stream *stream,
@@ -98,6 +110,10 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
         async_notify_rx_data_withheld(stream,
                                       BLADERF_RF_WITHHELD_SHORT_TRANSFER);
         async_notify_rx_overrun(stream);
+        /* A short transfer is an individual transport fault, so every
+         * occurrence gets its own event-only callback even when another
+         * withholding interval is already active. */
+        stream->rx_withheld_notice_active = true;
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
                                  stream->user_data);
     } else if (stream->dev != NULL && stream->dev->board != NULL &&
@@ -105,11 +121,20 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                !stream->dev->board->rx_async_buffer_valid(
                    stream->dev, stream->layout, stream->format, samples,
                    received_bytes)) {
-        /* Notify the consumer without handing it IQ. Invalidation/transition
-         * events already explain why no valid samples are available. */
+        /* Notify once when a continuous invalid-data interval begins. The
+         * native event history records its reason; repeated rejected buffers
+         * owned by libbladeRF can be recycled without another callback. Keep
+         * calling back for caller-supplied buffers, whose ownership must be
+         * returned explicitly. */
+        if (stream->rx_withheld_notice_active &&
+            async_stream_owns_buffer(stream, samples)) {
+            return samples;
+        }
+        stream->rx_withheld_notice_active = true;
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
                                  stream->user_data);
     } else {
+        stream->rx_withheld_notice_active = false;
         return stream->cb(stream->dev, stream, metadata, samples,
                           bytes_to_samples(stream->format, received_bytes),
                           stream->user_data);
@@ -365,6 +390,7 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
     MUTEX_LOCK(&stream->lock);
     stream->layout = layout;
     stream->state = STREAM_RUNNING;
+    stream->rx_withheld_notice_active = false;
     COND_SIGNAL(&stream->stream_started);
     MUTEX_UNLOCK(&stream->lock);
 

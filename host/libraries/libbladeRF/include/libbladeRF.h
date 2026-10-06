@@ -3033,13 +3033,16 @@ struct bladerf_stream;
  *       when every message carries the certified epoch ID and is at or after
  *       the FPGA first-valid timestamp. Short transfers and rejected epoch
  *       buffers produce an event-only callback with `samples == NULL` and
- *       `num_samples == 0`; no IQ is exposed. RX PACKET_META and raw sample
+ *       `num_samples == 0` when a continuous withholding interval begins; no
+ *       IQ is exposed. Repeated rejected library-owned buffers are recycled
+ *       internally until valid IQ resumes. Caller-supplied buffers continue
+ *       to receive callback ownership decisions. RX PACKET_META and raw sample
  *       formats cannot prove epoch identity and are withheld after an epoch
- *       contract is enabled. C callbacks receive the zero-sample event-only
- *       notification; the Python wrapper reports `rx_data_withheld` to RF-event
- *       subscribers once per continuous withholding interval. Short-transfer
- *       notifications use BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow
- *       reports the same event before stream shutdown. For event-only wakeups,
+ *       contract is enabled. The Python wrapper reports `rx_data_withheld` to
+ *       RF-event subscribers once per continuous withholding interval.
+ *       Each short-transfer occurrence still gets its own event-only callback
+ *       and BLADERF_RF_EVT_RX_STREAM_OVERRUN. A USB overflow reports the same
+ *       event before stream shutdown. For event-only wakeups,
  *       callbacks may return an ordinary replacement buffer, SHUTDOWN, or
  *       NO_DATA as usual. REUSE_BUFFER explicitly recycles the withheld
  *       transfer and is recommended when the callback normally rotates among
