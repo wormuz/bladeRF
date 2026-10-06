@@ -21,6 +21,8 @@ struct live_stream {
     uint64_t event_cursor;
     atomic_uint events_drained_from_callback;
     atomic_uint data_withheld_events;
+    atomic_uint event_history_gaps;
+    atomic_bool pause_event_poll;
     int stream_status;
 };
 
@@ -39,21 +41,29 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         if (samples != NULL) {
             return BLADERF_STREAM_SHUTDOWN;
         }
-        struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-        uint32_t event_count = 0;
-        uint64_t next_sequence = live->event_cursor;
-        bool history_complete = false;
-        int query_status = bladerf_rf_events_get_since(
-            dev, live->event_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
-            &event_count, &next_sequence, &history_complete);
-        if (query_status != 0) {
-            atomic_store(&live->event_query_status, query_status);
-        } else {
-            live->event_cursor = next_sequence;
-            atomic_fetch_add(&live->events_drained_from_callback, event_count);
-            for (uint32_t i = 0; i < event_count; ++i) {
-                if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD) {
-                    atomic_fetch_add(&live->data_withheld_events, 1);
+        if (!atomic_load(&live->pause_event_poll)) {
+            struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+            uint32_t event_count = 0;
+            uint64_t next_sequence = live->event_cursor;
+            bool history_complete = false;
+            int query_status = bladerf_rf_events_get_since(
+                dev, live->event_cursor, events,
+                BLADERF_RF_EVENT_HISTORY_SIZE, &event_count, &next_sequence,
+                &history_complete);
+            if (query_status != 0 && history_complete) {
+                atomic_store(&live->event_query_status, query_status);
+            } else {
+                live->event_cursor = next_sequence;
+                atomic_fetch_add(&live->events_drained_from_callback,
+                                 event_count);
+                if (!history_complete) {
+                    atomic_fetch_add(&live->event_history_gaps, 1);
+                }
+                for (uint32_t i = 0; i < event_count; ++i) {
+                    if (events[i].event_type ==
+                        BLADERF_RF_EVT_RX_DATA_WITHHELD) {
+                        atomic_fetch_add(&live->data_withheld_events, 1);
+                    }
                 }
             }
         }
@@ -230,6 +240,52 @@ int main(void)
         goto cleanup;
     }
 
+    /* Overflow the bounded history while paired RX1+RX2 async traffic keeps
+     * moving. Resuming callback polling must report the missing cursor range. */
+    atomic_store(&live.pause_event_poll, true);
+    unsigned int wrap_valid_target = atomic_load(&live.valid_callbacks);
+    unsigned int wrap_event_target = atomic_load(&live.event_only_callbacks);
+    for (unsigned int i = 0; i < 70; ++i) {
+        status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
+        if (status != 0 ||
+            !wait_for_count(&live.event_only_callbacks, ++wrap_event_target,
+                            3000)) {
+            fprintf(stderr, "ring-wrap invalidation %u failed: %s\n", i,
+                    bladerf_strerror(status));
+            status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+            stop_stream(&live, stream_thread);
+            goto cleanup;
+        }
+        status = event_transition(live.dev,
+                                  1835000000ULL + (i % 2) * 400000ULL,
+                                  &event);
+        if (status != 0 ||
+            !wait_for_count(&live.valid_callbacks, ++wrap_valid_target, 3000)) {
+            fprintf(stderr, "ring-wrap recovery %u failed: %s\n", i,
+                    bladerf_strerror(status));
+            status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+            stop_stream(&live, stream_thread);
+            goto cleanup;
+        }
+        if ((i + 1) % 10 == 0) {
+            fprintf(stderr, "paired invalidation/recovery stress=%u/70\n",
+                    i + 1);
+        }
+    }
+
+    /* Trigger a callback-side read after wrap; it must surface an incomplete
+     * cursor rather than silently treating the retained tail as complete. */
+    atomic_store(&live.pause_event_poll, false);
+    status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
+    if (status != 0 ||
+        !wait_for_count(&live.event_history_gaps, 1, 3000)) {
+        fprintf(stderr, "callback did not report overwritten RF history: %s\n",
+                bladerf_strerror(status));
+        status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+
     stop_stream(&live, stream_thread);
     if (live.stream_status != 0) {
         status = live.stream_status;
@@ -238,9 +294,11 @@ int main(void)
         goto cleanup;
     }
 
-    printf("async RX epoch gate: PASS valid=%u event_only=%u epoch=%u\n",
+    printf("async RX epoch gate: PASS valid=%u event_only=%u history_gaps=%u "
+           "epoch=%u\n",
            atomic_load(&live.valid_callbacks),
-           atomic_load(&live.event_only_callbacks), event.epoch_id);
+           atomic_load(&live.event_only_callbacks),
+           atomic_load(&live.event_history_gaps), event.epoch_id);
     if (atomic_load(&live.event_query_status) != 0 ||
         atomic_load(&live.events_drained_from_callback) == 0) {
         fprintf(stderr, "callback-side RF event history query failed\n");
