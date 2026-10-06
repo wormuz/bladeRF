@@ -574,7 +574,9 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     bladerf_gain_mode gain_mode  = BLADERF_GAIN_MGC;
     bladerf_gain_mode restore_to = BLADERF_GAIN_MGC;
     bool restore_gain_mode       = false;
+    bool gain_applied            = false;
     bladerf_frequency freq;
+    bladerf_gain old_gain_target;
     bladerf_gain assigned_gain = gain;
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_GAIN);
@@ -582,6 +584,7 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+    old_gain_target = dev->gain_tbls[ch].gain_target;
 
     /* The RFIC only accepts a manual gain value while it is in MGC: the
      * AD936x driver rejects the write outright otherwise. Borrow MGC for the
@@ -610,13 +613,24 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     dev->gain_tbls[ch].gain_target = gain;
 
     if (dev->gain_tbls[ch].enabled == true) {
-        dev->board->get_frequency(dev, ch, &freq);
-        get_gain_correction(dev, freq, ch, &assigned_gain);
+        status = dev->board->get_frequency(dev, ch, &freq);
+        if (status != 0) {
+            log_error("Failed to get frequency for gain correction\n");
+            goto error;
+        }
+
+        status = get_gain_correction(dev, freq, ch, &assigned_gain);
+        if (status != 0) {
+            log_error("Failed to calculate gain correction\n");
+            goto error;
+        }
     }
 
     status = dev->board->set_gain(dev, ch, assigned_gain);
     if (status != 0) {
         log_error("Failed to set gain\n");
+    } else {
+        gain_applied = true;
     }
 
     if (restore_gain_mode) {
@@ -630,6 +644,9 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     }
 
 error:
+    if (!gain_applied) {
+        dev->gain_tbls[ch].gain_target = old_gain_target;
+    }
     MUTEX_UNLOCK(&dev->lock);
     rx_reconfigure_complete(dev, ch);
     return status;
