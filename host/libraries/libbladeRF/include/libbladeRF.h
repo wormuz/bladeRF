@@ -4837,6 +4837,10 @@ struct bladerf_rx_transition_request {
  * BLADERF_RF_STATE_RX_DATA_INVALID. A device supports one outstanding
  * transition; a concurrent begin
  * returns ::BLADERF_ERR_WOULD_BLOCK without changing the active request.
+ * An epoch-required transition returns ::BLADERF_ERR_UNSUPPORTED without
+ * changing RF state while an RX async stream using a format without sample
+ * epoch metadata is active. Stop that stream or use a supported sample-META
+ * format before requesting an epoch.
  *
  * @param       dev             Device handle
  * @param[in]   ch              RX channel
@@ -4859,6 +4863,8 @@ int CALL_CONV bladerf_rx_transition_begin(
  * retune command has completed; use ::bladerf_rx_transition_wait for the
  * required PLL/ENSM/epoch confirmations. This preserves the fastlock path
  * while providing the same data-validity fence as the host-tuned API.
+ * An epoch-required request is rejected with ::BLADERF_ERR_UNSUPPORTED
+ * while an epoch-less RX async stream is active; RF state remains unchanged.
  *
  * @param[in] quick_tune  Profile previously obtained with
  *                        ::bladerf_get_quick_tune

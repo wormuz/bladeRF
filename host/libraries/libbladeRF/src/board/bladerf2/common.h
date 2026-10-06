@@ -176,6 +176,11 @@ struct bladerf2_board_data {
     /* Synchronous interface handles */
     struct bladerf_sync sync[2];
 
+    /* Number of running RX async streams whose format cannot carry an FPGA
+     * epoch tag. Guarded by dev->lock. Epoch-required transitions must not
+     * retune underneath one of these legacy consumers. */
+    unsigned int rx_async_epochless_stream_count;
+
     /* VCTCXO trim state */
     enum bladerf2_vctcxo_trim_source trim_source;
     uint16_t trimdac_last_value;   /**< saved running value */

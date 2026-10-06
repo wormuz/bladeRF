@@ -12,6 +12,7 @@
 #include "streaming/metadata.h"
 #include "board/board.h"
 #include "board/bladerf2/common.h"
+#include "board/bladerf2/rf_transition_policy.h"
 
 #define MSG_BYTES 8192u
 #define MSG_SAMPLES ((MSG_BYTES - METADATA_HEADER_SIZE) / 4u)
@@ -384,6 +385,9 @@ int main(void)
         true, BLADERF_FORMAT_SC8_Q7));
     assert(!metadata_rx_format_allowed_for_epoch_contract(
         true, BLADERF_FORMAT_PACKET_META));
+    assert(!bladerf2_rx_epoch_transition_blocked_by_async_format(false, 1));
+    assert(!bladerf2_rx_epoch_transition_blocked_by_async_format(true, 0));
+    assert(bladerf2_rx_epoch_transition_blocked_by_async_format(true, 1));
     write_msg(epoch_messages, 5000, 8, 1111);
     write_msg(epoch_messages + MSG_BYTES, 5000 + MSG_SAMPLES, 8, 1222);
     assert(metadata_rx_buffer_matches_epoch(epoch_messages,

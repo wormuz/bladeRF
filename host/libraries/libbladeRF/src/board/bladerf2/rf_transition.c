@@ -583,6 +583,7 @@ static int _bladerf_rx_transition_begin(
     uint32_t required_events_mask;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
+    bool epochless_async_stream_active = false;
     uint64_t stage_started_ns;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
@@ -628,6 +629,14 @@ static int _bladerf_rx_transition_begin(
         if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active) {
             transition_busy = true;
+        } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
+                       (required_events_mask &
+                        BLADERF_RF_REQUIRE_EPOCH_VALID) != 0,
+                       board_data->rx_async_epochless_stream_count)) {
+            /* An active legacy async consumer cannot identify the FPGA
+             * boundary. Reject before allocating a transaction, enabling
+             * the epoch contract, or touching the RFIC. */
+            epochless_async_stream_active = true;
         } else {
             board_data->rf_transition_next_id++;
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
@@ -659,6 +668,9 @@ static int _bladerf_rx_transition_begin(
 
     if (transition_busy) {
         return BLADERF_ERR_WOULD_BLOCK;
+    }
+    if (epochless_async_stream_active) {
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     /* Retire any previously certified sync-RX data before changing RF state.

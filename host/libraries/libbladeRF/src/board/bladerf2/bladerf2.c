@@ -2578,6 +2578,11 @@ static int bladerf2_stream(struct bladerf_stream *stream,
                            bladerf_channel_layout layout)
 {
     bladerf_direction dir = layout & BLADERF_DIRECTION_MASK;
+    struct bladerf2_board_data *board_data = stream->dev->board_data;
+    bool epoch_contract_enabled = false;
+    bool epochless_rx_format =
+        dir == BLADERF_RX &&
+        !metadata_rx_format_has_epoch_tag(stream->format);
     int rv;
 
     switch (layout) {
@@ -2593,33 +2598,44 @@ static int bladerf2_stream(struct bladerf_stream *stream,
     /* Reject formats that cannot carry RX epoch identity before starting
      * USB transfers. Some formats (notably PACKET_META) may never produce a
      * completed transfer, so callback-side withholding cannot notify users. */
-    if (dir == BLADERF_RX &&
-        !metadata_rx_format_has_epoch_tag(stream->format)) {
-        struct bladerf2_board_data *board_data = stream->dev->board_data;
-        bool epoch_contract_enabled;
-
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        epoch_contract_enabled =
-            board_data->rf_transition_epoch_contract_enabled;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
-        if (epoch_contract_enabled) {
-            bladerf2_rx_async_format_unsupported(stream->dev,
-                                                 stream->format);
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-    }
-
     WITH_MUTEX(&stream->dev->lock, {
-        CHECK_STATUS_LOCKED(
-            perform_format_config(stream->dev, dir, stream->format));
+        if (dir == BLADERF_RX) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            epoch_contract_enabled =
+                board_data->rf_transition_epoch_contract_enabled;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        }
+
+        if (epoch_contract_enabled && epochless_rx_format) {
+            rv = BLADERF_ERR_UNSUPPORTED;
+        } else {
+            rv = 0;
+        }
+        if (rv == 0) {
+            CHECK_STATUS_LOCKED(
+                perform_format_config(stream->dev, dir, stream->format));
+            if (epochless_rx_format) {
+                board_data->rx_async_epochless_stream_count++;
+            }
+        }
     });
+
+    if (rv == BLADERF_ERR_UNSUPPORTED) {
+        bladerf2_rx_async_format_unsupported(stream->dev, stream->format);
+        return rv;
+    }
 
     rv = async_run_stream(stream, layout);
 
     WITH_MUTEX(&stream->dev->lock, {
-        CHECK_STATUS_LOCKED(
-            perform_format_deconfig(stream->dev, dir));
+        int deconfig_status = perform_format_deconfig(stream->dev, dir);
+        if (epochless_rx_format &&
+            board_data->rx_async_epochless_stream_count > 0) {
+            board_data->rx_async_epochless_stream_count--;
+        }
+        if (deconfig_status < 0) {
+            rv = deconfig_status;
+        }
     });
 
     return rv;

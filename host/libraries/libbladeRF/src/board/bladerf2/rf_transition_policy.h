@@ -48,4 +48,12 @@ static inline bool bladerf2_rx_scheduled_retune_blocked(
            (transition_pending || epoch_filter_enabled);
 }
 
+/* Epoch-required transitions cannot safely hand data to a running async RX
+ * consumer that has no packet-level epoch identity. */
+static inline bool bladerf2_rx_epoch_transition_blocked_by_async_format(
+    bool require_epoch, unsigned int epochless_async_stream_count)
+{
+    return require_epoch && epochless_async_stream_count != 0;
+}
+
 #endif
