@@ -122,10 +122,16 @@ begin
 
             case state is
                 when STATE_ACTIVE =>
-                    out_sample_controls <= in_sample_controls;
-                    out_samples         <= in_samples;
+                    if( epoch_abort = '1' ) then
+                        out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
+                        out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                        state <= STATE_ERROR;
+                    else
+                        out_sample_controls <= in_sample_controls;
+                        out_samples         <= in_samples;
+                    end if;
 
-                    if( epoch_arm = '1' ) then
+                    if( epoch_arm = '1' and epoch_abort = '0' ) then
                         state           <= STATE_PENDING;
                         active_epoch_id <= epoch_id_in;
                     end if;
@@ -139,7 +145,10 @@ begin
                     out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
 
                     if( epoch_abort = '1' ) then
-                        state <= STATE_ACTIVE;
+                        -- The RFIC may already have changed even when the
+                        -- host reports failure. Never reopen samples under
+                        -- the aborted epoch (or pretend the old LO returned).
+                        state <= STATE_ERROR;
                     elsif( epoch_complete = '1' ) then
                         -- Completion only arms the new epoch.  The RX
                         -- sample-valid pulse is asynchronous to this
@@ -158,7 +167,7 @@ begin
                     out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
 
                     if( epoch_abort = '1' ) then
-                        state <= STATE_ACTIVE;
+                        state <= STATE_ERROR;
                     elsif( any_valid = '1' ) then
                         out_sample_controls  <= in_sample_controls;
                         out_samples          <= in_samples;
@@ -171,23 +180,34 @@ begin
                     -- The first sample was admitted and timestamped in
                     -- STATE_SETTLING on the preceding edge. Hold the new
                     -- epoch active and expose the completion marker.
-                    out_sample_controls <= in_sample_controls;
-                    out_samples         <= in_samples;
-                    state               <= STATE_ACTIVE;
+                    if( epoch_abort = '1' ) then
+                        out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
+                        out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                        state <= STATE_ERROR;
+                    else
+                        out_sample_controls <= in_sample_controls;
+                        out_samples         <= in_samples;
+                        state               <= STATE_ACTIVE;
+                    end if;
 
                 when others =>
-                    -- STATE_ERROR or any unreachable encoding: fail closed,
-                    -- never admit samples under an undefined state.
+                    -- STATE_ERROR is fail-closed. A later explicit ARM starts
+                    -- a new recovery transaction; no samples are admitted in
+                    -- the gap after a failed transition.
                     out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
                     out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
                     if( epoch_abort = '1' ) then
-                        state <= STATE_ACTIVE;
+                        state <= STATE_ERROR;
+                    elsif( epoch_arm = '1' ) then
+                        active_epoch_id <= epoch_id_in;
+                        state <= STATE_PENDING;
                     end if;
             end case;
 
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;
-            if( state = STATE_PENDING or state = STATE_SETTLING ) then
+            if( state = STATE_PENDING or state = STATE_SETTLING or
+                state = STATE_ERROR ) then
                 out_discard_active <= '1';
             else
                 out_discard_active <= '0';

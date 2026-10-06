@@ -150,8 +150,9 @@ static int _read_rx_epoch_state(struct bladerf *dev, uint32_t *status_word,
 }
 
 /* A previous handle may have closed while its FPGA gate was still fenced.
- * Reclaim that state before arming a fresh transaction, then allocate the
- * next ID relative to the persistent FPGA epoch rather than the new handle. */
+ * Invalidate that incomplete epoch, then allocate the next ID relative to
+ * the persistent FPGA epoch rather than the new handle. The gate remains
+ * fail-closed in ERROR until the next explicit ARM. */
 static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
                                 uint8_t *epoch_id, uint32_t *status_word)
 {
@@ -163,7 +164,8 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
         return status;
     }
 
-    if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+    if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE &&
+        state != NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
         status = nios_rx_epoch_ctrl_cmd(
             dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
         if (status != 0) {
@@ -176,13 +178,13 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
             if (status != 0) {
                 return status;
             }
-            if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+            if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
                 break;
             }
             usleep(POLL_INTERVAL_US);
         } while (_monotonic_ns() < deadline_ns);
 
-        if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE) {
+        if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
             return BLADERF_ERR_TIMEOUT;
         }
     }

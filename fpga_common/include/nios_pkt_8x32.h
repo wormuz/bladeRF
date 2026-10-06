@@ -333,9 +333,8 @@
 
 /* RX data-plane epoch gate control (write-only). ADR-0207 §6: a retune
  * leaves stale pre-retune samples in flight through the FIFO writer; this
- * gate suppresses USB-packet admission from epoch_arm until settle_samples
- * real ADC samples have been counted past epoch_complete, then resumes
- * admission and reports the event through RX_EPOCH_STATUS below.
+ * gate suppresses sample admission from epoch_arm until the host confirms
+ * RFIC completion and the first subsequent ADC sample defines the boundary.
  *
  * The addr field carries the command, same discipline as RF_LINK_CFG above
  * and for the same reason: bits 0..2 of the underlying PIO word are
@@ -347,11 +346,11 @@
  * epoch's open event apart from an earlier one it never saw close.
  *
  * Host ordering: ARM before the retune's bladerf_set_frequency() call ->
- * (host does the frequency change through the existing control-plane path,
- * unrelated to this PIO) -> COMPLETE once PLL lock / ENSM confirms the
- * retune landed -> poll RX_EPOCH_STATUS until state reads ACTIVE_NEW or
- * ERROR. ABORT returns to ACTIVE without opening a new epoch, for a retune
- * that failed before COMPLETE. */
+ * COMPLETE once the required RFIC events confirm the retune landed -> poll
+ * RX_EPOCH_STATUS until ACTIVE_NEW/ACTIVE or ERROR. ABORT always fails
+ * closed in ERROR: after a partial/failed LO operation the old epoch cannot
+ * safely be assumed valid. A later explicit ARM starts recovery directly
+ * from ERROR; it never reopens the failed epoch. */
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL   0x87
 
 /* RX data-plane epoch gate settle count (write-only). Plain level value,

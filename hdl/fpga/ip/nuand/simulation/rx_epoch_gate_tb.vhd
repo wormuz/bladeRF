@@ -16,6 +16,7 @@ architecture test of rx_epoch_gate_tb is
     signal samples_in : sample_streams_t(0 to 1) := (others => ZERO_SAMPLE);
     signal timestamp : unsigned(63 downto 0) := (others => '0');
     signal arm, complete, abort : std_logic := '0';
+    signal epoch_id_in : unsigned(7 downto 0) := x"2A";
     signal out_controls : sample_controls_t(0 to 1);
     signal out_samples : sample_streams_t(0 to 1);
     signal epoch_id : unsigned(7 downto 0);
@@ -30,7 +31,7 @@ begin
             in_sample_controls => controls_in, in_samples => samples_in,
             rx_timestamp => timestamp,
             epoch_arm => arm, epoch_complete => complete,
-            epoch_abort => abort, epoch_id_in => x"2A",
+            epoch_abort => abort, epoch_id_in => epoch_id_in,
             settle_samples_in => to_unsigned(1000000, 32),
             out_sample_controls => out_controls, out_samples => out_samples,
             out_epoch_id => epoch_id, out_state => state,
@@ -45,12 +46,42 @@ begin
         wait until falling_edge(clock);
         reset <= '0';
 
+        -- A failed RFIC operation may have changed the LO partially. ABORT
+        -- must therefore invalidate the data path instead of reopening old
+        -- samples under the candidate epoch ID.
         wait until falling_edge(clock);
+        epoch_id_in <= x"29";
         arm <= '1';
+        wait until falling_edge(clock);
+        arm <= '0';
+        wait until falling_edge(clock);
+        abort <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_controls(0).enable = '0'
+            report "ABORT admitted samples from the failed epoch" severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0100" and discard_active = '1'
+            report "ABORT did not leave the gate fail-closed" severity failure;
+        abort <= '0';
+
+        -- Recovery is explicit: a new ARM leaves ERROR only by starting a
+        -- fresh fenced epoch.
+        wait until falling_edge(clock);
+        epoch_id_in <= x"2A";
+        arm <= '1';
+        wait until falling_edge(clock);
+        arm <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0001" and discard_active = '1'
+            report "new ARM did not recover from ERROR into PENDING" severity failure;
+
+        wait until falling_edge(clock);
         samples_in(0).data_v <= '1';
         samples_in(1).data_v <= '1';
         wait until falling_edge(clock);
-        arm <= '0';
         timestamp <= to_unsigned(100, 64);
         wait until rising_edge(clock);
         wait for 1 ns;
@@ -95,6 +126,37 @@ begin
         assert first_valid_timestamp = to_unsigned(203, 64)
             report "first-valid timestamp does not match first admitted sample" severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
+
+        -- A failure after RFIC completion but before the first ADC sample
+        -- must also remain fenced and must not publish a valid epoch.
+        wait until falling_edge(clock);
+        wait until rising_edge(clock); -- retire ACTIVE_NEW status cycle
+        wait until falling_edge(clock);
+        samples_in(0).data_v <= '0';
+        samples_in(1).data_v <= '0';
+        epoch_id_in <= x"2B";
+        arm <= '1';
+        wait until falling_edge(clock);
+        arm <= '0';
+        wait until falling_edge(clock);
+        complete <= '1';
+        wait until falling_edge(clock);
+        complete <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0010" and out_controls(0).enable = '0'
+            report "completion did not remain fenced while awaiting ADC sample" severity failure;
+        wait until falling_edge(clock);
+        abort <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_controls(0).enable = '0' and start_event = '0'
+            report "ABORT after COMPLETE admitted invalid data" severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0100" and discard_active = '1' and
+               out_controls(0).enable = '0' and start_event = '0'
+            report "ABORT after COMPLETE exposed an unvalidated epoch" severity failure;
 
         report "rx_epoch_gate_tb: PASS" severity note;
         stop;
