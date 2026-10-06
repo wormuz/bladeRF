@@ -18,9 +18,16 @@
 #define LIVE_RX_META_MESSAGE_SIZE 8192u
 #define LIVE_RX_X2_SAMPLES_PER_TIMESTAMP 2u
 
+enum live_rx_active_mode {
+    LIVE_RX_ACTIVE_BOTH,
+    LIVE_RX_ACTIVE_RX1,
+    LIVE_RX_ACTIVE_RX2,
+};
+
 struct live_stream {
     struct bladerf *dev;
     struct bladerf_stream *stream;
+    bladerf_channel_layout stream_layout;
     void **buffers;
     atomic_uint valid_callbacks;
     atomic_uint event_only_callbacks;
@@ -34,6 +41,10 @@ struct live_stream {
     atomic_uint event_history_gaps;
     atomic_bool pause_event_poll;
     atomic_uint timestamp_discontinuities;
+    atomic_uint rx1_nonzero_slots;
+    atomic_uint rx2_nonzero_slots;
+    enum live_rx_active_mode active_mode;
+    bladerf_channel transition_channel;
     bool have_expected_timestamp;
     uint8_t timestamp_epoch_id;
     uint64_t expected_timestamp;
@@ -98,13 +109,17 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     }
 
     /* The xA4 USB3 META stream uses 8 KiB messages. RX_X2 interleaves two
-     * channel samples per FPGA timestamp tick. Validate continuity across
-     * every message and USB callback. The expected timestamp survives
-     * event-only callbacks; a different epoch establishes a fresh baseline. */
+     * channel samples per FPGA timestamp tick; RX_X1 has one. Validate
+     * continuity across every message and callback. The expected timestamp
+     * survives event-only callbacks; a different epoch establishes a fresh
+     * baseline. */
     const uint8_t *bytes = samples;
     const size_t received_bytes = num_samples * sizeof(int32_t);
     const size_t message_samples =
         (LIVE_RX_META_MESSAGE_SIZE - METADATA_HEADER_SIZE) / sizeof(int32_t);
+    const size_t samples_per_timestamp =
+        live->active_mode == LIVE_RX_ACTIVE_BOTH ?
+            LIVE_RX_X2_SAMPLES_PER_TIMESTAMP : 1u;
     for (size_t offset = 0; offset + LIVE_RX_META_MESSAGE_SIZE <= received_bytes;
          offset += LIVE_RX_META_MESSAGE_SIZE) {
         const uint8_t *header = bytes + offset;
@@ -114,6 +129,30 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
             return BLADERF_STREAM_SHUTDOWN;
         }
         const uint64_t timestamp = metadata_get_timestamp(header);
+        const int32_t *interleaved = (const int32_t *)(
+            header + METADATA_HEADER_SIZE);
+        const size_t complex_slots =
+            (LIVE_RX_META_MESSAGE_SIZE - METADATA_HEADER_SIZE) /
+            sizeof(*interleaved);
+        if (live->active_mode == LIVE_RX_ACTIVE_BOTH) {
+            for (size_t slot = 0; slot + 1 < complex_slots; slot += 2) {
+                if (interleaved[slot] != 0) {
+                    atomic_fetch_add(&live->rx1_nonzero_slots, 1);
+                }
+                if (interleaved[slot + 1] != 0) {
+                    atomic_fetch_add(&live->rx2_nonzero_slots, 1);
+                }
+            }
+        } else {
+            atomic_uint *active_slots =
+                live->active_mode == LIVE_RX_ACTIVE_RX1 ?
+                    &live->rx1_nonzero_slots : &live->rx2_nonzero_slots;
+            for (size_t slot = 0; slot < complex_slots; ++slot) {
+                if (interleaved[slot] != 0) {
+                    atomic_fetch_add(active_slots, 1);
+                }
+            }
+        }
         if (epoch_id == 1 && offset < 4 * LIVE_RX_META_MESSAGE_SIZE) {
             fprintf(stderr, "initial META epoch=1 msg=%zu timestamp=%llu\n",
                     offset / LIVE_RX_META_MESSAGE_SIZE,
@@ -127,16 +166,16 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                     "expected_delta=%zu actual_delta=%llu message=%zu\n",
                     epoch_id,
                     (unsigned long long)(live->expected_timestamp -
-                        message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP),
-                    message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP,
+                        message_samples / samples_per_timestamp),
+                    message_samples / samples_per_timestamp,
                     (unsigned long long)(timestamp -
                         (live->expected_timestamp - message_samples /
-                         LIVE_RX_X2_SAMPLES_PER_TIMESTAMP)),
+                         samples_per_timestamp)),
                     offset / LIVE_RX_META_MESSAGE_SIZE);
         }
         live->timestamp_epoch_id = epoch_id;
         live->expected_timestamp = timestamp +
-            message_samples / LIVE_RX_X2_SAMPLES_PER_TIMESTAMP;
+            message_samples / samples_per_timestamp;
         live->have_expected_timestamp = true;
     }
     atomic_fetch_add(&live->valid_callbacks, 1);
@@ -146,7 +185,7 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
 static void *run_stream(void *arg)
 {
     struct live_stream *live = arg;
-    live->stream_status = bladerf_stream(live->stream, BLADERF_RX_X2);
+    live->stream_status = bladerf_stream(live->stream, live->stream_layout);
     return NULL;
 }
 
@@ -180,6 +219,7 @@ static bool wait_for_count(atomic_uint *count, unsigned int minimum,
 }
 
 static int event_transition(struct bladerf *dev, uint64_t frequency_hz,
+                            bladerf_channel channel,
                             struct bladerf_rf_event *result)
 {
     const struct bladerf_rx_transition_request request = {
@@ -192,7 +232,7 @@ static int event_transition(struct bladerf *dev, uint64_t frequency_hz,
     };
     uint32_t transaction_id;
     int status = bladerf_rx_transition_begin(
-        dev, BLADERF_CHANNEL_RX(1), &request, &transaction_id);
+        dev, channel, &request, &transaction_id);
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, transaction_id, result, 2000);
     }
@@ -211,6 +251,7 @@ int main(void)
     struct bladerf_rf_event event = {0};
     unsigned int cross_band_cycles = 70;
     const char *cycles_env = getenv("BLADERF_ASYNC_EPOCH_CYCLES");
+    const char *active_env = getenv("BLADERF_ASYNC_RX_ACTIVE");
     if (cycles_env != NULL && cycles_env[0] != '\0') {
         char *end = NULL;
         unsigned long requested = strtoul(cycles_env, &end, 10);
@@ -221,6 +262,20 @@ int main(void)
         }
         cross_band_cycles = (unsigned int)requested;
     }
+    live.active_mode = LIVE_RX_ACTIVE_BOTH;
+    live.transition_channel = BLADERF_CHANNEL_RX(1);
+    if (active_env != NULL && strcmp(active_env, "RX1") == 0) {
+        live.active_mode = LIVE_RX_ACTIVE_RX1;
+        live.transition_channel = BLADERF_CHANNEL_RX(0);
+    } else if (active_env != NULL && strcmp(active_env, "RX2") == 0) {
+        live.active_mode = LIVE_RX_ACTIVE_RX2;
+        live.transition_channel = BLADERF_CHANNEL_RX(1);
+    } else if (active_env != NULL && strcmp(active_env, "BOTH") != 0) {
+        fprintf(stderr, "BLADERF_ASYNC_RX_ACTIVE must be RX1, RX2, or BOTH\n");
+        return 2;
+    }
+    live.stream_layout = live.active_mode == LIVE_RX_ACTIVE_BOTH ?
+        BLADERF_RX_X2 : BLADERF_RX_X1;
     int status = bladerf_open(&live.dev, NULL);
     if (status != 0) {
         fprintf(stderr, "bladerf_open: %s\n", bladerf_strerror(status));
@@ -254,14 +309,15 @@ int main(void)
                                      BLADERF_FORMAT_SC16_Q11_META,
                                      8192, 8, &live);
     }
-    if (status == 0) {
+    if (status == 0 && live.active_mode != LIVE_RX_ACTIVE_RX2) {
         status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), true);
     }
-    if (status == 0) {
+    if (status == 0 && live.active_mode != LIVE_RX_ACTIVE_RX1) {
         status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), true);
     }
     if (status == 0) {
-        status = event_transition(live.dev, 1835000000ULL, &event);
+        status = event_transition(live.dev, 1835000000ULL,
+                                  live.transition_channel, &event);
     }
     if (status != 0) {
         fprintf(stderr, "async RX setup/initial transition: %s\n",
@@ -287,7 +343,7 @@ int main(void)
 
     /* Same-value configuration still invalidates a prior RX certificate. */
     fprintf(stderr, "issuing invalidating gain setter\n");
-    status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
+    status = bladerf_set_gain(live.dev, live.transition_channel, 30);
     fprintf(stderr, "gain setter returned %d\n", status);
     if (status != 0 ||
         !wait_for_count(&live.event_only_callbacks, 2, 3000)) {
@@ -307,7 +363,8 @@ int main(void)
     }
 
     unsigned int valid_before = atomic_load(&live.valid_callbacks);
-    status = event_transition(live.dev, 1835400000ULL, &event);
+    status = event_transition(live.dev, 1835400000ULL,
+                              live.transition_channel, &event);
     if (status != 0 ||
         !wait_for_count(&live.valid_callbacks, valid_before + 2, 3000)) {
         fprintf(stderr, "new async epoch did not restore callback IQ: %s\n",
@@ -323,7 +380,7 @@ int main(void)
     unsigned int wrap_valid_target = atomic_load(&live.valid_callbacks);
     unsigned int wrap_event_target = atomic_load(&live.event_only_callbacks);
     for (unsigned int i = 0; i < cross_band_cycles; ++i) {
-        status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
+        status = bladerf_set_gain(live.dev, live.transition_channel, 30);
         if (status != 0 ||
             !wait_for_count(&live.event_only_callbacks, ++wrap_event_target,
                             3000)) {
@@ -338,7 +395,8 @@ int main(void)
             947500000ULL : 1835000000ULL;
         const uint32_t previous_transaction_id = event.transaction_id;
         const uint8_t previous_epoch_id = event.epoch_id;
-        status = event_transition(live.dev, target_frequency, &event);
+        status = event_transition(live.dev, target_frequency,
+                                  live.transition_channel, &event);
         if (status == 0 &&
             (event.transaction_id != previous_transaction_id + 1 ||
              event.epoch_id == previous_epoch_id)) {
@@ -368,7 +426,7 @@ int main(void)
     /* Trigger a callback-side read after wrap; it must surface an incomplete
      * cursor rather than silently treating the retained tail as complete. */
     atomic_store(&live.pause_event_poll, false);
-    status = bladerf_set_gain(live.dev, BLADERF_CHANNEL_RX(1), 30);
+    status = bladerf_set_gain(live.dev, live.transition_channel, 30);
     if (status != 0 ||
         !wait_for_count(&live.event_history_gaps, 1, 3000)) {
         fprintf(stderr, "callback did not report overwritten RF history: %s\n",
@@ -404,27 +462,47 @@ int main(void)
         goto cleanup;
     }
 
-    printf("async RX epoch gate: PASS cross_band_cycles=%u valid=%u event_only=%u "
-           "timestamp_discontinuities=%u timestamp_withheld=%u "
-           "overrun_events=%u history_gaps=%u epoch=%u\n",
-           cross_band_cycles, atomic_load(&live.valid_callbacks),
-           atomic_load(&live.event_only_callbacks),
-           atomic_load(&live.timestamp_discontinuities),
-           atomic_load(&live.timestamp_withheld_events),
-           atomic_load(&live.stream_overrun_events),
-           atomic_load(&live.event_history_gaps), event.epoch_id);
     if (atomic_load(&live.event_query_status) != 0 ||
         atomic_load(&live.events_drained_from_callback) == 0) {
         fprintf(stderr, "callback-side RF event history query failed\n");
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
+    if ((live.active_mode == LIVE_RX_ACTIVE_RX1 &&
+         atomic_load(&live.rx1_nonzero_slots) == 0) ||
+        (live.active_mode == LIVE_RX_ACTIVE_RX2 &&
+         atomic_load(&live.rx2_nonzero_slots) == 0)) {
+        fprintf(stderr, "active RX input produced no nonzero META slots "
+                "(RX1=%u RX2=%u)\n",
+                atomic_load(&live.rx1_nonzero_slots),
+                atomic_load(&live.rx2_nonzero_slots));
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    printf("async RX epoch gate: PASS active=%s cross_band_cycles=%u "
+           "valid=%u event_only=%u rx1_nonzero=%u rx2_nonzero=%u "
+           "timestamp_discontinuities=%u timestamp_withheld=%u "
+           "overrun_events=%u history_gaps=%u epoch=%u\n",
+           live.active_mode == LIVE_RX_ACTIVE_RX1 ? "RX1" :
+               live.active_mode == LIVE_RX_ACTIVE_RX2 ? "RX2" : "BOTH",
+           cross_band_cycles, atomic_load(&live.valid_callbacks),
+           atomic_load(&live.event_only_callbacks),
+           atomic_load(&live.rx1_nonzero_slots),
+           atomic_load(&live.rx2_nonzero_slots),
+           atomic_load(&live.timestamp_discontinuities),
+           atomic_load(&live.timestamp_withheld_events),
+           atomic_load(&live.stream_overrun_events),
+           atomic_load(&live.event_history_gaps), event.epoch_id);
     status = 0;
 
 cleanup:
     if (live.dev != NULL) {
-        bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), false);
-        bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), false);
+        if (live.active_mode != LIVE_RX_ACTIVE_RX1) {
+            bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), false);
+        }
+        if (live.active_mode != LIVE_RX_ACTIVE_RX2) {
+            bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), false);
+        }
         if (live.stream != NULL) {
             bladerf_deinit_stream(live.stream);
         }
