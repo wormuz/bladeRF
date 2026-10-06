@@ -4716,7 +4716,10 @@ typedef enum {
     BLADERF_RF_EVT_RX_STREAM_OVERRUN,
     /** RX async format cannot carry the epoch identity required by the
      * active data-validity contract. `flags` contains the bladerf_format. */
-    BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED
+    BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED,
+    /** Async RX IQ was withheld by the active epoch validity gate. `flags`
+     * identifies the reason; emitted once until valid IQ resumes. */
+    BLADERF_RF_EVT_RX_DATA_WITHHELD
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
@@ -4736,6 +4739,10 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RX_FIR     (1U << 11)
 #define BLADERF_RF_INVALIDATE_CLOCK      (1U << 12)
 #define BLADERF_RF_INVALIDATE_STREAM_CONFIG (1U << 13)
+
+/** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
+#define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
+#define BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH (1U << 1)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and

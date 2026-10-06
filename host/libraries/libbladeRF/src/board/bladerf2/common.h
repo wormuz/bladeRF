@@ -237,6 +237,7 @@ struct bladerf2_board_data {
     bool rf_transition_epoch_contract_enabled;
     bool rf_transition_epoch_certified;
     bool rx_async_format_unsupported_reported;
+    bool rx_async_data_withheld_reported;
     uint8_t rf_transition_certified_epoch_id;
     uint64_t rf_transition_first_valid_timestamp;
     bool rf_transition_pending;
@@ -272,6 +273,7 @@ void bladerf2_rf_event_append_locked(
     const struct bladerf_rf_event *event);
 void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
                                           bladerf_format format);
+void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason);
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);
 void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,

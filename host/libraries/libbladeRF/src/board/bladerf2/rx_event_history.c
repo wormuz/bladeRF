@@ -81,3 +81,37 @@ void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
     event.error_code = BLADERF_ERR_UNSUPPORTED;
     bladerf2_rf_event_append(board_data, &event);
 }
+
+void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    uint8_t epoch_id;
+    bool should_report = false;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* This is called from the USB callback; keep it independent of dev->lock. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->rf_transition_epoch_contract_enabled &&
+        !board_data->rx_async_data_withheld_reported) {
+        board_data->rx_async_data_withheld_reported = true;
+        should_report = true;
+    }
+    epoch_id = board_data->rf_transition_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (!should_report) {
+        return;
+    }
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.epoch_id = epoch_id;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
+    event.flags = reason;
+    bladerf2_rf_event_append(board_data, &event);
+}

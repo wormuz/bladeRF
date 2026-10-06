@@ -223,12 +223,54 @@ static void test_async_unsupported_format_event(void)
     free(board_data);
 }
 
+static void test_async_data_withheld_event(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data *board_data = calloc(1, sizeof(*board_data));
+    assert(board_data != NULL);
+    dev.board_data = board_data;
+    assert(MUTEX_INIT(&dev.lock) == 0);
+    assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+    board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_epoch_id = 9;
+
+    /* The callback writer stays independent of dev->lock and coalesces a
+     * withheld run into one history event until valid IQ resumes. */
+    MUTEX_LOCK(&dev.lock);
+    bladerf2_rx_async_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    bladerf2_rx_async_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    MUTEX_UNLOCK(&dev.lock);
+    assert(board_data->rf_transition_event_count == 1);
+    const struct bladerf_rf_event *event =
+        &board_data->rf_transition_events[0];
+    assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(event->epoch_id == 9);
+    assert(event->flags == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_INVALID);
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rx_async_data_withheld_reported = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_rx_async_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(board_data->rf_transition_event_count == 2);
+
+    MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+    MUTEX_DESTROY(&dev.lock);
+    free(board_data);
+}
+
 int main(void)
 {
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
 
     test_async_unsupported_format_event();
+    test_async_data_withheld_event();
 
 
     uint8_t epoch_messages[BYTES_PER_BUFFER];

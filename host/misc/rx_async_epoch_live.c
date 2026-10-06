@@ -20,6 +20,7 @@ struct live_stream {
     atomic_int event_query_status;
     uint64_t event_cursor;
     atomic_uint events_drained_from_callback;
+    atomic_uint data_withheld_events;
     int stream_status;
 };
 
@@ -50,6 +51,11 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         } else {
             live->event_cursor = next_sequence;
             atomic_fetch_add(&live->events_drained_from_callback, event_count);
+            for (uint32_t i = 0; i < event_count; ++i) {
+                if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD) {
+                    atomic_fetch_add(&live->data_withheld_events, 1);
+                }
+            }
         }
         atomic_fetch_add(&live->event_only_callbacks, 1);
         /* The library recycles the withheld transfer after this wakeup. */
@@ -206,6 +212,12 @@ int main(void)
     }
     fprintf(stderr, "event-only callbacks after invalidation: %u\n",
             atomic_load(&live.event_only_callbacks));
+    if (atomic_load(&live.data_withheld_events) == 0) {
+        fprintf(stderr, "native RX_DATA_WITHHELD event was not observed\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
 
     unsigned int valid_before = atomic_load(&live.valid_callbacks);
     status = event_transition(live.dev, 1835400000ULL, &event);

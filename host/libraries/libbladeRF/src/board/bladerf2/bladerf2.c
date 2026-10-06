@@ -1657,6 +1657,8 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         return false;
     }
     if (!epoch_valid) {
+        bladerf2_rx_async_data_withheld(
+            dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
         return false;
     }
 
@@ -1665,7 +1667,11 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     if (matches) {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rx_async_format_unsupported_reported = false;
+        board_data->rx_async_data_withheld_reported = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    } else {
+        bladerf2_rx_async_data_withheld(
+            dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     }
     return matches;
 }
