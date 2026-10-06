@@ -916,7 +916,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         uint64_t status_read_max_ns = 0;
         bool epoch_opened = false;
 
+        uint64_t complete_elapsed_ns;
+        uint64_t timestamp_lo_elapsed_ns = 0;
+        uint64_t timestamp_hi_elapsed_ns;
+        uint64_t fence_elapsed_ns;
+        uint64_t stage_begin_ns = _monotonic_ns();
         status = nios_rx_epoch_ctrl_cmd(dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
+        complete_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                        0, 0, 0, status, 0);
@@ -1021,11 +1027,15 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
          * boundary. Read both halves only after ACTIVE_NEW/ACTIVE is
          * observed; the latched value remains stable until the next ARM. */
         if (!board_data->rx_epoch_snapshot_supported) {
+            stage_begin_ns = _monotonic_ns();
             status = nios_rx_epoch_ts_read(dev, false, &timestamp_lo);
+            timestamp_lo_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         }
+        stage_begin_ns = _monotonic_ns();
         if (status == 0) {
             status = nios_rx_epoch_ts_read(dev, true, &timestamp_hi);
         }
+        timestamp_hi_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
@@ -1036,12 +1046,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         /* FPGA timestamp is the authoritative first admitted sample. Install
          * it as a lower bound before reporting transition success; sync_rx()
          * drops stale timestamped messages already queued on USB/host. */
+        stage_begin_ns = _monotonic_ns();
         status = sync_rx_epoch_set_min_timestamp(
             &board_data->sync[BLADERF_RX],
             ((uint64_t)timestamp_hi << 32) | timestamp_lo,
             (uint8_t)((epoch_status_word >>
                 NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
                 NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK));
+        fence_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
@@ -1055,6 +1067,15 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
                    & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
                    0, ((uint64_t)timestamp_hi << 32) | timestamp_lo, 0);
+        log_debug("%s: epoch handoff transaction=%u complete_us=%.3f "
+                  "status_reads=%u status_total_us=%.3f timestamp_lo_us=%.3f "
+                  "timestamp_hi_us=%.3f sync_fence_us=%.3f\n",
+                  __FUNCTION__, transaction_id,
+                  complete_elapsed_ns / 1000.0, status_reads,
+                  status_read_total_ns / 1000.0,
+                  timestamp_lo_elapsed_ns / 1000.0,
+                  timestamp_hi_elapsed_ns / 1000.0,
+                  fence_elapsed_ns / 1000.0);
     } else {
         /* This caller requested control-plane completion only. There was no
          * FPGA sample-boundary proof, so keep the state explicitly invalid. */
