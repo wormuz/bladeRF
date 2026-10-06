@@ -64,8 +64,14 @@ int main(void)
     bool saw_error = false;
     bool saw_valid = false;
     for (uint32_t i = 0; i < event_count; ++i) {
+        if (events[i].transaction_id != transaction_id) {
+            fprintf(stderr, "event transaction mismatch: got=%u expected=%u\n",
+                    events[i].transaction_id, transaction_id);
+            goto fail;
+        }
         saw_config |= events[i].event_type == BLADERF_RF_EVT_CONFIG_ACCEPTED;
-        saw_error |= events[i].event_type == BLADERF_RF_EVT_ERROR;
+        saw_error |= events[i].event_type == BLADERF_RF_EVT_ERROR &&
+                     events[i].error_code != 0;
         saw_valid |= events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
                      events[i].event_type ==
                          BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
