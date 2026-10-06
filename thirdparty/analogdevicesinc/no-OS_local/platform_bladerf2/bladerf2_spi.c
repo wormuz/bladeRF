@@ -47,7 +47,10 @@
 
 #include "board/board.h"
 #include "backend/usb/nios_access.h"
+#include "log.h"
 
+#include "no_os_delay.h"
+#include "no_os_mutex.h"
 #include "no_os_spi.h"
 
 /* Payload bytes one transaction can carry. Mirrors MAX_MBYTE_SPI, which the
@@ -59,10 +62,22 @@
  * and AD_WRITE as (1 << 15), so bit 15 is the direction. */
 #define BLADERF2_SPI_CMD_WRITE (1u << 15)
 
+enum gain_table_batch_state {
+    GAIN_TABLE_BATCH_UNKNOWN,
+    GAIN_TABLE_BATCH_SUPPORTED,
+    GAIN_TABLE_BATCH_UNSUPPORTED,
+};
+
+struct bladerf2_spi_context {
+    struct bladerf *dev;
+    enum gain_table_batch_state gain_table_batch;
+};
+
 static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
                                  const struct no_os_spi_init_param *param)
 {
     struct no_os_spi_desc *d;
+    struct bladerf2_spi_context *ctx;
 
     if (NULL == desc || NULL == param) {
         return -EINVAL;
@@ -73,11 +88,25 @@ static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
         return -ENOMEM;
     }
 
+    ctx = calloc(1, sizeof(*ctx));
+    if (NULL == ctx) {
+        free(d);
+        return -ENOMEM;
+    }
+
     /* The bladeRF device handle travels in extra, set by the caller that
      * builds the init parameters. Everything else in the descriptor is
      * unused: the transfer goes through the device back end, not a bus
      * peripheral this file owns. */
-    d->extra = param->extra;
+    ctx->dev = param->extra;
+    {
+        const char *disable_batch = getenv("BLADERF_DISABLE_GAIN_TABLE_BATCH");
+        if (disable_batch != NULL && disable_batch[0] != '\0' &&
+            strcmp(disable_batch, "0") != 0) {
+            ctx->gain_table_batch = GAIN_TABLE_BATCH_UNSUPPORTED;
+        }
+    }
+    d->extra = ctx;
     d->platform_ops = param->platform_ops;
 
     *desc = d;
@@ -87,6 +116,9 @@ static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
 
 static int32_t bladerf2_spi_remove(struct no_os_spi_desc *desc)
 {
+    if (desc != NULL) {
+        free(desc->extra);
+    }
     free(desc);
 
     return 0;
@@ -96,6 +128,7 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
                                            uint8_t *data,
                                            uint16_t bytes_number)
 {
+    struct bladerf2_spi_context *ctx;
     struct bladerf *dev;
     uint16_t cmd;
     uint16_t payload;
@@ -104,6 +137,11 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
     int status;
 
     if (NULL == desc || NULL == data) {
+        return -EINVAL;
+    }
+
+    ctx = desc->extra;
+    if (ctx == NULL) {
         return -EINVAL;
     }
 
@@ -118,7 +156,7 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
         return -EINVAL;
     }
 
-    dev = desc->extra;
+    dev = ctx->dev;
     if (NULL == dev) {
         return -EINVAL;
     }
@@ -164,17 +202,57 @@ static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
                                                   uint8_t config,
                                                   uint32_t delay_us)
 {
+    struct bladerf2_spi_context *ctx;
     struct bladerf *dev;
     int status;
 
-    if (desc == NULL || desc->extra == NULL) {
+    if (desc == NULL || desc->extra == NULL || desc->bus == NULL) {
         return -EINVAL;
     }
 
-    dev = desc->extra;
-    status = nios_ad9361_gain_table_row(dev, row, data1, data2, data3,
-                                        config, delay_us);
-    return status == 0 ? 0 : -EIO;
+    ctx = desc->extra;
+    dev = ctx->dev;
+    no_os_mutex_lock(desc->bus->mutex);
+
+    if (ctx->gain_table_batch != GAIN_TABLE_BATCH_UNSUPPORTED) {
+        status = nios_ad9361_gain_table_row(dev, row, data1, data2, data3,
+                                            config, delay_us);
+        if (status == 0) {
+            ctx->gain_table_batch = GAIN_TABLE_BATCH_SUPPORTED;
+            no_os_mutex_unlock(desc->bus->mutex);
+            return 0;
+        }
+
+        /* Old Nios images reject this packet target. Disable batching for
+         * this device session and replay the same row as ordinary ordered
+         * SPI writes so FPGA loading and legacy images keep working. A
+         * transport failure after partial execution is also safe: writing
+         * the same indexed table row again is idempotent. */
+        ctx->gain_table_batch = GAIN_TABLE_BATCH_UNSUPPORTED;
+        log_debug("Gain-table row batching unavailable (%s); using SPI fallback\n",
+                  bladerf_strerror(status));
+    }
+
+    static const uint16_t regs[] = { 0x130, 0x131, 0x132, 0x133, 0x137 };
+    const uint8_t values[] = {
+        (uint8_t)row, data1, data2, data3, config
+    };
+    for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); ++i) {
+        uint8_t buf[3] = {
+            (uint8_t)(BLADERF2_SPI_CMD_WRITE | ((regs[i] >> 8) & 0x7f)),
+            (uint8_t)regs[i],
+            values[i],
+        };
+        status = bladerf2_spi_write_and_read(desc, buf, sizeof(buf));
+        if (status < 0) {
+            no_os_mutex_unlock(desc->bus->mutex);
+            return status;
+        }
+    }
+
+    no_os_udelay(delay_us);
+    no_os_mutex_unlock(desc->bus->mutex);
+    return 0;
 }
 
 const struct no_os_spi_platform_ops bladerf2_spi_ops = {

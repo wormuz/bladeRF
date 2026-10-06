@@ -3,13 +3,30 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <time.h>
+
+static uint64_t monotonic_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static int compare_u64(const void *a, const void *b)
+{
+    uint64_t va = *(const uint64_t *)a;
+    uint64_t vb = *(const uint64_t *)b;
+    return (va > vb) - (va < vb);
+}
 
 int main(int argc, char **argv) {
     unsigned n = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 1000;
     const bool cross_band = argc > 2 && strcmp(argv[2], "--cross-band") == 0;
     struct bladerf *dev = NULL;
     int16_t *samples = calloc(8192 * 2, sizeof(*samples));
-    if (!samples) return 2;
+    uint64_t *latencies_ns = calloc(n, sizeof(*latencies_ns));
+    unsigned completed = 0;
+    if (!samples || !latencies_ns) return 2;
     int st = bladerf_open(&dev, NULL);
     if (st) { fprintf(stderr, "open: %s\n", bladerf_strerror(st)); return 2; }
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
@@ -24,6 +41,7 @@ int main(int argc, char **argv) {
     unsigned first_read_faults = 0;
     unsigned recovered_reads = 0;
     for (unsigned i=0; i<n; ++i) {
+        uint64_t start_ns = monotonic_ns();
         uint64_t freq = cross_band ?
             ((i & 1) ? 1835000000ULL : 947500000ULL) :
             ((i & 1) ? 1835000000ULL : 1835400000ULL);
@@ -39,6 +57,8 @@ int main(int argc, char **argv) {
         struct bladerf_metadata meta = {0};
         st = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0), &req, &txn);
         if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
+        latencies_ns[i] = monotonic_ns() - start_ns;
+        completed = i + 1;
         bool valid = false;
         if (!st) {
             for (unsigned attempt = 0; attempt < 4; ++attempt) {
@@ -71,10 +91,17 @@ int main(int argc, char **argv) {
         }
         if ((i+1)%100==0) fprintf(stderr,"progress=%u unrecovered=%u first_read_faults=%u recovered=%u last_epoch=%u\n",i+1,failures,first_read_faults,recovered_reads,event.epoch_id);
     }
-    printf("transitions=%u unrecovered=%u first_read_faults=%u recovered=%u\n",n,failures,first_read_faults,recovered_reads);
+    qsort(latencies_ns, completed, sizeof(*latencies_ns), compare_u64);
+    printf("transitions=%u unrecovered=%u first_read_faults=%u recovered=%u "
+           "transition_ms_p50=%.3f_p95=%.3f_p99=%.3f_max=%.3f\n",
+           completed, failures, first_read_faults, recovered_reads,
+           completed ? latencies_ns[(completed - 1) * 50 / 100] / 1e6 : 0.0,
+           completed ? latencies_ns[(completed - 1) * 95 / 100] / 1e6 : 0.0,
+           completed ? latencies_ns[(completed - 1) * 99 / 100] / 1e6 : 0.0,
+           completed ? latencies_ns[completed - 1] / 1e6 : 0.0);
     bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
-    bladerf_close(dev); free(samples);
+    bladerf_close(dev); free(samples); free(latencies_ns);
     return failures ? 1 : 0;
 fail:
-    bladerf_close(dev); free(samples); return 2;
+    bladerf_close(dev); free(samples); free(latencies_ns); return 2;
 }
