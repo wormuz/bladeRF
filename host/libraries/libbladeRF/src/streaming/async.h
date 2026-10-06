@@ -79,6 +79,10 @@ int async_init_stream(struct bladerf_stream **stream,
 
 /* Publish a receive discontinuity detected by an asynchronous backend. */
 void async_notify_rx_overrun(struct bladerf_stream *stream);
+/* Report a terminal RX transport failure to native history and to the stream
+ * callback as an event-only notification. No IQ is delivered. */
+void async_notify_rx_transport_failure(struct bladerf_stream *stream,
+                                       uint32_t reason);
 
 /* Deliver a complete continuous-IQ RX transfer, or recycle a partial one
  * without exposing its samples. Packet-meta payloads are caller-framed and

@@ -96,8 +96,12 @@ void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
 
     /* This is called from the USB callback; keep it independent of dev->lock. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER) {
-        /* A short USB transfer is invalid even in legacy mode, where the
+    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
+        reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
+        reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
+        reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
+        reason == BLADERF_RF_WITHHELD_DEVICE_LOST) {
+        /* A USB transport failure is invalid even in legacy mode, where the
          * epoch gate itself is disabled. Record each occurrence. */
         should_report = true;
     } else if (board_data->rf_transition_epoch_contract_enabled &&

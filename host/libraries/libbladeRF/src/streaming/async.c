@@ -50,8 +50,8 @@ void async_notify_rx_overrun(struct bladerf_stream *stream)
     }
 }
 
-static void async_notify_rx_withheld(struct bladerf_stream *stream,
-                                     uint32_t reason)
+static void async_notify_rx_data_withheld(struct bladerf_stream *stream,
+                                          uint32_t reason)
 {
     struct bladerf *dev;
 
@@ -64,6 +64,22 @@ static void async_notify_rx_withheld(struct bladerf_stream *stream,
     if (dev->board != NULL && dev->board->rx_async_data_withheld != NULL) {
         dev->board->rx_async_data_withheld(dev, reason);
     }
+}
+
+void async_notify_rx_transport_failure(struct bladerf_stream *stream,
+                                       uint32_t reason)
+{
+    struct bladerf_metadata metadata = {0};
+
+    if (stream == NULL || stream->cb == NULL || stream->dev == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    async_notify_rx_data_withheld(stream, reason);
+    async_notify_rx_overrun(stream);
+    (void)stream->cb(stream->dev, stream, &metadata, NULL, 0,
+                     stream->user_data);
 }
 
 void *async_rx_process_buffer(struct bladerf_stream *stream,
@@ -79,8 +95,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
-        async_notify_rx_withheld(stream,
-                                 BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+        async_notify_rx_data_withheld(stream,
+                                      BLADERF_RF_WITHHELD_SHORT_TRANSFER);
         async_notify_rx_overrun(stream);
         next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
                                  stream->user_data);

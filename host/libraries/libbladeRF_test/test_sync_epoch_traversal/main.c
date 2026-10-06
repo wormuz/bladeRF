@@ -285,11 +285,17 @@ static void test_async_data_withheld_event(void)
     event = &board_data->rf_transition_events[2];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(event->flags == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    bladerf2_rx_async_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_USB_OVERFLOW);
+    assert(board_data->rf_transition_event_count == 4);
+    event = &board_data->rf_transition_events[3];
+    assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(event->flags == BLADERF_RF_WITHHELD_USB_OVERFLOW);
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_async_stream_overrun(&dev);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 4);
-    event = &board_data->rf_transition_events[3];
+    assert(board_data->rf_transition_event_count == 5);
+    event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
     assert(event->flags == BLADERF_RF_STREAM_STATUS_OVERRUN);
 
@@ -564,6 +570,21 @@ int main(void)
     assert(async_rx_event_wakeups == 1);
     assert(async_withheld_events == 1);
     assert(async_withheld_reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    async_withheld_events = 0;
+    async_withheld_reason = 0;
+    async_rx_event_wakeups = 0;
+    async_stream.cb = count_async_rx_callback;
+    async_stream.user_data = async_samples;
+    assert(MUTEX_INIT(&f.dev.lock) == 0);
+    MUTEX_LOCK(&f.dev.lock);
+    async_notify_rx_transport_failure(
+        &async_stream, BLADERF_RF_WITHHELD_USB_OVERFLOW);
+    MUTEX_UNLOCK(&f.dev.lock);
+    assert(MUTEX_DESTROY(&f.dev.lock) == 0);
+    assert(async_withheld_events == 1);
+    assert(async_withheld_reason == BLADERF_RF_WITHHELD_USB_OVERFLOW);
+    assert(async_overrun_events == 2);
+    assert(async_rx_event_wakeups == 1);
     allow_async_rx_buffer = false;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);

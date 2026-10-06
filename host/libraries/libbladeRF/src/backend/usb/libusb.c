@@ -1239,12 +1239,16 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
             case LIBUSB_TRANSFER_STALL:
                 log_error("Hit stall for buffer %p\n\r", transfer->buffer);
+                async_notify_rx_transport_failure(
+                    stream, BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
             case LIBUSB_TRANSFER_ERROR:
                 log_error("Got transfer error for buffer %p\n\r",
                           transfer->buffer);
+                async_notify_rx_transport_failure(
+                    stream, BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
@@ -1252,7 +1256,8 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 log_error("Got transfer over for buffer %p, "
                           "transfer \"actual_length\" = %d\n\r",
                           transfer->buffer, transfer->actual_length);
-                async_notify_rx_overrun(stream);
+                async_notify_rx_transport_failure(
+                    stream, BLADERF_RF_WITHHELD_USB_OVERFLOW);
                 stream->error_code = BLADERF_ERR_IO;
                 break;
 
@@ -1270,10 +1275,14 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                           transfer->buffer, transfer->actual_length,
                           (int)transfer->length,
                           (unsigned)stream_data->num_complete);
+                async_notify_rx_transport_failure(
+                    stream, BLADERF_RF_WITHHELD_USB_TIMEOUT);
                 stream->error_code = BLADERF_ERR_TIMEOUT;
                 break;
 
             case LIBUSB_TRANSFER_NO_DEVICE:
+                async_notify_rx_transport_failure(
+                    stream, BLADERF_RF_WITHHELD_DEVICE_LOST);
                 stream->error_code = BLADERF_ERR_NODEV;
                 break;
 
