@@ -61,8 +61,8 @@ static void async_notify_rx_data_withheld(struct bladerf_stream *stream,
     }
 
     dev = stream->dev;
-    if (dev->board != NULL && dev->board->rx_async_data_withheld != NULL) {
-        dev->board->rx_async_data_withheld(dev, reason);
+    if (dev->board != NULL && dev->board->rx_data_withheld != NULL) {
+        dev->board->rx_data_withheld(dev, reason);
     }
 }
 

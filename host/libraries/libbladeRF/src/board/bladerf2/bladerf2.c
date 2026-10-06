@@ -1671,7 +1671,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rx_async_have_expected_timestamp = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        bladerf2_rx_async_data_withheld(
+        bladerf2_rx_data_withheld(
             dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
         return false;
     }
@@ -1709,7 +1709,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 &board_data->rx_async_timestamp_epoch_id,
                 &board_data->rx_async_expected_timestamp)) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            bladerf2_rx_async_data_withheld(
+            bladerf2_rx_data_withheld(
                 dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
             return false;
         }
@@ -1730,7 +1730,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rx_async_timestamp_discontinuity(dev);
     } else {
-        bladerf2_rx_async_data_withheld(
+        bladerf2_rx_data_withheld(
             dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     }
     return false;
@@ -3552,7 +3552,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
-    FIELD_INIT(.rx_async_data_withheld, bladerf2_rx_async_data_withheld),
+    FIELD_INIT(.rx_data_withheld, bladerf2_rx_data_withheld),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),

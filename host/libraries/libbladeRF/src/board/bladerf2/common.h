@@ -278,7 +278,8 @@ void bladerf2_rf_event_append_locked(
     const struct bladerf_rf_event *event);
 void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
                                           bladerf_format format);
-void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason);
+void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
+void bladerf2_rx_data_withheld_reset(struct bladerf *dev);
 void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev);
 void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
                                         int status);

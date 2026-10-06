@@ -74,6 +74,8 @@ struct fixture {
 static unsigned int rx_overrun_events;
 static unsigned int async_withheld_events;
 static uint32_t async_withheld_reason;
+static unsigned int sync_withheld_events;
+static uint32_t sync_withheld_reason;
 static unsigned int async_overrun_events;
 
 static void note_rx_overrun(struct bladerf *dev)
@@ -87,6 +89,13 @@ static void note_async_withheld(struct bladerf *dev, uint32_t reason)
     assert(dev != NULL);
     async_withheld_events++;
     async_withheld_reason = reason;
+}
+
+static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
+{
+    assert(dev != NULL);
+    sync_withheld_events++;
+    sync_withheld_reason = reason;
 }
 
 static void note_async_overrun(struct bladerf *dev)
@@ -132,13 +141,22 @@ static void *count_async_rx_callback(struct bladerf *dev,
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
     .rx_async_stream_overrun = note_async_overrun,
-    .rx_async_data_withheld = note_async_withheld,
+    .rx_data_withheld = note_sync_withheld,
+    .rx_async_buffer_valid = validate_async_rx_buffer,
+};
+
+static const struct board_fns test_async_board = {
+    .rx_stream_overrun = note_rx_overrun,
+    .rx_async_stream_overrun = note_async_overrun,
+    .rx_data_withheld = note_async_withheld,
     .rx_async_buffer_valid = validate_async_rx_buffer,
 };
 
 static void fixture_init(struct fixture *f)
 {
     memset(f, 0, sizeof(*f));
+    sync_withheld_events = 0;
+    sync_withheld_reason = 0;
     f->buffers[0] = calloc(1, BYTES_PER_BUFFER);
     f->buffers[1] = calloc(1, BYTES_PER_BUFFER);
     assert(f->buffers[0] != NULL && f->buffers[1] != NULL);
@@ -256,9 +274,9 @@ static void test_async_data_withheld_event(void)
     /* The callback writer stays independent of dev->lock and coalesces a
      * withheld run into one history event until valid IQ resumes. */
     MUTEX_LOCK(&dev.lock);
-    bladerf2_rx_async_data_withheld(
+    bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
-    bladerf2_rx_async_data_withheld(
+    bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     MUTEX_UNLOCK(&dev.lock);
     assert(board_data->rf_transition_event_count == 1);
@@ -269,23 +287,21 @@ static void test_async_data_withheld_event(void)
     assert(event->flags == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_INVALID);
 
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->rx_async_data_withheld_reported = false;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    bladerf2_rx_async_data_withheld(
+    bladerf2_rx_data_withheld_reset(&dev);
+    bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     assert(board_data->rf_transition_event_count == 2);
 
     board_data->rf_transition_epoch_contract_enabled = false;
     MUTEX_LOCK(&dev.lock);
-    bladerf2_rx_async_data_withheld(
+    bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     MUTEX_UNLOCK(&dev.lock);
     assert(board_data->rf_transition_event_count == 3);
     event = &board_data->rf_transition_events[2];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(event->flags == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
-    bladerf2_rx_async_data_withheld(
+    bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_USB_OVERFLOW);
     assert(board_data->rf_transition_event_count == 4);
     event = &board_data->rf_transition_events[3];
@@ -382,6 +398,9 @@ int main(void)
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
     assert_marker(out, MSG_SAMPLES, 222, 0);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     fixture_destroy(&f);
 
     /* A stale message after copied current-epoch data returns the valid
@@ -399,6 +418,9 @@ int main(void)
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert(meta.status & BLADERF_META_STATUS_OVERRUN);
     assert(rx_overrun_events == 1);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     assert_marker(out, MSG_SAMPLES, 333, 0);
 
     receive(&f, out, MSG_SAMPLES, &meta);
@@ -416,6 +438,9 @@ int main(void)
     assert(meta.timestamp == 1000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert_marker(out, 100, 666, 100);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     fixture_destroy(&f);
 
     /* A retune invalidates the remainder of a message that the parser had
@@ -451,6 +476,8 @@ int main(void)
     assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_WOULD_BLOCK);
     assert(meta.actual_count == 0);
     assert(f.sync.meta.rx_epoch_data_invalidated);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     fixture_destroy(&f);
 
     /* Only the exact successful boundary clears invalidation; old queued
@@ -544,6 +571,7 @@ int main(void)
      * without exposing their prefix to application callbacks, and publishes
      * the same device event used by sync RX. */
     fixture_init(&f);
+    f.dev.board = &test_async_board;
     struct bladerf_stream async_stream = {0};
     struct bladerf_metadata async_meta = {0};
     int16_t async_samples[2048] = {0};

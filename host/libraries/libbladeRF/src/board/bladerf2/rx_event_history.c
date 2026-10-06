@@ -82,7 +82,7 @@ void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
-void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
+void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
@@ -94,7 +94,8 @@ void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
     }
     board_data = dev->board_data;
 
-    /* This is called from the USB callback; keep it independent of dev->lock. */
+    /* This may run from the USB callback or sync parser. Keep it independent
+     * of dev->lock, which can be held by a setter waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
         reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
@@ -122,6 +123,21 @@ void bladerf2_rx_async_data_withheld(struct bladerf *dev, uint32_t reason)
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
     event.flags = reason;
     bladerf2_rf_event_append(board_data, &event);
+}
+
+void bladerf2_rx_data_withheld_reset(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rx_async_data_withheld_reported = false;
+    board_data->rx_async_timestamp_discontinuity_reported = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)

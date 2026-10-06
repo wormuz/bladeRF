@@ -699,6 +699,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     bool exit_early = false;
     bool copied_data = false;
     bool notify_overrun = false;
+    uint32_t withheld_reason = 0;
     unsigned int samples_returned = 0;
     uint8_t *samples_dest = (uint8_t*)samples;
     uint8_t *buf_src = NULL;
@@ -760,6 +761,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         s->meta.rx_epoch_id_filter_enabled &&
         s->meta.rx_epoch_data_invalidated) {
         status = BLADERF_ERR_WOULD_BLOCK;
+        withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
         goto out;
     }
 
@@ -1114,6 +1116,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                              * the contiguous prefix and retry this message on
                              * the next call, where it can be discarded. */
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
+                            withheld_reason =
+                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
                             exit_early = true;
                             s->meta.state = SYNC_META_STATE_HEADER;
                             break;
@@ -1122,6 +1126,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         if (epoch_disposition ==
                             METADATA_RX_EPOCH_DISCONTINUITY) {
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
+                            withheld_reason =
+                                BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY;
                             exit_early = copied_data;
                             log_debug("Sample discontinuity detected @ "
                                       "buffer %u, message %u: Expected t=%llu, "
@@ -1136,6 +1142,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                         s->meta.msg_num,
                                         s->meta.msg_timestamp,
                                         s->meta.curr_timestamp);
+                        } else if (epoch_disposition ==
+                                   METADATA_RX_EPOCH_DROP_MESSAGE) {
+                            withheld_reason = s->meta.rx_epoch_data_invalidated ?
+                                BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED :
+                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                        } else if (epoch_disposition ==
+                                   METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX) {
+                            withheld_reason =
+                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
                         }
 
                         /* Old-epoch messages are drained while a new epoch
@@ -1151,6 +1166,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     case SYNC_META_STATE_SAMPLES:
                         if (s->meta.rx_epoch_data_invalidated ||
                             s->meta.msg_epoch_filtered_out) {
+                            if (withheld_reason == 0) {
+                                withheld_reason = s->meta.rx_epoch_data_invalidated ?
+                                    BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED :
+                                    BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                            }
                             unsigned int left = left_in_msg(s);
                             s->meta.curr_msg_off += left;
                             s->meta.curr_timestamp +=
@@ -1376,6 +1396,11 @@ out:
         s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_stream_overrun != NULL) {
         s->dev->board->rx_stream_overrun(s->dev);
+    }
+
+    if (withheld_reason != 0 && s->dev != NULL && s->dev->board != NULL &&
+        s->dev->board->rx_data_withheld != NULL) {
+        s->dev->board->rx_data_withheld(s->dev, withheld_reason);
     }
 
     return status;

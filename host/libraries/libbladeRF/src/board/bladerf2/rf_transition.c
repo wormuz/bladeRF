@@ -363,6 +363,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     }
 
     status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    bladerf2_rx_data_withheld_reset(dev);
     data_epoch_enabled = sync_rx_epoch_filter_enabled(
         &board_data->sync[BLADERF_RX]);
     if (status == 0 && data_epoch_enabled) {
@@ -633,6 +634,7 @@ static int _bladerf_rx_transition_begin(
      * FPGA boundary is confirmed. On every failure this invalidation stays
      * latched; only sync_rx_epoch_set_min_timestamp() can clear it. */
     status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    bladerf2_rx_data_withheld_reset(dev);
     if (status != 0) {
         _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                     BLADERF_RF_STATE_ERROR,

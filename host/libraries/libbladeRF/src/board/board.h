@@ -325,9 +325,9 @@ struct board_fns {
     /* Async USB callbacks cannot acquire dev->lock: RF setters may hold it
      * while awaiting USB progress. Boards may provide a lock-safe writer. */
     void (*rx_async_stream_overrun)(struct bladerf *dev);
-    /* Report an asynchronous RX transfer deliberately withheld from the
-     * stream callback, including when no epoch filter is enabled. */
-    void (*rx_async_data_withheld)(struct bladerf *dev, uint32_t reason);
+    /* Report RX IQ deliberately withheld by either the asynchronous transfer
+     * validator or the synchronous META epoch parser. */
+    void (*rx_data_withheld)(struct bladerf *dev, uint32_t reason);
     /* Return whether an asynchronous RX META buffer belongs to the current
      * certified epoch. NULL preserves legacy, unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,
