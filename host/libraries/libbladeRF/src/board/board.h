@@ -298,6 +298,8 @@ struct board_fns {
     int (*set_frequency)(struct bladerf *dev,
                          bladerf_channel ch,
                          bladerf_frequency frequency);
+    /* Revoke certified RX data before an out-of-band RF retune. */
+    int (*invalidate_rx_data)(struct bladerf *dev, bladerf_channel ch);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,
                                const struct bladerf_range **range);

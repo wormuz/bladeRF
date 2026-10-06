@@ -2911,6 +2911,12 @@ int CALL_CONV bladerf_sync_tx(struct bladerf *dev,
  * @param[in]   timeout_ms  Timeout (milliseconds) for this call to complete.
  *                          Zero implies "infinite."
  *
+ * @note When an epoch-filtered RX META stream has had its certified epoch
+ *       invalidated by an RF retune, this call returns
+ *       ::BLADERF_ERR_WOULD_BLOCK with zero samples until a later successful
+ *       event-driven RX transition confirms a new epoch. This avoids waiting
+ *       indefinitely while discarding continuously arriving uncertified IQ.
+ *
  * @return 0 on success,
  *         ::BLADERF_ERR_UNSUPPORTED if libbladeRF is not built with support
  *         for this functionality,

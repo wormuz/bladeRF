@@ -212,7 +212,7 @@ int main(void)
     write_msg(f.buffers[1], 200, 8, 1001);
     memset(&meta, 0, sizeof(meta));
     meta.flags = BLADERF_META_FLAG_RX_NOW;
-    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
+    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_WOULD_BLOCK);
     assert(meta.actual_count == 0);
     assert(f.sync.meta.rx_epoch_data_invalidated);
     fixture_destroy(&f);

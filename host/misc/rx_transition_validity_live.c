@@ -115,9 +115,49 @@ int main(void)
         goto cleanup;
     }
 
-    printf("RX validity policy: PASS control_txn=%u state=RX_DATA_INVALID; "
-           "data_txn=%u epoch=%u timestamp=%llu\n",
-           txn - 1, txn, event.epoch_id,
+    /* The legacy setter has no FPGA epoch confirmation. It must revoke the
+     * previously certified stream until another event-driven transition. */
+    CHECK(bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(0), 1835500000ULL));
+    metadata = (struct bladerf_metadata){0};
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
+        fprintf(stderr, "legacy retune leaked uncertified IQ: status=%s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+
+    const struct bladerf_rx_transition_request recover_valid = {
+        .target_frequency_hz = 1835300000ULL,
+        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED,
+        .timeout_ms = 2000,
+        .require_rx_data_valid = true,
+        .epoch_settle_samples = 0,
+    };
+    CHECK(bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+                                     &recover_valid, &txn));
+    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
+    accepted = false;
+    for (unsigned attempt = 0; attempt < 5 && !accepted; ++attempt) {
+        metadata = (struct bladerf_metadata){0};
+        metadata.flags = BLADERF_META_FLAG_RX_NOW;
+        status = bladerf_sync_rx(dev, samples, 8192, &metadata, 2000);
+        accepted = status == 0 && metadata.rx_epoch_id_valid &&
+                   metadata.rx_epoch_id == event.epoch_id &&
+                   metadata.actual_count == 8192 &&
+                   (metadata.status & BLADERF_META_STATUS_OVERRUN) == 0 &&
+                   metadata.timestamp >= event.fpga_timestamp;
+    }
+    if (!accepted) {
+        fprintf(stderr, "event transition did not restore valid IQ after legacy retune\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+
+    printf("RX validity policy: PASS control_txn=%u legacy_retune=fenced; "
+           "recovery_txn=%u epoch=%u timestamp=%llu\n",
+           txn - 2, txn, event.epoch_id,
            (unsigned long long)metadata.timestamp);
     status = 0;
 

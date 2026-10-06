@@ -864,6 +864,18 @@ int bladerf_set_frequency(struct bladerf *dev,
                           bladerf_frequency frequency)
 {
     int status;
+
+    /* A legacy frequency setter does not produce a confirmed RX epoch.
+     * Revoke any previously certified sync-RX data before touching the RFIC;
+     * a later event-driven transition is required to certify data again. */
+    if (!BLADERF_CHANNEL_IS_TX(ch) &&
+        dev->board->invalidate_rx_data != NULL) {
+        status = dev->board->invalidate_rx_data(dev, ch);
+        if (status != 0) {
+            return status;
+        }
+    }
+
     MUTEX_LOCK(&dev->lock);
     status = bladerf_set_frequency_locked(dev, ch, frequency);
     MUTEX_UNLOCK(&dev->lock);

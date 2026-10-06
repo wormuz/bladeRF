@@ -1582,6 +1582,20 @@ static int bladerf2_set_frequency(struct bladerf *dev,
     return board_data->rfic->set_frequency(dev, ch, frequency);
 }
 
+static int bladerf2_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        return 0;
+    }
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    return sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+}
+
 
 /******************************************************************************/
 /* RF ports */
@@ -3306,6 +3320,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.get_bandwidth_range, bladerf2_get_bandwidth_range),
     FIELD_INIT(.get_frequency, bladerf2_get_frequency),
     FIELD_INIT(.set_frequency, bladerf2_set_frequency),
+    FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),
     FIELD_INIT(.set_rf_port, bladerf2_set_rf_port),

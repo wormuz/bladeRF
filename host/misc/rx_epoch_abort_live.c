@@ -190,9 +190,10 @@ int main(void)
     struct bladerf_metadata metadata = {0};
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
     status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
-    if (status != BLADERF_ERR_TIMEOUT) {
+    if (status != BLADERF_ERR_WOULD_BLOCK) {
         fprintf(stderr, "failed epoch read returned %s (epoch=%u valid=%u "
-                "count=%u), expected timeout\n", bladerf_strerror(status),
+                "count=%u), expected fail-closed WOULD_BLOCK\n",
+                bladerf_strerror(status),
                 metadata.rx_epoch_id, metadata.rx_epoch_id_valid,
                 metadata.actual_count);
         status = BLADERF_ERR_UNEXPECTED;

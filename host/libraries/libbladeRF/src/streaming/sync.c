@@ -681,6 +681,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             goto out;
         } else {
             user_meta->status = 0;
+            user_meta->actual_count = 0;
             user_meta->rx_epoch_id = 0;
             user_meta->rx_epoch_id_valid = 0;
             target_timestamp = user_meta->timestamp;
@@ -695,6 +696,20 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             }
             MUTEX_UNLOCK(&s->buf_mgmt.lock);
         }
+    }
+
+    /* Once a certified RX epoch is revoked, continuously arriving but
+     * uncertified packets can never satisfy this read. Fail promptly instead
+     * of draining forever (and resetting the per-buffer timeout each time).
+     * A later confirmed epoch clears this latch in
+     * sync_rx_epoch_set_min_timestamp(). */
+    if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
+        s->meta.rx_epoch_id_filter_enabled &&
+        s->meta.rx_epoch_data_invalidated) {
+        status = BLADERF_ERR_WOULD_BLOCK;
+        goto out;
     }
 
     b = &s->buf_mgmt;
