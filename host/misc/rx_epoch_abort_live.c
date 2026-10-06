@@ -96,18 +96,39 @@ static int check_failed_trace(struct bladerf *dev, uint32_t transaction_id)
     bool invalidated = false;
     bool errored = false;
     bool valid = false;
+    bool spi_started = false;
+    bool spi_done = false;
+    bool lo_readback = false;
+    bool pll_locked = false;
+    bool ensm_rx = false;
+    uint64_t previous_timestamp = 0;
     for (uint32_t i = 0; i < count; ++i) {
         if (events[i].transaction_id != transaction_id) {
             return BLADERF_ERR_UNEXPECTED;
         }
+        if (events[i].host_monotonic_ns < previous_timestamp) {
+            fprintf(stderr, "failed transition events out of timestamp order\n");
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        previous_timestamp = events[i].host_monotonic_ns;
         invalidated |= events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_INVALID;
         errored |= events[i].event_type == BLADERF_RF_EVT_ERROR;
         valid |= events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID;
+        spi_started |= events[i].event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN;
+        spi_done |= events[i].event_type == BLADERF_RF_EVT_SPI_DONE;
+        lo_readback |= events[i].event_type == BLADERF_RF_EVT_LO_READBACK_MATCH;
+        pll_locked |= events[i].event_type == BLADERF_RF_EVT_RX_PLL_LOCKED;
+        ensm_rx |= events[i].event_type == BLADERF_RF_EVT_ENSM_RX;
     }
-    if (!invalidated || !errored || valid) {
+    if (!invalidated || !errored || valid || spi_started || spi_done ||
+        lo_readback || pll_locked || ensm_rx ||
+        events[count - 1].event_type != BLADERF_RF_EVT_ERROR ||
+        events[count - 1].error_code != BLADERF_ERR_RANGE) {
         fprintf(stderr, "failed transition trace invalid txn=%u "
-                "invalidated=%u error=%u epoch_valid=%u events=%u\n",
-                transaction_id, invalidated, errored, valid, count);
+                "invalidated=%u error=%u epoch_valid=%u spi=%u/%u "
+                "readback=%u pll=%u ensm=%u events=%u\n",
+                transaction_id, invalidated, errored, valid,
+                spi_started, spi_done, lo_readback, pll_locked, ensm_rx, count);
         return BLADERF_ERR_UNEXPECTED;
     }
     return 0;
@@ -184,9 +205,9 @@ int main(void)
         goto out;
     }
 
-    /* All old-epoch packets must be consumed and dropped by the pending-ID
-     * filter. No epoch-valid samples can arrive while the FPGA gate is in
-     * ERROR, so the synchronous read must end only with a timeout. */
+    /* The host parser remains invalidated while the FPGA gate is in ERROR.
+     * sync_rx must fail promptly rather than wait on an epoch that cannot
+     * arrive until the next explicit transition. */
     struct bladerf_metadata metadata = {0};
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
     status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
