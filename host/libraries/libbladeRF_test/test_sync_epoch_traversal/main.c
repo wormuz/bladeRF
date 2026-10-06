@@ -182,12 +182,46 @@ int main(void)
     assert_marker(out, 100, 666, 100);
     fixture_destroy(&f);
 
-    /* A transition installs its expected epoch ID before FPGA ARM. This
-     * models the host-side fail-closed interval: queued old-epoch USB data
-     * is rejected even though the exact first-valid timestamp is not known
-     * yet. */
+    /* A retune invalidates the remainder of a message that the parser had
+     * already classified under the formerly valid epoch. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 811);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 911);
+    write_msg(f.buffers[1], 1000 + 2 * MSG_SAMPLES, 7, 1011);
+    write_msg(f.buffers[1] + MSG_BYTES, 1000 + 3 * MSG_SAMPLES, 7, 1111);
+    receive(&f, out, 100, &meta);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 4000, 8) == 0);
+    /* Even though successful-boundary installation clears the invalidation
+     * latch, the already-open old message remains marked for discard. */
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
+    assert(meta.actual_count == 0);
+    fixture_destroy(&f);
+
+    /* A transition poisons the entire parser epoch before ARM. Even a packet
+     * carrying the soon-to-be expected ID cannot escape until wait() confirms
+     * RX_EPOCH_VALID and installs the timestamp boundary. */
     fixture_init(&f);
     assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    write_msg(f.buffers[0], 0, 7, 888);
+    write_msg(f.buffers[0] + MSG_BYTES, 100, 8, 999);
+    write_msg(f.buffers[1], 200, 8, 1001);
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
+    assert(meta.actual_count == 0);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    fixture_destroy(&f);
+
+    /* Only the exact successful boundary clears invalidation; old queued
+     * packets remain suppressed and matching samples after it are returned. */
+    fixture_init(&f);
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 100, 8) == 0);
     write_msg(f.buffers[0], 0, 7, 888);
     write_msg(f.buffers[0] + MSG_BYTES, 100, 8, 999);
     receive(&f, out, 100, &meta);

@@ -843,6 +843,13 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "sync RX parser lacks the metadata timestamp lower-bound filter",
              "suppress queued samples preceding the FPGA first-valid timestamp")
+    if ("sync_rx_epoch_invalidate(" not in transition_text or
+            "rx_epoch_data_invalidated = true" not in sync_text or
+            "rx_epoch_data_invalidated = false" not in sync_text or
+            "s->meta.rx_epoch_data_invalidated ||" not in sync_text):
+        fail("rx-epoch-invalid-until-confirmed",
+             "sync parser can admit a pending or timed-out epoch",
+             "drop all epoch IQ until successful wait installs its FPGA timestamp boundary")
     if ("nios_pkt_8x32_rx_epoch_status_is_active" not in transition_text or
             "expected_epoch_id" not in transition_text):
         fail("rx-epoch-host-timestamp-fence",

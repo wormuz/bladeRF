@@ -503,6 +503,43 @@ int sync_rx_epoch_require_metadata(struct bladerf_sync *sync)
     return status;
 }
 
+/* Revoke admission of previously certified IQ when a new RF transition
+ * starts. A control-only transition has no later FPGA boundary to restore
+ * admission, so only a subsequent successful epoch may clear this latch. */
+int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
+{
+    int status;
+
+    if (sync == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!sync->initialized) {
+        return 0;
+    }
+
+    status = sync_rx_epoch_require_metadata(sync);
+    if (status == BLADERF_ERR_UNSUPPORTED) {
+        /* Raw/legacy formats carry no certified epoch to revoke. */
+        return 0;
+    }
+    if (status != 0) {
+        return status;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (sync->initialized &&
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        sync->meta.rx_epoch_id_filter_enabled) {
+        sync->meta.rx_epoch_data_invalidated = true;
+        if (sync->state == SYNC_STATE_USING_BUFFER_META &&
+            sync->meta.state == SYNC_META_STATE_SAMPLES) {
+            sync->meta.msg_epoch_filtered_out = true;
+        }
+    }
+    MUTEX_UNLOCK(&sync->lock);
+    return 0;
+}
+
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id)
@@ -521,6 +558,7 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
         sync->meta.rx_epoch_boundary_enabled = true;
         sync->meta.rx_epoch_expected_id = epoch_id;
         sync->meta.rx_epoch_id_filter_enabled = true;
+        sync->meta.rx_epoch_data_invalidated = false;
     }
     MUTEX_UNLOCK(&sync->lock);
 
@@ -549,6 +587,11 @@ int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id)
         sync->meta.rx_epoch_boundary_enabled = true;
         sync->meta.rx_epoch_expected_id = epoch_id;
         sync->meta.rx_epoch_id_filter_enabled = true;
+        sync->meta.rx_epoch_data_invalidated = true;
+        if (sync->state == SYNC_STATE_USING_BUFFER_META &&
+            sync->meta.state == SYNC_META_STATE_SAMPLES) {
+            sync->meta.msg_epoch_filtered_out = true;
+        }
     }
     MUTEX_UNLOCK(&sync->lock);
 
@@ -960,10 +1003,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                          * contiguous samples that start after the gap.
                          */
                         const bool epoch_matches =
-                            !s->meta.rx_epoch_id_filter_enabled ||
-                            metadata_rx_epoch_matches(
-                                s->meta.curr_msg,
-                                s->meta.rx_epoch_expected_id);
+                            !s->meta.rx_epoch_data_invalidated &&
+                            (!s->meta.rx_epoch_id_filter_enabled ||
+                             metadata_rx_epoch_matches(
+                                 s->meta.curr_msg,
+                                 s->meta.rx_epoch_expected_id));
                         s->meta.msg_epoch_filtered_out =
                             s->meta.rx_epoch_boundary_enabled &&
                             s->meta.rx_epoch_id_filter_enabled &&
@@ -1016,7 +1060,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         break;
 
                     case SYNC_META_STATE_SAMPLES:
-                        if (s->meta.msg_epoch_filtered_out) {
+                        if (s->meta.rx_epoch_data_invalidated ||
+                            s->meta.msg_epoch_filtered_out) {
                             unsigned int left = left_in_msg(s);
                             s->meta.curr_msg_off += left;
                             s->meta.curr_timestamp +=

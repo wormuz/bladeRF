@@ -413,6 +413,18 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
+    /* Retire any previously certified sync-RX data before changing RF state.
+     * For epoch requests expect_id below also poisons all messages until the
+     * FPGA boundary is confirmed. On every failure this invalidation stays
+     * latched; only sync_rx_epoch_set_min_timestamp() can clear it. */
+    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    if (status != 0) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                    BLADERF_RF_STATE_ERROR,
+                    request->target_frequency_hz, 0, 0, status, 0);
+        return _fail_transition(dev, board_data, status, NULL);
+    }
+
     _emit_event(dev, board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
                 BLADERF_RF_STATE_CONFIG_PENDING,
                 request->target_frequency_hz, 0, 0, 0, 0);
