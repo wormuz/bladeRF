@@ -72,6 +72,11 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
 
     if (trace_retune2) {
         transfer_started_ns = monotonic_ns();
+        dev->nios_retune_trace.request_begin_ns = transfer_started_ns;
+        dev->nios_retune_trace.usb_out_done_ns = 0;
+        dev->nios_retune_trace.response_done_ns = 0;
+        dev->nios_retune_trace.status = 0;
+        dev->nios_retune_trace.valid = true;
     }
 
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
@@ -80,6 +85,10 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
                                     NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
     if (status != 0) {
+        if (trace_retune2) {
+            dev->nios_retune_trace.response_done_ns = monotonic_ns();
+            dev->nios_retune_trace.status = status;
+        }
         log_error("Failed to send NIOS II request: %s\n",
                   bladerf_strerror(status));
         return status;
@@ -87,6 +96,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
 
     if (trace_retune2) {
         transfer_out_done_ns = monotonic_ns();
+        dev->nios_retune_trace.usb_out_done_ns = transfer_out_done_ns;
     }
 
     /* Retrieve the request */
@@ -99,6 +109,8 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
 
     if (trace_retune2) {
         const uint64_t transfer_done_ns = monotonic_ns();
+        dev->nios_retune_trace.response_done_ns = transfer_done_ns;
+        dev->nios_retune_trace.status = status;
         log_debug("NIOS retune2 USB OUT=%" PRIu64 " us IN=%" PRIu64
                   " us total=%" PRIu64 " us\n",
                   (transfer_out_done_ns - transfer_started_ns) / 1000ULL,

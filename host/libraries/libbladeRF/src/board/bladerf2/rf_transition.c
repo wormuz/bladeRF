@@ -416,6 +416,11 @@ static int _bladerf_rx_transition_begin(
     uint64_t spi_last_write_ns = 0;
     uint32_t spi_write_count = 0;
     int spi_last_status = 0;
+    uint64_t nios_begin_ns = 0;
+    uint64_t nios_out_done_ns = 0;
+    uint64_t nios_response_done_ns = 0;
+    int nios_transport_status = 0;
+    bool nios_trace_valid = false;
 
     if (dev == NULL || request == NULL || transaction_id == NULL) {
         return BLADERF_ERR_INVAL;
@@ -564,8 +569,42 @@ static int _bladerf_rx_transition_begin(
     stage_started_ns = _monotonic_ns();
     if (quick_tune != NULL) {
         struct bladerf_quick_tune qt = *quick_tune;
-        status = bladerf_schedule_retune(dev, ch, BLADERF_RETUNE_NOW,
-                                         request->target_frequency_hz, &qt);
+        /* Snapshot the NIOS transport stage timestamps before releasing the
+         * device lock, so another control operation cannot overwrite them. */
+        WITH_MUTEX(&dev->lock, {
+            memset(&dev->nios_retune_trace, 0,
+                   sizeof(dev->nios_retune_trace));
+            status = dev->board->schedule_retune(
+                dev, ch, BLADERF_RETUNE_NOW,
+                request->target_frequency_hz, &qt);
+            nios_begin_ns = dev->nios_retune_trace.request_begin_ns;
+            nios_out_done_ns = dev->nios_retune_trace.usb_out_done_ns;
+            nios_response_done_ns = dev->nios_retune_trace.response_done_ns;
+            nios_transport_status = dev->nios_retune_trace.status;
+            nios_trace_valid = dev->nios_retune_trace.valid;
+        });
+        if (nios_trace_valid && nios_begin_ns != 0) {
+            _emit_event_with_timestamp(dev, board_data,
+                BLADERF_RF_EVT_NIOS_RETUNE_BEGIN,
+                BLADERF_RF_STATE_SPI_PROGRAMMING,
+                request->target_frequency_hz, 0, 0, 0, 0,
+                nios_begin_ns, 0, 0);
+            if (nios_out_done_ns != 0) {
+                _emit_event_with_timestamp(dev, board_data,
+                    BLADERF_RF_EVT_NIOS_RETUNE_USB_OUT_DONE,
+                    BLADERF_RF_STATE_SPI_PROGRAMMING,
+                    request->target_frequency_hz, 0, 0, 0, 0,
+                    nios_out_done_ns, 0, 0);
+            }
+            if (nios_response_done_ns != 0) {
+                _emit_event_with_timestamp(dev, board_data,
+                    BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE,
+                    BLADERF_RF_STATE_SPI_PROGRAMMING,
+                    request->target_frequency_hz, 0,
+                    (uint32_t)nios_transport_status,
+                    status, 0, nios_response_done_ns, 0, 0);
+            }
+        }
         if (status != 0) {
             log_error("%s: Nios fastlock recall failed: transaction=%u "
                       "target=%" PRIu64 " nios_profile=%u rffe_profile=%u "

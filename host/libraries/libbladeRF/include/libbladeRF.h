@@ -4643,8 +4643,10 @@ typedef enum {
  * inside the AD9361 SPI platform adapter, including band selection and LO
  * programming. Their timestamps include NIOS/USB command transport; they are
  * not SCLK-edge timestamps. `flags` on either event carries the number of
- * writes observed in that tune operation. These events are not emitted for
- * NIOS fastlock recall, whose SPI owner is the NIOS core.
+ * writes observed in that tune operation. NIOS fastlock recall does not emit
+ * these SPI events; it emits NIOS_RETUNE_BEGIN, NIOS_RETUNE_USB_OUT_DONE,
+ * and NIOS_RETUNE_RESPONSE with timestamps around the USB request/response.
+ * Those delimit transport stages, not NIOS-side SPI edges.
  */
 typedef enum {
     BLADERF_RF_EVT_CONFIG_ACCEPTED = 0,
@@ -4663,7 +4665,13 @@ typedef enum {
     BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     BLADERF_RF_EVT_SPI_WRITE_BEGIN,
     /** RFIC control conditions completed; does not establish IQ validity. */
-    BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED
+    BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED,
+    /** NIOS-owned fastlock request entered the USB control path. */
+    BLADERF_RF_EVT_NIOS_RETUNE_BEGIN,
+    /** NIOS retune command USB OUT transfer completed. */
+    BLADERF_RF_EVT_NIOS_RETUNE_USB_OUT_DONE,
+    /** NIOS retune response USB IN transfer completed. */
+    BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE
 } bladerf_rf_event_type;
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.

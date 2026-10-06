@@ -189,6 +189,17 @@ struct bladerf {
     /* Board's private data */
     void *board_data;
 
+    /* Host-observed timing for the most recent NIOS RETUNE2 transaction.
+     * Written by nios_access() and snapshotted by the serialized RX
+     * transition path; timestamps are CLOCK_MONOTONIC nanoseconds. */
+    struct {
+        uint64_t request_begin_ns;
+        uint64_t usb_out_done_ns;
+        uint64_t response_done_ns;
+        int status;
+        bool valid;
+    } nios_retune_trace;
+
     /* XB attached */
     bladerf_xb xb;
 
