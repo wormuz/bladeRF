@@ -214,6 +214,12 @@ struct bladerf2_board_data {
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_pending;
     bool rf_transition_waiting;
+    bool rf_transition_spi_trace_enabled;
+    bool rf_transition_setter_active;
+    uint64_t rf_transition_spi_first_write_ns;
+    uint64_t rf_transition_spi_last_write_ns;
+    uint32_t rf_transition_spi_write_count;
+    int rf_transition_spi_last_status;
 };
 
 /* Internal sync-RX hook: record when the first post-epoch META samples are
@@ -221,6 +227,8 @@ struct bladerf2_board_data {
  * never participates in determining whether the epoch is valid. */
 void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata);
+void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
+                                        int status);
 
 struct bladerf_rfic_status_register {
     bool rfic_initialized;

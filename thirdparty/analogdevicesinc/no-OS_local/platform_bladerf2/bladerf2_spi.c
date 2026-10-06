@@ -52,6 +52,7 @@
 #include "no_os_delay.h"
 #include "no_os_mutex.h"
 #include "no_os_spi.h"
+#include "platform.h"
 
 /* Payload bytes one transaction can carry. Mirrors MAX_MBYTE_SPI, which the
  * driver defines as 8 in ad9361.h; kept local so this file does not need the
@@ -171,7 +172,9 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
             word |= ((uint64_t)data[2 + i]) << (8 * (7 - i));
         }
 
+        bladerf2_rx_transition_spi_observe(dev, true, 0);
         status = dev->backend->ad9361_spi_write(dev, cmd, word);
+        bladerf2_rx_transition_spi_observe(dev, false, status);
         if (status < 0) {
             return -EIO;
         }

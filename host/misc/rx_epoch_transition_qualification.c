@@ -36,7 +36,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     st = bladerf_rx_transition_get_events(dev, txn, events,
                                            BLADERF_RF_EVENT_HISTORY_SIZE,
                                            &count, &complete);
-    if (st || !complete || count < 9 ||
+    if (st || !complete || count < 11 ||
         events[0].event_type != BLADERF_RF_EVT_CONFIG_ACCEPTED ||
         events[0].fpga_state != BLADERF_RF_STATE_CONFIG_PENDING ||
         events[count - 2].event_type != final_event->event_type ||
@@ -52,6 +52,8 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     const bladerf_rf_event_type required[] = {
         BLADERF_RF_EVT_RX_EPOCH_INVALID,
         BLADERF_RF_EVT_CONFIG_ACCEPTED,
+        BLADERF_RF_EVT_SPI_WRITE_BEGIN,
+        BLADERF_RF_EVT_SPI_DONE,
         BLADERF_RF_EVT_LO_SET_RETURNED,
         BLADERF_RF_EVT_LO_READBACK_MATCH,
         BLADERF_RF_EVT_RX_PLL_LOCKED,
@@ -60,11 +62,28 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     };
     unsigned next = 0;
+    uint64_t spi_begin_ns = 0;
+    uint64_t spi_done_ns = 0;
+    uint64_t lo_return_ns = 0;
+    uint32_t spi_write_count = 0;
     for (uint32_t i = 0; i < count; ++i) {
         if (events[i].transaction_id != txn ||
             (i && events[i].host_monotonic_ns < events[i - 1].host_monotonic_ns)) {
             fprintf(stderr, "TRACE_ID_OR_ORDER txn=%u index=%u\n", txn, i);
             return BLADERF_ERR_UNEXPECTED;
+        }
+        if (events[i].event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN) {
+            if (events[i].flags == 0) return BLADERF_ERR_UNEXPECTED;
+            spi_begin_ns = events[i].host_monotonic_ns;
+            spi_write_count = events[i].flags;
+        } else if (events[i].event_type == BLADERF_RF_EVT_SPI_DONE) {
+            if (events[i].flags == 0 || spi_begin_ns == 0 ||
+                events[i].host_monotonic_ns < spi_begin_ns) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            spi_done_ns = events[i].host_monotonic_ns;
+        } else if (events[i].event_type == BLADERF_RF_EVT_LO_SET_RETURNED) {
+            lo_return_ns = events[i].host_monotonic_ns;
         }
         if (next < sizeof(required) / sizeof(required[0]) &&
             events[i].event_type == required[next]) {
@@ -75,8 +94,16 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
             ++next;
         }
     }
-    return next == sizeof(required) / sizeof(required[0]) ? 0 :
-                                                           BLADERF_ERR_UNEXPECTED;
+    if (next != sizeof(required) / sizeof(required[0]) ||
+        spi_write_count == 0 || spi_done_ns == 0 || lo_return_ns == 0 ||
+        spi_done_ns < spi_begin_ns || lo_return_ns < spi_done_ns) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    fprintf(stderr, "TRACE_SPI txn=%u writes=%u host_observed_write_us=%.3f "
+            "post_spi_to_tune_return_us=%.3f\n", txn, spi_write_count,
+            (spi_done_ns - spi_begin_ns) / 1000.0,
+            (lo_return_ns - spi_done_ns) / 1000.0);
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -119,6 +146,15 @@ int main(int argc, char **argv) {
         st = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0), &req, &txn);
         if (!first_txn) first_txn = txn;
         last_txn = txn;
+        if (!st) {
+            int competing_retune = bladerf_set_frequency(
+                dev, BLADERF_CHANNEL_RX(0), freq + 100000ULL);
+            if (competing_retune != BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "CONCURRENT_RETUNE txn=%u status=%s\n", txn,
+                        bladerf_strerror(competing_retune));
+                st = BLADERF_ERR_UNEXPECTED;
+            }
+        }
         if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
         latencies_ns[i] = monotonic_ns() - start_ns;
         completed = i + 1;

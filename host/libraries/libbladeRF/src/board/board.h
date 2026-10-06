@@ -481,6 +481,12 @@ struct board_fns {
     const char *name;
 };
 
+/* Execute the board frequency setter and gain correction with dev->lock
+ * already held. Used by the RX transition transaction to make its owned LO
+ * programming atomic with the transition ownership flag. */
+int bladerf_set_frequency_locked(struct bladerf *dev, bladerf_channel ch,
+                                bladerf_frequency frequency);
+
 /* Information about the (SPI) flash architecture */
 struct bladerf_flash_arch {
     enum { STATUS_FLASH_UNINITIALIZED, STATUS_SUCCESS, STATUS_ASSUMED } status;

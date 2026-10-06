@@ -472,6 +472,12 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const *range      = NULL;
+    int32_t lo_status;
+
+    if (!BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_transition_pending &&
+        !board_data->rf_transition_setter_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     CHECK_STATUS(dev->board->get_frequency_range(dev, ch, &range));
 
@@ -498,7 +504,15 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         CHECK_AD936X(ad9361_set_tx_lo_freq(phy, frequency));
     } else {
-        CHECK_AD936X(ad9361_set_rx_lo_freq(phy, frequency));
+        board_data->rf_transition_spi_write_count = 0;
+        board_data->rf_transition_spi_first_write_ns = 0;
+        board_data->rf_transition_spi_last_write_ns = 0;
+        board_data->rf_transition_spi_last_status = 0;
+        board_data->rf_transition_spi_trace_enabled =
+            board_data->rf_transition_pending;
+        lo_status = ad9361_set_rx_lo_freq(phy, frequency);
+        board_data->rf_transition_spi_trace_enabled = false;
+        CHECK_AD936X(lo_status);
     }
 
     return 0;

@@ -44,6 +44,7 @@
 /******************************************************************************/
 
 #include "stdint.h"
+#include <stdbool.h>
 /* Renamed upstream: util.h became ad9361_util.h when the driver moved to
  * drivers/rf-transceiver/ad9361/. */
 #include "ad9361_util.h"
@@ -152,6 +153,10 @@ enum adc_data_sel {
  * struct spi_device or struct gpio_device, so the old accessors are gone. */
 extern const struct no_os_spi_platform_ops bladerf2_spi_ops;
 extern const struct no_os_gpio_platform_ops bladerf2_gpio_ops;
+
+struct bladerf;
+void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
+                                        int status);
 
 void udelay(unsigned long usecs);
 void mdelay(unsigned long msecs);

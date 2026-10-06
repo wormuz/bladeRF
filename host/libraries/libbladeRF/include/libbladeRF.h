@@ -4626,7 +4626,15 @@ typedef enum {
     BLADERF_RF_STATE_ERROR
 } bladerf_rf_state;
 
-/** RF transaction event types (ADR-0207 §4 Event contract). */
+/** RF transaction event types (ADR-0207 §4 Event contract).
+ *
+ * BLADERF_RF_EVT_SPI_WRITE_BEGIN and BLADERF_RF_EVT_SPI_DONE delimit the
+ * host-observed first RX RFPLL write request and final write response inside
+ * the AD9361 SPI platform adapter. Their timestamps include NIOS/USB command
+ * transport; they are not SCLK-edge timestamps. `flags` on either event
+ * carries the number of writes observed in that tune operation. These events
+ * are not emitted for NIOS fastlock recall, whose SPI owner is the NIOS core.
+ */
 typedef enum {
     BLADERF_RF_EVT_CONFIG_ACCEPTED = 0,
     BLADERF_RF_EVT_SPI_DONE,
@@ -4641,7 +4649,8 @@ typedef enum {
     BLADERF_RF_EVT_ERROR,
     BLADERF_RF_EVT_LO_SET_RETURNED,
     BLADERF_RF_EVT_LO_READBACK_MATCH,
-    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA
+    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
+    BLADERF_RF_EVT_SPI_WRITE_BEGIN
 } bladerf_rf_event_type;
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
@@ -4656,10 +4665,9 @@ typedef enum {
 /**
  * Immutable RF transaction event (ADR-0207 §4).
  *
- * Every state transition populates exactly one of these and appends it to
- * the transaction's event trace. Timestamps are host monotonic nanoseconds
- * taken at the moment the condition was observed -- never a precomputed or
- * guessed value.
+ * Each observed transition condition appends one event to the transaction's
+ * history. Timestamps are host monotonic nanoseconds taken at the observation
+ * boundary; SPI events use the host time around their backend request/response.
  */
 struct bladerf_rf_event {
     uint64_t host_monotonic_ns;   /**< CLOCK_MONOTONIC ns when observed */
@@ -4671,7 +4679,7 @@ struct bladerf_rf_event {
     uint32_t rfic_status;         /**< Raw RFIC status register snapshot */
     bladerf_rf_state fpga_state;
     bladerf_rf_event_type event_type;
-    uint32_t flags;
+    uint32_t flags;              /**< Event-specific; SPI events contain write count */
     int32_t error_code;           /**< 0 unless event_type is _ERROR */
 };
 

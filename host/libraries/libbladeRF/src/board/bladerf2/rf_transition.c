@@ -204,6 +204,7 @@ static void _abort_transition(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_pending = false;
         board_data->rf_transition_waiting = false;
+        board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
             *final_event = board_data->rf_transition_last_event;
         }
@@ -228,7 +229,9 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
                         uint32_t rfic_status,
                         int32_t error_code,
                         uint32_t epoch_id,
-                        uint64_t fpga_timestamp)
+                        uint64_t host_monotonic_ns,
+                        uint64_t fpga_timestamp,
+                        uint32_t flags)
 {
     struct bladerf_rf_event event = {0};
 
@@ -245,11 +248,12 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
     event.rfic_status        = rfic_status;
     event.fpga_state         = state;
     event.event_type         = type;
-    event.flags              = 0;
+    event.flags              = flags;
     event.error_code         = error_code;
 
     WITH_MUTEX(&dev->lock, {
-        event.host_monotonic_ns = _monotonic_ns();
+        event.host_monotonic_ns = host_monotonic_ns != 0 ?
+                                  host_monotonic_ns : _monotonic_ns();
         event.transaction_id = board_data->rf_transition_current_id;
         if (requested_hz == 0) {
             requested_hz = board_data->rf_transition_requested_frequency_hz;
@@ -286,7 +290,35 @@ static void _emit_event(struct bladerf *dev,
 {
     _emit_event_with_timestamp(dev, board_data, type, state, requested_hz,
                                readback_hz, rfic_status, error_code,
-                               epoch_id, 0);
+                               epoch_id, 0, 0, 0);
+}
+
+/* Called by the AD9361 SPI platform adapter while bladerf_set_frequency()
+ * holds dev->lock. Timestamps surround actual backend SPI write calls; no
+ * mutex is taken here to avoid recursively acquiring the device lock. */
+void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
+                                        int status)
+{
+    struct bladerf2_board_data *board_data;
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    if (!board_data->rf_transition_spi_trace_enabled ||
+        !board_data->rf_transition_pending) {
+        return;
+    }
+
+    if (begin) {
+        if (board_data->rf_transition_spi_write_count == 0) {
+            board_data->rf_transition_spi_first_write_ns = _monotonic_ns();
+        }
+        board_data->rf_transition_spi_write_count++;
+    } else {
+        board_data->rf_transition_spi_last_write_ns = _monotonic_ns();
+        board_data->rf_transition_spi_last_status = status;
+    }
 }
 
 static int _bladerf_rx_transition_begin(
@@ -301,6 +333,10 @@ static int _bladerf_rx_transition_begin(
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
     uint64_t stage_started_ns;
+    uint64_t spi_first_write_ns = 0;
+    uint64_t spi_last_write_ns = 0;
+    uint32_t spi_write_count = 0;
+    int spi_last_status = 0;
 
     if (dev == NULL || request == NULL || transaction_id == NULL) {
         return BLADERF_ERR_INVAL;
@@ -436,9 +472,39 @@ static int _bladerf_rx_transition_begin(
                       qt.nios_profile, qt.rffe_profile, status);
         }
     } else {
-        /* Existing host-mode path remains unchanged. */
-        status = bladerf_set_frequency(dev, ch,
-                                       request->target_frequency_hz);
+        /* Hold device configuration ownership from the transition-specific
+         * setter entry through LO programming. Ordinary RX retunes are
+         * rejected until wait/abort clears rf_transition_pending. */
+        WITH_MUTEX(&dev->lock, {
+            board_data->rf_transition_setter_active = true;
+            status = bladerf_set_frequency_locked(
+                dev, ch, request->target_frequency_hz);
+            board_data->rf_transition_setter_active = false;
+        });
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        spi_first_write_ns = board_data->rf_transition_spi_first_write_ns;
+        spi_last_write_ns = board_data->rf_transition_spi_last_write_ns;
+        spi_write_count = board_data->rf_transition_spi_write_count;
+        spi_last_status = board_data->rf_transition_spi_last_status;
+        board_data->rf_transition_spi_first_write_ns = 0;
+        board_data->rf_transition_spi_last_write_ns = 0;
+        board_data->rf_transition_spi_write_count = 0;
+        board_data->rf_transition_spi_last_status = 0;
+    });
+    if (spi_write_count != 0 && spi_first_write_ns != 0) {
+        _emit_event_with_timestamp(dev, board_data,
+            BLADERF_RF_EVT_SPI_WRITE_BEGIN, BLADERF_RF_STATE_SPI_PROGRAMMING,
+            request->target_frequency_hz, 0, 0, 0, 0,
+            spi_first_write_ns, 0, spi_write_count);
+        if (spi_last_write_ns != 0) {
+            _emit_event_with_timestamp(dev, board_data,
+                BLADERF_RF_EVT_SPI_DONE, BLADERF_RF_STATE_SPI_PROGRAMMING,
+                request->target_frequency_hz, 0, (uint32_t)spi_last_status,
+                spi_last_status == 0 ? 0 : BLADERF_ERR_UNEXPECTED, 0,
+                spi_last_write_ns, 0, spi_write_count);
+        }
     }
     if (status != 0) {
         _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
@@ -753,7 +819,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,
                    (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
                    & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
-                   ((uint64_t)timestamp_hi << 32) | timestamp_lo);
+                   0, ((uint64_t)timestamp_hi << 32) | timestamp_lo, 0);
     } else {
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_DATAPATH_ARMED,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, 0, 0, 0);
@@ -762,6 +828,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_pending = false;
         board_data->rf_transition_waiting = false;
+        board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
             *final_event = board_data->rf_transition_last_event;
         }

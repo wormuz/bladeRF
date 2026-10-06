@@ -842,13 +842,11 @@ int bladerf_get_bandwidth_range(struct bladerf *dev,
 /* Frequency */
 /******************************************************************************/
 
-int bladerf_set_frequency(struct bladerf *dev,
-                          bladerf_channel ch,
-                          bladerf_frequency frequency)
+int bladerf_set_frequency_locked(struct bladerf *dev,
+                                 bladerf_channel ch,
+                                 bladerf_frequency frequency)
 {
     int status;
-    MUTEX_LOCK(&dev->lock);
-
     status = dev->board->set_frequency(dev, ch, frequency);
 
     if (dev->gain_tbls[ch].enabled && status == 0) {
@@ -858,6 +856,16 @@ int bladerf_set_frequency(struct bladerf *dev,
         }
     }
 
+    return status;
+}
+
+int bladerf_set_frequency(struct bladerf *dev,
+                          bladerf_channel ch,
+                          bladerf_frequency frequency)
+{
+    int status;
+    MUTEX_LOCK(&dev->lock);
+    status = bladerf_set_frequency_locked(dev, ch, frequency);
     MUTEX_UNLOCK(&dev->lock);
     return status;
 }
