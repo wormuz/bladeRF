@@ -139,6 +139,7 @@ static int check_failed_trace(struct bladerf *dev, uint32_t transaction_id)
     return 0;
 }
 
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
 static int check_abort_failed_trace(struct bladerf *dev,
                                     uint32_t transaction_id)
 {
@@ -177,6 +178,7 @@ static int check_abort_failed_trace(struct bladerf *dev,
     }
     return 0;
 }
+#endif
 
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
 static int check_injected_spi_failure_trace(struct bladerf *dev,
