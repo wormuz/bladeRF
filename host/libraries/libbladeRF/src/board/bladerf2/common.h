@@ -196,11 +196,15 @@ struct bladerf2_board_data {
      * just put into a standby state. */
     bool rfic_reset_on_close;
 
-    /* ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: last RX transition's
-     * event trace. Single-slot (no concurrent transactions per device) --
-     * bladerf_rx_transition_begin() overwrites it, bladerf_rx_transition_
-     * wait() reads from it. Guarded by dev->lock like everything else in
-     * this struct. */
+    /* ADR-0207: bounded chronological history of host-observed RX
+     * transition events. All access is guarded by dev->lock. */
+#define BLADERF2_RF_EVENT_HISTORY_SIZE BLADERF_RF_EVENT_HISTORY_SIZE
+    struct bladerf_rf_event rf_transition_events[
+        BLADERF2_RF_EVENT_HISTORY_SIZE];
+    uint32_t rf_transition_event_head;
+    uint32_t rf_transition_event_count;
+
+    /* Latest event is retained for the synchronous wait API. */
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;
     uint32_t rf_transition_required_events_mask;

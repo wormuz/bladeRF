@@ -19,6 +19,61 @@ static int compare_u64(const void *a, const void *b)
     return (va > vb) - (va < vb);
 }
 
+static int validate_event_trace(struct bladerf *dev, uint32_t txn,
+                                const struct bladerf_rf_event *final_event)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    bool complete = false;
+    int st = bladerf_rx_transition_get_events(dev, txn, NULL, 0, &count,
+                                               &complete);
+    if (st || count == 0 || count > BLADERF_RF_EVENT_HISTORY_SIZE) {
+        fprintf(stderr, "TRACE_COUNT txn=%u status=%s count=%u\n", txn,
+                bladerf_strerror(st), count);
+        return st ? st : BLADERF_ERR_UNEXPECTED;
+    }
+
+    st = bladerf_rx_transition_get_events(dev, txn, events,
+                                           BLADERF_RF_EVENT_HISTORY_SIZE,
+                                           &count, &complete);
+    if (st || !complete || count < 7 ||
+        events[0].event_type != BLADERF_RF_EVT_CONFIG_ACCEPTED ||
+        events[0].fpga_state != BLADERF_RF_STATE_CONFIG_PENDING ||
+        events[count - 1].event_type != final_event->event_type ||
+        events[count - 1].event_type != BLADERF_RF_EVT_RX_EPOCH_VALID) {
+        fprintf(stderr, "TRACE_TERMINAL txn=%u status=%s complete=%u count=%u\n",
+                txn, bladerf_strerror(st), complete, count);
+        return st ? st : BLADERF_ERR_UNEXPECTED;
+    }
+
+    const bladerf_rf_event_type required[] = {
+        BLADERF_RF_EVT_RX_EPOCH_INVALID,
+        BLADERF_RF_EVT_CONFIG_ACCEPTED,
+        BLADERF_RF_EVT_LO_SET_RETURNED,
+        BLADERF_RF_EVT_RX_PLL_LOCKED,
+        BLADERF_RF_EVT_ENSM_RX,
+        BLADERF_RF_EVT_RX_EPOCH_VALID,
+    };
+    unsigned next = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].transaction_id != txn ||
+            (i && events[i].host_monotonic_ns < events[i - 1].host_monotonic_ns)) {
+            fprintf(stderr, "TRACE_ID_OR_ORDER txn=%u index=%u\n", txn, i);
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (next < sizeof(required) / sizeof(required[0]) &&
+            events[i].event_type == required[next]) {
+            if (next == 1 && events[i].fpga_state !=
+                                BLADERF_RF_STATE_SPI_PROGRAMMING) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            ++next;
+        }
+    }
+    return next == sizeof(required) / sizeof(required[0]) ? 0 :
+                                                           BLADERF_ERR_UNEXPECTED;
+}
+
 int main(int argc, char **argv) {
     unsigned n = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 1000;
     const bool cross_band = argc > 2 && strcmp(argv[2], "--cross-band") == 0;
@@ -40,6 +95,7 @@ int main(int argc, char **argv) {
     unsigned failures = 0;
     unsigned first_read_faults = 0;
     unsigned recovered_reads = 0;
+    uint32_t first_txn = 0, last_txn = 0;
     for (unsigned i=0; i<n; ++i) {
         uint64_t start_ns = monotonic_ns();
         uint64_t freq = cross_band ?
@@ -56,7 +112,10 @@ int main(int argc, char **argv) {
         struct bladerf_rf_event event = {0};
         struct bladerf_metadata meta = {0};
         st = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0), &req, &txn);
+        if (!first_txn) first_txn = txn;
+        last_txn = txn;
         if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
+        if (!st) st = validate_event_trace(dev, txn, &event);
         latencies_ns[i] = monotonic_ns() - start_ns;
         completed = i + 1;
         bool valid = false;
@@ -90,6 +149,26 @@ int main(int argc, char **argv) {
             if (failures >= 10) break;
         }
         if ((i+1)%100==0) fprintf(stderr,"progress=%u unrecovered=%u first_read_faults=%u recovered=%u last_epoch=%u\n",i+1,failures,first_read_faults,recovered_reads,event.epoch_id);
+    }
+    if (!failures && completed > BLADERF_RF_EVENT_HISTORY_SIZE / 6) {
+        uint32_t retained = 0;
+        bool complete = true;
+        CHECK(bladerf_rx_transition_get_events(dev, first_txn, NULL, 0,
+                                                &retained, &complete));
+        if (retained != 0 || complete) {
+            fprintf(stderr, "TRACE_OVERWRITE txn=%u retained=%u complete=%u\n",
+                    first_txn, retained, complete);
+            st = BLADERF_ERR_UNEXPECTED;
+            goto fail;
+        }
+        CHECK(bladerf_rx_transition_get_events(dev, last_txn, NULL, 0,
+                                                &retained, &complete));
+        if (retained == 0 || !complete) {
+            fprintf(stderr, "TRACE_LATEST txn=%u retained=%u complete=%u\n",
+                    last_txn, retained, complete);
+            st = BLADERF_ERR_UNEXPECTED;
+            goto fail;
+        }
     }
     qsort(latencies_ns, completed, sizeof(*latencies_ns), compare_u64);
     printf("transitions=%u unrecovered=%u first_read_faults=%u recovered=%u "

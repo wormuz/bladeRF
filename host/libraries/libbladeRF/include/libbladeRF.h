@@ -4673,6 +4673,9 @@ struct bladerf_rf_event {
     int32_t error_code;           /**< 0 unless event_type is _ERROR */
 };
 
+/** Maximum number of recent RF transition events retained per device. */
+#define BLADERF_RF_EVENT_HISTORY_SIZE 64
+
 /** Request parameters for ::bladerf_rx_transition_begin. */
 struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
@@ -4753,6 +4756,37 @@ int CALL_CONV bladerf_rx_transition_wait(
     uint32_t transaction_id,
     struct bladerf_rf_event *final_event,
     uint32_t timeout_ms);
+
+/**
+ * Copy the retained event history for one RX transition.
+ *
+ * Events are returned in host-observation order. The per-device ring retains
+ * the most recent ::BLADERF_RF_EVENT_HISTORY_SIZE events across transactions.
+ * Set `events` to NULL and `capacity` to 0 to query the required count. If
+ * `capacity` is too small, the function copies the prefix, sets `event_count`
+ * to the required count, and returns ::BLADERF_ERR_MEM. `history_complete` is
+ * true only when the full transaction is retained from its initial
+ * CONFIG_ACCEPTED event through its terminal event; false indicates that the
+ * transaction is still pending or part of its history was overwritten.
+ *
+ * @param[in]   dev              Device handle
+ * @param[in]   transaction_id   Transaction returned by transition_begin
+ * @param[out]  events           Destination array, or NULL for count query
+ * @param[in]   capacity         Number of event slots in `events`
+ * @param[out]  event_count      Number of matching events required
+ * @param[out]  history_complete Whether the complete transaction is retained
+ *
+ * @return 0 on success, BLADERF_ERR_MEM for insufficient capacity,
+ *         or another value from RETCODES on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_transition_get_events(
+    struct bladerf *dev,
+    uint32_t transaction_id,
+    struct bladerf_rf_event *events,
+    uint32_t capacity,
+    uint32_t *event_count,
+    bool *history_complete);
 
 /** @} (End RF_TRANSITION) */
 
