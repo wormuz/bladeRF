@@ -20,6 +20,10 @@
  */
 
 #include <string.h>
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+#include <errno.h>
+#include <stdlib.h>
+#endif
 
 #include <libbladeRF.h>
 
@@ -3911,10 +3915,33 @@ int bladerf_set_rfic_register(struct bladerf *dev,
 
     WITH_MUTEX(&dev->lock, {
         uint64_t data = (((uint64_t)val) << 56);
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+        uint16_t reg_address = address;
+#endif
 
         address |= (AD936X_WRITE | AD936X_CNT(1));
 
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+        /* Test-only fault for public/configuration register writes. The
+         * transition fault hook covers SPI writes made by RX retunes; this
+         * one verifies legacy multi-register configuration fails closed too. */
+        const char *fault_address =
+            getenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
+        if (fault_address != NULL && fault_address[0] != '\0') {
+            char *end = NULL;
+            unsigned long parsed = strtoul(fault_address, &end, 0);
+            if (end != fault_address && *end == '\0' && parsed ==
+                (unsigned long)reg_address) {
+                status = -EIO;
+            } else {
+                status = dev->backend->ad9361_spi_write(dev, address, data);
+            }
+        } else {
+            status = dev->backend->ad9361_spi_write(dev, address, data);
+        }
+#else
         status = dev->backend->ad9361_spi_write(dev, address, data);
+#endif
     });
 
     if (owns_reservation) {

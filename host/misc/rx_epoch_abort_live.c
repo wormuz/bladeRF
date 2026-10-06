@@ -330,6 +330,61 @@ int main(void)
                            initial.fpga_timestamp));
 
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+    /* The oversample register script is part of the RX configuration
+     * transaction. An injected write failure must reach the caller and keep
+     * META RX invalid until the configuration and a new transition succeed. */
+    CHECK(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
+    if (setenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER", "0x1e2", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 6250000,
+                                     NULL);
+    unsetenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
+    if (status == 0) {
+        fprintf(stderr, "oversample RFIC write failure was hidden\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    struct bladerf_metadata config_failure_meta = {0};
+    config_failure_meta.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 4096, &config_failure_meta, 300);
+    if (status != BLADERF_ERR_WOULD_BLOCK ||
+        config_failure_meta.actual_count != 0) {
+        fprintf(stderr, "partial oversample configuration admitted IQ: "
+                "status=%s count=%u\n", bladerf_strerror(status),
+                config_failure_meta.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000,
+                                     NULL);
+    if (status == 0) {
+        fprintf(stderr, "oversample sample-rate range failure was hidden\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    memset(&config_failure_meta, 0, sizeof(config_failure_meta));
+    config_failure_meta.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 4096, &config_failure_meta, 300);
+    if (status != BLADERF_ERR_WOULD_BLOCK ||
+        config_failure_meta.actual_count != 0) {
+        fprintf(stderr, "failed sample-rate change admitted IQ: "
+                "status=%s count=%u\n", bladerf_strerror(status),
+                config_failure_meta.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 6250000, NULL));
+    struct bladerf_rf_event config_recovered = {0};
+    CHECK(transition(dev, recovery_frequency_hz, &config_recovered));
+    CHECK(read_valid_epoch(dev, samples, config_recovered.epoch_id,
+                           config_recovered.fpga_timestamp));
+    initial = config_recovered;
+    printf("RX oversample config fault injection: PASS; failed write stayed "
+           "invalid until full register retry and fresh epoch %u\n",
+           config_recovered.epoch_id);
+
     const uint32_t fault_ordinals[] = { 1, 5 };
     for (size_t i = 0; i < sizeof(fault_ordinals) / sizeof(fault_ordinals[0]);
          ++i) {
