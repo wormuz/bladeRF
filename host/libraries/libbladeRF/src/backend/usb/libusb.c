@@ -1831,7 +1831,14 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
     } else if (status != 0) {
         return BLADERF_ERR_UNEXPECTED;
     } else {
-        return submit_transfer(stream, buffer, *length);
+        status = submit_transfer(stream, buffer, *length);
+        if (status != 0 &&
+            (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+            fail_rx_stream(stream, stream_data, status,
+                           BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+            cancel_all_transfers(stream);
+        }
+        return status;
     }
 }
 
