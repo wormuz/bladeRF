@@ -931,25 +931,28 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                          * to preserve, so the read continues and returns
                          * contiguous samples that start after the gap.
                          */
-                        const bool epoch_prefix =
-                            s->meta.rx_epoch_boundary_enabled &&
-                            (s->meta.msg_timestamp <
-                                 s->meta.rx_epoch_min_timestamp ||
-                             s->meta.curr_timestamp <
-                                 s->meta.rx_epoch_min_timestamp ||
-                             (s->meta.rx_epoch_id_filter_enabled &&
-                              !metadata_rx_epoch_matches(
-                                  s->meta.curr_msg,
-                                  s->meta.rx_epoch_expected_id)));
-
-                        const bool epoch_id_mismatch =
-                            s->meta.rx_epoch_boundary_enabled &&
-                            s->meta.rx_epoch_id_filter_enabled &&
-                            !metadata_rx_epoch_matches(
+                        const bool epoch_matches =
+                            !s->meta.rx_epoch_id_filter_enabled ||
+                            metadata_rx_epoch_matches(
                                 s->meta.curr_msg,
                                 s->meta.rx_epoch_expected_id);
+                        s->meta.msg_epoch_filtered_out =
+                            s->meta.rx_epoch_boundary_enabled &&
+                            s->meta.rx_epoch_id_filter_enabled &&
+                            !epoch_matches;
+                        const enum metadata_rx_epoch_disposition epoch_disposition =
+                            metadata_rx_epoch_disposition(
+                                s->meta.rx_epoch_boundary_enabled,
+                                s->meta.rx_epoch_id_filter_enabled,
+                                epoch_matches,
+                                s->meta.msg_timestamp,
+                                s->meta.curr_timestamp,
+                                s->meta.rx_epoch_min_timestamp,
+                                s->meta.have_timestamp,
+                                copied_data);
 
-                        if (epoch_id_mismatch && copied_data) {
+                        if (epoch_disposition ==
+                            METADATA_RX_EPOCH_RETURN_VALID_PREFIX) {
                             /* A packet from another epoch after current-epoch
                              * samples is a real stream discontinuity. Return
                              * the contiguous prefix and retry this message on
@@ -960,9 +963,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             break;
                         }
 
-                        if (!epoch_prefix && s->meta.have_timestamp &&
-                            s->meta.msg_timestamp != s->meta.curr_timestamp) {
-
+                        if (epoch_disposition ==
+                            METADATA_RX_EPOCH_DISCONTINUITY) {
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
                             exit_early = copied_data;
                             log_debug("Sample discontinuity detected @ "
@@ -971,8 +973,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                       b->cons_i, s->meta.msg_num,
                                       (unsigned long long)s->meta.curr_timestamp,
                                       (unsigned long long)s->meta.msg_timestamp);
-
-                        } else {
+                        } else if (epoch_disposition ==
+                                   METADATA_RX_EPOCH_ACCEPT) {
                             log_verbose("Got header for message %u: "
                                         "t_new=%u, t_old=%u\n",
                                         s->meta.msg_num,
@@ -986,11 +988,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         break;
 
                     case SYNC_META_STATE_SAMPLES:
-                        if (s->meta.rx_epoch_boundary_enabled &&
-                            s->meta.rx_epoch_id_filter_enabled &&
-                            !metadata_rx_epoch_matches(
-                                s->meta.curr_msg,
-                                s->meta.rx_epoch_expected_id)) {
+                        if (s->meta.msg_epoch_filtered_out) {
                             unsigned int left = left_in_msg(s);
                             s->meta.curr_msg_off += left;
                             s->meta.curr_timestamp +=

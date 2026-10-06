@@ -46,5 +46,31 @@ int main(void)
     header[METADATA_RESV_OFFSET + 3] = 0x12;
     assert(!metadata_rx_epoch_matches(header, 0x21));
 
+    /* These are the exact header dispositions consumed by sync RX. */
+    assert(metadata_rx_epoch_disposition(true, true, false,
+               1200, 1200, 1000, true, false) ==
+           METADATA_RX_EPOCH_DROP_MESSAGE);
+    assert(metadata_rx_epoch_disposition(true, true, false,
+               1200, 1200, 1000, true, true) ==
+           METADATA_RX_EPOCH_RETURN_VALID_PREFIX);
+    assert(metadata_rx_epoch_disposition(true, true, true,
+               900, 900, 1000, true, false) ==
+           METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX);
+    assert(metadata_rx_epoch_disposition(true, true, true,
+               1000, 1000, 1000, true, false) ==
+           METADATA_RX_EPOCH_ACCEPT);
+    assert(metadata_rx_epoch_disposition(true, true, true,
+               1200, 1199, 1000, true, false) ==
+           METADATA_RX_EPOCH_DISCONTINUITY);
+    /* With a valid prefix already copied, a mixed-epoch next message ends
+     * this read with an overrun indication; caller retries and drops it. */
+    assert(metadata_rx_epoch_disposition(true, true, false,
+               1200, 1200, 1000, true, true) ==
+           METADATA_RX_EPOCH_RETURN_VALID_PREFIX);
+    /* Legacy/unfiltered stream behavior does not drop on absent epoch tags. */
+    assert(metadata_rx_epoch_disposition(true, false, false,
+               1000, 1000, 1000, true, false) ==
+           METADATA_RX_EPOCH_ACCEPT);
+
     return 0;
 }

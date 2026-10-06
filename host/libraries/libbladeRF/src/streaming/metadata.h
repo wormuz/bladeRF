@@ -131,6 +131,40 @@ static inline bool metadata_rx_epoch_matches(const uint8_t *header,
            epoch_id == expected_epoch_id;
 }
 
+/* Header-level disposition used by sync RX. Keeping this decision pure lets
+ * tests exercise the same stale-epoch, timestamp-prefix, and discontinuity
+ * branches used by the stream parser. */
+enum metadata_rx_epoch_disposition {
+    METADATA_RX_EPOCH_ACCEPT,
+    METADATA_RX_EPOCH_DROP_MESSAGE,
+    METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX,
+    METADATA_RX_EPOCH_RETURN_VALID_PREFIX,
+    METADATA_RX_EPOCH_DISCONTINUITY,
+};
+
+static inline enum metadata_rx_epoch_disposition metadata_rx_epoch_disposition(
+    bool boundary_enabled, bool epoch_filter_enabled, bool epoch_matches,
+    uint64_t message_timestamp, uint64_t expected_timestamp,
+    uint64_t minimum_timestamp, bool have_timestamp, bool copied_data)
+{
+    if (boundary_enabled && epoch_filter_enabled && !epoch_matches) {
+        return copied_data ? METADATA_RX_EPOCH_RETURN_VALID_PREFIX :
+                             METADATA_RX_EPOCH_DROP_MESSAGE;
+    }
+
+    if (boundary_enabled &&
+        (message_timestamp < minimum_timestamp ||
+         expected_timestamp < minimum_timestamp)) {
+        return METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX;
+    }
+
+    if (have_timestamp && message_timestamp != expected_timestamp) {
+        return METADATA_RX_EPOCH_DISCONTINUITY;
+    }
+
+    return METADATA_RX_EPOCH_ACCEPT;
+}
+
 static inline uint64_t metadata_get_timestamp(const uint8_t *header)
 {
     uint64_t ret;
