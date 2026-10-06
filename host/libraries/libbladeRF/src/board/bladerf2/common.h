@@ -216,6 +216,12 @@ struct bladerf2_board_data {
     bool rf_transition_waiting;
 };
 
+/* Internal sync-RX hook: record when the first post-epoch META samples are
+ * actually returned to the application. This is observability only and
+ * never participates in determining whether the epoch is valid. */
+void bladerf2_rx_transition_note_first_packet(
+    struct bladerf *dev, const struct bladerf_metadata *metadata);
+
 struct bladerf_rfic_status_register {
     bool rfic_initialized;
     size_t write_queue_length;

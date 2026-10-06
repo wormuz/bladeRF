@@ -36,11 +36,14 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     st = bladerf_rx_transition_get_events(dev, txn, events,
                                            BLADERF_RF_EVENT_HISTORY_SIZE,
                                            &count, &complete);
-    if (st || !complete || count < 7 ||
+    if (st || !complete || count < 9 ||
         events[0].event_type != BLADERF_RF_EVT_CONFIG_ACCEPTED ||
         events[0].fpga_state != BLADERF_RF_STATE_CONFIG_PENDING ||
-        events[count - 1].event_type != final_event->event_type ||
-        events[count - 1].event_type != BLADERF_RF_EVT_RX_EPOCH_VALID) {
+        events[count - 2].event_type != final_event->event_type ||
+        events[count - 2].event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        events[count - 1].event_type !=
+            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+        events[count - 1].fpga_timestamp < final_event->fpga_timestamp) {
         fprintf(stderr, "TRACE_TERMINAL txn=%u status=%s complete=%u count=%u\n",
                 txn, bladerf_strerror(st), complete, count);
         return st ? st : BLADERF_ERR_UNEXPECTED;
@@ -54,6 +57,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         BLADERF_RF_EVT_RX_PLL_LOCKED,
         BLADERF_RF_EVT_ENSM_RX,
         BLADERF_RF_EVT_RX_EPOCH_VALID,
+        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     };
     unsigned next = 0;
     for (uint32_t i = 0; i < count; ++i) {
@@ -116,7 +120,6 @@ int main(int argc, char **argv) {
         if (!first_txn) first_txn = txn;
         last_txn = txn;
         if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
-        if (!st) st = validate_event_trace(dev, txn, &event);
         latencies_ns[i] = monotonic_ns() - start_ns;
         completed = i + 1;
         bool valid = false;
@@ -148,6 +151,14 @@ int main(int argc, char **argv) {
             ++failures;
             fprintf(stderr,"UNRECOVERED i=%u status=%s\n", i, bladerf_strerror(st));
             if (failures >= 10) break;
+        }
+        if (valid) {
+            st = validate_event_trace(dev, txn, &event);
+            if (st != 0) {
+                ++failures;
+                fprintf(stderr, "TRACE_INVALID i=%u status=%s\n", i,
+                        bladerf_strerror(st));
+            }
         }
         if ((i+1)%100==0) fprintf(stderr,"progress=%u unrecovered=%u first_read_faults=%u recovered=%u last_epoch=%u\n",i+1,failures,first_read_faults,recovered_reads,event.epoch_id);
     }

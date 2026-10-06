@@ -2559,8 +2559,15 @@ static int bladerf2_sync_rx(struct bladerf *dev,
         RETURN_INVAL("sync rx", "not initialized");
     }
 
-    return sync_rx(&board_data->sync[BLADERF_RX], samples, num_samples,
-                   metadata, timeout_ms);
+    int status = sync_rx(&board_data->sync[BLADERF_RX], samples, num_samples,
+                         metadata, timeout_ms);
+    if (status == 0 && metadata != NULL &&
+        metadata->actual_count == num_samples &&
+        metadata->rx_epoch_id_valid &&
+        (metadata->status & BLADERF_META_STATUS_OVERRUN) == 0) {
+        bladerf2_rx_transition_note_first_packet(dev, metadata);
+    }
+    return status;
 }
 
 static int bladerf2_get_timestamp(struct bladerf *dev,

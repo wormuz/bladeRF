@@ -773,8 +773,88 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 static bool _is_terminal_event(bladerf_rf_event_type type)
 {
     return type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
+           type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
            type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
            type == BLADERF_RF_EVT_ERROR;
+}
+
+void bladerf2_rx_transition_note_first_packet(
+    struct bladerf *dev, const struct bladerf_metadata *metadata)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event epoch_event = {0};
+    struct bladerf_rf_event event = {0};
+    bool found_epoch = false;
+    bool already_recorded = false;
+
+    if (dev == NULL || metadata == NULL || !metadata->rx_epoch_id_valid ||
+        metadata->actual_count == 0 ||
+        (metadata->status & BLADERF_META_STATUS_OVERRUN) != 0) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    if (board_data == NULL) {
+        return;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        uint32_t retained = board_data->rf_transition_event_count;
+        for (uint32_t i = 0; i < retained; ++i) {
+            uint32_t slot = (board_data->rf_transition_event_head +
+                BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
+                BLADERF2_RF_EVENT_HISTORY_SIZE;
+            const struct bladerf_rf_event *candidate =
+                &board_data->rf_transition_events[slot];
+            if (candidate->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
+                candidate->epoch_id == metadata->rx_epoch_id &&
+                metadata->timestamp >= candidate->fpga_timestamp) {
+                epoch_event = *candidate;
+                found_epoch = true;
+                break;
+            }
+        }
+
+        if (found_epoch) {
+            for (uint32_t i = 0; i < retained; ++i) {
+                uint32_t slot = (board_data->rf_transition_event_head +
+                    BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
+                    BLADERF2_RF_EVENT_HISTORY_SIZE;
+                const struct bladerf_rf_event *candidate =
+                    &board_data->rf_transition_events[slot];
+                if (candidate->transaction_id == epoch_event.transaction_id &&
+                    candidate->event_type ==
+                        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
+                    already_recorded = true;
+                    break;
+                }
+            }
+        }
+
+        if (found_epoch && !already_recorded) {
+            event.host_monotonic_ns = _monotonic_ns();
+            event.fpga_timestamp = metadata->timestamp;
+            event.transaction_id = epoch_event.transaction_id;
+            event.epoch_id = epoch_event.epoch_id;
+            event.requested_rx_lo_hz = epoch_event.requested_rx_lo_hz;
+            event.readback_rx_lo_hz = epoch_event.readback_rx_lo_hz;
+            event.rfic_status = epoch_event.rfic_status;
+            event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
+            event.event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+            event.flags = metadata->status;
+            event.error_code = 0;
+
+            board_data->rf_transition_events[
+                board_data->rf_transition_event_head] = event;
+            board_data->rf_transition_event_head =
+                (board_data->rf_transition_event_head + 1) %
+                BLADERF2_RF_EVENT_HISTORY_SIZE;
+            if (board_data->rf_transition_event_count <
+                BLADERF2_RF_EVENT_HISTORY_SIZE) {
+                board_data->rf_transition_event_count++;
+            }
+        }
+    });
 }
 
 int bladerf_rx_transition_get_events(struct bladerf *dev,
