@@ -155,6 +155,24 @@ int main(int argc, char **argv) {
                 st = BLADERF_ERR_UNEXPECTED;
             }
         }
+        if (!st) {
+            int competing_bandwidth = bladerf_set_bandwidth(
+                dev, BLADERF_CHANNEL_RX(0), 5000000, NULL);
+            if (competing_bandwidth != BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "CONCURRENT_BANDWIDTH txn=%u status=%s\n",
+                        txn, bladerf_strerror(competing_bandwidth));
+                st = BLADERF_ERR_UNEXPECTED;
+            }
+        }
+        if (!st) {
+            int competing_rate = bladerf_set_sample_rate(
+                dev, BLADERF_CHANNEL_RX(0), 4000000, NULL);
+            if (competing_rate != BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "CONCURRENT_SAMPLE_RATE txn=%u status=%s\n",
+                        txn, bladerf_strerror(competing_rate));
+                st = BLADERF_ERR_UNEXPECTED;
+            }
+        }
         if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
         latencies_ns[i] = monotonic_ns() - start_ns;
         completed = i + 1;

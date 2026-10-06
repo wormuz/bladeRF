@@ -1585,12 +1585,23 @@ static int bladerf2_set_frequency(struct bladerf *dev,
 static int bladerf2_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
+    bool transition_pending;
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         return 0;
     }
     if (board_data == NULL) {
         return BLADERF_ERR_INVAL;
+    }
+
+    /* Frequency, sample-rate, and bandwidth setters share this callback.
+     * Do not allow a legacy setter to mutate RFIC state during an event
+     * transaction, even if that setter does not touch the LO. */
+    MUTEX_LOCK(&dev->lock);
+    transition_pending = board_data->rf_transition_pending;
+    MUTEX_UNLOCK(&dev->lock);
+    if (transition_pending) {
+        return BLADERF_ERR_WOULD_BLOCK;
     }
 
     return sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
