@@ -66,6 +66,21 @@ static bool _test_rx_transition_stall(const char *stage)
 #define ENSM_STATE_MASK 0x0F
 #define ENSM_STATE_RX 0x8
 #define ENSM_STATE_FDD 0xA
+#define RF_LINK_STATUS_RX_FAULT (1u << 14)
+
+/* Test builds can exercise the sticky FPGA-fault handoff without relying on
+ * a physical GPIF/FIFO failure. Production always uses the NIOS status word
+ * as returned by the device. */
+static uint32_t _rx_link_status_for_transition_test(uint32_t status)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    if (requested != NULL && strcmp(requested, "FPGA_FAULT") == 0) {
+        status |= RF_LINK_STATUS_RX_FAULT;
+    }
+#endif
+    return status;
+}
 
 static void _emit_event(struct bladerf *dev,
                         struct bladerf2_board_data *board_data,
@@ -1305,6 +1320,34 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                         BLADERF_RF_STATE_ERROR, 0, 0,
                         epoch_status_word, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
+        }
+
+        /* The fabric maintains a sticky, direction-specific RX fault
+         * aggregate for watchdog, GPIF, protocol, speed, and FIFO-abort
+         * failures. Do not publish EPOCH_VALID from the gate alone if the
+         * transport/data writer faulted while the epoch was opening. Check
+         * after the timestamp snapshot and before installing the host-side
+         * certificate. */
+        uint32_t rf_link_status = 0;
+        status = nios_rf_link_status_read(dev, &rf_link_status);
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        epoch_status_word, status, expected_epoch_id);
+            return _fail_transition(dev, board_data, status, final_event);
+        }
+        rf_link_status = _rx_link_status_for_transition_test(rf_link_status);
+        if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
+            log_error("%s: FPGA RX fault before epoch certification: "
+                      "transaction=%u status=0x%08x epoch=%u\n",
+                      __FUNCTION__, transaction_id, rf_link_status,
+                      expected_epoch_id);
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        rf_link_status, BLADERF_ERR_UNEXPECTED,
+                        expected_epoch_id);
+            return _fail_transition(dev, board_data,
+                                    BLADERF_ERR_UNEXPECTED, final_event);
         }
 
         /* FPGA timestamp is the authoritative first admitted sample. Install
