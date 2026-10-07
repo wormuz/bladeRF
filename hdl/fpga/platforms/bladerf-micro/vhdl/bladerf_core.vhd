@@ -486,6 +486,10 @@ architecture core_bladerf of bladerf_core is
 
     -- Latched dwell summary read window.
     signal dwell_rd_index         : unsigned(3 downto 0) := (others => '0');
+    signal dwell_rd_data_rx       : std_logic_vector(31 downto 0) := (others => '0');
+    signal dwell_rd_data_wire_sys : std_logic_vector(31 downto 0);
+    signal dwell_rd_data_req_sys  : std_logic := '0';
+    signal dwell_rd_data_ack_sys  : std_logic;
     signal dwell_rd_data          : std_logic_vector(31 downto 0) := (others => '0');
     signal dwell_generation       : unsigned(15 downto 0) := (others => '0');
 
@@ -1005,9 +1009,41 @@ begin
                 gain_too_high   => dwell_gain_too_high,
                 settle_elapsed  => dwell_settle_elapsed,
                 rd_index        => dwell_rd_index,
-                rd_data         => dwell_rd_data,
+                rd_data         => dwell_rd_data_rx,
                 generation      => dwell_generation
             );
+
+        U_dwell_readout_handshake : entity work.handshake
+            generic map ( DATA_WIDTH => 32 )
+            port map (
+                source_reset => rx_reset,
+                source_clock => rx_clock,
+                source_data  => dwell_rd_data_rx,
+                dest_reset   => sys_reset,
+                dest_clock   => sys_clock,
+                dest_data    => dwell_rd_data_wire_sys,
+                dest_req     => dwell_rd_data_req_sys,
+                dest_ack     => dwell_rd_data_ack_sys
+            );
+
+        -- Keep the selected word stable in the NIOS domain. The handshake
+        -- holds its source bus until this acknowledgement has crossed back;
+        -- the PIO therefore samples a destination-clock register, never the
+        -- asynchronous rx_clock output.
+        drive_handshake_dwell_readout : process( sys_clock, sys_reset )
+        begin
+            if( sys_reset = '1' ) then
+                dwell_rd_data_req_sys <= '0';
+                dwell_rd_data <= (others => '0');
+            elsif( rising_edge(sys_clock) ) then
+                if( dwell_rd_data_ack_sys = '0' ) then
+                    dwell_rd_data_req_sys <= '1';
+                else
+                    dwell_rd_data_req_sys <= '0';
+                    dwell_rd_data <= dwell_rd_data_wire_sys;
+                end if;
+            end if;
+        end process;
 
     end generate;
 
@@ -1038,12 +1074,9 @@ begin
     -- register because the host reads one or the other, never both at once,
     -- and a second PIO would cost a Qsys instance to save nothing.
     --
-    -- Index 15 returns the generation counter, and that multiplexing lives
-    -- inside dwell_readout rather than here on purpose: routed through the
-    -- block it arrives already latched on rx_clock, so the host cannot catch
-    -- it mid-increment. A mux here would carry a 16-bit rx_clock counter
-    -- straight into a system-domain word -- the same trap as oldest_index,
-    -- just harder to see.
+    -- Index 15 returns the generation counter. The selected source word
+    -- crosses to NIOS through a bundled-data handshake; a source-domain
+    -- register alone does not make this crossing safe.
     dwell_rd_index <= unsigned(pretrig_addr_rx(19 downto 16));
 
     -- Widened rather than truncated: gain_sequencer's counter is

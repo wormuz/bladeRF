@@ -354,7 +354,10 @@ def check_handshake_pairs_are_crossings():
         return
     src = code_only(SDC.read_text())
 
-    m = re.search(r"set hs_pairs \[list(.*?)\]\s*\n", src, re.S)
+    # The list contains literal Quartus wildcards `[*]`, so stopping at the
+    # first right bracket truncates the very CDC table this check is meant
+    # to audit. Parse through the list's own closing-bracket line instead.
+    m = re.search(r"set hs_pairs \[list(.*?)\n\]\s*\n", src, re.S)
     if not m:
         return
 
@@ -383,6 +386,7 @@ def check_handshake_pairs_are_crossings():
     # Two forms occur: "handshake:U_current|source_holding" where the entity
     # is named, and "*U_handshake_timestamp|source_holding" where it is not.
     insts = set(re.findall(r"[|:](U_\w+)\|source_holding", m.group(1)))
+    insts |= set(re.findall(r"handshake:(\w+)\|source_holding", m.group(1)))
     for inst in sorted(insts):
         ck = clocks_of(inst)
         if ck is None:
@@ -1006,10 +1010,10 @@ def check_qgate_sweep_handshake_count():
         return
     text = code_only(qgate.read_text(), comment="#")
     if not re.search(
-            r"if grep -qiE 'revision\[\[:space:\]\].*sweep'.*?hs_expect=14",
+            r"if grep -qiE 'revision\[\[:space:\]\].*sweep'.*?hs_expect=15",
             text, re.S):
         fail("qgate-sweep-handshake-count",
-             "sweep qgate must detect Quartus revision text and expect 14 constrained handshake pairs",
+             "sweep qgate must detect Quartus revision text and expect 15 constrained handshake pairs",
              "valid CDC constraints were rejected solely by a stale count")
 
 
@@ -1037,7 +1041,7 @@ def check_qgate_sta_resolution():
             f"Info: Project Name = {project / 'bladerf'}\n"
             "Info: Revision Name = sweep\n"
             "tamer hold_time crossing constrained on 2\n"
-            "handshake crossings constrained: 14\n"
+            "handshake crossings constrained: 15\n"
             "dcfifo pointer crossings constrained on 10\n")
 
         result = subprocess.run(
@@ -1079,7 +1083,7 @@ rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_ga
 rx-epoch-controller-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_controller.vhd
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
 rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
-qgate-sweep-handshake-count   qgate's sweep CDC count must match the 14 constrained pairs
+qgate-sweep-handshake-count   qgate's sweep CDC count must match the 15 constrained pairs
 """
 
 
