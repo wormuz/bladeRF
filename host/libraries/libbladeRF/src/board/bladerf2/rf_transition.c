@@ -351,14 +351,19 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
     event.epoch_id           = epoch_id;
     event.rfic_status        = rfic_status;
     event.fpga_state         = state;
-    event.event_type         = type;
-    event.flags              = flags;
+        event.event_type         = type;
+        event.flags              = flags;
     event.error_code         = error_code;
 
     WITH_MUTEX(&dev->lock, {
         event.host_monotonic_ns = host_monotonic_ns != 0 ?
                                   host_monotonic_ns : _monotonic_ns();
         event.transaction_id = board_data->rf_transition_current_id;
+        event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
+        if (board_data->rf_transition_current_channel ==
+            BLADERF_CHANNEL_RX(1)) {
+            event.flags |= BLADERF_RF_EVENT_F_TRANSITION_RX2;
+        }
         if (requested_hz == 0) {
             requested_hz = board_data->rf_transition_requested_frequency_hz;
         }
@@ -1212,6 +1217,7 @@ static int _bladerf_rx_transition_begin(
                 bladerf2_rx_transition_next_transaction_id(
                     board_data->rf_transition_next_id);
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
+            board_data->rf_transition_current_channel = ch;
             {
                 const uint32_t timing_slot =
                     board_data->rf_transition_current_id %

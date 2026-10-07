@@ -4837,6 +4837,12 @@ typedef enum {
  * buffer used the paired RX_X2 interleaved layout. Both channel lanes in that
  * buffer share the event's RX epoch and timestamp validation. */
 #define BLADERF_RF_EVENT_F_RX_X2_LAYOUT (1U << 30)
+/** Transition was requested through RX2. This is control-plane provenance;
+ * RX_X2_LAYOUT separately identifies paired RX1+RX2 host data. */
+#define BLADERF_RF_EVENT_F_TRANSITION_RX2 (1U << 29)
+/** Transition channel provenance is present; absence denotes an older event
+ * or an event that is not associated with a transition request. */
+#define BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID (1U << 28)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

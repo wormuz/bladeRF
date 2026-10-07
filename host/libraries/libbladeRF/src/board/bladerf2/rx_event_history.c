@@ -334,6 +334,9 @@ void bladerf2_rx_data_note_first_packet_locked(
             : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
         event.flags = metadata->status |
                       BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        event.flags |= epoch_event->flags &
+                       (BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+                        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID);
         if (layout == BLADERF_RX_X2) {
             event.flags |= BLADERF_RF_EVENT_F_RX_X2_LAYOUT;
         }

@@ -473,6 +473,9 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     board_data.rf_transition_certified_epoch_event.epoch_id = 5;
     board_data.rf_transition_certified_epoch_event.event_type =
         BLADERF_RF_EVT_RX_EPOCH_VALID;
+    board_data.rf_transition_certified_epoch_event.flags =
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+        BLADERF_RF_EVENT_F_TRANSITION_RX2;
     board_data.rf_transition_certified_epoch_event.fpga_timestamp = 1000;
     board_data.rf_transition_certified_epoch_event.requested_rx_lo_hz =
         1835000000ULL;
@@ -509,6 +512,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
     assert(board_data.rf_transition_first_host_data_event.flags &
            BLADERF_RF_EVENT_F_RX_X2_LAYOUT);
+    assert(board_data.rf_transition_first_host_data_event.flags &
+           BLADERF_RF_EVENT_F_TRANSITION_RX2);
 
     /* When the request explicitly requires paired host data, an X1 packet
      * cannot satisfy or wake the transition waiter. */
@@ -535,6 +540,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(board_data.rf_transition_events[latest].transaction_id == 77);
     assert(!(board_data.rf_transition_events[latest].flags &
              BLADERF_RF_EVENT_F_RX_X2_LAYOUT));
+    assert(board_data.rf_transition_events[latest].flags &
+           BLADERF_RF_EVENT_F_TRANSITION_RX2);
 
     COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);

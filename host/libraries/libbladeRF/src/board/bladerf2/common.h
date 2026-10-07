@@ -242,6 +242,7 @@ struct bladerf2_board_data {
     /* Latest event is retained for the synchronous wait API. */
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;
+    bladerf_channel rf_transition_current_channel;
     uint32_t rf_transition_required_events_mask;
     uint8_t rf_transition_epoch_id;
     bool rx_epoch_snapshot_capability_checked;
