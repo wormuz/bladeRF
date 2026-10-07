@@ -153,22 +153,35 @@ expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-
 expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
 
-# Timing: any negative slack in the summary is a failure. The .sta.summary
-# sits beside the build directory, so derive it from the log's own report of
-# where it wrote.
-# Device size is not hardcoded: xA4 and xA9 are the same design on different
-# parts, and the artefact names carry the size (hostedxA4, hostedxA9).
-# Any revision, not just hosted. The name used to be hardcoded to
-# hostedx[A-Z][0-9], so on the sweep revision this lookup found nothing and
-# the check reported "not found, not checked" -- a silent skip of the timing
-# gate itself, which is the same failure mode as an SDC pattern that matches
-# nothing. Job 62 passed every other check while its timing was never read.
+# Timing: any negative slack in the summary is a failure. Resolve the exact
+# revision's STA summary from Quartus's Project Name and Revision Name in the
+# build log. Logs are often stored in /tmp; searching their parent (or /) can
+# select an unrelated stale report and makes qgate traverse the whole tree.
 sta=$(grep -oE '/[^ ]*\.sta\.summary' "$f" 2>/dev/null | head -1)
-if [ -z "$sta" ]; then
-    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' -newer "$(dirname "$f")" 2>/dev/null | head -1)
+if [ -n "$sta" ] && [ ! -r "$sta" ]; then
+    sta=""
 fi
-if [ -z "$sta" ]; then
-    sta=$(find "$(dirname "$f")/.." -name '*.sta.summary' 2>/dev/null | head -1)
+project=$(sed -nE 's/.*Project Name[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$f" 2>/dev/null | head -1)
+revision=$(sed -nE 's/.*Revision Name[[:space:]]*=[[:space:]]*([^[:space:]]+).*/\1/p' "$f" 2>/dev/null | head -1)
+if [ -z "$revision" ]; then
+    revision=$(sed -nE 's/.*Revision[[:space:]]+([^[:space:]]+).*/\1/p' "$f" 2>/dev/null | head -1)
+fi
+if [ -z "$sta" ] && [ -n "$project" ] && [ -n "$revision" ]; then
+    project_dir=$(dirname "$project")
+    candidate="$project_dir/output_files/$revision.sta.summary"
+    if [ -r "$candidate" ]; then
+        sta="$candidate"
+    fi
+fi
+if [ -z "$sta" ] && [ -n "$revision" ]; then
+    log_dir=$(dirname "$f")
+    for candidate in "$log_dir/$revision.sta.summary" \
+                     "$log_dir/output_files/$revision.sta.summary"; do
+        if [ -r "$candidate" ]; then
+            sta="$candidate"
+            break
+        fi
+    done
 fi
 if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
     neg=$(grep -A1 '^Type' "$sta" | grep -cE '^Slack\s*:\s*-' || true)
@@ -179,7 +192,8 @@ if [ -n "${sta:-}" ] && [ -r "$sta" ]; then
         note ok "timing (no negative slack)"
     fi
 else
-    note "?" "timing summary not found, not checked"
+    note FAIL "timing summary not found, timing not checked"
+    fail=1
 fi
 
 if [ "$mode" = "--warn" ]; then

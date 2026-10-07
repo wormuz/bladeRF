@@ -11,7 +11,9 @@ finding it again. The point is to never spend that day twice.
 Exit 1 if anything fires.
 """
 import re
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1011,6 +1013,54 @@ def check_qgate_sweep_handshake_count():
              "valid CDC constraints were rejected solely by a stale count")
 
 
+def check_qgate_sta_resolution():
+    """Exercise qgate with an out-of-tree log and a stale-report decoy."""
+    qgate = ROOT / "hdl/quartus/qgate"
+    if not qgate.exists():
+        return
+
+    with tempfile.TemporaryDirectory(prefix="qcheck-qgate-") as temp:
+        root = Path(temp)
+        project = root / "quartus" / "project"
+        log_dir = root / "logs"
+        actual_sta = project / "output_files" / "sweep.sta.summary"
+        decoy_sta = root / "output_files" / "sweep.sta.summary"
+        project.joinpath("output_files").mkdir(parents=True)
+        log_dir.mkdir()
+        decoy_sta.parent.mkdir()
+        actual_sta.write_text("Type\nSlack : 0.023\n")
+        decoy_sta.write_text("Type\nSlack : -9.999\n")
+        log = log_dir / "build.log"
+        log.write_text(
+            "Info: Quartus Prime Fitter was successful\n"
+            "Info: Quartus Prime Timing Analyzer was successful\n"
+            f"Info: Project Name = {project / 'bladerf'}\n"
+            "Info: Revision Name = sweep\n"
+            "tamer hold_time crossing constrained on 2\n"
+            "handshake crossings constrained: 14\n"
+            "dcfifo pointer crossings constrained on 10\n")
+
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode != 0 or "timing (no negative slack)" not in result.stdout:
+            fail("qgate-sta-report-resolution",
+                 "qgate did not select the exact project's STA report when "
+                 "the build log was outside the project tree",
+                 "a stale report can reject or approve the wrong FPGA image")
+            return
+
+        actual_sta.unlink()
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "timing summary not found" not in result.stdout):
+            fail("qgate-missing-sta-fails-closed",
+                 "qgate accepted a build without its revision STA summary",
+                 "timing would be unchecked while the FPGA image appears eligible")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -1053,6 +1103,7 @@ def main():
     check_fpga_reload_quiesces_and_reinitializes_rfic()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
+    check_qgate_sta_resolution()
 
     for n in notes:
         print(f"note  {n}")
