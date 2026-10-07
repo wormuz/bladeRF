@@ -113,4 +113,12 @@ static inline bool bladerf2_rx_fault_observation_is_current(
            observed_epoch_id == current_epoch_id;
 }
 
+/* Transaction ID zero is reserved by the public history APIs. Keep it
+ * reserved when the 32-bit sequence wraps during long-running sweeps. */
+static inline uint32_t bladerf2_rx_transition_next_transaction_id(
+    uint32_t previous_id)
+{
+    return previous_id == UINT32_MAX ? 1u : previous_id + 1u;
+}
+
 #endif

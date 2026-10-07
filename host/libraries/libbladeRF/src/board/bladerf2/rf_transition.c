@@ -1151,7 +1151,9 @@ static int _bladerf_rx_transition_begin(
              * invalidation below. */
             sync_format_unsupported = true;
         } else {
-            board_data->rf_transition_next_id++;
+            board_data->rf_transition_next_id =
+                bladerf2_rx_transition_next_transaction_id(
+                    board_data->rf_transition_next_id);
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
             {
                 const uint32_t timing_slot =

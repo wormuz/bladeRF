@@ -120,5 +120,8 @@ int main(void)
      * a delayed monitor observation from an earlier certification. */
     assert(!bladerf2_rx_fault_observation_is_current(1, 257, 7, 7));
     assert(!bladerf2_rx_fault_observation_is_current(0, 0, 7, 7));
+    assert(bladerf2_rx_transition_next_transaction_id(0) == 1);
+    assert(bladerf2_rx_transition_next_transaction_id(41) == 42);
+    assert(bladerf2_rx_transition_next_transaction_id(UINT32_MAX) == 1);
     return 0;
 }
