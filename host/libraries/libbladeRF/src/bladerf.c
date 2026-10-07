@@ -1195,12 +1195,34 @@ int bladerf_schedule_retune(struct bladerf *dev,
 
 {
     int status;
+    CHECK_NULL(dev);
+
+    if (ch != BLADERF_CHANNEL_RX(0) && ch != BLADERF_CHANNEL_RX(1) &&
+        ch != BLADERF_CHANNEL_TX(0) && ch != BLADERF_CHANNEL_TX(1)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (quick_tune == NULL && strcmp(dev->board->name, "bladerf2") == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    /* A queued RX fastlock recall has no host completion event or valid-data
+     * boundary. Revoke the current certificate before it can run; only a
+     * later event-driven transition may establish RX IQ validity again. */
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_FREQUENCY);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
 
-    status =
-        dev->board->schedule_retune(dev, ch, timestamp, frequency, quick_tune);
+    status = dev->board->schedule_retune != NULL
+                 ? dev->board->schedule_retune(
+                       dev, ch, timestamp, frequency, quick_tune)
+                 : BLADERF_ERR_UNSUPPORTED;
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 

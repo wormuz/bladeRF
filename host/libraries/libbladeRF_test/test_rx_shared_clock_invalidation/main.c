@@ -33,6 +33,11 @@ struct mock_state {
     unsigned int lms_write_calls;
     unsigned int trigger_arm_calls;
     unsigned int trigger_write_calls;
+    unsigned int schedule_retune_calls;
+    int schedule_retune_status;
+    bladerf_channel scheduled_channel;
+    bladerf_timestamp scheduled_timestamp;
+    bladerf_frequency scheduled_frequency;
     bladerf_channel trigger_arm_channel;
     bladerf_channel trigger_write_channel;
     uint8_t trigger_write_value;
@@ -143,6 +148,20 @@ static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
     return 0;
 }
 
+static int mock_schedule_retune(struct bladerf *dev, bladerf_channel ch,
+                                bladerf_timestamp timestamp,
+                                bladerf_frequency frequency,
+                                struct bladerf_quick_tune *quick_tune)
+{
+    struct mock_state *state = dev->board_data;
+    assert(quick_tune != NULL);
+    state->schedule_retune_calls++;
+    state->scheduled_channel = ch;
+    state->scheduled_timestamp = timestamp;
+    state->scheduled_frequency = frequency;
+    return state->schedule_retune_status;
+}
+
 static int mock_expansion_gpio_read(struct bladerf *dev, uint32_t *value)
 {
     struct mock_state *state = dev->board_data;
@@ -205,6 +224,7 @@ static const struct board_fns mock_board = {
     .wishbone_master_write = mock_wishbone_write,
     .trigger_arm = mock_trigger_arm,
     .write_trigger = mock_trigger_write,
+    .schedule_retune = mock_schedule_retune,
 };
 
 static const struct backend_fns mock_backend = {
@@ -234,6 +254,7 @@ int main(void)
         .role = BLADERF_TRIGGER_ROLE_SLAVE,
         .signal = BLADERF_TRIGGER_J51_1,
     };
+    struct bladerf_quick_tune quick_tune = {0};
 
     memset(&dev, 0, sizeof(dev));
     dev.board = &mock_board;
@@ -467,6 +488,41 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 30 && state.complete_calls == 20 &&
            state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
+
+    /* RX scheduled retunes have no completion boundary. Revoke first and
+     * notify even outside epoch-filter mode; a failed fence must prevent the
+     * NIOS queue write, while TX remains independent of RX validity. */
+    state.invalidate_status = 0;
+    assert(bladerf_schedule_retune(&dev, rx2, 0x12345678, 900000000,
+                                   &quick_tune) == 0);
+    assert(state.invalidate_calls == 31 && state.complete_calls == 21 &&
+           state.invalidate_reason == BLADERF_RF_INVALIDATE_FREQUENCY &&
+           state.invalidated_channel == rx2 && state.completed_channel == rx2 &&
+           state.schedule_retune_calls == 1 &&
+           state.scheduled_channel == rx2 &&
+           state.scheduled_timestamp == 0x12345678 &&
+           state.scheduled_frequency == 900000000);
+
+    state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
+    assert(bladerf_schedule_retune(&dev, rx2, 0x23456789, 901000000,
+                                   &quick_tune) == BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+           state.schedule_retune_calls == 1);
+
+    state.invalidate_status = 0;
+    assert(bladerf_schedule_retune(&dev, tx0, 0x3456789a, 902000000,
+                                   &quick_tune) == 0);
+    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+           state.schedule_retune_calls == 2 &&
+           state.scheduled_channel == tx0);
+
+    assert(bladerf_schedule_retune(&dev, rx2, BLADERF_RETUNE_NOW,
+                                   903000000, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_schedule_retune(&dev, BLADERF_CHANNEL_INVALID,
+                                   BLADERF_RETUNE_NOW, 904000000,
+                                   &quick_tune) == BLADERF_ERR_INVAL);
+    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+           state.schedule_retune_calls == 2);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

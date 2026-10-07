@@ -894,6 +894,37 @@ def check_public_rf_lifecycle_calls_invalidate_rx():
                  "the event-driven RX validity contract")
 
 
+def check_scheduled_rx_retune_invalidates_epoch():
+    """A queued fastlock recall has no completion event; invalidate before queueing."""
+    source = ROOT / "host/libraries/libbladeRF/src/bladerf.c"
+    policy = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition_policy.h"
+    if not source.exists() or not policy.exists():
+        return
+    text = source.read_text(errors="replace")
+    start = text.find("int bladerf_schedule_retune(")
+    end = text.find("\nint ", start + 1) if start >= 0 else -1
+    body = text[start:end if end >= 0 else None]
+    ordered = [
+        "invalidate_rx_data_before_reconfigure(",
+        "BLADERF_RF_INVALIDATE_FREQUENCY",
+        "dev->board->schedule_retune(",
+        "rx_reconfigure_complete(dev, ch)",
+    ]
+    positions = [body.find(token) for token in ordered]
+    policy_text = policy.read_text(errors="replace")
+    policy_start = policy_text.find(
+        "static inline bool bladerf2_rx_scheduled_retune_blocked(")
+    policy_end = policy_text.find("\n}", policy_start) if policy_start >= 0 else -1
+    policy_body = policy_text[policy_start:policy_end]
+    if (start < 0 or any(pos < 0 for pos in positions) or
+            positions != sorted(positions) or policy_end < 0 or
+            "is_rx && !transaction_fastlock && transition_pending" not in
+            " ".join(policy_body.split())):
+        fail("rx-scheduled-retune-invalidates-epoch",
+             "public RX scheduled retune must invalidate before queue mutation; only an active transition may block it",
+             "a queued LO change has no completion/first-valid event and could otherwise leave stale IQ certified")
+
+
 def check_fpga_reload_quiesces_and_reinitializes_rfic():
     """Keep live FPGA reload from retaining stale RFIC/stream state."""
     source = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c"
@@ -1310,6 +1341,7 @@ def main():
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
     check_public_rf_lifecycle_calls_invalidate_rx()
+    check_scheduled_rx_retune_invalidates_epoch()
     check_fpga_reload_quiesces_and_reinitializes_rfic()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()

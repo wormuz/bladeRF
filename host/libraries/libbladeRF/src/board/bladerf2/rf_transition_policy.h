@@ -148,16 +148,13 @@ static inline bool bladerf2_rf_event_latest_transition_result_for_transaction(
     return false;
 }
 
-/* An independently queued RX recall has no transaction completion event or
- * epoch boundary. Only the fastlock request issued from inside the active
- * transition may pass while the event-driven contract owns the channel. */
+/* Public scheduling revokes the current RX certificate before reaching this
+ * policy. A queued recall is safe only outside a transition transaction; its
+ * data remains invalid until an explicit transition establishes a new epoch. */
 static inline bool bladerf2_rx_scheduled_retune_blocked(
-    bool is_rx, bool transition_pending, bool epoch_contract_enabled,
-    bool sync_epoch_filter_enabled, bool transaction_fastlock)
+    bool is_rx, bool transition_pending, bool transaction_fastlock)
 {
-    return is_rx && !transaction_fastlock &&
-           (transition_pending || epoch_contract_enabled ||
-            sync_epoch_filter_enabled);
+    return is_rx && !transaction_fastlock && transition_pending;
 }
 
 /* Clearing the RX fastlock queue can cancel the retune owned by an active
