@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #include "host_config.h"
 #include "bladeRF.h"
@@ -678,6 +679,72 @@ static void test_epoch_admission_finish(void *context)
     assert(context != NULL);
 }
 
+struct admission_lock_probe {
+    pthread_mutex_t *lock;
+    atomic_bool started;
+    atomic_bool acquired;
+};
+
+static void *probe_admission_lock(void *arg)
+{
+    struct admission_lock_probe *probe = arg;
+    atomic_store(&probe->started, true);
+    assert(pthread_mutex_lock(probe->lock) == 0);
+    atomic_store(&probe->acquired, true);
+    assert(pthread_mutex_unlock(probe->lock) == 0);
+    return NULL;
+}
+
+static void test_async_epoch_certificate_commit(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_rf_event event = {0};
+    struct admission_lock_probe probe = {0};
+    bool admission_lock_held = false;
+    pthread_t thread;
+    struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    board_data.rf_transition_epoch_contract_enabled = true;
+    event.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
+    event.transaction_id = 91;
+    event.epoch_id = 23;
+    event.fpga_timestamp = 987654;
+
+    assert(bladerf2_rx_epoch_admission_prepare(
+               &board_data, &event, 0, &admission_lock_held) ==
+           BLADERF_ERR_TIMEOUT);
+    assert(!admission_lock_held);
+    assert(!board_data.rf_transition_epoch_certified);
+
+    assert(bladerf2_rx_epoch_admission_prepare(
+               &board_data, &event, UINT64_MAX,
+               &admission_lock_held) == 0);
+    assert(admission_lock_held);
+    assert(board_data.rf_transition_epoch_certified);
+    assert(board_data.rf_transition_certified_epoch_id == event.epoch_id);
+    assert(board_data.rf_transition_first_valid_timestamp ==
+           event.fpga_timestamp);
+    assert(board_data.rf_transition_certified_epoch_event.transaction_id ==
+           event.transaction_id);
+
+    probe.lock = &board_data.rx_async_epoch_lock;
+    atomic_init(&probe.started, false);
+    atomic_init(&probe.acquired, false);
+    assert(pthread_create(&thread, NULL, probe_admission_lock, &probe) == 0);
+    while (!atomic_load(&probe.started)) {
+        nanosleep(&(struct timespec){.tv_sec = 0, .tv_nsec = 1000000}, NULL);
+    }
+    nanosleep(&pause, NULL);
+    assert(!atomic_load(&probe.acquired));
+    bladerf2_rx_epoch_admission_finish(&board_data, &admission_lock_held);
+    assert(!admission_lock_held);
+    assert(pthread_join(thread, NULL) == 0);
+    assert(atomic_load(&probe.acquired));
+    assert(pthread_mutex_destroy(&board_data.rx_async_epoch_lock) == 0);
+}
+
 static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 {
     struct fixture f;
@@ -795,6 +862,7 @@ int main(void)
     test_worker_overrun_event_history_is_lock_safe();
     test_sync_worker_overrun_published_before_sync_read();
     test_meta_withheld_event_precedes_sync_read_timeout();
+    test_async_epoch_certificate_commit();
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();

@@ -918,19 +918,25 @@ def check_rx_epoch_host_timestamp_fence():
     emit_start = transition_text.find("static void _emit_event_with_timestamp(")
     emit_end = transition_text.find(
         "struct rx_epoch_admission_context", emit_start)
-    admission_start = transition_text.find(
-        "static int _prepare_async_rx_epoch_admission(")
-    admission_end = transition_text.find("static ", admission_start + 1)
+    history = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rx_event_history.c"
+    history_text = re.sub(
+        r"/\*.*?\*/|//[^\n]*", "",
+        history.read_text(errors="replace"), flags=re.S)
+    admission_start = history_text.find(
+        "int bladerf2_rx_epoch_admission_prepare(")
+    admission_end = history_text.find(
+        "void bladerf2_rx_epoch_admission_finish(", admission_start + 1)
     emit_body = transition_text[emit_start:emit_end]
-    admission_body = transition_text[admission_start:admission_end]
-    finish_start = transition_text.find(
-        "static void _finish_async_rx_epoch_admission(")
-    finish_end = transition_text.find("static ", finish_start + 1)
-    finish_body = transition_text[finish_start:finish_end]
+    admission_body = history_text[admission_start:admission_end]
+    finish_start = history_text.find(
+        "void bladerf2_rx_epoch_admission_finish(", admission_end)
+    finish_end = history_text.find("void ", finish_start + 1)
+    finish_body = history_text[finish_start:finish_end]
     if ("rf_transition_epoch_certified = true" in emit_body or
-            "now_ns >= deadline_ns" not in admission_body or
+            "rx_epoch_admission_deadline_status(deadline_ns)" not in admission_body or
+            "now_ns >= deadline_ns" not in history_text or
             "rf_transition_epoch_certified = true" not in admission_body or
-            "MUTEX_UNLOCK(&admission->board_data->rx_async_epoch_lock)" not in finish_body):
+            "MUTEX_UNLOCK(&board_data->rx_async_epoch_lock)" not in finish_body):
         fail("rx-epoch-host-timestamp-fence",
              "RX_EPOCH_VALID publication can certify async IQ before the deadline-checked host admission commit",
              "publish the event while async IQ remains uncertified, then hold the admission lock across certificate commit and sync parser activation")

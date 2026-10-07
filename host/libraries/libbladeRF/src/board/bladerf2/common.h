@@ -651,4 +651,11 @@ bool does_rffe_dir_have_enabled_ch(uint32_t reg, bladerf_direction dir);
 
 int get_gain_offset(struct bladerf *dev, bladerf_channel ch, float *offset);
 
+int bladerf2_rx_epoch_admission_prepare(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_rf_event *epoch_event, uint64_t deadline_ns,
+    bool *admission_lock_held);
+void bladerf2_rx_epoch_admission_finish(
+    struct bladerf2_board_data *board_data, bool *admission_lock_held);
+
 #endif  // BLADERF2_COMMON_H_

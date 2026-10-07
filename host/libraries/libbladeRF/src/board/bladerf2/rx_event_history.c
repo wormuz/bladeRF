@@ -20,6 +20,68 @@ static uint64_t monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+static int rx_epoch_admission_deadline_status(uint64_t deadline_ns)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    const uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL +
+                            (uint64_t)ts.tv_nsec;
+    return now_ns >= deadline_ns ? BLADERF_ERR_TIMEOUT : 0;
+}
+
+int bladerf2_rx_epoch_admission_prepare(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_rf_event *epoch_event, uint64_t deadline_ns,
+    bool *admission_lock_held)
+{
+    int status;
+
+    if (board_data == NULL || epoch_event == NULL ||
+        admission_lock_held == NULL ||
+        epoch_event->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        epoch_event->fpga_state != BLADERF_RF_STATE_RX_DATA_VALID) {
+        return BLADERF_ERR_INVAL;
+    }
+    *admission_lock_held = false;
+    status = rx_epoch_admission_deadline_status(deadline_ns);
+    if (status != 0) {
+        return status;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    *admission_lock_held = true;
+    status = rx_epoch_admission_deadline_status(deadline_ns);
+    if (status == 0 && !board_data->rf_transition_epoch_contract_enabled) {
+        status = BLADERF_ERR_UNEXPECTED;
+    }
+    if (status == 0) {
+        board_data->rf_transition_epoch_certified = true;
+        board_data->rf_transition_certified_epoch_id =
+            (uint8_t)epoch_event->epoch_id;
+        board_data->rf_transition_first_valid_timestamp =
+            epoch_event->fpga_timestamp;
+        board_data->rf_transition_certified_epoch_event = *epoch_event;
+        board_data->rf_transition_first_host_data_reported = false;
+        board_data->rx_async_have_expected_timestamp = false;
+    } else {
+        *admission_lock_held = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+    return status;
+}
+
+void bladerf2_rx_epoch_admission_finish(
+    struct bladerf2_board_data *board_data, bool *admission_lock_held)
+{
+    if (board_data != NULL && admission_lock_held != NULL &&
+        *admission_lock_held) {
+        *admission_lock_held = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+}
+
 void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event)

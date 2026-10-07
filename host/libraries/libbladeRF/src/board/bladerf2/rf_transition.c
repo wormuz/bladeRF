@@ -399,60 +399,21 @@ static int _prepare_async_rx_epoch_admission(void *context,
                                              uint64_t deadline_ns)
 {
     struct rx_epoch_admission_context *admission = context;
-    struct bladerf2_board_data *board_data;
-    uint64_t now_ns;
-    int status = 0;
 
-    if (admission == NULL || admission->board_data == NULL ||
-        admission->event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
-        admission->event.fpga_state != BLADERF_RF_STATE_RX_DATA_VALID) {
+    if (admission == NULL) {
         return BLADERF_ERR_INVAL;
     }
-
-    board_data = admission->board_data;
-    now_ns = _monotonic_ns();
-    if (now_ns == 0) {
-        return BLADERF_ERR_UNEXPECTED;
-    }
-    if (now_ns >= deadline_ns) {
-        return BLADERF_ERR_TIMEOUT;
-    }
-
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    admission->admission_lock_held = true;
-    /* Recheck after taking the admission lock. This is the async linearizing
-     * point: callbacks blocked behind this mutex may consume samples only
-     * after the certificate and sync fence have committed successfully. */
-    now_ns = _monotonic_ns();
-    if (now_ns == 0) {
-        status = BLADERF_ERR_UNEXPECTED;
-    } else if (now_ns >= deadline_ns) {
-        status = BLADERF_ERR_TIMEOUT;
-    } else if (!board_data->rf_transition_epoch_contract_enabled) {
-        status = BLADERF_ERR_UNEXPECTED;
-    } else {
-        board_data->rf_transition_epoch_certified = true;
-        board_data->rf_transition_certified_epoch_id =
-            (uint8_t)admission->event.epoch_id;
-        board_data->rf_transition_first_valid_timestamp =
-            admission->event.fpga_timestamp;
-        board_data->rf_transition_certified_epoch_event = admission->event;
-        board_data->rf_transition_first_host_data_reported = false;
-        board_data->rx_async_have_expected_timestamp = false;
-    }
-    if (status != 0) {
-        admission->admission_lock_held = false;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    }
-    return status;
+    return bladerf2_rx_epoch_admission_prepare(
+        admission->board_data, &admission->event, deadline_ns,
+        &admission->admission_lock_held);
 }
 
 static void _finish_async_rx_epoch_admission(void *context)
 {
     struct rx_epoch_admission_context *admission = context;
     if (admission != NULL && admission->admission_lock_held) {
-        admission->admission_lock_held = false;
-        MUTEX_UNLOCK(&admission->board_data->rx_async_epoch_lock);
+        bladerf2_rx_epoch_admission_finish(
+            admission->board_data, &admission->admission_lock_held);
     }
 }
 

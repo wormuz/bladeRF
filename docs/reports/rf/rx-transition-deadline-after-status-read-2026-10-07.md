@@ -47,6 +47,9 @@ Validation completed:
 - sync traversal verifies the admission callback is skipped after an expired
   deadline, propagates callback failure without clearing the parser latch,
   and runs successfully for both sync and async-only configurations;
+- native board-helper regression verifies an expired async certificate commit
+  leaves certification false and that the admission mutex remains held after
+  successful prepare until the explicit finish step;
 - a lock-contention regression starts the fence before deadline, holds the
   parser mutex past it, and verifies the fence returns timeout without
   admitting IQ;
