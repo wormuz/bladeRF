@@ -233,6 +233,36 @@ begin
                epoch_id = x"2C"
             report "RX_X1 epoch waited for a disabled RX lane" severity failure;
 
+        -- RX2-only is the symmetric single-lane case and must establish its
+        -- own boundary without waiting for the disabled RX1 lane.
+        wait until rising_edge(clock); -- retire ACTIVE_NEW status cycle
+        wait until rising_edge(clock); -- return to ACTIVE
+        wait until falling_edge(clock);
+        controls_in(0).enable <= '0';
+        controls_in(1).enable <= '1';
+        samples_in(0).data_v <= '0';
+        samples_in(1).data_v <= '1';
+        epoch_id_in <= x"2D";
+        arm <= '1';
+        wait until falling_edge(clock);
+        arm <= '0';
+        wait until falling_edge(clock);
+        complete <= '1';
+        wait until falling_edge(clock);
+        complete <= '0';
+        timestamp <= to_unsigned(400, 64);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert start_event = '1'
+            report "RX2-only epoch did not open on RX2's valid sample" severity failure;
+        assert first_valid_timestamp = to_unsigned(400, 64)
+            report "RX2-only epoch latched the wrong timestamp" severity failure;
+        assert epoch_id = x"2D"
+            report "RX2-only epoch latched the wrong epoch ID" severity failure;
+        assert out_controls(0).enable = '0' and out_controls(1).enable = '1'
+            report "RX2-only epoch did not preserve the selected lane controls"
+            severity failure;
+
         report "rx_epoch_gate_tb: PASS" severity note;
         stop;
         wait;

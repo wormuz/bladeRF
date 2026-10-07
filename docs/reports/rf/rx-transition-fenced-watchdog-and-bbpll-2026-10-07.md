@@ -48,7 +48,9 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
   confirms no-progress detection resumes.
 - `host/misc/run_rx_epoch_gate_tb.sh` now runs the epoch-gate, writer fence,
   writer abort, and writer enable testbenches together. The consolidated
-  runner passed with GHDL 5.0.1 in this worktree.
+  runner passed with GHDL 5.0.1 in this worktree. The gate bench explicitly
+  verifies RX1-only, RX2-only, and paired RX_X2 epoch boundaries, including
+  that a paired epoch waits for both enabled lanes.
 - Quartus Prime 25.1std full flow passed for the xA4 Cyclone V `sweep`
   revision: Analysis & Synthesis 0 errors, Fitter 0 errors, Timing Analyzer
   0 errors, Assembler 0 errors. Across 32 setup and 32 hold corners, the
