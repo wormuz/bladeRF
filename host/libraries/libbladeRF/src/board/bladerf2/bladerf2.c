@@ -1682,11 +1682,17 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     const char *metadata_fault =
         getenv("BLADERF_TEST_RX_EPOCH_METADATA_FAULT");
     if (metadata_fault != NULL && metadata_fault[0] != '\0' &&
-        first_valid_timestamp != 0) {
+        (strcmp(metadata_fault, "stale_epoch") == 0 ||
+         strcmp(metadata_fault, "pre_boundary") == 0) &&
+        first_valid_timestamp != 0 && message_size >= METADATA_HEADER_SIZE &&
+        length >= message_size) {
         bool inject = false;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         if (board_data->rf_transition_epoch_contract_enabled &&
             board_data->rf_transition_epoch_certified &&
+            board_data->rf_transition_certified_epoch_id == epoch_id &&
+            board_data->rf_transition_first_valid_timestamp ==
+                first_valid_timestamp &&
             !board_data->test_rx_epoch_metadata_fault_injected) {
             board_data->test_rx_epoch_metadata_fault_injected = true;
             inject = true;
