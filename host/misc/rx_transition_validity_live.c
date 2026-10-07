@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define CHECK(call) do { \
     status = (call); \
@@ -13,6 +14,8 @@
         goto cleanup; \
     } \
 } while (0)
+
+static bladerf_channel rx_channel = BLADERF_CHANNEL_RX(0);
 
 static int check_no_epoch_event(struct bladerf *dev, uint32_t txn)
 {
@@ -44,7 +47,7 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
-    int status = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+    int status = bladerf_rx_transition_begin(dev, rx_channel,
                                              &request, txn);
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, *txn, event, 2000);
@@ -69,6 +72,64 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
     fprintf(stderr, "event transition did not restore valid IQ at %llu Hz\n",
             (unsigned long long)frequency_hz);
     return BLADERF_ERR_UNEXPECTED;
+}
+
+static int latest_rf_event_cursor(struct bladerf *dev, uint64_t *cursor)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = 0;
+    bool history_complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count,
+        &next_sequence, &history_complete);
+    /* A busy device may append while the snapshot is copied. The returned
+     * cursor is still the last copied event, a valid boundary for our query. */
+    if (status != 0 && status != BLADERF_ERR_MEM) {
+        return status;
+    }
+    if (count == 0 && !history_complete) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    *cursor = next_sequence;
+    return 0;
+}
+
+static int check_invalidation_reason(struct bladerf *dev, uint64_t cursor,
+                                    uint32_t reason)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = cursor;
+    bool history_complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count,
+        &next_sequence, &history_complete);
+    if (status != 0 && status != BLADERF_ERR_MEM) {
+        return status;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
+            events[i].flags == reason) {
+            return 0;
+        }
+    }
+    fprintf(stderr, "missing RX_DATA_INVALIDATED reason 0x%x\n", reason);
+    return BLADERF_ERR_UNEXPECTED;
+}
+
+static int assert_rx_iq_withheld(struct bladerf *dev, int16_t *samples,
+                                 const char *operation)
+{
+    struct bladerf_metadata metadata = {0};
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    const int status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
+        fprintf(stderr, "%s left RX IQ valid: status=%s count=%u\n",
+                operation, bladerf_strerror(status), metadata.actual_count);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
 }
 
 static int check_sync_timeout_timestamp_event(struct bladerf *dev,
@@ -137,7 +198,7 @@ static int check_sync_timeout_timestamp_event(struct bladerf *dev,
     return BLADERF_ERR_UNEXPECTED;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct bladerf *dev = NULL;
     int16_t *samples = NULL;
@@ -145,6 +206,23 @@ int main(void)
     uint32_t txn = 0;
     struct bladerf_rf_event event = {0};
     struct bladerf_metadata metadata = {0};
+    uint64_t tx_fir_event_cursor = 0;
+    bladerf_channel rx2_channel = BLADERF_CHANNEL_RX(1);
+    bladerf_channel_layout layout = BLADERF_RX_X1;
+    bool paired = false;
+
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
+                     strcmp(argv[1], "RX2") != 0 &&
+                     strcmp(argv[1], "BOTH") != 0)) {
+        fprintf(stderr, "usage: %s [RX1|RX2|BOTH]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 2 && strcmp(argv[1], "RX2") == 0) {
+        rx_channel = rx2_channel;
+    } else if (argc == 2 && strcmp(argv[1], "BOTH") == 0) {
+        layout = BLADERF_RX_X2;
+        paired = true;
+    }
 
     samples = calloc(8192 * 2, sizeof(*samples));
     if (samples == NULL) {
@@ -152,12 +230,15 @@ int main(void)
     }
     CHECK(bladerf_open(&dev, NULL));
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
-    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000, NULL));
-    CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 5000000, NULL));
-    CHECK(bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), 30));
-    CHECK(bladerf_sync_config(dev, BLADERF_RX_X1, BLADERF_FORMAT_SC16_Q11_META,
+    CHECK(bladerf_set_sample_rate(dev, rx_channel, 4000000, NULL));
+    CHECK(bladerf_set_bandwidth(dev, rx_channel, 5000000, NULL));
+    CHECK(bladerf_set_gain(dev, rx_channel, 30));
+    CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
                               16, 8192, 8, 1000));
-    CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true));
+    CHECK(bladerf_enable_module(dev, rx_channel, true));
+    if (paired) {
+        CHECK(bladerf_enable_module(dev, rx2_channel, true));
+    }
 
     const struct bladerf_rx_transition_request control_only = {
         .target_frequency_hz = 1835000000ULL,
@@ -167,7 +248,7 @@ int main(void)
         .require_rx_data_valid = false,
         .epoch_settle_samples = 0,
     };
-    CHECK(bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+    CHECK(bladerf_rx_transition_begin(dev, rx_channel,
                                      &control_only, &txn));
     CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
     if (event.event_type != BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
@@ -187,7 +268,7 @@ int main(void)
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
-    CHECK(bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+    CHECK(bladerf_rx_transition_begin(dev, rx_channel,
                                      &require_valid, &txn));
     CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
     if (event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
@@ -225,7 +306,7 @@ int main(void)
 
     /* The legacy setter has no FPGA epoch confirmation. It must revoke the
      * previously certified stream until another event-driven transition. */
-    CHECK(bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(0), 1835500000ULL));
+    CHECK(bladerf_set_frequency(dev, rx_channel, 1835500000ULL));
     metadata = (struct bladerf_metadata){0};
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
     status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
@@ -240,7 +321,7 @@ int main(void)
 
     /* Bandwidth and sample-rate changes also invalidate the old datapath
      * certificate; each must require a fresh event transition. */
-    CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 4500000, NULL));
+    CHECK(bladerf_set_bandwidth(dev, rx_channel, 4500000, NULL));
     metadata = (struct bladerf_metadata){0};
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
     status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
@@ -252,25 +333,31 @@ int main(void)
     }
     CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
-    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 3840000, NULL));
-    metadata = (struct bladerf_metadata){0};
-    metadata.flags = BLADERF_META_FLAG_RX_NOW;
-    status = bladerf_sync_rx(dev, samples, 8192, &metadata, 100);
-    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0) {
-        fprintf(stderr, "sample-rate change left RX epoch certified: %s count=%u\n",
-                bladerf_strerror(status), metadata.actual_count);
-        status = BLADERF_ERR_UNEXPECTED;
-        goto cleanup;
-    }
+    CHECK(bladerf_set_sample_rate(dev, rx_channel, 3840000, NULL));
+    CHECK(assert_rx_iq_withheld(dev, samples, "sample-rate change"));
     CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
-    printf("RX validity policy: PASS legacy_LO/BW/rate changes=fenced; "
-           "final_txn=%u epoch=%u\n", txn, event.epoch_id);
+    /* ADI documents TX FIR programming as potentially data-path changing.
+     * It must revoke shared RX validity and publish a specific reason. */
+    CHECK(latest_rf_event_cursor(dev, &tx_fir_event_cursor));
+    CHECK(bladerf_set_rfic_tx_fir(dev, BLADERF_RFIC_TXFIR_DEFAULT));
+    CHECK(check_invalidation_reason(dev, tx_fir_event_cursor,
+                                    BLADERF_RF_INVALIDATE_TX_FIR));
+    CHECK(assert_rx_iq_withheld(dev, samples, "TX FIR change"));
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
+    printf("RX validity policy: PASS mode=%s legacy_LO/BW/rate/TX_FIR="
+           "fenced; final_txn=%u epoch=%u\n",
+           paired ? "BOTH" : (rx_channel == rx2_channel ? "RX2" : "RX1"),
+           txn, event.epoch_id);
     status = 0;
 
 cleanup:
     if (dev != NULL) {
-        bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+        bladerf_enable_module(dev, rx_channel, false);
+        if (paired) {
+            bladerf_enable_module(dev, rx2_channel, false);
+        }
         bladerf_close(dev);
     }
     free(samples);

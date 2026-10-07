@@ -4833,6 +4833,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE (1U << 22)
 /** AD9361 baseband PLL lock was lost or absent. */
 #define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED (1U << 23)
+/** TX FIR configuration may alter the shared RFIC datapath used by RX. */
+#define BLADERF_RF_INVALIDATE_TX_FIR (1U << 25)
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)
 

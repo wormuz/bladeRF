@@ -4154,26 +4154,37 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const sr_range    = bladerf2_sample_rate_range_4x;
     bladerf_channel const ch               = BLADERF_CHANNEL_TX(0);
+    int status = 0;
+
+    /* ADI documents FIR configuration as potentially data-path changing.
+     * TX FIR programming recalculates shared RFIC clock/datapath state, so
+     * RX IQ must be revoked before the first register write as well. */
+    status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_TX_FIR);
+    if (status != 0) {
+        return status;
+    }
 
     WITH_MUTEX(&dev->lock, {
         /* Verify that sample rate is not too low */
         if (txfir != BLADERF_RFIC_TXFIR_INT4) {
             bladerf_sample_rate sr;
 
-            CHECK_STATUS_LOCKED(dev->board->get_sample_rate(dev, ch, &sr));
-
-            if (is_within_range(&sr_range, sr)) {
+            status = dev->board->get_sample_rate(dev, ch, &sr);
+            if (status == 0 && is_within_range(&sr_range, sr)) {
                 log_error("%s: sample rate too low for filter (%d < %d)\n",
                           __FUNCTION__, sr, sr_range.min);
-                MUTEX_UNLOCK(&dev->lock);
-                return BLADERF_ERR_INVAL;
+                status = BLADERF_ERR_INVAL;
             }
         }
 
-        CHECK_STATUS_LOCKED(rfic->set_filter(dev, ch, 0, txfir));
+        if (status == 0) {
+            status = rfic->set_filter(dev, ch, 0, txfir);
+        }
     });
 
-    return 0;
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return status;
 }
 
 
