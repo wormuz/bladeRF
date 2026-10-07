@@ -4436,8 +4436,11 @@ int CALL_CONV bladerf_enable_gain_calibration(struct bladerf *dev,
 /**
  * @brief Provides read-only access to a channel's gain calibration table.
  *
- * Returns a read-only pointer to a specified channel's gain calibration table,
- * preventing modification. Access is thread-safe, protected by device mutexes.
+ * Returns a read-only pointer to a specified channel's gain calibration table.
+ * The lookup is protected by the device mutex, but the returned pointer is
+ * borrowed: callers must not use it concurrently with a calibration-table
+ * reload or device close. Use ::bladerf_get_gain_calibration_copy when the
+ * table must outlive the call or be read concurrently with device operations.
  *
  * @param[in]  dev Non-NULL pointer to a BladeRF device structure.
  * @param[in]  ch  Channel to retrieve the gain calibration table for.
@@ -4449,6 +4452,36 @@ int CALL_CONV bladerf_enable_gain_calibration(struct bladerf *dev,
  */
 API_EXPORT
 int CALL_CONV bladerf_get_gain_calibration(struct bladerf *dev, bladerf_channel ch, const struct bladerf_gain_cal_tbl **tbl);
+
+/**
+ * @brief Obtain an owned snapshot of a channel's gain calibration table.
+ *
+ * Deep-copies the table and its entries while holding the device mutex. The
+ * returned snapshot is independent of later table reloads and can be read
+ * without holding the device lock. Release it with
+ * ::bladerf_free_gain_calibration_copy.
+ *
+ * @param[in] dev  Non-NULL pointer to a bladeRF device.
+ * @param[in] ch   Channel whose loaded calibration table is copied.
+ * @param[out] copy Destination structure. It is zeroed before the operation.
+ *
+ * @return 0 on success, BLADERF_ERR_UNEXPECTED if no table is loaded, or
+ * another BLADERF_ERR_* code on failure.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_gain_calibration_copy(
+    struct bladerf *dev, bladerf_channel ch,
+    struct bladerf_gain_cal_tbl *copy);
+
+/**
+ * @brief Release an owned gain-calibration snapshot.
+ *
+ * Safe to call with NULL. The structure is zeroed after its owned storage is
+ * released.
+ */
+API_EXPORT
+void CALL_CONV bladerf_free_gain_calibration_copy(
+    struct bladerf_gain_cal_tbl *copy);
 
 /**
  * @brief Computes the gain target for a specified channel, incorporating

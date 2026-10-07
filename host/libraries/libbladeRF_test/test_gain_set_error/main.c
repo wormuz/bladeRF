@@ -101,6 +101,7 @@ static void mock_rx_reconfigure_complete(struct bladerf *dev,
 }
 
 static const struct board_fns mock_board = {
+    .name = "bladerf2",
     .get_gain_mode = mock_get_gain_mode,
     .set_gain_mode = mock_set_gain_mode,
     .get_frequency = mock_get_frequency,
@@ -224,7 +225,38 @@ int main(void)
     assert(state.set_gain_calls == 3 && state.last_gain == 30);
     assert(state.invalidate_calls == 7 && state.complete_calls == 6);
 
+    /* Public calibration reads can own a stable snapshot while the live table
+     * is replaced or freed under the device mutex. */
+    dev.gain_tbls[ch].file_path = malloc(16);
+    assert(dev.gain_tbls[ch].file_path != NULL);
+    strcpy(dev.gain_tbls[ch].file_path, "calibration.tbl");
+    dev.gain_tbls[ch].file_path_len = 15;
+    {
+        struct bladerf_gain_cal_tbl snapshot = {0};
+        status = bladerf_get_gain_calibration_copy(&dev, ch, &snapshot);
+        assert(status == 0);
+        assert(snapshot.entries != dev.gain_tbls[ch].entries);
+        assert(snapshot.file_path != dev.gain_tbls[ch].file_path);
+        assert(strcmp(snapshot.file_path, "calibration.tbl") == 0);
+        assert(snapshot.entries[0].freq == dev.gain_tbls[ch].entries[0].freq);
+        assert(snapshot.entries[0].gain_corr == -20.0);
+        dev.gain_tbls[ch].entries[0].gain_corr = 7.0;
+        assert(snapshot.entries[0].gain_corr == -20.0);
+        bladerf_free_gain_calibration_copy(&snapshot);
+        assert(snapshot.entries == NULL && snapshot.file_path == NULL);
+    }
+    {
+        struct bladerf_gain_cal_tbl invalid_snapshot = {0};
+        status = bladerf_get_gain_calibration_copy(
+            &dev, (bladerf_channel)NUM_GAIN_CAL_TBLS, &invalid_snapshot);
+        assert(status == BLADERF_ERR_INVAL);
+        assert(invalid_snapshot.entries == NULL &&
+               invalid_snapshot.file_path == NULL);
+    }
+    assert(bladerf_print_gain_calibration(&dev, ch, true) == 0);
+
     free(dev.gain_tbls[ch].entries);
+    free(dev.gain_tbls[ch].file_path);
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
 }

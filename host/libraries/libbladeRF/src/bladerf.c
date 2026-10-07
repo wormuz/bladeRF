@@ -568,6 +568,11 @@ int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 /* Gain */
 /******************************************************************************/
 
+static bool valid_gain_cal_channel(bladerf_channel ch)
+{
+    return (unsigned int)ch < NUM_GAIN_CAL_TBLS;
+}
+
 /* Apply a gain target while dev->lock is held. Keeping this operation
  * separate lets compound gain-calibration changes reserve/fence RX once and
  * update the policy bit and physical gain as one serialized transaction. */
@@ -675,6 +680,10 @@ error:
 
 int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 {
+    CHECK_NULL(dev);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     int status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_GAIN);
     if (status != 0) {
@@ -2490,6 +2499,10 @@ static int bladerf_set_oversample_register_config(struct bladerf *dev) {
 
 int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const char* cal_file_loc)
 {
+    CHECK_NULL(dev);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     int status = 0;
     const char *board_name;
     char *full_path = NULL;
@@ -2611,6 +2624,9 @@ error:
 int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, bool en)
 {
     CHECK_NULL(dev);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     int status;
     bool previous_enabled;
     bool gain_applied;
@@ -2660,9 +2676,12 @@ int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, boo
 int bladerf_print_gain_calibration(struct bladerf *dev, bladerf_channel ch, bool with_entries)
 {
     CHECK_NULL(dev);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     int status = 0;
     const char *board_name;
-    struct bladerf_gain_cal_tbl *gain_tbls = dev->gain_tbls;
+    struct bladerf_gain_cal_tbl table = {0};
 
     board_name = bladerf_get_board_name(dev);
     if (strcmp(board_name, "bladerf2") != 0) {
@@ -2671,33 +2690,47 @@ int bladerf_print_gain_calibration(struct bladerf *dev, bladerf_channel ch, bool
         goto error;
     }
 
-    if (gain_tbls[ch].state == BLADERF_GAIN_CAL_UNINITIALIZED) {
+    status = bladerf_get_gain_calibration_copy(dev, ch, &table);
+    if (status != 0) {
+        bool uninitialized;
+        MUTEX_LOCK(&dev->lock);
+        uninitialized = dev->gain_tbls[ch].state ==
+                        BLADERF_GAIN_CAL_UNINITIALIZED;
+        MUTEX_UNLOCK(&dev->lock);
+        if (!uninitialized) {
+            goto error;
+        }
         printf("Gain Calibration [%s]: uninitialized\n", channel2str(ch));
         return 0;
     }
 
     printf("Gain Calibration [%s]: loaded\n", channel2str(ch));
-    printf("  Status: %s\n", (gain_tbls[ch].enabled) ? "enabled" : "disabled");
+    printf("  Status: %s\n", table.enabled ? "enabled" : "disabled");
     printf("  Version: %i.%i.%i\n",
-        gain_tbls[ch].version.major, gain_tbls[ch].version.minor, gain_tbls[ch].version.patch);
-    printf("  Number of Entries: %u\n", gain_tbls[ch].n_entries);
-    printf("  Start Frequency: %" PRIu64 " Hz\n", gain_tbls[ch].start_freq);
-    printf("  Stop Frequency: %" PRIu64 " Hz\n", gain_tbls[ch].stop_freq);
-    printf("  File Path: %s\n", gain_tbls[ch].file_path);
+        table.version.major, table.version.minor, table.version.patch);
+    printf("  Number of Entries: %u\n", table.n_entries);
+    printf("  Start Frequency: %" PRIu64 " Hz\n", table.start_freq);
+    printf("  Stop Frequency: %" PRIu64 " Hz\n", table.stop_freq);
+    printf("  File Path: %s\n", table.file_path != NULL ? table.file_path : "");
 
     if (with_entries) {
-        for (size_t i = 0; i < gain_tbls[ch].n_entries; i++) {
-            printf("%" PRIu64 ",%f\n", gain_tbls[ch].entries[i].freq, gain_tbls[ch].entries[i].gain_corr);
+        for (size_t i = 0; i < table.n_entries; i++) {
+            printf("%" PRIu64 ",%f\n", table.entries[i].freq,
+                   table.entries[i].gain_corr);
         }
     }
 
 error:
+    bladerf_free_gain_calibration_copy(&table);
     return status;
 }
 
 int bladerf_get_gain_calibration(struct bladerf *dev, bladerf_channel ch, const struct bladerf_gain_cal_tbl **tbl)
 {
-    CHECK_NULL(dev);
+    CHECK_NULL(dev, tbl);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     MUTEX_LOCK(&dev->lock);
 
     if (dev->gain_tbls[ch].state != BLADERF_GAIN_CAL_LOADED) {
@@ -2712,10 +2745,84 @@ int bladerf_get_gain_calibration(struct bladerf *dev, bladerf_channel ch, const 
     return 0;
 }
 
+int bladerf_get_gain_calibration_copy(
+    struct bladerf *dev, bladerf_channel ch,
+    struct bladerf_gain_cal_tbl *copy)
+{
+    const struct bladerf_gain_cal_tbl *source;
+    size_t path_length = 0;
+    int status = 0;
+
+    CHECK_NULL(dev, copy);
+    memset(copy, 0, sizeof(*copy));
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    MUTEX_LOCK(&dev->lock);
+    source = &dev->gain_tbls[ch];
+    if (source->state != BLADERF_GAIN_CAL_LOADED) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto unlock;
+    }
+
+    *copy = *source;
+    copy->entries = NULL;
+    copy->file_path = NULL;
+
+    if (source->n_entries != 0) {
+        if (source->entries == NULL) {
+            status = BLADERF_ERR_UNEXPECTED;
+            goto unlock;
+        }
+        copy->entries = calloc(source->n_entries, sizeof(*copy->entries));
+        if (copy->entries == NULL) {
+            status = BLADERF_ERR_MEM;
+            goto unlock;
+        }
+        memcpy(copy->entries, source->entries,
+               source->n_entries * sizeof(*copy->entries));
+    }
+
+    if (source->file_path != NULL) {
+        while (path_length < source->file_path_len &&
+               source->file_path[path_length] != '\0') {
+            path_length++;
+        }
+        copy->file_path = calloc(source->file_path_len + 1, 1);
+        if (copy->file_path == NULL) {
+            status = BLADERF_ERR_MEM;
+            goto unlock;
+        }
+        memcpy(copy->file_path, source->file_path, path_length);
+        copy->file_path[path_length] = '\0';
+    }
+
+unlock:
+    MUTEX_UNLOCK(&dev->lock);
+    if (status != 0) {
+        bladerf_free_gain_calibration_copy(copy);
+    }
+    return status;
+}
+
+void bladerf_free_gain_calibration_copy(struct bladerf_gain_cal_tbl *copy)
+{
+    if (copy == NULL) {
+        return;
+    }
+    free(copy->entries);
+    free(copy->file_path);
+    memset(copy, 0, sizeof(*copy));
+}
+
 int bladerf_get_gain_target(struct bladerf *dev, bladerf_channel ch, int *gain_target)
 {
     int status = 0;
-    CHECK_NULL(dev);
+    CHECK_NULL(dev, gain_target);
+    if (!valid_gain_cal_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     MUTEX_LOCK(&dev->lock);
     bladerf_frequency current_frequency;
     struct bladerf_gain_cal_tbl *cal_table = &dev->gain_tbls[ch];
