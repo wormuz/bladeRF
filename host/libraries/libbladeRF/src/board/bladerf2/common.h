@@ -289,7 +289,8 @@ void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event);
 void bladerf2_rx_format_unsupported(struct bladerf *dev,
-                                    bladerf_format format);
+                                    bladerf_format format,
+                                    bool deduplicate);
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint8_t epoch_id,

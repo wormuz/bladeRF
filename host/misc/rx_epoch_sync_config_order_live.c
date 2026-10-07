@@ -37,7 +37,8 @@ int main(int argc, char **argv)
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint64_t event_cursor = 0, next_event_cursor = 0;
     uint32_t event_count = 0;
-    bool history_complete = false, format_event_found = false;
+    bool history_complete = false;
+    unsigned int format_event_count = 0;
     int16_t samples[4096 * 2];
     int s, raw_status;
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
@@ -67,6 +68,9 @@ int main(int argc, char **argv)
     printf("raw sync config status=%d (%s), expected %d\n", raw_status,
            bladerf_strerror(raw_status), BLADERF_ERR_UNSUPPORTED);
     if (raw_status != BLADERF_ERR_UNSUPPORTED) goto fail;
+    raw_status = bladerf_sync_config(dev, rx_layout,
+                                     BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, 3000);
+    if (raw_status != BLADERF_ERR_UNSUPPORTED) goto fail;
     s = bladerf_rf_events_get_since(dev, event_cursor, events,
                                     BLADERF_RF_EVENT_HISTORY_SIZE,
                                     &event_count, &next_event_cursor,
@@ -79,12 +83,12 @@ int main(int argc, char **argv)
         if (events[i].event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED &&
             events[i].flags == BLADERF_FORMAT_SC16_Q11 &&
             events[i].error_code == BLADERF_ERR_UNSUPPORTED) {
-            format_event_found = true;
-            break;
+            format_event_count++;
         }
     }
-    if (!format_event_found) {
-        fprintf(stderr, "sync format rejection did not publish RX_FORMAT_UNSUPPORTED\n");
+    if (format_event_count != 2) {
+        fprintf(stderr, "expected 2 RX_FORMAT_UNSUPPORTED events, found %u\n",
+                format_event_count);
         goto fail;
     }
     s = bladerf_sync_config(dev, rx_layout,

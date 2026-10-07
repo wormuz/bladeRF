@@ -295,8 +295,8 @@ static void test_unsupported_format_event(void)
 
     /* Callback-side publication must not wait for dev->lock. */
     MUTEX_LOCK(&dev.lock);
-    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
-    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META, true);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META, true);
     MUTEX_UNLOCK(&dev.lock);
     assert(board_data->rf_transition_event_count == 1);
     const struct bladerf_rf_event *event =
@@ -309,8 +309,13 @@ static void test_unsupported_format_event(void)
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rx_format_unsupported_reported = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, true);
     assert(board_data->rf_transition_event_count == 2);
+
+    board_data->rx_format_unsupported_reported = false;
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, false);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, false);
+    assert(board_data->rf_transition_event_count == 4);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
