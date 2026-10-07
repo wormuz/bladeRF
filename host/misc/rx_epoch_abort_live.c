@@ -540,6 +540,57 @@ int main(void)
                            recovered.fpga_timestamp));
 
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    /* A synchronous host-data requirement can time out while META buffers
+     * are queued but no consumer has admitted one. If the FPGA ABORT then
+     * fails, the host parser must still reject queued IQ. */
+    const struct bladerf_rx_transition_request first_data_timeout_request = {
+        .target_frequency_hz = recovery_frequency_hz,
+        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                                BLADERF_RF_REQUIRE_ENSM_RX |
+                                BLADERF_RF_REQUIRE_EPOCH_VALID |
+                                BLADERF_RF_REQUIRE_FIRST_HOST_DATA,
+        .timeout_ms = 1000,
+        .require_rx_data_valid = true,
+        .epoch_settle_samples = 0,
+    };
+    uint32_t first_data_timeout_txn = 0;
+    struct bladerf_rf_event first_data_timeout_result = {0};
+    CHECK(bladerf_rx_transition_begin(
+        dev, BLADERF_CHANNEL_RX(0), &first_data_timeout_request,
+        &first_data_timeout_txn));
+    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    status = bladerf_rx_transition_wait(
+        dev, first_data_timeout_txn, &first_data_timeout_result, 150);
+    unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
+    if (status != BLADERF_ERR_TIMEOUT) {
+        fprintf(stderr, "first host-data wait returned %s, expected timeout\n",
+                bladerf_strerror(status));
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    CHECK(check_abort_failed_trace(dev, first_data_timeout_txn));
+    int16_t first_data_sentinel[4096 * 2];
+    memset(samples, 0x5a, 4096 * 2 * sizeof(*samples));
+    memcpy(first_data_sentinel, samples, sizeof(first_data_sentinel));
+    memset(&metadata, 0, sizeof(metadata));
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0 ||
+        memcmp(samples, first_data_sentinel, sizeof(first_data_sentinel)) != 0) {
+        fprintf(stderr, "timed-out host-data transition exposed IQ: status=%s "
+                "count=%u\n", bladerf_strerror(status), metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    printf("RX first-host-data timeout + failed ABORT: PASS txn=%u IQ withheld\n",
+           first_data_timeout_txn);
+    CHECK(transition(dev, recovery_frequency_hz, &recovered));
+    CHECK(read_valid_epoch(dev, samples, recovered.epoch_id,
+                           recovered.fpga_timestamp));
+
     /* Legacy setters must not mutate the RFIC when host revocation succeeds
      * but the FPGA ABORT command fails. Capture the event cursor first so
      * this checks the exact operation, even when prior transitions filled

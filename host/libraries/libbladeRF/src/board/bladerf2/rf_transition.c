@@ -273,20 +273,25 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
 
 static void _abort_transition(struct bladerf *dev,
                               struct bladerf2_board_data *board_data,
+                              int transition_status,
                               struct bladerf_rf_event *final_event)
 {
     int abort_status = 0;
+    int sync_status = bladerf2_rx_transition_host_revoke(
+        dev, &board_data->sync[BLADERF_RX], transition_status);
 
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_EPOCH_VALID) {
         abort_status = _rx_epoch_abort_command(dev);
     }
 
-    if (abort_status != 0) {
+    if (abort_status != 0 || sync_status != 0) {
         /* Preserve the primary transition error returned to the caller, but
-         * make failed FPGA cleanup explicit in the device-wide event history. */
+         * make failed cleanup explicit. Host admission was revoked before
+         * either cleanup operation, so this report does not guard IQ safety. */
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED,
-                    BLADERF_RF_STATE_ERROR, 0, 0, 0, abort_status,
+                    BLADERF_RF_STATE_ERROR, 0, 0, 0,
+                    abort_status != 0 ? abort_status : sync_status,
                     board_data->rf_transition_epoch_id);
     }
 
@@ -320,7 +325,7 @@ static int _fail_transition(struct bladerf *dev,
                             int status,
                             struct bladerf_rf_event *final_event)
 {
-    _abort_transition(dev, board_data, final_event);
+    _abort_transition(dev, board_data, status, final_event);
     return status;
 }
 

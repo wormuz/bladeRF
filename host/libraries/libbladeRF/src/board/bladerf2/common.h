@@ -315,6 +315,9 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
  * wake a transition waiting for required first host data immediately. */
 void bladerf2_rx_transition_fail_first_host_data_locked(
     struct bladerf2_board_data *board_data, int status);
+int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
+                                      struct bladerf_sync *sync,
+                                      int transition_status);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,

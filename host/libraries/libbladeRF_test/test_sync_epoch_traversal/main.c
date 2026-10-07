@@ -1011,6 +1011,51 @@ static void test_sync_read_fails_closed_before_parser_invalidation(void)
     fixture_destroy(&f);
 }
 
+static void test_failed_transition_revokes_host_epoch_before_abort(void)
+{
+    struct fixture f;
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_metadata metadata = {0};
+    int16_t out[64];
+    int16_t sentinel[64];
+
+    fixture_init(&f);
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
+    f.dev.board_data = &board_data;
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_certified_epoch_id = 7;
+    board_data.rf_transition_first_host_data_required = true;
+    board_data.rf_transition_first_host_data_reported = false;
+    board_data.rf_transition_first_host_data_failure = 0;
+    board_data.rx_async_have_expected_timestamp = true;
+    write_msg(f.buffers[0], 1000, 7, 1222);
+    memset(out, 0x5a, sizeof(out));
+    memcpy(sentinel, out, sizeof(out));
+
+    /* Model a wait timeout followed by a failed NIOS ABORT. The host half of
+     * failed-transition cleanup must revoke admission independently. */
+    assert(bladerf2_rx_transition_host_revoke(
+               &f.dev, &f.sync, BLADERF_ERR_TIMEOUT) == 0);
+    assert(!board_data.rf_transition_epoch_certified);
+    assert(!board_data.rx_async_have_expected_timestamp);
+    assert(board_data.rf_transition_first_host_data_failure ==
+           BLADERF_ERR_TIMEOUT);
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 32, &metadata, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(metadata.actual_count == 0);
+    assert(memcmp(out, sentinel, sizeof(out)) == 0);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+    f.dev.board_data = NULL;
+    fixture_destroy(&f);
+}
+
 struct deadline_fence_call {
     struct bladerf_sync *sync;
     uint64_t deadline_ns;
@@ -1220,6 +1265,7 @@ int main(void)
 {
     test_rx_channel_mask_runtime_policy();
     test_sync_channel_selection_fail_closed();
+    test_failed_transition_revokes_host_epoch_before_abort();
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META,
                                      BLADERF_META_FLAG_RX_NOW));
