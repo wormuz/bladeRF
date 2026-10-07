@@ -10,6 +10,7 @@
 #define RX_RATE_BEFORE 1920000u
 #define RX_RATE_AFTER  2000000u
 #define RX_BANDWIDTH   1500000u
+#define TX_BANDWIDTH_AFTER 1000000u
 #define RX_FREQUENCY   1835000000ULL
 #define RX_SAMPLES     4096u
 
@@ -48,20 +49,25 @@ int main(int argc, char **argv)
     struct bladerf_metadata metadata = { .flags = BLADERF_META_FLAG_RX_NOW };
     const bladerf_channel ch = argc > 1 && strcmp(argv[1], "RX2") == 0
         ? BLADERF_CHANNEL_RX(1) : BLADERF_CHANNEL_RX(0);
+    const bool change_bandwidth = argc > 2 && strcmp(argv[2], "bandwidth") == 0;
+    const char *operation = change_bandwidth ? "bandwidth" : "rate";
     const char *channel_name = ch == BLADERF_CHANNEL_RX(0) ? "RX1" : "RX2";
     int16_t samples[RX_SAMPLES * 2];
     uint32_t event_count = 0;
     uint64_t event_cursor = 0;
     uint64_t next_sequence = 0;
     bladerf_sample_rate actual_rate = 0;
+    bladerf_bandwidth actual_bandwidth = 0;
     bladerf_sample_rate rx_rate = 0;
     bool history_complete = false;
     bool saw_rate_invalidation = false;
     int status;
 
-    if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
-                                   strcmp(argv[1], "RX2") != 0)) {
-        fprintf(stderr, "usage: %s [RX1|RX2]\n", argv[0]);
+    if (argc > 3 || (argc >= 2 && strcmp(argv[1], "RX1") != 0 &&
+                                   strcmp(argv[1], "RX2") != 0) ||
+        (argc == 3 && strcmp(argv[2], "rate") != 0 &&
+                       strcmp(argv[2], "bandwidth") != 0)) {
+        fprintf(stderr, "usage: %s [RX1|RX2] [rate|bandwidth]\n", argv[0]);
         return 2;
     }
 
@@ -90,16 +96,23 @@ int main(int argc, char **argv)
     }
     event_cursor = next_sequence;
 
-    /* TX rate configuration calls AD9361's shared RX/TX clock-chain
-     * calculator. It must revoke this active RX epoch before the RFIC write. */
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
-                                     RX_RATE_AFTER, &actual_rate);
-    if (status != 0) { fail("set TX sample rate", status); goto error; }
+    /* TX rate rewrites both clock chains; TX bandwidth reruns shared RX
+     * filter/TIA/ADC calibration. Both must revoke the active RX epoch. */
+    if (change_bandwidth) {
+        status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_TX(0),
+                                       TX_BANDWIDTH_AFTER,
+                                       &actual_bandwidth);
+        if (status != 0) { fail("set TX bandwidth", status); goto error; }
+    } else {
+        status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
+                                         RX_RATE_AFTER, &actual_rate);
+        if (status != 0) { fail("set TX sample rate", status); goto error; }
+    }
     status = bladerf_get_sample_rate(dev, ch, &rx_rate);
     if (status != 0) { fail("read RX sample rate after TX change", status); goto error; }
-    if (rx_rate != RX_RATE_AFTER) {
-        fprintf(stderr, "shared clock evidence mismatch: RX rate=%u expected=%u\n",
-                rx_rate, RX_RATE_AFTER);
+    if (rx_rate != (change_bandwidth ? RX_RATE_BEFORE : RX_RATE_AFTER)) {
+        fprintf(stderr, "RX rate evidence mismatch: RX rate=%u expected=%u\n",
+                rx_rate, change_bandwidth ? RX_RATE_BEFORE : RX_RATE_AFTER);
         goto error;
     }
 
@@ -113,12 +126,14 @@ int main(int argc, char **argv)
     }
     for (uint32_t i = 0; i < event_count; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
-            events[i].flags == BLADERF_RF_INVALIDATE_SAMPLE_RATE) {
+            events[i].flags == (change_bandwidth
+                ? BLADERF_RF_INVALIDATE_BANDWIDTH
+                : BLADERF_RF_INVALIDATE_SAMPLE_RATE)) {
             saw_rate_invalidation = true;
         }
     }
     if (!saw_rate_invalidation) {
-        fprintf(stderr, "TX rate change emitted no RX sample-rate invalidation\n");
+        fprintf(stderr, "TX %s change emitted no RX invalidation\n", operation);
         goto error;
     }
 
@@ -127,8 +142,8 @@ int main(int argc, char **argv)
     status = bladerf_sync_rx(dev, samples, RX_SAMPLES, &metadata, 100);
     if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0 ||
         samples[0] != (int16_t)0xA5A5) {
-        fprintf(stderr, "invalid RX escaped TX-rate change: status=%s count=%u\n",
-                bladerf_strerror(status), metadata.actual_count);
+        fprintf(stderr, "invalid RX escaped TX-%s change: status=%s count=%u\n",
+                operation, bladerf_strerror(status), metadata.actual_count);
         goto error;
     }
 
@@ -155,9 +170,11 @@ int main(int argc, char **argv)
         goto error;
     }
 
-    printf("TX shared-clock invalidation PASS channel=%s tx_rate=%u rx_rate=%u "
-           "epoch=%u first_timestamp=%" PRIu64 " boundary=%" PRIu64 "\n",
-           channel_name, actual_rate, rx_rate, metadata.rx_epoch_id,
+    printf("TX shared-RX invalidation PASS operation=%s channel=%s "
+           "tx_rate=%u tx_bandwidth=%u rx_rate=%u epoch=%u "
+           "first_timestamp=%" PRIu64 " boundary=%" PRIu64 "\n",
+           operation, channel_name, actual_rate, actual_bandwidth, rx_rate,
+           metadata.rx_epoch_id,
            metadata.timestamp, final_event.fpga_timestamp);
     (void)bladerf_enable_module(dev, ch, false);
     bladerf_close(dev);

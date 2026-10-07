@@ -821,6 +821,15 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
     return 0;
 }
 
+/* These AD9361 configuration calls can update RX state even when the caller
+ * selected TX: sample-rate programming recalculates both clock chains, and TX
+ * bandwidth programming reruns shared RX filter/TIA/ADC calibration. */
+static bladerf_channel rx_shared_rfic_invalidation_channel(
+    bladerf_channel ch)
+{
+    return BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_CHANNEL_RX(0) : ch;
+}
+
 static void rx_reconfigure_complete(struct bladerf *dev, bladerf_channel ch)
 {
     if (!BLADERF_CHANNEL_IS_TX(ch) &&
@@ -836,11 +845,8 @@ int bladerf_set_sample_rate(struct bladerf *dev,
 {
     int status;
     bladerf_feature feature;
-    /* AD9361 computes and programs the RX and TX clock chains together for
-     * either sampling-frequency setter. A TX rate change therefore revokes
-     * any RX epoch even though the API channel is TX. */
-    const bladerf_channel rx_clock_channel = BLADERF_CHANNEL_IS_TX(ch)
-        ? BLADERF_CHANNEL_RX(0) : ch;
+    const bladerf_channel rx_clock_channel =
+        rx_shared_rfic_invalidation_channel(ch);
 
     status = invalidate_rx_data_before_reconfigure(
         dev, rx_clock_channel, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
@@ -902,11 +908,8 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
 {
     int status;
     bladerf_feature feature;
-    /* The AD9361 rate calculator and set_trx_clock_chain() update both
-     * directions for a TX request as well; keep RX fenced for the entire
-     * operation. */
-    const bladerf_channel rx_clock_channel = BLADERF_CHANNEL_IS_TX(ch)
-        ? BLADERF_CHANNEL_RX(0) : ch;
+    const bladerf_channel rx_clock_channel =
+        rx_shared_rfic_invalidation_channel(ch);
 
     status = invalidate_rx_data_before_reconfigure(
         dev, rx_clock_channel, BLADERF_RF_INVALIDATE_SAMPLE_RATE);
@@ -964,9 +967,11 @@ int bladerf_set_bandwidth(struct bladerf *dev,
                           bladerf_bandwidth *actual)
 {
     int status;
+    const bladerf_channel rx_config_channel =
+        rx_shared_rfic_invalidation_channel(ch);
 
     status = invalidate_rx_data_before_reconfigure(
-        dev, ch, BLADERF_RF_INVALIDATE_BANDWIDTH);
+        dev, rx_config_channel, BLADERF_RF_INVALIDATE_BANDWIDTH);
     if (status != 0) {
         return status;
     }
@@ -976,7 +981,7 @@ int bladerf_set_bandwidth(struct bladerf *dev,
     status = dev->board->set_bandwidth(dev, ch, bandwidth, actual);
 
     MUTEX_UNLOCK(&dev->lock);
-    rx_reconfigure_complete(dev, ch);
+    rx_reconfigure_complete(dev, rx_config_channel);
     return status;
 }
 
