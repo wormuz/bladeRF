@@ -153,6 +153,10 @@ static void note_worker_overrun(struct bladerf *dev, uint32_t source_flags)
 static unsigned int async_rx_callbacks;
 static unsigned int async_rx_event_wakeups;
 static bool allow_async_rx_buffer = true;
+static bool check_async_rx_channel_mask;
+static bool async_rx_channel_mask_valid = true;
+static uint8_t async_rx_channel_mask;
+static bladerf_channel async_rx_transition_channel;
 static void *async_rejected_replacement;
 
 static void *replace_rejected_async_buffer(void *user_data, void *buffer)
@@ -170,7 +174,11 @@ static bool validate_async_rx_buffer(struct bladerf *dev,
     assert(dev != NULL && buffer != NULL && length > 0);
     assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX);
     (void)format;
-    return allow_async_rx_buffer;
+    return allow_async_rx_buffer &&
+        (!check_async_rx_channel_mask ||
+         bladerf2_rx_layout_matches_channel_mask(
+             layout, async_rx_transition_channel,
+             async_rx_channel_mask_valid, async_rx_channel_mask));
 }
 
 static void *count_async_rx_callback(struct bladerf *dev,
@@ -1367,7 +1375,11 @@ int main(void)
     assert(async_withheld_reason == BLADERF_RF_WITHHELD_USB_OVERFLOW);
     assert(async_overrun_events == 3);
     assert(async_rx_event_wakeups == 1);
-    allow_async_rx_buffer = false;
+    allow_async_rx_buffer = true;
+    check_async_rx_channel_mask = true;
+    async_rx_channel_mask_valid = true;
+    async_rx_channel_mask = 0x1;
+    async_rx_transition_channel = BLADERF_CHANNEL_RX(0);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
@@ -1377,25 +1389,42 @@ int main(void)
                                    sizeof(async_samples)) ==
            async_replacement);
     assert(async_rx_event_wakeups == 1);
-    allow_async_rx_buffer = true;
-    async_stream.layout = BLADERF_RX_X1;
+    async_rx_channel_mask = 0x3;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 1);
+    async_stream.layout = BLADERF_RX_X1;
+    async_rx_transition_channel = BLADERF_CHANNEL_RX(1);
+    async_rx_channel_mask = 0x1;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) ==
+           async_replacement);
+    assert(async_rx_callbacks == 1);
+    assert(async_rx_event_wakeups == 2);
+    async_rx_channel_mask = 0x2;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_callbacks == 2);
+    assert(async_rx_event_wakeups == 2);
+    check_async_rx_channel_mask = false;
+    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+                                   sizeof(async_samples)) == async_samples);
+    assert(async_rx_callbacks == 3);
+    assert(async_rx_event_wakeups == 2);
     assert(rx_overrun_events == 2);
     allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
-    assert(async_rx_callbacks == 1);
-    assert(async_rx_event_wakeups == 2);
+    assert(async_rx_callbacks == 3);
+    assert(async_rx_event_wakeups == 3);
     allow_async_rx_buffer = true;
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
-    assert(async_rx_callbacks == 2);
-    assert(async_rx_event_wakeups == 2);
+    assert(async_rx_callbacks == 4);
+    assert(async_rx_event_wakeups == 3);
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);
