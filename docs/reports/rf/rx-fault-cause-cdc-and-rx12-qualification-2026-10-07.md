@@ -191,3 +191,20 @@ libbladeRF target, and `libbladeRF_test_sync_epoch_traversal` passed. Hardware r
 qualification remains pending. The board enumerates, but the live handoff
 runner currently fails during `bladerf_open()` while reading FPGA version
 (`BLADERF_ERR_TIMEOUT`), so no live race result is claimed.
+
+## Preserve first-host-data identity across event-ring pressure
+
+The first-host-data publisher previously searched the bounded event ring for
+the `RX_EPOCH_VALID` record to recover transaction identity. A saturated ring
+could evict that record before host IQ arrived, suppressing the corresponding
+`RX_FIRST_VALID_HOST_DATA` event even though the epoch certificate and packet
+were valid. The epoch-valid event is now also retained as a lock-protected
+snapshot with a per-epoch host-data-reported latch. First-data and resume
+events are built from that snapshot, independent of ring retention.
+
+The sync/epoch regression fills the ring with unrelated overrun events so the
+epoch record is absent, then verifies the host-data and resume notifications
+retain transaction 77 and epoch 5. The rebuilt target and
+`libbladeRF_test_sync_epoch_traversal` pass. Hardware qualification remains
+pending because the board's open path currently times out at FPGA-version
+readback.

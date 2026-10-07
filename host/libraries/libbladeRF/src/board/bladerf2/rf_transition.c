@@ -356,8 +356,11 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
                 (uint8_t)epoch_id;
             board_data->rf_transition_first_valid_timestamp =
                 fpga_timestamp;
+            board_data->rf_transition_certified_epoch_event = event;
+            board_data->rf_transition_first_host_data_reported = false;
         } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
+            board_data->rf_transition_first_host_data_reported = false;
         }
         /* Publish epoch-valid and its certificate atomically with respect to
          * async admission. Otherwise a first valid USB transfer can observe
@@ -1936,92 +1939,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
     struct bladerf *dev, const struct bladerf_metadata *metadata)
 {
-    struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event epoch_event = {0};
-    struct bladerf_rf_event event = {0};
-    bool found_epoch = false;
-    bool already_recorded = false;
-
-    if (dev == NULL || !metadata_rx_has_epoch_samples(metadata)) {
-        return;
+    if (dev != NULL && dev->board_data != NULL) {
+        /* Caller holds rx_async_epoch_lock. The durable epoch snapshot, not
+         * the bounded event ring, links this packet to its transition. */
+        bladerf2_rx_data_note_first_packet_locked(dev->board_data, metadata);
     }
-
-    board_data = dev->board_data;
-    if (board_data == NULL) {
-        return;
-    }
-
-    /* Caller holds rx_async_epoch_lock so event publication is atomic with
-     * respect to certificate revocation and async buffer admission. */
-    if (!board_data->rf_transition_epoch_contract_enabled ||
-        !board_data->rf_transition_epoch_certified ||
-        board_data->rf_transition_certified_epoch_id !=
-            metadata->rx_epoch_id ||
-        metadata->timestamp < board_data->rf_transition_first_valid_timestamp) {
-        return;
-    }
-
-    MUTEX_LOCK(&board_data->rf_transition_event_lock);
-    uint32_t retained = board_data->rf_transition_event_count;
-    for (uint32_t i = 0; i < retained; ++i) {
-        uint32_t slot = (board_data->rf_transition_event_head +
-            BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
-            BLADERF2_RF_EVENT_HISTORY_SIZE;
-        const struct bladerf_rf_event *candidate =
-            &board_data->rf_transition_events[slot];
-        if (candidate->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
-            candidate->epoch_id == metadata->rx_epoch_id &&
-            metadata->timestamp >= candidate->fpga_timestamp) {
-            epoch_event = *candidate;
-            found_epoch = true;
-            break;
-        }
-    }
-
-    if (found_epoch) {
-        for (uint32_t i = 0; i < retained; ++i) {
-            uint32_t slot = (board_data->rf_transition_event_head +
-                BLADERF2_RF_EVENT_HISTORY_SIZE - 1 - i) %
-                BLADERF2_RF_EVENT_HISTORY_SIZE;
-            const struct bladerf_rf_event *candidate =
-                &board_data->rf_transition_events[slot];
-            if (candidate->transaction_id == epoch_event.transaction_id &&
-                candidate->event_type ==
-                    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
-                already_recorded = true;
-                break;
-            }
-        }
-    }
-
-    if (found_epoch &&
-        (!already_recorded || board_data->rx_async_data_withheld_active)) {
-        event.host_monotonic_ns = _monotonic_ns();
-        event.fpga_timestamp = metadata->timestamp;
-        event.transaction_id = epoch_event.transaction_id;
-        event.epoch_id = epoch_event.epoch_id;
-        event.requested_rx_lo_hz = epoch_event.requested_rx_lo_hz;
-        event.readback_rx_lo_hz = epoch_event.readback_rx_lo_hz;
-        event.rfic_status = epoch_event.rfic_status;
-        event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
-        event.event_type = already_recorded
-            ? BLADERF_RF_EVT_RX_DATA_RESUMED
-            : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
-        event.flags = metadata->status |
-                      BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
-        event.error_code = 0;
-
-        bladerf2_rf_event_append_locked(board_data, &event);
-        board_data->rx_async_data_withheld_active = false;
-    }
-    if (found_epoch) {
-        /* Sync RX reaches this point only after returning certified IQ. End
-         * the current withheld interval so a later, independent fault in the
-         * same epoch is reported instead of being hidden by its old dedupe
-         * latch. Async RX performs the same rearm at its admission point. */
-        bladerf2_rx_data_rearm_notifications_locked(board_data);
-    }
-    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }
 
 void bladerf2_rx_transition_note_first_packet(

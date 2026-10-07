@@ -268,6 +268,8 @@ struct bladerf2_board_data {
     uint64_t rx_async_expected_timestamp;
     uint8_t rf_transition_certified_epoch_id;
     uint64_t rf_transition_first_valid_timestamp;
+    struct bladerf_rf_event rf_transition_certified_epoch_event;
+    bool rf_transition_first_host_data_reported;
     bool rf_transition_pending;
     bool rf_transition_waiting;
     bool rf_transition_spi_trace_enabled;
@@ -321,6 +323,11 @@ void bladerf2_rx_data_withheld_reset(struct bladerf *dev);
  * interval, so subsequent faults must be published as a new interval. */
 void bladerf2_rx_data_rearm_notifications_locked(
     struct bladerf2_board_data *board_data);
+/* Caller holds rx_async_epoch_lock. Snapshot-backed event publication must
+ * not depend on the bounded history ring retaining RX_EPOCH_VALID. */
+void bladerf2_rx_data_note_first_packet_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,
     uint64_t first_unvalidated_timestamp);

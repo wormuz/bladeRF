@@ -4,12 +4,14 @@
  * terms of the GNU Lesser General Public License, version 2.1 or later.
  */
 #include <time.h>
+#include <string.h>
 
 #include <libbladeRF.h>
 
 #include "bladeRF.h"
 #include "board/board.h"
 #include "common.h"
+#include "streaming/metadata.h"
 
 static uint64_t monotonic_ns(void)
 {
@@ -193,6 +195,57 @@ void bladerf2_rx_data_rearm_notifications_locked(
     board_data->rx_format_unsupported_reported = false;
     board_data->rx_async_data_withheld_reported = false;
     board_data->rx_async_timestamp_discontinuity_reported = false;
+}
+
+void bladerf2_rx_data_note_first_packet_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata)
+{
+    const struct bladerf_rf_event *epoch_event;
+    struct bladerf_rf_event event = {0};
+    bool already_reported;
+
+    if (board_data == NULL || !metadata_rx_has_epoch_samples(metadata) ||
+        !board_data->rf_transition_epoch_contract_enabled ||
+        !board_data->rf_transition_epoch_certified) {
+        return;
+    }
+
+    epoch_event = &board_data->rf_transition_certified_epoch_event;
+    if (epoch_event->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        epoch_event->epoch_id != metadata->rx_epoch_id ||
+        board_data->rf_transition_certified_epoch_id !=
+            metadata->rx_epoch_id ||
+        metadata->timestamp < board_data->rf_transition_first_valid_timestamp ||
+        metadata->timestamp < epoch_event->fpga_timestamp) {
+        return;
+    }
+
+    already_reported = board_data->rf_transition_first_host_data_reported;
+    if (!already_reported || board_data->rx_async_data_withheld_active) {
+        event.host_monotonic_ns = monotonic_ns();
+        event.fpga_timestamp = metadata->timestamp;
+        event.transaction_id = epoch_event->transaction_id;
+        event.epoch_id = epoch_event->epoch_id;
+        event.requested_rx_lo_hz = epoch_event->requested_rx_lo_hz;
+        event.readback_rx_lo_hz = epoch_event->readback_rx_lo_hz;
+        event.rfic_status = epoch_event->rfic_status;
+        event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
+        event.event_type = already_reported
+            ? BLADERF_RF_EVT_RX_DATA_RESUMED
+            : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+        event.flags = metadata->status |
+                      BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        event.error_code = 0;
+
+        MUTEX_LOCK(&board_data->rf_transition_event_lock);
+        bladerf2_rf_event_append_locked(board_data, &event);
+        MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+        board_data->rf_transition_first_host_data_reported = true;
+        board_data->rx_async_data_withheld_active = false;
+    }
+
+    bladerf2_rx_data_rearm_notifications_locked(board_data);
 }
 
 void bladerf2_rx_async_timestamp_discontinuity(

@@ -419,6 +419,68 @@ static void test_async_data_withheld_event(void)
     free(board_data);
 }
 
+static void test_host_data_event_uses_epoch_snapshot(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_rf_event filler = {0};
+    struct bladerf_metadata metadata = {0};
+    const uint32_t capacity = BLADERF2_RF_EVENT_HISTORY_SIZE;
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_certified_epoch_id = 5;
+    board_data.rf_transition_first_valid_timestamp = 1000;
+    board_data.rf_transition_certified_epoch_event.transaction_id = 77;
+    board_data.rf_transition_certified_epoch_event.epoch_id = 5;
+    board_data.rf_transition_certified_epoch_event.event_type =
+        BLADERF_RF_EVT_RX_EPOCH_VALID;
+    board_data.rf_transition_certified_epoch_event.fpga_timestamp = 1000;
+    board_data.rf_transition_certified_epoch_event.requested_rx_lo_hz =
+        1835000000ULL;
+    board_data.rf_transition_certified_epoch_event.readback_rx_lo_hz =
+        1835000000ULL;
+
+    /* Simulate a saturated ring whose retained entries no longer contain
+     * RX_EPOCH_VALID. The durable snapshot must still produce the host IQ
+     * event with its transition identity. */
+    filler.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    for (uint32_t i = 0; i < capacity; ++i) {
+        bladerf2_rf_event_append_locked(&board_data, &filler);
+    }
+    metadata.actual_count = 8;
+    metadata.rx_epoch_id_valid = 1;
+    metadata.rx_epoch_id = 5;
+    metadata.timestamp = 1001;
+
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    assert(board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_event_sequence == capacity + 1);
+    uint32_t latest = (board_data.rf_transition_event_head + capacity - 1) %
+                      capacity;
+    assert(board_data.rf_transition_events[latest].event_type ==
+           BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
+    assert(board_data.rf_transition_events[latest].transaction_id == 77);
+    assert(board_data.rf_transition_events[latest].epoch_id == 5);
+    assert(board_data.rf_transition_events[latest].fpga_timestamp == 1001);
+
+    board_data.rx_async_data_withheld_active = true;
+    metadata.timestamp = 1002;
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    latest = (board_data.rf_transition_event_head + capacity - 1) % capacity;
+    assert(board_data.rf_transition_events[latest].event_type ==
+           BLADERF_RF_EVT_RX_DATA_RESUMED);
+    assert(board_data.rf_transition_events[latest].transaction_id == 77);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
 static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
@@ -472,6 +534,7 @@ int main(void)
 
     test_unsupported_format_event();
     test_async_data_withheld_event();
+    test_host_data_event_uses_epoch_snapshot();
     test_async_timestamp_continuity();
 
 
