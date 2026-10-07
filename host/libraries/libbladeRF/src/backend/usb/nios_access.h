@@ -285,6 +285,9 @@ int nios_rffe_control_write(struct bladerf *dev, uint32_t value);
  */
 int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value);
 
+/** Read coherent sticky RX FIFO-writer cause bits (0..4). */
+int nios_rx_fault_causes_read(struct bladerf *dev, uint32_t *value);
+
 /* Pre-trigger ring depth in samples, fixed by the gateware (DEPTH_LOG2 = 12
  * in bladerf_core.vhd). Here so callers can size a buffer without guessing;
  * a mismatch would silently truncate or over-read a drain. */

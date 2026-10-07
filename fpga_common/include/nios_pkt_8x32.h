@@ -377,6 +377,16 @@
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO   0x8a
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI   0x8b
 
+/* RX FIFO-writer sticky causes, captured from rx_clock into sys_clock as one
+ * coherent word. Bits 0..4 match fifo_writer fault_sticky bit indices:
+ * speed mismatch, no progress, GPIF timeout, protocol error, FIFO abort. */
+#define NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES  0x8c
+#define NIOS_PKT_8x32_RX_FAULT_SPEED_MISMATCH    (1u << 0)
+#define NIOS_PKT_8x32_RX_FAULT_START_NO_PROGRESS (1u << 1)
+#define NIOS_PKT_8x32_RX_FAULT_GPIF_TIMEOUT      (1u << 2)
+#define NIOS_PKT_8x32_RX_FAULT_PROTOCOL_ERROR    (1u << 3)
+#define NIOS_PKT_8x32_RX_FAULT_FIFO_ABORT        (1u << 4)
+
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02

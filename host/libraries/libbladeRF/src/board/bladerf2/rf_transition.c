@@ -537,6 +537,8 @@ static void *rx_fault_monitor_task(void *arg)
         bool epoch_certified = false;
         uint8_t epoch_id = 0;
         uint32_t rf_link_status = 0;
+        uint32_t rx_fault_causes = 0;
+        bool rx_fault_causes_valid = false;
         uint8_t pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
@@ -544,6 +546,7 @@ static void *rx_fault_monitor_task(void *arg)
         int status = 0;
         int loss_count_status = 0;
         int rfic_status = 0;
+        int rx_fault_causes_status = 0;
 
         /* NIOS bulk control and AD9361 SPI requests share serialization with
          * configuration traffic. Hold dev->lock only across these short
@@ -581,6 +584,14 @@ static void *rx_fault_monitor_task(void *arg)
                         rfic_status = _read_rfic_reg(
                             dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
                     }
+                } else if (status == 0 &&
+                           (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
+                               RF_LINK_STATUS_VERSION_1 &&
+                           (rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
+                    rx_fault_causes_status = nios_rx_fault_causes_read(
+                        dev, &rx_fault_causes);
+                    rx_fault_causes_valid = rx_fault_causes_status == 0 &&
+                        (rx_fault_causes & 0x1fu) != 0;
                 }
             }
         });
@@ -661,7 +672,10 @@ static void *rx_fault_monitor_task(void *arg)
         }
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, rf_link_status,
+                dev, epoch_id,
+                rx_fault_causes_valid
+                    ? (0x80000000u | (rx_fault_causes & 0x1fu))
+                    : rf_link_status,
                 BLADERF_RF_INVALIDATE_FPGA_RX_FAULT, 0);
             continue;
         }

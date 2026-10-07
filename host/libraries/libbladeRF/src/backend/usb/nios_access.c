@@ -987,6 +987,12 @@ int nios_rf_link_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_rx_fault_causes_read(struct bladerf *dev, uint32_t *value)
+{
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES, 0,
+                          value);
+}
+
 int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value)
 {
     int status;

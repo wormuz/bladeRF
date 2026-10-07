@@ -297,6 +297,15 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_ts_hi_wire_sys  : std_logic_vector(31 downto 0);
     signal rx_epoch_ts_hi_sys       : std_logic_vector(31 downto 0) := (others => '0');
 
+    -- Transfer sticky RX writer causes as a coherent snapshot. A five-bit
+    -- vector must not cross through independent synchronizers because two
+    -- causes may assert together and appear as a transient combination.
+    signal rx_fault_causes_word     : std_logic_vector(31 downto 0);
+    signal rx_fault_causes_req_sys  : std_logic := '0';
+    signal rx_fault_causes_ack_sys  : std_logic;
+    signal rx_fault_causes_wire_sys : std_logic_vector(31 downto 0);
+    signal rx_fault_causes_sys      : std_logic_vector(31 downto 0) := (others => '0');
+
     -- Status fields as produced by U_rx_epoch_gate in rx.vhd (rx_clock
     -- domain, source side of the three handshakes above).
     signal rx_epoch_id_out_rx       : unsigned(7 downto 0);
@@ -804,6 +813,7 @@ begin
             rx_epoch_status_export           => rx_epoch_status_sys,
             rx_epoch_ts_lo_export            => rx_epoch_ts_lo_sys,
             rx_epoch_ts_hi_export            => rx_epoch_ts_hi_sys,
+            rx_fault_causes_export           => rx_fault_causes_sys,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
@@ -1399,6 +1409,45 @@ begin
         elsif( rising_edge(sys_clock) ) then
             if( rx_epoch_ts_hi_ack_sys = '1' ) then
                 rx_epoch_ts_hi_sys <= rx_epoch_ts_hi_wire_sys;
+            end if;
+        end if;
+    end process;
+
+    rx_fault_causes_word <= (31 downto 5 => '0') & rx_fault_sticky;
+
+    U_rx_fault_causes_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => rx_reset,
+            source_clock => rx_clock,
+            source_data  => rx_fault_causes_word,
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => rx_fault_causes_wire_sys,
+            dest_req     => rx_fault_causes_req_sys,
+            dest_ack     => rx_fault_causes_ack_sys
+        );
+
+    drive_handshake_rx_fault_causes : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_fault_causes_req_sys <= '0';
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_fault_causes_ack_sys = '0' ) then
+                rx_fault_causes_req_sys <= '1';
+            else
+                rx_fault_causes_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_fault_causes_capture : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_fault_causes_sys <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_fault_causes_ack_sys = '1' ) then
+                rx_fault_causes_sys <= rx_fault_causes_wire_sys;
             end if;
         end if;
     end process;

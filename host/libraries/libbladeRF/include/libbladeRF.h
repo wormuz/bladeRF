@@ -4835,6 +4835,15 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_BOOTLOADER (1U << 17)
 /** Sticky FPGA RX data-link fault observed during a certified epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
+/** `rfic_status` marker for an RX fault event with a coherent FPGA cause
+ * snapshot in its low bits. Legacy FPGA images retain the RF link status
+ * word in `rfic_status` and omit this marker. */
+#define BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID (1U << 31)
+#define BLADERF_RF_FPGA_RX_FAULT_SPEED_MISMATCH (1U << 0)
+#define BLADERF_RF_FPGA_RX_FAULT_START_NO_PROGRESS (1U << 1)
+#define BLADERF_RF_FPGA_RX_FAULT_GPIF_TIMEOUT (1U << 2)
+#define BLADERF_RF_FPGA_RX_FAULT_PROTOCOL_ERROR (1U << 3)
+#define BLADERF_RF_FPGA_RX_FAULT_FIFO_ABORT (1U << 4)
 /** FPGA RX-integrity status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
 /** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */
@@ -4853,6 +4862,7 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_WISHBONE (1U << 27)
 /** Feature mode changes sample-rate/format interpretation for RX. */
 #define BLADERF_RF_INVALIDATE_FEATURE (1U << 28)
+
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)
 

@@ -372,6 +372,20 @@ set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
 set_instance_parameter_value rf_link_status {width} {32}
 
+# RX FIFO-writer sticky causes, captured coherently from rx_clock.
+add_instance rx_fault_causes altera_avalon_pio
+set_instance_parameter_value rx_fault_causes {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rx_fault_causes {bitModifyingOutReg} {0}
+set_instance_parameter_value rx_fault_causes {captureEdge} {0}
+set_instance_parameter_value rx_fault_causes {direction} {Input}
+set_instance_parameter_value rx_fault_causes {edgeType} {RISING}
+set_instance_parameter_value rx_fault_causes {generateIRQ} {0}
+set_instance_parameter_value rx_fault_causes {irqType} {LEVEL}
+set_instance_parameter_value rx_fault_causes {resetValue} {0.0}
+set_instance_parameter_value rx_fault_causes {simDoTestBenchWiring} {0}
+set_instance_parameter_value rx_fault_causes {simDrivenValue} {0.0}
+set_instance_parameter_value rx_fault_causes {width} {32}
+
 # ADR-0207 BLADE_RF_EVENT_DRIVEN_RF_STATE_001: RX epoch gate control/
 # status. Separate from rf_link_cfg/status: that pair gates USB-speed
 # epoch (start/stop of the whole RX/TX stream), this set gates data
@@ -698,6 +712,7 @@ add_interface tx_trigger_ctl conduit end
 set_interface_property tx_trigger_ctl EXPORT_OF tx_trigger_ctl.external_connection
 add_interface xb_gpio conduit end
 set_interface_property rf_link_status EXPORT_OF rf_link_status.external_connection
+set_interface_property rx_fault_causes EXPORT_OF rx_fault_causes.external_connection
 set_interface_property rx_epoch_ctrl EXPORT_OF rx_epoch_ctrl.external_connection
 set_interface_property rx_epoch_status EXPORT_OF rx_epoch_status.external_connection
 set_interface_property rx_epoch_ts_lo EXPORT_OF rx_epoch_ts_lo.external_connection
@@ -843,6 +858,10 @@ add_connection nios2.data_master rf_link_status.s1
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 baseAddress {0x9520}
 set_connection_parameter_value nios2.data_master/rf_link_status.s1 defaultConnection {0}
+add_connection nios2.data_master rx_fault_causes.s1
+set_connection_parameter_value nios2.data_master/rx_fault_causes.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rx_fault_causes.s1 baseAddress {0x9680}
+set_connection_parameter_value nios2.data_master/rx_fault_causes.s1 defaultConnection {0}
 
 add_connection nios2.data_master rx_epoch_ctrl.s1
 set_connection_parameter_value nios2.data_master/rx_epoch_ctrl.s1 arbitrationPriority {1}
@@ -962,6 +981,7 @@ add_connection system_clock.clk dwell_readout.clk
 add_connection system_clock.clk dwell_status.clk
 foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk $pio.clk }
 add_connection system_clock.clk rf_link_status.clk
+add_connection system_clock.clk rx_fault_causes.clk
 add_connection system_clock.clk rx_epoch_ctrl.clk
 add_connection system_clock.clk rx_epoch_status.clk
 add_connection system_clock.clk rx_epoch_ts_lo.clk
@@ -1012,6 +1032,7 @@ add_connection system_clock.clk_reset dwell_readout.reset
 add_connection system_clock.clk_reset dwell_status.reset
 foreach pio {rx_overflow_count_lo rx_overflow_count_hi tx_underflow_count_lo tx_underflow_count_hi} { add_connection system_clock.clk_reset $pio.reset }
 add_connection system_clock.clk_reset rf_link_status.reset
+add_connection system_clock.clk_reset rx_fault_causes.reset
 add_connection system_clock.clk_reset rx_epoch_ctrl.reset
 add_connection system_clock.clk_reset rx_epoch_status.reset
 add_connection system_clock.clk_reset rx_epoch_ts_lo.reset

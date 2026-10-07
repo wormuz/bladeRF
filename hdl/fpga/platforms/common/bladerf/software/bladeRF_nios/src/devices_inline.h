@@ -104,6 +104,18 @@ static inline uint32_t rf_link_status_read(void)
     #endif
 }
 
+/* Coherent RX writer sticky-cause snapshot. The FPGA returns zero on old
+ * images that do not instantiate this read-only PIO; callers must continue
+ * to use RF_LINK_STATUS bit 14 as the compatibility aggregate. */
+static inline uint32_t rx_fault_causes_read(void)
+{
+    #ifdef RX_FAULT_CAUSES_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_FAULT_CAUSES_BASE);
+    #else
+    return 0;
+    #endif
+}
+
 /* Loss counters, 64 bits each across two PIOs.
  *
  * The fabric has always counted these -- every RX sample the writer had to

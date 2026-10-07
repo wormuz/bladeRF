@@ -82,6 +82,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
         case NIOS_PKT_8x32_TARGET_RF_LINK_STATUS:
             *data = rf_link_status_read();
             break;
+
+        case NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES:
+            *data = rx_fault_causes_read();
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
