@@ -72,6 +72,29 @@ int main(void)
         assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
     }
 
+    /* A completed buffer outside the reorder window is forwarded only with
+     * an explicit discontinuity pending for the sync reader. */
+    {
+        struct bladerf_sync sync = {0};
+        sync.buf_mgmt.expected_seq = 10;
+        sync.buf_mgmt.reorder_limit = 2;
+        assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+        assert(COND_INIT(&sync.buf_mgmt.buf_ready) == 0);
+
+        MUTEX_LOCK(&sync.buf_mgmt.lock);
+        assert(sync_worker_rx_reorder_buffer(&sync, 11, 0, 64));
+        assert(sync.buf_mgmt.reorder_len == 1);
+        assert(!sync.buf_mgmt.overrun_pending);
+        assert(!sync.buf_mgmt.stale_pending);
+
+        assert(!sync_worker_rx_reorder_buffer(&sync, 13, 1, 64));
+        assert(sync.buf_mgmt.overrun_pending);
+        assert(sync.buf_mgmt.stale_pending);
+        MUTEX_UNLOCK(&sync.buf_mgmt.lock);
+
+        assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+    }
+
     /* Rejected completions may arrive out of order around the sequence wrap.
      * Once the missing head sequence is retired, queued tombstones must flush
      * in order instead of leaving expected_seq permanently behind. */

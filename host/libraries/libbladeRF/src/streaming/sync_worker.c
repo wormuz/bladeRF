@@ -172,6 +172,39 @@ static void note_rx_overrun(struct buffer_mgmt *b)
     }
 }
 
+bool sync_worker_rx_reorder_buffer(struct bladerf_sync *s, uint32_t seq,
+                                   unsigned int buffer_idx,
+                                   size_t num_samples)
+{
+    struct buffer_mgmt *b = &s->buf_mgmt;
+    const uint32_t distance = seq - b->expected_seq;
+
+    if (distance == 0) {
+        return false;
+    }
+
+    if (distance <= b->reorder_limit &&
+        hold_out_of_order_buffer(b, seq, buffer_idx, num_samples, false)) {
+        return true;
+    }
+
+    if (distance > b->reorder_limit) {
+        log_warning("RX reorder distance %u exceeds window %u; "
+                    "forwarding buffer %u (expected %u)\n",
+                    distance, b->reorder_limit, buffer_idx, b->expected_seq);
+    } else {
+        log_warning("RX reorder window full (limit=%u); forwarding buffer %u "
+                    "(seq=%u, expected=%u)\n",
+                    b->reorder_limit, buffer_idx, seq, b->expected_seq);
+    }
+
+    /* The caller may forward the payload, but consumers must be told that
+     * worker ordering could not be preserved. META callers see the overrun
+     * bit and validate timestamps; sample-only sync reads fail closed. */
+    note_rx_overrun(b);
+    return false;
+}
+
 void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
 {
     struct bladerf_sync *s = user_data;
@@ -307,30 +340,9 @@ static void *rx_callback(struct bladerf *dev,
                 seq = b->buffer_seq[samples_idx];
 
                 if (seq != b->expected_seq) {
-                    const uint32_t distance = seq - b->expected_seq;
-
-                    if (distance != 0 && distance <= b->reorder_limit) {
-                        if (hold_out_of_order_buffer(b, seq, samples_idx,
-                                                     num_samples, false)) {
-                            release_now = false;
-                            log_verbose("%s worker: buf[%u] held for reorder "
-                                        "(seq=%u expect=%u)\n",
-                                        worker2str(s), samples_idx, seq,
-                                        b->expected_seq);
-                        } else {
-                            log_warning("%s worker: RX reorder window full "
-                                        "(limit=%u). Forwarding buf[%u] "
-                                        "(seq=%u, expect=%u).\n",
-                                        worker2str(s), b->reorder_limit,
-                                        samples_idx, seq, b->expected_seq);
-                            note_rx_overrun(b);
-                        }
-                    } else if (distance != 0) {
-                        log_warning("%s worker: RX reorder distance %u exceeds "
-                                    "window %u. Forwarding buf[%u].\n",
-                                    worker2str(s), distance, b->reorder_limit,
-                                    samples_idx);
-                        note_rx_overrun(b);
+                    if (sync_worker_rx_reorder_buffer(
+                            s, seq, samples_idx, num_samples)) {
+                        release_now = false;
                     }
                 }
             }

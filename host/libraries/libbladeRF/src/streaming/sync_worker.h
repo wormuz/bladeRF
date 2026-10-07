@@ -130,4 +130,11 @@ void sync_worker_submit_request(struct sync_worker *w, unsigned int request);
 /* async.c calls this for each RX transfer withheld before rx_callback(). */
 void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
 
+/* Hold an out-of-order RX buffer for later ordered delivery when it fits the
+ * reorder window. Otherwise mark a discontinuity and wake sync_rx. The caller
+ * must hold sync->buf_mgmt.lock. Returns true when the buffer was held. */
+bool sync_worker_rx_reorder_buffer(struct bladerf_sync *sync, uint32_t seq,
+                                   unsigned int buffer_idx,
+                                   size_t num_samples);
+
 #endif
