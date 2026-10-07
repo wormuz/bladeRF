@@ -568,7 +568,11 @@ int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 /* Gain */
 /******************************************************************************/
 
-int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
+/* Apply a gain target while dev->lock is held. Keeping this operation
+ * separate lets compound gain-calibration changes reserve/fence RX once and
+ * update the policy bit and physical gain as one serialized transaction. */
+static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
+                           bool *gain_applied_out)
 {
     int status;
     bladerf_gain_mode gain_mode  = BLADERF_GAIN_MGC;
@@ -578,12 +582,6 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     bladerf_frequency freq;
     bladerf_gain old_gain_target;
     bladerf_gain assigned_gain = gain;
-    status = invalidate_rx_data_before_reconfigure(
-        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
-    if (status != 0) {
-        return status;
-    }
-    MUTEX_LOCK(&dev->lock);
     old_gain_target = dev->gain_tbls[ch].gain_target;
 
     /* The RFIC only accepts a manual gain value while it is in MGC: the
@@ -647,6 +645,22 @@ error:
     if (!gain_applied) {
         dev->gain_tbls[ch].gain_target = old_gain_target;
     }
+    if (gain_applied_out != NULL) {
+        *gain_applied_out = gain_applied;
+    }
+    return status;
+}
+
+int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
+{
+    int status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
+    if (status != 0) {
+        return status;
+    }
+
+    MUTEX_LOCK(&dev->lock);
+    status = set_gain_locked(dev, ch, gain, NULL);
     MUTEX_UNLOCK(&dev->lock);
     rx_reconfigure_complete(dev, ch);
     return status;
@@ -2581,15 +2595,44 @@ error:
 int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, bool en)
 {
     CHECK_NULL(dev);
-    int status = 0;
+    int status;
+    bool previous_enabled;
+    bool gain_applied;
+    bladerf_gain gain_target;
 
+    MUTEX_LOCK(&dev->lock);
     if (dev->gain_tbls[ch].state == BLADERF_GAIN_CAL_UNINITIALIZED) {
         log_warning("%s: Gain calibration not loaded\n", __FUNCTION__);
+        MUTEX_UNLOCK(&dev->lock);
         return 0;
     }
+    MUTEX_UNLOCK(&dev->lock);
 
-    dev->gain_tbls[ch].enabled = en;
-    status = bladerf_set_gain(dev, ch, dev->gain_tbls[ch].gain_target);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
+    if (status != 0) {
+        return status;
+    }
+
+    MUTEX_LOCK(&dev->lock);
+    if (dev->gain_tbls[ch].state == BLADERF_GAIN_CAL_UNINITIALIZED) {
+        /* The table became unavailable after the preflight check. Do not
+         * mutate device configuration or leave the setter reservation held. */
+        status = 0;
+    } else {
+        previous_enabled = dev->gain_tbls[ch].enabled;
+        gain_target = dev->gain_tbls[ch].gain_target;
+        dev->gain_tbls[ch].enabled = en;
+        status = set_gain_locked(dev, ch, gain_target, &gain_applied);
+        if (status != 0 && !gain_applied) {
+            /* A failed gain write must not publish a calibration policy that
+             * the hardware never received. RX remains fenced until recovery. */
+            dev->gain_tbls[ch].enabled = previous_enabled;
+        }
+    }
+    MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
+
     if (status != 0) {
         log_error("%s: Failed to reset gain.\n", __FUNCTION__);
         return status;

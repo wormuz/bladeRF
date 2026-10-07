@@ -4419,6 +4419,12 @@ int CALL_CONV bladerf_print_gain_calibration(struct bladerf *dev,
  * etc.) to set gain calibration for.
  * @param[in] en   `true` to enable or `false` to disable gain calibration.
  *
+ * For RX, this operation invalidates the current RX data epoch before
+ * applying the corrected gain. A failed fence or gain write leaves the
+ * previous calibration enable state in effect; RX data remains invalid until
+ * a successful RX transition. If another RX transition or setter owns the
+ * configuration, this call may return `BLADERF_ERR_WOULD_BLOCK`.
+ *
  * @return 0 on success, or a `BLADERF_ERR_*` code on failure (e.g., if
  * calibration table is not initialized).
  */
