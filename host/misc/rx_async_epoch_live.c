@@ -60,7 +60,6 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
 {
     struct live_stream *live = user_data;
     (void)stream;
-    (void)metadata;
 
     if (atomic_load(&live->stop)) {
         return BLADERF_STREAM_SHUTDOWN;
@@ -133,6 +132,21 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     const size_t samples_per_timestamp =
         live->active_mode == LIVE_RX_ACTIVE_BOTH ?
             LIVE_RX_X2_SAMPLES_PER_TIMESTAMP : 1u;
+    uint8_t first_epoch_id = 0;
+    if (received_bytes < LIVE_RX_META_MESSAGE_SIZE ||
+        !metadata->rx_epoch_id_valid || metadata->actual_count != num_samples ||
+        !metadata_get_rx_epoch_id(bytes, &first_epoch_id) ||
+        metadata->rx_epoch_id != first_epoch_id ||
+        metadata->timestamp != metadata_get_timestamp(bytes)) {
+        atomic_store(&live->event_query_status, BLADERF_ERR_UNEXPECTED);
+        fprintf(stderr, "async callback metadata mismatch: count=%u/%zu "
+                "epoch_valid=%u epoch=%u first_epoch=%u timestamp=%llu "
+                "first_timestamp=%llu\n", metadata->actual_count, num_samples,
+                metadata->rx_epoch_id_valid, metadata->rx_epoch_id,
+                first_epoch_id, (unsigned long long)metadata->timestamp,
+                (unsigned long long)metadata_get_timestamp(bytes));
+        return BLADERF_STREAM_SHUTDOWN;
+    }
     for (size_t offset = 0; offset + LIVE_RX_META_MESSAGE_SIZE <= received_bytes;
          offset += LIVE_RX_META_MESSAGE_SIZE) {
         const uint8_t *header = bytes + offset;

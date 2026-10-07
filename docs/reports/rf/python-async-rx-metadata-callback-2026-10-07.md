@@ -42,8 +42,12 @@ event notification path and do not invoke the IQ callback.
 - Native sync/async traversal regression and transition policy pass.
 - Python wrapper suite: 27 passed against the rebuilt libbladeRF.
 - Worker-stop regression and HDL `qcheck` pass.
+- The strengthened xA4 live async harness compiles with `-Werror` and now
+  compares callback metadata against the first META header. The attempted live
+  RX1 run could not open the board: USB enumeration succeeded, but the FPGA
+  version control read timed out before streaming began. No hardware result is
+  claimed for this callback change.
 - `git diff --check`: passed.
-- No live hardware callback qualification was performed for this change.
 
 The callback exposes metadata supplied by native libbladeRF; it does not
 independently certify RF analog settling or decoder success.
