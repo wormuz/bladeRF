@@ -40,6 +40,9 @@ invalidation path; the causes are not channel-specific.
   decoding simultaneous GPIF-timeout and FIFO-abort causes.
 - The existing RX epoch gate testbench passes for single-lane and paired
   RX_X2 behavior.
+- The consolidated `host/misc/run_rx_epoch_gate_tb.sh` now also runs the
+  asynchronous 32-bit handshake re-arm test used by the coherent cause
+  snapshot; the complete runner passed.
 
 ## Remaining hardware check
 
