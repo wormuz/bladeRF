@@ -4927,7 +4927,12 @@ typedef enum {
  * RX_X1 stream configuration/start is rejected while that request is active.
  * For synchronous RX, an application sync_rx consumer must run concurrently
  * with rx_transition_wait so the first valid buffer can be produced; wait
- * does not consume or discard application IQ. */
+ * does not consume or discard application IQ. If a required stream format,
+ * layout, or enabled-channel mask makes that first buffer impossible, wait
+ * fails immediately with BLADERF_ERR_UNSUPPORTED and the RF event history
+ * retains the reason-coded format/layout/channel-selection notification.
+ * Recoverable data withholding does not satisfy the requirement and remains
+ * subject to the transaction deadline. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
 /** Requires a sample-backed FPGA RX epoch (stronger than software arm). */
