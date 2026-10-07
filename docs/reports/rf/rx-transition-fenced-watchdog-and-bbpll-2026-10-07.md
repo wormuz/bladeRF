@@ -50,10 +50,19 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
   writer abort, and writer enable testbenches together. The consolidated
   runner passed with GHDL 5.0.1 in this worktree.
 - Quartus Prime 25.1std full flow passed for the xA4 Cyclone V `sweep`
-  revision in an isolated copy of the existing project: Analysis & Synthesis
-  0 errors, Fitter 0 errors, Timing Analyzer 0 errors, Assembler 0 errors.
-  The flow generated a 2,632,660-byte `sweep.rbf`; the temporary build copy
-  was discarded after collecting the result, so the image was not programmed.
+  revision: Analysis & Synthesis 0 errors, Fitter 0 errors, Timing Analyzer
+  0 errors, Assembler 0 errors. Across 32 setup and 32 hold corners, the
+  minimum slack is +0.482 ns setup and +0.011 ns hold; TNS is 0.000 in every
+  corner. The minimum hold margin is small and remains a timing watch item.
+- The retained build is
+  `hdl/quartus/work/adr0207-rx-fence-xa4/output_files/sweep.rbf` (2,632,660
+  bytes, SHA-256
+  `b8710635e9dc2ad202bd5d239fb2fe2adb1af2863e2878ec0ca3bbc9bb4be3e4`).
+  Its fit, STA, and full-flow reports are in the adjacent `output_files`
+  directory. It was loaded to the connected xA4 with `bladeRF-cli -l`; the
+  CLI used `BLADERF_SKIP_FPGA_SIZE_CHECK=1` because this unit's FPGA-size
+  readback is unsupported. The RBF is an xA4 image of the expected fixed
+  2,632,660-byte size. It was not written to flash.
 - Quartus exposed an integration error missed by unit testbenches: the RX
   entity read its `rx_epoch_discard_active` output while wiring the FIFO
   writer. An internal `rx_epoch_discard_active_local` signal now drives both
@@ -71,11 +80,17 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
 - Python RF event notification tests passed (11 tests).
 - Existing production xA4 transition-validity test passed.
 
-## Qualification limit
+## Hardware qualification
 
-The connected xA4 still runs FPGA v0.16.1, which does not contain the new
-`rx_epoch_discard_active` watchdog behavior. The modified FPGA now passes
-Quartus synthesis, fitting, timing analysis, and image assembly, but that image
-has not yet been loaded onto the board. The long-timeout recovery case must be
-rerun on the new image to qualify this specific FPGA fix. No timeout or sample
-discard is accepted as evidence that IQ is valid.
+The board reports FPGA version v0.16.1 for both the previous and newly loaded
+image because this build does not change the encoded version string. The new
+image was verified by loading the retained RBF and exercising the changed
+watchdog behavior directly. `rx_transition_validity_live` passed, and
+`run_rx_epoch_positive_timeout_live.sh` passed on RX1, RX2, and paired RX_X2.
+For RFPLL, ENSM, BBPLL, and FPGA epoch stalls, each injected 100 ms timeout
+returned a timeout error, withheld IQ, then recovered only after a fresh
+event-driven transition. Thus the fence remains valid for longer than the old
+34–68 ms no-progress watchdog interval without a sticky writer fault.
+
+Timeout or sample discard is never accepted as evidence that IQ is valid; only
+the successful post-timeout event-driven recovery established a valid epoch.
