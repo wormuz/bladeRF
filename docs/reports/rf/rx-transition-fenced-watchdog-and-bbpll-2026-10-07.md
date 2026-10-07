@@ -46,6 +46,9 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
   enable testbenches passed. The new test holds a fence longer than its
   shortened test watchdog, verifies no sticky fault, then drops the fence and
   confirms no-progress detection resumes.
+- `host/misc/run_rx_epoch_gate_tb.sh` now runs the epoch-gate, writer fence,
+  writer abort, and writer enable testbenches together. The consolidated
+  runner passed with GHDL 5.0.1 in this worktree.
 - libbladeRF requirement-policy test passed; production shared-library build
   passed.
 - Test-build xA4 runtime BBPLL-loss injection passed for RX1, RX2, and RX_X2:
