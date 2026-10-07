@@ -2488,8 +2488,11 @@ const char * CALL_CONV bladerf_format_to_string(bladerf_format format);
 #define BLADERF_META_FLAG_RX_NOW (1 << 31)
 
 /**
- * This flag is asserted in bladerf_metadata.status by the hardware when an
- * underflow is detected in the sample buffering system on the device.
+ * This flag is asserted in bladerf_metadata.status by the hardware when a
+ * TX sample-buffer underrun has been latched. The FPGA reports this status
+ * in RX metadata; it does not indicate an RX sample discontinuity. RX
+ * continuity must be determined from RX timestamps (and the corresponding
+ * RX stream-overrun event when a discontinuity is detected).
  */
 #define BLADERF_META_FLAG_RX_HW_UNDERFLOW (1 << 0)
 
