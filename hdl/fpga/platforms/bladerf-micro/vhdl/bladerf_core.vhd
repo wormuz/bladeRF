@@ -260,11 +260,7 @@ architecture core_bladerf of bladerf_core is
     --   bits 15:8  host epoch_id
     -- No sample-count discard control exists in this path.
     signal rx_epoch_ctrl_word       : std_logic_vector(31 downto 0);
-    signal rx_epoch_ctrl_req_rx     : std_logic := '0';
-    signal rx_epoch_ctrl_ack_rx     : std_logic;
-    signal rx_epoch_ctrl_wire_rx    : std_logic_vector(31 downto 0);
     signal rx_epoch_ctrl_rx         : std_logic_vector(31 downto 0) := (others => '0');
-    signal rx_epoch_ctrl_prev_rx    : std_logic_vector(2 downto 0) := (others => '0');
     signal rx_epoch_meta_enable_rx  : std_logic := '0';
     signal rx_epoch_complete_seen_rx : std_logic := '0';
 
@@ -1195,91 +1191,24 @@ begin
         end if;
     end process;
 
-    -- RX transition commands cross sys_clock -> rx_clock as one bundled
-    -- word so epoch_id stays paired with the toggle that names it.
-    U_rx_epoch_ctrl_handshake : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
+    -- One production-tested block owns the bundled sys_clock -> rx_clock
+    -- handshake and toggle decode. Keeping this with the gate lets GHDL
+    -- exercise real ABORT/ARM/COMPLETE crossings instead of idealized pulses.
+    U_rx_epoch_controller : entity work.rx_epoch_controller
         port map (
-            source_reset => sys_reset,
-            source_clock => sys_clock,
-            source_data  => rx_epoch_ctrl_word,
-            dest_reset   => rx_reset,
-            dest_clock   => rx_clock,
-            dest_data    => rx_epoch_ctrl_wire_rx,
-            dest_req     => rx_epoch_ctrl_req_rx,
-            dest_ack     => rx_epoch_ctrl_ack_rx
+            source_clock  => sys_clock,
+            source_reset  => sys_reset,
+            source_control => rx_epoch_ctrl_word,
+            rx_clock      => rx_clock,
+            rx_reset      => rx_reset,
+            rx_control    => rx_epoch_ctrl_rx,
+            epoch_arm     => rx_epoch_arm_rx,
+            epoch_complete => rx_epoch_complete_rx,
+            epoch_abort   => rx_epoch_abort_rx,
+            epoch_id      => rx_epoch_id_in_rx,
+            meta_enable   => rx_epoch_meta_enable_rx,
+            complete_seen => rx_epoch_complete_seen_rx
         );
-
-    drive_handshake_rx_epoch_ctrl : process( rx_clock, rx_reset )
-    begin
-        if( rx_reset = '1' ) then
-            rx_epoch_ctrl_req_rx <= '0';
-        elsif( rising_edge(rx_clock) ) then
-            if( rx_epoch_ctrl_ack_rx = '0' ) then
-                rx_epoch_ctrl_req_rx <= '1';
-            else
-                rx_epoch_ctrl_req_rx <= '0';
-            end if;
-        end if;
-    end process;
-
-    rx_epoch_ctrl_capture : process( rx_clock, rx_reset )
-    begin
-        if( rx_reset = '1' ) then
-            rx_epoch_ctrl_rx <= (others => '0');
-        elsif( rising_edge(rx_clock) ) then
-            if( rx_epoch_ctrl_ack_rx = '1' ) then
-                rx_epoch_ctrl_rx <= rx_epoch_ctrl_wire_rx;
-            end if;
-        end if;
-    end process;
-
-    -- Toggle-edge decode of rx_epoch_ctrl_rx, same shape as
-    -- rf_link_controller's start/stop/clear_fault decode: a changed bit
-    -- produces a one-cycle pulse, a repeated write of the same word
-    -- produces none. epoch_id is captured unconditionally every cycle
-    -- (it is a field, not a command) -- but it is only MEANINGFUL at the
-    -- moment arm/complete/abort pulses, which is exactly when
-    -- rx_epoch_gate reads it (ADR requirement: epoch_id must never be
-    -- observed out of sync with the command that named it -- satisfied
-    -- here because both come from the same captured word on the same
-    -- cycle, never two different handshake transfers).
-    rx_epoch_ctrl_decode : process( rx_clock, rx_reset )
-    begin
-        if( rx_reset = '1' ) then
-            rx_epoch_ctrl_prev_rx <= (others => '0');
-            rx_epoch_arm_rx       <= '0';
-            rx_epoch_complete_rx  <= '0';
-            rx_epoch_abort_rx     <= '0';
-            rx_epoch_id_in_rx     <= (others => '0');
-            rx_epoch_meta_enable_rx <= '0';
-            rx_epoch_complete_seen_rx <= '0';
-        elsif( rising_edge(rx_clock) ) then
-            rx_epoch_arm_rx      <= '0';
-            rx_epoch_complete_rx <= '0';
-            rx_epoch_abort_rx    <= '0';
-
-            if( rx_epoch_ctrl_rx(0) /= rx_epoch_ctrl_prev_rx(0) ) then
-                rx_epoch_arm_rx <= '1';
-            end if;
-            if( rx_epoch_ctrl_rx(1) /= rx_epoch_ctrl_prev_rx(1) ) then
-                rx_epoch_complete_rx <= '1';
-            end if;
-            if( rx_epoch_ctrl_rx(2) /= rx_epoch_ctrl_prev_rx(2) ) then
-                rx_epoch_abort_rx <= '1';
-            end if;
-
-            rx_epoch_ctrl_prev_rx <= rx_epoch_ctrl_rx(2 downto 0);
-            rx_epoch_id_in_rx     <= unsigned(rx_epoch_ctrl_rx(15 downto 8));
-            rx_epoch_meta_enable_rx <= rx_epoch_ctrl_rx(16);
-
-            if( rx_epoch_arm_rx = '1' ) then
-                rx_epoch_complete_seen_rx <= '0';
-            elsif( rx_epoch_complete_rx = '1' ) then
-                rx_epoch_complete_seen_rx <= '1';
-            end if;
-        end if;
-    end process;
 
     -- ADR-0207 §6: rx_epoch_status crossing (rx_clock -> sys_clock), same
     -- direction/shape as U_handshake_rx_overflow below. Three separate
