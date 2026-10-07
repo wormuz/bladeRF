@@ -139,12 +139,13 @@ expect_count() {
 # crossings exist. If one of these ever differs between sizes, that means the
 # revision instantiates something conditionally and the difference is the news.
 #
-# The handshake count differs by revision. Sweep currently has 13 constrained
+# The handshake count differs by revision. Sweep currently has 14 constrained
 # pairs: the hosted crossings plus dwell config, RX epoch control/status and
-# timestamps, and the pre-trigger address bundled-data crossing. Keeping this
-# count exact makes a newly added or dropped CDC pair visible to qgate.
-if grep -q 'revision sweep' "$f" 2>/dev/null; then
-    hs_expect=13
+# timestamps, pre-trigger address bundled-data crossing, and runtime RX status
+# monitor. Keeping this count exact makes a newly added or dropped CDC pair
+# visible to qgate.
+if grep -qiE 'revision[[:space:]]+name[[:space:]]*=[[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
+    hs_expect=14
 else
     hs_expect=5
 fi
