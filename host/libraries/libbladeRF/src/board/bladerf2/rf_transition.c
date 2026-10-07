@@ -194,8 +194,7 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
 
     if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE &&
         state != NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
-        status = nios_rx_epoch_ctrl_cmd(
-            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+        status = _rx_epoch_abort_command(dev);
         if (status != 0) {
             return status;
         }
