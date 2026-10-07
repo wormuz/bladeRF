@@ -239,6 +239,7 @@ struct sync_meta {
             uint8_t msg_epoch_id;
             bool msg_epoch_id_valid;
             bool msg_epoch_filtered_out;
+            bool msg_channel_filtered_out;
         };
 
         /* Used only for TX */

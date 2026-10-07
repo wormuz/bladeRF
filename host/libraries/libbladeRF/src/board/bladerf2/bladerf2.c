@@ -1700,6 +1700,28 @@ static void bladerf2_rx_sync_data_valid_cb(
     bladerf2_rx_transition_note_first_packet(dev, metadata, layout);
 }
 
+static bool bladerf2_rx_sync_channel_selection_valid(
+    struct bladerf *dev, bladerf_channel_layout layout)
+{
+    struct bladerf2_board_data *board_data;
+    bool contract_enabled;
+    bool matches;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return false;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    matches = !contract_enabled ||
+        bladerf2_rx_layout_matches_channel_mask(
+            layout, board_data->rf_transition_current_channel,
+            board_data->rx_channel_enable_mask_valid,
+            board_data->rx_channel_enable_mask);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return matches;
+}
+
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
@@ -1846,6 +1868,17 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             bladerf2_rx_data_withheld(
                 dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            return false;
+        }
+        if (!bladerf2_rx_layout_matches_channel_mask(
+                layout, board_data->rf_transition_current_channel,
+                board_data->rx_channel_enable_mask_valid,
+                board_data->rx_channel_enable_mask)) {
+            uint64_t rejected_timestamp = metadata_get_timestamp(bytes);
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_rx_data_withheld_at(
+                dev, BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION, epoch_id,
+                rejected_timestamp, true);
             return false;
         }
         if (!metadata_rx_epoch_commit_timestamp(
@@ -3790,6 +3823,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_sync_data_valid, bladerf2_rx_sync_data_valid_cb),
+    FIELD_INIT(.rx_sync_channel_selection_valid,
+               bladerf2_rx_sync_channel_selection_valid),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
     FIELD_INIT(.rx_worker_stream_overrun,
                bladerf2_rx_worker_stream_overrun),

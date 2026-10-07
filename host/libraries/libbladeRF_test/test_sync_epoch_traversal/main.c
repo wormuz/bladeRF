@@ -72,6 +72,15 @@ static unsigned int sync_event_order;
 static unsigned int sync_host_data_order;
 static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
+static bool allow_sync_channel_selection = true;
+
+static bool validate_sync_channel_selection(
+    struct bladerf *dev, bladerf_channel_layout layout)
+{
+    assert(dev != NULL);
+    assert(layout == BLADERF_RX_X1 || layout == BLADERF_RX_X2);
+    return allow_sync_channel_selection;
+}
 
 static void note_sync_host_data(struct bladerf *dev,
                                 const struct bladerf_metadata *metadata,
@@ -187,6 +196,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
     .rx_sync_data_valid = note_sync_host_data,
+    .rx_sync_channel_selection_valid = validate_sync_channel_selection,
     .rx_async_stream_overrun = note_async_overrun,
     .rx_worker_stream_overrun = note_worker_overrun,
     .rx_data_withheld = note_sync_withheld,
@@ -273,6 +283,34 @@ static void receive(struct fixture *f, int16_t *out, unsigned int count,
     meta->flags = BLADERF_META_FLAG_RX_NOW;
     assert(sync_rx(&f->sync, out, count, meta, 0) == 0);
     assert(meta->actual_count == count);
+}
+
+static void test_sync_channel_selection_fail_closed(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta = {0};
+    int16_t out[64];
+
+    fixture_init(&f);
+    for (size_t i = 0; i < sizeof(out) / sizeof(out[0]); ++i) {
+        out[i] = 0x5a5a;
+    }
+    write_msg(f.buffers[0], 1000, 7, 2222);
+    allow_sync_channel_selection = false;
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 32, &meta, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(meta.actual_count == 0);
+    for (size_t i = 0; i < sizeof(out) / sizeof(out[0]); ++i) {
+        assert(out[i] == 0x5a5a);
+    }
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_epochs[0] == 7);
+    assert(sync_withheld_timestamps[0] == 1000);
+    assert(sync_host_data_events == 0);
+    allow_sync_channel_selection = true;
+    fixture_destroy(&f);
 }
 
 static void assert_marker(const int16_t *iq, unsigned int count,
@@ -932,6 +970,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_sync_channel_selection_fail_closed();
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META,
                                      BLADERF_META_FLAG_RX_NOW));
