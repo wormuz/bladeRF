@@ -3001,14 +3001,18 @@ struct bladerf_stream;
  * buffers, the caller must ensure that if one thread is processing samples in a
  * buffer, that this buffer is not returned via the callback's return value.
  *
- * As of libbladeRF v0.15.0, is guaranteed that only one callback from a stream
- * will occur at a time. (i.e., a second TX callback will not fire while one is
- * currently being handled.)  To achieve this, while a callback is executing, a
- * per-stream lock is held. It is important to consider this when thinking about
- * the order of lock acquisitions both in the callbacks, and the code
- * surrounding bladerf_submit_stream_buffer().
+ * Only one callback from a stream will execute at a time. RX callbacks run
+ * without the per-stream lock held so callback code can acquire stream state
+ * through the API; the backend reacquires the lock before processing the
+ * callback result. TX callbacks retain the existing lock behavior. Callbacks
+ * still execute on backend streaming threads, so the API user must keep them
+ * short and thread safe.
  *
  * @note Do not call bladerf_submit_stream_buffer() from a callback.
+ * @note Do not deinitialize the stream or close its device from its callback.
+ *       Teardown waits for the active callback to return; request shutdown by
+ *       returning ::BLADERF_STREAM_SHUTDOWN, then deinitialize from another
+ *       thread after the stream has stopped.
  *
  * For both RX and TX, the stream callback receives:
  *  - dev:          Device structure

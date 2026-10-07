@@ -85,14 +85,19 @@ int async_init_stream(struct bladerf_stream **stream,
 
 /* Publish a receive discontinuity detected by an asynchronous backend. */
 void async_notify_rx_overrun(struct bladerf_stream *stream);
-/* Report a terminal RX transport failure to native history and to the stream
- * callback as an event-only notification. No IQ is delivered. */
+/* Called with stream->lock held. Report a terminal RX transport failure to
+ * native history and to the stream callback as an event-only notification.
+ * Application callback execution temporarily releases that lock. No IQ is
+ * delivered. */
 void async_notify_rx_transport_failure(struct bladerf_stream *stream,
                                        uint32_t reason);
 
-/* Deliver a complete continuous-IQ RX transfer, or recycle a partial one
- * without exposing its samples. Packet-meta payloads are caller-framed and
- * may be variable length, so they are passed through unchanged. */
+/* Called by RX backends with stream->lock held. Deliver a complete
+ * continuous-IQ RX transfer, or recycle a partial one without exposing its
+ * samples. The function drops stream->lock while invoking stream->cb so
+ * callback code does not re-enter the backend while holding its state mutex,
+ * then reacquires it before returning. Packet-meta payloads are caller-framed
+ * and may be variable length, so they are passed through unchanged. */
 void *async_rx_process_buffer(struct bladerf_stream *stream,
                               struct bladerf_metadata *metadata,
                               void *samples,

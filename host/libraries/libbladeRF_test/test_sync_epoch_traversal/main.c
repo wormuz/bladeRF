@@ -67,6 +67,7 @@ static unsigned int async_fault_withheld_order;
 static unsigned int async_fault_overrun_order;
 static unsigned int async_fault_rejected_order;
 static unsigned int async_fault_callback_order;
+static bool async_callback_observed_unlocked;
 static unsigned int sync_host_data_events;
 static unsigned int sync_event_order;
 static unsigned int sync_host_data_order;
@@ -230,6 +231,10 @@ static void *count_async_rx_callback(struct bladerf *dev,
                                     void *user_data)
 {
     assert(dev != NULL && stream != NULL && metadata != NULL);
+    /* The backend must drop stream->lock while invoking application code. */
+    assert(pthread_mutex_trylock(&stream->lock) == 0);
+    assert(pthread_mutex_unlock(&stream->lock) == 0);
+    async_callback_observed_unlocked = true;
     if (num_samples == 0) {
         assert(samples == NULL);
         assert(user_data != NULL);
@@ -240,6 +245,31 @@ static void *count_async_rx_callback(struct bladerf *dev,
         assert(samples != NULL);
         async_rx_callbacks++;
     }
+    return samples;
+}
+
+static void *run_async_rx_process_buffer_locked(
+    struct bladerf_stream *stream, struct bladerf_metadata *metadata,
+    void *samples, size_t received_bytes)
+{
+    void *result;
+    MUTEX_LOCK(&stream->lock);
+    result = async_rx_process_buffer(stream, metadata, samples,
+                                     received_bytes);
+    MUTEX_UNLOCK(&stream->lock);
+    return result;
+}
+
+static void *stop_async_rx_stream_from_callback(
+    struct bladerf *dev, struct bladerf_stream *stream,
+    struct bladerf_metadata *metadata, void *samples, size_t num_samples,
+    void *user_data)
+{
+    assert(dev != NULL && stream != NULL && metadata != NULL);
+    assert(samples != NULL && num_samples != 0 && user_data != NULL);
+    MUTEX_LOCK(&stream->lock);
+    stream->state = STREAM_SHUTTING_DOWN;
+    MUTEX_UNLOCK(&stream->lock);
     return samples;
 }
 
@@ -1802,9 +1832,13 @@ int main(void)
     async_fault_overrun_order = 0;
     async_fault_rejected_order = 0;
     async_fault_callback_order = 0;
+    async_callback_observed_unlocked = false;
+    assert(MUTEX_INIT(&async_stream.lock) == 0);
+    async_stream.state = STREAM_RUNNING;
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples) / 2) ==
            async_replacement);
     MUTEX_UNLOCK(&f.dev.lock);
@@ -1820,7 +1854,8 @@ int main(void)
     assert(async_fault_rejected_order < async_fault_callback_order);
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples) / 2) ==
            async_replacement);
     MUTEX_UNLOCK(&f.dev.lock);
@@ -1835,8 +1870,10 @@ int main(void)
     async_stream.user_data = async_samples;
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
+    MUTEX_LOCK(&async_stream.lock);
     async_notify_rx_transport_failure(
         &async_stream, BLADERF_RF_WITHHELD_USB_OVERFLOW);
+    MUTEX_UNLOCK(&async_stream.lock);
     MUTEX_UNLOCK(&f.dev.lock);
     assert(MUTEX_DESTROY(&f.dev.lock) == 0);
     assert(async_withheld_events == 1);
@@ -1848,51 +1885,68 @@ int main(void)
     async_rx_channel_mask_valid = true;
     async_rx_channel_mask = 0x1;
     async_rx_transition_channel = BLADERF_CHANNEL_RX(0);
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
     assert(async_rx_callbacks == 0);
     assert(async_rx_event_wakeups == 1);
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
     assert(async_rx_event_wakeups == 1);
     async_rx_channel_mask = 0x3;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 1);
     async_stream.layout = BLADERF_RX_X1;
     async_rx_transition_channel = BLADERF_CHANNEL_RX(1);
     async_rx_channel_mask = 0x1;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
     assert(async_rx_callbacks == 1);
     assert(async_rx_event_wakeups == 2);
     async_rx_channel_mask = 0x2;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 2);
     assert(async_rx_event_wakeups == 2);
     check_async_rx_channel_mask = false;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 3);
     assert(async_rx_event_wakeups == 2);
     assert(rx_overrun_events == 2);
     allow_async_rx_buffer = false;
     async_stream.format = BLADERF_FORMAT_PACKET_META;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) ==
            async_replacement);
     assert(async_rx_callbacks == 3);
     assert(async_rx_event_wakeups == 3);
     allow_async_rx_buffer = true;
-    assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 4);
     assert(async_rx_event_wakeups == 3);
+    assert(async_callback_observed_unlocked);
+    async_stream.cb = stop_async_rx_stream_from_callback;
+    MUTEX_LOCK(&async_stream.lock);
+    async_stream.state = STREAM_RUNNING;
+    MUTEX_UNLOCK(&async_stream.lock);
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
+               sizeof(async_samples)) == BLADERF_STREAM_SHUTDOWN);
+    assert(MUTEX_DESTROY(&async_stream.lock) == 0);
     async_stream.layout = BLADERF_TX_X2;
     async_notify_rx_overrun(&async_stream);
     async_notify_rx_overrun(NULL);

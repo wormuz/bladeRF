@@ -66,6 +66,21 @@ static void async_notify_rx_data_withheld(struct bladerf_stream *stream,
     }
 }
 
+/* RX backends call into this file with stream->lock held. Do not execute
+ * application code under that lock: callbacks may re-enter wrapper code that
+ * needs to inspect or update active stream state. */
+static void *async_call_rx_callback_unlocked(
+    struct bladerf_stream *stream, struct bladerf_metadata *metadata,
+    void *samples, size_t num_samples)
+{
+    void *result;
+    MUTEX_UNLOCK(&stream->lock);
+    result = stream->cb(stream->dev, stream, metadata, samples, num_samples,
+                        stream->user_data);
+    MUTEX_LOCK(&stream->lock);
+    return result;
+}
+
 void async_notify_rx_transport_failure(struct bladerf_stream *stream,
                                        uint32_t reason)
 {
@@ -79,8 +94,7 @@ void async_notify_rx_transport_failure(struct bladerf_stream *stream,
     stream->rx_withheld_notice_active = true;
     async_notify_rx_data_withheld(stream, reason);
     async_notify_rx_overrun(stream);
-    (void)stream->cb(stream->dev, stream, &metadata, NULL, 0,
-                     stream->user_data);
+    (void)async_call_rx_callback_unlocked(stream, &metadata, NULL, 0);
 }
 
 static bool async_stream_owns_buffer(const struct bladerf_stream *stream,
@@ -123,8 +137,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
          * occurrence gets its own event-only callback even when another
          * withholding interval is already active. */
         stream->rx_withheld_notice_active = true;
-        next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
-                                 stream->user_data);
+        next_buffer = async_call_rx_callback_unlocked(
+            stream, metadata, NULL, 0);
     } else if (stream->dev != NULL && stream->dev->board != NULL &&
                stream->dev->board->rx_async_buffer_valid != NULL &&
                !stream->dev->board->rx_async_buffer_valid(
@@ -150,13 +164,19 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                 stream->user_data, samples);
         }
         stream->rx_withheld_notice_active = true;
-        next_buffer = stream->cb(stream->dev, stream, metadata, NULL, 0,
-                                 stream->user_data);
+        next_buffer = async_call_rx_callback_unlocked(
+            stream, metadata, NULL, 0);
     } else {
         stream->rx_withheld_notice_active = false;
-        return stream->cb(stream->dev, stream, metadata, samples,
-                          bytes_to_samples(stream->format, received_bytes),
-                          stream->user_data);
+        next_buffer = async_call_rx_callback_unlocked(
+            stream, metadata, samples,
+            bytes_to_samples(stream->format, received_bytes));
+    }
+
+    /* A concurrent stop may have changed the state while application code
+     * ran. Do not let the backend resubmit a buffer into a stopped stream. */
+    if (stream->state != STREAM_RUNNING) {
+        return BLADERF_STREAM_SHUTDOWN;
     }
 
     /* A zero-sample callback is an event-only wakeup. It may return a
