@@ -940,6 +940,18 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "RX_EPOCH_VALID publication can certify async IQ before the deadline-checked host admission commit",
              "publish the event while async IQ remains uncertified, then hold the admission lock across certificate commit and sync parser activation")
+    event_cursor_start = transition_text.find(
+        "int bladerf_rf_events_get_since(")
+    event_cursor_end = transition_text.find("int bladerf_rx_transition_get_nios_timing(",
+                                            event_cursor_start)
+    event_cursor_body = transition_text[event_cursor_start:event_cursor_end]
+    if ("bladerf2_rf_event_cursor_is_valid(after_sequence" not in
+            event_cursor_body or
+            "*next_sequence = current_sequence" not in event_cursor_body or
+            "status = BLADERF_ERR_INVAL" not in event_cursor_body):
+        fail("rf-event-future-cursor",
+             "a cursor beyond the event tail can appear complete and suppress later RF invalidation events",
+             "reject future cursors, report incomplete history, and return the actual tail for resynchronization")
     policy = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition_policy.h"
     policy_text = re.sub(
         r"/\*.*?\*/|//[^\n]*", "",

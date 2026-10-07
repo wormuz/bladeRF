@@ -130,4 +130,13 @@ static inline uint32_t bladerf2_rx_transition_next_transaction_id(
     return previous_id == UINT32_MAX ? 1u : previous_id + 1u;
 }
 
+/* A cursor beyond the current tail cannot be treated as an empty, complete
+ * history: doing so would silently hide every event until the ring catches
+ * up to that fabricated sequence. */
+static inline bool bladerf2_rf_event_cursor_is_valid(uint64_t after_sequence,
+                                                     uint64_t current_sequence)
+{
+    return after_sequence <= current_sequence;
+}
+
 #endif

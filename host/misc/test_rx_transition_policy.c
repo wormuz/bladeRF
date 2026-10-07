@@ -129,5 +129,10 @@ int main(void)
     assert(bladerf2_rx_transition_next_transaction_id(0) == 1);
     assert(bladerf2_rx_transition_next_transaction_id(41) == 42);
     assert(bladerf2_rx_transition_next_transaction_id(UINT32_MAX) == 1);
+    assert(bladerf2_rf_event_cursor_is_valid(0, 0));
+    assert(bladerf2_rf_event_cursor_is_valid(99, 99));
+    assert(bladerf2_rf_event_cursor_is_valid(98, 99));
+    assert(!bladerf2_rf_event_cursor_is_valid(100, 99));
+    assert(!bladerf2_rf_event_cursor_is_valid(UINT64_MAX, 0));
     return 0;
 }

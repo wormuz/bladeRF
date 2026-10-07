@@ -2177,6 +2177,7 @@ int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
     struct bladerf2_board_data *board_data;
     uint32_t copied = 0;
     bool complete = true;
+    int status = 0;
 
     if (dev == NULL || event_count == NULL || next_sequence == NULL ||
         history_complete == NULL || (capacity != 0 && events == NULL)) {
@@ -2192,6 +2193,7 @@ int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
     MUTEX_LOCK(&board_data->rf_transition_event_lock);
     {
         uint32_t retained = board_data->rf_transition_event_count;
+        uint64_t current_sequence = board_data->rf_transition_event_sequence;
         uint32_t oldest = (board_data->rf_transition_event_head +
                            BLADERF2_RF_EVENT_HISTORY_SIZE - retained) %
                           BLADERF2_RF_EVENT_HISTORY_SIZE;
@@ -2199,11 +2201,19 @@ int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
             board_data->rf_transition_event_sequences[oldest] :
             board_data->rf_transition_event_sequence + 1;
 
-        if (retained != 0 && after_sequence < oldest_sequence - 1) {
+        if (!bladerf2_rf_event_cursor_is_valid(after_sequence,
+                                               current_sequence)) {
+            /* Resynchronize to the current tail and explicitly report an
+             * incomplete history. Never let a fabricated future cursor
+             * suppress later invalidation events while appearing complete. */
+            complete = false;
+            *next_sequence = current_sequence;
+            status = BLADERF_ERR_INVAL;
+        } else if (retained != 0 && after_sequence < oldest_sequence - 1) {
             complete = false;
         }
 
-        for (uint32_t i = 0; i < retained; ++i) {
+        for (uint32_t i = 0; complete && i < retained; ++i) {
             uint32_t slot = (oldest + i) % BLADERF2_RF_EVENT_HISTORY_SIZE;
             uint64_t sequence =
                 board_data->rf_transition_event_sequences[slot];
@@ -2223,7 +2233,7 @@ int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
 
     *event_count = copied;
     *history_complete = complete;
-    return complete ? 0 : BLADERF_ERR_MEM;
+    return status != 0 ? status : (complete ? 0 : BLADERF_ERR_MEM);
 }
 
 int bladerf_rx_transition_get_nios_timing(
