@@ -49,6 +49,16 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
 - `host/misc/run_rx_epoch_gate_tb.sh` now runs the epoch-gate, writer fence,
   writer abort, and writer enable testbenches together. The consolidated
   runner passed with GHDL 5.0.1 in this worktree.
+- Quartus Prime 25.1std full flow passed for the xA4 Cyclone V `sweep`
+  revision in an isolated copy of the existing project: Analysis & Synthesis
+  0 errors, Fitter 0 errors, Timing Analyzer 0 errors, Assembler 0 errors.
+  The flow generated a 2,632,660-byte `sweep.rbf`; the temporary build copy
+  was discarded after collecting the result, so the image was not programmed.
+- Quartus exposed an integration error missed by unit testbenches: the RX
+  entity read its `rx_epoch_discard_active` output while wiring the FIFO
+  writer. An internal `rx_epoch_discard_active_local` signal now drives both
+  the output port and writer input. The successful full flow includes this
+  fix.
 - libbladeRF requirement-policy test passed; production shared-library build
   passed.
 - Test-build xA4 runtime BBPLL-loss injection passed for RX1, RX2, and RX_X2:
@@ -64,8 +74,8 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
 ## Qualification limit
 
 The connected xA4 still runs FPGA v0.16.1, which does not contain the new
-`rx_epoch_discard_active` watchdog behavior. Quartus is not installed in this
-environment, so the modified FPGA has not been synthesized or loaded. The
-long-timeout recovery case must be rerun on a synthesized image to qualify
-this specific FPGA fix. No timeout or sample discard is accepted as evidence
-that IQ is valid.
+`rx_epoch_discard_active` watchdog behavior. The modified FPGA now passes
+Quartus synthesis, fitting, timing analysis, and image assembly, but that image
+has not yet been loaded onto the board. The long-timeout recovery case must be
+rerun on the new image to qualify this specific FPGA fix. No timeout or sample
+discard is accepted as evidence that IQ is valid.

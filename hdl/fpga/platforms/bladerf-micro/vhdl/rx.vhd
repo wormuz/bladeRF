@@ -168,6 +168,7 @@ architecture arch of rx is
     signal gated_controls           : sample_controls_t(adc_streams'range) := (others => SAMPLE_CONTROL_DISABLE);
     signal gated_streams            : sample_streams_t(adc_streams'range)  := (others => ZERO_SAMPLE);
     signal rx_epoch_id_local        : unsigned(7 downto 0) := (others => '0');
+    signal rx_epoch_discard_active_local : std_logic := '0';
 
     signal trigger_signal_out       : std_logic;
     signal trigger_signal_out_sync  : std_logic;
@@ -177,6 +178,7 @@ begin
     rx_mux_mode            <= rx_mux_mode_t'val(to_integer(rx_mux_sel));
     loopback_fifo_wenabled <= loopback_fifo_wenabled_i;
     rx_epoch_id_out        <= rx_epoch_id_local;
+    rx_epoch_discard_active <= rx_epoch_discard_active_local;
 
     set_timestamp_reset : process(rx_clock, rx_reset)
     begin
@@ -295,7 +297,7 @@ begin
 
             out_epoch_id            => rx_epoch_id_local,
             out_state               => rx_epoch_state,
-            out_discard_active      => rx_epoch_discard_active,
+            out_discard_active      => rx_epoch_discard_active_local,
             epoch_start_event       => rx_epoch_start_event,
             first_valid_timestamp   => rx_epoch_first_valid_ts
         );
@@ -322,7 +324,7 @@ begin
             mini_exp            =>  mini_exp,
             rx_epoch_meta_enable => rx_epoch_meta_enable,
             rx_epoch_id          => rx_epoch_id_local,
-            rx_epoch_discard_active => rx_epoch_discard_active,
+            rx_epoch_discard_active => rx_epoch_discard_active_local,
 
             link_start_toggle          =>  link_start_toggle,
             link_stop_toggle           =>  link_stop_toggle,
