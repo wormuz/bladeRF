@@ -3767,21 +3767,16 @@ int bladerf_set_bias_tee(struct bladerf *dev, bladerf_channel ch, bool enable)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
     bool owns_reservation = false;
     int status = 0;
 
     if (!BLADERF_CHANNEL_IS_TX(ch)) {
-        WITH_MUTEX(&dev->lock, {
-            owns_reservation = !board_data->rf_transition_setter_active;
-        });
-        if (owns_reservation) {
-            status = bladerf2_rx_data_invalidate(
-                dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
-            if (status != 0) {
-                return status;
-            }
+        status = bladerf2_rx_data_invalidate(
+            dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
+        if (status != 0) {
+            return status;
         }
+        owns_reservation = true;
     }
 
     WITH_MUTEX(&dev->lock, {
@@ -3972,19 +3967,10 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
-    bool owns_reservation;
-    int status;
-
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
-        if (status != 0) {
-            return status;
-        }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
     }
 
     WITH_MUTEX(&dev->lock, {
@@ -4018,9 +4004,7 @@ int bladerf_set_rfic_register(struct bladerf *dev,
 #endif
     });
 
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     if (status < 0) {
         status = errno_ad9361_to_bladerf(status);
         log_error("%s: AD9361 register write failed: %s\n", __FUNCTION__,
@@ -4113,18 +4097,12 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const sr_range    = bladerf2_sample_rate_range_4x;
     bladerf_channel const ch               = BLADERF_CHANNEL_RX(0);
-    bool owns_reservation;
     int status = 0;
 
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, ch, BLADERF_RF_INVALIDATE_RX_FIR);
-        if (status != 0) {
-            return status;
-        }
+    status = bladerf2_rx_data_invalidate(
+        dev, ch, BLADERF_RF_INVALIDATE_RX_FIR);
+    if (status != 0) {
+        return status;
     }
 
     WITH_MUTEX(&dev->lock, {
@@ -4145,9 +4123,7 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
         }
     });
 
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, ch);
-    }
+    bladerf2_rx_reconfigure_complete(dev, ch);
 
     return status;
 }
@@ -4205,6 +4181,53 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
 /* Low level PLL Accessors */
 /******************************************************************************/
 
+/* Internal raw helpers are used only while an enclosing public clock setter
+ * owns the RX invalidation reservation. Public setters below always acquire
+ * their own reservation and cannot mistake another thread's active setter
+ * for a nested call. */
+static int bladerf2_set_pll_enable_hw(struct bladerf *dev, bool enable)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        uint32_t data;
+
+        if (enable) {
+            status = _bladerf2_set_trim_dac_enable(dev, false);
+        }
+        if (status == 0) {
+            status = dev->backend->config_gpio_read(dev, &data);
+        }
+        if (status == 0) {
+            data &= ~(1 << CFG_GPIO_PLL_EN);
+            data |= ((enable ? 1 : 0) << CFG_GPIO_PLL_EN);
+            status = dev->backend->config_gpio_write(dev, data);
+        }
+        if (status == 0) {
+            board_data->trim_source = enable ? TRIM_SOURCE_PLL : TRIM_SOURCE_NONE;
+        }
+        if (status == 0 && !enable) {
+            status = _bladerf2_set_trim_dac_enable(dev, true);
+        }
+    });
+
+    return status;
+}
+
+static int bladerf2_write_pll_register_hw(struct bladerf *dev,
+                                          uint8_t address, uint32_t val)
+{
+    int status;
+
+    WITH_MUTEX(&dev->lock, {
+        address &= 0x03;
+        status = dev->backend->adf400x_write(dev, address, val);
+    });
+
+    return status;
+}
+
 static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
@@ -4227,7 +4250,7 @@ static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
 
     /* Enable the chip if applicable */
     if (!is_enabled) {
-        CHECK_STATUS(bladerf_set_pll_enable(dev, true));
+        CHECK_STATUS(bladerf2_set_pll_enable_hw(dev, true));
     }
 
     /* Register 0: Reference Counter Latch */
@@ -4264,12 +4287,12 @@ static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
 
     /* Write the values to the chip */
     for (i = 0; i < ARRAY_SIZE(init_array); ++i) {
-        CHECK_STATUS(bladerf_set_pll_register(dev, i, init_array[i]));
+        CHECK_STATUS(bladerf2_write_pll_register_hw(dev, i, init_array[i]));
     }
 
     /* Re-disable the chip if applicable */
     if (!is_enabled) {
-        CHECK_STATUS(bladerf_set_pll_enable(dev, false));
+        CHECK_STATUS(bladerf2_set_pll_enable_hw(dev, false));
     }
 
     return 0;
@@ -4366,58 +4389,13 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
-    bool owns_reservation;
-    int status = 0;
-
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
-        if (status != 0) {
-            return status;
-        }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
     }
-
-    WITH_MUTEX(&dev->lock, {
-        uint32_t data;
-
-        // Disable the trim DAC when we're using the PLL
-        if (enable) {
-            status = _bladerf2_set_trim_dac_enable(dev, false);
-        }
-
-        // Read current config GPIO value
-        if (status == 0) {
-            status = dev->backend->config_gpio_read(dev, &data);
-        }
-
-        // Set the PLL enable bit accordingly
-        if (status == 0) {
-            data &= ~(1 << CFG_GPIO_PLL_EN);
-            data |= ((enable ? 1 : 0) << CFG_GPIO_PLL_EN);
-
-            // Write back the config GPIO
-            status = dev->backend->config_gpio_write(dev, data);
-        }
-
-        // Update our state flag
-        if (status == 0) {
-            board_data->trim_source = enable ? TRIM_SOURCE_PLL : TRIM_SOURCE_NONE;
-        }
-
-        // Enable the trim DAC if we're done with the
-        // PLL
-        if (status == 0 && !enable) {
-            status = _bladerf2_set_trim_dac_enable(dev, true);
-        }
-    });
-
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    status = bladerf2_set_pll_enable_hw(dev, enable);
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -4468,8 +4446,6 @@ int bladerf_set_pll_refclk(struct bladerf *dev, bladerf_frequency frequency)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     uint16_t R, N;
-    struct bladerf2_board_data *board_data = dev->board_data;
-    bool owns_reservation;
     int status;
 
     // We assume the system clock frequency is
@@ -4481,21 +4457,14 @@ int bladerf_set_pll_refclk(struct bladerf *dev, bladerf_frequency frequency)
         return status;
     }
 
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
-        if (status != 0) {
-            return status;
-        }
+    status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
     }
 
     status = bladerf_pll_configure(dev, R, N);
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
 
     return status;
 }
@@ -4526,34 +4495,14 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
-    bool owns_reservation;
-    int status;
-
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
-        if (status != 0) {
-            return status;
-        }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
     }
 
-    WITH_MUTEX(&dev->lock, {
-        uint32_t data;
-
-        address &= 0x03;
-
-        data = val;
-
-        status = dev->backend->adf400x_write(dev, address, data);
-    });
-
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    status = bladerf2_write_pll_register_hw(dev, address, val);
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -4614,19 +4563,10 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
-    bool owns_reservation;
-    int status;
-
-    WITH_MUTEX(&dev->lock, {
-        owns_reservation = !board_data->rf_transition_setter_active;
-    });
-    if (owns_reservation) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
-        if (status != 0) {
-            return status;
-        }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    if (status != 0) {
+        return status;
     }
 
     if (bladerf_device_speed(dev) == BLADERF_DEVICE_SPEED_HIGH) {
@@ -4656,9 +4596,7 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
         }
     });
 
-    if (owns_reservation) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 

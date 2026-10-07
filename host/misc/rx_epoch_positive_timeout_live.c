@@ -153,6 +153,53 @@ static int assert_sync_valid(struct bladerf *dev,
     return 0;
 }
 
+/* A public low-level setter must never infer that a reservation belongs to
+ * it merely because another thread currently holds one. Use an idempotent
+ * bias-tee write so an incorrectly admitted call does not change board state. */
+static int assert_legacy_setter_blocked_during_transition(
+    struct bladerf *dev, const struct rx_test_config *config)
+{
+    struct bladerf_rx_transition_request request = {0};
+    struct bladerf_rf_event event = {0};
+    uint32_t transaction_id = 0;
+    bool bias_enabled = false;
+    int status = bladerf_get_bias_tee(
+        dev, BLADERF_CHANNEL_RX(0), &bias_enabled);
+    if (status != 0) {
+        return status;
+    }
+
+    request.target_frequency_hz = 1835000000ULL;
+    request.required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID;
+    request.require_rx_data_valid = true;
+    request.timeout_ms = 2000;
+    status = bladerf_rx_transition_begin(dev, config->transition_channel,
+                                         &request, &transaction_id);
+    if (status != 0) {
+        return status;
+    }
+
+    status = bladerf_set_bias_tee(dev, BLADERF_CHANNEL_RX(0), bias_enabled);
+    if (status != BLADERF_ERR_WOULD_BLOCK) {
+        fprintf(stderr, "concurrent RX setter was not rejected: %s\n",
+                bladerf_strerror(status));
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    status = bladerf_rx_transition_wait(dev, transaction_id, &event, 2000);
+    if (status != 0 || event.fpga_state != BLADERF_RF_STATE_RX_DATA_VALID) {
+        fprintf(stderr, "transition after rejected setter failed: %s state=%u\n",
+                bladerf_strerror(status), event.fpga_state);
+        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    status = assert_sync_valid(dev, config, &event);
+    if (status == 0) {
+        printf("concurrent low-level setter reservation: PASS (%s)\n",
+               config->name);
+    }
+    return status;
+}
+
 int main(int argc, char **argv)
 {
     static const char *const stages[] = {"PLL", "ENSM", "BBPLL", "EPOCH"};
@@ -203,6 +250,9 @@ int main(int argc, char **argv)
         status = bladerf_sync_config(dev, config.layout,
                                      BLADERF_FORMAT_SC16_Q11_META,
                                      8, config.sync_samples, 4, 1000);
+    }
+    if (status == 0) {
+        status = assert_legacy_setter_blocked_during_transition(dev, &config);
     }
     for (size_t i = 0; status == 0 && i < sizeof(stages) / sizeof(stages[0]); ++i) {
         struct bladerf_rf_event failed = {0};

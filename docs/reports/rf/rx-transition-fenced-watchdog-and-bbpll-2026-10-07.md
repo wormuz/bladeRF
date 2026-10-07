@@ -15,6 +15,11 @@ Two transition validity gaps were addressed in this change:
   on hardware.
 - The host verified the AD9361 RF PLL and ENSM state, but not the baseband PLL.
   Runtime monitoring likewise had no BBPLL-loss invalidation event.
+- Several bladeRF 2 low-level public setters treated the global
+  `rf_transition_setter_active` flag as proof that their own call already held
+  the RX reservation. The flag has no thread ownership, so an unrelated
+  concurrent clock/RFIC/bias/FIR write could slip into another setter or a
+  pending event-driven transition without its own invalidation event.
 
 ## Changes
 
@@ -39,6 +44,14 @@ The RX1/RX2 data gate remains one shared epoch because the AD9361 RX LO and
 BBPLL are shared. It only opens after all enabled stream lanes are valid. The
 existing gate test covers paired RX_X2 waiting for both lanes, while the live
 transition checks below exercise RX1, RX2, and RX1+RX2.
+
+Low-level public RFIC/clock setters now always acquire the common RX
+invalidation reservation. PLL reference-clock configuration uses private
+hardware-write helpers while it holds one outer reservation, instead of
+re-entering public setters and guessing whether a reservation belongs to the
+current caller. A live regression attempts an idempotent RX bias-tee setter
+after transition begin and requires `BLADERF_ERR_WOULD_BLOCK`; the transition
+then must complete with a valid epoch and valid META IQ.
 
 ## Verification
 
@@ -85,6 +98,11 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
   fail-closed behavior, not the new FPGA watchdog fix.
 - Python RF event notification tests passed (11 tests).
 - Existing production xA4 transition-validity test passed.
+- After the setter-reservation fix, the 100 ms positive-timeout and recovery
+  suite passed again on RX1, RX2, and paired RX1+RX2. In every layout the
+  concurrent low-level setter was rejected with WOULD_BLOCK, the active
+  transition still certified, and the subsequent RFPLL/ENSM/BBPLL/FPGA timeout
+  cases withheld IQ until a fresh successful transition.
 
 ## Hardware qualification
 
