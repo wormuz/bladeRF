@@ -3613,6 +3613,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
     FIELD_INIT(.rx_data_withheld, bladerf2_rx_data_withheld),
+    FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),

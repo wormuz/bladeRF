@@ -328,6 +328,11 @@ struct board_fns {
     /* Report RX IQ deliberately withheld by either the asynchronous transfer
      * validator or the synchronous META epoch parser. */
     void (*rx_data_withheld)(struct bladerf *dev, uint32_t reason);
+    /* Sync META parsing knows the FPGA timestamp where rejected data begins.
+     * This optional hook preserves that source coordinate in the event. */
+    void (*rx_data_withheld_at)(struct bladerf *dev, uint32_t reason,
+                                uint8_t epoch_id, uint64_t fpga_timestamp,
+                                bool fpga_timestamp_valid);
     /* Return whether an asynchronous RX META buffer belongs to the current
      * certified epoch. NULL preserves legacy, unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,

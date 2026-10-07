@@ -83,7 +83,10 @@ void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
-void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
+static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
+                              bool explicit_source,
+                              bool explicit_timestamp_valid,
+                              uint8_t event_epoch_id, uint64_t event_timestamp)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
@@ -115,11 +118,12 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
         board_data->rx_async_data_withheld_reported = true;
         should_report = true;
     }
-    epoch_id = board_data->rf_transition_epoch_id;
+    epoch_id = explicit_source ? event_epoch_id :
+                                board_data->rf_transition_epoch_id;
     /* This cursor is the first sample expected after the last admitted async
      * META buffer. Publish it only while it still belongs to the certified
      * epoch; never borrow it for a synchronous timeout or an invalid epoch. */
-    if (reason != BLADERF_RF_WITHHELD_SYNC_TIMEOUT &&
+    if (!explicit_source && reason != BLADERF_RF_WITHHELD_SYNC_TIMEOUT &&
         board_data->rf_transition_epoch_certified &&
         board_data->rx_async_have_expected_timestamp &&
         board_data->rx_async_timestamp_epoch_id ==
@@ -136,13 +140,30 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
     }
 
     event.host_monotonic_ns = monotonic_ns();
-    event.fpga_timestamp = first_unvalidated_timestamp;
+    event.fpga_timestamp = explicit_source
+        ? event_timestamp : first_unvalidated_timestamp;
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
-    event.flags = reason | (timestamp_valid
+    event.flags = reason | ((explicit_source
+                                 ? explicit_timestamp_valid
+                                 : timestamp_valid)
         ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
     bladerf2_rf_event_append(board_data, &event);
+}
+
+void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
+{
+    _rx_data_withheld(dev, reason, false, false, 0, 0);
+}
+
+void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
+                                  uint8_t epoch_id,
+                                  uint64_t fpga_timestamp,
+                                  bool fpga_timestamp_valid)
+{
+    _rx_data_withheld(dev, reason, true, fpga_timestamp_valid,
+                      epoch_id, fpga_timestamp);
 }
 
 void bladerf2_rx_data_withheld_reset(struct bladerf *dev)

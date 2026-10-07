@@ -1,6 +1,7 @@
 /* Integration test for sample-META epoch filtering through sync_rx(). */
 #include <assert.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -78,6 +79,9 @@ static uint32_t async_withheld_reason;
 static unsigned int sync_withheld_events;
 static uint32_t sync_withheld_reason;
 static uint32_t sync_withheld_reasons[8];
+static bool sync_withheld_timestamp_valid[8];
+static uint8_t sync_withheld_epochs[8];
+static uint64_t sync_withheld_timestamps[8];
 static unsigned int async_overrun_events;
 
 static void note_rx_overrun(struct bladerf *dev)
@@ -101,6 +105,20 @@ static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
     if (sync_withheld_events <=
         sizeof(sync_withheld_reasons) / sizeof(sync_withheld_reasons[0])) {
         sync_withheld_reasons[sync_withheld_events - 1] = reason;
+    }
+}
+
+static void note_sync_withheld_at(struct bladerf *dev, uint32_t reason,
+                                  uint8_t epoch_id, uint64_t timestamp,
+                                  bool timestamp_valid)
+{
+    note_sync_withheld(dev, reason);
+    const unsigned int index = sync_withheld_events - 1;
+    if (index < sizeof(sync_withheld_timestamp_valid) /
+                sizeof(sync_withheld_timestamp_valid[0])) {
+        sync_withheld_timestamp_valid[index] = timestamp_valid;
+        sync_withheld_epochs[index] = epoch_id;
+        sync_withheld_timestamps[index] = timestamp;
     }
 }
 
@@ -155,6 +173,7 @@ static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
     .rx_async_stream_overrun = note_async_overrun,
     .rx_data_withheld = note_sync_withheld,
+    .rx_data_withheld_at = note_sync_withheld_at,
     .rx_async_buffer_valid = validate_async_rx_buffer,
 };
 
@@ -171,6 +190,10 @@ static void fixture_init(struct fixture *f)
     sync_withheld_events = 0;
     sync_withheld_reason = 0;
     memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
+    memset(sync_withheld_timestamp_valid, 0,
+           sizeof(sync_withheld_timestamp_valid));
+    memset(sync_withheld_epochs, 0, sizeof(sync_withheld_epochs));
+    memset(sync_withheld_timestamps, 0, sizeof(sync_withheld_timestamps));
     f->buffers[0] = calloc(1, BYTES_PER_BUFFER);
     f->buffers[1] = calloc(1, BYTES_PER_BUFFER);
     assert(f->buffers[0] != NULL && f->buffers[1] != NULL);
@@ -440,6 +463,9 @@ int main(void)
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason ==
            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_timestamps[0] == 0);
+    assert(sync_withheld_epochs[0] == 6);
     fixture_destroy(&f);
 
     /* A stale message after copied current-epoch data returns the valid
@@ -460,6 +486,9 @@ int main(void)
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason ==
            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_timestamps[0] == 1000 + MSG_SAMPLES);
+    assert(sync_withheld_epochs[0] == 6);
     assert_marker(out, MSG_SAMPLES, 333, 0);
 
     receive(&f, out, MSG_SAMPLES, &meta);
@@ -480,6 +509,9 @@ int main(void)
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason ==
            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_timestamps[0] == 900);
+    assert(sync_withheld_epochs[0] == 7);
     fixture_destroy(&f);
 
     /* A retune invalidates the remainder of a message that the parser had
@@ -500,12 +532,40 @@ int main(void)
     meta.flags = BLADERF_META_FLAG_RX_NOW;
     sync_withheld_events = 0;
     sync_withheld_reason = 0;
+    memset(sync_withheld_timestamp_valid, 0,
+           sizeof(sync_withheld_timestamp_valid));
+    memset(sync_withheld_epochs, 0, sizeof(sync_withheld_epochs));
+    memset(sync_withheld_timestamps, 0, sizeof(sync_withheld_timestamps));
     assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
     assert(meta.actual_count == 0);
     assert(sync_withheld_events == 2);
     assert(sync_withheld_reasons[0] ==
            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     assert(sync_withheld_reasons[1] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_timestamps[0] == 1100);
+    assert(!sync_withheld_timestamp_valid[1]);
+    fixture_destroy(&f);
+
+    /* A timeout after previously admitted META data is bounded at the sync
+     * parser's current FPGA coordinate, independently of the async cursor. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1201);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 1301);
+    write_msg(f.buffers[1], 1000 + 2 * MSG_SAMPLES, 7, 1401);
+    write_msg(f.buffers[1] + MSG_BYTES, 1000 + 3 * MSG_SAMPLES, 7, 1501);
+    receive(&f, out, 2 * MSG_SAMPLES, &meta);
+    receive(&f, out, 2 * MSG_SAMPLES, &meta);
+    assert(sync_withheld_events == 0);
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
+    assert(meta.actual_count == 0);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_timestamps[0] == 1000 + 4 * MSG_SAMPLES);
+    assert(sync_withheld_epochs[0] == 7);
     fixture_destroy(&f);
 
     /* A transition poisons the entire parser epoch before ARM. Even a packet
@@ -523,6 +583,7 @@ int main(void)
     assert(f.sync.meta.rx_epoch_data_invalidated);
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert(!sync_withheld_timestamp_valid[0]);
     fixture_destroy(&f);
 
     /* Only the exact successful boundary clears invalidation; old queued

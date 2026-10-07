@@ -71,6 +71,72 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
     return BLADERF_ERR_UNEXPECTED;
 }
 
+static int check_sync_timeout_timestamp_event(struct bladerf *dev,
+                                              int16_t *samples,
+                                              uint8_t expected_epoch_id,
+                                              uint64_t epoch_start)
+{
+    struct bladerf_metadata metadata = {0};
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t cursor = 0;
+    uint64_t next = 0;
+    bladerf_timestamp now = 0;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count, &cursor,
+        &complete);
+    if (status != 0 || !complete) {
+        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    status = bladerf_get_timestamp(dev, BLADERF_RX, &now);
+    if (status != 0) {
+        return status;
+    }
+
+    /* Ask for a sample coordinate well beyond this short watchdog window.
+     * Timeout must fail the read while reporting the parser's last known
+     * coordinate; it cannot turn the requested future timestamp into IQ. */
+    metadata.timestamp = now + 4000000ULL;
+    status = bladerf_sync_rx(dev, samples, 8192, &metadata, 20);
+    if (status != BLADERF_ERR_TIMEOUT || metadata.actual_count != 0) {
+        fprintf(stderr, "future-timestamp read was not fail-closed: %s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    status = bladerf_rf_events_get_since(
+        dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count, &next,
+        &complete);
+    if (status != 0 || !complete) {
+        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
+            (events[i].flags & ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+                BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
+            if ((events[i].flags &
+                 BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) == 0 ||
+                events[i].fpga_timestamp < epoch_start ||
+                events[i].epoch_id != expected_epoch_id) {
+                fprintf(stderr, "sync timeout event has no current timestamp "
+                        "boundary: epoch=%u timestamp=%llu valid=%u\n",
+                        events[i].epoch_id,
+                        (unsigned long long)events[i].fpga_timestamp,
+                        (events[i].flags &
+                         BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) != 0);
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            printf("sync timeout boundary: epoch=%u timestamp=%llu\n",
+                   events[i].epoch_id,
+                   (unsigned long long)events[i].fpga_timestamp);
+            return 0;
+        }
+    }
+    fprintf(stderr, "sync timeout event was not recorded\n");
+    return BLADERF_ERR_UNEXPECTED;
+}
+
 int main(void)
 {
     struct bladerf *dev = NULL;
@@ -153,6 +219,9 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
+
+    CHECK(check_sync_timeout_timestamp_event(dev, samples, event.epoch_id,
+                                              event.fpga_timestamp));
 
     /* The legacy setter has no FPGA epoch confirmation. It must revoke the
      * previously certified stream until another event-driven transition. */

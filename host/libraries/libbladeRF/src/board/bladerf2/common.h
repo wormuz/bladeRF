@@ -291,6 +291,10 @@ void bladerf2_rf_event_append_locked(
 void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
                                           bladerf_format format);
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
+void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
+                                  uint8_t epoch_id,
+                                  uint64_t fpga_timestamp,
+                                  bool fpga_timestamp_valid);
 void bladerf2_rx_data_withheld_reset(struct bladerf *dev);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,

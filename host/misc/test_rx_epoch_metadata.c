@@ -117,6 +117,19 @@ int main(void)
     uint8_t timestamp_epoch = 3;
     uint64_t expected_timestamp = 44;
 
+    /* The first matching META header seeds timestamp continuity. A
+     * zero-initialized cursor must not make a packet exactly at the certified
+     * first-valid boundary look like an invalid prefix. */
+    assert(metadata_rx_epoch_disposition(
+        true, true, true, 1000, 0, 1000, false, false) ==
+        METADATA_RX_EPOCH_ACCEPT);
+    assert(metadata_rx_epoch_disposition(
+        true, true, true, 999, 0, 1000, false, false) ==
+        METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX);
+    assert(metadata_rx_epoch_disposition(
+        true, true, true, 1000, 999, 1000, true, false) ==
+        METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX);
+
     /* Async admission rechecks the same boundary after parsing. A setter can
      * revoke it while the transfer is being inspected, so matching bytes
      * alone are insufficient if the live certificate changed meanwhile.

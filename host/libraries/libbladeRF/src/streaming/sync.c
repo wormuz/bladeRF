@@ -709,6 +709,21 @@ static inline unsigned int timestamp_to_msg(struct bladerf_sync *s, uint64_t t)
     return (unsigned int) m;
 }
 
+static void sync_rx_note_withheld(uint32_t reason, uint64_t timestamp,
+                                  bool timestamp_valid, uint8_t epoch_id,
+                                  uint32_t *stored_reason,
+                                  uint64_t *stored_timestamp,
+                                  bool *stored_timestamp_valid,
+                                  uint8_t *stored_epoch_id)
+{
+    if (*stored_reason == 0) {
+        *stored_reason = reason;
+        *stored_timestamp = timestamp;
+        *stored_timestamp_valid = timestamp_valid;
+        *stored_epoch_id = epoch_id;
+    }
+}
+
 int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             struct bladerf_metadata *user_meta, unsigned int timeout_ms)
 {
@@ -719,6 +734,12 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     bool copied_data = false;
     bool notify_overrun = false;
     uint32_t withheld_reason = 0;
+    uint64_t withheld_timestamp = 0;
+    uint8_t withheld_epoch_id = 0;
+    bool withheld_timestamp_valid = false;
+    uint64_t sync_timestamp = 0;
+    uint8_t sync_epoch_id = 0;
+    bool sync_timestamp_valid = false;
     unsigned int samples_returned = 0;
     uint8_t *samples_dest = (uint8_t*)samples;
     uint8_t *buf_src = NULL;
@@ -796,6 +817,19 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     log_verbose("%s: Requests %u samples.\n", __FUNCTION__, num_samples);
 
     while (!exit_early && samples_returned < num_samples && status == 0) {
+        /* Enforce the caller's watchdog while consuming ready buffers too.
+         * A timestamped read can discard many packets while searching for a
+         * future target; checking the deadline only in WAIT_FOR_BUFFER lets
+         * a continuously busy stream run past timeout indefinitely. */
+        if (timeout_ms != 0 && call_start_ns != 0) {
+            const uint64_t now_ns = wallclock_get_current_nsec();
+            if (now_ns >= call_start_ns &&
+                now_ns - call_start_ns >=
+                    (uint64_t)timeout_ms * 1000000ULL) {
+                status = BLADERF_ERR_TIMEOUT;
+                break;
+            }
+        }
         dump_buf_states(s);
 
         switch (s->state) {
@@ -1209,8 +1243,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                              * the contiguous prefix and retry this message on
                              * the next call, where it can be discarded. */
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
-                            withheld_reason =
-                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                            sync_rx_note_withheld(
+                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH,
+                                s->meta.msg_timestamp, true,
+                                s->meta.msg_epoch_id_valid
+                                    ? s->meta.msg_epoch_id
+                                    : s->meta.rx_epoch_expected_id,
+                                &withheld_reason, &withheld_timestamp,
+                                &withheld_timestamp_valid, &withheld_epoch_id);
                             exit_early = true;
                             s->meta.state = SYNC_META_STATE_HEADER;
                             break;
@@ -1219,8 +1259,17 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         if (epoch_disposition ==
                             METADATA_RX_EPOCH_DISCONTINUITY) {
                             user_meta->status |= BLADERF_META_STATUS_OVERRUN;
-                            withheld_reason =
-                                BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY;
+                            sync_rx_note_withheld(
+                                BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY,
+                                s->meta.have_timestamp
+                                    ? s->meta.curr_timestamp
+                                    : s->meta.msg_timestamp,
+                                true,
+                                s->meta.msg_epoch_id_valid
+                                    ? s->meta.msg_epoch_id
+                                    : s->meta.rx_epoch_expected_id,
+                                &withheld_reason, &withheld_timestamp,
+                                &withheld_timestamp_valid, &withheld_epoch_id);
                             exit_early = copied_data;
                             log_debug("Sample discontinuity detected @ "
                                       "buffer %u, message %u: Expected t=%llu, "
@@ -1237,13 +1286,26 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                         s->meta.curr_timestamp);
                         } else if (epoch_disposition ==
                                    METADATA_RX_EPOCH_DROP_MESSAGE) {
-                            withheld_reason = s->meta.rx_epoch_data_invalidated ?
-                                BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED :
-                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                            sync_rx_note_withheld(
+                                s->meta.rx_epoch_data_invalidated
+                                    ? BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED
+                                    : BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH,
+                                s->meta.msg_timestamp, true,
+                                s->meta.msg_epoch_id_valid
+                                    ? s->meta.msg_epoch_id
+                                    : s->meta.rx_epoch_expected_id,
+                                &withheld_reason, &withheld_timestamp,
+                                &withheld_timestamp_valid, &withheld_epoch_id);
                         } else if (epoch_disposition ==
                                    METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX) {
-                            withheld_reason =
-                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                            sync_rx_note_withheld(
+                                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH,
+                                s->meta.msg_timestamp, true,
+                                s->meta.msg_epoch_id_valid
+                                    ? s->meta.msg_epoch_id
+                                    : s->meta.rx_epoch_expected_id,
+                                &withheld_reason, &withheld_timestamp,
+                                &withheld_timestamp_valid, &withheld_epoch_id);
                         }
 
                         /* Old-epoch messages are drained while a new epoch
@@ -1260,9 +1322,17 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         if (s->meta.rx_epoch_data_invalidated ||
                             s->meta.msg_epoch_filtered_out) {
                             if (withheld_reason == 0) {
-                                withheld_reason = s->meta.rx_epoch_data_invalidated ?
-                                    BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED :
-                                    BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+                                sync_rx_note_withheld(
+                                    s->meta.rx_epoch_data_invalidated
+                                        ? BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED
+                                        : BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH,
+                                    s->meta.curr_timestamp, true,
+                                    s->meta.msg_epoch_id_valid
+                                        ? s->meta.msg_epoch_id
+                                        : s->meta.rx_epoch_expected_id,
+                                    &withheld_reason, &withheld_timestamp,
+                                    &withheld_timestamp_valid,
+                                    &withheld_epoch_id);
                             }
                             unsigned int left = left_in_msg(s);
                             s->meta.curr_msg_off += left;
@@ -1475,6 +1545,14 @@ out:
         }
     }
     MUTEX_UNLOCK(&s->buf_mgmt.lock);
+    if ((s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
+        s->meta.have_timestamp && !s->meta.rx_epoch_data_invalidated) {
+        sync_timestamp = s->meta.curr_timestamp;
+        sync_timestamp_valid = true;
+        sync_epoch_id = s->meta.msg_epoch_id_valid
+            ? s->meta.msg_epoch_id : s->meta.rx_epoch_expected_id;
+    }
     MUTEX_UNLOCK(&s->lock);
 
     /* Keep stream discontinuities in the same device event history as RF
@@ -1492,8 +1570,15 @@ out:
     }
 
     if (withheld_reason != 0 && s->dev != NULL && s->dev->board != NULL &&
-        s->dev->board->rx_data_withheld != NULL) {
-        s->dev->board->rx_data_withheld(s->dev, withheld_reason);
+        (s->dev->board->rx_data_withheld_at != NULL ||
+         s->dev->board->rx_data_withheld != NULL)) {
+        if (s->dev->board->rx_data_withheld_at != NULL) {
+            s->dev->board->rx_data_withheld_at(
+                s->dev, withheld_reason, withheld_epoch_id,
+                withheld_timestamp, withheld_timestamp_valid);
+        } else if (s->dev->board->rx_data_withheld != NULL) {
+            s->dev->board->rx_data_withheld(s->dev, withheld_reason);
+        }
     }
 
     /* Preserve both facts when a parser rejects data and the caller then
@@ -1502,9 +1587,17 @@ out:
      * specific parser/epoch reason with the read outcome. A timeout is never
      * evidence of valid IQ. */
     if (status == BLADERF_ERR_TIMEOUT && s->dev != NULL &&
-        s->dev->board != NULL && s->dev->board->rx_data_withheld != NULL) {
-        s->dev->board->rx_data_withheld(
-            s->dev, BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+        s->dev->board != NULL &&
+        (s->dev->board->rx_data_withheld_at != NULL ||
+         s->dev->board->rx_data_withheld != NULL)) {
+        if (s->dev->board->rx_data_withheld_at != NULL) {
+            s->dev->board->rx_data_withheld_at(
+                s->dev, BLADERF_RF_WITHHELD_SYNC_TIMEOUT, sync_epoch_id,
+                sync_timestamp, sync_timestamp_valid);
+        } else if (s->dev->board->rx_data_withheld != NULL) {
+            s->dev->board->rx_data_withheld(
+                s->dev, BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+        }
     }
 
     return status;

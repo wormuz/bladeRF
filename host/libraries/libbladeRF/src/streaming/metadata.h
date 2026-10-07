@@ -280,9 +280,13 @@ static inline enum metadata_rx_epoch_disposition metadata_rx_epoch_disposition(
                              METADATA_RX_EPOCH_DROP_MESSAGE;
     }
 
+    /* `expected_timestamp` is undefined until a first META header seeds the
+     * continuity cursor. Comparing its zero-initialized value to the epoch
+     * boundary falsely classified a packet that starts exactly at the
+     * boundary as a withheld timestamp prefix. */
     if (boundary_enabled &&
         (message_timestamp < minimum_timestamp ||
-         expected_timestamp < minimum_timestamp)) {
+         (have_timestamp && expected_timestamp < minimum_timestamp))) {
         return METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX;
     }
 
