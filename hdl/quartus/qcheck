@@ -1130,12 +1130,35 @@ def check_qgate_sta_resolution():
                  "a stale report can reject or approve the wrong FPGA image")
             return
 
+        actual_sta.touch()
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "Design Assistant report predates this STA build" not in result.stdout):
+            fail("qgate-stale-design-assistant-fails-closed",
+                 "qgate accepted a DRC report from before the current fitted netlist",
+                 "a stale CDC report cannot certify a newer bitstream")
+            return
+        actual_drc.touch()
+
+        actual_drc.unlink()
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "Design Assistant report not found" not in result.stdout):
+            fail("qgate-missing-design-assistant-fails-closed",
+                 "qgate accepted a build without a Design Assistant report",
+                 "STA closure alone does not establish CDC closure")
+            return
         actual_drc.write_text(
             "; Design Assistant Status ; Analyzed ;\n"
             "; Total Critical Violations ; 0 ;\n"
             "; Total High Violations ; 8 ;\n"
             "; - Rule D101 ; 0 ;\n"
             "; - Rule D103 ; 8 ;\n")
+
         result = subprocess.run(
             [str(qgate), str(log)], text=True, capture_output=True,
             check=False)
