@@ -535,6 +535,10 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
         return;
     }
 
+    /* Revoke sync reads before publishing the fault and issuing the NIOS
+     * ABORT request. A reader starting in that control-transfer window must
+     * not consume a queued buffer under the old certified generation. */
+    sync_rx_epoch_revoke_delivery(&board_data->sync[BLADERF_RX]);
     bladerf2_rx_data_withheld_reset(dev);
     event.host_monotonic_ns = _monotonic_ns();
     event.epoch_id = observed_epoch_id;

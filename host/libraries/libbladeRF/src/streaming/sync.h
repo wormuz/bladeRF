@@ -270,6 +270,7 @@ struct bladerf_sync {
      * indefinitely while a transition waits for the same lock. */
     MUTEX rx_epoch_generation_lock;
     uint64_t rx_epoch_generation;
+    uint64_t rx_epoch_certified_generation;
     struct bladerf *dev;
     bool initialized;
     sync_state state;
@@ -328,6 +329,9 @@ int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);
  * old IQ; epoch fencing therefore requires per-message RX timestamps. */
 int sync_rx_epoch_require_metadata(struct bladerf_sync *sync);
 int sync_rx_epoch_invalidate(struct bladerf_sync *sync);
+/* Revoke queued sync-RX delivery without taking sync->lock. Used to close
+ * the race before publishing asynchronous hardware-fault notifications. */
+void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync);
 void sync_rx_report_fpga_loss(struct bladerf_sync *sync);
 bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync);
 int sync_rx_epoch_require_transition(struct bladerf_sync *sync);

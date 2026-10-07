@@ -161,6 +161,16 @@ static bool rx_epoch_generation_changed(struct bladerf_sync *sync,
     return rx_epoch_generation_snapshot(sync) != generation;
 }
 
+static bool rx_epoch_delivery_revoked(struct bladerf_sync *sync)
+{
+    bool revoked;
+    MUTEX_LOCK(&sync->rx_epoch_generation_lock);
+    revoked = sync->rx_epoch_generation !=
+              sync->rx_epoch_certified_generation;
+    MUTEX_UNLOCK(&sync->rx_epoch_generation_lock);
+    return revoked;
+}
+
 int sync_init(struct bladerf_sync *sync,
               struct bladerf *dev,
               bladerf_channel_layout layout,
@@ -382,6 +392,7 @@ int sync_init(struct bladerf_sync *sync,
 
     MUTEX_INIT(&sync->rx_epoch_generation_lock);
     sync->rx_epoch_generation = 0;
+    sync->rx_epoch_certified_generation = 0;
     sync->initialized = true;
 
     return 0;
@@ -576,7 +587,7 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     /* Publish cancellation before taking sync->lock. A blocked sync_rx can
      * otherwise keep consuming epoch-filtered callbacks indefinitely while
      * this transition waits for its lock. */
-    (void)rx_epoch_generation_advance(sync);
+    sync_rx_epoch_revoke_delivery(sync);
 
     status = sync_rx_epoch_require_metadata(sync);
     if (status == BLADERF_ERR_UNSUPPORTED) {
@@ -611,6 +622,14 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     }
     MUTEX_UNLOCK(&sync->lock);
     return 0;
+}
+
+void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync)
+{
+    if (sync == NULL || !sync->initialized) {
+        return;
+    }
+    (void)rx_epoch_generation_advance(sync);
 }
 
 /* The FPGA counts sample-loss episodes that do not necessarily overflow the
@@ -786,10 +805,16 @@ int sync_rx_epoch_activate_with_admission_before_deadline(
          * deadline, keep the parser fenced and let the caller abort FPGA. */
         status = sync_rx_epoch_check_deadline(deadline_ns);
         if (status == 0) {
+            /* Keep epoch generation and the parser latch one commit: an
+             * invalidator either advances first and leaves IQ fenced, or
+             * advances afterward and revokes this newly certified epoch. */
+            MUTEX_LOCK(&sync->rx_epoch_generation_lock);
             if (prepare != NULL) {
                 status = prepare(context, deadline_ns);
             }
             if (status == 0) {
+                sync->rx_epoch_certified_generation =
+                    sync->rx_epoch_generation;
                 sync->meta.rx_epoch_data_invalidated = false;
                 if (prepare != NULL && finish != NULL) {
                     /* The async admission lock stays held while the sync
@@ -798,6 +823,7 @@ int sync_rx_epoch_activate_with_admission_before_deadline(
                     finish(context);
                 }
             }
+            MUTEX_UNLOCK(&sync->rx_epoch_generation_lock);
         }
     }
     MUTEX_UNLOCK(&sync->lock);
@@ -1007,6 +1033,16 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
      * of draining forever (and resetting the per-buffer timeout each time).
      * A later confirmed epoch clears this latch in
      * sync_rx_epoch_set_min_timestamp(). */
+    if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
+        s->meta.rx_epoch_id_filter_enabled &&
+        rx_epoch_delivery_revoked(s)) {
+        status = BLADERF_ERR_WOULD_BLOCK;
+        withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        goto out;
+    }
+
     if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
         (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
          s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&

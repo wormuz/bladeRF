@@ -810,6 +810,44 @@ static void test_meta_withheld_event_precedes_sync_read_timeout(void)
     fixture_destroy(&f);
 }
 
+static void test_sync_read_fails_closed_before_parser_invalidation(void)
+{
+    struct fixture f;
+    struct bladerf_metadata metadata = {0};
+    int16_t out[128];
+    int16_t sentinel[128];
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1111);
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    memset(out, 0x5a, sizeof(out));
+    memcpy(sentinel, out, sizeof(out));
+
+    /* Runtime fault handling revokes the lockless delivery generation
+     * before event publication and NIOS ABORT, while parser invalidation
+     * still has to wait for sync->lock. A new read in this interval must
+     * already be unable to consume the queued old-epoch buffer. */
+    sync_rx_epoch_revoke_delivery(&f.sync);
+    assert(sync_rx(&f.sync, out, 32, &metadata, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(metadata.actual_count == 0);
+    assert(memcmp(out, sentinel, sizeof(out)) == 0);
+
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 4000, 8) == 0);
+    write_msg(f.buffers[0], 1000, 7, 1222);
+    write_msg(f.buffers[0] + MSG_BYTES, 4000, 8, 1333);
+    f.states[0] = SYNC_BUFFER_FULL;
+    f.lengths[0] = BYTES_PER_BUFFER;
+    receive(&f, out, 32, &metadata);
+    assert(metadata.actual_count == 32);
+    assert(metadata.timestamp == 4000);
+    assert(metadata.rx_epoch_id_valid && metadata.rx_epoch_id == 8);
+    assert_marker(out, 32, 1333, 0);
+    fixture_destroy(&f);
+}
+
 struct deadline_fence_call {
     struct bladerf_sync *sync;
     uint64_t deadline_ns;
@@ -1036,6 +1074,7 @@ int main(void)
     test_worker_overrun_event_history_is_lock_safe();
     test_sync_worker_overrun_published_before_sync_read();
     test_meta_withheld_event_precedes_sync_read_timeout();
+    test_sync_read_fails_closed_before_parser_invalidation();
     test_async_epoch_certificate_commit();
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
