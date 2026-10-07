@@ -1942,14 +1942,19 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
         /* FPGA timestamp is the authoritative first admitted sample. Install
          * it as a lower bound before reporting transition success; sync_rx()
-         * drops stale timestamped messages already queued on USB/host. */
+         * drops stale timestamped messages already queued on USB/host. The
+         * deadline is checked again while holding sync->lock, before the
+         * invalid-data latch can be cleared, so a late mutex acquisition
+         * cannot briefly release IQ before returning timeout. */
+        _test_rx_transition_late_observation("LATE_HOST_FENCE");
         stage_begin_ns = _monotonic_ns();
-        status = sync_rx_epoch_set_min_timestamp(
+        status = sync_rx_epoch_set_min_timestamp_before_deadline(
             &board_data->sync[BLADERF_RX],
             ((uint64_t)timestamp_hi << 32) | timestamp_lo,
             (uint8_t)((epoch_status_word >>
                 NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
-                NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK));
+                NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK),
+            deadline_ns);
         fence_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
@@ -1957,15 +1962,6 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                         epoch_status_word, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
         }
-        _test_rx_transition_late_observation("LATE_HOST_FENCE");
-        if (_deadline_expired(deadline_ns)) {
-            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
-                        BLADERF_RF_STATE_ERROR, 0, 0, epoch_status_word,
-                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
-            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
-                                    final_event);
-        }
-
         _emit_event_with_timestamp(
                    dev, board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,

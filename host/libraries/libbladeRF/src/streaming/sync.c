@@ -19,6 +19,7 @@
 #include <string.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <time.h>
 
 /* Only switch on the verbose debug prints in this file when we *really* want
  * them. Otherwise, compile them out to avoid excessive log level checks
@@ -648,6 +649,17 @@ bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)
     return enabled;
 }
 
+static int sync_rx_epoch_check_deadline(uint64_t deadline_ns)
+{
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    const uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000ULL +
+                            (uint64_t)now.tv_nsec;
+    return now_ns >= deadline_ns ? BLADERF_ERR_TIMEOUT : 0;
+}
+
 /* A stream parser replacement loses packet state and metadata queued under
  * the previous stream. Keep certified RX fail-closed until a fresh hardware
  * transition supplies the new epoch ID and first-valid timestamp. */
@@ -678,9 +690,22 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id)
 {
+    return sync_rx_epoch_set_min_timestamp_before_deadline(
+        sync, min_timestamp, epoch_id, UINT64_MAX);
+}
+
+int sync_rx_epoch_set_min_timestamp_before_deadline(
+    struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
+    uint64_t deadline_ns)
+{
     int status = sync_rx_epoch_require_metadata(sync);
-    if (status != 0 || sync == NULL || !sync->initialized) {
+    if (status != 0 || sync == NULL) {
         return status;
+    }
+    if (!sync->initialized) {
+        /* Async-only RX has no sync parser lock, but the transition deadline
+         * still applies before its epoch-valid event is published. */
+        return sync_rx_epoch_check_deadline(deadline_ns);
     }
 
     MUTEX_LOCK(&sync->lock);
@@ -688,12 +713,17 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
         (sync->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
         status = BLADERF_ERR_INVAL;
     } else {
-        sync->meta.rx_epoch_min_timestamp = min_timestamp;
-        sync->meta.rx_epoch_boundary_enabled = true;
-        sync->meta.rx_epoch_expected_id = epoch_id;
-        sync->meta.rx_epoch_id_filter_enabled = true;
-        sync->meta.rx_epoch_data_invalidated = false;
-        sync->buf_mgmt.rx_epoch_trace_remaining = 4;
+        /* Keep queued IQ fenced if the RF transition's deadline expired
+         * while this thread waited for sync->lock. */
+        status = sync_rx_epoch_check_deadline(deadline_ns);
+        if (status == 0) {
+            sync->meta.rx_epoch_min_timestamp = min_timestamp;
+            sync->meta.rx_epoch_boundary_enabled = true;
+            sync->meta.rx_epoch_expected_id = epoch_id;
+            sync->meta.rx_epoch_id_filter_enabled = true;
+            sync->meta.rx_epoch_data_invalidated = false;
+            sync->buf_mgmt.rx_epoch_trace_remaining = 4;
+        }
     }
     MUTEX_UNLOCK(&sync->lock);
 
@@ -704,7 +734,7 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
  * The FPGA's first-valid timestamp is not available until the transition
  * completes, but the new epoch ID is known before ARM. Installing this
  * filter first prevents old-epoch samples from escaping during a failed or
- * still-pending RFIC transition. sync_rx_epoch_set_min_timestamp() tightens
+ * still-pending RFIC transition. The timestamp-boundary setter tightens
  * the same filter after FPGA reports the exact boundary. */
 int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id)
 {

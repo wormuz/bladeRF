@@ -637,6 +637,82 @@ static void test_meta_withheld_event_precedes_sync_read_timeout(void)
     fixture_destroy(&f);
 }
 
+struct deadline_fence_call {
+    struct bladerf_sync *sync;
+    uint64_t deadline_ns;
+    atomic_bool entered;
+    int status;
+};
+
+static void *set_deadline_fence_thread(void *arg)
+{
+    struct deadline_fence_call *call = arg;
+    atomic_store(&call->entered, true);
+    call->status = sync_rx_epoch_set_min_timestamp_before_deadline(
+        call->sync, 2000, 8, call->deadline_ns);
+    return NULL;
+}
+
+static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
+{
+    struct fixture f;
+    struct bladerf_sync async_only_sync = {0};
+    struct bladerf_metadata metadata = {0};
+    int16_t samples[2 * MSG_SAMPLES] = {0};
+    pthread_t fence_thread;
+    struct deadline_fence_call call = {0};
+    struct timespec now, hold = {.tv_sec = 0, .tv_nsec = 100000000};
+
+    fixture_init(&f);
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    write_msg(f.buffers[0], 2000, 8, 1666);
+
+    /* Async-only configurations have no sync parser to lock, but the
+     * transition deadline still applies before their epoch-valid event. */
+    assert(sync_rx_epoch_set_min_timestamp_before_deadline(
+               &async_only_sync, 2000, 8, 0) == BLADERF_ERR_TIMEOUT);
+
+    /* A deadline already in the past must not clear the parser's invalid
+     * latch, even when the queued packet has the expected epoch and sample
+     * timestamp. */
+    assert(sync_rx_epoch_set_min_timestamp_before_deadline(
+               &f.sync, 2000, 8, 0) == BLADERF_ERR_TIMEOUT);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    assert(f.sync.meta.rx_epoch_expected_id == 8);
+    assert(f.sync.meta.rx_epoch_min_timestamp == 0);
+
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, samples, MSG_SAMPLES, &metadata, 1) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(metadata.actual_count == 0);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+
+    /* Also force the actual lock-wait race: the caller's deadline is live
+     * when the thread starts, but expires while it is blocked on sync->lock.
+     * The atomic deadline check must reject the update without admitting IQ. */
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    call.sync = &f.sync;
+    call.deadline_ns = (uint64_t)now.tv_sec * 1000000000ULL +
+                       (uint64_t)now.tv_nsec + 50000000ULL;
+    atomic_store(&call.entered, false);
+    MUTEX_LOCK(&f.sync.lock);
+    assert(pthread_create(&fence_thread, NULL,
+                          set_deadline_fence_thread, &call) == 0);
+    while (!atomic_load(&call.entered)) {
+        nanosleep(&(struct timespec){.tv_sec = 0, .tv_nsec = 1000000}, NULL);
+    }
+    nanosleep(&hold, NULL);
+    MUTEX_UNLOCK(&f.sync.lock);
+    assert(pthread_join(fence_thread, NULL) == 0);
+    assert(call.status == BLADERF_ERR_TIMEOUT);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+
+    /* A fresh, non-expired explicit fence is the only operation that
+     * reopens sample admission. */
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 2000, 8) == 0);
+    fixture_destroy(&f);
+}
+
 int main(void)
 {
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
@@ -656,6 +732,7 @@ int main(void)
     test_worker_overrun_event_history_is_lock_safe();
     test_sync_worker_overrun_published_before_sync_read();
     test_meta_withheld_event_precedes_sync_read_timeout();
+    test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
     test_async_timestamp_continuity();

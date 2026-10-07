@@ -334,5 +334,10 @@ int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id);
 int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
                                     uint64_t min_timestamp,
                                     uint8_t epoch_id);
+/* Apply the final RX timestamp fence only before the transition deadline;
+ * an expired call leaves RX epoch data invalidated. */
+int sync_rx_epoch_set_min_timestamp_before_deadline(
+    struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
+    uint64_t deadline_ns);
 
 #endif

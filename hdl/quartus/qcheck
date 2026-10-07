@@ -899,7 +899,8 @@ def check_rx_epoch_host_timestamp_fence():
     # Both tune modes share the same fence-before-retune contract.
     retune = min((pos for pos in (retune_host, retune_fastlock) if pos >= 0),
                  default=-1)
-    fence = transition_text.find("sync_rx_epoch_set_min_timestamp(")
+    fence = transition_text.find(
+        "sync_rx_epoch_set_min_timestamp_before_deadline(")
     valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
     if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or valid < 0 or
             not (begin < fence_ack < retune and fence < valid)):

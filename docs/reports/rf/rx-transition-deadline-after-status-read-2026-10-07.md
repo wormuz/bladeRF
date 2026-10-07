@@ -14,6 +14,13 @@ timestamp, link-status, or host-fence completion returns
 The public header documents that an observation at or after the deadline does
 not satisfy the wait. No sleep or sample discard establishes validity.
 
+The host timestamp fence receives the same absolute monotonic deadline. For
+sync RX, it checks the deadline while holding the parser mutex and leaves
+`rx_epoch_data_invalidated` set if the deadline expired while waiting for
+that lock. This prevents a late fence update from briefly releasing queued IQ
+before the transition returns timeout. Async-only RX performs the same
+deadline check before its epoch-valid notification.
+
 The test-only transition fault build can delay a selected successful
 observation by 150 ms. The positive-timeout harness now covers ordinary
 missing-state stalls and late PLL, ENSM, BBPLL, COMPLETE, epoch, timestamp,
@@ -26,6 +33,11 @@ Validation completed:
 - test-injection library and strict C harness compilation passed;
 - RX transition requirement policy and RX epoch metadata tests passed;
 - sync epoch traversal and shared-clock invalidation tests passed;
+- sync traversal verifies that a past-deadline fence leaves the parser
+  invalidated and withholds a matching epoch/timestamp packet;
+- a lock-contention regression starts the fence before deadline, holds the
+  parser mutex past it, and verifies the fence returns timeout without
+  admitting IQ;
 - `hdl/quartus/qcheck` passed after updating its stale source token from the
   removed metadata-preflight helper to the current sync invalidation path;
 - `git diff --check` passed.
@@ -33,4 +45,5 @@ Validation completed:
 The live `RX1/RX2/RX_X2` harness could not open the attached device:
 `get_fpga_version` returned `Operation timed out`. Therefore late-observation
 hardware behavior remains unqualified; the failure is not counted as a test
-pass. No services were started.
+pass. The test-only library and strict C harness compile were repeated after
+the deadline-aware sync-fence change. No services were started.
