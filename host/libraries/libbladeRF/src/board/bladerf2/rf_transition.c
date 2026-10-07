@@ -525,9 +525,9 @@ static void *rx_fault_monitor_task(void *arg)
         int status = 0;
         int rfic_status = 0;
 
-        /* NIOS bulk control requests share endpoints with configuration
-         * traffic. Hold dev->lock only across the short status read, and
-         * never perform this request from a libusb stream callback. */
+        /* NIOS bulk control and AD9361 SPI requests share serialization with
+         * configuration traffic. Hold dev->lock only across these short
+         * status reads, and never perform them from a libusb stream callback. */
         WITH_MUTEX(&dev->lock, {
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             epoch_certified =
