@@ -4892,6 +4892,10 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_WISHBONE (1U << 27)
 /** Feature mode changes sample-rate/format interpretation for RX. */
 #define BLADERF_RF_INVALIDATE_FEATURE (1U << 28)
+/** Runtime RFFE RX1/RX2 enable mask differs from the certified channel set. */
+#define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED (1U << 29)
+/** RFFE RX1/RX2 enable mask could not be read during epoch monitoring. */
+#define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE (1U << 30)
 
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)

@@ -6,7 +6,8 @@
  * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
  * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT, or use the
  * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION, or
- * RUNTIME_RFIC_* values to verify runtime control-plane loss handling. */
+ * RUNTIME_RFIC_* and RUNTIME_RX_CHANNEL_* values to verify runtime
+ * control-plane loss handling. */
 #include <libbladeRF.h>
 
 #include <stdbool.h>
@@ -70,6 +71,8 @@ int main(int argc, char **argv)
     int expected_error = 0;
     uint32_t expected_rfic_mask = 0;
     uint32_t expected_rfic_value = 0;
+    uint32_t expected_status_mask = 0;
+    uint32_t expected_status_value = 0;
     uint32_t transaction_id = 0;
     int status;
 
@@ -110,6 +113,16 @@ int main(int argc, char **argv)
     } else if (strcmp(fault_mode, "RUNTIME_RFIC_BBPLL_UNLOCKED") == 0) {
         expected_reason = BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED;
         expected_rfic_mask = 0x80;
+    } else if (strcmp(fault_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED;
+        expected_status_mask = 0x303;
+        const uint32_t expected_mask = (enable_rx1 ? 1u : 0u) |
+            (enable_rx2 ? 2u : 0u);
+        expected_status_value = (expected_mask << 8) | (expected_mask ^ 1u);
+    } else if (strcmp(fault_mode,
+                      "RUNTIME_RX_CHANNEL_STATUS_READ_FAILURE") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE;
+        expected_error = BLADERF_ERR_IO;
     } else if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
         fprintf(stderr, "unknown monitor injection mode: %s\n", fault_mode);
         return 2;
@@ -248,6 +261,8 @@ int main(int argc, char **argv)
                  (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0) &&
                 (events[i].rfic_status & expected_rfic_mask) ==
                     expected_rfic_value &&
+                (events[i].rfic_status & expected_status_mask) ==
+                    expected_status_value &&
                 (expected_error == 0 || events[i].error_code == expected_error) &&
                 events[i].epoch_id == transition_event.epoch_id) {
                 saw_fault_invalidation = true;

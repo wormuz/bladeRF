@@ -617,6 +617,10 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
+        uint32_t rffe_status = 0;
+        uint8_t expected_rx_channel_mask = 0;
+        bool expected_rx_channel_mask_valid = false;
+        int rx_channel_status = 0;
         uint64_t rx_loss_count = 0;
         int status = 0;
         int loss_count_status = 0;
@@ -632,6 +636,9 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_epoch_certified;
             epoch_id = board_data->rf_transition_certified_epoch_id;
+            expected_rx_channel_mask = board_data->rx_channel_enable_mask;
+            expected_rx_channel_mask_valid =
+                board_data->rx_channel_enable_mask_valid;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             transaction_id = board_data->rf_transition_current_id;
             should_poll = board_data->state == STATE_INITIALIZED &&
@@ -639,6 +646,8 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_pending &&
                 !board_data->rf_transition_setter_active;
             if (should_poll) {
+                rx_channel_status = dev->backend->rffe_control_read(
+                    dev, &rffe_status);
                 status = nios_rf_link_status_read(dev, &rf_link_status);
                 if (status == 0 && dev->board->get_loss_event_count != NULL) {
                     loss_count_status = dev->board->get_loss_event_count(
@@ -675,6 +684,36 @@ static void *rx_fault_monitor_task(void *arg)
         if (!should_poll) {
             continue;
         }
+        const char *test_mode = _runtime_rx_monitor_test_mode();
+        if (test_mode != NULL &&
+            strcmp(test_mode, "RUNTIME_RX_CHANNEL_STATUS_READ_FAILURE") == 0) {
+            rx_channel_status = BLADERF_ERR_IO;
+        } else if (test_mode != NULL &&
+                   strcmp(test_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
+            rffe_status ^= (1u << RFFE_CONTROL_MIMO_RX_EN_0);
+        }
+        if (rx_channel_status != 0 || !expected_rx_channel_mask_valid) {
+            const int monitor_error = rx_channel_status != 0
+                ? rx_channel_status : BLADERF_ERR_UNEXPECTED;
+            _invalidate_faulted_rx_epoch(
+                dev, transaction_id, epoch_id,
+                rx_channel_status != 0 ? (uint32_t)rx_channel_status
+                                       : expected_rx_channel_mask,
+                BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE,
+                monitor_error);
+            continue;
+        }
+        const uint8_t observed_rx_channel_mask =
+            (uint8_t)(((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
+                      (((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
+        if (observed_rx_channel_mask != expected_rx_channel_mask) {
+            _invalidate_faulted_rx_epoch(
+                dev, transaction_id, epoch_id,
+                ((uint32_t)expected_rx_channel_mask << 8) |
+                    observed_rx_channel_mask,
+                BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED, 0);
+            continue;
+        }
         if (_test_runtime_rx_status_unavailable()) {
             const char *requested =
                 getenv("BLADERF_TEST_RX_TRANSITION_STALL");
@@ -694,7 +733,6 @@ static void *rx_fault_monitor_task(void *arg)
                 monitor_error);
             continue;
         }
-        const char *test_mode = _runtime_rx_monitor_test_mode();
         if (loss_count_status == 0) {
             (void)_test_runtime_rx_loss_counter(&rx_loss_count);
             bool report_loss = false;
