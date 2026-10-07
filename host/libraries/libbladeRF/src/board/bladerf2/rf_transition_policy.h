@@ -188,6 +188,29 @@ static inline bool bladerf2_rx_layout_matches_channel_mask(
                              ((unsigned int)transition_channel >> 1));
 }
 
+enum bladerf2_rx_channel_mask_observation {
+    BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE = 0,
+    BLADERF2_RX_CHANNEL_MASK_MATCH,
+    BLADERF2_RX_CHANNEL_MASK_CHANGED,
+};
+
+/* A certified RX epoch depends on the channel set remaining observable and
+ * unchanged. Keep this decision in the shared policy layer so the runtime
+ * monitor and native tests exercise the same fail-closed classification. */
+static inline enum bladerf2_rx_channel_mask_observation
+bladerf2_rx_channel_mask_observation(bool status_read_succeeded,
+                                     bool expected_mask_valid,
+                                     uint8_t expected_mask,
+                                     uint8_t observed_mask)
+{
+    if (!status_read_succeeded || !expected_mask_valid) {
+        return BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE;
+    }
+    return expected_mask == observed_mask
+        ? BLADERF2_RX_CHANNEL_MASK_MATCH
+        : BLADERF2_RX_CHANNEL_MASK_CHANGED;
+}
+
 static inline bool bladerf2_rx_x1_consumer_blocks_x2_transition(
     bool require_rx_x2, unsigned int active_async_rx_x1,
     bool sync_rx_x1_configured)

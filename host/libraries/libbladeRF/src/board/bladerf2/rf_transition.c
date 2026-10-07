@@ -692,7 +692,14 @@ static void *rx_fault_monitor_task(void *arg)
                    strcmp(test_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
             rffe_status ^= (1u << RFFE_CONTROL_MIMO_RX_EN_0);
         }
-        if (rx_channel_status != 0 || !expected_rx_channel_mask_valid) {
+        const uint8_t observed_rx_channel_mask =
+            (uint8_t)(((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
+                      (((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
+        const enum bladerf2_rx_channel_mask_observation channel_observation =
+            bladerf2_rx_channel_mask_observation(
+                rx_channel_status == 0, expected_rx_channel_mask_valid,
+                expected_rx_channel_mask, observed_rx_channel_mask);
+        if (channel_observation == BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE) {
             const int monitor_error = rx_channel_status != 0
                 ? rx_channel_status : BLADERF_ERR_UNEXPECTED;
             _invalidate_faulted_rx_epoch(
@@ -703,10 +710,7 @@ static void *rx_fault_monitor_task(void *arg)
                 monitor_error);
             continue;
         }
-        const uint8_t observed_rx_channel_mask =
-            (uint8_t)(((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
-                      (((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
-        if (observed_rx_channel_mask != expected_rx_channel_mask) {
+        if (channel_observation == BLADERF2_RX_CHANNEL_MASK_CHANGED) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id,
                 ((uint32_t)expected_rx_channel_mask << 8) |

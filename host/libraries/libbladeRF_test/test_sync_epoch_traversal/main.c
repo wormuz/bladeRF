@@ -74,6 +74,30 @@ static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 static bool allow_sync_channel_selection = true;
 
+static void test_rx_channel_mask_runtime_policy(void)
+{
+    assert(bladerf2_rx_channel_mask_observation(
+               false, true, 0x1, 0x1) ==
+           BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, false, 0x1, 0x1) ==
+           BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE);
+
+    /* RX1, RX2, and paired RX_X2 all share the same mask observation rule. */
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x1, 0x1) == BLADERF2_RX_CHANNEL_MASK_MATCH);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x2, 0x2) == BLADERF2_RX_CHANNEL_MASK_MATCH);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x3, 0x3) == BLADERF2_RX_CHANNEL_MASK_MATCH);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x1, 0x0) == BLADERF2_RX_CHANNEL_MASK_CHANGED);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x2, 0x0) == BLADERF2_RX_CHANNEL_MASK_CHANGED);
+    assert(bladerf2_rx_channel_mask_observation(
+               true, true, 0x3, 0x1) == BLADERF2_RX_CHANNEL_MASK_CHANGED);
+}
+
 static bool validate_sync_channel_selection(
     struct bladerf *dev, bladerf_channel_layout layout)
 {
@@ -978,6 +1002,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_rx_channel_mask_runtime_policy();
     test_sync_channel_selection_fail_closed();
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META,
