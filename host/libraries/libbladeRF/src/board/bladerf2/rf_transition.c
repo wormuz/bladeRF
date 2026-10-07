@@ -338,6 +338,8 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
                         uint32_t flags)
 {
     struct bladerf_rf_event event = {0};
+    struct bladerf_rf_event invalidation_channel_event;
+    uint32_t invalidation_channel_flags = 0;
 
     /* Later events (PLL, ENSM, epoch-valid) are emitted by wait(), which
      * does not receive the original request again. Preserve the requested
@@ -350,19 +352,28 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
      * report before the gate confirms one opened. */
     event.epoch_id           = epoch_id;
     event.rfic_status        = rfic_status;
-    event.fpga_state         = state;
-        event.event_type         = type;
-        event.flags              = flags;
+    event.fpga_state = state;
+    event.event_type = type;
+    event.flags = flags;
     event.error_code         = error_code;
 
     WITH_MUTEX(&dev->lock, {
         event.host_monotonic_ns = host_monotonic_ns != 0 ?
                                   host_monotonic_ns : _monotonic_ns();
         event.transaction_id = board_data->rf_transition_current_id;
-        event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
-        if (board_data->rf_transition_current_channel ==
-            BLADERF_CHANNEL_RX(1)) {
-            event.flags |= BLADERF_RF_EVENT_F_TRANSITION_RX2;
+        if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED) {
+            /* Invalidation reason bits share the flags word with legacy
+             * channel metadata. Keep the reason byte-for-byte intact and
+             * publish channel provenance as an adjacent companion event. */
+            invalidation_channel_flags =
+                bladerf2_rx_transition_channel_event_flags(
+                    board_data->rf_transition_current_channel, true);
+        } else {
+            event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
+            if (board_data->rf_transition_current_channel ==
+                BLADERF_CHANNEL_RX(1)) {
+                event.flags |= BLADERF_RF_EVENT_F_TRANSITION_RX2;
+            }
         }
         if (requested_hz == 0) {
             requested_hz = board_data->rf_transition_requested_frequency_hz;
@@ -390,6 +401,15 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
          * failed host activation cannot leak IQ after wait() reports error. */
         MUTEX_LOCK(&board_data->rf_transition_event_lock);
         bladerf2_rf_event_append_locked(board_data, &event);
+        if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
+            (invalidation_channel_flags &
+             BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID) != 0) {
+            invalidation_channel_event =
+                bladerf2_rx_invalidation_channel_event(
+                    &event, invalidation_channel_flags);
+            bladerf2_rf_event_append_locked(
+                board_data, &invalidation_channel_event);
+        }
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
         COND_SIGNAL(&board_data->rx_async_epoch_cond);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);

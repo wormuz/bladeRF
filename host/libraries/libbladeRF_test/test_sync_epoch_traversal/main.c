@@ -380,7 +380,12 @@ static void test_unsupported_format_event(void)
         &board_data->rf_transition_events[0];
     assert(event->event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED);
     assert(event->epoch_id == 7);
-    assert(event->flags == BLADERF_FORMAT_PACKET_META);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           BLADERF_FORMAT_PACKET_META);
+    assert((event->flags & BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID) != 0);
+    assert((event->flags & BLADERF_RF_EVENT_F_TRANSITION_RX2) == 0);
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
     assert(board_data->rf_transition_first_host_data_failure ==
            BLADERF_ERR_UNSUPPORTED);
@@ -403,7 +408,10 @@ static void test_unsupported_format_event(void)
     assert(board_data->rf_transition_event_count == 5);
     assert(board_data->rf_transition_events[4].event_type ==
            BLADERF_RF_EVT_RX_DATA_WITHHELD);
-    assert(board_data->rf_transition_events[4].flags ==
+    assert((board_data->rf_transition_events[4].flags &
+            ~(BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
            BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
@@ -445,9 +453,12 @@ static void test_worker_overrun_event_history_is_lock_safe(void)
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
     assert(event->epoch_id == 9);
     assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_VALID);
-    assert(event->flags == (BLADERF_RF_STREAM_STATUS_OVERRUN |
-                            BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
-                            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           (BLADERF_RF_STREAM_STATUS_OVERRUN |
+            BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
     assert(board_data->rx_async_data_withheld_active);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
@@ -481,7 +492,11 @@ static void test_async_data_withheld_event(void)
         &board_data->rf_transition_events[0];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(event->epoch_id == 9);
-    assert(event->flags == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_INVALID);
 
     /* Model the rearm performed after a certified packet. A later fault in
@@ -507,21 +522,30 @@ static void test_async_data_withheld_event(void)
     assert(board_data->rf_transition_event_count == 4);
     event = &board_data->rf_transition_events[3];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
-    assert(event->flags == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_USB_OVERFLOW);
     assert(board_data->rf_transition_event_count == 5);
     event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
-    assert(event->flags == BLADERF_RF_WITHHELD_USB_OVERFLOW);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           BLADERF_RF_WITHHELD_USB_OVERFLOW);
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_async_stream_overrun(&dev);
     MUTEX_UNLOCK(&dev.lock);
     assert(board_data->rf_transition_event_count == 6);
     event = &board_data->rf_transition_events[5];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
-    assert(event->flags == (BLADERF_RF_STREAM_STATUS_OVERRUN |
-                            BLADERF_RF_STREAM_STATUS_ASYNC_USB));
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           (BLADERF_RF_STREAM_STATUS_OVERRUN |
+            BLADERF_RF_STREAM_STATUS_ASYNC_USB));
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
@@ -711,7 +735,9 @@ static void test_rx_x2_layout_rejection_event(void)
     assert(event->event_type == BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED);
     assert(event->transaction_id == 123);
     assert(event->epoch_id == 9);
-    assert(event->flags == BLADERF_RX_X1);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) == BLADERF_RX_X1);
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
     assert(board_data.rf_transition_first_host_data_failure ==
            BLADERF_ERR_UNSUPPORTED);

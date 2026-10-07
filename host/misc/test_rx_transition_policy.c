@@ -54,6 +54,23 @@ int main(void)
     assert(invalidation_channel.error_code == 0);
     assert(invalidation.flags == BLADERF_RF_INVALIDATE_FEATURE);
 
+    /* A transition-time RFIC failure keeps its reason in the primary event;
+     * channel provenance belongs only to the adjacent companion record. */
+    invalidation.flags = BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED;
+    invalidation_channel = bladerf2_rx_invalidation_channel_event(
+        &invalidation,
+        bladerf2_rx_transition_channel_event_flags(
+            BLADERF_CHANNEL_RX(1), true));
+    assert(invalidation.flags == BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED);
+    assert(invalidation_channel.event_type ==
+           BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL);
+    assert(invalidation_channel.flags ==
+           (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2));
+    assert(invalidation_channel.epoch_id == invalidation.epoch_id);
+    assert(invalidation_channel.host_monotonic_ns ==
+           invalidation.host_monotonic_ns);
+
     /* A status read which returns at or after the deadline is not a timely
      * completion, even if its sampled hardware bit is already asserted. */
     assert(!bladerf2_rf_transition_deadline_expired(99, 100));
