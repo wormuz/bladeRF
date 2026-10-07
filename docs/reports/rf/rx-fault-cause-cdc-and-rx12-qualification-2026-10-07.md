@@ -177,13 +177,17 @@ host-data lifecycle event instead of the transition completion event. The
 selector now skips post-transition lifecycle events and returns only a
 transition-terminal event. If event-ring pressure removed every terminal
 event, the wait fails closed instead of returning `CONFIG_ACCEPTED` as a
-success. The history still retains and exposes all events when present.
+success. `bladerf_rx_transition_get_events()` also requires a retained
+transition-terminal event to claim complete history; a later host-data event
+cannot conceal eviction of the completion event. The history still retains
+and exposes all events when present.
 
 The policy regression exercises `CONFIG_ACCEPTED → RX_EPOCH_VALID →
 RX_FIRST_VALID_HOST_DATA → RX_DATA_RESUMED` and requires the waiter result to
 remain `RX_EPOCH_VALID`; a second case removes that terminal event and requires
-selection to fail. `run_rx_transition_policy_test.sh`, the rebuilt libbladeRF
-target, and `libbladeRF_test_sync_epoch_traversal` passed. Hardware race
+selection to fail. The terminal classifier also rejects both host-data event
+types as transition completion. `run_rx_transition_policy_test.sh`, the rebuilt
+libbladeRF target, and `libbladeRF_test_sync_epoch_traversal` passed. Hardware race
 qualification remains pending. The board enumerates, but the live handoff
 runner currently fails during `bladerf_open()` while reading FPGA version
 (`BLADERF_ERR_TIMEOUT`), so no live race result is claimed.

@@ -10,6 +10,15 @@ int main(void)
     struct bladerf_rf_event events[4] = {0};
     struct bladerf_rf_event final_event = {0};
 
+    assert(bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_RX_EPOCH_VALID));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_RX_DATA_RESUMED));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_CONFIG_ACCEPTED));
+
     /* Empty requests are rejected; a control-only completion must still
      * identify at least one observed hardware condition. */
     assert(!bladerf2_rf_transition_normalize_requirements(0, false,

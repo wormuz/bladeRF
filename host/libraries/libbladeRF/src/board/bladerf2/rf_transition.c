@@ -1933,17 +1933,6 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         ? BLADERF_ERR_UNEXPECTED : 0;
 }
 
-static bool _is_terminal_event(bladerf_rf_event_type type)
-{
-    return type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
-           type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
-           type == BLADERF_RF_EVT_RX_DATA_RESUMED ||
-           type == BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
-           type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
-           type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
-           type == BLADERF_RF_EVT_ERROR;
-}
-
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
     struct bladerf *dev, const struct bladerf_metadata *metadata)
 {
@@ -2061,9 +2050,9 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event first_event = {0};
-    struct bladerf_rf_event last_event = {0};
     uint32_t found = 0;
     bool complete = false;
+    bool transition_terminal_event_found = false;
 
     if (dev == NULL || transaction_id == 0 || event_count == NULL ||
         history_complete == NULL || (capacity != 0 && events == NULL)) {
@@ -2097,14 +2086,17 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
             if (found < capacity) {
                 events[found] = *event;
             }
-            last_event = *event;
+            if (bladerf2_rf_event_is_transition_terminal(
+                    event->event_type)) {
+                transition_terminal_event_found = true;
+            }
             found++;
         }
 
         complete = found != 0 &&
                    first_event.event_type == BLADERF_RF_EVT_CONFIG_ACCEPTED &&
                    first_event.fpga_state == BLADERF_RF_STATE_CONFIG_PENDING &&
-                   _is_terminal_event(last_event.event_type) &&
+                   transition_terminal_event_found &&
                    !(board_data->rf_transition_pending &&
                      board_data->rf_transition_current_id == transaction_id);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
