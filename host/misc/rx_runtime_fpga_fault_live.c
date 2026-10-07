@@ -155,11 +155,57 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Prove recovery requires a fresh explicit epoch after the injected
+     * fault/status failure has been removed. */
+    if (setenv("BLADERF_TEST_RX_TRANSITION_STALL", "", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    request.target_frequency_hz += 100000;
+    status = bladerf_rx_transition_begin(dev, transition_channel, &request,
+                                         &transaction_id);
+    if (status != 0) goto cleanup;
+    struct bladerf_rf_event recovery_event = {0};
+    status = bladerf_rx_transition_wait(dev, transaction_id, &recovery_event,
+                                        2000);
+    if (status != 0 ||
+        recovery_event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        recovery_event.epoch_id == transition_event.epoch_id) {
+        fprintf(stderr, "explicit recovery transition failed: %s event=%u\n",
+                bladerf_strerror(status), recovery_event.event_type);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    struct bladerf_metadata recovery_metadata = {
+        .flags = BLADERF_META_FLAG_RX_NOW
+    };
+    /* The abort can leave one explicit overrun notification queued for the
+     * first read after recovery. Consume that event-only read, then require
+     * the following call to return the new epoch's IQ. */
+    status = bladerf_sync_rx(dev, samples, 8192, &recovery_metadata, 1000);
+    if (status == BLADERF_ERR_WOULD_BLOCK &&
+        recovery_metadata.actual_count == 0) {
+        recovery_metadata.flags = BLADERF_META_FLAG_RX_NOW;
+        status = bladerf_sync_rx(dev, samples, 8192, &recovery_metadata, 1000);
+    }
+    if (status != 0 || recovery_metadata.actual_count < 8192 - 16 ||
+        !recovery_metadata.rx_epoch_id_valid ||
+        recovery_metadata.rx_epoch_id != recovery_event.epoch_id) {
+        fprintf(stderr, "explicit recovery invalid IQ: %s count=%u epoch=%u/%u "
+                "epoch_valid=%u meta_status=0x%x\n",
+                bladerf_strerror(status), recovery_metadata.actual_count,
+                recovery_metadata.rx_epoch_id, recovery_event.epoch_id,
+                recovery_metadata.rx_epoch_id_valid, recovery_metadata.status);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+
     printf("runtime FPGA RX fault monitor: PASS layout=%s epoch=%u "
-           "reason=0x%x iq_count=0\n",
+           "reason=0x%x iq_count=0 recovered_epoch=%u recovered_iq=%u\n",
            layout == BLADERF_RX_X2 ? "RX_X2" :
            (transition_channel == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
-           transition_event.epoch_id, expected_reason);
+           transition_event.epoch_id, expected_reason, recovery_event.epoch_id,
+           recovery_metadata.actual_count);
     status = 0;
 
 cleanup:
