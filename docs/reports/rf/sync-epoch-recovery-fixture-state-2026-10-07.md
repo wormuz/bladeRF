@@ -20,8 +20,12 @@ current epoch/timestamp data reaches the caller.
 ## Validation
 
 - Rebuilt `libbladeRF_test_sync_epoch_traversal` and ran it successfully.
+- `host/misc/run_sync_rx_epoch_traversal_test.sh`: PASS.
 - `host/misc/run_rx_transition_policy_test.sh`: PASS.
 - `host/misc/run_rx_epoch_metadata_test.sh`: PASS.
+- `host/misc/run_rx_epoch_gate_tb.sh`: PASS for the epoch gate, RX1-only,
+  RX2-only, paired RX_X2, FIFO fence, abort, and handshake cases.
+- `ghdl --synth --std=08 rx_epoch_gate`: PASS.
 - `hdl/quartus/qcheck`: clean (existing informational notes only).
 - `git diff --check`: PASS.
 
