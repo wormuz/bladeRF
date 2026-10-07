@@ -2313,11 +2313,17 @@ int bladerf_xb200_set_filterbank(struct bladerf *dev,
                                  bladerf_xb200_filter filter)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb200_set_filterbank(dev, ch, filter);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
@@ -2339,11 +2345,17 @@ int bladerf_xb200_set_path(struct bladerf *dev,
                            bladerf_xb200_path path)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb200_set_path(dev, ch, path);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 

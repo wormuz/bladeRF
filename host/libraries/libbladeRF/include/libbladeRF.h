@@ -4860,6 +4860,7 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_BANDWIDTH  (1U << 2)
 #define BLADERF_RF_INVALIDATE_GAIN       (1U << 3)
 #define BLADERF_RF_INVALIDATE_GAIN_MODE  (1U << 4)
+/** RF port or external RF path/filter selection changed. */
 #define BLADERF_RF_INVALIDATE_RF_PORT    (1U << 5)
 #define BLADERF_RF_INVALIDATE_CORRECTION (1U << 6)
 #define BLADERF_RF_INVALIDATE_RX_MUX     (1U << 7)

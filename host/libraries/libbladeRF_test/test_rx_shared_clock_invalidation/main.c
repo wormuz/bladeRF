@@ -3,6 +3,7 @@
 
 #include "host_config.h"
 #include "board/board.h"
+#include "backend/backend.h"
 
 struct mock_state {
     int invalidate_status;
@@ -25,6 +26,14 @@ struct mock_state {
     uint32_t config_gpio_value;
     uint32_t wishbone_address;
     uint32_t wishbone_value;
+    uint32_t expansion_gpio_value;
+    uint8_t lms_5a;
+    unsigned int expansion_gpio_write_calls;
+    unsigned int lms_write_calls;
+};
+
+struct fake_xb200_data {
+    bladerf_xb200_filter auto_filter[2];
 };
 
 static int mock_invalidate_rx(struct bladerf *dev, bladerf_channel ch,
@@ -104,6 +113,40 @@ static int mock_wishbone_write(struct bladerf *dev, uint32_t address,
     return 0;
 }
 
+static int mock_expansion_gpio_read(struct bladerf *dev, uint32_t *value)
+{
+    struct mock_state *state = dev->board_data;
+    *value = state->expansion_gpio_value;
+    return 0;
+}
+
+static int mock_expansion_gpio_write(struct bladerf *dev, uint32_t mask,
+                                     uint32_t value)
+{
+    struct mock_state *state = dev->board_data;
+    state->expansion_gpio_value =
+        (state->expansion_gpio_value & ~mask) | (value & mask);
+    state->expansion_gpio_write_calls++;
+    return 0;
+}
+
+static int mock_lms_read(struct bladerf *dev, uint8_t address, uint8_t *value)
+{
+    struct mock_state *state = dev->board_data;
+    assert(address == 0x5a);
+    *value = state->lms_5a;
+    return 0;
+}
+
+static int mock_lms_write(struct bladerf *dev, uint8_t address, uint8_t value)
+{
+    struct mock_state *state = dev->board_data;
+    assert(address == 0x5a);
+    state->lms_5a = value;
+    state->lms_write_calls++;
+    return 0;
+}
+
 static const struct board_fns mock_board = {
     .name = "bladerf2",
     .invalidate_rx_data = mock_invalidate_rx,
@@ -115,10 +158,20 @@ static const struct board_fns mock_board = {
     .wishbone_master_write = mock_wishbone_write,
 };
 
+static const struct backend_fns mock_backend = {
+    .expansion_gpio_read = mock_expansion_gpio_read,
+    .expansion_gpio_write = mock_expansion_gpio_write,
+    .lms_read = mock_lms_read,
+    .lms_write = mock_lms_write,
+};
+
 int main(void)
 {
     struct bladerf dev;
     struct mock_state state = {0};
+    struct fake_xb200_data xb200_data = {{
+        BLADERF_XB200_50M, BLADERF_XB200_50M,
+    }};
     const bladerf_channel tx0 = BLADERF_CHANNEL_TX(0);
     const bladerf_channel rx0 = BLADERF_CHANNEL_RX(0);
     const bladerf_channel rx2 = BLADERF_CHANNEL_RX(1);
@@ -128,7 +181,9 @@ int main(void)
 
     memset(&dev, 0, sizeof(dev));
     dev.board = &mock_board;
+    dev.backend = &mock_backend;
     dev.board_data = &state;
+    dev.xb_data = &xb200_data;
     assert(MUTEX_INIT(&dev.lock) == 0);
 
     /* AD9361's TX samplerate API updates both clock chains. Fence RX before
@@ -230,6 +285,44 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(dev.feature == BLADERF_FEATURE_DEFAULT && state.invalidate_calls == 15);
     assert(state.complete_calls == 10);
+
+    /* XB-200 RX filter changes alter the RF path. Fence the common RX epoch
+     * first and publish the dedicated reason before touching the expansion. */
+    state.invalidate_status = 0;
+    assert(bladerf_xb200_set_filterbank(
+               &dev, rx0, BLADERF_XB200_144M) == 0);
+    assert(state.invalidate_calls == 16 && state.complete_calls == 11);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(state.expansion_gpio_write_calls == 1);
+
+    /* The RX bypass/mixer switch also changes the external signal path and
+     * uses both LMS and expansion GPIO controls. */
+    state.expansion_gpio_value |= 0x0800;
+    assert(bladerf_xb200_set_path(
+               &dev, rx0, BLADERF_XB200_MIX) == 0);
+    assert(state.invalidate_calls == 17 && state.complete_calls == 12);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(state.lms_write_calls == 1 &&
+           state.expansion_gpio_write_calls == 2);
+
+    /* XB-200 RX path changes also program LMS and expansion GPIO; a failed
+     * epoch fence must stop before either write. */
+    state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
+    const unsigned int lms_writes_before = state.lms_write_calls;
+    const unsigned int gpio_writes_before = state.expansion_gpio_write_calls;
+    assert(bladerf_xb200_set_path(
+               &dev, rx0, BLADERF_XB200_MIX) == BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 18 && state.complete_calls == 12);
+    assert(state.lms_write_calls == lms_writes_before &&
+           state.expansion_gpio_write_calls == gpio_writes_before);
+
+    /* TX-only XB-200 filter changes do not invalidate the RX epoch. */
+    state.invalidate_status = 0;
+    assert(bladerf_xb200_set_filterbank(
+               &dev, tx0, BLADERF_XB200_144M) == 0);
+    assert(state.invalidate_calls == 18 && state.complete_calls == 12);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
