@@ -333,7 +333,8 @@ struct board_fns {
      * validator or the synchronous META epoch parser. */
     void (*rx_data_withheld)(struct bladerf *dev, uint32_t reason);
     /* Sync META parsing knows the FPGA timestamp where rejected data begins.
-     * This optional hook preserves that source coordinate in the event. */
+     * It may publish immediately while sync/ring locks are held when no valid
+     * prefix is pending, so implementations must not acquire dev/sync locks. */
     void (*rx_data_withheld_at)(struct bladerf *dev, uint32_t reason,
                                 uint8_t epoch_id, uint64_t fpga_timestamp,
                                 bool fpga_timestamp_valid);

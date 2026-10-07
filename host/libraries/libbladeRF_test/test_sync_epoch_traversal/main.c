@@ -1,9 +1,11 @@
 /* Integration test for sample-META epoch filtering through sync_rx(). */
 #include <assert.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "host_config.h"
 #include "bladeRF.h"
@@ -57,6 +59,7 @@ static uint32_t sync_withheld_reasons[8];
 static bool sync_withheld_timestamp_valid[8];
 static uint8_t sync_withheld_epochs[8];
 static uint64_t sync_withheld_timestamps[8];
+static atomic_bool sync_withheld_observed;
 static unsigned int async_overrun_events;
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;
@@ -100,6 +103,7 @@ static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
     sync_withheld_events++;
     sync_withheld_order = ++sync_event_order;
     sync_withheld_reason = reason;
+    atomic_store(&sync_withheld_observed, true);
     if (sync_withheld_events <=
         sizeof(sync_withheld_reasons) / sizeof(sync_withheld_reasons[0])) {
         sync_withheld_reasons[sync_withheld_events - 1] = reason;
@@ -574,6 +578,65 @@ static void test_sync_worker_overrun_published_before_sync_read(void)
     fixture_destroy(&f);
 }
 
+struct blocked_sync_read {
+    struct fixture *fixture;
+    int16_t samples[2 * MSG_SAMPLES];
+    struct bladerf_metadata metadata;
+    atomic_bool done;
+    int status;
+};
+
+static void *blocked_sync_read_thread(void *arg)
+{
+    struct blocked_sync_read *read = arg;
+    memset(&read->metadata, 0, sizeof(read->metadata));
+    read->metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    read->status = sync_rx(&read->fixture->sync, read->samples, 100,
+                           &read->metadata, 300);
+    atomic_store(&read->done, true);
+    return NULL;
+}
+
+static void test_meta_withheld_event_precedes_sync_read_timeout(void)
+{
+    struct fixture f;
+    struct blocked_sync_read read = {0};
+    pthread_t reader;
+
+    fixture_init(&f);
+    read.fixture = &f;
+    write_msg(f.buffers[0], 1000, 7, 2101);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 2201);
+    write_msg(f.buffers[1], 1000 + 2 * MSG_SAMPLES, 7, 2301);
+    write_msg(f.buffers[1] + MSG_BYTES, 1000 + 3 * MSG_SAMPLES, 7, 2401);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 0, 8) == 0);
+    atomic_store(&sync_withheld_observed, false);
+    atomic_store(&read.done, false);
+    assert(pthread_create(&reader, NULL, blocked_sync_read_thread, &read) == 0);
+
+    /* The parser rejects the first old-epoch packet, then the read waits for
+     * new-epoch data. The wrapper's native-event poller must see the reason
+     * while that same sync_rx() call is still blocked, well before timeout. */
+    struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+    for (unsigned int i = 0; i < 100 &&
+         !atomic_load(&sync_withheld_observed); ++i) {
+        nanosleep(&pause, NULL);
+    }
+    const bool event_before_deadline =
+        atomic_load(&sync_withheld_observed) && !atomic_load(&read.done);
+    assert(pthread_join(reader, NULL) == 0);
+
+    assert(event_before_deadline);
+    assert(read.status == BLADERF_ERR_TIMEOUT);
+    assert(read.metadata.actual_count == 0);
+    assert(sync_withheld_reasons[0] ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(sync_withheld_events == 2);
+    assert(sync_withheld_reasons[1] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+
+    fixture_destroy(&f);
+}
+
 int main(void)
 {
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
@@ -592,6 +655,7 @@ int main(void)
     test_unsupported_format_event();
     test_worker_overrun_event_history_is_lock_safe();
     test_sync_worker_overrun_published_before_sync_read();
+    test_meta_withheld_event_precedes_sync_read_timeout();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
     test_async_timestamp_continuity();
