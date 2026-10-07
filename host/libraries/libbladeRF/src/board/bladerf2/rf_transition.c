@@ -385,6 +385,21 @@ static bool _test_runtime_rx_fault(void)
 #endif
 }
 
+static bool _test_runtime_rx_loss_counter(uint64_t *count)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    if (count != NULL && requested != NULL &&
+        strcmp(requested, "RUNTIME_FPGA_RX_LOSS") == 0) {
+        ++*count;
+        return true;
+    }
+#else
+    (void)count;
+#endif
+    return false;
+}
+
 static bool _test_runtime_rx_status_unavailable(void)
 {
 #ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
@@ -525,7 +540,9 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
+        uint64_t rx_loss_count = 0;
         int status = 0;
+        int loss_count_status = 0;
         int rfic_status = 0;
 
         /* NIOS bulk control and AD9361 SPI requests share serialization with
@@ -544,6 +561,12 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active;
             if (should_poll) {
                 status = nios_rf_link_status_read(dev, &rf_link_status);
+                if (status == 0 && dev->board->get_loss_event_count != NULL) {
+                    loss_count_status = dev->board->get_loss_event_count(
+                        dev, BLADERF_RX, &rx_loss_count);
+                } else if (status == 0) {
+                    loss_count_status = BLADERF_ERR_UNSUPPORTED;
+                }
                 if (status == 0 &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                         RF_LINK_STATUS_VERSION_1 &&
@@ -585,6 +608,41 @@ static void *rx_fault_monitor_task(void *arg)
             continue;
         }
         const char *test_mode = _runtime_rx_monitor_test_mode();
+        if (loss_count_status == 0) {
+            (void)_test_runtime_rx_loss_counter(&rx_loss_count);
+            bool report_loss = false;
+            bool counter_reset = false;
+            WITH_MUTEX(&dev->lock, {
+                if (!board_data->rx_fpga_loss_count_valid) {
+                    board_data->rx_fpga_loss_count_last = rx_loss_count;
+                    board_data->rx_fpga_loss_count_valid = true;
+                } else if (rx_loss_count <
+                           board_data->rx_fpga_loss_count_last) {
+                    board_data->rx_fpga_loss_count_last = rx_loss_count;
+                    counter_reset = true;
+                } else if (rx_loss_count >
+                           board_data->rx_fpga_loss_count_last) {
+                    board_data->rx_fpga_loss_count_last = rx_loss_count;
+                    report_loss = true;
+                }
+            });
+            if (report_loss) {
+                bladerf2_rx_fpga_loss(dev, epoch_id, rx_loss_count);
+            }
+            if (counter_reset) {
+                _invalidate_faulted_rx_epoch(
+                    dev, epoch_id, (uint32_t)rx_loss_count,
+                    BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE,
+                    BLADERF_ERR_UNEXPECTED);
+                continue;
+            }
+        } else {
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, (uint32_t)loss_count_status,
+                BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE,
+                loss_count_status);
+            continue;
+        }
         if (test_mode != NULL &&
             strcmp(test_mode, "RUNTIME_RFIC_STATUS_READ_FAILURE") == 0) {
             rfic_status = BLADERF_ERR_UNEXPECTED;
@@ -825,6 +883,45 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev)
         event.readback_rx_lo_hz =
             board_data->rf_transition_readback_frequency_hz;
         event.fpga_state = board_data->rf_transition_state;
+        bladerf2_rf_event_append(board_data, &event);
+        board_data->rf_transition_last_event = event;
+    });
+}
+
+void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
+                           uint64_t loss_count)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* Preserve the discontinuity for blocking sync callers even if they are
+     * not polling the event history. META reads report the overrun bit on the
+     * next call; timestamp continuity still determines which samples are
+     * contiguous. */
+    sync_rx_report_fpga_loss(&board_data->sync[BLADERF_RX]);
+
+    event.host_monotonic_ns = _monotonic_ns();
+    event.epoch_id = epoch_id;
+    event.rfic_status = (uint32_t)loss_count;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+                  BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+
+    WITH_MUTEX(&dev->lock, {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_data_withheld_active = true;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        event.transaction_id = 0;
+        event.requested_rx_lo_hz =
+            board_data->rf_transition_requested_frequency_hz;
+        event.readback_rx_lo_hz =
+            board_data->rf_transition_readback_frequency_hz;
         bladerf2_rf_event_append(board_data, &event);
         board_data->rf_transition_last_event = event;
     });

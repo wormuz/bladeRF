@@ -211,6 +211,8 @@ struct bladerf2_board_data {
     bool rx_fault_monitor_sync_initialized;
     bool rx_fault_monitor_started;
     bool rx_fault_monitor_stop;
+    uint64_t rx_fpga_loss_count_last;
+    bool rx_fpga_loss_count_valid;
 
     /* ADR-0207: bounded chronological history of host-observed RX
      * transition events. Event readers must not take dev->lock because the
@@ -296,6 +298,8 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev);
+void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
+                           uint64_t loss_count);
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev);
 int bladerf2_rx_fault_monitor_start(struct bladerf *dev);
 void bladerf2_rx_fault_monitor_stop(struct bladerf *dev);

@@ -4763,9 +4763,11 @@ typedef enum {
      * `flags` contains one BLADERF_RF_INVALIDATE_* reason. This event has
      * transaction_id=0 because it is not a completed event-driven request. */
     BLADERF_RF_EVT_RX_DATA_INVALIDATED,
-    /** RX discontinuity: sync metadata/queue overrun, or an asynchronous
-     * USB RX short transfer/overflow. IQ from a discontinuous read must not
-     * be treated as a contiguous capture. */
+    /** RX discontinuity: sync metadata/queue overrun, an asynchronous USB RX
+     * short transfer/overflow, or (when
+     * BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS is set) a loss episode counted
+     * in the FPGA sample path. IQ from a discontinuous read must not be
+     * treated as a contiguous capture. */
     BLADERF_RF_EVT_RX_STREAM_OVERRUN,
     /** RX async format cannot carry the epoch identity required by the
      * active data-validity contract. `flags` contains the bladerf_format. */
@@ -4791,6 +4793,11 @@ typedef enum {
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
+/** The RX overrun event came from the FPGA sample-loss counter, not only the
+ * host USB/sync queue. `rfic_status` contains the low 32 bits of the current
+ * FPGA loss-event count; use bladerf_get_loss_event_count() for the full
+ * monotonic count. */
+#define BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS (1U << 1)
 /** Set in bladerf_rf_event.flags when fpga_timestamp is a valid coordinate.
  * Event-specific flag/reason bits remain in the lower 31 bits. */
 #define BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID (1U << 31)
@@ -4816,7 +4823,7 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_BOOTLOADER (1U << 17)
 /** Sticky FPGA RX data-link fault observed during a certified epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
-/** FPGA RX-link status read failed or its protocol version was unsupported. */
+/** FPGA RX-integrity status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
 /** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */
 #define BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED (1U << 20)
@@ -4826,6 +4833,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE (1U << 22)
 /** AD9361 baseband PLL lock was lost or absent. */
 #define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED (1U << 23)
+/** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
+#define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)
 
 /** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)

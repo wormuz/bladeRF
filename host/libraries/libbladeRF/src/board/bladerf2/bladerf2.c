@@ -1008,6 +1008,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
             return status;
         }
         announce_rf_link_epoch(dev, ch);
+        if (!BLADERF_CHANNEL_IS_TX(ch) && !board_data->rf_link_dir_on[0]) {
+            /* The FPGA loss counter resets with the RX sample-domain reset
+             * issued by the first RX module enable. Start monitoring from
+             * that reset boundary; later RX1/RX2 enables share the same
+             * counter and must not move its baseline. */
+            board_data->rx_fpga_loss_count_last = 0;
+            board_data->rx_fpga_loss_count_valid = true;
+        }
         board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = true;
         return 0;
     }

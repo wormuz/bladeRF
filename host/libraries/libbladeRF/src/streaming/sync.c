@@ -559,6 +559,22 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     return 0;
 }
 
+/* The FPGA counts sample-loss episodes that do not necessarily overflow the
+ * host USB queue. Carry that discontinuity to the next sync read so META
+ * callers receive BLADERF_META_STATUS_OVERRUN and raw callers still trigger
+ * the common RX_STREAM_OVERRUN event path. The current buffered prefix stays
+ * readable; timestamps determine where continuity resumes. */
+void sync_rx_report_fpga_loss(struct bladerf_sync *sync)
+{
+    if (sync == NULL || !sync->initialized) {
+        return;
+    }
+
+    MUTEX_LOCK(&sync->buf_mgmt.lock);
+    sync->buf_mgmt.overrun_pending = true;
+    MUTEX_UNLOCK(&sync->buf_mgmt.lock);
+}
+
 bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)
 {
     bool enabled = false;
