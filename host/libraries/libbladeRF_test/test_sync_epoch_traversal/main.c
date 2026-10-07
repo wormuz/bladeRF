@@ -732,6 +732,47 @@ static void test_invalidation_companion_append_is_atomic_at_ring_wrap(void)
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
 }
 
+static void test_shared_invalidation_uses_certified_rx_channel(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    const uint32_t rx1_flags =
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
+    const uint32_t rx2_flags = rx1_flags |
+        BLADERF_RF_EVENT_F_TRANSITION_RX2;
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(1);
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_CLOCK) == 0);
+    board_data.rf_transition_current_channel_valid = true;
+
+    /* Global clock/RFIC/TX-FIR setters have no RX channel argument; they
+     * invalidate the epoch selected by its last explicit RX transition. */
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_CLOCK) == rx2_flags);
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_RFIC_REG) == rx2_flags);
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_TX_FIR) == rx2_flags);
+
+    /* A channel-specific RX setter retains its own call-site channel. */
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_GAIN) == rx1_flags);
+
+    board_data.rf_transition_epoch_contract_enabled = false;
+    assert(bladerf2_rx_invalidation_channel_event_flags(
+               &board_data, BLADERF_CHANNEL_RX(0),
+               BLADERF_RF_INVALIDATE_CLOCK) == 0);
+
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
 static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
@@ -1203,6 +1244,7 @@ int main(void)
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
     test_invalidation_companion_append_is_atomic_at_ring_wrap();
+    test_shared_invalidation_uses_certified_rx_channel();
     test_rx_x2_layout_rejection_event();
     test_async_timestamp_continuity();
 

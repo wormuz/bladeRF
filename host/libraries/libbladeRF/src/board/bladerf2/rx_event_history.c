@@ -350,9 +350,28 @@ uint32_t bladerf2_rx_current_transition_channel_event_flags(
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     flags = bladerf2_rx_transition_channel_event_flags(
         board_data->rf_transition_current_channel,
-        board_data->rf_transition_epoch_contract_enabled);
+        board_data->rf_transition_epoch_contract_enabled &&
+            board_data->rf_transition_current_channel_valid);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return flags;
+}
+
+uint32_t bladerf2_rx_invalidation_channel_event_flags(
+    struct bladerf2_board_data *board_data, bladerf_channel channel,
+    uint32_t reason)
+{
+    const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_RFIC_REG |
+                                    BLADERF_RF_INVALIDATE_TX_FIR |
+                                    BLADERF_RF_INVALIDATE_CLOCK;
+
+    if ((reason & shared_reasons) != 0) {
+        /* These setters have no RX channel argument. Use the channel that
+         * established the shared certified epoch; if there is no active
+         * epoch contract, leave provenance unspecified. */
+        return bladerf2_rx_current_transition_channel_event_flags(board_data);
+    }
+
+    return bladerf2_rx_transition_channel_event_flags(channel, true);
 }
 
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,

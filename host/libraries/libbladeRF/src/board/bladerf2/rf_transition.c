@@ -976,7 +976,8 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
         board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
         bladerf2_rf_event_append_rx_invalidation(
             board_data, &event,
-            bladerf2_rx_transition_channel_event_flags(ch, true));
+            bladerf2_rx_invalidation_channel_event_flags(
+                board_data, ch, reason));
         /* Keep the reservation through the actual legacy setter only when
          * the invalidation/fence succeeded. */
         if (status != 0) {
@@ -1317,6 +1318,7 @@ static int _bladerf_rx_transition_begin(
             board_data->rf_transition_required_events_mask = required_events_mask;
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->rf_transition_current_channel = ch;
+            board_data->rf_transition_current_channel_valid = true;
             board_data->rf_transition_rx_x2_host_data_required =
                 (required_events_mask &
                  BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0;

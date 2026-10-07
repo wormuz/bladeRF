@@ -243,6 +243,7 @@ struct bladerf2_board_data {
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;
     bladerf_channel rf_transition_current_channel;
+    bool rf_transition_current_channel_valid;
     uint8_t rx_channel_enable_mask;
     bool rx_channel_enable_mask_valid;
     uint32_t rf_transition_required_events_mask;
@@ -348,6 +349,9 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
 uint32_t bladerf2_rx_current_transition_channel_event_flags(
     struct bladerf2_board_data *board_data);
+uint32_t bladerf2_rx_invalidation_channel_event_flags(
+    struct bladerf2_board_data *board_data, bladerf_channel channel,
+    uint32_t reason);
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint8_t epoch_id,
                                   uint64_t fpga_timestamp,
