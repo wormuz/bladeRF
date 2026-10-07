@@ -31,6 +31,11 @@ struct mock_state {
     unsigned int expansion_gpio_write_calls;
     unsigned int expansion_gpio_dir_write_calls;
     unsigned int lms_write_calls;
+    unsigned int trigger_arm_calls;
+    unsigned int trigger_write_calls;
+    bladerf_channel trigger_arm_channel;
+    bladerf_channel trigger_write_channel;
+    uint8_t trigger_write_value;
 };
 
 struct fake_xb200_data {
@@ -114,6 +119,30 @@ static int mock_wishbone_write(struct bladerf *dev, uint32_t address,
     return 0;
 }
 
+static int mock_trigger_arm(struct bladerf *dev,
+                            const struct bladerf_trigger *trigger,
+                            bool arm, uint64_t resv1, uint64_t resv2)
+{
+    struct mock_state *state = dev->board_data;
+    (void)arm;
+    (void)resv1;
+    (void)resv2;
+    state->trigger_arm_calls++;
+    state->trigger_arm_channel = trigger->channel;
+    return 0;
+}
+
+static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
+                              bladerf_trigger_signal signal, uint8_t value)
+{
+    struct mock_state *state = dev->board_data;
+    (void)signal;
+    state->trigger_write_calls++;
+    state->trigger_write_channel = ch;
+    state->trigger_write_value = value;
+    return 0;
+}
+
 static int mock_expansion_gpio_read(struct bladerf *dev, uint32_t *value)
 {
     struct mock_state *state = dev->board_data;
@@ -174,6 +203,8 @@ static const struct board_fns mock_board = {
     .set_bandwidth = mock_set_bandwidth,
     .config_gpio_write = mock_config_gpio_write,
     .wishbone_master_write = mock_wishbone_write,
+    .trigger_arm = mock_trigger_arm,
+    .write_trigger = mock_trigger_write,
 };
 
 static const struct backend_fns mock_backend = {
@@ -197,6 +228,11 @@ int main(void)
     const bladerf_channel rx2 = BLADERF_CHANNEL_RX(1);
     struct bladerf_rational_rate rational = {
         .integer = 2000000, .num = 1, .den = 3,
+    };
+    struct bladerf_trigger trigger = {
+        .channel = BLADERF_CHANNEL_RX(1),
+        .role = BLADERF_TRIGGER_ROLE_SLAVE,
+        .signal = BLADERF_TRIGGER_J51_1,
     };
 
     memset(&dev, 0, sizeof(dev));
@@ -398,6 +434,39 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 26 && state.complete_calls == 18 &&
            state.expansion_gpio_write_calls == expansion_writes_before_raw_gpio);
+
+    /* RX trigger arm and raw trigger-register writes change when samples are
+     * admitted to capture. Fence RX2 before each mutation; TX trigger controls
+     * remain independent of the shared RX epoch. */
+    state.invalidate_status = 0;
+    assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
+    assert(state.invalidate_calls == 27 && state.complete_calls == 19 &&
+           state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
+           state.invalidated_channel == rx2 &&
+           state.trigger_arm_channel == rx2 && state.trigger_arm_calls == 1);
+    assert(bladerf_write_trigger(&dev, rx2, BLADERF_TRIGGER_J51_1,
+                                 BLADERF_TRIGGER_REG_ARM) == 0);
+    assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
+           state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
+           state.invalidated_channel == rx2 &&
+           state.trigger_write_channel == rx2 &&
+           state.trigger_write_value == BLADERF_TRIGGER_REG_ARM);
+
+    trigger.channel = tx0;
+    assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
+    assert(bladerf_write_trigger(&dev, tx0, BLADERF_TRIGGER_J51_1,
+                                 BLADERF_TRIGGER_REG_ARM) == 0);
+    assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
+           state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
+
+    state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
+    trigger.channel = rx2;
+    assert(bladerf_trigger_arm(&dev, &trigger, false, 0, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(bladerf_write_trigger(&dev, rx2, BLADERF_TRIGGER_J51_1, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 30 && state.complete_calls == 20 &&
+           state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

@@ -1672,6 +1672,11 @@ int CALL_CONV bladerf_trigger_init(struct bladerf *dev,
  *       inherently disarm an armed trigger and clear any fire requests,
  *       regardless of the value of `arm`.
  *
+ * RX trigger-arm changes revoke the current RX epoch before programming the
+ * trigger. After arming or disarming RX, establish a fresh event-driven RX
+ * transition before consuming samples. Trigger fire is the operational edge
+ * within that newly configured capture and does not itself reconfigure RX.
+ *
  * @param       dev     Device to configure
  * @param[in]   trigger Trigger configure
  * @param[in]   arm     (Re)Arm trigger if true, disarm if false
@@ -3932,6 +3937,9 @@ int CALL_CONV bladerf_read_trigger(struct bladerf *dev,
  * @param[in]   val         Data to write into the trigger control register.
  *                          See the BLADERF_TRIGGER_REG_* macros for options.
  *
+ * RX trigger-register writes revoke the current RX epoch before the write;
+ * establish a fresh event-driven RX transition before consuming samples.
+ *
  * @return 0 on success, value from \ref RETCODES list on failure
  */
 API_EXPORT
@@ -4918,6 +4926,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED (1U << 29)
 /** RFFE RX1/RX2 enable mask could not be read during epoch monitoring. */
 #define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE (1U << 30)
+/** RX trigger arm/configuration changes the capture admission boundary. */
+#define BLADERF_RF_INVALIDATE_TRIGGER (1U << 31)
 
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)

@@ -1278,11 +1278,20 @@ int bladerf_trigger_arm(struct bladerf *dev,
                         uint64_t resv2)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(trigger);
+
+    status = invalidate_rx_data_before_reconfigure(
+        dev, trigger->channel, BLADERF_RF_INVALIDATE_TRIGGER);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->trigger_arm(dev, trigger, arm, resv1, resv2);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, trigger->channel);
     return status;
 }
 
@@ -1871,11 +1880,18 @@ int bladerf_write_trigger(struct bladerf *dev,
                           uint8_t val)
 {
     int status;
+    CHECK_NULL(dev);
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_TRIGGER);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->write_trigger(dev, ch, trigger, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, ch);
     return status;
 }
 
