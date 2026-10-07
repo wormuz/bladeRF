@@ -173,6 +173,7 @@ architecture arch of rx is
 
     signal trigger_signal_out       : std_logic;
     signal trigger_signal_out_sync  : std_logic;
+    signal trigger_arm_sync         : std_logic;
 
 begin
 
@@ -500,12 +501,27 @@ begin
 
 
     -- RX Trigger
+    -- The trigger-control PIO is clocked by sys_clock in NIOS, while the
+    -- trigger gates the RX sample path in rx_clock. Deassert arm immediately
+    -- on the asynchronous low level and release it only after synchronization
+    -- into the sample domain, matching the TX trigger's fail-safe behavior.
+    U_reset_sync_rx_trigger_arm : entity work.reset_synchronizer
+        generic map (
+            INPUT_LEVEL  => '0',
+            OUTPUT_LEVEL => '0'
+        )
+        port map (
+            clock => rx_clock,
+            async => trigger_arm,
+            sync  => trigger_arm_sync
+        );
+
     rxtrig : entity work.trigger(async)
         generic map (
             DEFAULT_OUTPUT  => '0'
         )
         port map (
-            armed           => trigger_arm,       -- in  sl
+            armed           => trigger_arm_sync,  -- in  sl
             fired           => trigger_fire,      -- in  sl
             master          => trigger_master,    -- in  sl
             trigger_in      => trigger_line,      -- in  sl

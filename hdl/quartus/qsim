@@ -61,7 +61,10 @@ run_one() {
     local analysed=""
     analyse() {
         local f="$1"
-        case "$f" in *synchronizer.vhd) return ;; esac
+        # Only the generic multi-bit test synchronizer needs its PRESERVE
+        # output-port attribute stripped above. Keep reset_synchronizer in the
+        # analysis set so CDC-specific benches can instantiate it.
+        case "$f" in "$N/synthesis/synchronizer.vhd") return ;; esac
         [ -r "$f" ] || return
         case " $analysed " in *" $f "*) return ;; esac
         analysed="$analysed $f"
