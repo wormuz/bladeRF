@@ -984,6 +984,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     unsigned int pkt_len_dwords = 0;
     uint64_t call_start_ns = 0;
     uint64_t rx_epoch_generation = 0;
+    uint64_t first_sync_admission_ns = 0;
 
     if (s == NULL || samples == NULL) {
         log_debug("NULL pointer passed to %s\n", __FUNCTION__);
@@ -1697,12 +1698,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 s->dev != NULL && s->dev->board != NULL &&
                                 s->dev->board->rx_sync_data_admission_reason !=
                                     NULL) {
+                                uint64_t admission_ns = 0;
                                 const uint32_t admission_reason =
                                     s->dev->board->rx_sync_data_admission_reason(
                                         s->dev, s->stream_config.layout,
                                         s->meta.msg_epoch_id,
                                         s->meta.curr_timestamp,
-                                        samples_to_copy);
+                                        samples_to_copy,
+                                        &admission_ns);
                                 if (admission_reason != 0) {
                                     s->meta.msg_admission_withheld_reason =
                                         admission_reason;
@@ -1711,6 +1714,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                         BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
                                     s->meta.msg_epoch_filtered_out = true;
                                     break;
+                                }
+                                if (first_sync_admission_ns == 0) {
+                                    /* The board callback returns the exact
+                                     * monotonic admission instant. Preserve
+                                     * it for post-copy event commit. */
+                                    first_sync_admission_ns =
+                                        admission_ns;
                                 }
                             }
 
@@ -1907,7 +1917,8 @@ out:
         s->dev->board->rx_sync_data_valid != NULL &&
         metadata_rx_has_epoch_samples(user_meta)) {
         s->dev->board->rx_sync_data_valid(s->dev, user_meta,
-                                          s->stream_config.layout);
+                                          s->stream_config.layout,
+                                          first_sync_admission_ns);
     }
 
     /* Keep stream discontinuities in the same device event history as RF

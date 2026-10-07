@@ -2330,6 +2330,31 @@ void bladerf2_rx_transition_note_first_packet(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
+void bladerf2_rx_transition_note_first_packet_at(
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL || metadata == NULL ||
+        admission_monotonic_ns == 0) {
+        return;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    /* Sync RX commits host-data evidence only after its final delivery check;
+     * the timestamp itself is captured before the payload copy. */
+    if (board_data->rf_transition_epoch_certified &&
+        metadata->rx_epoch_id_valid &&
+        metadata->rx_epoch_id == board_data->rf_transition_certified_epoch_id &&
+        metadata->timestamp >=
+            board_data->rf_transition_first_valid_timestamp) {
+        bladerf2_rx_data_note_first_packet_at_locked(
+            board_data, metadata, layout, admission_monotonic_ns);
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
 int bladerf_rx_transition_get_events(struct bladerf *dev,
                                      uint32_t transaction_id,
                                      struct bladerf_rf_event *events,

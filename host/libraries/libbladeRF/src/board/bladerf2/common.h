@@ -306,6 +306,9 @@ struct bladerf2_board_data {
 void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata,
     bladerf_channel_layout layout);
+void bladerf2_rx_transition_note_first_packet_at(
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns);
 /* Caller holds rx_async_epoch_lock; lets async admission and host-data event
  * publication share one linearization point without taking dev->lock. */
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
@@ -370,10 +373,14 @@ void bladerf2_rx_data_note_first_packet_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,
     bladerf_channel_layout layout);
+void bladerf2_rx_data_note_first_packet_at_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns);
 uint32_t bladerf2_rx_sync_data_admission_reason_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,
-    bladerf_channel_layout layout);
+    bladerf_channel_layout layout, uint64_t *admission_monotonic_ns);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,
     uint64_t first_unvalidated_timestamp);

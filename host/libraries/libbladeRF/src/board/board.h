@@ -343,12 +343,14 @@ struct board_fns {
      * before dispatching the discontinuity notifications. */
     void (*rx_sync_data_valid)(struct bladerf *dev,
                                const struct bladerf_metadata *metadata,
-                               bladerf_channel_layout layout);
+                               bladerf_channel_layout layout,
+                               uint64_t admission_monotonic_ns);
     /* Called before sync META samples are copied to the application. Returns
      * zero to admit, or a BLADERF_RF_WITHHELD_* reason to reject. */
     uint32_t (*rx_sync_data_admission_reason)(
         struct bladerf *dev, bladerf_channel_layout layout,
-        uint8_t epoch_id, uint64_t timestamp, unsigned int samples);
+        uint8_t epoch_id, uint64_t timestamp, unsigned int samples,
+        uint64_t *admission_monotonic_ns);
     /* Return whether an asynchronous RX META buffer belongs to the current
      * certified epoch. NULL preserves legacy, unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,

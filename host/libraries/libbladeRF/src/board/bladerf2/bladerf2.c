@@ -1695,14 +1695,16 @@ static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev,
 
 static void bladerf2_rx_sync_data_valid_cb(
     struct bladerf *dev, const struct bladerf_metadata *metadata,
-    bladerf_channel_layout layout)
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns)
 {
-    bladerf2_rx_transition_note_first_packet(dev, metadata, layout);
+    bladerf2_rx_transition_note_first_packet_at(
+        dev, metadata, layout, admission_monotonic_ns);
 }
 
 static uint32_t bladerf2_rx_sync_data_admission_reason(
     struct bladerf *dev, bladerf_channel_layout layout, uint8_t epoch_id,
-    uint64_t timestamp, unsigned int samples)
+    uint64_t timestamp, unsigned int samples,
+    uint64_t *admission_monotonic_ns)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_metadata metadata = {0};
@@ -1719,7 +1721,7 @@ static uint32_t bladerf2_rx_sync_data_admission_reason(
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     reason = bladerf2_rx_sync_data_admission_reason_locked(
-        board_data, &metadata, layout);
+        board_data, &metadata, layout, admission_monotonic_ns);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return reason;
 }

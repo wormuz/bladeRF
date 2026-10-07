@@ -101,13 +101,20 @@ static void test_rx_channel_mask_runtime_policy(void)
 
 static uint32_t sync_data_admission_reason(
     struct bladerf *dev, bladerf_channel_layout layout, uint8_t epoch_id,
-    uint64_t timestamp, unsigned int samples)
+    uint64_t timestamp, unsigned int samples,
+    uint64_t *admission_monotonic_ns)
 {
     assert(dev != NULL);
     assert(layout == BLADERF_RX_X1 || layout == BLADERF_RX_X2);
     assert(samples != 0);
     (void)epoch_id;
     (void)timestamp;
+    if (admission_monotonic_ns != NULL) {
+        struct timespec ts;
+        assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
+        *admission_monotonic_ns = (uint64_t)ts.tv_sec * 1000000000ULL +
+                                  (uint64_t)ts.tv_nsec;
+    }
     if (sync_admission_withheld_reason != 0) {
         return sync_admission_withheld_reason;
     }
@@ -117,11 +124,13 @@ static uint32_t sync_data_admission_reason(
 
 static void note_sync_host_data(struct bladerf *dev,
                                 const struct bladerf_metadata *metadata,
-                                bladerf_channel_layout layout)
+                                bladerf_channel_layout layout,
+                                uint64_t admission_monotonic_ns)
 {
     assert(dev != NULL);
     assert(metadata_rx_has_epoch_samples(metadata));
     assert(layout == BLADERF_RX_X1 || layout == BLADERF_RX_X2);
+    assert(admission_monotonic_ns != 0);
     sync_host_data_events++;
     sync_host_data_order = ++sync_event_order;
 }
@@ -756,6 +765,7 @@ static void test_sync_admission_policy_checks_deadline_before_copy(void)
     struct bladerf2_board_data board_data = {0};
     struct bladerf_metadata metadata = {0};
     uint32_t reason;
+    uint64_t admission_ns = 0;
 
     assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
     assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
@@ -781,7 +791,7 @@ static void test_sync_admission_policy_checks_deadline_before_copy(void)
 
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     reason = bladerf2_rx_sync_data_admission_reason_locked(
-        &board_data, &metadata, BLADERF_RX_X1);
+        &board_data, &metadata, BLADERF_RX_X1, NULL);
     MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
 
     assert(reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
@@ -789,6 +799,25 @@ static void test_sync_admission_policy_checks_deadline_before_copy(void)
     assert(board_data.rf_transition_first_host_data_failure ==
            BLADERF_ERR_TIMEOUT);
     assert(board_data.rf_transition_event_count == 0);
+
+    /* A timely admission passes the pre-copy gate without publishing host
+     * validity. Only the post-copy commit emits the first-data event. */
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    board_data.rf_transition_first_host_data_failure = 0;
+    board_data.rf_transition_first_host_data_deadline_ns = UINT64_MAX;
+    reason = bladerf2_rx_sync_data_admission_reason_locked(
+        &board_data, &metadata, BLADERF_RX_X1, &admission_ns);
+    assert(reason == 0);
+    assert(admission_ns != 0);
+    assert(!board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_event_count == 0);
+    bladerf2_rx_data_note_first_packet_at_locked(
+        &board_data, &metadata, BLADERF_RX_X1, admission_ns);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    assert(board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_event_count == 1);
+    assert(board_data.rf_transition_first_host_data_event.host_monotonic_ns ==
+           admission_ns);
 
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
     COND_DESTROY(&board_data.rx_async_epoch_cond);

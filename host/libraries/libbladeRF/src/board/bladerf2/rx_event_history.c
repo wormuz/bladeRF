@@ -436,10 +436,10 @@ void bladerf2_rx_data_rearm_notifications_locked(
     board_data->rx_async_timestamp_discontinuity_reported = false;
 }
 
-void bladerf2_rx_data_note_first_packet_locked(
+void bladerf2_rx_data_note_first_packet_at_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,
-    bladerf_channel_layout layout)
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns)
 {
     const struct bladerf_rf_event *epoch_event;
     struct bladerf_rf_event event = {0};
@@ -499,17 +499,15 @@ void bladerf2_rx_data_note_first_packet_locked(
         board_data->rf_transition_first_host_data_required &&
         board_data->rf_transition_first_host_data_deadline_ns != 0 &&
         !bladerf2_rx_first_host_data_before_deadline(
-            monotonic_ns(),
+            admission_monotonic_ns,
             board_data->rf_transition_first_host_data_deadline_ns)) {
-        /* Sync admission calls this before copying to application memory;
-         * async admission also reaches this point after its commit checks.
-         * A late packet cannot be promoted to first-valid host data. */
+        /* Admission is timestamped before sync copy or at async commit. */
         bladerf2_rx_transition_fail_first_host_data_locked(
             board_data, BLADERF_ERR_TIMEOUT);
         return;
     }
     if (!already_reported || board_data->rx_async_data_withheld_active) {
-        event.host_monotonic_ns = monotonic_ns();
+        event.host_monotonic_ns = admission_monotonic_ns;
         event.fpga_timestamp = metadata->timestamp;
         event.transaction_id = epoch_event->transaction_id;
         event.epoch_id = epoch_event->epoch_id;
@@ -545,11 +543,23 @@ void bladerf2_rx_data_note_first_packet_locked(
     bladerf2_rx_data_rearm_notifications_locked(board_data);
 }
 
-uint32_t bladerf2_rx_sync_data_admission_reason_locked(
+void bladerf2_rx_data_note_first_packet_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,
     bladerf_channel_layout layout)
 {
+    bladerf2_rx_data_note_first_packet_at_locked(
+        board_data, metadata, layout, monotonic_ns());
+}
+
+uint32_t bladerf2_rx_sync_data_admission_reason_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t *admission_monotonic_ns)
+{
+    if (admission_monotonic_ns != NULL) {
+        *admission_monotonic_ns = 0;
+    }
     if (board_data == NULL || metadata == NULL ||
         (layout != BLADERF_RX_X1 && layout != BLADERF_RX_X2)) {
         return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
@@ -581,21 +591,29 @@ uint32_t bladerf2_rx_sync_data_admission_reason_locked(
             now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
                      (uint64_t)now_ts.tv_nsec;
         }
+        if (now_ns == 0) {
+            bladerf2_rx_transition_fail_first_host_data_locked(
+                board_data, BLADERF_ERR_UNEXPECTED);
+            return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        }
         /* A zero deadline means wait() has not armed its watchdog yet. The
          * wait path validates the event timestamp once its deadline exists. */
-        if (deadline_ns != 0 && (now_ns == 0 || now_ns >= deadline_ns)) {
+        if (deadline_ns != 0 && now_ns >= deadline_ns) {
             bladerf2_rx_transition_fail_first_host_data_locked(
                 board_data, BLADERF_ERR_TIMEOUT);
             return BLADERF_RF_WITHHELD_SYNC_TIMEOUT;
         }
-        bladerf2_rx_data_note_first_packet_locked(board_data, metadata,
-                                                   layout);
-        if (!board_data->rf_transition_first_host_data_reported) {
-            return board_data->rf_transition_first_host_data_failure ==
-                   BLADERF_ERR_TIMEOUT
-                ? BLADERF_RF_WITHHELD_SYNC_TIMEOUT
-                : BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        if (admission_monotonic_ns != NULL) {
+            *admission_monotonic_ns = now_ns;
         }
+    } else if (admission_monotonic_ns != NULL) {
+        struct timespec now_ts;
+        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+            return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        }
+        *admission_monotonic_ns =
+            (uint64_t)now_ts.tv_sec * 1000000000ULL +
+            (uint64_t)now_ts.tv_nsec;
     }
     return 0;
 }
