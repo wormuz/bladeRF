@@ -13,6 +13,8 @@ struct mock_state {
     unsigned int sample_rate_calls;
     unsigned int rational_rate_calls;
     unsigned int bandwidth_calls;
+    unsigned int config_gpio_write_calls;
+    unsigned int wishbone_write_calls;
     unsigned int complete_calls;
     bladerf_channel invalidated_channel;
     bladerf_channel sample_rate_channel;
@@ -20,6 +22,9 @@ struct mock_state {
     bladerf_channel bandwidth_channel;
     bladerf_channel completed_channel;
     uint32_t invalidate_reason;
+    uint32_t config_gpio_value;
+    uint32_t wishbone_address;
+    uint32_t wishbone_value;
 };
 
 static int mock_invalidate_rx(struct bladerf *dev, bladerf_channel ch,
@@ -81,6 +86,24 @@ static int mock_set_bandwidth(struct bladerf *dev, bladerf_channel ch,
     return state->bandwidth_status;
 }
 
+static int mock_config_gpio_write(struct bladerf *dev, uint32_t value)
+{
+    struct mock_state *state = dev->board_data;
+    state->config_gpio_write_calls++;
+    state->config_gpio_value = value;
+    return 0;
+}
+
+static int mock_wishbone_write(struct bladerf *dev, uint32_t address,
+                               uint32_t value)
+{
+    struct mock_state *state = dev->board_data;
+    state->wishbone_write_calls++;
+    state->wishbone_address = address;
+    state->wishbone_value = value;
+    return 0;
+}
+
 static const struct board_fns mock_board = {
     .name = "bladerf2",
     .invalidate_rx_data = mock_invalidate_rx,
@@ -88,6 +111,8 @@ static const struct board_fns mock_board = {
     .set_sample_rate = mock_set_sample_rate,
     .set_rational_sample_rate = mock_set_rational_sample_rate,
     .set_bandwidth = mock_set_bandwidth,
+    .config_gpio_write = mock_config_gpio_write,
+    .wishbone_master_write = mock_wishbone_write,
 };
 
 int main(void)
@@ -157,16 +182,39 @@ int main(void)
            state.completed_channel == rx2);
     assert(state.bandwidth_calls == 3 && state.complete_calls == 6);
 
+    /* Raw configuration GPIO writes can change RX mux or clock selection.
+     * Fence the shared RX certificate even though the generic API cannot
+     * identify which register bits the caller intended to alter. */
+    assert(bladerf_config_gpio_write(&dev, 0x12345678) == 0);
+    assert(state.invalidate_calls == 7 && state.config_gpio_write_calls == 1);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_CONFIG_GPIO &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(state.config_gpio_value == 0x12345678 && state.complete_calls == 7);
+
+    /* Arbitrary Wishbone writes can touch the FPGA RX admission or metadata
+     * path, so they use a distinct fail-closed reason. */
+    assert(bladerf_wishbone_master_write(&dev, 0x100, 0xa5a55a5a) == 0);
+    assert(state.invalidate_calls == 8 && state.wishbone_write_calls == 1);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_WISHBONE &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(state.wishbone_address == 0x100 &&
+           state.wishbone_value == 0xa5a55a5a && state.complete_calls == 8);
+
     /* Failed RX fencing blocks both shared TX configuration paths before the
      * board setter runs. */
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_set_bandwidth(&dev, tx0, 1400000, NULL) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 7 && state.bandwidth_calls == 3);
+    assert(state.invalidate_calls == 9 && state.bandwidth_calls == 3);
     assert(bladerf_set_sample_rate(&dev, tx0, 3000000, NULL) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 8 && state.sample_rate_calls == 2);
-    assert(state.complete_calls == 6);
+    assert(state.invalidate_calls == 10 && state.sample_rate_calls == 2);
+    assert(bladerf_config_gpio_write(&dev, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(bladerf_wishbone_master_write(&dev, 0, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 12 &&
+           state.config_gpio_write_calls == 1 && state.wishbone_write_calls == 1);
+    assert(state.complete_calls == 8);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

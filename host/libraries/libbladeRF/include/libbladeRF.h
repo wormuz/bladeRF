@@ -3969,6 +3969,10 @@ int CALL_CONV bladerf_wishbone_master_read(struct bladerf *dev, uint32_t addr, u
  * @param       addr    Wishbone Master address
  * @param       data    Wishbone Master data
  *
+ * @note On bladeRF 2.x this opaque write revokes the current RX data-valid
+ *       epoch before touching FPGA state. A new event-driven RX transition is
+ *       required before IQ is certified again.
+ *
  * @return 0 on success, value from \ref RETCODES list on failure
  */
 API_EXPORT
@@ -4005,6 +4009,9 @@ int CALL_CONV bladerf_config_gpio_read(struct bladerf *dev, uint32_t *val);
  * @note Callers should be sure to perform a read-modify-write sequence to
  *       avoid accidentally clearing other GPIO bits that may be set by the
  *       library internally.
+ * @note On bladeRF 2.x this opaque write revokes the current RX data-valid
+ *       epoch before updating configuration GPIO state. A new event-driven RX
+ *       transition is required before IQ is certified again.
  *
  * @param       dev     Device handle
  * @param[out]  val     Desired configuration GPIO value
@@ -4835,6 +4842,10 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED (1U << 23)
 /** TX FIR configuration may alter the shared RFIC datapath used by RX. */
 #define BLADERF_RF_INVALIDATE_TX_FIR (1U << 25)
+/** Opaque low-level configuration GPIO write may change RX mux/clock inputs. */
+#define BLADERF_RF_INVALIDATE_CONFIG_GPIO (1U << 26)
+/** Opaque Wishbone write may change FPGA RX sample admission or metadata. */
+#define BLADERF_RF_INVALIDATE_WISHBONE (1U << 27)
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)
 

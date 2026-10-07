@@ -1896,11 +1896,17 @@ int bladerf_wishbone_master_read(struct bladerf *dev, uint32_t addr, uint32_t *d
 int bladerf_wishbone_master_write(struct bladerf *dev, uint32_t addr, uint32_t data)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_WISHBONE);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->wishbone_master_write(dev, addr, data);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -1922,11 +1928,17 @@ int bladerf_config_gpio_read(struct bladerf *dev, uint32_t *val)
 int bladerf_config_gpio_write(struct bladerf *dev, uint32_t val)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CONFIG_GPIO);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->config_gpio_write(dev, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 

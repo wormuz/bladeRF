@@ -346,8 +346,20 @@ int main(int argc, char **argv)
     CHECK(assert_rx_iq_withheld(dev, samples, "TX FIR change"));
     CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
-    printf("RX validity policy: PASS mode=%s legacy_LO/BW/rate/TX_FIR="
-           "fenced; final_txn=%u epoch=%u\n",
+    /* The public low-level GPIO API writes the whole register, including
+     * clock-select and RX-mux bits. Writing back the observed value is benign
+     * electrically but must still revoke opaque configuration's old epoch. */
+    uint32_t config_gpio = 0;
+    CHECK(latest_rf_event_cursor(dev, &tx_fir_event_cursor));
+    CHECK(bladerf_config_gpio_read(dev, &config_gpio));
+    CHECK(bladerf_config_gpio_write(dev, config_gpio));
+    CHECK(check_invalidation_reason(dev, tx_fir_event_cursor,
+                                    BLADERF_RF_INVALIDATE_CONFIG_GPIO));
+    CHECK(assert_rx_iq_withheld(dev, samples, "config GPIO write"));
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
+    printf("RX validity policy: PASS mode=%s legacy_LO/BW/rate/TX_FIR/"
+           "config_GPIO=fenced; final_txn=%u epoch=%u\n",
            paired ? "BOTH" : (rx_channel == rx2_channel ? "RX2" : "RX1"),
            txn, event.epoch_id);
     status = 0;
