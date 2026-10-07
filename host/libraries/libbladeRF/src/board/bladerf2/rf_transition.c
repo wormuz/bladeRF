@@ -395,6 +395,15 @@ static bool _test_runtime_rx_status_unavailable(void)
 #endif
 }
 
+static const char *_runtime_rx_monitor_test_mode(void)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    return getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+#else
+    return NULL;
+#endif
+}
+
 /* Revoke exactly the epoch whose sticky hardware fault was observed. The
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */
@@ -511,7 +520,10 @@ static void *rx_fault_monitor_task(void *arg)
         bool epoch_certified = false;
         uint8_t epoch_id = 0;
         uint32_t rf_link_status = 0;
+        uint8_t pll_status = 0;
+        uint8_t ensm_status = 0;
         int status = 0;
+        int rfic_status = 0;
 
         /* NIOS bulk control requests share endpoints with configuration
          * traffic. Hold dev->lock only across the short status read, and
@@ -529,6 +541,17 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active;
             if (should_poll) {
                 status = nios_rf_link_status_read(dev, &rf_link_status);
+                if (status == 0 &&
+                    (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
+                        RF_LINK_STATUS_VERSION_1 &&
+                    (rf_link_status & RF_LINK_STATUS_RX_FAULT) == 0) {
+                    rfic_status = _read_rfic_reg(
+                        dev, REG_RX_CP_VCO_LOCK_ADDR, &pll_status);
+                    if (rfic_status == 0) {
+                        rfic_status = _read_rfic_reg(
+                            dev, REG_STATE_ADDR, &ensm_status);
+                    }
+                }
             }
         });
 
@@ -554,6 +577,17 @@ static void *rx_fault_monitor_task(void *arg)
                 monitor_error);
             continue;
         }
+        const char *test_mode = _runtime_rx_monitor_test_mode();
+        if (test_mode != NULL &&
+            strcmp(test_mode, "RUNTIME_RFIC_STATUS_READ_FAILURE") == 0) {
+            rfic_status = BLADERF_ERR_UNEXPECTED;
+        } else if (test_mode != NULL &&
+                   strcmp(test_mode, "RUNTIME_RFIC_PLL_UNLOCKED") == 0) {
+            pll_status &= (uint8_t)~VCO_LOCK_BIT;
+        } else if (test_mode != NULL &&
+                   strcmp(test_mode, "RUNTIME_RFIC_ENSM_NOT_RX") == 0) {
+            ensm_status = 0x05;
+        }
         if (_test_runtime_rx_fault()) {
             rf_link_status |= RF_LINK_STATUS_RX_FAULT;
         }
@@ -561,6 +595,26 @@ static void *rx_fault_monitor_task(void *arg)
             _invalidate_faulted_rx_epoch(
                 dev, epoch_id, rf_link_status,
                 BLADERF_RF_INVALIDATE_FPGA_RX_FAULT, 0);
+            continue;
+        }
+        if (rfic_status != 0) {
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, ((uint32_t)ensm_status << 8) | pll_status,
+                BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE,
+                rfic_status);
+            continue;
+        }
+        if ((pll_status & VCO_LOCK_BIT) == 0) {
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, pll_status,
+                BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED, 0);
+            continue;
+        }
+        uint8_t ensm_state = ensm_status & ENSM_STATE_MASK;
+        if (ensm_state != ENSM_STATE_RX && ensm_state != ENSM_STATE_FDD) {
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, ensm_status,
+                BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX, 0);
         }
     }
 

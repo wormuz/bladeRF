@@ -4812,8 +4812,16 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_DEVICE_RESET (1U << 15)
 #define BLADERF_RF_INVALIDATE_FPGA_RELOAD (1U << 16)
 #define BLADERF_RF_INVALIDATE_BOOTLOADER (1U << 17)
+/** Sticky FPGA RX data-link fault observed during a certified epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
+/** FPGA RX-link status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
+/** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */
+#define BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED (1U << 20)
+/** Runtime AD9361 ENSM state is neither RX nor FDD after certification. */
+#define BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX (1U << 21)
+/** AD9361 status could not be read; the certified epoch is revoked. */
+#define BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE (1U << 22)
 
 /** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
@@ -4856,7 +4864,7 @@ struct bladerf_rf_event {
     bladerf_rf_state fpga_state;
     bladerf_rf_event_type event_type;
     uint32_t flags;              /**< Event-specific; SPI events contain write count */
-    int32_t error_code;           /**< 0 unless event_type is _ERROR */
+    int32_t error_code;           /**< Nonzero for failed observations, including invalidations */
 };
 
 /** Maximum number of recent RF transition events retained per device. */

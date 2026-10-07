@@ -5,8 +5,8 @@
  * status without waiting for a libusb completion callback. Build with
  * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
  * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT, or use the
- * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION values to
- * verify fail-closed behavior when the monitor cannot trust the status. */
+ * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION, or
+ * RUNTIME_RFIC_* values to verify runtime control-plane loss handling. */
 #include <libbladeRF.h>
 
 #include <stdbool.h>
@@ -68,6 +68,8 @@ int main(int argc, char **argv)
     const char *fault_mode = fault_mode_storage;
     uint32_t expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
     int expected_error = 0;
+    uint32_t expected_rfic_mask = 0;
+    uint32_t expected_rfic_value = 0;
     uint32_t transaction_id = 0;
     int status;
 
@@ -89,11 +91,25 @@ int main(int argc, char **argv)
         return 2;
     }
     strcpy(fault_mode_storage, requested_fault_mode);
-    if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
+    if (strcmp(fault_mode, "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ||
+        strcmp(fault_mode, "RUNTIME_FPGA_STATUS_VERSION") == 0) {
         expected_reason = BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE;
         expected_error = strcmp(fault_mode,
             "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ? BLADERF_ERR_IO :
             BLADERF_ERR_UNEXPECTED;
+    } else if (strcmp(fault_mode, "RUNTIME_RFIC_STATUS_READ_FAILURE") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE;
+        expected_error = BLADERF_ERR_UNEXPECTED;
+    } else if (strcmp(fault_mode, "RUNTIME_RFIC_PLL_UNLOCKED") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED;
+        expected_rfic_mask = 0x02;
+    } else if (strcmp(fault_mode, "RUNTIME_RFIC_ENSM_NOT_RX") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX;
+        expected_rfic_mask = 0x0f;
+        expected_rfic_value = 0x05;
+    } else if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
+        fprintf(stderr, "unknown monitor injection mode: %s\n", fault_mode);
+        return 2;
     }
     if (unsetenv("BLADERF_TEST_RX_TRANSITION_STALL") != 0) {
         fprintf(stderr, "set one runtime monitor injection mode in the env\n");
@@ -227,6 +243,8 @@ int main(int argc, char **argv)
                 events[i].flags == expected_reason &&
                 (expected_reason != BLADERF_RF_INVALIDATE_FPGA_RX_FAULT ||
                  (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0) &&
+                (events[i].rfic_status & expected_rfic_mask) ==
+                    expected_rfic_value &&
                 (expected_error == 0 || events[i].error_code == expected_error) &&
                 events[i].epoch_id == transition_event.epoch_id) {
                 saw_fault_invalidation = true;
