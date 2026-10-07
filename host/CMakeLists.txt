@@ -69,6 +69,13 @@ if(ENABLE_TEST_RX_ABORT_FAULT_INJECTION)
     add_definitions(-DBLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION=1)
 endif()
 
+option(ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+       "Enable test-only PLL/ENSM/epoch wait-stall injection."
+       OFF)
+if(ENABLE_TEST_RX_TRANSITION_STALL_INJECTION)
+    add_definitions(-DBLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=1)
+endif()
+
 option(ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
        "Enable one-shot test-only RX libusb transfer-status injection."
        OFF)

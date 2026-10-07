@@ -31,8 +31,20 @@
 #include <unistd.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <libbladeRF.h>
+
+static bool _test_rx_transition_stall(const char *stage)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    return requested != NULL && strcmp(requested, stage) == 0;
+#else
+    (void)stage;
+    return false;
+#endif
+}
 
 #include "ad936x.h"
 #include "backend/usb/nios_access.h"
@@ -1074,6 +1086,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
             }
+            if (_test_rx_transition_stall("PLL")) {
+                pll_reg &= (uint8_t)~VCO_LOCK_BIT;
+            }
             if (pll_reg & VCO_LOCK_BIT) {
                 pll_locked = true;
                 _emit_event(dev, board_data, BLADERF_RF_EVT_RX_PLL_LOCKED,
@@ -1102,6 +1117,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
+            }
+            if (_test_rx_transition_stall("ENSM")) {
+                ensm_reg &= (uint8_t)~ENSM_STATE_MASK;
             }
             uint8_t ensm_state = ensm_reg & ENSM_STATE_MASK;
             if (ensm_state == ENSM_STATE_RX || ensm_state == ENSM_STATE_FDD) {
@@ -1150,7 +1168,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         uint64_t timestamp_hi_elapsed_ns;
         uint64_t fence_elapsed_ns;
         uint64_t stage_begin_ns = _monotonic_ns();
-        status = nios_rx_epoch_ctrl_cmd(dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
+        if (_test_rx_transition_stall("EPOCH")) {
+            /* Keep the real FPGA gate fenced for the positive-timeout test. */
+            status = 0;
+        } else {
+            status = nios_rx_epoch_ctrl_cmd(
+                dev, NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0);
+        }
         complete_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
