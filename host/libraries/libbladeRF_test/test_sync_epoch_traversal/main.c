@@ -778,6 +778,25 @@ int main(void)
                   (int16_t)(1444 + MSG_SAMPLES), 0);
     fixture_destroy(&f);
 
+    /* A stale RX_X2 META message contains a paired RX1/RX2 payload. The
+     * epoch fence must discard the whole pair and start both interleaved
+     * channels at the first paired sample of the certified epoch. */
+    fixture_init(&f);
+    f.sync.stream_config.layout = BLADERF_RX_X2;
+    f.sync.meta.samples_per_ts = 2;
+    assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 3000, 8) == 0);
+    write_msg(f.buffers[0], 2000, 7, 1777);
+    write_msg(f.buffers[0] + MSG_BYTES, 3000, 8, 1888);
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, MSG_SAMPLES, &meta, 0) == 0);
+    assert(meta.actual_count == MSG_SAMPLES);
+    assert(meta.timestamp == 3000);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 8);
+    assert_marker(out, MSG_SAMPLES, 1888, 0);
+    fixture_destroy(&f);
+
     /* Replacing a certified RX_X2 parser must poison both interleaved
      * channels until a fresh transition installs the new epoch boundary. */
     fixture_init(&f);
