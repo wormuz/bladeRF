@@ -47,6 +47,11 @@ architecture arch of time_tamer is
     -- powers up at zero anyway; this just makes the model agree.
     signal hold_time    :   unsigned(63 downto 0) := (others => '0') ;
 
+    -- Immutable payload for the current compare request. The host may write
+    -- the next hold_time while this request is crossing into ts_clock; keep
+    -- the accepted value stable until ts_compare_loaded returns.
+    signal compare_payload : unsigned(63 downto 0) := (others => '0');
+
     signal uaddr    :   unsigned(addr'range) ;
 
     signal status   :   std_logic_vector(7 downto 0) ;
@@ -308,7 +313,7 @@ begin
                 when WAIT_FOR_LOAD =>
                     if( ts_compare_load = '1' ) then
                         ts_compare_loaded <= '1' ;
-                        compare_time <= hold_time ;
+                        compare_time <= compare_payload ;
                         ts_compare_cleared <= '0' ;
                         fsm := WAIT_FOR_COMPARE ;
                     end if ;
@@ -370,7 +375,7 @@ begin
         if( reset = '1' ) then
             time_is_past <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( hold_time < current_time_q ) then
+            if( compare_payload < current_time_q ) then
                 time_is_past <= '1' ;
             else
                 time_is_past <= '0' ;
@@ -405,6 +410,11 @@ begin
                         mm_clear_compare <= '0' ;
                         mm_compare_load <= '0' ;
                         if( intr_set = '1' ) then
+                            -- Snapshot at command acceptance, before the
+                            -- request/ack crossing starts. Later host writes
+                            -- prepare the next compare and cannot mutate the
+                            -- payload currently in flight.
+                            compare_payload <= hold_time;
                             fsm := CHECK_CURRENT_TIME ;
                         end if ;
 
@@ -493,4 +503,3 @@ begin
     end process ;
 
 end architecture ;
-

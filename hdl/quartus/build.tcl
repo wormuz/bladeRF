@@ -68,6 +68,7 @@ if { $opts(flow) != "gen" &&
 
 # Open the project with the specific revision
 project_open -revision $opts(rev) $opts(projname)
+set project_is_open 1
 
 # Add signaltap file
 set forced_talkback 0
@@ -149,6 +150,7 @@ set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 # Save all the options
 export_assignments
 project_close
+set project_is_open 0
 
 set failed 0
 
@@ -165,6 +167,7 @@ if { $enable_stp == 1 } {
 
 # Open the project with the specific revision
 project_open -revision $opts(rev) $opts(projname)
+set project_is_open 1
 
 if { ($opts(flow) == "synth") || ($opts(flow) == "full") } {
     # Run Analysis and Synthesis
@@ -215,6 +218,7 @@ if { $opts(flow) == "full" } {
     # and hold slack.
     if { $failed == 0 && $opts(rev) == "sweep" } {
         project_close
+        set project_is_open 0
         set skew_script [file normalize [file join [file dirname [info script]] report_adc_xfer_cdc.tcl]]
         if { [catch {qexec "quartus_sta --64bit -t \"$skew_script\""} result] } {
             puts "Result: $result"
@@ -242,4 +246,6 @@ if { $forced_talkback == 1 } {
     set_user_option -name TALKBACK_ENABLED off
 }
 
-project_close
+if { $project_is_open } {
+    project_close
+}

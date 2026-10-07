@@ -1070,6 +1070,24 @@ def check_qgate_sweep_handshake_count():
              "valid CDC constraints were rejected solely by a stale count")
 
 
+def check_build_project_close_state():
+    """The sweep max-skew subflow closes the project before launching STA."""
+    build = ROOT / "hdl/quartus/build.tcl"
+    if not build.exists():
+        return
+    src = code_only(build.read_text(), comment="#")
+    skew = src.find('if { $failed == 0 && $opts(rev) == "sweep" }')
+    close = src.find("project_close", skew)
+    closed_flag = src.find("set project_is_open 0", close)
+    final_guard = src.rfind("if { $project_is_open }")
+    final_close = src.find("project_close", final_guard)
+    if (skew < 0 or close < 0 or closed_flag < close or final_guard < 0 or
+            final_close < final_guard):
+        fail("quartus-build-project-close-state",
+             "sweep max-skew STA closes the project, so final cleanup must close only when project_is_open",
+             "otherwise a completed full build exits with 'You must open a project' after fit, STA, assembly and DRC")
+
+
 def check_full_flow_runs_design_assistant():
     """The custom full flow must produce the DRC report consumed by qgate."""
     build_tcl = ROOT / "hdl/quartus/build.tcl"
@@ -1136,7 +1154,7 @@ def check_qgate_sta_resolution():
             "ADC_XFER channel=3 source_bits=61 destination_bits=61\n"
             "ADC_XFER all four RX bundles paired: PASS\n"
             "Info (332181): Report Max Skew: Found 168 paths (0 violated). Worst case slack is 1.528\n"
-            "tamer hold_time crossing constrained on 2\n"
+            "tamer compare payload crossing constrained on 2\n"
             "handshake crossings constrained: 15\n"
             "ADC up_xfer bundled crossings constrained: 4\n"
             "dcfifo pointer crossings constrained on 10\n")
@@ -1295,6 +1313,7 @@ def main():
     check_fpga_reload_quiesces_and_reinitializes_rfic()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
+    check_build_project_close_state()
     check_full_flow_runs_design_assistant()
     check_full_flow_runs_rx_max_skew_report()
     check_qgate_sta_resolution()

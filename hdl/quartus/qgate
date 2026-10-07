@@ -149,7 +149,7 @@ if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revis
 else
     hs_expect=5
 fi
-expect_count "cdc tamer hold_time"  'tamer hold_time crossing constrained on [0-9]+' 2
+expect_count "cdc tamer compare payload"  'tamer compare payload crossing constrained on [0-9]+' 2
 expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
 expect_count "adc up_xfer bundled data" 'ADC up_xfer bundled crossings constrained: [0-9]+' 4
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10

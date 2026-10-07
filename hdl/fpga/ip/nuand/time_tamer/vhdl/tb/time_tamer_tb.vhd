@@ -1,6 +1,7 @@
 library ieee ;
     use ieee.std_logic_1164.all ;
     use ieee.numeric_std.all ;
+    use std.env.all;
 
 entity time_tamer_tb is
 end entity ;
@@ -165,6 +166,26 @@ begin
         -- Clear the interrupt
         clear_intr( clock, addr, din, write ) ;
 
+        -- The accepted compare payload must not change when software writes
+        -- the next target while this request is crossing into ts_clock.
+        -- Arm 0x500, then immediately change hold_time to 0x600. This request
+        -- must still fire at 0x500, proving that the CDC payload was captured
+        -- at command acceptance rather than at the later destination edge.
+        write_time( clock, addr, din, write, x"0000_0000_0000_0500" ) ;
+        set_intr( clock, addr, din, write ) ;
+        write_time( clock, addr, din, write, x"0000_0000_0000_0600" ) ;
+        wait until rising_edge(clock) and intr = '1' ;
+        read_time( clock, addr, dout, read, readack, ts ) ;
+        assert ts >= x"0000_0000_0000_0500" and
+               ts <  x"0000_0000_0000_0600"
+            report "accepted compare payload changed after command: timestamp " &
+                   to_hstring(ts) & " is outside [0x500, 0x600)"
+            severity failure ;
+        report "immutable compare payload: fired at timestamp " & to_hstring(ts) ;
+        nop( clock, 1000 ) ;
+
+        clear_intr( clock, addr, din, write ) ;
+
         -- Write a comparison time in the past
         write_time( clock, addr, din, write, x"0000_0000_0000_0400" ) ;
         set_intr( clock, addr, din, write ) ;
@@ -187,7 +208,9 @@ begin
 
         nop( clock, 1000 ) ;
 
-        report "-- End of Simulation" severity failure ;
+        report "time_tamer_tb: PASS" severity note;
+        stop;
+        wait;
     end process ;
 
 end architecture ;

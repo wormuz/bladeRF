@@ -117,7 +117,7 @@ set_false_path -from {*reset_synchronizer:U_reset_sync_rx|sync} -to {*tx:U_tx|tx
 set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe12a[0]}
 set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx_*fifo*common_dcfifo*dffpipe_3dc:wraclr|dffe13a[0]}
 
-# hold_time -> compare_time is a bundled-data crossing, not a false path.
+# compare_payload -> compare_time is a bundled-data crossing, not a false path.
 #
 # It used to be cut outright, "due to the way the FSM is setup". What the FSM
 # actually does (time_tamer.vhd, WAIT_FOR_LOAD) is capture all 64 bits of
@@ -134,8 +134,10 @@ set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx
 # Same omission as the handshake block below: skew and net delay were added,
 # the relaxation was not, so this crossing is still being timed per cycle.
 #
-# Here the capture register genuinely exists in the RTL -- time_tamer does
-# "compare_time <= hold_time" under ts_compare_load, in the ts_clock domain --
+# time_tamer snapshots hold_time into compare_payload when it accepts intr_set,
+# then does "compare_time <= compare_payload" under ts_compare_load, in the
+# ts_clock domain. The accepted payload remains immutable until ACK; subsequent
+# host writes can prepare the next request without changing the crossing --
 # so the exception has a proper endpoint and stops there. The comparison that
 # follows, compare_time = timestamp, is ordinary same-clock logic and stays
 # timed.
@@ -146,7 +148,7 @@ set_false_path -from {*reset_synchronizer:U_reset_sync_tx|sync} -to {*tx:U_tx|tx
 # the same mistake that left the dcfifo pointer constraints unbound twice.
 set ht_done 0
 foreach tamer {rx_tamer tx_tamer} {
-    set ht_src [get_keepers -nowarn "*time_tamer:${tamer}|hold_time\[*\]"]
+    set ht_src [get_keepers -nowarn "*time_tamer:${tamer}|compare_payload\[*\]"]
     set ht_dst [get_keepers -nowarn "*time_tamer:${tamer}|compare_time\[*\]"]
     if { [get_collection_size $ht_src] > 0 && [get_collection_size $ht_dst] > 0 } {
         # Two-ended max/min instead of a false path. Measured: with
@@ -173,9 +175,9 @@ foreach tamer {rx_tamer tx_tamer} {
     }
 }
 if { $ht_done == 0 } {
-    post_message -type critical_warning "tamer hold_time crossing not matched: it would be timed as a single-cycle path"
+    post_message -type critical_warning "tamer compare payload crossing not matched: it would be timed as a single-cycle path"
 } else {
-    post_message -type info "tamer hold_time crossing constrained on $ht_done instance(s)"
+    post_message -type info "tamer compare payload crossing constrained on $ht_done instance(s)"
 }
 
 # Mini Expansion Port (J51)

@@ -25,6 +25,11 @@ GPIF=$(find "$(cd "$(dirname "$0")/../fpga" && pwd)" -name fx3_gpif_p.vhd | head
 run_one() {
     local tb="$1"
     local src="$N/simulation/$tb.vhd"
+    local extra_src=""
+    if [ ! -r "$src" ] && [ "$tb" = "time_tamer_tb" ]; then
+        src="$N/time_tamer/vhdl/tb/$tb.vhd"
+        extra_src="$N/time_tamer/vhdl/time_tamer.vhd"
+    fi
     [ -r "$src" ] || { printf '%-28s no such testbench\n' "$tb"; return 1; }
 
     local work="/var/tmp/qsim-$tb"
@@ -87,6 +92,7 @@ run_one() {
         case "$f" in *fifo_readwrite_p.vhd) continue ;; esac
         analyse "$f"
     done
+    [ -z "$extra_src" ] || analyse "$extra_src"
     analyse "$src"
 
     if ! ghdl -e $GHDL_FLAGS "$tb" >/dev/null 2>&1; then
@@ -96,7 +102,17 @@ run_one() {
     fi
 
     local out
-    out=$(ghdl -r $GHDL_FLAGS "$tb" 2>&1)
+    local timeout_s="${QSIM_TIMEOUT_SECONDS:-30}"
+    local run_status=0
+    out=$(timeout "$timeout_s" ghdl -r $GHDL_FLAGS "$tb" 2>&1) || run_status=$?
+    if [ "$run_status" -eq 124 ]; then
+        printf '%-28s TIMEOUT after %ss (set QSIM_TIMEOUT_SECONDS to override)\n' "$tb" "$timeout_s"
+        return 1
+    elif [ "$run_status" -ne 0 ] && ! echo "$out" | grep -q "${tb}: PASS"; then
+        printf '%-28s FAILED (GHDL exit %s)\n' "$tb" "$run_status"
+        echo "$out" | grep -iE 'error|failure' | head -3 | cut -c1-120
+        return 1
+    fi
     if echo "$out" | grep -qiE "assertion error|severity error|simulation failed"; then
         printf '%-28s FAILED\n' "$tb"
         echo "$out" | grep -iE "error" | head -3 | cut -c1-120
@@ -116,7 +132,8 @@ run_one() {
 
 if [ "${1:-}" = "--all" ]; then
     fails=0
-    for f in "$N"/simulation/*_tb.vhd; do
+    for f in "$N"/simulation/*_tb.vhd "$N"/time_tamer/vhdl/tb/*_tb.vhd; do
+        [ -r "$f" ] || continue
         run_one "$(basename "$f" .vhd)" || fails=$((fails + 1))
     done
     printf '\n%s testbench(es) failed\n' "$fails"
