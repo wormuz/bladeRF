@@ -1191,6 +1191,25 @@ int main(void)
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reasons[0] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
     assert(!sync_withheld_timestamp_valid[0]);
+
+    /* A later explicit epoch must recover this same parser after the
+     * timed-out read and discard all queued data from the previous epoch.
+     * Model the first USB completion after reactivation as stale then valid
+     * META messages in one sync ring buffer. */
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(sync_rx_epoch_expect_id(&f.sync, 9) == 0);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 9000, 9) == 0);
+    assert(f.states[0] == SYNC_BUFFER_EMPTY);
+    assert(f.states[1] == SYNC_BUFFER_EMPTY);
+    write_msg(f.buffers[0], 5000, 8, 1211);
+    write_msg(f.buffers[0] + MSG_BYTES, 9000, 9, 1311);
+    f.states[0] = SYNC_BUFFER_FULL;
+    f.lengths[0] = BYTES_PER_BUFFER;
+    receive(&f, out, 100, &meta);
+    assert(meta.timestamp == 9000);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 9);
+    assert(meta.actual_count == 100);
+    assert_marker(out, 100, 1311, 0);
     fixture_destroy(&f);
 
     /* A timeout after previously admitted META data is bounded at the sync
