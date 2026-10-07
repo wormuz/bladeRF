@@ -336,7 +336,8 @@ set hs_pairs [list \
     {*U_rx_epoch_ctrl_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ctrl_rx[*]}    \
     {*U_rx_epoch_status_handshake|source_holding[*]}               {*bladerf_core:*|rx_epoch_status_sys[*]} \
     {*U_rx_epoch_ts_lo_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ts_lo_sys[*]}  \
-    {*U_rx_epoch_ts_hi_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ts_hi_sys[*]}  ]
+    {*U_rx_epoch_ts_hi_handshake|source_holding[*]}                {*bladerf_core:*|rx_epoch_ts_hi_sys[*]}  \
+    {*U_rx_fault_causes_handshake|source_holding[*]}                {*bladerf_core:*|rx_fault_causes_sys[*]} ]
 
 # The dwell_cfg pair exists only in the sweep revision, and it is a genuine
 # bundled-data crossing: dwell_cfg_rx[29:24] selects a shift and [23:0] is

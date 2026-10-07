@@ -797,6 +797,12 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active) {
+            log_debug("%s: invalidation blocked (transition_pending=%u "
+                      "setter_active=%u state=%u transaction=%u)\n",
+                      __FUNCTION__, board_data->rf_transition_pending,
+                      board_data->rf_transition_setter_active,
+                      board_data->rf_transition_state,
+                      board_data->rf_transition_current_id);
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
             board_data->rf_transition_setter_active = true;
@@ -820,8 +826,14 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     board_data->rx_async_have_expected_timestamp = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_data_withheld_reset(dev);
+    log_debug("%s: reserved RX reconfiguration (reason=0x%x)\n",
+              __FUNCTION__, reason);
 
     status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    if (status != 0) {
+        log_debug("%s: sync epoch invalidation failed: %s\n",
+                  __FUNCTION__, bladerf_strerror(status));
+    }
 
     event.host_monotonic_ns = _monotonic_ns();
     event.transaction_id = 0; /* invalidation is not a transition transaction */
@@ -886,6 +898,8 @@ void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
     board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_setter_active = false;
+        log_debug("%s: released RX reconfiguration reservation\n",
+                  __FUNCTION__);
     });
 }
 

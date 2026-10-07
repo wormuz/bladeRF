@@ -75,6 +75,9 @@
 /******************************************************************************/
 
 static int bladerf2_read_flash_vctcxo_trim(struct bladerf *dev, uint16_t *trim);
+static int bladerf2_set_pll_refclk_internal(struct bladerf *dev,
+                                            bladerf_frequency frequency,
+                                            bool rx_reconfiguration_reserved);
 
 
 /******************************************************************************/
@@ -216,7 +219,19 @@ static int _bladerf2_initialize(struct bladerf *dev)
     board_data->trim_source = TRIM_SOURCE_TRIM_DAC;
 
     /* Configure PLL */
-    CHECK_STATUS(bladerf_set_pll_refclk(dev, BLADERF_REFIN_DEFAULT));
+    bool rx_reconfiguration_reserved;
+    WITH_MUTEX(&dev->lock, {
+        rx_reconfiguration_reserved = board_data->rf_transition_setter_active;
+    });
+    if (rx_reconfiguration_reserved) {
+        /* bladerf_load_fpga() owns this reservation across the image reload
+         * and RFIC reinitialization. Re-entering the public setter here would
+         * try to reserve RX a second time and fail closed with WOULD_BLOCK. */
+        CHECK_STATUS(bladerf2_set_pll_refclk_internal(
+            dev, BLADERF_REFIN_DEFAULT, true));
+    } else {
+        CHECK_STATUS(bladerf_set_pll_refclk(dev, BLADERF_REFIN_DEFAULT));
+    }
 
     /* Reset current quick tune profile number */
     board_data->quick_tune_rx_profile = 0;
@@ -4460,11 +4475,10 @@ int bladerf_get_pll_refclk(struct bladerf *dev, bladerf_frequency *frequency)
     return 0;
 }
 
-int bladerf_set_pll_refclk(struct bladerf *dev, bladerf_frequency frequency)
+static int bladerf2_set_pll_refclk_internal(
+    struct bladerf *dev, bladerf_frequency frequency,
+    bool rx_reconfiguration_reserved)
 {
-    CHECK_BOARD_IS_BLADERF2(dev);
-    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
-
     uint16_t R, N;
     int status;
 
@@ -4477,16 +4491,28 @@ int bladerf_set_pll_refclk(struct bladerf *dev, bladerf_frequency frequency)
         return status;
     }
 
-    status = bladerf2_rx_data_invalidate(
-        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
-    if (status != 0) {
-        return status;
+    if (!rx_reconfiguration_reserved) {
+        status = bladerf2_rx_data_invalidate(
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+        if (status != 0) {
+            return status;
+        }
     }
 
     status = bladerf_pll_configure(dev, R, N);
-    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    if (!rx_reconfiguration_reserved) {
+        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    }
 
     return status;
+}
+
+int bladerf_set_pll_refclk(struct bladerf *dev, bladerf_frequency frequency)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    return bladerf2_set_pll_refclk_internal(dev, frequency, false);
 }
 
 int bladerf_get_pll_register(struct bladerf *dev,
