@@ -323,12 +323,14 @@ static void *rx_callback(struct bladerf *dev,
                                         "(seq=%u, expect=%u).\n",
                                         worker2str(s), b->reorder_limit,
                                         samples_idx, seq, b->expected_seq);
+                            note_rx_overrun(b);
                         }
                     } else if (distance != 0) {
                         log_warning("%s worker: RX reorder distance %u exceeds "
                                     "window %u. Forwarding buf[%u].\n",
                                     worker2str(s), distance, b->reorder_limit,
                                     samples_idx);
+                        note_rx_overrun(b);
                     }
                 }
             }
