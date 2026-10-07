@@ -103,6 +103,19 @@ static void test_rx_channel_mask_runtime_policy(void)
                true, true, 0x3, 0x1) == BLADERF2_RX_CHANNEL_MASK_CHANGED);
 }
 
+static void test_rx_fault_causes_read_error_provenance(void)
+{
+    assert(bladerf2_rx_fault_causes_read_error(false, false, 0) == 0);
+    assert(bladerf2_rx_fault_causes_read_error(true, true, 0) == 0);
+    assert(bladerf2_rx_fault_causes_read_error(true, true,
+                                               BLADERF_ERR_IO) == 0);
+    assert(bladerf2_rx_fault_causes_read_error(true, false,
+                                               BLADERF_ERR_IO) ==
+           BLADERF_ERR_IO);
+    assert(bladerf2_rx_fault_causes_read_error(true, false, 0) ==
+           BLADERF_ERR_UNEXPECTED);
+}
+
 static uint32_t sync_data_admission_reason(
     struct bladerf *dev, bladerf_channel_layout layout, uint8_t epoch_id,
     uint64_t timestamp, unsigned int samples,
@@ -1571,6 +1584,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_rx_channel_mask_runtime_policy();
+    test_rx_fault_causes_read_error_provenance();
     test_sync_channel_selection_fail_closed();
     test_sync_first_host_data_deadline_withholds_before_copy();
     test_failed_transition_revokes_host_epoch_before_abort();

@@ -55,6 +55,19 @@ static inline bool bladerf2_rf_transition_deadline_expired(
     return now_ns >= deadline_ns;
 }
 
+/* A set summary fault bit still invalidates IQ when its detailed-cause PIO
+ * cannot be read. Preserve that read failure in the invalidation event; a
+ * successful read with no cause bits is also an inconsistent status snapshot. */
+static inline int bladerf2_rx_fault_causes_read_error(
+    bool read_attempted, bool causes_valid, int read_status)
+{
+    if (!read_attempted || causes_valid) {
+        return 0;
+    }
+
+    return read_status != 0 ? read_status : BLADERF_ERR_UNEXPECTED;
+}
+
 static inline bool bladerf2_rf_transition_normalize_requirements(
     uint32_t requested, bool require_rx_data_valid, uint32_t *effective)
 {

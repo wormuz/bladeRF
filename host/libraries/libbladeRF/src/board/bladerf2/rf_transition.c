@@ -644,6 +644,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint32_t rf_link_status = 0;
         uint32_t rx_fault_causes = 0;
         bool rx_fault_causes_valid = false;
+        bool rx_fault_causes_read_attempted = false;
         uint8_t pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
@@ -703,6 +704,7 @@ static void *rx_fault_monitor_task(void *arg)
                            (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                                RF_LINK_STATUS_VERSION_1 &&
                            (rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
+                    rx_fault_causes_read_attempted = true;
                     rx_fault_causes_status = nios_rx_fault_causes_read(
                         dev, &rx_fault_causes);
                     rx_fault_causes_valid = rx_fault_causes_status == 0 &&
@@ -824,7 +826,10 @@ static void *rx_fault_monitor_task(void *arg)
                 rx_fault_causes_valid
                     ? (0x80000000u | (rx_fault_causes & 0x1fu))
                     : rf_link_status,
-                BLADERF_RF_INVALIDATE_FPGA_RX_FAULT, 0);
+                BLADERF_RF_INVALIDATE_FPGA_RX_FAULT,
+                bladerf2_rx_fault_causes_read_error(
+                    rx_fault_causes_read_attempted,
+                    rx_fault_causes_valid, rx_fault_causes_status));
             continue;
         }
         if (rfic_status != 0) {
