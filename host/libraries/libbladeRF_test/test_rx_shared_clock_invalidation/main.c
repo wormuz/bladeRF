@@ -324,6 +324,34 @@ int main(void)
                &dev, tx0, BLADERF_XB200_144M) == 0);
     assert(state.invalidate_calls == 18 && state.complete_calls == 12);
 
+    /* XB-300 TRX antenna routing affects RX regardless of the selected mode. */
+    assert(bladerf_xb300_set_trx(&dev, BLADERF_XB300_TRX_RX) == 0);
+    assert(state.invalidate_calls == 19 && state.complete_calls == 13);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+
+    /* Its LNA affects RX gain; PA/AUX controls are TX-only and preserve RX. */
+    assert(bladerf_xb300_set_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_LNA, true) == 0);
+    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_GAIN &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(bladerf_xb300_set_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_PA, true) == 0);
+    assert(bladerf_xb300_set_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_PA_AUX, true) == 0);
+    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
+
+    /* A failed LNA fence prevents the GPIO write and releases no reservation. */
+    state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
+    const unsigned int gpio_writes_before_xb300 =
+        state.expansion_gpio_write_calls;
+    assert(bladerf_xb300_set_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_LNA, false) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 21 && state.complete_calls == 14);
+    assert(state.expansion_gpio_write_calls == gpio_writes_before_xb300);
+
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
 }

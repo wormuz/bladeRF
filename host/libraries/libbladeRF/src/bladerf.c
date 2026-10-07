@@ -2377,11 +2377,17 @@ int bladerf_xb200_get_path(struct bladerf *dev,
 int bladerf_xb300_set_trx(struct bladerf *dev, bladerf_xb300_trx trx)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb300_set_trx(dev, trx);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -2401,11 +2407,21 @@ int bladerf_xb300_set_amplifier_enable(struct bladerf *dev,
                                        bool enable)
 {
     int status;
+    if (amp == BLADERF_XB300_AMP_LNA) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_GAIN);
+        if (status != 0) {
+            return status;
+        }
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb300_set_amplifier_enable(dev, amp, enable);
 
     MUTEX_UNLOCK(&dev->lock);
+    if (amp == BLADERF_XB300_AMP_LNA) {
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    }
     return status;
 }
 
