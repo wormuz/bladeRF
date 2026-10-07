@@ -369,6 +369,211 @@ static void _emit_event(struct bladerf *dev,
                                epoch_id, 0, 0, 0);
 }
 
+#define RX_FAULT_MONITOR_INTERVAL_MS 100
+#define RF_LINK_STATUS_VERSION_MASK  0xf0000000u
+#define RF_LINK_STATUS_VERSION_1     0x10000000u
+
+static bool _test_runtime_rx_fault(void)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    return requested != NULL && strcmp(requested, "RUNTIME_FPGA_FAULT") == 0;
+#else
+    return false;
+#endif
+}
+
+/* Revoke exactly the epoch whose sticky hardware fault was observed. The
+ * device lock serializes this reservation against setters and transitions;
+ * the epoch lock is the async admission linearization point. */
+static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
+                                         uint8_t observed_epoch_id,
+                                         uint32_t rf_link_status)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    struct bladerf_rf_event event = {0};
+    bool invalidate = false;
+    bool epoch_contract_enabled = false;
+    int sync_status;
+    int abort_status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        if (!board_data->rf_transition_pending &&
+            !board_data->rf_transition_setter_active &&
+            board_data->rf_link_dir_on[0]) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_epoch_certified &&
+                board_data->rf_transition_certified_epoch_id ==
+                    observed_epoch_id) {
+                board_data->rf_transition_epoch_certified = false;
+                board_data->rx_async_have_expected_timestamp = false;
+                epoch_contract_enabled = true;
+                invalidate = true;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (invalidate) {
+                board_data->rf_transition_setter_active = true;
+            }
+        }
+    });
+
+    if (!invalidate) {
+        return;
+    }
+
+    bladerf2_rx_data_withheld_reset(dev);
+    sync_status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+
+    event.host_monotonic_ns = _monotonic_ns();
+    event.epoch_id = observed_epoch_id;
+    event.requested_rx_lo_hz =
+        board_data->rf_transition_requested_frequency_hz;
+    event.readback_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
+    event.flags = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+    event.rfic_status = rf_link_status;
+    event.error_code = sync_status;
+    bladerf2_rf_event_append(board_data, &event);
+
+    if (epoch_contract_enabled) {
+        abort_status = _rx_epoch_abort_command(dev);
+    }
+    if (abort_status != 0) {
+        event.host_monotonic_ns = _monotonic_ns();
+        event.event_type = BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED;
+        event.fpga_state = BLADERF_RF_STATE_ERROR;
+        event.error_code = abort_status;
+        bladerf2_rf_event_append(board_data, &event);
+    }
+
+    event.host_monotonic_ns = _monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.error_code = sync_status != 0 ? sync_status : BLADERF_ERR_UNEXPECTED;
+    bladerf2_rf_event_append(board_data, &event);
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+        board_data->rf_transition_last_event = event;
+        board_data->rf_transition_setter_active = false;
+    });
+}
+
+static void *rx_fault_monitor_task(void *arg)
+{
+    struct bladerf *dev = arg;
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    for (;;) {
+        bool stop;
+        MUTEX_LOCK(&board_data->rx_fault_monitor_lock);
+        if (!board_data->rx_fault_monitor_stop) {
+            (void)COND_TIMED_WAIT(&board_data->rx_fault_monitor_cond,
+                                  &board_data->rx_fault_monitor_lock,
+                                  RX_FAULT_MONITOR_INTERVAL_MS);
+        }
+        stop = board_data->rx_fault_monitor_stop;
+        MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
+        if (stop) {
+            break;
+        }
+
+        bool should_poll = false;
+        bool epoch_certified = false;
+        uint8_t epoch_id = 0;
+        uint32_t rf_link_status = 0;
+        int status = 0;
+
+        /* NIOS bulk control requests share endpoints with configuration
+         * traffic. Hold dev->lock only across the short status read, and
+         * never perform this request from a libusb stream callback. */
+        WITH_MUTEX(&dev->lock, {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            epoch_certified =
+                board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_epoch_certified;
+            epoch_id = board_data->rf_transition_certified_epoch_id;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            should_poll = board_data->state == STATE_INITIALIZED &&
+                board_data->rf_link_dir_on[0] && epoch_certified &&
+                !board_data->rf_transition_pending &&
+                !board_data->rf_transition_setter_active;
+            if (should_poll) {
+                status = nios_rf_link_status_read(dev, &rf_link_status);
+            }
+        });
+
+        if (!should_poll || status != 0 ||
+            (rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
+                RF_LINK_STATUS_VERSION_1) {
+            continue;
+        }
+        if (_test_runtime_rx_fault()) {
+            rf_link_status |= RF_LINK_STATUS_RX_FAULT;
+        }
+        if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
+            _invalidate_faulted_rx_epoch(dev, epoch_id, rf_link_status);
+        }
+    }
+
+    return NULL;
+}
+
+int bladerf2_rx_fault_monitor_start(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    int status;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    MUTEX_INIT(&board_data->rx_fault_monitor_lock);
+    status = COND_INIT(&board_data->rx_fault_monitor_cond);
+    if (status != 0) {
+        MUTEX_DESTROY(&board_data->rx_fault_monitor_lock);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    board_data->rx_fault_monitor_sync_initialized = true;
+    board_data->rx_fault_monitor_stop = false;
+    status = THREAD_CREATE(&board_data->rx_fault_monitor_thread,
+                           rx_fault_monitor_task, dev);
+    if (status != THREAD_SUCCESS) {
+        COND_DESTROY(&board_data->rx_fault_monitor_cond);
+        MUTEX_DESTROY(&board_data->rx_fault_monitor_lock);
+        board_data->rx_fault_monitor_sync_initialized = false;
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    board_data->rx_fault_monitor_started = true;
+    return 0;
+}
+
+void bladerf2_rx_fault_monitor_stop(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    if (board_data->rx_fault_monitor_started) {
+        MUTEX_LOCK(&board_data->rx_fault_monitor_lock);
+        board_data->rx_fault_monitor_stop = true;
+        COND_SIGNAL(&board_data->rx_fault_monitor_cond);
+        MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
+        THREAD_JOIN(board_data->rx_fault_monitor_thread, NULL);
+        board_data->rx_fault_monitor_started = false;
+    }
+    if (board_data->rx_fault_monitor_sync_initialized) {
+        COND_DESTROY(&board_data->rx_fault_monitor_cond);
+        MUTEX_DESTROY(&board_data->rx_fault_monitor_lock);
+        board_data->rx_fault_monitor_sync_initialized = false;
+    }
+}
+
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason)
 {

@@ -29,6 +29,7 @@
 #include "bladerf2_common.h"
 #include "helpers/version.h"
 #include "streaming/sync.h"
+#include "thread.h"
 
 
 /******************************************************************************/
@@ -201,6 +202,16 @@ struct bladerf2_board_data {
      * just put into a standby state. */
     bool rfic_reset_on_close;
 
+    /* Poll the sticky FPGA RX-fault aggregate outside libusb completion
+     * callbacks so an active certified stream can be invalidated with its
+     * hardware cause before endpoint timeout delivery. */
+    THREAD rx_fault_monitor_thread;
+    MUTEX rx_fault_monitor_lock;
+    COND rx_fault_monitor_cond;
+    bool rx_fault_monitor_sync_initialized;
+    bool rx_fault_monitor_started;
+    bool rx_fault_monitor_stop;
+
     /* ADR-0207: bounded chronological history of host-observed RX
      * transition events. Event readers must not take dev->lock because the
      * async USB callback dispatches events while setters may hold that lock. */
@@ -286,6 +297,8 @@ void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev);
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev);
+int bladerf2_rx_fault_monitor_start(struct bladerf *dev);
+void bladerf2_rx_fault_monitor_stop(struct bladerf *dev);
 void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
                               const struct bladerf_rf_event *event);
 void bladerf2_rf_event_append_locked(

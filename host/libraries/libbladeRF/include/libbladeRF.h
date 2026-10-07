@@ -4812,6 +4812,7 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_DEVICE_RESET (1U << 15)
 #define BLADERF_RF_INVALIDATE_FPGA_RELOAD (1U << 16)
 #define BLADERF_RF_INVALIDATE_BOOTLOADER (1U << 17)
+#define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
 
 /** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
@@ -4850,7 +4851,7 @@ struct bladerf_rf_event {
     uint32_t epoch_id;            /**< RX data epoch, if applicable */
     uint64_t requested_rx_lo_hz;
     uint64_t readback_rx_lo_hz;
-    uint32_t rfic_status;         /**< Raw RFIC status register snapshot */
+    uint32_t rfic_status;         /**< Raw RFIC/device status snapshot */
     bladerf_rf_state fpga_state;
     bladerf_rf_event_type event_type;
     uint32_t flags;              /**< Event-specific; SPI events contain write count */

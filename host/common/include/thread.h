@@ -69,21 +69,25 @@
         assert(status == 0 && "Mutex attr setype failure"); \
         status = pthread_mutex_init(m, &mutex_attr); \
         assert(status == 0 && "Mutex init failure"); \
+        (void)status; \
     } while (0)
 
 #   define MUTEX_LOCK(m) do { \
         int status = pthread_mutex_lock(m); \
         assert(status == 0 && "Mutex lock failure");\
+        (void)status; \
     } while (0)
 
 #   define MUTEX_UNLOCK(m) do { \
         int status = pthread_mutex_unlock(m); \
         assert(status == 0 && "Mutex unlock failure");\
+        (void)status; \
     } while (0)
 
 #   define MUTEX_DESTROY(m) do { \
         int status = pthread_mutex_destroy(m); \
         assert(status == 0 && "Mutex destroy failure");\
+        (void)status; \
     } while (0)
 #else /* ENABLE_LOCK_CHECKS */
 
@@ -103,6 +107,7 @@
 
 #   define COND_INIT(m) pthread_cond_init(m, NULL)
 #   define COND_SIGNAL(m) pthread_cond_signal(m)
+#   define COND_DESTROY(m) pthread_cond_destroy(m)
 // POSIX implementation as a function
 static inline int posix_cond_timedwait(pthread_cond_t *c,
                                        pthread_mutex_t *m,
@@ -139,16 +144,19 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
         int status; \
         status = mtx_init(m, mtx_plain | mtx_recursive); \
         assert(status == thrd_success && "Mutex init failure"); \
+        (void)status; \
     } while (0)
 
 #   define MUTEX_LOCK(m) do { \
         int status = mtx_lock(m); \
         assert(status == thrd_success && "Mutex lock failure");\
+        (void)status; \
     } while (0)
 
 #   define MUTEX_UNLOCK(m) do { \
         int status = mtx_unlock(m); \
         assert(status == thrd_success && "Mutex unlock failure");\
+        (void)status; \
     } while (0)
 
 #   define MUTEX_DESTROY(m) do { \
@@ -177,6 +185,7 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
 
 #   define COND_INIT(m) (InitializeConditionVariable(m), 0)
 #   define COND_SIGNAL(m) WakeConditionVariable(m)
+#   define COND_DESTROY(m) ((void)(m))
 #   define COND_TIMED_WAIT(c, m, t) \
         (SleepConditionVariableCS(c, m, t) ? 0 : GetLastError())
 #   define COND_WAIT(c, m) (!SleepConditionVariableCS(c, m, INFINITE))

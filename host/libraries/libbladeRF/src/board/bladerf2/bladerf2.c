@@ -222,6 +222,8 @@ static int _bladerf2_initialize(struct bladerf *dev)
     board_data->quick_tune_rx_profile = 0;
     board_data->quick_tune_tx_profile = 0;
 
+    CHECK_STATUS(bladerf2_rx_fault_monitor_start(dev));
+
     log_debug("%s: complete\n", __FUNCTION__);
 
     return 0;
@@ -284,9 +286,9 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         RETURN_ERROR_STATUS("calloc board_data", BLADERF_ERR_MEM);
     }
     dev->board_data = board_data;
-    (void)MUTEX_INIT(&board_data->rx_async_epoch_lock);
+    MUTEX_INIT(&board_data->rx_async_epoch_lock);
     board_data->rx_async_epoch_lock_initialized = true;
-    (void)MUTEX_INIT(&board_data->rf_transition_event_lock);
+    MUTEX_INIT(&board_data->rf_transition_event_lock);
     board_data->rf_transition_event_lock_initialized = true;
     board_data->phy = NULL;
     board_data->rfic_init_params = (void *)&bladerf2_rfic_init_params;
@@ -558,6 +560,8 @@ static void bladerf2_close(struct bladerf *dev)
 
         if (board_data != NULL) {
             bladerf_direction dir;
+
+            bladerf2_rx_fault_monitor_stop(dev);
 
             FOR_EACH_DIRECTION(dir)
             {
