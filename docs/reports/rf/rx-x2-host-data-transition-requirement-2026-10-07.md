@@ -36,7 +36,11 @@ sweep path uses the read-before-wait sequence and retains that first block.
 - Python Cython extension and dual-channel sweep extension build against the
   changed API.
 - 24 Python event and sweep-helper tests pass.
-- No attached-board run was performed.
+- A live harness was added at `host/misc/run_rx_x2_transition_requirement_live.sh`.
+  USB enumeration sees xA4 serial `f695006ba84a40daa7b777c6a6eba78`, but
+  `bladerf_open()` fails while reading the FPGA version with
+  `BLADERF_ERR_TIMEOUT`; `fuser` reports no process holding the USB node.
+  Therefore no RF mutation or RX_X2 live qualification was performed.
 
 ## Remaining scope
 
