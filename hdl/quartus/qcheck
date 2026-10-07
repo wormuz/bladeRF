@@ -1084,6 +1084,21 @@ def check_full_flow_runs_design_assistant():
              "qgate otherwise checks timing while silently missing CDC D101/D103 findings")
 
 
+def check_full_flow_runs_rx_max_skew_report():
+    """The sweep fit log must contain fitted RX bundle max-skew results."""
+    build_tcl = ROOT / "hdl/quartus/build.tcl"
+    if not build_tcl.exists():
+        return
+    src = code_only(build_tcl.read_text(), comment="#")
+    drc = src.find("execute_module -tool drc")
+    report = src.find("report_adc_xfer_cdc.tcl", drc)
+    qexec = src.find("qexec", report)
+    if drc < 0 or report < drc or qexec < report:
+        fail("quartus-full-flow-rx-max-skew",
+             "full sweep flow must append report_adc_xfer_cdc.tcl output after DRC",
+             "qgate cannot check fitted skew if the post-fit report is omitted")
+
+
 def check_qgate_sta_resolution():
     """Exercise qgate with an out-of-tree log and a stale-report decoy."""
     qgate = ROOT / "hdl/quartus/qgate"
@@ -1115,6 +1130,12 @@ def check_qgate_sta_resolution():
             "Info: Quartus Prime Timing Analyzer was successful\n"
             "Info: Project  = bladerf\n"
             "Info: Revision = sweep\n"
+            "ADC_XFER channel=0 source_bits=61 destination_bits=61\n"
+            "ADC_XFER channel=1 source_bits=61 destination_bits=61\n"
+            "ADC_XFER channel=2 source_bits=61 destination_bits=61\n"
+            "ADC_XFER channel=3 source_bits=61 destination_bits=61\n"
+            "ADC_XFER all four RX bundles paired: PASS\n"
+            "Info (332181): Report Max Skew: Found 168 paths (0 violated). Worst case slack is 1.528\n"
             "tamer hold_time crossing constrained on 2\n"
             "handshake crossings constrained: 15\n"
             "ADC up_xfer bundled crossings constrained: 4\n"
@@ -1129,6 +1150,34 @@ def check_qgate_sta_resolution():
                  "the build log was outside the project tree",
                  "a stale report can reject or approve the wrong FPGA image")
             return
+
+        log.write_text(log.read_text().replace(
+            "Report Max Skew: Found 168 paths (0 violated)",
+            "Report Max Skew: Found 168 paths (2 violated)"))
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode == 0 or "max-skew violations: 2" not in result.stdout:
+            fail("qgate-max-skew-violations-fail-closed",
+                 "qgate accepted a sweep with violated max-skew paths",
+                 "positive setup/hold slack does not prove bundled-data skew closure")
+            return
+        log.write_text(log.read_text().replace(
+            "Report Max Skew: Found 168 paths (2 violated)",
+            "Report Max Skew: Found 168 paths (0 violated)"))
+
+        log_text = log.read_text()
+        log.write_text(log_text.replace(
+            "ADC_XFER all four RX bundles paired: PASS\n", ""))
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode == 0 or "max-skew report missing" not in result.stdout:
+            fail("qgate-missing-max-skew-report-fails-closed",
+                 "qgate accepted a sweep without the post-fit RX max-skew report",
+                 "the fitted RX bus bounds must be measured, not inferred from SDC text")
+            return
+        log.write_text(log_text)
 
         actual_sta.touch()
         result = subprocess.run(
@@ -1171,6 +1220,21 @@ def check_qgate_sta_resolution():
         actual_drc.write_text(
             "; Design Assistant Status ; Analyzed ;\n"
             "; Total Critical Violations ; 0 ;\n"
+            "; Total High Violations ; 1 ;\n"
+            "; - Rule D101 ; 1 ;\n")
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "Design Assistant violations: critical=0 high=1 D101=1 D103=0"
+                not in result.stdout):
+            fail("qgate-omitted-zero-rule-count",
+                 "qgate did not interpret an omitted zero-count D103 row as zero",
+                 "Quartus omits per-rule summary rows when a rule has no findings")
+            return
+        actual_drc.write_text(
+            "; Design Assistant Status ; Analyzed ;\n"
+            "; Total Critical Violations ; 0 ;\n"
             "; Total High Violations ; 0 ;\n"
             "; - Rule D101 ; 0 ;\n"
             "; - Rule D103 ; 0 ;\n")
@@ -1206,6 +1270,7 @@ rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an u
 rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
 qgate-sweep-handshake-count   qgate's sweep CDC count must match the 15 constrained pairs
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
+quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded
 """
 
@@ -1231,6 +1296,7 @@ def main():
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
     check_full_flow_runs_design_assistant()
+    check_full_flow_runs_rx_max_skew_report()
     check_qgate_sta_resolution()
 
     for n in notes:

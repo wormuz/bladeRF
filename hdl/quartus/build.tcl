@@ -208,6 +208,24 @@ if { $opts(flow) == "full" } {
         set failed 1
     }
 
+    # Quartus' timing summary does not include max-skew constraints. Run the
+    # persistent RX bundle report as a separate STA pass after closing the
+    # project; include its results in this build log so qgate can reject a
+    # fitted image whose bundled-data skew regressed despite positive setup
+    # and hold slack.
+    if { $failed == 0 && $opts(rev) == "sweep" } {
+        project_close
+        set skew_script [file normalize [file join [file dirname [info script]] report_adc_xfer_cdc.tcl]]
+        if { [catch {qexec "quartus_sta --64bit -t \"$skew_script\""} result] } {
+            puts "Result: $result"
+            puts stderr "ERROR: Post-fit max-skew report failed"
+            set failed 1
+        } else {
+            puts "Info: Post-fit max-skew report output follows"
+            puts $result
+        }
+    }
+
     # Run EDA Output
     #if { $failed == 0 && [catch {execute_module -tool eda} result] } {
     #    puts "Result: $result"

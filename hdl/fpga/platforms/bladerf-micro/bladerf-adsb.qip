@@ -22,6 +22,7 @@ set_global_assignment -name VHDL_FILE    [file normalize [file join $here      v
 # Nuand IP
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/signal_generator.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/synchronizer.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/sticky_reduce.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/constellation_mapper.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/fir_filter.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/tan_table.vhd]]

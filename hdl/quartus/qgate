@@ -216,6 +216,28 @@ else
     fail=1
 fi
 
+# A positive setup/hold summary does not prove that bundled-data max-skew
+# constraints met their bound. The sweep full flow appends the persistent
+# report_adc_xfer_cdc.tcl output; require all four fitted RX lanes and zero
+# violated max-skew paths from that same build.
+if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
+    if ! grep -q 'ADC_XFER all four RX bundles paired: PASS' "$f"; then
+        note FAIL "max-skew report missing or RX bundle inventory incomplete"
+        fail=1
+    else
+        skew_summary=$(grep -E 'Report Max Skew: Found [0-9]+ paths? \([0-9]+ violated\)' "$f" | tail -1)
+        if [ -z "$skew_summary" ]; then
+            note FAIL "max-skew summary missing from sweep build log"
+            fail=1
+        elif [[ "$skew_summary" =~ \(([1-9][0-9]*)[[:space:]]+violated\) ]]; then
+            note FAIL "max-skew violations: ${BASH_REMATCH[1]}"
+            fail=1
+        else
+            note ok "max-skew (all paths within bound)"
+        fi
+    fi
+fi
+
 # STA alone misses CDC structures. Require the Design Assistant report for the
 # exact same revision and reject unresolved High/Critical violations. In
 # particular, keep D101 bundled crossings and D103 sticky-fault crossings
@@ -242,11 +264,18 @@ else
        ! [[ "$drc_critical" =~ ^[0-9]+$ && "$drc_high" =~ ^[0-9]+$ ]]; then
         note FAIL "Design Assistant report incomplete or malformed"
         fail=1
-    elif [ "$drc_critical" != 0 ] || [ "$drc_high" != 0 ]; then
-        note FAIL "Design Assistant violations: critical=$drc_critical high=$drc_high D101=${drc_d101:-?} D103=${drc_d103:-?}"
-        fail=1
     else
-        note ok "Design Assistant (zero critical/high violations)"
+        # Quartus omits per-rule rows when a rule has zero findings. Once the
+        # report itself is validated, an absent D101/D103 row therefore means
+        # zero, not an unparseable report.
+        drc_d101=${drc_d101:-0}
+        drc_d103=${drc_d103:-0}
+        if [ "$drc_critical" != 0 ] || [ "$drc_high" != 0 ]; then
+            note FAIL "Design Assistant violations: critical=$drc_critical high=$drc_high D101=$drc_d101 D103=$drc_d103"
+            fail=1
+        else
+            note ok "Design Assistant (zero critical/high violations)"
+        fi
     fi
 fi
 

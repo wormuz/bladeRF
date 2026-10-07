@@ -196,8 +196,9 @@ architecture core_bladerf of bladerf_core is
     signal tx_usb_speed_mismatch_sys       : std_logic;
     signal tx_protocol_start_violation_sys : std_logic;
 
-    -- Fault aggregate, reduced in the originating domain then crossed as a
-    -- single bit. rx_fault_any lives on rx_clock, its _sys copy on sys_clock.
+    -- Fault aggregate, reduced and registered in the originating domain,
+    -- then crossed as a single bit. rx_fault_any lives on rx_clock, its _sys
+    -- copy on sys_clock. The register keeps the CDC launch point unambiguous.
     signal rx_fault_any                    : std_logic;
     signal tx_fault_any                    : std_logic;
     signal rx_fault_any_sys                : std_logic;
@@ -2123,11 +2124,19 @@ begin
     tx_epoch_current <= '1' when tx_epoch_valid_sys = '1' and
                                  tx_epoch_ack_sys = rf_link_start_toggle else '0';
 
-    -- Reduced where the bits are latched, so only a settled single bit
-    -- crosses. Combinational on purpose: fault_sticky is set-dominant and
-    -- holds until an explicit clear, so there is no pulse to miss.
-    rx_fault_any <= '1' when rx_fault_sticky /= "00000" else '0';
-    tx_fault_any <= '1' when tx_fault_sticky /= "00000" else '0';
+    -- The sticky vectors are held until an explicit clear. Registering their
+    -- reduction in each source domain adds one source-clock cycle but keeps
+    -- every asserted fault visible and gives the CDC checker a single,
+    -- registered launch point instead of eight asynchronous data paths.
+    U_rx_fault_reduce : entity work.sticky_reduce
+        generic map ( WIDTH => rx_fault_sticky'length )
+        port map ( clock => rx_clock, reset => rx_reset,
+                   flags => rx_fault_sticky, any_set => rx_fault_any );
+
+    U_tx_fault_reduce : entity work.sticky_reduce
+        generic map ( WIDTH => tx_fault_sticky'length )
+        port map ( clock => tx_clock, reset => tx_reset,
+                   flags => tx_fault_sticky, any_set => tx_fault_any );
 
     -- Dwell/pre-trigger flags into the system domain. Five instances rather
     -- than one wide crossing: each is an independent single-bit level, and
