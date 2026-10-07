@@ -93,6 +93,7 @@ struct buffer_mgmt {
      * recovers by resubmitting buffers, so the sample stream has a gap that
      * is otherwise invisible to the caller. */
     bool overrun_pending;
+    uint32_t overrun_source_flags;
 
     /* Async epoch gating can wake the sync worker without a sample buffer.
      * The next sync_rx() must fail closed instead of treating that callback

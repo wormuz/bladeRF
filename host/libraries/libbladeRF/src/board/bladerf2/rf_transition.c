@@ -517,7 +517,8 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+                  BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT;
     event.error_code = sync_status != 0 ? sync_status :
         (monitor_error != 0 ? monitor_error : BLADERF_ERR_UNEXPECTED);
     bladerf2_rf_event_append(board_data, &event);
@@ -903,7 +904,7 @@ void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
     });
 }
 
-void bladerf2_rx_stream_overrun(struct bladerf *dev)
+void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
@@ -914,7 +915,7 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev)
     board_data = dev->board_data;
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags;
     WITH_MUTEX(&dev->lock, {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rx_async_data_withheld_active = true;

@@ -69,10 +69,19 @@ harness now exits nonzero if any such event occurs. A separate 1,000-transition
 RX_X2 rerun saw two overrun events on the first transition (epoch 1); a later
 100-transition rerun saw two on its first transition (epoch 101), and another
 100-transition rerun saw none. This is intermittent and needs follow-up
-before claiming zero-loss RX_X2 qualification. The public event currently
-does not identify whether a non-FPGA overrun came from sync queue accounting,
-USB short/overflow, or timestamp discontinuity; this is a separate event
-diagnostic gap to close.
+before claiming zero-loss RX_X2 qualification. The public event now carries
+source bits for sync RX queue loss, async USB transport errors, timestamp
+discontinuity, runtime RF-state faults, and FPGA loss-counter events. A
+follow-up 1,000-transition RX_X2 run reproduced 11 failures, all classified
+as `sync_rx_queue` plus `sync_rx_ring_full` (`flags=0x45`); none indicated
+FPGA sample-path loss. A later 3,334-transition run also found 11 ring-full
+events. The sync worker now preserves this subcause in the event, narrowing
+the remaining work to RX_X2 queue occupancy and consumer throughput rather
+than RFIC or FPGA loss detection. After adding source and subtype reporting,
+another 1,000-transition RX_X2 run had zero overrun events; 1,000-transition
+RX1 and RX2 runs also had zero. The RX_X2 ring-full condition is intermittent,
+so the earlier 3,334-transition qualification remains failed and must be
+repeated at scale after the queue behavior is understood.
 
 The aggregate run covers 10,002 transitions, but it does not replace physical
 fault injection for every FPGA fault-cause bit or a larger repeated RX_X2

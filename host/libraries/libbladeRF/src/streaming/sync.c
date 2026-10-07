@@ -320,6 +320,7 @@ int sync_init(struct bladerf_sync *sync,
             sync->meta.msg_flags = 0;
             sync->meta.have_timestamp = false;
             sync->buf_mgmt.overrun_pending = false;
+            sync->buf_mgmt.overrun_source_flags = 0;
             sync->buf_mgmt.rx_data_withheld_pending = false;
             sync->buf_mgmt.stale_pending = false;
 
@@ -572,6 +573,8 @@ void sync_rx_report_fpga_loss(struct bladerf_sync *sync)
 
     MUTEX_LOCK(&sync->buf_mgmt.lock);
     sync->buf_mgmt.overrun_pending = true;
+    sync->buf_mgmt.overrun_source_flags |=
+        BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
     MUTEX_UNLOCK(&sync->buf_mgmt.lock);
 }
 
@@ -749,6 +752,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     bool exit_early = false;
     bool copied_data = false;
     bool notify_overrun = false;
+    bool overrun_already_published = false;
+    uint32_t overrun_source_flags = 0;
     uint32_t withheld_reason = 0;
     uint64_t withheld_timestamp = 0;
     uint8_t withheld_epoch_id = 0;
@@ -805,7 +810,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             if (s->buf_mgmt.overrun_pending) {
                 user_meta->status |= BLADERF_META_STATUS_OVERRUN;
                 s->buf_mgmt.overrun_pending = false;
+                overrun_source_flags |= s->buf_mgmt.overrun_source_flags;
+                s->buf_mgmt.overrun_source_flags = 0;
                 notify_overrun = true;
+                overrun_already_published =
+                    (overrun_source_flags &
+                     BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) != 0 &&
+                    (overrun_source_flags &
+                     ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) == 0;
             }
             MUTEX_UNLOCK(&s->buf_mgmt.lock);
         }
@@ -1552,7 +1564,14 @@ out:
     MUTEX_LOCK(&s->buf_mgmt.lock);
     if (s->buf_mgmt.overrun_pending) {
         s->buf_mgmt.overrun_pending = false;
+        overrun_source_flags |= s->buf_mgmt.overrun_source_flags;
+        s->buf_mgmt.overrun_source_flags = 0;
         notify_overrun = true;
+        overrun_already_published =
+            (overrun_source_flags &
+             BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) != 0 &&
+            (overrun_source_flags &
+             ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) == 0;
         if (user_meta != NULL &&
             (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
              s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
@@ -1583,7 +1602,7 @@ out:
     /* Keep stream discontinuities in the same device event history as RF
      * invalidation. Invoke only after dropping sync->lock: RF setters acquire
      * dev->lock before touching sync state. */
-    if ((notify_overrun ||
+    if (!overrun_already_published && (notify_overrun ||
          (user_meta != NULL &&
           (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
            s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
@@ -1591,7 +1610,7 @@ out:
           (user_meta->status & BLADERF_META_STATUS_OVERRUN) != 0)) &&
         s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_stream_overrun != NULL) {
-        s->dev->board->rx_stream_overrun(s->dev);
+        s->dev->board->rx_stream_overrun(s->dev, overrun_source_flags);
     }
 
     if (withheld_reason != 0 && s->dev != NULL && s->dev->board != NULL &&

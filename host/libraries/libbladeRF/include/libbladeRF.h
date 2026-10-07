@@ -4810,6 +4810,20 @@ typedef enum {
  * FPGA loss-event count; use bladerf_get_loss_event_count() for the full
  * monotonic count. */
 #define BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS (1U << 1)
+/** The sync RX worker detected a dropped, reordered, or unretirable buffer. */
+#define BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE (1U << 2)
+/** An asynchronous RX transfer was short or failed at the USB transport. */
+#define BLADERF_RF_STREAM_STATUS_ASYNC_USB (1U << 3)
+/** META timestamps were discontinuous within the certified RX epoch. */
+#define BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY (1U << 4)
+/** Runtime RFIC/FPGA state monitoring revoked a previously valid RX epoch. */
+#define BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT (1U << 5)
+/** Sync RX queue filled before the application retired its oldest buffers. */
+#define BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL (1U << 6)
+/** Sync RX completion ordering exceeded the configured reorder window. */
+#define BLADERF_RF_STREAM_STATUS_SYNC_RX_REORDER (1U << 7)
+/** The sync RX worker could not retain a dropped-sequence marker. */
+#define BLADERF_RF_STREAM_STATUS_SYNC_RX_SEQUENCE_TRACKER (1U << 8)
 /** Set in bladerf_rf_event.flags when fpga_timestamp is a valid coordinate.
  * Event-specific flag/reason bits remain in the lower 31 bits. */
 #define BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID (1U << 31)

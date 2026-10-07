@@ -74,6 +74,7 @@ struct fixture {
 };
 
 static unsigned int rx_overrun_events;
+static uint32_t last_rx_overrun_source_flags;
 static unsigned int async_withheld_events;
 static uint32_t async_withheld_reason;
 static unsigned int sync_withheld_events;
@@ -103,10 +104,11 @@ static void note_sync_host_data(struct bladerf *dev,
     sync_host_data_order = ++sync_event_order;
 }
 
-static void note_rx_overrun(struct bladerf *dev)
+static void note_rx_overrun(struct bladerf *dev, uint32_t source_flags)
 {
     assert(dev != NULL);
     rx_overrun_events++;
+    last_rx_overrun_source_flags = source_flags;
     sync_overrun_order = ++sync_event_order;
 }
 
@@ -395,7 +397,8 @@ static void test_async_data_withheld_event(void)
     assert(board_data->rf_transition_event_count == 5);
     event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
-    assert(event->flags == BLADERF_RF_STREAM_STATUS_OVERRUN);
+    assert(event->flags == (BLADERF_RF_STREAM_STATUS_OVERRUN |
+                            BLADERF_RF_STREAM_STATUS_ASYNC_USB));
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
@@ -719,8 +722,14 @@ int main(void)
     f.sync.stream_config.format = BLADERF_FORMAT_SC16_Q11;
     f.sync.stream_config.samples_per_buffer = 2048;
     f.sync.buf_mgmt.overrun_pending = true;
+    f.sync.buf_mgmt.overrun_source_flags =
+        BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+        BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL;
     assert(sync_rx(&f.sync, out, 8, NULL, 0) == BLADERF_ERR_WOULD_BLOCK);
     assert(rx_overrun_events == 2);
+    assert(last_rx_overrun_source_flags ==
+           (BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
     assert(!f.sync.buf_mgmt.overrun_pending);
     fixture_destroy(&f);
 

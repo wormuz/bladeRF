@@ -1640,9 +1640,10 @@ static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
     bladerf2_rx_reconfigure_complete(dev, ch);
 }
 
-static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev)
+static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev,
+                                         uint32_t source_flags)
 {
-    bladerf2_rx_stream_overrun(dev);
+    bladerf2_rx_stream_overrun(dev, source_flags);
 }
 
 static void bladerf2_rx_sync_data_valid_cb(

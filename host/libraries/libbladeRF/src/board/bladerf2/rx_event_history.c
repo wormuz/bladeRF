@@ -236,7 +236,8 @@ void bladerf2_rx_async_timestamp_discontinuity(
 
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+                  BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY;
     event.error_code = 0;
     bladerf2_rf_event_append(board_data, &event);
 }
@@ -261,6 +262,7 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+                  BLADERF_RF_STREAM_STATUS_ASYNC_USB;
     bladerf2_rf_event_append(board_data, &event);
 }
