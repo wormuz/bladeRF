@@ -67,6 +67,8 @@ __pycache__/
 # quartusq build queue: local state, not source
 hdl/quartus/quartusq.db*
 hdl/quartus/builds/
+# Hosted bitstream/report bundles emitted by build_bladerf.sh.
+hdl/quartus/*xA[2459]/
 
 # quartusq notification log: local runtime state
 hdl/quartus/quartusq-finished.log

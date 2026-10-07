@@ -428,6 +428,45 @@ if { $hs_done == 0 } {
     post_message -type info "handshake crossings constrained: $hs_done"
 }
 
+# AD9361 RX control words cross from the NIOS up_clk domain into each
+# adc_clk domain through ADI's up_xfer_cntrl toggle/ack protocol. up_xfer_data
+# is written on the request edge and held until the synchronized destination
+# toggle returns, while d_data_cntrl captures it after the request toggle has
+# crossed three destination flops. These are bundled-data buses, not bitwise
+# synchronizers: keep setup/hold from treating the unrelated clocks as
+# synchronous, while bounding each physical data path and inter-bit skew well
+# inside the four-cycle destination capture window (adc_clk <= 61.44 MHz on
+# this device). Pair each channel separately; cross-lane pairings do not
+# exist and must not be constrained accidentally.
+set adc_xfer_done 0
+foreach channel {0 1 2 3} {
+    set adc_xfer_instance [format {*axi_ad9361_rx_channel:i_rx_channel_%d|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl} $channel]
+    set adc_xfer_src [get_keepers -nowarn "${adc_xfer_instance}|up_xfer_data\[*\]"]
+    set adc_xfer_dst [get_keepers -nowarn "${adc_xfer_instance}|d_data_cntrl\[*\]"]
+    if { [get_collection_size $adc_xfer_src] > 0 &&
+         [get_collection_size $adc_xfer_dst] > 0 } {
+        set_max_delay 40 -from $adc_xfer_src -to $adc_xfer_dst
+        set_min_delay -40 -from $adc_xfer_src -to $adc_xfer_dst
+        set_max_skew -from $adc_xfer_src -to $adc_xfer_dst 6.4
+        set_net_delay -from $adc_xfer_src -to $adc_xfer_dst -max 6.4
+        if { [get_collection_size $adc_xfer_dst] >
+             [get_collection_size $adc_xfer_src] } {
+            post_message -type critical_warning \
+                "ADC up_xfer pair too wide: channel $channel source [get_collection_size $adc_xfer_src] -> destination [get_collection_size $adc_xfer_dst]"
+        }
+        incr adc_xfer_done
+    } else {
+        post_message -type critical_warning \
+            "ADC up_xfer pair not matched: channel $channel source [get_collection_size $adc_xfer_src] -> destination [get_collection_size $adc_xfer_dst]"
+    }
+}
+if { $adc_xfer_done == 0 || $adc_xfer_done != 4 } {
+    post_message -type critical_warning \
+        "ADC up_xfer bundled crossings constrained: $adc_xfer_done (expected 4)"
+} else {
+    post_message -type info "ADC up_xfer bundled crossings constrained: $adc_xfer_done"
+}
+
 # Every handshake instance in the design is named in the pairs above. The
 # count check below is what catches a future one: if the number of instances
 # ever exceeds the number of pairs, a crossing exists that nobody wrote an
