@@ -4728,9 +4728,13 @@ typedef enum {
      * active data-validity contract. `flags` contains the bladerf_format. */
     BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED,
     /** Async RX IQ was withheld by a validity or transfer-integrity check.
-     * `flags` identifies the reason; epoch-gate reasons are coalesced until
-     * valid IQ resumes, while each short/failed transport transfer is
-     * recorded separately. */
+     * `flags` identifies the reason and may include
+     * BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID. When set,
+     * `fpga_timestamp` is the first unvalidated sample coordinate after the
+     * last admitted async META buffer. A later RX_DATA_RESUMED timestamp marks
+     * the first admitted sample; samples between the two are not certified.
+     * Epoch-gate reasons are coalesced until valid IQ resumes, while each
+     * short/failed transport transfer is recorded separately. */
     BLADERF_RF_EVT_RX_DATA_WITHHELD,
     /** NIOS did not acknowledge aborting an incomplete RX epoch. IQ remains
      * invalid; `error_code` contains the ABORT command failure. */
@@ -4742,6 +4746,9 @@ typedef enum {
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
+/** Set in bladerf_rf_event.flags when fpga_timestamp is a valid coordinate.
+ * Event-specific flag/reason bits remain in the lower 31 bits. */
+#define BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID (1U << 31)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

@@ -1738,13 +1738,30 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
 
     if (validation == METADATA_RX_BUFFER_DISCONTINUITY) {
         /* Rebase after withholding this transfer. A subsequent contiguous
-         * transfer can resume without accepting the discontinuous samples. */
+         * transfer can resume without accepting the discontinuous samples.
+         * As with admission, a concurrent setter may revoke the epoch after
+         * our snapshot; do not write a stale timestamp cursor into the new
+         * configuration. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->rx_async_have_expected_timestamp = true;
-        board_data->rx_async_timestamp_epoch_id = epoch_id;
-        board_data->rx_async_expected_timestamp = next_timestamp;
+        if (!metadata_rx_epoch_commit_timestamp(
+                contract_enabled, epoch_valid, epoch_id,
+                first_valid_timestamp,
+                board_data->rf_transition_epoch_contract_enabled,
+                board_data->rf_transition_epoch_certified,
+                board_data->rf_transition_certified_epoch_id,
+                board_data->rf_transition_first_valid_timestamp,
+                next_timestamp,
+                &board_data->rx_async_have_expected_timestamp,
+                &board_data->rx_async_timestamp_epoch_id,
+                &board_data->rx_async_expected_timestamp)) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_rx_data_withheld(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            return false;
+        }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        bladerf2_rx_async_timestamp_discontinuity(dev);
+        bladerf2_rx_async_timestamp_discontinuity(
+            dev, epoch_id, expected_timestamp);
     } else {
         bladerf2_rx_data_withheld(
             dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);

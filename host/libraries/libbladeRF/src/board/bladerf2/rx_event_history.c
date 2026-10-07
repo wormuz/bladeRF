@@ -88,6 +88,8 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
+    uint64_t first_unvalidated_timestamp = 0;
+    bool timestamp_valid = false;
     bool should_report = false;
 
     if (dev == NULL || dev->board_data == NULL) {
@@ -114,6 +116,19 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
         should_report = true;
     }
     epoch_id = board_data->rf_transition_epoch_id;
+    /* This cursor is the first sample expected after the last admitted async
+     * META buffer. Publish it only while it still belongs to the certified
+     * epoch; never borrow it for a synchronous timeout or an invalid epoch. */
+    if (reason != BLADERF_RF_WITHHELD_SYNC_TIMEOUT &&
+        board_data->rf_transition_epoch_certified &&
+        board_data->rx_async_have_expected_timestamp &&
+        board_data->rx_async_timestamp_epoch_id ==
+            board_data->rf_transition_certified_epoch_id) {
+        first_unvalidated_timestamp =
+            board_data->rx_async_expected_timestamp;
+        epoch_id = board_data->rf_transition_certified_epoch_id;
+        timestamp_valid = true;
+    }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!should_report) {
@@ -121,10 +136,12 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
     }
 
     event.host_monotonic_ns = monotonic_ns();
+    event.fpga_timestamp = first_unvalidated_timestamp;
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
-    event.flags = reason;
+    event.flags = reason | (timestamp_valid
+        ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
     bladerf2_rf_event_append(board_data, &event);
 }
 
@@ -143,11 +160,14 @@ void bladerf2_rx_data_withheld_reset(struct bladerf *dev)
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
+void bladerf2_rx_async_timestamp_discontinuity(
+    struct bladerf *dev, uint8_t expected_epoch_id,
+    uint64_t first_unvalidated_timestamp)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
+    bool timestamp_valid;
     bool should_report = false;
 
     if (dev == NULL || dev->board_data == NULL) {
@@ -164,7 +184,11 @@ void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
         board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }
-    epoch_id = board_data->rf_transition_certified_epoch_id;
+    timestamp_valid = board_data->rf_transition_epoch_contract_enabled &&
+        board_data->rf_transition_epoch_certified &&
+        board_data->rf_transition_certified_epoch_id == expected_epoch_id;
+    epoch_id = timestamp_valid
+        ? expected_epoch_id : board_data->rf_transition_epoch_id;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!should_report) {
@@ -172,10 +196,13 @@ void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
     }
 
     event.host_monotonic_ns = monotonic_ns();
+    event.fpga_timestamp = timestamp_valid
+        ? first_unvalidated_timestamp : 0;
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
-    event.flags = BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY;
+    event.flags = BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY |
+        (timestamp_valid ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
     event.error_code = BLADERF_ERR_UNEXPECTED;
     bladerf2_rf_event_append(board_data, &event);
 

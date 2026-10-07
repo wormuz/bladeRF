@@ -1329,7 +1329,8 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,
                    (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
                    & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
-                   0, ((uint64_t)timestamp_hi << 32) | timestamp_lo, 0);
+                   0, ((uint64_t)timestamp_hi << 32) | timestamp_lo,
+                   BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
         log_debug("%s: epoch handoff transaction=%u complete_us=%.3f "
                   "status_reads=%u status_total_us=%.3f timestamp_lo_us=%.3f "
                   "timestamp_hi_us=%.3f sync_fence_us=%.3f\n",
@@ -1446,7 +1447,8 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
         event.event_type = already_recorded
             ? BLADERF_RF_EVT_RX_DATA_RESUMED
             : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
-        event.flags = metadata->status;
+        event.flags = metadata->status |
+                      BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
         event.error_code = 0;
 
         bladerf2_rf_event_append_locked(board_data, &event);
