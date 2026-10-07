@@ -120,5 +120,48 @@ int main(void)
 
         assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
     }
+
+    /* A stalled head transfer can leave enough later completions to fill the
+     * bounded tombstone queue. Overflow must be an observable discontinuity,
+     * not a warning that leaves sync_rx asleep behind an unretirable hole. */
+    {
+        enum { NUM_BUFFERS = SYNC_RX_MAX_REORDER + 4 };
+        struct bladerf_sync sync = {0};
+        void *ring[NUM_BUFFERS];
+        uint32_t sequences[NUM_BUFFERS];
+        bool dropped[NUM_BUFFERS] = { false };
+        sync_buffer_status states[NUM_BUFFERS];
+        unsigned char storage[NUM_BUFFERS][8] = {{0}};
+
+        for (unsigned int i = 0; i < NUM_BUFFERS; ++i) {
+            ring[i] = storage[i];
+            sequences[i] = i;
+            states[i] = SYNC_BUFFER_IN_FLIGHT;
+        }
+        states[NUM_BUFFERS - 1] = SYNC_BUFFER_EMPTY;
+
+        sync.stream_config.layout = BLADERF_RX_X1;
+        sync.buf_mgmt.buffers = ring;
+        sync.buf_mgmt.status = states;
+        sync.buf_mgmt.buffer_seq = sequences;
+        sync.buf_mgmt.buffer_dropped = dropped;
+        sync.buf_mgmt.num_buffers = NUM_BUFFERS;
+        sync.buf_mgmt.expected_seq = 0; /* Intentionally stalled head. */
+        sync.buf_mgmt.next_seq = NUM_BUFFERS;
+        sync.buf_mgmt.prod_i = NUM_BUFFERS - 1;
+        sync.buf_mgmt.reorder_limit = NUM_BUFFERS - 1;
+        assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+        assert(COND_INIT(&sync.buf_mgmt.buf_ready) == 0);
+
+        for (unsigned int i = 1; i <= SYNC_RX_MAX_REORDER + 1; ++i) {
+            (void)sync_worker_rx_buffer_rejected(&sync, ring[i]);
+        }
+
+        assert(sync.buf_mgmt.reorder_len == SYNC_RX_MAX_REORDER);
+        assert(sync.buf_mgmt.overrun_pending);
+        assert(sync.buf_mgmt.stale_pending);
+
+        assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+    }
     return 0;
 }

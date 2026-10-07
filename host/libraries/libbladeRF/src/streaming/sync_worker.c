@@ -142,6 +142,8 @@ static bool hold_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
     return true;
 }
 
+static void note_rx_overrun(struct buffer_mgmt *b);
+
 static void retire_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
 {
     if (seq == b->expected_seq) {
@@ -151,6 +153,11 @@ static void retire_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
                !hold_dropped_sequence(b, seq)) {
         log_warning("RX dropped-sequence queue full: seq=%u expected=%u\n",
                     seq, b->expected_seq);
+        /* Losing a tombstone leaves an unretirable sequence hole. Surface a
+         * discontinuity and wake sync_rx so RX_NOW can discard stale ring
+         * contents and the META parser can re-establish timestamp continuity.
+         * Never treat queue overflow as permission to admit reordered IQ. */
+        note_rx_overrun(b);
     }
 }
 
