@@ -26,8 +26,6 @@ independent analog sensitivity for RX1 and RX2.
 
 ## Remaining scope
 
-`BLADERF_RF_REQUIRE_FIRST_HOST_DATA` still waits for the first validated
-buffer from the active stream; it does not yet require that the active stream
-be RX_X2. The next paired-channel step must make the requested layout explicit
-in transition semantics and verify paired capture/count/timestamp/detector
-behavior on hardware.
+`BLADERF_RF_REQUIRE_RX_X2_HOST_DATA` now makes the required paired layout
+explicit; it rejects an active RX_X1 consumer and waits for a validated RX_X2
+block. Repeated paired hardware qualification and detector parity remain open.

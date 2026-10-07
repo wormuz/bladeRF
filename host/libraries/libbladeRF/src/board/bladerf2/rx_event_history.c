@@ -22,7 +22,7 @@ static uint64_t monotonic_ns(void)
 }
 
 void bladerf2_rx_transition_fail_first_host_data_locked(
-    struct bladerf2_board_data *board_data, int status, uint32_t reason)
+    struct bladerf2_board_data *board_data, int status)
 {
     if (board_data == NULL || status == 0 ||
         !board_data->rf_transition_first_host_data_required ||
@@ -32,7 +32,6 @@ void bladerf2_rx_transition_fail_first_host_data_locked(
     }
 
     board_data->rf_transition_first_host_data_failure = status;
-    board_data->rf_transition_first_host_data_failure_reason = reason;
     COND_SIGNAL(&board_data->rx_async_epoch_cond);
 }
 
@@ -145,8 +144,7 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     if (board_data->rf_transition_epoch_contract_enabled &&
         (!deduplicate || !board_data->rx_format_unsupported_reported)) {
         bladerf2_rx_transition_fail_first_host_data_locked(
-            board_data, BLADERF_ERR_UNSUPPORTED,
-            BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED);
+            board_data, BLADERF_ERR_UNSUPPORTED);
         if (deduplicate) {
             board_data->rx_format_unsupported_reported = true;
             /* Repeated async packets are one withheld interval. A sync
@@ -195,8 +193,7 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
             event.epoch_id = board_data->rf_transition_certified_epoch_id;
         }
         bladerf2_rx_transition_fail_first_host_data_locked(
-            board_data, BLADERF_ERR_UNSUPPORTED,
-            BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED);
+            board_data, BLADERF_ERR_UNSUPPORTED);
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
@@ -346,8 +343,7 @@ void bladerf2_rx_data_note_first_packet_locked(
             board_data->rx_channel_enable_mask_valid,
             board_data->rx_channel_enable_mask)) {
         bladerf2_rx_transition_fail_first_host_data_locked(
-            board_data, BLADERF_ERR_UNSUPPORTED,
-            BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION);
+            board_data, BLADERF_ERR_UNSUPPORTED);
         if (!board_data->rx_async_data_withheld_active) {
             event.host_monotonic_ns = monotonic_ns();
             event.fpga_timestamp = metadata->timestamp;

@@ -17,8 +17,10 @@ therefore cannot turn a timed-out transition into success.
 
 The event carries the certified epoch's transaction and epoch IDs, and the
 first admitted packet timestamp. This option proves first host delivery for
-the stream admitted by the current transition path; it does not yet establish
-that both RX1 and RX2 have delivered data for a paired RX_X2 capture.
+the stream admitted by the current transition path. The separate
+`BLADERF_RF_REQUIRE_RX_X2_HOST_DATA` requirement demands an RX_X2 host block
+and rejects RX_X1-only consumers before RF mutation; see
+`rx-x2-host-data-transition-requirement-2026-10-07.md`.
 
 The C API remains opt-in for compatibility. The Python binding exposes the
 requirement bit and documents that timeout withholds late first data.
@@ -39,5 +41,5 @@ requirement bit and documents that timeout withholds late first data.
 
 This closes the gap between FPGA epoch certification and host delivery for
 callers that request it. It does not prove analog settling beyond the RFIC
-status events, and it does not implement the planned paired-channel contract
-or hardware qualification for RX1+RX2.
+status events. Paired layout is a distinct opt-in requirement; repeated
+hardware qualification for RX1+RX2 remains open.

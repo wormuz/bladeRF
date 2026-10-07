@@ -1286,7 +1286,6 @@ static int _bladerf_rx_transition_begin(
                 board_data->rf_transition_first_host_data_deadline_ns = 0;
                 board_data->rf_transition_first_host_data_reported = false;
                 board_data->rf_transition_first_host_data_failure = 0;
-                board_data->rf_transition_first_host_data_failure_reason = 0;
                 memset(&board_data->rf_transition_first_host_data_event, 0,
                        sizeof(board_data->rf_transition_first_host_data_event));
             }

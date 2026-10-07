@@ -265,7 +265,6 @@ struct bladerf2_board_data {
     uint32_t rf_transition_rx_x2_host_data_transaction_id;
     uint64_t rf_transition_first_host_data_deadline_ns;
     int rf_transition_first_host_data_failure;
-    uint32_t rf_transition_first_host_data_failure_reason;
     bool rf_transition_epoch_certified;
 #ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
     bool test_rx_epoch_metadata_fault_injected;
@@ -314,7 +313,7 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
 /* Caller holds rx_async_epoch_lock. Terminal stream incompatibilities must
  * wake a transition waiting for required first host data immediately. */
 void bladerf2_rx_transition_fail_first_host_data_locked(
-    struct bladerf2_board_data *board_data, int status, uint32_t reason);
+    struct bladerf2_board_data *board_data, int status);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,

@@ -384,8 +384,6 @@ static void test_unsupported_format_event(void)
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
     assert(board_data->rf_transition_first_host_data_failure ==
            BLADERF_ERR_UNSUPPORTED);
-    assert(board_data->rf_transition_first_host_data_failure_reason ==
-           BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED);
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rx_format_unsupported_reported = false;
@@ -628,6 +626,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     /* An RX_X1 packet with only RX1 enabled cannot stand in for a transition
      * requested through RX2. Record the mismatch and do not report IQ valid. */
     board_data.rx_channel_enable_mask = 0x1;
+    board_data.rf_transition_first_host_data_required = true;
+    board_data.rf_transition_first_host_data_reported = false;
     metadata.timestamp = 1004;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
@@ -641,6 +641,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
             BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
             BLADERF_RF_EVENT_F_TRANSITION_RX2 |
             BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID));
+    assert(board_data.rf_transition_first_host_data_failure ==
+           BLADERF_ERR_UNSUPPORTED);
 
     COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
@@ -689,11 +691,13 @@ static void test_rx_x2_layout_rejection_event(void)
     struct bladerf dev = {0};
 
     assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     dev.board_data = &board_data;
     board_data.rf_transition_rx_x2_host_data_required = true;
     board_data.rf_transition_rx_x2_host_data_transaction_id = 123;
     board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_first_host_data_required = true;
     board_data.rf_transition_certified_epoch_id = 9;
     board_data.rf_transition_certified_epoch_event.transaction_id = 123;
 
@@ -709,7 +713,10 @@ static void test_rx_x2_layout_rejection_event(void)
     assert(event->epoch_id == 9);
     assert(event->flags == BLADERF_RX_X1);
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
+    assert(board_data.rf_transition_first_host_data_failure ==
+           BLADERF_ERR_UNSUPPORTED);
 
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
