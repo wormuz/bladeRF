@@ -4772,8 +4772,11 @@ typedef enum {
     /** NIOS retune response USB IN transfer completed. */
     BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE,
     /** Existing certified RX IQ was revoked by a legacy RF reconfiguration.
-     * `flags` contains one BLADERF_RF_INVALIDATE_* reason. This event has
-     * transaction_id=0 because it is not a completed event-driven request. */
+     * `flags` contains one BLADERF_RF_INVALIDATE_* reason. bladeRF2 keeps a
+     * shared RX epoch certificate for the AD9361 RX LO, so this revokes both
+     * RX1 and RX2 consumers even when a channel-specific setter initiated the
+     * change. This event has transaction_id=0 because it is not a completed
+     * event-driven request. */
     BLADERF_RF_EVT_RX_DATA_INVALIDATED,
     /** RX discontinuity: sync metadata/queue overrun, an asynchronous USB RX
      * short transfer/overflow, or (when
