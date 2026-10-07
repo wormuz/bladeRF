@@ -673,6 +673,65 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
+static void test_invalidation_companion_append_is_atomic_at_ring_wrap(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_rf_event filler = {0};
+    struct bladerf_rf_event invalidation = {
+        .host_monotonic_ns = 1234,
+        .transaction_id = 77,
+        .epoch_id = 9,
+        .requested_rx_lo_hz = 1835000000ULL,
+        .readback_rx_lo_hz = 1835000000ULL,
+        .fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID,
+        .event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+        .flags = BLADERF_RF_INVALIDATE_FEATURE,
+        .error_code = BLADERF_ERR_UNEXPECTED,
+    };
+    const uint32_t capacity = BLADERF2_RF_EVENT_HISTORY_SIZE;
+    uint32_t invalidation_index, channel_index;
+
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    for (uint32_t i = 0; i < capacity - 1; ++i) {
+        filler.transaction_id = i;
+        bladerf2_rf_event_append(&board_data, &filler);
+    }
+
+    MUTEX_LOCK(&board_data.rf_transition_event_lock);
+    bladerf2_rf_event_append_rx_invalidation_locked(
+        &board_data, &invalidation,
+        bladerf2_rx_transition_channel_event_flags(
+            BLADERF_CHANNEL_RX(1), true));
+    MUTEX_UNLOCK(&board_data.rf_transition_event_lock);
+
+    assert(board_data.rf_transition_event_sequence == capacity + 1);
+    invalidation_index =
+        (board_data.rf_transition_event_head + capacity - 2) % capacity;
+    channel_index =
+        (board_data.rf_transition_event_head + capacity - 1) % capacity;
+    const struct bladerf_rf_event *reason_event =
+        &board_data.rf_transition_events[invalidation_index];
+    const struct bladerf_rf_event *channel_event =
+        &board_data.rf_transition_events[channel_index];
+    assert(board_data.rf_transition_event_sequences[invalidation_index] ==
+           capacity);
+    assert(board_data.rf_transition_event_sequences[channel_index] ==
+           capacity + 1);
+    assert(reason_event->event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED);
+    assert(reason_event->flags == BLADERF_RF_INVALIDATE_FEATURE);
+    assert(channel_event->event_type == BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL);
+    assert(channel_event->flags ==
+           (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2));
+    assert(channel_event->transaction_id == reason_event->transaction_id);
+    assert(channel_event->epoch_id == reason_event->epoch_id);
+    assert(channel_event->host_monotonic_ns == reason_event->host_monotonic_ns);
+    assert(channel_event->requested_rx_lo_hz == reason_event->requested_rx_lo_hz);
+    assert(channel_event->readback_rx_lo_hz == reason_event->readback_rx_lo_hz);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+}
+
 static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
@@ -1143,6 +1202,7 @@ int main(void)
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
+    test_invalidation_companion_append_is_atomic_at_ring_wrap();
     test_rx_x2_layout_rejection_event();
     test_async_timestamp_continuity();
 

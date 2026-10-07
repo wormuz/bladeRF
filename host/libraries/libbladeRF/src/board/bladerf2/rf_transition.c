@@ -338,7 +338,6 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
                         uint32_t flags)
 {
     struct bladerf_rf_event event = {0};
-    struct bladerf_rf_event invalidation_channel_event;
     uint32_t invalidation_channel_flags = 0;
 
     /* Later events (PLL, ENSM, epoch-valid) are emitted by wait(), which
@@ -400,15 +399,11 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
          * Keep async admission uncertified until that commit so a late or
          * failed host activation cannot leak IQ after wait() reports error. */
         MUTEX_LOCK(&board_data->rf_transition_event_lock);
-        bladerf2_rf_event_append_locked(board_data, &event);
-        if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
-            (invalidation_channel_flags &
-             BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID) != 0) {
-            invalidation_channel_event =
-                bladerf2_rx_invalidation_channel_event(
-                    &event, invalidation_channel_flags);
-            bladerf2_rf_event_append_locked(
-                board_data, &invalidation_channel_event);
+        if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED) {
+            bladerf2_rf_event_append_rx_invalidation_locked(
+                board_data, &event, invalidation_channel_flags);
+        } else {
+            bladerf2_rf_event_append_locked(board_data, &event);
         }
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
         COND_SIGNAL(&board_data->rx_async_epoch_cond);

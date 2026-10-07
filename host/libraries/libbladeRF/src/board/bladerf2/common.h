@@ -335,6 +335,10 @@ void bladerf2_rf_event_append_locked(
 void bladerf2_rf_event_append_rx_invalidation(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event, uint32_t channel_flags);
+/* Caller holds rf_transition_event_lock. */
+void bladerf2_rf_event_append_rx_invalidation_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_rf_event *event, uint32_t channel_flags);
 void bladerf2_rx_format_unsupported(struct bladerf *dev,
                                     bladerf_format format,
                                     bool deduplicate);
