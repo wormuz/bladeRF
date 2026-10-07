@@ -2085,15 +2085,24 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     NULL_CHECK(quick_tune);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    bool epoch_contract_enabled;
+    bool sync_epoch_filter_enabled;
 
-    /* Once sample-META epoch filtering is active, an ordinary scheduled
-     * retune has no completion event or first-valid boundary. Only the
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    epoch_contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    sync_epoch_filter_enabled =
+        board_data->sync[BLADERF_RX].initialized &&
+        sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
+
+    /* An ordinary scheduled retune has no host completion event or
+     * first-valid boundary. Once the caller has opted into the RX epoch
+     * contract, block it for sync and async META consumers alike. Only the
      * quick-tune recall issued inside rx_transition_begin() is allowed; it
      * is fenced by that transaction's FPGA epoch gate. */
     if (bladerf2_rx_scheduled_retune_blocked(
             !BLADERF_CHANNEL_IS_TX(ch), board_data->rf_transition_pending,
-            board_data->sync[BLADERF_RX].initialized &&
-                sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]),
+            epoch_contract_enabled, sync_epoch_filter_enabled,
             board_data->rf_transition_scheduling_quick_tune)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }

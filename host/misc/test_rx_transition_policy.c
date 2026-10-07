@@ -52,17 +52,22 @@ int main(void)
     assert(!bladerf2_rf_transition_normalize_requirements(0, false, NULL));
 
     /* A queued RX recall has no epoch completion. It is blocked whenever an
-     * event transaction owns the channel or the host epoch filter is active;
-     * only the quick-tune substep inside that transaction is allowed. */
+     * event transaction owns the channel or epoch protection is active
+     * (sync filter or async META contract); only the transaction's own
+     * quick-tune substep is allowed. */
     assert(!bladerf2_rx_scheduled_retune_blocked(
-        false, true, true, false));
+        false, true, true, true, false));
     assert(bladerf2_rx_scheduled_retune_blocked(
-        true, true, false, false));
+        true, true, false, false, false));
     assert(bladerf2_rx_scheduled_retune_blocked(
-        true, false, true, false));
+        true, false, false, true, false));
+    /* Async META users have no sync filter object, but the enabled RX epoch
+     * contract must still block this unreported retune. */
+    assert(bladerf2_rx_scheduled_retune_blocked(
+        true, false, true, false, false));
     assert(!bladerf2_rx_scheduled_retune_blocked(
-        true, true, true, true));
+        true, true, true, true, true));
     assert(!bladerf2_rx_scheduled_retune_blocked(
-        true, false, false, false));
+        true, false, false, false, false));
     return 0;
 }

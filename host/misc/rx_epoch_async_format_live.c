@@ -176,9 +176,59 @@ int main(void)
                 status, (unsigned long long)frequency_after);
         goto fail;
     }
+
+    /* The contract remains active without a sync-RX filter object. An async
+     * META consumer must therefore reject ordinary queued retunes too: they
+     * have no host completion event or new epoch boundary. */
+    unsigned int raw_callbacks = atomic_load(&test.callbacks);
+    struct bladerf_quick_tune quick_tune = {0};
+    atomic_store(&test.callbacks, 0);
+    atomic_store(&test.stop, false);
+    status = bladerf_init_stream(&test.stream, test.dev, rx_callback,
+                                 &test.buffers, RX_BUFFERS,
+                                 BLADERF_FORMAT_SC16_Q11_META, RX_SAMPLES,
+                                 4, &test);
+    if (status != 0) {
+        fprintf(stderr, "META stream init: %s\n", bladerf_strerror(status));
+        goto fail;
+    }
+    if (pthread_create(&stream_thread, NULL, run_stream, &test) != 0) {
+        fprintf(stderr, "failed to start META RX stream thread\n");
+        goto fail;
+    }
+    if (!wait_for_callback(&test)) {
+        fprintf(stderr, "META async stream produced no callback\n");
+        goto stop_fail;
+    }
+    status = bladerf_schedule_retune(test.dev, BLADERF_CHANNEL_RX(0),
+                                     0, 1835500000ULL, &quick_tune);
+    if (status != BLADERF_ERR_WOULD_BLOCK) {
+        fprintf(stderr, "scheduled RX retune under async epoch contract: "
+                "%d (%s), expected %d\n", status, bladerf_strerror(status),
+                BLADERF_ERR_WOULD_BLOCK);
+        goto stop_fail;
+    }
+    status = bladerf_get_frequency(test.dev, BLADERF_CHANNEL_RX(0),
+                                   &frequency_after);
+    if (status != 0 ||
+        (frequency_after > 1835400000ULL ?
+             frequency_after - 1835400000ULL :
+             1835400000ULL - frequency_after) > 1000ULL) {
+        fprintf(stderr, "rejected scheduled retune changed LO: status=%d "
+                "LO=%llu\n", status,
+                (unsigned long long)frequency_after);
+        goto stop_fail;
+    }
+
+    atomic_store(&test.stop, true);
+    (void)bladerf_submit_stream_buffer(test.stream, BLADERF_STREAM_SHUTDOWN,
+                                      1000);
+    pthread_join(stream_thread, NULL);
+    bladerf_deinit_stream(test.stream);
+    test.stream = NULL;
     printf("async epoch format guard: PASS raw callbacks=%u rejected=%d \
 LO after rejected request=%llu; accepted retune LO=%llu transaction=%u\n",
-           atomic_load(&test.callbacks), BLADERF_ERR_UNSUPPORTED,
+           raw_callbacks, BLADERF_ERR_UNSUPPORTED,
            (unsigned long long)frequency_before,
            (unsigned long long)frequency_after, transaction_id);
     bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), false);
