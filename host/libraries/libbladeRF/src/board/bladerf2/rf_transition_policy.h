@@ -100,4 +100,17 @@ static inline bool bladerf2_rx_epoch_transition_blocked_by_async_format(
     return require_epoch && epochless_async_stream_count != 0;
 }
 
+/* Runtime status reads happen outside the async admission lock. Match their
+ * result to both the short FPGA epoch tag and the host transaction that was
+ * certified when the read began, so an old observation cannot revoke a later
+ * epoch after the 8-bit FPGA epoch counter wraps. */
+static inline bool bladerf2_rx_fault_observation_is_current(
+    uint32_t observed_transaction_id, uint32_t current_transaction_id,
+    uint8_t observed_epoch_id, uint8_t current_epoch_id)
+{
+    return observed_transaction_id != 0 &&
+           observed_transaction_id == current_transaction_id &&
+           observed_epoch_id == current_epoch_id;
+}
+
 #endif

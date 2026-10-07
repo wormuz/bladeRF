@@ -443,6 +443,7 @@ static const char *_runtime_rx_monitor_test_mode(void)
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */
 static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
+                                         uint32_t observed_transaction_id,
                                          uint8_t observed_epoch_id,
                                          uint32_t rf_link_status,
                                          uint32_t reason,
@@ -462,8 +463,11 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             if (board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_epoch_certified &&
-                board_data->rf_transition_certified_epoch_id ==
-                    observed_epoch_id) {
+                bladerf2_rx_fault_observation_is_current(
+                    observed_transaction_id,
+                    board_data->rf_transition_current_id,
+                    observed_epoch_id,
+                    board_data->rf_transition_certified_epoch_id)) {
                 board_data->rf_transition_epoch_certified = false;
                 board_data->rx_async_have_expected_timestamp = false;
                 epoch_contract_enabled = true;
@@ -554,6 +558,7 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool epoch_certified = false;
+        uint32_t transaction_id = 0;
         uint8_t epoch_id = 0;
         uint32_t rf_link_status = 0;
         uint32_t rx_fault_causes = 0;
@@ -577,6 +582,7 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rf_transition_epoch_certified;
             epoch_id = board_data->rf_transition_certified_epoch_id;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            transaction_id = board_data->rf_transition_current_id;
             should_poll = board_data->state == STATE_INITIALIZED &&
                 board_data->rf_link_dir_on[0] && epoch_certified &&
                 !board_data->rf_transition_pending &&
@@ -632,7 +638,7 @@ static void *rx_fault_monitor_task(void *arg)
                 RF_LINK_STATUS_VERSION_1) {
             const int monitor_error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, rf_link_status,
+                dev, transaction_id, epoch_id, rf_link_status,
                 BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE,
                 monitor_error);
             continue;
@@ -661,14 +667,14 @@ static void *rx_fault_monitor_task(void *arg)
             }
             if (counter_reset) {
                 _invalidate_faulted_rx_epoch(
-                    dev, epoch_id, (uint32_t)rx_loss_count,
+                    dev, transaction_id, epoch_id, (uint32_t)rx_loss_count,
                     BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE,
                     BLADERF_ERR_UNEXPECTED);
                 continue;
             }
         } else {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, (uint32_t)loss_count_status,
+                dev, transaction_id, epoch_id, (uint32_t)loss_count_status,
                 BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE,
                 loss_count_status);
             continue;
@@ -691,7 +697,7 @@ static void *rx_fault_monitor_task(void *arg)
         }
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id,
+                dev, transaction_id, epoch_id,
                 rx_fault_causes_valid
                     ? (0x80000000u | (rx_fault_causes & 0x1fu))
                     : rf_link_status,
@@ -700,27 +706,28 @@ static void *rx_fault_monitor_task(void *arg)
         }
         if (rfic_status != 0) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, ((uint32_t)ensm_status << 8) | pll_status,
+                dev, transaction_id, epoch_id,
+                ((uint32_t)ensm_status << 8) | pll_status,
                 BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE,
                 rfic_status);
             continue;
         }
         if ((pll_status & VCO_LOCK_BIT) == 0) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, pll_status,
+                dev, transaction_id, epoch_id, pll_status,
                 BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED, 0);
             continue;
         }
         uint8_t ensm_state = ensm_status & ENSM_STATE_MASK;
         if (ensm_state != ENSM_STATE_RX && ensm_state != ENSM_STATE_FDD) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, ensm_status,
+                dev, transaction_id, epoch_id, ensm_status,
                 BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX, 0);
             continue;
         }
         if ((bbpll_status & BBPLL_LOCK_BIT) == 0) {
             _invalidate_faulted_rx_epoch(
-                dev, epoch_id, bbpll_status,
+                dev, transaction_id, epoch_id, bbpll_status,
                 BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED, 0);
         }
     }

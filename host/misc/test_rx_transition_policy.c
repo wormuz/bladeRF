@@ -113,5 +113,12 @@ int main(void)
     assert(final_event.event_type == BLADERF_RF_EVT_ERROR);
     assert(!bladerf2_rf_event_latest_transition_result_for_transaction(
         events, 4, 1, 3, 99, &final_event));
+
+    assert(bladerf2_rx_fault_observation_is_current(91, 91, 7, 7));
+    assert(!bladerf2_rx_fault_observation_is_current(90, 91, 7, 7));
+    /* The short FPGA epoch tag may wrap; the host transaction still fences
+     * a delayed monitor observation from an earlier certification. */
+    assert(!bladerf2_rx_fault_observation_is_current(1, 257, 7, 7));
+    assert(!bladerf2_rx_fault_observation_is_current(0, 0, 7, 7));
     return 0;
 }
