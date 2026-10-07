@@ -108,13 +108,17 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
+        /* Publish the native reason before sync-worker bookkeeping can wake
+         * a blocked sync_rx caller. Otherwise that read could return and the
+         * wrapper drain the event ring before the short-transfer event is
+         * appended. */
+        async_notify_rx_data_withheld(stream,
+                                      BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+        async_notify_rx_overrun(stream);
         if (stream->rx_buffer_rejected != NULL) {
             rejected_replacement = stream->rx_buffer_rejected(
                 stream->user_data, samples);
         }
-        async_notify_rx_data_withheld(stream,
-                                      BLADERF_RF_WITHHELD_SHORT_TRANSFER);
-        async_notify_rx_overrun(stream);
         /* A short transfer is an individual transport fault, so every
          * occurrence gets its own event-only callback even when another
          * withholding interval is already active. */

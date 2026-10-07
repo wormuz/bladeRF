@@ -83,6 +83,11 @@ static bool sync_withheld_timestamp_valid[8];
 static uint8_t sync_withheld_epochs[8];
 static uint64_t sync_withheld_timestamps[8];
 static unsigned int async_overrun_events;
+static unsigned int async_fault_order;
+static unsigned int async_fault_withheld_order;
+static unsigned int async_fault_overrun_order;
+static unsigned int async_fault_rejected_order;
+static unsigned int async_fault_callback_order;
 static unsigned int sync_host_data_events;
 static unsigned int sync_event_order;
 static unsigned int sync_host_data_order;
@@ -110,6 +115,7 @@ static void note_async_withheld(struct bladerf *dev, uint32_t reason)
     assert(dev != NULL);
     async_withheld_events++;
     async_withheld_reason = reason;
+    async_fault_withheld_order = ++async_fault_order;
 }
 
 static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
@@ -142,6 +148,7 @@ static void note_async_overrun(struct bladerf *dev)
 {
     assert(dev != NULL);
     async_overrun_events++;
+    async_fault_overrun_order = ++async_fault_order;
 }
 
 static unsigned int async_rx_callbacks;
@@ -152,6 +159,7 @@ static void *async_rejected_replacement;
 static void *replace_rejected_async_buffer(void *user_data, void *buffer)
 {
     assert(user_data != NULL && buffer != NULL);
+    async_fault_rejected_order = ++async_fault_order;
     return async_rejected_replacement;
 }
 
@@ -177,6 +185,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
         assert(samples == NULL);
         assert(user_data != NULL);
         async_rx_event_wakeups++;
+        async_fault_callback_order = ++async_fault_order;
         return BLADERF_STREAM_REUSE_BUFFER;
     } else {
         assert(samples != NULL);
@@ -740,6 +749,11 @@ int main(void)
     async_withheld_events = 0;
     async_withheld_reason = 0;
     async_overrun_events = 0;
+    async_fault_order = 0;
+    async_fault_withheld_order = 0;
+    async_fault_overrun_order = 0;
+    async_fault_rejected_order = 0;
+    async_fault_callback_order = 0;
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
@@ -753,6 +767,9 @@ int main(void)
     assert(async_rx_event_wakeups == 1);
     assert(async_withheld_events == 1);
     assert(async_withheld_reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
+    assert(async_fault_withheld_order < async_fault_overrun_order);
+    assert(async_fault_overrun_order < async_fault_rejected_order);
+    assert(async_fault_rejected_order < async_fault_callback_order);
     assert(MUTEX_INIT(&f.dev.lock) == 0);
     MUTEX_LOCK(&f.dev.lock);
     assert(async_rx_process_buffer(&async_stream, &async_meta, async_samples,
