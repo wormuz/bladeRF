@@ -1200,7 +1200,12 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
         transfer->status == LIBUSB_TRANSFER_COMPLETED) {
         const char *fault = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
-        if (fault != NULL) {
+        const char *after_text =
+            getenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
+        const unsigned after = after_text != NULL
+                                   ? (unsigned)strtoul(after_text, NULL, 10)
+                                   : 0;
+        if (fault != NULL && stream_data->num_complete >= after) {
             if (strcmp(fault, "OVERFLOW") == 0) {
                 transfer->status = LIBUSB_TRANSFER_OVERFLOW;
             } else if (strcmp(fault, "ERROR") == 0) {

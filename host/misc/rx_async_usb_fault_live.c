@@ -34,11 +34,15 @@ struct fault_test {
     atomic_uint event_callbacks;
     atomic_uint withheld_events;
     atomic_uint overrun_events;
+    atomic_uint resumed_events;
+    atomic_uint first_valid_events;
+    atomic_uint resume_metadata_mismatches;
     atomic_bool fault_seen;
     atomic_bool data_after_fault;
     atomic_bool api_submit_requested;
     atomic_bool api_submit_mode;
     atomic_bool recoverable_short_mode;
+    atomic_bool short_after_valid_mode;
     atomic_uint rx1_samples;
     atomic_uint rx2_samples;
     atomic_uint invalid_meta_buffers;
@@ -52,6 +56,40 @@ struct fault_test {
     int stream_status;
 };
 
+static bool consume_rf_events(struct fault_test *test, struct bladerf *dev)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next = test->event_cursor;
+    bool complete = false;
+
+    if (bladerf_rf_events_get_since(dev, test->event_cursor, events,
+            BLADERF_RF_EVENT_HISTORY_SIZE, &count, &next, &complete) != 0 ||
+        !complete) {
+        return false;
+    }
+    test->event_cursor = next;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
+            events[i].flags == test->expected_reason) {
+            atomic_fetch_add(&test->withheld_events, 1);
+            atomic_store(&test->fault_seen, true);
+        } else if (events[i].event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
+            atomic_fetch_add(&test->overrun_events, 1);
+        } else if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) {
+            if (events[i].epoch_id != test->expected_epoch_id ||
+                events[i].fpga_timestamp < test->first_valid_timestamp) {
+                atomic_fetch_add(&test->resume_metadata_mismatches, 1);
+            }
+            atomic_fetch_add(&test->resumed_events, 1);
+        } else if (events[i].event_type ==
+                   BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
+            atomic_fetch_add(&test->first_valid_events, 1);
+        }
+    }
+    return true;
+}
+
 static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                          struct bladerf_metadata *metadata, void *samples,
                          size_t num_samples, void *user_data)
@@ -61,26 +99,8 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     (void)metadata;
 
     if (num_samples == 0) {
-        struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-        uint32_t count = 0;
-        uint64_t next = test->event_cursor;
-        bool complete = false;
-        if (samples != NULL || bladerf_rf_events_get_since(
-                dev, test->event_cursor, events,
-                BLADERF_RF_EVENT_HISTORY_SIZE, &count, &next,
-                &complete) != 0 || !complete) {
+        if (samples != NULL || !consume_rf_events(test, dev)) {
             return BLADERF_STREAM_SHUTDOWN;
-        }
-        test->event_cursor = next;
-        for (uint32_t i = 0; i < count; ++i) {
-            if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
-                events[i].flags == test->expected_reason) {
-                atomic_fetch_add(&test->withheld_events, 1);
-                atomic_store(&test->fault_seen, true);
-            } else if (events[i].event_type ==
-                       BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
-                atomic_fetch_add(&test->overrun_events, 1);
-            }
         }
         atomic_fetch_add(&test->event_callbacks, 1);
         return BLADERF_STREAM_REUSE_BUFFER;
@@ -126,8 +146,13 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
             atomic_fetch_add(&test->rx2_samples, complex_samples);
         }
     }
+    if (!consume_rf_events(test, dev)) {
+        return BLADERF_STREAM_SHUTDOWN;
+    }
     if (atomic_fetch_add(&test->data_callbacks, 1) >=
-        (atomic_load(&test->recoverable_short_mode) ? 1 : 3)) {
+        (atomic_load(&test->recoverable_short_mode)
+             ? (atomic_load(&test->short_after_valid_mode) ? 50 : 1)
+             : 3)) {
         return BLADERF_STREAM_SHUTDOWN;
     }
     return samples;
@@ -226,10 +251,13 @@ int main(void)
     } else if (strcmp(fault_status, "UNKNOWN") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
-    } else if (strcmp(fault_status, "SHORT") == 0) {
+    } else if (strcmp(fault_status, "SHORT") == 0 ||
+               strcmp(fault_status, "SHORT_AFTER_VALID") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_SHORT_TRANSFER;
         test.expected_stream_status = 0;
         atomic_store(&test.recoverable_short_mode, true);
+        atomic_store(&test.short_after_valid_mode,
+                     strcmp(fault_status, "SHORT_AFTER_VALID") == 0);
     } else if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR;
         test.expected_stream_status = BLADERF_ERR_IO;
@@ -301,6 +329,25 @@ int main(void)
         goto cleanup;
     }
 
+    /* Discard the successful transition's history before starting the
+     * stream, so a later RX_DATA_RESUMED event is checked at the exact
+     * recovery callback that admitted its META packet. */
+    {
+        struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+        uint32_t count = 0;
+        uint64_t next = 0;
+        bool complete = false;
+        status = bladerf_rf_events_get_since(
+            test.dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+            &count, &next, &complete);
+        if (status != 0 || !complete) {
+            fprintf(stderr, "could not initialize RF event cursor\n");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto cleanup;
+        }
+        test.event_cursor = next;
+    }
+
     if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
         pthread_t submit_thread;
         if (pthread_create(&thread, NULL, run_stream, &test) != 0 ||
@@ -321,7 +368,11 @@ int main(void)
              ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR",
                       strcmp(fault_status, "SUBMIT_NODEV") == 0 ? "NO_DEVICE" :
                       strcmp(fault_status, "SUBMIT_TIMEOUT") == 0 ? "TIMEOUT" : "IO", 1)
-             : setenv("BLADERF_TEST_LIBUSB_RX_STATUS", fault_status, 1)) != 0 ||
+             : setenv("BLADERF_TEST_LIBUSB_RX_STATUS",
+                      atomic_load(&test.short_after_valid_mode)
+                          ? "SHORT" : fault_status, 1)) != 0 ||
+        (atomic_load(&test.short_after_valid_mode) &&
+         setenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS", "20", 1) != 0) ||
         pthread_create(&thread, NULL, run_stream, &test) != 0) {
         fprintf(stderr, "could not arm/start test stream\n");
         status = BLADERF_ERR_UNEXPECTED;
@@ -330,6 +381,7 @@ int main(void)
 
     pthread_join(thread, NULL);
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
     unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
     unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
     unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
@@ -359,11 +411,35 @@ int main(void)
         (pre_callback_fault || atomic_load(&test.recoverable_short_mode)
              ? atomic_load(&test.event_callbacks) < 1
              : atomic_load(&test.event_callbacks) != 1) ||
+        (atomic_load(&test.short_after_valid_mode)
+             ? (atomic_load(&test.resumed_events) != 1 ||
+                atomic_load(&test.first_valid_events) != 1)
+             : (atomic_load(&test.resumed_events) != 0 ||
+                (atomic_load(&test.recoverable_short_mode) &&
+                 atomic_load(&test.first_valid_events) != 1))) ||
+        atomic_load(&test.resume_metadata_mismatches) != 0 ||
         atomic_load(&test.data_after_fault) ||
         atomic_load(&test.invalid_meta_buffers) != 0) {
+        struct bladerf_rf_event debug_events[BLADERF_RF_EVENT_HISTORY_SIZE];
+        uint32_t debug_count = 0;
+        uint64_t debug_next = 0;
+        bool debug_complete = false;
+        if (bladerf_rf_events_get_since(test.dev, 0, debug_events,
+                BLADERF_RF_EVENT_HISTORY_SIZE, &debug_count, &debug_next,
+                &debug_complete) == 0) {
+            for (uint32_t i = 0; i < debug_count; ++i) {
+                fprintf(stderr, "event[%u] type=%u reason=0x%x epoch=%u ts=%llu txn=%u\n",
+                        i, debug_events[i].event_type, debug_events[i].flags,
+                        debug_events[i].epoch_id,
+                        (unsigned long long)debug_events[i].fpga_timestamp,
+                        debug_events[i].transaction_id);
+            }
+        }
         fprintf(stderr, "FAIL stream=%s data=%u event_only=%u withheld=%u "
                 "overrun=%u rx1_slots=%u rx2_slots=%u invalid_meta=%u "
-                "data_after_fault=%u api_submit=%s expected_reason=0x%x\n",
+                "resumed=%u resume_mismatch=%u data_after_fault=%u "
+                "first_valid=%u "
+                "api_submit=%s expected_reason=0x%x\n",
                 bladerf_strerror(test.stream_status),
                 atomic_load(&test.data_callbacks),
                 atomic_load(&test.event_callbacks),
@@ -372,16 +448,22 @@ int main(void)
                 atomic_load(&test.rx1_samples),
                 atomic_load(&test.rx2_samples),
                 atomic_load(&test.invalid_meta_buffers),
+                atomic_load(&test.resumed_events),
+                atomic_load(&test.resume_metadata_mismatches),
                 atomic_load(&test.data_after_fault),
+                atomic_load(&test.first_valid_events),
                 bladerf_strerror(test.api_submit_status), test.expected_reason);
         status = BLADERF_ERR_UNEXPECTED;
     } else if (atomic_load(&test.recoverable_short_mode)) {
-        printf("PASS libusb %s %s callback: resumed_valid_IQ=%u "
+        printf("PASS libusb %s %s callback: valid_IQ=%u "
+               "first_valid_events=%u resume_events=%u "
                "rx1_slots=%u rx2_slots=%u invalid_meta=%u event_only=%u "
                "withheld=%u overrun=%u stream=%s\n",
                fault_layout_name(test.layout),
                fault_status,
                atomic_load(&test.data_callbacks),
+               atomic_load(&test.first_valid_events),
+               atomic_load(&test.resumed_events),
                atomic_load(&test.rx1_samples),
                atomic_load(&test.rx2_samples),
                atomic_load(&test.invalid_meta_buffers),
@@ -391,12 +473,13 @@ int main(void)
                bladerf_strerror(test.stream_status));
         status = 0;
     } else {
-        printf("PASS libusb %s %s callback: data=%u rx1_slots=%u "
+        printf("PASS libusb %s %s callback: data=%u resume_events=%u rx1_slots=%u "
                "rx2_slots=%u invalid_meta=%u event_only=%u withheld=%u "
                "overrun=%u post_fault_IQ=0 stream=%s\n",
                fault_layout_name(test.layout),
                fault_status,
                atomic_load(&test.data_callbacks),
+               atomic_load(&test.resumed_events),
                atomic_load(&test.rx1_samples),
                atomic_load(&test.rx2_samples),
                atomic_load(&test.invalid_meta_buffers),
@@ -410,6 +493,7 @@ int main(void)
 cleanup:
     if (test.dev != NULL) {
         unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+        unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
         unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
         unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
         unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");

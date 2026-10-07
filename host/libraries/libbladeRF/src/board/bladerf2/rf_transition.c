@@ -479,6 +479,9 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev)
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
     WITH_MUTEX(&dev->lock, {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_data_withheld_active = true;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         event.transaction_id = 0;
         event.epoch_id = board_data->rf_transition_epoch_id;
         event.requested_rx_lo_hz =
@@ -1360,6 +1363,7 @@ static bool _is_terminal_event(bladerf_rf_event_type type)
 {
     return type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
            type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+           type == BLADERF_RF_EVT_RX_DATA_RESUMED ||
            type == BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
            type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
            type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
@@ -1429,7 +1433,8 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
         }
     }
 
-    if (found_epoch && !already_recorded) {
+    if (found_epoch &&
+        (!already_recorded || board_data->rx_async_data_withheld_active)) {
         event.host_monotonic_ns = _monotonic_ns();
         event.fpga_timestamp = metadata->timestamp;
         event.transaction_id = epoch_event.transaction_id;
@@ -1438,11 +1443,14 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
         event.readback_rx_lo_hz = epoch_event.readback_rx_lo_hz;
         event.rfic_status = epoch_event.rfic_status;
         event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
-        event.event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+        event.event_type = already_recorded
+            ? BLADERF_RF_EVT_RX_DATA_RESUMED
+            : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
         event.flags = metadata->status;
         event.error_code = 0;
 
         bladerf2_rf_event_append_locked(board_data, &event);
+        board_data->rx_async_data_withheld_active = false;
     }
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }

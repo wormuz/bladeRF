@@ -243,6 +243,9 @@ struct bladerf2_board_data {
     bool rf_transition_epoch_certified;
     bool rx_async_format_unsupported_reported;
     bool rx_async_data_withheld_reported;
+    /* Set while the current epoch has an unannounced/active invalid data
+     * interval. Cleared only after a host-validated packet is published. */
+    bool rx_async_data_withheld_active;
     bool rx_async_timestamp_discontinuity_reported;
     bool rx_async_have_expected_timestamp;
     uint8_t rx_async_timestamp_epoch_id;

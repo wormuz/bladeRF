@@ -4734,7 +4734,11 @@ typedef enum {
     BLADERF_RF_EVT_RX_DATA_WITHHELD,
     /** NIOS did not acknowledge aborting an incomplete RX epoch. IQ remains
      * invalid; `error_code` contains the ABORT command failure. */
-    BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED
+    BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED,
+    /** A previously withheld RX stream resumed after a complete host META
+     * packet passed the current epoch/timestamp checks. This does not bridge
+     * the preceding gap or certify analog signal quality. */
+    BLADERF_RF_EVT_RX_DATA_RESUMED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)

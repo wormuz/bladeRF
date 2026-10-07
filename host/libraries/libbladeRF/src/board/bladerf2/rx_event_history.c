@@ -64,6 +64,7 @@ void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
     if (board_data->rf_transition_epoch_contract_enabled &&
         !board_data->rx_async_format_unsupported_reported) {
         board_data->rx_async_format_unsupported_reported = true;
+        board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }
     epoch_id = board_data->rf_transition_epoch_id;
@@ -97,6 +98,7 @@ void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
     /* This may run from the USB callback or sync parser. Keep it independent
      * of dev->lock, which can be held by a setter waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rx_async_data_withheld_active = true;
     if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
         reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
         reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
@@ -159,6 +161,7 @@ void bladerf2_rx_async_timestamp_discontinuity(struct bladerf *dev)
     if (board_data->rf_transition_epoch_contract_enabled &&
         !board_data->rx_async_timestamp_discontinuity_reported) {
         board_data->rx_async_timestamp_discontinuity_reported = true;
+        board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }
     epoch_id = board_data->rf_transition_certified_epoch_id;
@@ -197,6 +200,7 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
      * blocked on this same USB event loop. Only snapshot lock-safe identity. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->rf_transition_certified_epoch_id;
+    board_data->rx_async_data_withheld_active = true;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     event.host_monotonic_ns = monotonic_ns();
