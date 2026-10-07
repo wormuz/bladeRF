@@ -73,6 +73,7 @@ static unsigned int sync_host_data_order;
 static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 static bool allow_sync_channel_selection = true;
+static uint32_t sync_admission_withheld_reason;
 
 static void test_rx_channel_mask_runtime_policy(void)
 {
@@ -98,12 +99,20 @@ static void test_rx_channel_mask_runtime_policy(void)
                true, true, 0x3, 0x1) == BLADERF2_RX_CHANNEL_MASK_CHANGED);
 }
 
-static bool validate_sync_channel_selection(
-    struct bladerf *dev, bladerf_channel_layout layout)
+static uint32_t sync_data_admission_reason(
+    struct bladerf *dev, bladerf_channel_layout layout, uint8_t epoch_id,
+    uint64_t timestamp, unsigned int samples)
 {
     assert(dev != NULL);
     assert(layout == BLADERF_RX_X1 || layout == BLADERF_RX_X2);
-    return allow_sync_channel_selection;
+    assert(samples != 0);
+    (void)epoch_id;
+    (void)timestamp;
+    if (sync_admission_withheld_reason != 0) {
+        return sync_admission_withheld_reason;
+    }
+    return allow_sync_channel_selection
+        ? 0 : BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
 }
 
 static void note_sync_host_data(struct bladerf *dev,
@@ -228,7 +237,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
     .rx_sync_data_valid = note_sync_host_data,
-    .rx_sync_channel_selection_valid = validate_sync_channel_selection,
+    .rx_sync_data_admission_reason = sync_data_admission_reason,
     .rx_async_stream_overrun = note_async_overrun,
     .rx_worker_stream_overrun = note_worker_overrun,
     .rx_data_withheld = note_sync_withheld,
@@ -255,6 +264,7 @@ static void fixture_init(struct fixture *f)
     rx_worker_overrun_events = 0;
     last_rx_worker_overrun_source_flags = 0;
     sync_withheld_reason = 0;
+    sync_admission_withheld_reason = 0;
     memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
     memset(sync_withheld_timestamp_valid, 0,
            sizeof(sync_withheld_timestamp_valid));
@@ -342,6 +352,32 @@ static void test_sync_channel_selection_fail_closed(void)
     assert(sync_withheld_timestamps[0] == 1000);
     assert(sync_host_data_events == 0);
     allow_sync_channel_selection = true;
+    fixture_destroy(&f);
+}
+
+static void test_sync_first_host_data_deadline_withholds_before_copy(void)
+{
+    struct fixture f;
+    struct bladerf_metadata metadata = {0};
+    int16_t out[64];
+    int16_t sentinel[64];
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1777);
+    memset(out, 0x5a, sizeof(out));
+    memcpy(sentinel, out, sizeof(out));
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    sync_admission_withheld_reason = BLADERF_RF_WITHHELD_SYNC_TIMEOUT;
+
+    assert(sync_rx(&f.sync, out, 32, &metadata, 300) ==
+           BLADERF_ERR_TIMEOUT);
+    assert(metadata.actual_count == 0);
+    assert(memcmp(out, sentinel, sizeof(out)) == 0);
+    assert(sync_host_data_events == 0);
+    assert(sync_withheld_events >= 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+
+    sync_admission_withheld_reason = 0;
     fixture_destroy(&f);
 }
 
@@ -670,6 +706,92 @@ static void test_host_data_event_uses_epoch_snapshot(void)
 
     COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
+static void test_late_first_host_data_cannot_be_certified(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_metadata metadata = {0};
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_first_host_data_required = true;
+    board_data.rf_transition_first_host_data_deadline_ns = 1;
+    board_data.rf_transition_certified_epoch_id = 4;
+    board_data.rf_transition_first_valid_timestamp = 700;
+    board_data.rf_transition_certified_epoch_event.transaction_id = 33;
+    board_data.rf_transition_certified_epoch_event.epoch_id = 4;
+    board_data.rf_transition_certified_epoch_event.event_type =
+        BLADERF_RF_EVT_RX_EPOCH_VALID;
+    board_data.rf_transition_certified_epoch_event.fpga_timestamp = 700;
+    board_data.rx_channel_enable_mask_valid = true;
+    board_data.rx_channel_enable_mask = 0x1;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(0);
+    metadata.actual_count = 8;
+    metadata.rx_epoch_id_valid = 1;
+    metadata.rx_epoch_id = 4;
+    metadata.timestamp = 701;
+
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
+                                               BLADERF_RX_X1);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+
+    assert(!board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_first_host_data_failure ==
+           BLADERF_ERR_TIMEOUT);
+    assert(board_data.rf_transition_event_count == 0);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
+static void test_sync_admission_policy_checks_deadline_before_copy(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf_metadata metadata = {0};
+    uint32_t reason;
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_first_host_data_required = true;
+    board_data.rf_transition_first_host_data_deadline_ns = 1;
+    board_data.rf_transition_certified_epoch_id = 4;
+    board_data.rf_transition_first_valid_timestamp = 700;
+    board_data.rf_transition_certified_epoch_event.transaction_id = 33;
+    board_data.rf_transition_certified_epoch_event.epoch_id = 4;
+    board_data.rf_transition_certified_epoch_event.event_type =
+        BLADERF_RF_EVT_RX_EPOCH_VALID;
+    board_data.rf_transition_certified_epoch_event.fpga_timestamp = 700;
+    board_data.rx_channel_enable_mask_valid = true;
+    board_data.rx_channel_enable_mask = 0x1;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(0);
+    metadata.actual_count = 8;
+    metadata.rx_epoch_id_valid = 1;
+    metadata.rx_epoch_id = 4;
+    metadata.timestamp = 701;
+
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    reason = bladerf2_rx_sync_data_admission_reason_locked(
+        &board_data, &metadata, BLADERF_RX_X1);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+
+    assert(reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(!board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_first_host_data_failure ==
+           BLADERF_ERR_TIMEOUT);
+    assert(board_data.rf_transition_event_count == 0);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
@@ -1265,6 +1387,7 @@ int main(void)
 {
     test_rx_channel_mask_runtime_policy();
     test_sync_channel_selection_fail_closed();
+    test_sync_first_host_data_deadline_withholds_before_copy();
     test_failed_transition_revokes_host_epoch_before_abort();
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11_META,
@@ -1289,6 +1412,8 @@ int main(void)
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
+    test_late_first_host_data_cannot_be_certified();
+    test_sync_admission_policy_checks_deadline_before_copy();
     test_invalidation_companion_append_is_atomic_at_ring_wrap();
     test_shared_invalidation_uses_certified_rx_channel();
     test_rx_x2_layout_rejection_event();

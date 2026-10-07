@@ -1700,26 +1700,28 @@ static void bladerf2_rx_sync_data_valid_cb(
     bladerf2_rx_transition_note_first_packet(dev, metadata, layout);
 }
 
-static bool bladerf2_rx_sync_channel_selection_valid(
-    struct bladerf *dev, bladerf_channel_layout layout)
+static uint32_t bladerf2_rx_sync_data_admission_reason(
+    struct bladerf *dev, bladerf_channel_layout layout, uint8_t epoch_id,
+    uint64_t timestamp, unsigned int samples)
 {
     struct bladerf2_board_data *board_data;
-    bool contract_enabled;
-    bool matches;
+    struct bladerf_metadata metadata = {0};
+    uint32_t reason;
 
     if (dev == NULL || dev->board_data == NULL) {
-        return false;
+        return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
     }
     board_data = dev->board_data;
+    metadata.timestamp = timestamp;
+    metadata.actual_count = samples;
+    metadata.rx_epoch_id = epoch_id;
+    metadata.rx_epoch_id_valid = 1;
+
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    contract_enabled = board_data->rf_transition_epoch_contract_enabled;
-    matches = !contract_enabled ||
-        bladerf2_rx_layout_matches_channel_mask(
-            layout, board_data->rf_transition_current_channel,
-            board_data->rx_channel_enable_mask_valid,
-            board_data->rx_channel_enable_mask);
+    reason = bladerf2_rx_sync_data_admission_reason_locked(
+        board_data, &metadata, layout);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    return matches;
+    return reason;
 }
 
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
@@ -3827,8 +3829,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_sync_data_valid, bladerf2_rx_sync_data_valid_cb),
-    FIELD_INIT(.rx_sync_channel_selection_valid,
-               bladerf2_rx_sync_channel_selection_valid),
+    FIELD_INIT(.rx_sync_data_admission_reason,
+               bladerf2_rx_sync_data_admission_reason),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
     FIELD_INIT(.rx_worker_stream_overrun,
                bladerf2_rx_worker_stream_overrun),

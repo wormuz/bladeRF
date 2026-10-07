@@ -240,6 +240,7 @@ struct sync_meta {
             bool msg_epoch_id_valid;
             bool msg_epoch_filtered_out;
             bool msg_channel_filtered_out;
+            uint32_t msg_admission_withheld_reason;
         };
 
         /* Used only for TX */

@@ -1454,6 +1454,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             metadata_get_rx_epoch_id(s->meta.curr_msg,
                                 &s->meta.msg_epoch_id);
                         s->meta.msg_channel_filtered_out = false;
+                        s->meta.msg_admission_withheld_reason = 0;
 
                         if (!s->meta.rx_epoch_boundary_enabled ||
                             s->meta.msg_timestamp >=
@@ -1498,22 +1499,6 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 s->meta.rx_epoch_min_timestamp,
                                 s->meta.have_timestamp,
                                 copied_data);
-
-                        /* Check RFIC lane selection before any payload copy.
-                         * RX_X1 does not encode RX1 versus RX2 in its layout,
-                         * so the board hook compares the current channel mask
-                         * with the transition channel. RX_X2 requires both
-                         * lanes. */
-                        if (epoch_disposition == METADATA_RX_EPOCH_ACCEPT &&
-                            s->meta.rx_epoch_id_filter_enabled &&
-                            s->dev != NULL && s->dev->board != NULL &&
-                            s->dev->board->rx_sync_channel_selection_valid !=
-                                NULL &&
-                            !s->dev->board->rx_sync_channel_selection_valid(
-                                s->dev, s->stream_config.layout)) {
-                            s->meta.msg_channel_filtered_out = true;
-                            s->meta.msg_epoch_filtered_out = true;
-                        }
 
                         if (epoch_disposition ==
                             METADATA_RX_EPOCH_RETURN_VALID_PREFIX) {
@@ -1608,9 +1593,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 sync_rx_note_withheld(s, !copied_data,
                                     s->meta.msg_channel_filtered_out
                                         ? BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION
-                                        : (s->meta.rx_epoch_data_invalidated
+                                        : (s->meta.msg_admission_withheld_reason != 0
+                                            ? s->meta.msg_admission_withheld_reason
+                                            : (s->meta.rx_epoch_data_invalidated
                                             ? BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED
-                                            : BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH),
+                                            : BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH)),
                                     s->meta.msg_channel_filtered_out
                                         ? s->meta.msg_timestamp
                                         : s->meta.curr_timestamp,
@@ -1634,7 +1621,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 s->meta.msg_num = 0;
                                 s->state = SYNC_STATE_WAIT_FOR_BUFFER;
                             }
-                            if (s->meta.msg_channel_filtered_out) {
+                            if (s->meta.msg_admission_withheld_reason ==
+                                BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
+                                status = BLADERF_ERR_TIMEOUT;
+                            } else if (s->meta.msg_channel_filtered_out ||
+                                       s->meta.msg_admission_withheld_reason != 0) {
                                 if (!copied_data) {
                                     status = BLADERF_ERR_WOULD_BLOCK;
                                 } else {
@@ -1697,6 +1688,35 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             samples_to_copy =
                                 uint_min(num_samples - samples_returned,
                                          left_in_msg(s));
+
+                            /* Recheck the board certificate and any required
+                             * first-host-data deadline at the last point
+                             * before copying META IQ to application memory. */
+                            if (samples_to_copy != 0 &&
+                                s->meta.rx_epoch_id_filter_enabled &&
+                                s->dev != NULL && s->dev->board != NULL &&
+                                s->dev->board->rx_sync_data_admission_reason !=
+                                    NULL) {
+                                const uint32_t admission_reason =
+                                    s->dev->board->rx_sync_data_admission_reason(
+                                        s->dev, s->stream_config.layout,
+                                        s->meta.msg_epoch_id,
+                                        s->meta.curr_timestamp,
+                                        samples_to_copy);
+                                if (admission_reason != 0) {
+                                    s->meta.msg_admission_withheld_reason =
+                                        admission_reason;
+                                    s->meta.msg_channel_filtered_out =
+                                        admission_reason ==
+                                        BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
+                                    s->meta.msg_epoch_filtered_out = true;
+                                    break;
+                                }
+                            }
+
+                            if (s->meta.msg_epoch_filtered_out) {
+                                break;
+                            }
 
                             memcpy(samples_dest + samples2bytes(s, samples_returned),
                                    s->meta.curr_msg +

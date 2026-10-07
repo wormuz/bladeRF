@@ -495,6 +495,19 @@ void bladerf2_rx_data_note_first_packet_locked(
     }
 
     already_reported = board_data->rf_transition_first_host_data_reported;
+    if (!already_reported &&
+        board_data->rf_transition_first_host_data_required &&
+        board_data->rf_transition_first_host_data_deadline_ns != 0 &&
+        !bladerf2_rx_first_host_data_before_deadline(
+            monotonic_ns(),
+            board_data->rf_transition_first_host_data_deadline_ns)) {
+        /* Sync admission calls this before copying to application memory;
+         * async admission also reaches this point after its commit checks.
+         * A late packet cannot be promoted to first-valid host data. */
+        bladerf2_rx_transition_fail_first_host_data_locked(
+            board_data, BLADERF_ERR_TIMEOUT);
+        return;
+    }
     if (!already_reported || board_data->rx_async_data_withheld_active) {
         event.host_monotonic_ns = monotonic_ns();
         event.fpga_timestamp = metadata->timestamp;
@@ -529,8 +542,62 @@ void bladerf2_rx_data_note_first_packet_locked(
             COND_SIGNAL(&board_data->rx_async_epoch_cond);
         }
     }
-
     bladerf2_rx_data_rearm_notifications_locked(board_data);
+}
+
+uint32_t bladerf2_rx_sync_data_admission_reason_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout)
+{
+    if (board_data == NULL || metadata == NULL ||
+        (layout != BLADERF_RX_X1 && layout != BLADERF_RX_X2)) {
+        return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+    }
+    if (!board_data->rf_transition_epoch_contract_enabled) {
+        return 0;
+    }
+    if (!board_data->rf_transition_epoch_certified ||
+        !metadata->rx_epoch_id_valid ||
+        metadata->rx_epoch_id != board_data->rf_transition_certified_epoch_id ||
+        metadata->timestamp < board_data->rf_transition_first_valid_timestamp) {
+        return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+    }
+    if (!bladerf2_rx_layout_matches_channel_mask(
+            layout, board_data->rf_transition_current_channel,
+            board_data->rx_channel_enable_mask_valid,
+            board_data->rx_channel_enable_mask)) {
+        bladerf2_rx_transition_fail_first_host_data_locked(
+            board_data, BLADERF_ERR_UNSUPPORTED);
+        return BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
+    }
+    if (board_data->rf_transition_first_host_data_required &&
+        !board_data->rf_transition_first_host_data_reported) {
+        const uint64_t deadline_ns =
+            board_data->rf_transition_first_host_data_deadline_ns;
+        struct timespec now_ts;
+        uint64_t now_ns = 0;
+        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
+            now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                     (uint64_t)now_ts.tv_nsec;
+        }
+        /* A zero deadline means wait() has not armed its watchdog yet. The
+         * wait path validates the event timestamp once its deadline exists. */
+        if (deadline_ns != 0 && (now_ns == 0 || now_ns >= deadline_ns)) {
+            bladerf2_rx_transition_fail_first_host_data_locked(
+                board_data, BLADERF_ERR_TIMEOUT);
+            return BLADERF_RF_WITHHELD_SYNC_TIMEOUT;
+        }
+        bladerf2_rx_data_note_first_packet_locked(board_data, metadata,
+                                                   layout);
+        if (!board_data->rf_transition_first_host_data_reported) {
+            return board_data->rf_transition_first_host_data_failure ==
+                   BLADERF_ERR_TIMEOUT
+                ? BLADERF_RF_WITHHELD_SYNC_TIMEOUT
+                : BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        }
+    }
+    return 0;
 }
 
 void bladerf2_rx_async_timestamp_discontinuity(

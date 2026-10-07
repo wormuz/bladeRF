@@ -370,6 +370,10 @@ void bladerf2_rx_data_note_first_packet_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,
     bladerf_channel_layout layout);
+uint32_t bladerf2_rx_sync_data_admission_reason_locked(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,
     uint64_t first_unvalidated_timestamp);
