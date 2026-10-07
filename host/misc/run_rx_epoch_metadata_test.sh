@@ -8,6 +8,7 @@ test_bin="$(mktemp)"
 trap 'rm -f "$test_bin"' EXIT
 
 cc -std=gnu11 -Wall -Wextra -Werror -pthread \
+  -I"$bladerf_root/host/libraries/libbladeRF/include" \
   -I"$bladerf_root/host/libraries/libbladeRF/src" \
   -I"$bladerf_root/host/common/include" \
   -I"$build_dir/host/common/include" \

@@ -72,6 +72,10 @@ transition checks below exercise RX1, RX2, and RX1+RX2.
   fix.
 - libbladeRF requirement-policy test passed; production shared-library build
   passed.
+- Focused policy, metadata-epoch, sync epoch-traversal, and FPGA epoch-status
+  identity tests all passed. The metadata test runner now puts this worktree's
+  public header directory first, avoiding accidental compilation against an
+  older system-installed `libbladeRF.h`.
 - Test-build xA4 runtime BBPLL-loss injection passed for RX1, RX2, and RX_X2:
   each emitted an invalidation before the blocked sync read returned, exposed
   no IQ after revocation, then recovered only through a fresh explicit epoch.
