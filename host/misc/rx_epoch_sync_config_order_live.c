@@ -98,6 +98,27 @@ int main(int argc, char **argv)
     printf("pre-transition sync RX status=%d (%s), actual_count=%u\n", s,
            bladerf_strerror(s), meta.actual_count);
     if (s != BLADERF_ERR_WOULD_BLOCK) goto fail;
+    s = bladerf_rf_events_get_since(dev, next_event_cursor, events,
+                                    BLADERF_RF_EVENT_HISTORY_SIZE,
+                                    &event_count, &event_cursor,
+                                    &history_complete);
+    if (s != 0 || !history_complete) {
+        fprintf(stderr, "withheld event query failed: %s\n", bladerf_strerror(s));
+        goto fail;
+    }
+    bool withheld_event_found = false;
+    for (uint32_t i = 0; i < event_count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
+            (events[i].flags & ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+                BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED) {
+            withheld_event_found = true;
+            break;
+        }
+    }
+    if (!withheld_event_found) {
+        fprintf(stderr, "invalid sync RX read did not publish RX_DATA_WITHHELD\n");
+        goto fail;
+    }
     s = transition(dev);
     if (s != 0) { fprintf(stderr, "recovery transition: %s\n", bladerf_strerror(s)); goto fail; }
     meta = (struct bladerf_metadata){ .flags = BLADERF_META_FLAG_RX_NOW };

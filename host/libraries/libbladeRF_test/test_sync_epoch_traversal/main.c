@@ -313,9 +313,18 @@ static void test_unsupported_format_event(void)
     assert(board_data->rf_transition_event_count == 2);
 
     board_data->rx_format_unsupported_reported = false;
+    board_data->rx_async_data_withheld_active = false;
     bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, false);
     bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, false);
     assert(board_data->rf_transition_event_count == 4);
+    assert(!board_data->rx_async_data_withheld_active);
+    bladerf2_rx_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert(board_data->rf_transition_event_count == 5);
+    assert(board_data->rf_transition_events[4].event_type ==
+           BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(board_data->rf_transition_events[4].flags ==
+           BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);

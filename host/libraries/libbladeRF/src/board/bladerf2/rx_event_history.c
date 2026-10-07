@@ -66,8 +66,12 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
         (!deduplicate || !board_data->rx_format_unsupported_reported)) {
         if (deduplicate) {
             board_data->rx_format_unsupported_reported = true;
+            /* Repeated async packets are one withheld interval. A sync
+             * config rejection is a separate configuration event and must
+             * not suppress RX_DATA_WITHHELD if the caller then reads while
+             * the epoch is still invalid. */
+            board_data->rx_async_data_withheld_active = true;
         }
-        board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }
     epoch_id = board_data->rf_transition_epoch_id;
