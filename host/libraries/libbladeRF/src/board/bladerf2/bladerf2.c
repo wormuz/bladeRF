@@ -1730,7 +1730,8 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
                                            const void *buffer,
-                                           size_t length)
+                                           size_t length,
+                                           struct bladerf_metadata *metadata)
 {
     struct bladerf2_board_data *board_data;
     bool contract_enabled;
@@ -1916,6 +1917,11 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
         first_packet.rx_epoch_id = epoch_id;
         first_packet.rx_epoch_id_valid = 1;
+        if (metadata != NULL) {
+            metadata->timestamp = first_packet.timestamp;
+            metadata->rx_epoch_id = epoch_id;
+            metadata->rx_epoch_id_valid = 1;
+        }
         if (now_ns != 0) {
             bladerf2_rx_transition_note_first_packet_epoch_locked_at(
                 dev, &first_packet, layout, now_ns);

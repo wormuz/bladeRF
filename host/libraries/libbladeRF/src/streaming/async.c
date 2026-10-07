@@ -116,9 +116,19 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     void *next_buffer;
     void *rejected_replacement = samples;
 
-    if (stream == NULL || stream->cb == NULL || samples == NULL) {
+    if (stream == NULL || stream->cb == NULL || samples == NULL ||
+        metadata == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
     }
+
+    /* RX metadata is callback-scoped. Clear it on every transfer so a
+     * withheld buffer cannot inherit the preceding buffer's epoch identity. */
+    metadata->timestamp = 0;
+    metadata->flags = 0;
+    metadata->status = 0;
+    metadata->actual_count = 0;
+    metadata->rx_epoch_id = 0;
+    metadata->rx_epoch_id_valid = 0;
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
@@ -143,7 +153,7 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                stream->dev->board->rx_async_buffer_valid != NULL &&
                !stream->dev->board->rx_async_buffer_valid(
                    stream->dev, stream->layout, stream->format, samples,
-                   received_bytes)) {
+                   received_bytes, metadata)) {
         /* Notify once when a continuous invalid-data interval begins. The
          * native event history records its reason; repeated rejected buffers
          * owned by libbladeRF can be recycled without another callback. Keep
@@ -168,6 +178,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
             stream, metadata, NULL, 0);
     } else {
         stream->rx_withheld_notice_active = false;
+        metadata->actual_count = (unsigned int)bytes_to_samples(
+            stream->format, received_bytes);
         next_buffer = async_call_rx_callback_unlocked(
             stream, metadata, samples,
             bytes_to_samples(stream->format, received_bytes));

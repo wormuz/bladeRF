@@ -222,16 +222,24 @@ static void *replace_rejected_async_buffer(void *user_data, void *buffer)
 static bool validate_async_rx_buffer(struct bladerf *dev,
                                      bladerf_channel_layout layout,
                                      bladerf_format format,
-                                     const void *buffer, size_t length)
+                                     const void *buffer, size_t length,
+                                     struct bladerf_metadata *metadata)
 {
     assert(dev != NULL && buffer != NULL && length > 0);
     assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX);
-    (void)format;
-    return allow_async_rx_buffer &&
+    assert(metadata != NULL);
+    bool valid = allow_async_rx_buffer &&
         (!check_async_rx_channel_mask ||
          bladerf2_rx_layout_matches_channel_mask(
              layout, async_rx_transition_channel,
              async_rx_channel_mask_valid, async_rx_channel_mask));
+    if (valid && (format == BLADERF_FORMAT_SC16_Q11_META ||
+                  format == BLADERF_FORMAT_SC8_Q7_META)) {
+        metadata->timestamp = 0x123456789ULL;
+        metadata->rx_epoch_id = 23;
+        metadata->rx_epoch_id_valid = 1;
+    }
+    return valid;
 }
 
 static void *count_async_rx_callback(struct bladerf *dev,
@@ -247,12 +255,20 @@ static void *count_async_rx_callback(struct bladerf *dev,
     async_callback_observed_unlocked = true;
     if (num_samples == 0) {
         assert(samples == NULL);
+        assert(metadata->timestamp == 0);
+        assert(metadata->actual_count == 0);
+        assert(metadata->rx_epoch_id_valid == 0);
         assert(user_data != NULL);
         async_rx_event_wakeups++;
         async_fault_callback_order = ++async_fault_order;
         return BLADERF_STREAM_REUSE_BUFFER;
     } else {
         assert(samples != NULL);
+        if (metadata->rx_epoch_id_valid) {
+            assert(metadata->timestamp == 0x123456789ULL);
+            assert(metadata->rx_epoch_id == 23);
+            assert(metadata->actual_count == num_samples);
+        }
         async_rx_callbacks++;
     }
     return samples;

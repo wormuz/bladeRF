@@ -352,11 +352,14 @@ struct board_fns {
         uint8_t epoch_id, uint64_t timestamp, unsigned int samples,
         uint64_t *admission_monotonic_ns);
     /* Return whether an asynchronous RX META buffer belongs to the current
-     * certified epoch. NULL preserves legacy, unfiltered behavior. */
+     * certified epoch. On success, populate callback metadata with the
+     * validated first timestamp and epoch ID. NULL preserves legacy,
+     * unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,
                                   bladerf_channel_layout layout,
                                   bladerf_format format,
-                                  const void *buffer, size_t length);
+                                  const void *buffer, size_t length,
+                                  struct bladerf_metadata *metadata);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,
                                const struct bladerf_range **range);
