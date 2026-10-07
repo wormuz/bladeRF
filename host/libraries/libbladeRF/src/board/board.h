@@ -333,6 +333,11 @@ struct board_fns {
     void (*rx_data_withheld_at)(struct bladerf *dev, uint32_t reason,
                                 uint8_t epoch_id, uint64_t fpga_timestamp,
                                 bool fpga_timestamp_valid);
+    /* A successful sync META read may contain host-visible epoch samples
+     * before a later discontinuity in the same request. Report those samples
+     * before dispatching the discontinuity notifications. */
+    void (*rx_sync_data_valid)(struct bladerf *dev,
+                               const struct bladerf_metadata *metadata);
     /* Return whether an asynchronous RX META buffer belongs to the current
      * certified epoch. NULL preserves legacy, unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,

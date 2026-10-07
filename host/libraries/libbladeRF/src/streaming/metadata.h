@@ -270,6 +270,17 @@ enum metadata_rx_epoch_disposition {
     METADATA_RX_EPOCH_DISCONTINUITY,
 };
 
+/* sync_rx() can return a contiguous, epoch-tagged prefix while setting the
+ * overrun flag for a later gap in the same request. That prefix is still
+ * host-visible IQ; consumers must receive both the data-valid event and the
+ * separate discontinuity notification. */
+static inline bool metadata_rx_has_epoch_samples(
+    const struct bladerf_metadata *metadata)
+{
+    return metadata != NULL && metadata->actual_count != 0 &&
+           metadata->rx_epoch_id_valid != 0;
+}
+
 static inline enum metadata_rx_epoch_disposition metadata_rx_epoch_disposition(
     bool boundary_enabled, bool epoch_filter_enabled, bool epoch_matches,
     uint64_t message_timestamp, uint64_t expected_timestamp,

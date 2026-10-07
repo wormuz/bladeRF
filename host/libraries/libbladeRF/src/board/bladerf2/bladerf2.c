@@ -1618,6 +1618,12 @@ static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev)
     bladerf2_rx_stream_overrun(dev);
 }
 
+static void bladerf2_rx_sync_data_valid_cb(
+    struct bladerf *dev, const struct bladerf_metadata *metadata)
+{
+    bladerf2_rx_transition_note_first_packet(dev, metadata);
+}
+
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
@@ -2822,15 +2828,8 @@ static int bladerf2_sync_rx(struct bladerf *dev,
         RETURN_INVAL("sync rx", "not initialized");
     }
 
-    int status = sync_rx(&board_data->sync[BLADERF_RX], samples, num_samples,
-                         metadata, timeout_ms);
-    if (status == 0 && metadata != NULL &&
-        metadata->actual_count == num_samples &&
-        metadata->rx_epoch_id_valid &&
-        (metadata->status & BLADERF_META_STATUS_OVERRUN) == 0) {
-        bladerf2_rx_transition_note_first_packet(dev, metadata);
-    }
-    return status;
+    return sync_rx(&board_data->sync[BLADERF_RX], samples, num_samples,
+                   metadata, timeout_ms);
 }
 
 static int bladerf2_get_timestamp(struct bladerf *dev,
@@ -3611,6 +3610,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
+    FIELD_INIT(.rx_sync_data_valid, bladerf2_rx_sync_data_valid_cb),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
     FIELD_INIT(.rx_data_withheld, bladerf2_rx_data_withheld),
     FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),

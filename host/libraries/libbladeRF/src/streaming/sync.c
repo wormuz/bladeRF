@@ -1555,6 +1555,15 @@ out:
     }
     MUTEX_UNLOCK(&s->lock);
 
+    /* Publish the fact that this read returned epoch-tagged IQ before any
+     * later gap/overrun event from the same request. For a partial read, the
+     * metadata parser has already limited actual_count to the valid prefix. */
+    if (status == 0 && s->dev != NULL && s->dev->board != NULL &&
+        s->dev->board->rx_sync_data_valid != NULL &&
+        metadata_rx_has_epoch_samples(user_meta)) {
+        s->dev->board->rx_sync_data_valid(s->dev, user_meta);
+    }
+
     /* Keep stream discontinuities in the same device event history as RF
      * invalidation. Invoke only after dropping sync->lock: RF setters acquire
      * dev->lock before touching sync state. */

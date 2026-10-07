@@ -83,11 +83,26 @@ static bool sync_withheld_timestamp_valid[8];
 static uint8_t sync_withheld_epochs[8];
 static uint64_t sync_withheld_timestamps[8];
 static unsigned int async_overrun_events;
+static unsigned int sync_host_data_events;
+static unsigned int sync_event_order;
+static unsigned int sync_host_data_order;
+static unsigned int sync_overrun_order;
+static unsigned int sync_withheld_order;
+
+static void note_sync_host_data(struct bladerf *dev,
+                                const struct bladerf_metadata *metadata)
+{
+    assert(dev != NULL);
+    assert(metadata_rx_has_epoch_samples(metadata));
+    sync_host_data_events++;
+    sync_host_data_order = ++sync_event_order;
+}
 
 static void note_rx_overrun(struct bladerf *dev)
 {
     assert(dev != NULL);
     rx_overrun_events++;
+    sync_overrun_order = ++sync_event_order;
 }
 
 static void note_async_withheld(struct bladerf *dev, uint32_t reason)
@@ -101,6 +116,7 @@ static void note_sync_withheld(struct bladerf *dev, uint32_t reason)
 {
     assert(dev != NULL);
     sync_withheld_events++;
+    sync_withheld_order = ++sync_event_order;
     sync_withheld_reason = reason;
     if (sync_withheld_events <=
         sizeof(sync_withheld_reasons) / sizeof(sync_withheld_reasons[0])) {
@@ -171,6 +187,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
 
 static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
+    .rx_sync_data_valid = note_sync_host_data,
     .rx_async_stream_overrun = note_async_overrun,
     .rx_data_withheld = note_sync_withheld,
     .rx_data_withheld_at = note_sync_withheld_at,
@@ -187,6 +204,11 @@ static const struct board_fns test_async_board = {
 static void fixture_init(struct fixture *f)
 {
     memset(f, 0, sizeof(*f));
+    sync_host_data_events = 0;
+    sync_event_order = 0;
+    sync_host_data_order = 0;
+    sync_overrun_order = 0;
+    sync_withheld_order = 0;
     sync_withheld_events = 0;
     sync_withheld_reason = 0;
     memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
@@ -482,6 +504,12 @@ int main(void)
     assert(meta.timestamp == 1000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert(meta.status & BLADERF_META_STATUS_OVERRUN);
+    /* The returned samples are a valid contiguous prefix; the overrun marks
+     * the later rejected message and must not suppress host-data validity. */
+    assert(metadata_rx_has_epoch_samples(&meta));
+    assert(sync_host_data_events == 1);
+    assert(sync_host_data_order < sync_overrun_order);
+    assert(sync_overrun_order < sync_withheld_order);
     assert(rx_overrun_events == 1);
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason ==

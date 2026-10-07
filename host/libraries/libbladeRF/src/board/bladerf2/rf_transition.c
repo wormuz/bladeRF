@@ -54,6 +54,7 @@ static bool _test_rx_transition_stall(const char *stage)
 #include "log.h"
 #include "nios_pkt_8x32.h"
 #include "rf_transition_policy.h"
+#include "streaming/metadata.h"
 #include "streaming/sync.h"
 
 /* Byte-exact with sdrscanner/driver/tuner_fault.py::FAULT_REGS and
@@ -1380,9 +1381,7 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
     bool found_epoch = false;
     bool already_recorded = false;
 
-    if (dev == NULL || metadata == NULL || !metadata->rx_epoch_id_valid ||
-        metadata->actual_count == 0 ||
-        (metadata->status & BLADERF_META_STATUS_OVERRUN) != 0) {
+    if (dev == NULL || !metadata_rx_has_epoch_samples(metadata)) {
         return;
     }
 
