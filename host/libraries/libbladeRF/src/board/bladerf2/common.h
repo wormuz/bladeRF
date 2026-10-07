@@ -332,6 +332,9 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
 void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event);
+void bladerf2_rf_event_append_rx_invalidation(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_rf_event *event, uint32_t channel_flags);
 void bladerf2_rx_format_unsupported(struct bladerf *dev,
                                     bladerf_format format,
                                     bool deduplicate);

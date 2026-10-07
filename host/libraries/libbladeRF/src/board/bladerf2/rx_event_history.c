@@ -124,6 +124,33 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }
 
+void bladerf2_rf_event_append_rx_invalidation(
+    struct bladerf2_board_data *board_data,
+    const struct bladerf_rf_event *event, uint32_t channel_flags)
+{
+    struct bladerf_rf_event channel_event;
+    const uint32_t channel_mask =
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+        BLADERF_RF_EVENT_F_TRANSITION_RX2;
+
+    if (board_data == NULL || event == NULL ||
+        event->event_type != BLADERF_RF_EVT_RX_DATA_INVALIDATED) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    bladerf2_rf_event_append_locked(board_data, event);
+
+    channel_flags &= channel_mask;
+    if (channel_flags & BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID) {
+        channel_event = bladerf2_rx_invalidation_channel_event(
+            event, channel_flags);
+        bladerf2_rf_event_append_locked(board_data, &channel_event);
+    }
+
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+}
+
 void bladerf2_rx_format_unsupported(struct bladerf *dev,
                                     bladerf_format format,
                                     bool deduplicate)

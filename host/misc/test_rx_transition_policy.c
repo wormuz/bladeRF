@@ -9,6 +9,20 @@ int main(void)
     uint32_t effective = UINT32_MAX;
     struct bladerf_rf_event events[4] = {0};
     struct bladerf_rf_event final_event = {0};
+    struct bladerf_rf_event invalidation = {
+        .host_monotonic_ns = 99,
+        .fpga_timestamp = 101,
+        .transaction_id = 0,
+        .epoch_id = 7,
+        .requested_rx_lo_hz = 1840000000,
+        .readback_rx_lo_hz = 1840000000,
+        .rfic_status = 0x55,
+        .fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID,
+        .event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+        .flags = BLADERF_RF_INVALIDATE_FEATURE,
+        .error_code = BLADERF_ERR_UNEXPECTED,
+    };
+    struct bladerf_rf_event invalidation_channel;
 
     assert(bladerf2_rx_transition_channel_event_flags(
                BLADERF_CHANNEL_RX(0), true) ==
@@ -21,6 +35,24 @@ int main(void)
                BLADERF_CHANNEL_RX(1), false) == 0);
     assert(bladerf2_rx_transition_channel_event_flags(
                BLADERF_CHANNEL_TX(0), true) == 0);
+
+    invalidation_channel = bladerf2_rx_invalidation_channel_event(
+        &invalidation,
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+        BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+        BLADERF_RF_INVALIDATE_FEATURE);
+    assert(invalidation_channel.event_type ==
+           BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL);
+    assert(invalidation_channel.epoch_id == invalidation.epoch_id);
+    assert(invalidation_channel.host_monotonic_ns ==
+           invalidation.host_monotonic_ns);
+    assert(invalidation_channel.fpga_timestamp == invalidation.fpga_timestamp);
+    assert(invalidation_channel.flags ==
+           (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2));
+    assert(invalidation_channel.rfic_status == 0);
+    assert(invalidation_channel.error_code == 0);
+    assert(invalidation.flags == BLADERF_RF_INVALIDATE_FEATURE);
 
     /* A status read which returns at or after the deadline is not a timely
      * completion, even if its sampled hardware bit is already asserted. */

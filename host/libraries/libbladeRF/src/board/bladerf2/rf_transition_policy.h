@@ -25,6 +25,27 @@ static inline uint32_t bladerf2_rx_transition_channel_event_flags(
                 ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
 }
 
+static inline struct bladerf_rf_event
+bladerf2_rx_invalidation_channel_event(
+    const struct bladerf_rf_event *invalidation, uint32_t channel_flags)
+{
+    struct bladerf_rf_event event = {0};
+    const uint32_t channel_mask =
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+        BLADERF_RF_EVENT_F_TRANSITION_RX2;
+
+    if (invalidation == NULL) {
+        return event;
+    }
+
+    event = *invalidation;
+    event.event_type = BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL;
+    event.flags = channel_flags & channel_mask;
+    event.rfic_status = 0;
+    event.error_code = 0;
+    return event;
+}
+
 /* A hardware observation is timely only if it completed strictly before the
  * caller's deadline. Checking only before a blocking SPI/NIOS read can accept
  * a late completion and turn an expired wait into success. */

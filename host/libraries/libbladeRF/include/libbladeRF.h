@@ -4807,7 +4807,13 @@ typedef enum {
     /** AD9361 baseband PLL lock was read from REG_CH_1_OVERFLOW[7]. */
     BLADERF_RF_EVT_RX_BBPLL_LOCKED,
     /** RX stream layout does not satisfy the active transition request. */
-    BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED
+    BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED,
+    /** Channel provenance for the immediately preceding RX_DATA_INVALIDATED
+     * event. Appended atomically with that event to preserve its full reason
+     * flags without overloading bits 28-30. `epoch_id`, timestamp, and
+     * frequency fields match the invalidation; `flags` contains only the
+     * transition-channel provenance flags. */
+    BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)

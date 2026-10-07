@@ -550,7 +550,9 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     event.flags = reason;
     event.rfic_status = rf_link_status;
     event.error_code = monitor_error;
-    bladerf2_rf_event_append(board_data, &event);
+    bladerf2_rf_event_append_rx_invalidation(
+        board_data, &event,
+        bladerf2_rx_current_transition_channel_event_flags(board_data));
 
     if (epoch_contract_enabled) {
         abort_status = _rx_epoch_abort_command(dev);
@@ -957,7 +959,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-        bladerf2_rf_event_append(board_data, &event);
+        bladerf2_rf_event_append_rx_invalidation(
+            board_data, &event,
+            bladerf2_rx_transition_channel_event_flags(ch, true));
         /* Keep the reservation through the actual legacy setter only when
          * the invalidation/fence succeeded. */
         if (status != 0) {
