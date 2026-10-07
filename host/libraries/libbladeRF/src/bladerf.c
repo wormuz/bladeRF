@@ -572,6 +572,7 @@ int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
  * separate lets compound gain-calibration changes reserve/fence RX once and
  * update the policy bit and physical gain as one serialized transaction. */
 static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
+                           bool clamp_corrected_gain,
                            bool *gain_applied_out)
 {
     int status;
@@ -622,6 +623,27 @@ static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
             log_error("Failed to calculate gain correction\n");
             goto error;
         }
+
+        if (clamp_corrected_gain) {
+            const struct bladerf_range *range = NULL;
+            status = dev->board->get_gain_range(dev, ch, &range);
+            if (status != 0 || range == NULL) {
+                log_error("Failed to get gain range for correction\n");
+                status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+                goto error;
+            }
+            if (assigned_gain < range->min) {
+                log_warning("Power compensated gain below range [%" PRId64
+                            ":%" PRId64 "]: %i; clamping\n",
+                            range->min, range->max, assigned_gain);
+                assigned_gain = range->min;
+            } else if (assigned_gain > range->max) {
+                log_warning("Power compensated gain above range [%" PRId64
+                            ":%" PRId64 "]: %i; clamping\n",
+                            range->min, range->max, assigned_gain);
+                assigned_gain = range->max;
+            }
+        }
     }
 
     status = dev->board->set_gain(dev, ch, assigned_gain);
@@ -660,7 +682,7 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     }
 
     MUTEX_LOCK(&dev->lock);
-    status = set_gain_locked(dev, ch, gain, NULL);
+    status = set_gain_locked(dev, ch, gain, false, NULL);
     MUTEX_UNLOCK(&dev->lock);
     rx_reconfigure_complete(dev, ch);
     return status;
@@ -971,7 +993,10 @@ int bladerf_set_frequency_locked(struct bladerf *dev,
     status = dev->board->set_frequency(dev, ch, frequency);
 
     if (dev->gain_tbls[ch].enabled && status == 0) {
-        status = apply_gain_correction(dev, ch, frequency);
+        /* Use the same MGC borrow/restore path as an explicit gain update.
+         * AD9361 rejects manual gain writes while AGC owns the gain stages. */
+        status = set_gain_locked(dev, ch,
+                                 dev->gain_tbls[ch].gain_target, true, NULL);
         if (status != 0) {
             log_error("Failed to set gain correction\n");
         }
@@ -2471,13 +2496,11 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
     char *full_path_bin = NULL;
     char *ext;
     bool lock_held = false;
+    bool rx_reserved = false;
     bladerf_gain gain_target_after_load;
-
     size_t filename_len = PATH_MAX;
     char *filename = (char *)calloc(1, filename_len + 1);
     CHECK_NULL(filename);
-
-    bladerf_gain_mode gain_mode_before_gain_reset;
 
     log_debug("Loading gain calibration\n");
     MUTEX_LOCK(&dev->lock);
@@ -2537,6 +2560,20 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
         }
     }
 
+    /* Loading replaces the table and the subsequent gain reset applies that
+     * table to RFIC state. Reserve/fence RX before publishing either change,
+     * then keep the reservation through the gain write. */
+    MUTEX_UNLOCK(&dev->lock);
+    lock_held = false;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_GAIN);
+    if (status != 0) {
+        goto error;
+    }
+    rx_reserved = true;
+
+    MUTEX_LOCK(&dev->lock);
+    lock_held = true;
     status = load_gain_calibration(dev, ch, full_path_bin);
     if (status != 0) {
         log_error("Failed to load calibration\n");
@@ -2545,37 +2582,13 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
     }
 
     gain_target_after_load = dev->gain_tbls[ch].gain_target;
-    MUTEX_UNLOCK(&dev->lock);
-    lock_held = false;
-
-    /* Save current gain mode before gain reset */
-    if (BLADERF_CHANNEL_IS_TX(ch) == false) {
-        MUTEX_LOCK(&dev->lock);
-        lock_held = true;
-        status = dev->board->get_gain_mode(dev, ch,
-                                            &gain_mode_before_gain_reset);
-        MUTEX_UNLOCK(&dev->lock);
-        lock_held = false;
-        if (status != 0) {
-            log_error("Failed to get gain mode before calibration reset\n");
-            goto error;
-        }
-    }
-
-    /* Reset gain to ensure calibration adjustment is applied after loading */
-    status = bladerf_set_gain(dev, ch, gain_target_after_load);
+    /* The lock-held helper applies the loaded correction and restores the
+     * gain mode it observed. No transition can certify RX between these
+     * operations because the setter reservation remains active. */
+    status = set_gain_locked(dev, ch, gain_target_after_load, false, NULL);
     if (status != 0) {
         log_error("%s: Failed to reset gain.\n", __FUNCTION__);
         goto error;
-    }
-
-    /** Restore previous gain mode */
-    if (BLADERF_CHANNEL_IS_TX(ch) == false) {
-        status = bladerf_set_gain_mode(dev, ch, gain_mode_before_gain_reset);
-        if (status != 0) {
-            log_error("%s: Failed to reset gain mode.\n", __FUNCTION__);
-            goto error;
-        }
     }
 
 error:
@@ -2588,6 +2601,9 @@ error:
 
     if (lock_held) {
         MUTEX_UNLOCK(&dev->lock);
+    }
+    if (rx_reserved) {
+        rx_reconfigure_complete(dev, ch);
     }
     return status;
 }
@@ -2623,7 +2639,7 @@ int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, boo
         previous_enabled = dev->gain_tbls[ch].enabled;
         gain_target = dev->gain_tbls[ch].gain_target;
         dev->gain_tbls[ch].enabled = en;
-        status = set_gain_locked(dev, ch, gain_target, &gain_applied);
+        status = set_gain_locked(dev, ch, gain_target, false, &gain_applied);
         if (status != 0 && !gain_applied) {
             /* A failed gain write must not publish a calibration policy that
              * the hardware never received. RX remains fenced until recovery. */

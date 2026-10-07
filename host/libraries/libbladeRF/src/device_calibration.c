@@ -509,29 +509,3 @@ int get_gain_correction(struct bladerf *dev, bladerf_frequency freq, bladerf_cha
     log_verbose("Target gain:  %i, Compen. gain: %i\n", dev->gain_tbls[ch].gain_target, *compensated_gain);
     return status;
 }
-
-int apply_gain_correction(struct bladerf *dev, bladerf_channel ch, bladerf_frequency frequency) {
-    struct bladerf_range const *gain_range = NULL;
-    bladerf_frequency current_frequency;
-    bladerf_gain gain_compensated;
-
-    if (dev->gain_tbls[ch].enabled == false) {
-        log_error("Gain compensation disabled. Can't apply gain correction.\n");
-        return BLADERF_ERR_UNEXPECTED;
-    }
-
-    CHECK_STATUS(dev->board->get_gain_range(dev, ch, &gain_range));
-    CHECK_STATUS(dev->board->get_frequency(dev, ch, &current_frequency));
-    CHECK_STATUS(get_gain_correction(dev, frequency, ch, &gain_compensated));
-
-    if (gain_compensated > gain_range->max || gain_compensated < gain_range->min) {
-        log_warning("Power compensated gain out of range [%i:%i]: %i\n",
-            gain_range->min, gain_range->max, gain_compensated);
-        gain_compensated = (gain_compensated > gain_range->max) ? gain_range->max : gain_range->min;
-        log_warning("Gain clamped to: %i\n", gain_compensated);
-    }
-
-    CHECK_STATUS(dev->board->set_gain(dev, ch, gain_compensated););
-
-    return 0;
-}

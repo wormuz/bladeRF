@@ -13,6 +13,7 @@ struct mock_state {
     bladerf_gain_mode current_gain_mode;
     bladerf_frequency frequency;
     unsigned int set_gain_calls;
+    unsigned int set_frequency_calls;
     unsigned int invalidate_calls;
     unsigned int complete_calls;
     bladerf_gain last_gain;
@@ -59,6 +60,28 @@ static int mock_set_gain(struct bladerf *dev, bladerf_channel ch,
     return 0;
 }
 
+static int mock_set_frequency(struct bladerf *dev, bladerf_channel ch,
+                              bladerf_frequency frequency)
+{
+    struct mock_state *state = dev->board_data;
+    (void)ch;
+    state->set_frequency_calls++;
+    state->frequency = frequency;
+    return 0;
+}
+
+static int mock_get_gain_range(struct bladerf *dev, bladerf_channel ch,
+                               const struct bladerf_range **range)
+{
+    static const struct bladerf_range supported = {
+        .min = 0, .max = 30, .step = 1, .scale = 1.0f,
+    };
+    (void)dev;
+    (void)ch;
+    *range = &supported;
+    return 0;
+}
+
 static int mock_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch,
                                   uint32_t reason)
 {
@@ -82,6 +105,8 @@ static const struct board_fns mock_board = {
     .set_gain_mode = mock_set_gain_mode,
     .get_frequency = mock_get_frequency,
     .set_gain = mock_set_gain,
+    .set_frequency = mock_set_frequency,
+    .get_gain_range = mock_get_gain_range,
     .invalidate_rx_data = mock_invalidate_rx_data,
     .rx_reconfigure_complete = mock_rx_reconfigure_complete,
 };
@@ -97,6 +122,7 @@ int main(void)
         .current_gain_mode = BLADERF_GAIN_MGC,
         .frequency = 0,
         .set_gain_calls = 0,
+        .set_frequency_calls = 0,
         .invalidate_calls = 0,
         .complete_calls = 0,
         .last_gain = 0,
@@ -183,6 +209,20 @@ int main(void)
     assert(!dev.gain_tbls[ch].enabled);
     assert(state.set_gain_calls == 2 && state.last_gain == initial_target);
     assert(state.invalidate_calls == 6 && state.complete_calls == 5);
+
+    /* Frequency-driven correction must borrow MGC while applying the gain,
+     * clamp to the gain range, then restore AGC before the RX setter
+     * reservation is released. */
+    dev.gain_tbls[ch].enabled = true;
+    dev.gain_tbls[ch].entries[0].gain_corr = -20.0;
+    state.current_gain_mode = BLADERF_GAIN_DEFAULT;
+    state.restore_gain_mode_status = 0;
+    status = bladerf_set_frequency(&dev, ch, state.frequency);
+    assert(status == 0);
+    assert(state.set_frequency_calls == 1);
+    assert(state.current_gain_mode == BLADERF_GAIN_DEFAULT);
+    assert(state.set_gain_calls == 3 && state.last_gain == 30);
+    assert(state.invalidate_calls == 7 && state.complete_calls == 6);
 
     free(dev.gain_tbls[ch].entries);
     assert(MUTEX_DESTROY(&dev.lock) == 0);

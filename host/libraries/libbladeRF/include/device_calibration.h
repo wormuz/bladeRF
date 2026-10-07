@@ -102,15 +102,6 @@ int get_gain_cal_entry(const struct bladerf_gain_cal_tbl *tbl,
                        struct bladerf_gain_cal_entry *result);
 
 /**
- * Applies compensated gain given the current gain target and center frequency
- *
- * @param dev       The bladeRF device structure pointer.
- * @param ch        The bladeRF channel to use.
- * @param frequency The target frequency.
- */
-int apply_gain_correction(struct bladerf *dev, bladerf_channel ch, bladerf_frequency frequency);
-
-/**
  * @brief Frees the resources of a gain calibration table and resets its fields.
  *
  * This function frees the dynamically allocated memory for the 'entries' and 'file_path'
