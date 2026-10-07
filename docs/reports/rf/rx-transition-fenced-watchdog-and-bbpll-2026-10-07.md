@@ -103,6 +103,12 @@ then must complete with a valid epoch and valid META IQ.
   concurrent low-level setter was rejected with WOULD_BLOCK, the active
   transition still certified, and the subsequent RFPLL/ENSM/BBPLL/FPGA timeout
   cases withheld IQ until a fresh successful transition.
+- The asynchronous libusb terminal-fault matrix passed for RX1, RX2, and RX_X2
+  across transfer ERROR, STALL, TIMEOUT, NO_DEVICE, and unknown status. Every
+  case produced exactly one event-only callback, one reason-coded withheld
+  event and one overrun event, delivered zero IQ after the injected fault, and
+  returned the matching stream error. This verifies the notification contract
+  for all active RX layouts and terminal USB failure classes.
 
 ## Hardware qualification
 
