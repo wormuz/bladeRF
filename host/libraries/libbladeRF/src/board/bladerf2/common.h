@@ -322,6 +322,7 @@ void bladerf2_rx_transition_fail_first_host_data_locked(
 int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
                                       struct bladerf_sync *sync,
                                       int transition_status);
+void bladerf2_rx_epoch_revoke_admission(void *context);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,

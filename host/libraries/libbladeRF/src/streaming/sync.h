@@ -330,9 +330,16 @@ int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);
  * old IQ; epoch fencing therefore requires per-message RX timestamps. */
 int sync_rx_epoch_require_metadata(struct bladerf_sync *sync);
 int sync_rx_epoch_invalidate(struct bladerf_sync *sync);
+typedef void (*sync_rx_epoch_revoke_callback)(void *context);
+int sync_rx_epoch_invalidate_with_revoke(
+    struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
+    void *context);
 /* Revoke queued sync-RX delivery without taking sync->lock. Used to close
  * the race before publishing asynchronous hardware-fault notifications. */
 void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync);
+void sync_rx_epoch_revoke_delivery_with_callback(
+    struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
+    void *context);
 /* Mark an FPGA sample-loss episode and publish its device event before the
  * pending overrun becomes visible to a sync reader. The callback runs while
  * buf_mgmt.lock is held and must only append to an independent event queue. */

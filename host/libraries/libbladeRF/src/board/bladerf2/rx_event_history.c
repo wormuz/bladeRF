@@ -35,20 +35,35 @@ void bladerf2_rx_transition_fail_first_host_data_locked(
     COND_SIGNAL(&board_data->rx_async_epoch_cond);
 }
 
-int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
-                                      struct bladerf_sync *sync,
-                                      int transition_status)
+void bladerf2_rx_epoch_revoke_admission(void *context)
 {
-    struct bladerf2_board_data *board_data;
+    struct bladerf2_board_data *board_data = context;
 
-    if (dev == NULL || dev->board_data == NULL || sync == NULL) {
-        return BLADERF_ERR_INVAL;
+    if (board_data == NULL) {
+        return;
     }
-    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rf_transition_epoch_certified = false;
+    board_data->rx_async_have_expected_timestamp = false;
+    board_data->rf_transition_first_host_data_reported = false;
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
 
-    /* This is the software admission fence for every failed transition.
-     * Revoke it before asking NIOS to ABORT: failed control I/O must never
-     * leave the host parser's last successful epoch trusted. */
+struct failed_transition_revoke_context {
+    struct bladerf2_board_data *board_data;
+    int status;
+};
+
+static void revoke_failed_transition_admission(void *context)
+{
+    struct failed_transition_revoke_context *revoke = context;
+    struct bladerf2_board_data *board_data =
+        revoke != NULL ? revoke->board_data : NULL;
+
+    if (board_data == NULL) {
+        return;
+    }
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rf_transition_epoch_certified = false;
     board_data->rx_async_have_expected_timestamp = false;
@@ -56,14 +71,31 @@ int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
     if (board_data->rf_transition_first_host_data_required &&
         board_data->rf_transition_first_host_data_failure == 0) {
         board_data->rf_transition_first_host_data_failure =
-            transition_status != 0 ? transition_status : BLADERF_ERR_UNEXPECTED;
+            revoke->status != 0 ? revoke->status : BLADERF_ERR_UNEXPECTED;
     }
     COND_SIGNAL(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
 
-    /* The generation changes before sync->lock is acquired, so reads already
-     * in flight also fail closed when this waits behind their parser lock. */
-    return sync_rx_epoch_invalidate(sync);
+int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
+                                      struct bladerf_sync *sync,
+                                      int transition_status)
+{
+    struct bladerf2_board_data *board_data;
+    struct failed_transition_revoke_context revoke;
+
+    if (dev == NULL || dev->board_data == NULL || sync == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    revoke.board_data = board_data;
+    revoke.status = transition_status;
+
+    /* Keep sync generation and the device certificate in one lock order.
+     * The waiter retains the actual transition failure status. */
+    int status = sync_rx_epoch_invalidate_with_revoke(
+        sync, revoke_failed_transition_admission, &revoke);
+    return status;
 }
 
 static int rx_epoch_admission_deadline_status(uint64_t deadline_ns)

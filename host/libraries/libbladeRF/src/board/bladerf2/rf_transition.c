@@ -539,14 +539,17 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
                     board_data->rf_transition_current_id,
                     observed_epoch_id,
                     board_data->rf_transition_certified_epoch_id)) {
-                board_data->rf_transition_epoch_certified = false;
-                board_data->rx_async_have_expected_timestamp = false;
                 epoch_contract_enabled = true;
                 invalidate = true;
             }
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             if (invalidate) {
                 board_data->rf_transition_setter_active = true;
+                /* Keep the async certificate and sync delivery generation
+                 * on one invalidation boundary before releasing dev->lock. */
+                sync_rx_epoch_revoke_delivery_with_callback(
+                    &board_data->sync[BLADERF_RX],
+                    bladerf2_rx_epoch_revoke_admission, board_data);
             }
         }
     });
@@ -558,7 +561,6 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     /* Revoke sync reads before publishing the fault and issuing the NIOS
      * ABORT request. A reader starting in that control-transfer window must
      * not consume a queued buffer under the old certified generation. */
-    sync_rx_epoch_revoke_delivery(&board_data->sync[BLADERF_RX]);
     bladerf2_rx_data_withheld_reset(dev);
     event.host_monotonic_ns = _monotonic_ns();
     event.epoch_id = observed_epoch_id;
@@ -954,14 +956,14 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
      * epoch are shared by RX1/RX2, so revoke the common certificate. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     data_epoch_enabled = board_data->rf_transition_epoch_contract_enabled;
-    board_data->rf_transition_epoch_certified = false;
-    board_data->rx_async_have_expected_timestamp = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_data_withheld_reset(dev);
     log_debug("%s: reserved RX reconfiguration (reason=0x%x)\n",
               __FUNCTION__, reason);
 
-    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    status = sync_rx_epoch_invalidate_with_revoke(
+        &board_data->sync[BLADERF_RX],
+        bladerf2_rx_epoch_revoke_admission, board_data);
     if (status != 0) {
         log_debug("%s: sync epoch invalidation failed: %s\n",
                   __FUNCTION__, bladerf_strerror(status));
@@ -1370,7 +1372,9 @@ static int _bladerf_rx_transition_begin(
      * For epoch requests expect_id below also poisons all messages until the
      * FPGA boundary is confirmed. On every failure this invalidation stays
      * latched; only sync_rx_epoch_set_min_timestamp() can clear it. */
-    status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    status = sync_rx_epoch_invalidate_with_revoke(
+        &board_data->sync[BLADERF_RX],
+        bladerf2_rx_epoch_revoke_admission, board_data);
     bladerf2_rx_data_withheld_reset(dev);
     if (status != 0) {
         _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,

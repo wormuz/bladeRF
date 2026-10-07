@@ -140,11 +140,20 @@ static uint64_t rx_epoch_generation_snapshot(struct bladerf_sync *sync)
     return generation;
 }
 
-static uint64_t rx_epoch_generation_advance(struct bladerf_sync *sync)
+static uint64_t rx_epoch_generation_advance_with_callback(
+    struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
+    void *context)
 {
     uint64_t generation;
     MUTEX_LOCK(&sync->rx_epoch_generation_lock);
     generation = ++sync->rx_epoch_generation;
+    /* Sync readers publish first-host-data while holding this same lock.
+     * Revoke the device certificate in the same lock order (generation,
+     * then board async-epoch lock) so either the IQ event commits first or
+     * the read observes the new generation and withholds its output. */
+    if (revoke != NULL) {
+        revoke(context);
+    }
     MUTEX_UNLOCK(&sync->rx_epoch_generation_lock);
 
     /* sync_rx may be waiting while holding sync->lock. Wake it without
@@ -575,19 +584,29 @@ int sync_rx_epoch_require_metadata(struct bladerf_sync *sync)
  * admission, so only a subsequent successful epoch may clear this latch. */
 int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
 {
+    return sync_rx_epoch_invalidate_with_revoke(sync, NULL, NULL);
+}
+
+int sync_rx_epoch_invalidate_with_revoke(
+    struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
+    void *context)
+{
     int status;
 
     if (sync == NULL) {
         return BLADERF_ERR_INVAL;
     }
     if (!sync->initialized) {
+        if (revoke != NULL) {
+            revoke(context);
+        }
         return 0;
     }
 
     /* Publish cancellation before taking sync->lock. A blocked sync_rx can
      * otherwise keep consuming epoch-filtered callbacks indefinitely while
      * this transition waits for its lock. */
-    sync_rx_epoch_revoke_delivery(sync);
+    (void)rx_epoch_generation_advance_with_callback(sync, revoke, context);
 
     status = sync_rx_epoch_require_metadata(sync);
     if (status == BLADERF_ERR_UNSUPPORTED) {
@@ -626,10 +645,20 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
 
 void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync)
 {
+    sync_rx_epoch_revoke_delivery_with_callback(sync, NULL, NULL);
+}
+
+void sync_rx_epoch_revoke_delivery_with_callback(
+    struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
+    void *context)
+{
     if (sync == NULL || !sync->initialized) {
+        if (revoke != NULL) {
+            revoke(context);
+        }
         return;
     }
-    (void)rx_epoch_generation_advance(sync);
+    (void)rx_epoch_generation_advance_with_callback(sync, revoke, context);
 }
 
 /* The FPGA counts sample-loss episodes that do not necessarily overflow the
@@ -1904,21 +1933,21 @@ out:
                 user_meta->rx_epoch_id = 0;
             }
         }
+        /* Commit first-host-data evidence before releasing the generation
+         * lock. An invalidator takes this lock before revoking the board's
+         * epoch certificate, so the durable event is ordered either before
+         * invalidation or the read is rejected above. */
+        if (status == 0 && s->dev != NULL && s->dev->board != NULL &&
+            s->dev->board->rx_sync_data_valid != NULL &&
+            metadata_rx_has_epoch_samples(user_meta)) {
+            s->dev->board->rx_sync_data_valid(
+                s->dev, user_meta, s->stream_config.layout,
+                first_sync_admission_ns);
+        }
         MUTEX_UNLOCK(&s->lock);
         MUTEX_UNLOCK(&s->rx_epoch_generation_lock);
     } else {
         MUTEX_UNLOCK(&s->lock);
-    }
-
-    /* Publish the fact that this read returned epoch-tagged IQ before any
-     * later gap/overrun event from the same request. For a partial read, the
-     * metadata parser has already limited actual_count to the valid prefix. */
-    if (status == 0 && s->dev != NULL && s->dev->board != NULL &&
-        s->dev->board->rx_sync_data_valid != NULL &&
-        metadata_rx_has_epoch_samples(user_meta)) {
-        s->dev->board->rx_sync_data_valid(s->dev, user_meta,
-                                          s->stream_config.layout,
-                                          first_sync_admission_ns);
     }
 
     /* Keep stream discontinuities in the same device event history as RF

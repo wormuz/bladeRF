@@ -71,6 +71,9 @@ static bool async_callback_observed_unlocked;
 static unsigned int sync_host_data_events;
 static unsigned int sync_event_order;
 static unsigned int sync_host_data_order;
+static atomic_bool sync_host_data_block;
+static atomic_bool sync_host_data_entered;
+static atomic_bool sync_host_data_release;
 static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 static bool allow_sync_channel_selection = true;
@@ -134,6 +137,13 @@ static void note_sync_host_data(struct bladerf *dev,
     assert(admission_monotonic_ns != 0);
     sync_host_data_events++;
     sync_host_data_order = ++sync_event_order;
+    if (atomic_load(&sync_host_data_block)) {
+        atomic_store(&sync_host_data_entered, true);
+        while (!atomic_load(&sync_host_data_release)) {
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
+    }
 }
 
 static void note_rx_overrun(struct bladerf *dev, uint32_t source_flags)
@@ -1192,6 +1202,100 @@ static void test_sync_read_fails_closed_before_parser_invalidation(void)
     fixture_destroy(&f);
 }
 
+struct sync_epoch_race_read {
+    struct fixture *fixture;
+    int16_t samples[128];
+    struct bladerf_metadata metadata;
+    int status;
+};
+
+static void *sync_epoch_race_read_thread(void *context)
+{
+    struct sync_epoch_race_read *read = context;
+    read->metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    read->status = sync_rx(&read->fixture->sync, read->samples, 64,
+                           &read->metadata, 0);
+    return NULL;
+}
+
+struct sync_epoch_race_revoke {
+    atomic_bool called;
+    unsigned int order;
+};
+
+static void note_sync_epoch_revoke(void *context)
+{
+    struct sync_epoch_race_revoke *revoke = context;
+    revoke->order = ++sync_event_order;
+    atomic_store(&revoke->called, true);
+}
+
+struct sync_epoch_race_invalidate {
+    struct fixture *fixture;
+    struct sync_epoch_race_revoke *revoke;
+    int status;
+};
+
+static void *sync_epoch_race_invalidate_thread(void *context)
+{
+    struct sync_epoch_race_invalidate *invalidate = context;
+    invalidate->status = sync_rx_epoch_invalidate_with_revoke(
+        &invalidate->fixture->sync, note_sync_epoch_revoke,
+        invalidate->revoke);
+    return NULL;
+}
+
+static void test_first_host_event_commits_before_concurrent_invalidation(void)
+{
+    struct fixture f;
+    struct sync_epoch_race_read read = {0};
+    struct sync_epoch_race_revoke revoke = {0};
+    struct sync_epoch_race_invalidate invalidate = {0};
+    pthread_t reader, invalidator;
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 3001);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 3101);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 1000, 7) == 0);
+    atomic_store(&sync_host_data_entered, false);
+    atomic_store(&sync_host_data_release, false);
+    atomic_store(&sync_host_data_block, true);
+    read.fixture = &f;
+    assert(pthread_create(&reader, NULL, sync_epoch_race_read_thread,
+                          &read) == 0);
+    for (unsigned int i = 0; i < 1000 &&
+         !atomic_load(&sync_host_data_entered); ++i) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    assert(atomic_load(&sync_host_data_entered));
+
+    atomic_init(&revoke.called, false);
+    invalidate.fixture = &f;
+    invalidate.revoke = &revoke;
+    invalidate.status = BLADERF_ERR_UNEXPECTED;
+    assert(pthread_create(&invalidator, NULL,
+                          sync_epoch_race_invalidate_thread,
+                          &invalidate) == 0);
+    struct timespec pause = {.tv_sec = 0, .tv_nsec = 10000000};
+    nanosleep(&pause, NULL);
+    /* Invalidation must wait for the host-data event's commit point. */
+    assert(!atomic_load(&revoke.called));
+    atomic_store(&sync_host_data_release, true);
+    assert(pthread_join(reader, NULL) == 0);
+    assert(pthread_join(invalidator, NULL) == 0);
+    atomic_store(&sync_host_data_block, false);
+
+    assert(read.status == 0);
+    assert(read.metadata.actual_count == 64);
+    assert(sync_host_data_events == 1);
+    assert(invalidate.status == 0);
+    assert(atomic_load(&revoke.called));
+    assert(sync_host_data_order < revoke.order);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    fixture_destroy(&f);
+}
+
 static void test_failed_transition_revokes_host_epoch_before_abort(void)
 {
     struct fixture f;
@@ -1467,6 +1571,7 @@ int main(void)
     test_sync_worker_overrun_published_before_sync_read();
     test_meta_withheld_event_precedes_sync_read_timeout();
     test_sync_read_fails_closed_before_parser_invalidation();
+    test_first_host_event_commits_before_concurrent_invalidation();
     test_async_epoch_certificate_commit();
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();

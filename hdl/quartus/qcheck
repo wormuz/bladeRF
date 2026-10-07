@@ -899,7 +899,8 @@ def check_rx_epoch_host_timestamp_fence():
     # The epoch metadata preflight is now performed from the initialized
     # sync stream description in _bladerf_rx_transition_begin(). The durable
     # host fence starts with invalidating queued/previous sync data.
-    begin = transition_text.find("sync_rx_epoch_invalidate(", function_start)
+    begin = transition_text.find(
+        "sync_rx_epoch_invalidate_with_revoke(", function_start)
     fence_ack = transition_text.find("_wait_rx_epoch_fenced(",
                                      function_start)
     retune_host = transition_text.find("bladerf_set_frequency_locked(",
@@ -979,6 +980,22 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "sync RX parser lacks the metadata timestamp lower-bound filter",
              "suppress queued samples preceding the FPGA first-valid timestamp")
+    host_data_commit = sync_text.find(
+        "s->dev->board->rx_sync_data_valid(")
+    generation_unlock = sync_text.find(
+        "MUTEX_UNLOCK(&s->rx_epoch_generation_lock)", host_data_commit)
+    revoke_advance = sync_text.find(
+        "static uint64_t rx_epoch_generation_advance_with_callback")
+    revoke_callback = sync_text.find("revoke(context)", revoke_advance)
+    revoke_unlock = sync_text.find(
+        "MUTEX_UNLOCK(&sync->rx_epoch_generation_lock)", revoke_advance)
+    if (host_data_commit < 0 or generation_unlock < 0 or
+            not host_data_commit < generation_unlock or
+            revoke_advance < 0 or revoke_callback < 0 or revoke_unlock < 0 or
+            not revoke_callback < revoke_unlock):
+        fail("rx-first-host-data-invalidation-linearization",
+             "sync first-host-data publication can race certificate revocation",
+             "commit the host-data event under the epoch generation lock and revoke the board certificate under that same lock")
     if ("sync_rx_epoch_invalidate(" not in transition_text or
             "rx_epoch_data_invalidated = true" not in sync_text or
             "rx_epoch_data_invalidated = false" not in sync_text or
