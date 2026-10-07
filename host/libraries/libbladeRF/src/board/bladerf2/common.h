@@ -339,6 +339,8 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
                                     bladerf_channel_layout layout,
                                     bool active_requirement_context);
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
+uint32_t bladerf2_rx_current_transition_channel_event_flags(
+    struct bladerf2_board_data *board_data);
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint8_t epoch_id,
                                   uint64_t fpga_timestamp,

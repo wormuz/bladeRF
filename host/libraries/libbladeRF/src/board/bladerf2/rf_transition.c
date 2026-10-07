@@ -580,7 +580,9 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
-                  BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT;
+                  BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT |
+                  bladerf2_rx_current_transition_channel_event_flags(
+                      board_data);
     event.error_code = sync_status != 0 ? sync_status :
         (monitor_error != 0 ? monitor_error : BLADERF_ERR_UNEXPECTED);
     bladerf2_rf_event_append(board_data, &event);
@@ -1025,6 +1027,9 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags;
     WITH_MUTEX(&dev->lock, {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        event.flags |= bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
         board_data->rx_async_data_withheld_active = true;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         event.transaction_id = 0;
@@ -1071,7 +1076,9 @@ void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
     loss.event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     loss.event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     loss.event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
-                       BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+                       BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS |
+                       bladerf2_rx_current_transition_channel_event_flags(
+                           board_data);
     loss.event.transaction_id = 0;
     WITH_MUTEX(&dev->lock, {
         loss.event.requested_rx_lo_hz =

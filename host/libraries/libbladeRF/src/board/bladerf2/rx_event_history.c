@@ -131,6 +131,7 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
+    uint32_t transition_channel_flags = 0;
     bool should_report = false;
 
     if (dev == NULL || dev->board_data == NULL) {
@@ -156,6 +157,10 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
         should_report = true;
     }
     epoch_id = board_data->rf_transition_epoch_id;
+    transition_channel_flags =
+        bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!should_report) {
@@ -166,7 +171,7 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED;
-    event.flags = (uint32_t)format;
+    event.flags = (uint32_t)format | transition_channel_flags;
     event.error_code = BLADERF_ERR_UNSUPPORTED;
     bladerf2_rf_event_append(board_data, &event);
 }
@@ -177,12 +182,17 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
+    uint32_t transition_channel_flags;
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
     }
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    transition_channel_flags =
+        bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
     if (active_requirement_context &&
         board_data->rf_transition_rx_x2_host_data_required) {
         event.transaction_id =
@@ -200,7 +210,7 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED;
-    event.flags = (uint32_t)layout;
+    event.flags = (uint32_t)layout | transition_channel_flags;
     event.error_code = BLADERF_ERR_UNSUPPORTED;
     bladerf2_rf_event_append(board_data, &event);
 }
@@ -287,6 +297,23 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
 {
     _rx_data_withheld(dev, reason, false, false, 0, 0);
+}
+
+uint32_t bladerf2_rx_current_transition_channel_event_flags(
+    struct bladerf2_board_data *board_data)
+{
+    uint32_t flags;
+
+    if (board_data == NULL) {
+        return 0;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    flags = bladerf2_rx_transition_channel_event_flags(
+        board_data->rf_transition_current_channel,
+        board_data->rf_transition_epoch_contract_enabled);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return flags;
 }
 
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
@@ -426,6 +453,7 @@ void bladerf2_rx_async_timestamp_discontinuity(
     uint8_t epoch_id;
     bool timestamp_valid;
     bool should_report = false;
+    uint32_t transition_channel_flags = 0;
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
@@ -444,6 +472,10 @@ void bladerf2_rx_async_timestamp_discontinuity(
     timestamp_valid = board_data->rf_transition_epoch_contract_enabled &&
         board_data->rf_transition_epoch_certified &&
         board_data->rf_transition_certified_epoch_id == expected_epoch_id;
+    transition_channel_flags =
+        bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
     epoch_id = timestamp_valid
         ? expected_epoch_id : board_data->rf_transition_epoch_id;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -459,14 +491,16 @@ void bladerf2_rx_async_timestamp_discontinuity(
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
     event.flags = BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY |
-        (timestamp_valid ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
+        (timestamp_valid ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0) |
+        transition_channel_flags;
     event.error_code = BLADERF_ERR_UNEXPECTED;
     bladerf2_rf_event_append(board_data, &event);
 
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
-                  BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY;
+                  BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY |
+                  transition_channel_flags;
     event.error_code = 0;
     bladerf2_rf_event_append(board_data, &event);
 }
@@ -485,14 +519,17 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
      * blocked on this same USB event loop. Only snapshot lock-safe identity. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->rf_transition_certified_epoch_id;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+        BLADERF_RF_STREAM_STATUS_ASYNC_USB |
+        bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
     board_data->rx_async_data_withheld_active = true;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
-                  BLADERF_RF_STREAM_STATUS_ASYNC_USB;
     bladerf2_rf_event_append(board_data, &event);
 }
 
@@ -517,6 +554,9 @@ void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
     event.fpga_state = board_data->rf_transition_epoch_certified
         ? BLADERF_RF_STATE_RX_DATA_VALID
         : BLADERF_RF_STATE_RX_DATA_INVALID;
+    source_flags |= bladerf2_rx_transition_channel_event_flags(
+        board_data->rf_transition_current_channel,
+        board_data->rf_transition_epoch_contract_enabled);
     if (board_data->rf_transition_epoch_contract_enabled) {
         board_data->rx_async_data_withheld_active = true;
     }
