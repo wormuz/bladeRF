@@ -42,6 +42,38 @@ certificate until a successful event-driven transition creates a fresh epoch.
 ## Remaining qualification
 
 This validates channel selection, paired streaming, FPGA reload, and validity
-notification on one xA4. It does not replace the longer 10,000-transition
-latency/loss qualification or a physical fault-injection measurement for every
-fault-cause bit.
+notification on one xA4. A new `host/misc/run_rx_epoch_transition_qualification.sh`
+qualification now runs event-order, stale-epoch filtering, completion, and
+runtime-event checks across RX1, RX2, and RX_X2. It drains the global event
+history by sequence, so transaction ID 0 overrun/withheld notifications are
+included and history loss fails the run.
+
+On 2026-10-07, 3,334 transitions per mode completed with no unrecovered IQ
+read failures:
+
+| Mode | P50 / P95 / P99 transition latency | Unrecovered | Runtime overrun events | Withheld notifications |
+|---|---:|---:|---:|---:|
+| RX1 | 6.909 / 7.201 / 7.427 ms | 0 | 0 | 3,334 |
+| RX2 | 6.909 / 7.207 / 7.671 ms | 0 | 0 | 3,334 |
+| RX_X2 | 6.913 / 7.205 / 7.431 ms | 0 | 7 | 3,337 |
+
+All three modes returned `WOULD_BLOCK` on the first sync read after every
+transition, then recovered on a later read (3,334/3,334 in each mode). This
+is the expected fail-closed behavior while the next valid host packet has not
+arrived. Each transition also emitted its runtime data-withheld notification.
+The seven RX_X2 overrun events are real qualification failures even though
+the sample reads recovered; their flags were `BLADERF_RF_STREAM_STATUS_OVERRUN`
+without `BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS`, so they identify a host
+stream/queue discontinuity rather than an FPGA sample-path loss. The current
+harness now exits nonzero if any such event occurs. A separate 1,000-transition
+RX_X2 rerun saw two overrun events on the first transition (epoch 1); a later
+100-transition rerun saw two on its first transition (epoch 101), and another
+100-transition rerun saw none. This is intermittent and needs follow-up
+before claiming zero-loss RX_X2 qualification. The public event currently
+does not identify whether a non-FPGA overrun came from sync queue accounting,
+USB short/overflow, or timestamp discontinuity; this is a separate event
+diagnostic gap to close.
+
+The aggregate run covers 10,002 transitions, but it does not replace physical
+fault injection for every FPGA fault-cause bit or a larger repeated RX_X2
+zero-overrun qualification.

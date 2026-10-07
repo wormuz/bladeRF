@@ -19,8 +19,46 @@ static int compare_u64(const void *a, const void *b)
     return (va > vb) - (va < vb);
 }
 
+static int collect_runtime_events(struct bladerf *dev, uint64_t *cursor,
+                                  uint32_t *overruns, uint32_t *withheld,
+                                  bool establish_baseline)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next = *cursor;
+    bool complete = false;
+    int st = bladerf_rf_events_get_since(dev, *cursor, events,
+                                          BLADERF_RF_EVENT_HISTORY_SIZE,
+                                          &count, &next, &complete);
+    if (st != 0) return st;
+    if (!establish_baseline && !complete) {
+        fprintf(stderr, "RUNTIME_EVENT_HISTORY_GAP after=%llu next=%llu\n",
+                (unsigned long long)*cursor, (unsigned long long)next);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    if (!establish_baseline) {
+        for (uint32_t i = 0; i < count; ++i) {
+            if (events[i].event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
+                ++*overruns;
+                if (*overruns <= 16) {
+                    fprintf(stderr, "RUNTIME_OVERRUN n=%u epoch=%u flags=0x%x "
+                            "rfic_status=0x%x error=%d timestamp=%llu\n",
+                            *overruns, events[i].epoch_id, events[i].flags,
+                            events[i].rfic_status, events[i].error_code,
+                            (unsigned long long)events[i].fpga_timestamp);
+                }
+            } else if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD) {
+                ++*withheld;
+            }
+        }
+    }
+    *cursor = next;
+    return 0;
+}
+
 static int validate_event_trace(struct bladerf *dev, uint32_t txn,
-                                const struct bladerf_rf_event *final_event)
+                                const struct bladerf_rf_event *final_event,
+                                bool report_trace)
 {
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t count = 0;
@@ -36,19 +74,39 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     st = bladerf_rx_transition_get_events(dev, txn, events,
                                            BLADERF_RF_EVENT_HISTORY_SIZE,
                                            &count, &complete);
+    bool epoch_valid_seen = false;
+    bool host_data_seen = false;
+    uint64_t epoch_valid_ts = 0;
+    for (uint32_t i = 0; i < count && i < BLADERF_RF_EVENT_HISTORY_SIZE; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
+            events[i].epoch_id == final_event->epoch_id) {
+            epoch_valid_seen = true;
+            epoch_valid_ts = events[i].fpga_timestamp;
+        }
+        if (epoch_valid_seen &&
+            (events[i].event_type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+             events[i].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) &&
+            events[i].epoch_id == final_event->epoch_id &&
+            events[i].fpga_timestamp >= epoch_valid_ts) {
+            host_data_seen = true;
+        }
+    }
     if (st || !complete || count < 11 ||
         events[0].event_type != BLADERF_RF_EVT_CONFIG_ACCEPTED ||
         events[0].fpga_state != BLADERF_RF_STATE_CONFIG_PENDING ||
-        events[count - 2].event_type != final_event->event_type ||
-        events[count - 2].event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
-        events[count - 1].event_type !=
-            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
-        events[count - 1].fpga_timestamp < final_event->fpga_timestamp) {
+        final_event->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        !epoch_valid_seen || !host_data_seen) {
         fprintf(stderr, "TRACE_TERMINAL txn=%u status=%s complete=%u count=%u\n",
                 txn, bladerf_strerror(st), complete, count);
+        for (uint32_t i = 0; i < count && i < BLADERF_RF_EVENT_HISTORY_SIZE; ++i) {
+            fprintf(stderr, "TRACE_EVENT i=%u type=%u state=%u epoch=%u "
+                    "flags=0x%x error=%d ts=%llu\n", i,
+                    events[i].event_type, events[i].fpga_state,
+                    events[i].epoch_id, events[i].flags, events[i].error_code,
+                    (unsigned long long)events[i].fpga_timestamp);
+        }
         return st ? st : BLADERF_ERR_UNEXPECTED;
     }
-
     const bladerf_rf_event_type required[] = {
         BLADERF_RF_EVT_RX_EPOCH_INVALID,
         BLADERF_RF_EVT_CONFIG_ACCEPTED,
@@ -99,16 +157,51 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         spi_done_ns < spi_begin_ns || lo_return_ns < spi_done_ns) {
         return BLADERF_ERR_UNEXPECTED;
     }
-    fprintf(stderr, "TRACE_SPI txn=%u writes=%u host_observed_write_us=%.3f "
-            "post_spi_to_tune_return_us=%.3f\n", txn, spi_write_count,
-            (spi_done_ns - spi_begin_ns) / 1000.0,
-            (lo_return_ns - spi_done_ns) / 1000.0);
+    if (report_trace) {
+        fprintf(stderr, "TRACE_SPI txn=%u writes=%u host_observed_write_us=%.3f "
+                "post_spi_to_tune_return_us=%.3f\n", txn, spi_write_count,
+                (spi_done_ns - spi_begin_ns) / 1000.0,
+                (lo_return_ns - spi_done_ns) / 1000.0);
+    }
     return 0;
 }
 
 int main(int argc, char **argv) {
-    unsigned n = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 1000;
-    const bool cross_band = argc > 2 && strcmp(argv[2], "--cross-band") == 0;
+    unsigned n = 1000;
+    bool count_set = false;
+    bool cross_band = false;
+    bool paired = false;
+    const char *mode = "RX1";
+    bladerf_channel transition_channel = BLADERF_CHANNEL_RX(0);
+    bladerf_channel_layout layout = BLADERF_RX_X1;
+    for (int arg = 1; arg < argc; ++arg) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(argv[arg], &end, 10);
+        if (!count_set && end != argv[arg] && *end == '\0') {
+            if (parsed == 0 || parsed > UINT32_MAX) {
+                fprintf(stderr, "invalid transition count: %s\n", argv[arg]);
+                return 2;
+            }
+            n = (unsigned)parsed;
+            count_set = true;
+        } else if (strcmp(argv[arg], "RX1") == 0 ||
+                   strcmp(argv[arg], "RX2") == 0 ||
+                   strcmp(argv[arg], "BOTH") == 0) {
+            mode = argv[arg];
+        } else if (strcmp(argv[arg], "--cross-band") == 0) {
+            cross_band = true;
+        } else {
+            fprintf(stderr, "usage: %s [count] [RX1|RX2|BOTH] [--cross-band]\n",
+                    argv[0]);
+            return 2;
+        }
+    }
+    if (strcmp(mode, "RX2") == 0) {
+        transition_channel = BLADERF_CHANNEL_RX(1);
+    } else if (strcmp(mode, "BOTH") == 0) {
+        layout = BLADERF_RX_X2;
+        paired = true;
+    }
     struct bladerf *dev = NULL;
     int16_t *samples = calloc(8192 * 2, sizeof(*samples));
     uint64_t *latencies_ns = calloc(n, sizeof(*latencies_ns));
@@ -118,15 +211,24 @@ int main(int argc, char **argv) {
     if (st) { fprintf(stderr, "open: %s\n", bladerf_strerror(st)); return 2; }
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
 #define CHECK(x) do { st=(x); if(st) { fprintf(stderr,"%s: %s\n",#x,bladerf_strerror(st)); goto fail; } } while(0)
-    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000, NULL));
-    CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 5000000, NULL));
-    CHECK(bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), 30));
-    CHECK(bladerf_sync_config(dev, BLADERF_RX_X1, BLADERF_FORMAT_SC16_Q11_META, 16, 8192, 8, 1000));
-    CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true));
+    CHECK(bladerf_set_sample_rate(dev, transition_channel, 4000000, NULL));
+    CHECK(bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL));
+    CHECK(bladerf_set_gain(dev, transition_channel, 30));
+    CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META, 16, 8192, 8, 1000));
+    CHECK(bladerf_enable_module(dev, transition_channel, true));
+    if (paired) CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), true));
+    uint64_t runtime_event_cursor = 0;
+    uint32_t stream_overrun_events = 0;
+    uint32_t data_withheld_events = 0;
+    CHECK(collect_runtime_events(dev, &runtime_event_cursor,
+                                 &stream_overrun_events, &data_withheld_events,
+                                 true));
     uint64_t last_ts = 0;
     unsigned failures = 0;
     unsigned first_read_faults = 0;
     unsigned recovered_reads = 0;
+    unsigned retry_would_block = 0;
+    unsigned retry_overruns = 0;
     uint32_t first_txn = 0, last_txn = 0;
     for (unsigned i=0; i<n; ++i) {
         uint64_t start_ns = monotonic_ns();
@@ -143,12 +245,12 @@ int main(int argc, char **argv) {
         uint32_t txn = 0;
         struct bladerf_rf_event event = {0};
         struct bladerf_metadata meta = {0};
-        st = bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0), &req, &txn);
+        st = bladerf_rx_transition_begin(dev, transition_channel, &req, &txn);
         if (!first_txn) first_txn = txn;
         last_txn = txn;
         if (!st) {
             int competing_retune = bladerf_set_frequency(
-                dev, BLADERF_CHANNEL_RX(0), freq + 100000ULL);
+                dev, transition_channel, freq + 100000ULL);
             if (competing_retune != BLADERF_ERR_WOULD_BLOCK) {
                 fprintf(stderr, "CONCURRENT_RETUNE txn=%u status=%s\n", txn,
                         bladerf_strerror(competing_retune));
@@ -157,7 +259,7 @@ int main(int argc, char **argv) {
         }
         if (!st) {
             int competing_bandwidth = bladerf_set_bandwidth(
-                dev, BLADERF_CHANNEL_RX(0), 5000000, NULL);
+                dev, transition_channel, 5000000, NULL);
             if (competing_bandwidth != BLADERF_ERR_WOULD_BLOCK) {
                 fprintf(stderr, "CONCURRENT_BANDWIDTH txn=%u status=%s\n",
                         txn, bladerf_strerror(competing_bandwidth));
@@ -166,7 +268,7 @@ int main(int argc, char **argv) {
         }
         if (!st) {
             int competing_rate = bladerf_set_sample_rate(
-                dev, BLADERF_CHANNEL_RX(0), 4000000, NULL);
+                dev, transition_channel, 4000000, NULL);
             if (competing_rate != BLADERF_ERR_WOULD_BLOCK) {
                 fprintf(stderr, "CONCURRENT_SAMPLE_RATE txn=%u status=%s\n",
                         txn, bladerf_strerror(competing_rate));
@@ -193,12 +295,16 @@ int main(int argc, char **argv) {
                     last_ts = meta.timestamp;
                     break;
                 }
+                if (st == BLADERF_ERR_WOULD_BLOCK) ++retry_would_block;
+                if (meta.status & BLADERF_META_STATUS_OVERRUN) ++retry_overruns;
                 if (!attempt) ++first_read_faults;
-                fprintf(stderr,"READ_FAULT i=%u attempt=%u status=%s epoch=%u/%u valid=%u count=%u meta_status=0x%x ts=%llu boundary=%llu\n",
-                        i, attempt + 1, bladerf_strerror(st), meta.rx_epoch_id,
-                        event.epoch_id, meta.rx_epoch_id_valid, meta.actual_count,
-                        meta.status, (unsigned long long)meta.timestamp,
-                        (unsigned long long)event.fpga_timestamp);
+                if (attempt == 3) {
+                    fprintf(stderr,"READ_FAULT i=%u attempt=%u status=%s epoch=%u/%u valid=%u count=%u meta_status=0x%x ts=%llu boundary=%llu\n",
+                            i, attempt + 1, bladerf_strerror(st), meta.rx_epoch_id,
+                            event.epoch_id, meta.rx_epoch_id_valid, meta.actual_count,
+                            meta.status, (unsigned long long)meta.timestamp,
+                            (unsigned long long)event.fpga_timestamp);
+                }
             }
         }
         if (!valid) {
@@ -207,14 +313,18 @@ int main(int argc, char **argv) {
             if (failures >= 10) break;
         }
         if (valid) {
-            st = validate_event_trace(dev, txn, &event);
+            st = validate_event_trace(dev, txn, &event,
+                                      (i + 1) % 100 == 0);
             if (st != 0) {
                 ++failures;
                 fprintf(stderr, "TRACE_INVALID i=%u status=%s\n", i,
                         bladerf_strerror(st));
             }
         }
-        if ((i+1)%100==0) fprintf(stderr,"progress=%u unrecovered=%u first_read_faults=%u recovered=%u last_epoch=%u\n",i+1,failures,first_read_faults,recovered_reads,event.epoch_id);
+        CHECK(collect_runtime_events(dev, &runtime_event_cursor,
+                                     &stream_overrun_events,
+                                     &data_withheld_events, false));
+        if ((i+1)%100==0) fprintf(stderr,"mode=%s progress=%u unrecovered=%u first_read_faults=%u recovered=%u last_epoch=%u\n",mode,i+1,failures,first_read_faults,recovered_reads,event.epoch_id);
     }
     if (!failures && completed > BLADERF_RF_EVENT_HISTORY_SIZE / 6) {
         uint32_t retained = 0;
@@ -237,16 +347,25 @@ int main(int argc, char **argv) {
         }
     }
     qsort(latencies_ns, completed, sizeof(*latencies_ns), compare_u64);
-    printf("transitions=%u unrecovered=%u first_read_faults=%u recovered=%u "
+    printf("mode=%s transitions=%u unrecovered=%u first_read_faults=%u recovered=%u "
+           "retry_would_block=%u retry_overruns=%u stream_overrun_events=%u "
+           "data_withheld_events=%u "
            "transition_ms_p50=%.3f_p95=%.3f_p99=%.3f_max=%.3f\n",
-           completed, failures, first_read_faults, recovered_reads,
+           mode, completed, failures, first_read_faults, recovered_reads,
+           retry_would_block, retry_overruns, stream_overrun_events,
+           data_withheld_events,
            completed ? latencies_ns[(completed - 1) * 50 / 100] / 1e6 : 0.0,
            completed ? latencies_ns[(completed - 1) * 95 / 100] / 1e6 : 0.0,
            completed ? latencies_ns[(completed - 1) * 99 / 100] / 1e6 : 0.0,
            completed ? latencies_ns[completed - 1] / 1e6 : 0.0);
-    bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+    if (stream_overrun_events != 0) {
+        fprintf(stderr, "QUALIFICATION_FAILED runtime_stream_overruns=%u\n",
+                stream_overrun_events);
+    }
+    bladerf_enable_module(dev, transition_channel, false);
+    if (paired) bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
     bladerf_close(dev); free(samples); free(latencies_ns);
-    return failures ? 1 : 0;
+    return (failures || stream_overrun_events) ? 1 : 0;
 fail:
     bladerf_close(dev); free(samples); free(latencies_ns); return 2;
 }
