@@ -383,12 +383,26 @@ static bool _test_runtime_rx_fault(void)
 #endif
 }
 
+static bool _test_runtime_rx_status_unavailable(void)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    return requested != NULL &&
+        (strcmp(requested, "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ||
+         strcmp(requested, "RUNTIME_FPGA_STATUS_VERSION") == 0);
+#else
+    return false;
+#endif
+}
+
 /* Revoke exactly the epoch whose sticky hardware fault was observed. The
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */
 static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
                                          uint8_t observed_epoch_id,
-                                         uint32_t rf_link_status)
+                                         uint32_t rf_link_status,
+                                         uint32_t reason,
+                                         int monitor_error)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_rf_event event = {0};
@@ -432,9 +446,9 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     event.readback_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
-    event.flags = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+    event.flags = reason;
     event.rfic_status = rf_link_status;
-    event.error_code = sync_status;
+    event.error_code = monitor_error != 0 ? monitor_error : sync_status;
     bladerf2_rf_event_append(board_data, &event);
 
     if (epoch_contract_enabled) {
@@ -506,16 +520,35 @@ static void *rx_fault_monitor_task(void *arg)
             }
         });
 
-        if (!should_poll || status != 0 ||
+        if (!should_poll) {
+            continue;
+        }
+        if (_test_runtime_rx_status_unavailable()) {
+            const char *requested =
+                getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+            if (strcmp(requested, "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0) {
+                status = BLADERF_ERR_IO;
+            } else {
+                rf_link_status &= ~RF_LINK_STATUS_VERSION_MASK;
+            }
+        }
+        if (status != 0 ||
             (rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
                 RF_LINK_STATUS_VERSION_1) {
+            const int monitor_error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, rf_link_status,
+                BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE,
+                monitor_error);
             continue;
         }
         if (_test_runtime_rx_fault()) {
             rf_link_status |= RF_LINK_STATUS_RX_FAULT;
         }
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
-            _invalidate_faulted_rx_epoch(dev, epoch_id, rf_link_status);
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, rf_link_status,
+                BLADERF_RF_INVALIDATE_FPGA_RX_FAULT, 0);
         }
     }
 

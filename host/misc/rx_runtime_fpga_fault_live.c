@@ -4,7 +4,9 @@
  * FPGA RX fault after epoch certification, revoke it, and publish the source
  * status without waiting for a libusb completion callback. Build with
  * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
- * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT. */
+ * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT, or use the
+ * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION values to
+ * verify fail-closed behavior when the monitor cannot trust the status. */
 #include <libbladeRF.h>
 
 #include <stdbool.h>
@@ -24,6 +26,9 @@ int main(int argc, char **argv)
     bladerf_channel_layout layout = BLADERF_RX_X1;
     bool enable_rx1 = true;
     bool enable_rx2 = false;
+    const char *fault_mode = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    uint32_t expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+    int expected_error = 0;
     uint32_t transaction_id = 0;
     int status;
 
@@ -38,6 +43,13 @@ int main(int argc, char **argv)
     } else if (argc > 1 && strcmp(argv[1], "RX1") != 0) {
         fprintf(stderr, "usage: %s [RX1|RX2|RX_X2]\n", argv[0]);
         return 2;
+    }
+    if (fault_mode != NULL &&
+        strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE;
+        expected_error = strcmp(fault_mode,
+            "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ? BLADERF_ERR_IO :
+            BLADERF_ERR_UNEXPECTED;
     }
 
     status = bladerf_open(&dev, NULL);
@@ -108,8 +120,10 @@ int main(int argc, char **argv)
         cursor = next_cursor;
         for (uint32_t i = 0; i < event_count; ++i) {
             if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
-                events[i].flags == BLADERF_RF_INVALIDATE_FPGA_RX_FAULT &&
-                (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0 &&
+                events[i].flags == expected_reason &&
+                (expected_reason != BLADERF_RF_INVALIDATE_FPGA_RX_FAULT ||
+                 (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0) &&
+                (expected_error == 0 || events[i].error_code == expected_error) &&
                 events[i].epoch_id == transition_event.epoch_id) {
                 saw_fault_invalidation = true;
                 break;
@@ -141,11 +155,11 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("runtime FPGA RX fault: PASS layout=%s epoch=%u invalidated=1 "
-           "status_bit=1 iq_count=0\n",
+    printf("runtime FPGA RX fault monitor: PASS layout=%s epoch=%u "
+           "reason=0x%x iq_count=0\n",
            layout == BLADERF_RX_X2 ? "RX_X2" :
            (transition_channel == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
-           transition_event.epoch_id);
+           transition_event.epoch_id, expected_reason);
     status = 0;
 
 cleanup:
