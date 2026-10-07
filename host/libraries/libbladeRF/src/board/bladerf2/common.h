@@ -317,6 +317,10 @@ void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint64_t fpga_timestamp,
                                   bool fpga_timestamp_valid);
 void bladerf2_rx_data_withheld_reset(struct bladerf *dev);
+/* Caller holds rx_async_epoch_lock; a certified data packet ended a withheld
+ * interval, so subsequent faults must be published as a new interval. */
+void bladerf2_rx_data_rearm_notifications_locked(
+    struct bladerf2_board_data *board_data);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,
     uint64_t first_unvalidated_timestamp);

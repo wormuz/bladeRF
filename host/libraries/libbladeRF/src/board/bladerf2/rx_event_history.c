@@ -183,9 +183,16 @@ void bladerf2_rx_data_withheld_reset(struct bladerf *dev)
     board_data = dev->board_data;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_rx_data_rearm_notifications_locked(board_data);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+void bladerf2_rx_data_rearm_notifications_locked(
+    struct bladerf2_board_data *board_data)
+{
+    board_data->rx_format_unsupported_reported = false;
     board_data->rx_async_data_withheld_reported = false;
     board_data->rx_async_timestamp_discontinuity_reported = false;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_async_timestamp_discontinuity(

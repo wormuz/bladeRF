@@ -1794,9 +1794,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
             return false;
         }
-        board_data->rx_format_unsupported_reported = false;
-        board_data->rx_async_data_withheld_reported = false;
-        board_data->rx_async_timestamp_discontinuity_reported = false;
+        bladerf2_rx_data_rearm_notifications_locked(board_data);
 
         /* A validated async META transfer is the first host-visible IQ for
          * this epoch just as a complete sync read is. Record it before

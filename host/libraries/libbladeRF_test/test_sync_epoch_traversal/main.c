@@ -374,31 +374,41 @@ static void test_async_data_withheld_event(void)
     assert(event->flags == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_INVALID);
 
-    bladerf2_rx_data_withheld_reset(&dev);
+    /* Model the rearm performed after a certified packet. A later fault in
+     * this same epoch must produce a fresh notification. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_rx_data_rearm_notifications_locked(board_data);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     assert(board_data->rf_transition_event_count == 2);
+
+    /* Explicit invalidation also rearms notification coalescing. */
+    bladerf2_rx_data_withheld_reset(&dev);
+    bladerf2_rx_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert(board_data->rf_transition_event_count == 3);
 
     board_data->rf_transition_epoch_contract_enabled = false;
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 3);
-    event = &board_data->rf_transition_events[2];
+    assert(board_data->rf_transition_event_count == 4);
+    event = &board_data->rf_transition_events[3];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(event->flags == BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_USB_OVERFLOW);
-    assert(board_data->rf_transition_event_count == 4);
-    event = &board_data->rf_transition_events[3];
+    assert(board_data->rf_transition_event_count == 5);
+    event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(event->flags == BLADERF_RF_WITHHELD_USB_OVERFLOW);
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_async_stream_overrun(&dev);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 5);
-    event = &board_data->rf_transition_events[4];
+    assert(board_data->rf_transition_event_count == 6);
+    event = &board_data->rf_transition_events[5];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
     assert(event->flags == (BLADERF_RF_STREAM_STATUS_OVERRUN |
                             BLADERF_RF_STREAM_STATUS_ASYNC_USB));

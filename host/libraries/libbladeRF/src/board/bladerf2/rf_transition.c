@@ -2025,6 +2025,13 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked(
         bladerf2_rf_event_append_locked(board_data, &event);
         board_data->rx_async_data_withheld_active = false;
     }
+    if (found_epoch) {
+        /* Sync RX reaches this point only after returning certified IQ. End
+         * the current withheld interval so a later, independent fault in the
+         * same epoch is reported instead of being hidden by its old dedupe
+         * latch. Async RX performs the same rearm at its admission point. */
+        bladerf2_rx_data_rearm_notifications_locked(board_data);
+    }
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }
 

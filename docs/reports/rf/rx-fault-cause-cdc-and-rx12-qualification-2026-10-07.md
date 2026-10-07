@@ -147,3 +147,21 @@ the observed overruns in this test without adding validity sleeps or sample
 discard. This result qualifies the tested xA4 host configuration, while the
 earlier 3,334-transition run remains a valid failure for its then-current
 configuration and must not be rewritten as a pass.
+
+## Re-arm sync fault notifications after recovery
+
+The sync RX valid-data callback already emitted `RX_FIRST_VALID_HOST_DATA` or
+`RX_DATA_RESUMED`, but only the asynchronous META admission path cleared the
+withheld-event deduplication latches after valid IQ returned. As a result, a
+second independent parser/epoch fault in the same sync epoch could be hidden
+behind the first `RX_DATA_WITHHELD` event. The shared notification-rearm
+helper now runs after a certified sync packet and on asynchronous admission;
+it clears only notification coalescing state and never changes epoch
+certification. A later fault therefore starts a new reported withheld
+interval, while repeated reports during one uninterrupted interval remain
+coalesced.
+
+The libbladeRF build and `libbladeRF_test_sync_epoch_traversal` pass with a
+regression that rearms the latch and confirms a second fault appends another
+event. This is a host-side state/notification test; no new physical fault
+injection or hardware qualification is claimed for this follow-up.
