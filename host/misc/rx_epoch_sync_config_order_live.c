@@ -34,6 +34,10 @@ int main(int argc, char **argv)
 {
     struct bladerf *dev = NULL;
     struct bladerf_metadata meta = { .flags = BLADERF_META_FLAG_RX_NOW };
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint64_t event_cursor = 0, next_event_cursor = 0;
+    uint32_t event_count = 0;
+    bool history_complete = false, format_event_found = false;
     int16_t samples[4096 * 2];
     int s, raw_status;
     if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
@@ -50,11 +54,39 @@ int main(int argc, char **argv)
     if (s != 0) { fprintf(stderr, "enable: %s\n", bladerf_strerror(s)); goto fail; }
     s = transition(dev);
     if (s != 0) { fprintf(stderr, "first transition: %s\n", bladerf_strerror(s)); goto fail; }
+    s = bladerf_rf_events_get_since(dev, 0, events,
+                                    BLADERF_RF_EVENT_HISTORY_SIZE,
+                                    &event_count, &event_cursor,
+                                    &history_complete);
+    if (s != 0 || !history_complete) {
+        fprintf(stderr, "event cursor query failed: %s\n", bladerf_strerror(s));
+        goto fail;
+    }
     raw_status = bladerf_sync_config(dev, rx_layout,
                                      BLADERF_FORMAT_SC16_Q11, 8, 4096, 4, 3000);
     printf("raw sync config status=%d (%s), expected %d\n", raw_status,
            bladerf_strerror(raw_status), BLADERF_ERR_UNSUPPORTED);
     if (raw_status != BLADERF_ERR_UNSUPPORTED) goto fail;
+    s = bladerf_rf_events_get_since(dev, event_cursor, events,
+                                    BLADERF_RF_EVENT_HISTORY_SIZE,
+                                    &event_count, &next_event_cursor,
+                                    &history_complete);
+    if (s != 0 || !history_complete) {
+        fprintf(stderr, "format event query failed: %s\n", bladerf_strerror(s));
+        goto fail;
+    }
+    for (uint32_t i = 0; i < event_count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED &&
+            events[i].flags == BLADERF_FORMAT_SC16_Q11 &&
+            events[i].error_code == BLADERF_ERR_UNSUPPORTED) {
+            format_event_found = true;
+            break;
+        }
+    }
+    if (!format_event_found) {
+        fprintf(stderr, "sync format rejection did not publish RX_FORMAT_UNSUPPORTED\n");
+        goto fail;
+    }
     s = bladerf_sync_config(dev, rx_layout,
                             BLADERF_FORMAT_SC16_Q11_META, 8, 4096, 4, 3000);
     if (s != 0) { fprintf(stderr, "META sync config: %s\n", bladerf_strerror(s)); goto fail; }

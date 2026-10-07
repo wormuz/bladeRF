@@ -1671,7 +1671,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
      * do not let either format bypass the gate. The event-only callback tells
      * asynchronous consumers that this transfer was withheld. */
     if (!metadata_rx_format_has_epoch_tag(format)) {
-        bladerf2_rx_async_format_unsupported(dev, format);
+        bladerf2_rx_format_unsupported(dev, format);
         return false;
     }
     if (!epoch_valid) {
@@ -1688,7 +1688,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
 
     bytes_per_sample = samples_to_bytes(format, 1);
     if (message_size <= METADATA_HEADER_SIZE || bytes_per_sample == 0) {
-        bladerf2_rx_async_format_unsupported(dev, format);
+        bladerf2_rx_format_unsupported(dev, format);
         return false;
     }
     timestamp_step = (message_size - METADATA_HEADER_SIZE) / bytes_per_sample;
@@ -1723,7 +1723,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
             return false;
         }
-        board_data->rx_async_format_unsupported_reported = false;
+        board_data->rx_format_unsupported_reported = false;
         board_data->rx_async_data_withheld_reported = false;
         board_data->rx_async_timestamp_discontinuity_reported = false;
 
@@ -2660,7 +2660,7 @@ static int bladerf2_stream(struct bladerf_stream *stream,
     });
 
     if (rv == BLADERF_ERR_UNSUPPORTED) {
-        bladerf2_rx_async_format_unsupported(stream->dev, stream->format);
+        bladerf2_rx_format_unsupported(stream->dev, stream->format);
         return rv;
     }
 
@@ -2760,6 +2760,7 @@ static int bladerf2_sync_config(struct bladerf *dev,
      * transition can certify samples on the new stream. */
     if (!metadata_rx_format_allowed_for_epoch_contract(
             preserve_rx_epoch_contract, format)) {
+        bladerf2_rx_format_unsupported(dev, format);
         return BLADERF_ERR_UNSUPPORTED;
     }
 

@@ -45,8 +45,8 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }
 
-void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
-                                          bladerf_format format)
+void bladerf2_rx_format_unsupported(struct bladerf *dev,
+                                    bladerf_format format)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
@@ -58,12 +58,12 @@ void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
     }
     board_data = dev->board_data;
 
-    /* Runs in the async USB callback. Do not take dev->lock: a setter may
-     * hold it while waiting for progress from this USB event loop. */
+    /* May run in a USB callback or on a synchronous format preflight. Do not
+     * take dev->lock: a setter may hold it while waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     if (board_data->rf_transition_epoch_contract_enabled &&
-        !board_data->rx_async_format_unsupported_reported) {
-        board_data->rx_async_format_unsupported_reported = true;
+        !board_data->rx_format_unsupported_reported) {
+        board_data->rx_format_unsupported_reported = true;
         board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }

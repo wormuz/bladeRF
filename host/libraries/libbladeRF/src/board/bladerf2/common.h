@@ -241,7 +241,7 @@ struct bladerf2_board_data {
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
     bool rf_transition_epoch_certified;
-    bool rx_async_format_unsupported_reported;
+    bool rx_format_unsupported_reported;
     bool rx_async_data_withheld_reported;
     /* Set while the current epoch has an unannounced/active invalid data
      * interval. Cleared only after a host-validated packet is published. */
@@ -288,8 +288,8 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
 void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event);
-void bladerf2_rx_async_format_unsupported(struct bladerf *dev,
-                                          bladerf_format format);
+void bladerf2_rx_format_unsupported(struct bladerf *dev,
+                                    bladerf_format format);
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint8_t epoch_id,

@@ -280,7 +280,7 @@ static void assert_marker(const int16_t *iq, unsigned int count,
     }
 }
 
-static void test_async_unsupported_format_event(void)
+static void test_unsupported_format_event(void)
 {
     struct bladerf dev = {0};
     struct bladerf2_board_data *board_data =
@@ -295,8 +295,8 @@ static void test_async_unsupported_format_event(void)
 
     /* Callback-side publication must not wait for dev->lock. */
     MUTEX_LOCK(&dev.lock);
-    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
-    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META);
     MUTEX_UNLOCK(&dev.lock);
     assert(board_data->rf_transition_event_count == 1);
     const struct bladerf_rf_event *event =
@@ -307,9 +307,9 @@ static void test_async_unsupported_format_event(void)
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->rx_async_format_unsupported_reported = false;
+    board_data->rx_format_unsupported_reported = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    bladerf2_rx_async_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11);
     assert(board_data->rf_transition_event_count == 2);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
@@ -431,7 +431,7 @@ int main(void)
     int16_t out[4 * MSG_SAMPLES];
     struct bladerf_metadata meta;
 
-    test_async_unsupported_format_event();
+    test_unsupported_format_event();
     test_async_data_withheld_event();
     test_async_timestamp_continuity();
 
