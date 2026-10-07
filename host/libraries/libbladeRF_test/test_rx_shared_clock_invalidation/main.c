@@ -200,21 +200,36 @@ int main(void)
     assert(state.wishbone_address == 0x100 &&
            state.wishbone_value == 0xa5a55a5a && state.complete_calls == 8);
 
+    /* OVERSAMPLE changes the sample-rate and stream-format interpretation.
+     * Fence before changing the public feature policy, including disable. */
+    assert(bladerf_enable_feature(&dev, BLADERF_FEATURE_OVERSAMPLE, true) == 0);
+    assert(dev.feature == BLADERF_FEATURE_OVERSAMPLE &&
+           state.invalidate_reason == BLADERF_RF_INVALIDATE_FEATURE &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(state.invalidate_calls == 9 && state.complete_calls == 9);
+    assert(bladerf_enable_feature(&dev, BLADERF_FEATURE_DEFAULT, false) == 0);
+    assert(dev.feature == BLADERF_FEATURE_DEFAULT &&
+           state.invalidate_reason == BLADERF_RF_INVALIDATE_FEATURE);
+    assert(state.invalidate_calls == 10 && state.complete_calls == 10);
+
     /* Failed RX fencing blocks both shared TX configuration paths before the
      * board setter runs. */
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_set_bandwidth(&dev, tx0, 1400000, NULL) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 9 && state.bandwidth_calls == 3);
+    assert(state.invalidate_calls == 11 && state.bandwidth_calls == 3);
     assert(bladerf_set_sample_rate(&dev, tx0, 3000000, NULL) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 10 && state.sample_rate_calls == 2);
+    assert(state.invalidate_calls == 12 && state.sample_rate_calls == 2);
     assert(bladerf_config_gpio_write(&dev, 0) == BLADERF_ERR_WOULD_BLOCK);
     assert(bladerf_wishbone_master_write(&dev, 0, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 12 &&
+    assert(state.invalidate_calls == 14 &&
            state.config_gpio_write_calls == 1 && state.wishbone_write_calls == 1);
-    assert(state.complete_calls == 8);
+    assert(bladerf_enable_feature(&dev, BLADERF_FEATURE_OVERSAMPLE, true) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(dev.feature == BLADERF_FEATURE_DEFAULT && state.invalidate_calls == 15);
+    assert(state.complete_calls == 10);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

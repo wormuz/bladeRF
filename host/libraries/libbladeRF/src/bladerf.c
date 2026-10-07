@@ -2446,25 +2446,30 @@ static int validate_board_compatibility(const char *board_name, bladerf_feature 
 int bladerf_enable_feature(struct bladerf *dev, bladerf_feature feature, bool enable)
 {
     log_verbose("%s feature %s\n", enable ? "Enabling" : "Disabling", feature2str(feature));
-    int status = 0;
+    int status;
     CHECK_NULL(dev);
 
     const char *board_name = bladerf_get_board_name(dev);
 
-    if (enable == false) {
-        MUTEX_LOCK(&dev->lock);
-        dev->feature = BLADERF_FEATURE_DEFAULT;
-        MUTEX_UNLOCK(&dev->lock);
-        return 0;
+    if (enable) {
+        status = validate_board_compatibility(board_name, feature);
+        if (status != 0) {
+            return status;
+        }
     }
 
-    CHECK_STATUS(validate_board_compatibility(board_name, feature));
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_FEATURE);
+    if (status != 0) {
+        return status;
+    }
+
     MUTEX_LOCK(&dev->lock);
-    dev->feature = feature;
+    dev->feature = enable ? feature : BLADERF_FEATURE_DEFAULT;
     MUTEX_UNLOCK(&dev->lock);
 
-error:
-    return status;
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return 0;
 }
 
 int bladerf_get_feature(struct bladerf *dev, bladerf_feature* feature)

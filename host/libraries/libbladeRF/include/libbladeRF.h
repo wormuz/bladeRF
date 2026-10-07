@@ -4303,6 +4303,11 @@ typedef enum {
  * @param[out]  feature     Feature
  * @param[in]   enable  true to enable, false to disable
  *
+ * @note On bladeRF 2.x, changing the feature mode revokes the RX data-valid
+ *       epoch because the mode affects sample-rate and format interpretation.
+ *       Complete a new event-driven RX transition before consuming certified
+ *       IQ again.
+ *
  * @return 0 on success, value from \ref RETCODES list on failure
  */
 API_EXPORT
@@ -4846,6 +4851,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_CONFIG_GPIO (1U << 26)
 /** Opaque Wishbone write may change FPGA RX sample admission or metadata. */
 #define BLADERF_RF_INVALIDATE_WISHBONE (1U << 27)
+/** Feature mode changes sample-rate/format interpretation for RX. */
+#define BLADERF_RF_INVALIDATE_FEATURE (1U << 28)
 /** FPGA RX loss-event counter could not be read while monitoring a valid epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE (1U << 24)
 

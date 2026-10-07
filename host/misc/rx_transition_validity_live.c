@@ -358,8 +358,22 @@ int main(int argc, char **argv)
     CHECK(assert_rx_iq_withheld(dev, samples, "config GPIO write"));
     CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
+    /* OVERSAMPLE changes the public sample-rate and format interpretation.
+     * Both enabling it and returning to DEFAULT must revoke the old epoch. */
+    CHECK(latest_rf_event_cursor(dev, &tx_fir_event_cursor));
+    CHECK(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
+    CHECK(check_invalidation_reason(dev, tx_fir_event_cursor,
+                                    BLADERF_RF_INVALIDATE_FEATURE));
+    CHECK(assert_rx_iq_withheld(dev, samples, "OVERSAMPLE feature enable"));
+    CHECK(latest_rf_event_cursor(dev, &tx_fir_event_cursor));
+    CHECK(bladerf_enable_feature(dev, BLADERF_FEATURE_DEFAULT, true));
+    CHECK(check_invalidation_reason(dev, tx_fir_event_cursor,
+                                    BLADERF_RF_INVALIDATE_FEATURE));
+    CHECK(assert_rx_iq_withheld(dev, samples, "OVERSAMPLE feature reset"));
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
     printf("RX validity policy: PASS mode=%s legacy_LO/BW/rate/TX_FIR/"
-           "config_GPIO=fenced; final_txn=%u epoch=%u\n",
+           "config_GPIO/feature=fenced; final_txn=%u epoch=%u\n",
            paired ? "BOTH" : (rx_channel == rx2_channel ? "RX2" : "RX1"),
            txn, event.epoch_id);
     status = 0;
