@@ -17,6 +17,7 @@ Validation:
 
 - `host/misc/run_rx_epoch_gate_tb.sh` — PASS: epoch gate, CDC handshake, FIFO
   epoch fence, abort and enable testbenches.
+- `ghdl --synth --std=08 rx_epoch_gate` — PASS for the changed gate entity.
 - `git diff --check` — PASS.
 - Full Quartus synthesis was not run: `quartus_sh` is unavailable in this
   environment. The platform RX port association was checked against the sole
