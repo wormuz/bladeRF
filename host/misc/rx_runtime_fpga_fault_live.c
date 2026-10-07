@@ -62,7 +62,10 @@ int main(int argc, char **argv)
     bool reader_started = false;
     pthread_t reader_thread;
     struct blocking_reader reader = {0};
-    const char *fault_mode = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    const char *requested_fault_mode =
+        getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    char fault_mode_storage[64];
+    const char *fault_mode = fault_mode_storage;
     uint32_t expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
     int expected_error = 0;
     uint32_t transaction_id = 0;
@@ -80,14 +83,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "usage: %s [RX1|RX2|RX_X2]\n", argv[0]);
         return 2;
     }
-    if (fault_mode != NULL &&
-        strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
+    if (requested_fault_mode == NULL ||
+        strlen(requested_fault_mode) >= sizeof(fault_mode_storage)) {
+        fprintf(stderr, "set one runtime monitor injection mode in the env\n");
+        return 2;
+    }
+    strcpy(fault_mode_storage, requested_fault_mode);
+    if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
         expected_reason = BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE;
         expected_error = strcmp(fault_mode,
             "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ? BLADERF_ERR_IO :
             BLADERF_ERR_UNEXPECTED;
     }
-    if (fault_mode == NULL || unsetenv("BLADERF_TEST_RX_TRANSITION_STALL") != 0) {
+    if (unsetenv("BLADERF_TEST_RX_TRANSITION_STALL") != 0) {
         fprintf(stderr, "set one runtime monitor injection mode in the env\n");
         return 2;
     }
@@ -167,7 +175,7 @@ int main(int argc, char **argv)
 
     /* Keep a long sync read inside sync_rx while the background monitor
      * observes the injected fault. The event must enter native history
-     * before this read releases sync->lock (up to its 3s timeout). */
+     * before this read releases sync->lock (up to its 5s timeout). */
     reader.dev = dev;
     reader.sample_count = BLOCKING_READ_SAMPLES;
     reader.samples = calloc((size_t)BLOCKING_READ_SAMPLES *
