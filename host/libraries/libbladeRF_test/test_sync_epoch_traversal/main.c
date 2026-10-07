@@ -232,6 +232,8 @@ static void fixture_init(struct fixture *f)
     assert(f->buffers[0] != NULL && f->buffers[1] != NULL);
 
     assert(MUTEX_INIT(&f->sync.lock) == 0);
+    assert(MUTEX_INIT(&f->sync.rx_epoch_generation_lock) == 0);
+    f->sync.rx_epoch_generation = 0;
     assert(MUTEX_INIT(&f->sync.buf_mgmt.lock) == 0);
     assert(COND_INIT(&f->sync.buf_mgmt.buf_ready) == 0);
 
@@ -266,6 +268,7 @@ static void fixture_init(struct fixture *f)
 static void fixture_destroy(struct fixture *f)
 {
     assert(pthread_mutex_destroy(&f->sync.lock) == 0);
+    assert(pthread_mutex_destroy(&f->sync.rx_epoch_generation_lock) == 0);
     assert(pthread_mutex_destroy(&f->sync.buf_mgmt.lock) == 0);
     assert(pthread_cond_destroy(&f->sync.buf_mgmt.buf_ready) == 0);
     free(f->buffers[0]);

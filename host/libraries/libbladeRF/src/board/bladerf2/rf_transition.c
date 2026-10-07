@@ -1085,6 +1085,7 @@ static int _bladerf_rx_transition_begin(
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
     bool epochless_async_stream_active = false;
+    bool sync_format_unsupported = false;
     uint64_t stage_started_ns;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
@@ -1113,19 +1114,6 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_INVAL;
     }
 
-    /* Timestamped RX metadata is required to fence USB/sync buffers that
-     * were already queued before the FPGA epoch gate opened. Raw sync
-     * formats cannot prove which side of the epoch boundary a sample is on.
-     * Reject before arming or touching the RFIC. */
-    if ((required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
-        board_data->sync[BLADERF_RX].initialized) {
-        status = sync_rx_epoch_require_metadata(
-            &board_data->sync[BLADERF_RX]);
-        if (status != 0) {
-            return status;
-        }
-    }
-
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active) {
@@ -1138,6 +1126,20 @@ static int _bladerf_rx_transition_begin(
              * boundary. Reject before allocating a transaction, enabling
              * the epoch contract, or touching the RFIC. */
             epochless_async_stream_active = true;
+        } else if ((required_events_mask &
+                    BLADERF_RF_REQUIRE_EPOCH_VALID) &&
+                   board_data->sync[BLADERF_RX].initialized &&
+                   (board_data->sync[BLADERF_RX].stream_config.layout &
+                    BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+                   board_data->sync[BLADERF_RX].stream_config.format !=
+                       BLADERF_FORMAT_SC16_Q11_META &&
+                   board_data->sync[BLADERF_RX].stream_config.format !=
+                       BLADERF_FORMAT_SC8_Q7_META) {
+            /* sync_config updates this immutable stream description under
+             * dev->lock. Inspect it here instead of taking sync->lock: a
+             * blocked sync_rx must first be cancelled by the transaction
+             * invalidation below. */
+            sync_format_unsupported = true;
         } else {
             board_data->rf_transition_next_id++;
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
@@ -1171,6 +1173,9 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_WOULD_BLOCK;
     }
     if (epochless_async_stream_active) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (sync_format_unsupported) {
         return BLADERF_ERR_UNSUPPORTED;
     }
 

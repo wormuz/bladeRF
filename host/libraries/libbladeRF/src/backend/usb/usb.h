@@ -25,6 +25,7 @@
 #include "host_config.h"
 
 #include "board/board.h"
+#include "thread.h"
 
 #if ENABLE_USB_DEV_RESET_ON_OPEN
 extern bool bladerf_usb_reset_device_on_open;
@@ -185,6 +186,8 @@ struct usb_driver {
 struct bladerf_usb {
     const struct usb_fns *fn;
     void *driver;
+    /* Keep each NIOS OUT/IN request-response pair atomic across callers. */
+    MUTEX peripheral_lock;
 };
 
 #endif

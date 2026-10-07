@@ -240,6 +240,7 @@ static void usb_close(struct bladerf *dev)
         }
 
         usb->fn->close(usb->driver);
+        MUTEX_DESTROY(&usb->peripheral_lock);
         free(usb);
         dev->backend_data = NULL;
     }
@@ -347,6 +348,8 @@ static int usb_open(struct bladerf *dev, struct bladerf_devinfo *info)
         free(usb);
         return BLADERF_ERR_NODEV;
     }
+
+    MUTEX_INIT(&usb->peripheral_lock);
 
     /* Default to legacy-mode access until we determine the FPGA is
      * capable of handling newer request formats */

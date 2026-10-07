@@ -86,3 +86,32 @@ repeated at scale after the queue behavior is understood.
 The aggregate run covers 10,002 transitions, but it does not replace physical
 fault injection for every FPGA fault-cause bit or a larger repeated RX_X2
 zero-overrun qualification.
+
+## Concurrent RX_X2 consumer follow-up
+
+The host sync read now publishes a cancellation generation before waiting for
+the sync mutex. A read already blocked when a transition starts returns
+`BLADERF_ERR_WOULD_BLOCK` promptly, and its final delivery check is linearized
+against invalidation so an old buffer cannot escape after the transition
+revokes its epoch. The RX transition preflight checks the configured metadata
+format under the device lock, avoiding a blocking sync-mutex acquisition ahead
+of that cancellation path. NIOS control request/response transfers are also
+serialized across legacy and current packet formats because the shared USB IN
+endpoint carries replies for both.
+
+Live xA4 RX_X2 test with a concurrent sync consumer:
+
+- 1 transition: success; 245 post-transition blocks; no invalid blocks,
+  timestamp regressions, or overrun events.
+- 100 transitions issued back-to-back: all 100 control transitions succeeded,
+  but the run failed qualification with sync ring-full/overrun events and only
+  151 valid blocks. This deliberately zero-dwell stress run confirms fault
+  notification works; it does not qualify usable sweep throughput. It also
+  shows that `EPOCH_VALID` can precede host consumption of any data from that
+  epoch. A sweep caller must leave a data-collection interval between retunes,
+  and a future API completion condition should distinguish FPGA epoch opening
+  from first valid host-delivered data.
+
+The separate RX1, RX2, and paired RX_X2 basic validity tests remain passed.
+Full-rate concurrent RX_X2 qualification is still open until a sweep-style
+test with a defined per-channel collection interval has zero queue overruns.

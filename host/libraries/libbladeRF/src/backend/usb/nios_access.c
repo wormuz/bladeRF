@@ -82,6 +82,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
     /* Send the command */
+    MUTEX_LOCK(&usb->peripheral_lock);
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
                                     NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
     if (status != 0) {
@@ -91,6 +92,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
         }
         log_error("Failed to send NIOS II request: %s\n",
                   bladerf_strerror(status));
+        MUTEX_UNLOCK(&usb->peripheral_lock);
         return status;
     }
 
@@ -106,6 +108,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
         log_error("Failed to receive NIOS II response: %s\n",
                   bladerf_strerror(status));
     }
+    MUTEX_UNLOCK(&usb->peripheral_lock);
 
     if (trace_retune2) {
         const uint64_t transfer_done_ns = monotonic_ns();
@@ -132,15 +135,18 @@ static int nios_access_quiet(struct bladerf *dev, uint8_t *buf)
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
     /* Send the command */
+    MUTEX_LOCK(&usb->peripheral_lock);
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
                                     NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
     if (status != 0) {
+        MUTEX_UNLOCK(&usb->peripheral_lock);
         return status;
     }
 
     /* Retrieve the request */
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
                                     NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
+    MUTEX_UNLOCK(&usb->peripheral_lock);
 
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
 

@@ -261,6 +261,11 @@ struct sync_meta {
 
 struct bladerf_sync {
     MUTEX lock;
+    /* Epoch invalidation must cancel a blocked sync_rx before acquiring
+     * lock: rejected old-epoch callbacks can otherwise wake that reader
+     * indefinitely while a transition waits for the same lock. */
+    MUTEX rx_epoch_generation_lock;
+    uint64_t rx_epoch_generation;
     struct bladerf *dev;
     bool initialized;
     sync_state state;

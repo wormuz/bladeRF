@@ -98,10 +98,12 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
     print_buf("NIOS II access request:\n", buf, 16);
 
     /* Send the command */
+    MUTEX_LOCK(&usb->peripheral_lock);
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
                                      buf, sizeof(buf),
                                      PERIPHERAL_TIMEOUT_MS);
     if (status != 0) {
+        MUTEX_UNLOCK(&usb->peripheral_lock);
         log_debug("Failed to submit NIOS II request: %s\n",
                   bladerf_strerror(status));
         return status;
@@ -112,6 +114,7 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN,
                                     buf, sizeof(buf),
                                     PERIPHERAL_TIMEOUT_MS);
+    MUTEX_UNLOCK(&usb->peripheral_lock);
 
     if (dir == NIOS_PKT_LEGACY_MODE_DIR_READ && status == 0) {
         for (i = 0; i < len; i++) {

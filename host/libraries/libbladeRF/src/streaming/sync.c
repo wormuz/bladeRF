@@ -130,6 +130,36 @@ static inline unsigned int samples_per_msg(size_t msg_size,
     return (unsigned int) n;
 }
 
+static uint64_t rx_epoch_generation_snapshot(struct bladerf_sync *sync)
+{
+    uint64_t generation;
+    MUTEX_LOCK(&sync->rx_epoch_generation_lock);
+    generation = sync->rx_epoch_generation;
+    MUTEX_UNLOCK(&sync->rx_epoch_generation_lock);
+    return generation;
+}
+
+static uint64_t rx_epoch_generation_advance(struct bladerf_sync *sync)
+{
+    uint64_t generation;
+    MUTEX_LOCK(&sync->rx_epoch_generation_lock);
+    generation = ++sync->rx_epoch_generation;
+    MUTEX_UNLOCK(&sync->rx_epoch_generation_lock);
+
+    /* sync_rx may be waiting while holding sync->lock. Wake it without
+     * acquiring that lock so it can observe cancellation and release it. */
+    MUTEX_LOCK(&sync->buf_mgmt.lock);
+    COND_SIGNAL(&sync->buf_mgmt.buf_ready);
+    MUTEX_UNLOCK(&sync->buf_mgmt.lock);
+    return generation;
+}
+
+static bool rx_epoch_generation_changed(struct bladerf_sync *sync,
+                                        uint64_t generation)
+{
+    return rx_epoch_generation_snapshot(sync) != generation;
+}
+
 int sync_init(struct bladerf_sync *sync,
               struct bladerf *dev,
               bladerf_channel_layout layout,
@@ -348,6 +378,8 @@ int sync_init(struct bladerf_sync *sync,
         goto error;
     }
 
+    MUTEX_INIT(&sync->rx_epoch_generation_lock);
+    sync->rx_epoch_generation = 0;
     sync->initialized = true;
 
     return 0;
@@ -380,6 +412,8 @@ void sync_deinit(struct bladerf_sync *sync)
 
         sync_worker_deinit(sync->worker, &sync->buf_mgmt.lock,
                            &sync->buf_mgmt.buf_ready);
+
+        MUTEX_DESTROY(&sync->rx_epoch_generation_lock);
 
         /* De-allocate our buffer management resources */
         if (sync->buf_mgmt.status) {
@@ -536,6 +570,11 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     if (!sync->initialized) {
         return 0;
     }
+
+    /* Publish cancellation before taking sync->lock. A blocked sync_rx can
+     * otherwise keep consuming epoch-filtered callbacks indefinitely while
+     * this transition waits for its lock. */
+    (void)rx_epoch_generation_advance(sync);
 
     status = sync_rx_epoch_require_metadata(sync);
     if (status == BLADERF_ERR_UNSUPPORTED) {
@@ -769,6 +808,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     uint64_t target_timestamp = UINT64_MAX;
     unsigned int pkt_len_dwords = 0;
     uint64_t call_start_ns = 0;
+    uint64_t rx_epoch_generation = 0;
 
     if (s == NULL || samples == NULL) {
         log_debug("NULL pointer passed to %s\n", __FUNCTION__);
@@ -786,6 +826,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     if (timeout_ms != 0) {
         call_start_ns = wallclock_get_current_nsec();
     }
+
+    rx_epoch_generation = rx_epoch_generation_snapshot(s);
 
     MUTEX_LOCK(&s->lock);
 
@@ -845,6 +887,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     log_verbose("%s: Requests %u samples.\n", __FUNCTION__, num_samples);
 
     while (!exit_early && samples_returned < num_samples && status == 0) {
+        if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+            rx_epoch_generation_changed(s, rx_epoch_generation)) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+            withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+            withheld_epoch_id = s->meta.rx_epoch_expected_id;
+            break;
+        }
+
         /* Enforce the caller's watchdog while consuming ready buffers too.
          * A timestamped read can discard many packets while searching for a
          * future target; checking the deadline only in WAIT_FOR_BUFFER lets
@@ -1588,7 +1638,29 @@ out:
         sync_epoch_id = s->meta.msg_epoch_id_valid
             ? s->meta.msg_epoch_id : s->meta.rx_epoch_expected_id;
     }
-    MUTEX_UNLOCK(&s->lock);
+
+    /* Linearize delivery against RF invalidation. The invalidator publishes
+     * a generation change before waiting for sync->lock. Holding the
+     * generation lock through sync->lock release makes this read either
+     * precede invalidation or fail closed. */
+    if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        MUTEX_LOCK(&s->rx_epoch_generation_lock);
+        if (s->rx_epoch_generation != rx_epoch_generation) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+            withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+            withheld_epoch_id = s->meta.rx_epoch_expected_id;
+            sync_timestamp_valid = false;
+            if (user_meta != NULL) {
+                user_meta->actual_count = 0;
+                user_meta->rx_epoch_id_valid = 0;
+                user_meta->rx_epoch_id = 0;
+            }
+        }
+        MUTEX_UNLOCK(&s->lock);
+        MUTEX_UNLOCK(&s->rx_epoch_generation_lock);
+    } else {
+        MUTEX_UNLOCK(&s->lock);
+    }
 
     /* Publish the fact that this read returned epoch-tagged IQ before any
      * later gap/overrun event from the same request. For a partial read, the
