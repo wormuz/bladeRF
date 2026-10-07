@@ -165,3 +165,20 @@ The libbladeRF build and `libbladeRF_test_sync_epoch_traversal` pass with a
 regression that rearms the latch and confirms a second fault appends another
 event. This is a host-side state/notification test; no new physical fault
 injection or hardware qualification is claimed for this follow-up.
+
+## Keep transition completion separate from host-data events
+
+`RX_FIRST_VALID_HOST_DATA` and `RX_DATA_RESUMED` carry the transaction ID of
+the epoch they describe. A fast RX consumer can publish one of these between
+the transition's `RX_EPOCH_VALID` event and the waiter's final history read.
+The result selector previously returned the latest event with that
+transaction ID, so a successful wait could nondeterministically return a
+host-data lifecycle event instead of the transition completion event. The
+selector now skips those post-transition lifecycle events and returns the
+latest transition event. The history still retains and exposes all events.
+
+The policy regression exercises `CONFIG_ACCEPTED → RX_EPOCH_VALID →
+RX_FIRST_VALID_HOST_DATA → RX_DATA_RESUMED` and requires the waiter result to
+remain `RX_EPOCH_VALID`. `run_rx_transition_policy_test.sh`, the rebuilt
+libbladeRF target, and `libbladeRF_test_sync_epoch_traversal` passed. Hardware
+race qualification remains pending.

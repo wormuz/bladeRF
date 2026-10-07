@@ -72,17 +72,19 @@ int main(void)
     assert(!bladerf2_rx_scheduled_retune_blocked(
         true, false, false, false, false));
 
-    /* A runtime notification can follow the terminal transition event.
-     * Waiting must select the latest event for that transaction rather than
-     * an unrelated overrun with transaction_id zero. */
+    /* Host-data lifecycle notifications keep the epoch transaction ID. They
+     * may race the waiter's final history read but must not replace its
+     * transition-completion result. */
     events[0].transaction_id = 42;
     events[0].event_type = BLADERF_RF_EVT_CONFIG_ACCEPTED;
     events[1].transaction_id = 42;
     events[1].event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
-    events[2].transaction_id = 0;
-    events[2].event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    events[2].transaction_id = 42;
+    events[2].event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+    events[3].transaction_id = 42;
+    events[3].event_type = BLADERF_RF_EVT_RX_DATA_RESUMED;
     assert(bladerf2_rf_event_latest_for_transaction(
-        events, 4, 3, 3, 42, &final_event));
+        events, 4, 0, 4, 42, &final_event));
     assert(final_event.transaction_id == 42);
     assert(final_event.event_type == BLADERF_RF_EVT_RX_EPOCH_VALID);
 

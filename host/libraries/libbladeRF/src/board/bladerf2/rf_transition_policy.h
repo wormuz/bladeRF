@@ -40,8 +40,9 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
 }
 
 /* Runtime RX notifications share the history ring with transition events.
- * Select a wait result by transaction identity so an unrelated overrun or
- * watchdog event appended after transition completion cannot replace it. */
+ * Host-data lifecycle events carry the epoch's transaction ID, but happen
+ * after transition completion and must not replace the event returned by
+ * rx_transition_wait(). */
 static inline bool bladerf2_rf_event_latest_for_transaction(
     const struct bladerf_rf_event *events, uint32_t capacity, uint32_t head,
     uint32_t count, uint32_t transaction_id,
@@ -55,6 +56,11 @@ static inline bool bladerf2_rf_event_latest_for_transaction(
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t slot = (head + capacity - 1u - i) % capacity;
         if (events[slot].transaction_id == transaction_id) {
+            if (events[slot].event_type ==
+                    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+                events[slot].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) {
+                continue;
+            }
             *result = events[slot];
             return true;
         }
