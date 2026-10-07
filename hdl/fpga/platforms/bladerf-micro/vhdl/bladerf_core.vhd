@@ -348,6 +348,7 @@ architecture core_bladerf of bladerf_core is
 
     signal tx_enable_pclk         : std_logic;
     signal rx_enable_pclk         : std_logic;
+    signal rx_fifo_read_reset     : std_logic;
 
     signal tx_enable              : std_logic;
     signal rx_enable              : std_logic;
@@ -1860,7 +1861,7 @@ begin
 
             -- Samples to host via FX3
             sample_fifo_rclock     => fx3_pclk_pll,
-            sample_fifo_raclr      => not rx_enable_pclk,
+            sample_fifo_raclr      => rx_fifo_read_reset,
             sample_fifo_rreq       => rx_sample_fifo.rreq,
             sample_fifo_rdata      => rx_sample_fifo.rdata,
             sample_fifo_rempty     => rx_sample_fifo.rempty,
@@ -1872,7 +1873,7 @@ begin
 
             -- Metadata to host via FX3
             meta_fifo_rclock       => fx3_pclk_pll,
-            meta_fifo_raclr        => not rx_enable_pclk,
+            meta_fifo_raclr        => rx_fifo_read_reset,
             meta_fifo_rreq         => rx_meta_fifo.rreq,
             meta_fifo_rdata        => rx_meta_fifo.rdata,
             meta_fifo_rempty       => rx_meta_fifo.rempty,
@@ -2556,6 +2557,23 @@ begin
             clock       =>  rx_clock,
             async       =>  rx_enable_pclk,
             sync        =>  rx_enable
+        );
+
+    -- The RX sample/META DCFIFOs use an asynchronous read-side clear. Do not
+    -- drive that reset from the GPIF enable register: Quartus identifies it
+    -- as an unsynchronized external reset, and direct assertion/deassertion
+    -- can violate FIFO recovery/removal. Synchronize the enable first; GPIF
+    -- already stops reads when DMA is disabled, so a few pclk cycles before
+    -- clearing pointers cannot expose stale FIFO words to the host.
+    U_sync_rx_fifo_read_enable : entity work.synchronizer
+        generic map (
+            RESET_LEVEL         =>  '1'
+        )
+        port map (
+            reset               =>  sys_reset_pclk,
+            clock               =>  fx3_pclk_pll,
+            async               =>  not rx_enable_pclk,
+            sync                =>  rx_fifo_read_reset
         );
 
     U_sync_tx_enable : entity work.synchronizer
