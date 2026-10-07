@@ -138,8 +138,18 @@ begin
             case state is
                 when STATE_ACTIVE =>
                     if( epoch_abort = '1' ) then
-                        out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-                        out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                        -- Keep the continuous transport alive on the very
+                        -- cycle that invalidates an active epoch. Do not
+                        -- forward the current RF samples: emit zero-IQ
+                        -- keepalives just like PENDING and ERROR.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
@@ -208,8 +218,18 @@ begin
                     -- STATE_WAIT_FIRST_SAMPLE on the preceding edge. Hold the new
                     -- epoch active and expose the completion marker.
                     if( epoch_abort = '1' ) then
-                        out_sample_controls <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-                        out_samples         <= (in_sample_controls'range => ZERO_SAMPLE);
+                        -- The host may revoke the just-opened epoch before
+                        -- observing the following ACTIVE cycle. Preserve the
+                        -- stream with zero-IQ keepalives while withholding
+                        -- all samples from this epoch.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;

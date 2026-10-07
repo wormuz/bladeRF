@@ -177,17 +177,33 @@ begin
             severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
 
-        -- The epoch opens on the first real ADC sample after COMPLETE; there
-        -- is no sample-count discard input or delay in this gate.
+        -- Abort immediately after the first valid sample, while the internal
+        -- FSM is in ACTIVE_NEW. This edge must keep both enabled lanes alive
+        -- as zero-IQ keepalives rather than briefly disabling the stream.
+        wait until falling_edge(clock);
+        abort <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert state = "0011" and out_controls(0).enable = '1'
-            report "legacy settle count delayed epoch validity" severity failure;
+        assert out_controls(0).enable = '1' and out_controls(1).enable = '1' and
+               out_samples(0).data_v = '1' and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_v = '1' and
+               out_samples(1).data_i = to_signed(0, 16) and start_event = '0'
+            report "ACTIVE_NEW ABORT stopped transport or exposed IQ"
+            severity failure;
+        wait until falling_edge(clock);
+        abort <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0100" and out_controls(0).enable = '1' and
+               out_controls(1).enable = '1' and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16)
+            report "ACTIVE_NEW ABORT did not enter zero-IQ ERROR keepalives"
+            severity failure;
 
         -- A failure after RFIC completion but before the first ADC sample
         -- must also remain fenced and must not publish a valid epoch.
-        wait until falling_edge(clock);
-        wait until rising_edge(clock); -- retire ACTIVE_NEW status cycle
         wait until falling_edge(clock);
         samples_in(0).data_v <= '0';
         samples_in(1).data_v <= '0';
@@ -270,6 +286,34 @@ begin
             report "RX2-only epoch latched the wrong epoch ID" severity failure;
         assert out_controls(0).enable = '0' and out_controls(1).enable = '1'
             report "RX2-only epoch did not preserve the selected lane controls"
+            severity failure;
+
+        -- Runtime invalidation can arrive while the epoch is already active.
+        -- The gate must zero IQ immediately without pulsing either lane's
+        -- stream enable low, which could terminate continuous USB RX.
+        wait until rising_edge(clock); -- retire ACTIVE_NEW status cycle
+        wait until rising_edge(clock); -- enter ACTIVE
+        wait until falling_edge(clock);
+        samples_in(1).data_i <= to_signed(4321, 16);
+        samples_in(1).data_q <= to_signed(-1234, 16);
+        abort <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_controls(0).enable = '0' and out_controls(1).enable = '1' and
+               out_samples(1).data_v = '1' and
+               out_samples(1).data_i = to_signed(0, 16) and
+               out_samples(1).data_q = to_signed(0, 16)
+            report "active-epoch ABORT stopped transport or exposed RX2 IQ"
+            severity failure;
+        wait until falling_edge(clock);
+        abort <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0100" and out_controls(1).enable = '1' and
+               out_samples(1).data_v = '1' and
+               out_samples(1).data_i = to_signed(0, 16) and
+               out_samples(1).data_q = to_signed(0, 16)
+            report "ERROR state did not retain zero-IQ RX2 keepalives"
             severity failure;
 
         report "rx_epoch_gate_tb: PASS" severity note;
