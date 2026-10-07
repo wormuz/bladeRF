@@ -39,6 +39,30 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
+/* Runtime RX notifications share the history ring with transition events.
+ * Select a wait result by transaction identity so an unrelated overrun or
+ * watchdog event appended after transition completion cannot replace it. */
+static inline bool bladerf2_rf_event_latest_for_transaction(
+    const struct bladerf_rf_event *events, uint32_t capacity, uint32_t head,
+    uint32_t count, uint32_t transaction_id,
+    struct bladerf_rf_event *result)
+{
+    if (events == NULL || result == NULL || capacity == 0 ||
+        head >= capacity || count > capacity || transaction_id == 0) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t slot = (head + capacity - 1u - i) % capacity;
+        if (events[slot].transaction_id == transaction_id) {
+            *result = events[slot];
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* An independently queued RX recall has no transaction completion event or
  * epoch boundary. Only the fastlock request issued from inside the active
  * transition may pass while the event-driven contract owns the channel. */

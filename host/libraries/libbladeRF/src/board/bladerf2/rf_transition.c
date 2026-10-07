@@ -274,7 +274,22 @@ static void _abort_transition(struct bladerf *dev,
         board_data->rf_transition_waiting = false;
         board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
-            *final_event = board_data->rf_transition_last_event;
+            MUTEX_LOCK(&board_data->rf_transition_event_lock);
+            const bool found = bladerf2_rf_event_latest_for_transaction(
+                board_data->rf_transition_events,
+                BLADERF2_RF_EVENT_HISTORY_SIZE,
+                board_data->rf_transition_event_head,
+                board_data->rf_transition_event_count,
+                board_data->rf_transition_current_id, final_event);
+            MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            if (!found) {
+                memset(final_event, 0, sizeof(*final_event));
+                final_event->transaction_id =
+                    board_data->rf_transition_current_id;
+                final_event->event_type = BLADERF_RF_EVT_ERROR;
+                final_event->fpga_state = BLADERF_RF_STATE_ERROR;
+                final_event->error_code = BLADERF_ERR_UNEXPECTED;
+            }
         }
     });
 }
@@ -1874,11 +1889,28 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         board_data->rf_transition_waiting = false;
         board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
-            *final_event = board_data->rf_transition_last_event;
+            MUTEX_LOCK(&board_data->rf_transition_event_lock);
+            const bool found = bladerf2_rf_event_latest_for_transaction(
+                board_data->rf_transition_events,
+                BLADERF2_RF_EVENT_HISTORY_SIZE,
+                board_data->rf_transition_event_head,
+                board_data->rf_transition_event_count,
+                transaction_id, final_event);
+            MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            if (!found) {
+                memset(final_event, 0, sizeof(*final_event));
+                final_event->transaction_id = transaction_id;
+                final_event->event_type = BLADERF_RF_EVT_ERROR;
+                final_event->fpga_state = BLADERF_RF_STATE_ERROR;
+                final_event->error_code = BLADERF_ERR_UNEXPECTED;
+            }
         }
     });
 
-    return 0;
+    return final_event != NULL && final_event->error_code ==
+           BLADERF_ERR_UNEXPECTED &&
+           final_event->event_type == BLADERF_RF_EVT_ERROR
+        ? BLADERF_ERR_UNEXPECTED : 0;
 }
 
 static bool _is_terminal_event(bladerf_rf_event_type type)

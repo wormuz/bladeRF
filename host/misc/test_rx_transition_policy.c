@@ -7,6 +7,8 @@
 int main(void)
 {
     uint32_t effective = UINT32_MAX;
+    struct bladerf_rf_event events[4] = {0};
+    struct bladerf_rf_event final_event = {0};
 
     /* Empty requests are rejected; a control-only completion must still
      * identify at least one observed hardware condition. */
@@ -69,5 +71,30 @@ int main(void)
         true, true, true, true, true));
     assert(!bladerf2_rx_scheduled_retune_blocked(
         true, false, false, false, false));
+
+    /* A runtime notification can follow the terminal transition event.
+     * Waiting must select the latest event for that transaction rather than
+     * an unrelated overrun with transaction_id zero. */
+    events[0].transaction_id = 42;
+    events[0].event_type = BLADERF_RF_EVT_CONFIG_ACCEPTED;
+    events[1].transaction_id = 42;
+    events[1].event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
+    events[2].transaction_id = 0;
+    events[2].event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    assert(bladerf2_rf_event_latest_for_transaction(
+        events, 4, 3, 3, 42, &final_event));
+    assert(final_event.transaction_id == 42);
+    assert(final_event.event_type == BLADERF_RF_EVT_RX_EPOCH_VALID);
+
+    /* Reverse traversal remains correct after the ring wraps. */
+    events[0].transaction_id = 7;
+    events[0].event_type = BLADERF_RF_EVT_ERROR;
+    events[3].transaction_id = 7;
+    events[3].event_type = BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED;
+    assert(bladerf2_rf_event_latest_for_transaction(
+        events, 4, 1, 3, 7, &final_event));
+    assert(final_event.event_type == BLADERF_RF_EVT_ERROR);
+    assert(!bladerf2_rf_event_latest_for_transaction(
+        events, 4, 1, 3, 99, &final_event));
     return 0;
 }
