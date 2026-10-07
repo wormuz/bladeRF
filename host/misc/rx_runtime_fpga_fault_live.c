@@ -10,13 +10,46 @@
 #include <libbladeRF.h>
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #define RX_FAULT_STATUS_BIT (1u << 14)
+#define BLOCKING_READ_SAMPLES (4u * 1024u * 1024u)
+
+struct blocking_reader {
+    struct bladerf *dev;
+    int16_t *samples;
+    unsigned int sample_count;
+    struct bladerf_metadata metadata;
+    int status;
+    atomic_bool started;
+    atomic_bool finished;
+};
+
+static void *blocking_sync_reader(void *arg)
+{
+    struct blocking_reader *reader = arg;
+    struct timespec begin, end;
+    clock_gettime(CLOCK_MONOTONIC, &begin);
+    atomic_store(&reader->started, true);
+    reader->status = bladerf_sync_rx(reader->dev, reader->samples,
+                                     reader->sample_count,
+                                     &reader->metadata, 5000);
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    fprintf(stderr, "blocking sync reader returned after %.3f s status=%d "
+            "count=%u\n",
+            (end.tv_sec - begin.tv_sec) +
+                (end.tv_nsec - begin.tv_nsec) / 1e9,
+            reader->status, reader->metadata.actual_count);
+    atomic_store(&reader->finished, true);
+    return NULL;
+}
 
 int main(int argc, char **argv)
 {
@@ -26,6 +59,9 @@ int main(int argc, char **argv)
     bladerf_channel_layout layout = BLADERF_RX_X1;
     bool enable_rx1 = true;
     bool enable_rx2 = false;
+    bool reader_started = false;
+    pthread_t reader_thread;
+    struct blocking_reader reader = {0};
     const char *fault_mode = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
     uint32_t expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
     int expected_error = 0;
@@ -51,14 +87,18 @@ int main(int argc, char **argv)
             "RUNTIME_FPGA_STATUS_READ_FAILURE") == 0 ? BLADERF_ERR_IO :
             BLADERF_ERR_UNEXPECTED;
     }
+    if (fault_mode == NULL || unsetenv("BLADERF_TEST_RX_TRANSITION_STALL") != 0) {
+        fprintf(stderr, "set one runtime monitor injection mode in the env\n");
+        return 2;
+    }
 
     status = bladerf_open(&dev, NULL);
     if (status != 0) goto cleanup;
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
 
-    status = bladerf_set_sample_rate(dev, transition_channel, 4000000, NULL);
+    status = bladerf_set_sample_rate(dev, transition_channel, 1000000, NULL);
     if (status != 0) goto cleanup;
-    status = bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL);
+    status = bladerf_set_bandwidth(dev, transition_channel, 1500000, NULL);
     if (status != 0) goto cleanup;
     status = bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
                                  16, 8192, 8, 1000);
@@ -80,6 +120,10 @@ int main(int argc, char **argv)
         .epoch_settle_samples = 0,
     };
     struct bladerf_rf_event transition_event = {0};
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t event_count = 0;
+    uint64_t cursor = 0;
+    bool complete = false;
     status = bladerf_rx_transition_begin(dev, transition_channel, &request,
                                          &transaction_id);
     if (status != 0) goto cleanup;
@@ -93,10 +137,26 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
-    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-    uint32_t event_count = 0;
-    uint64_t cursor = 0;
-    bool complete = false;
+    /* Drain startup buffering once so the long read below is demonstrably
+     * consuming a certified stream instead of only rejecting the unprimed
+     * pre-boundary queue. */
+    struct bladerf_metadata prime_metadata = {
+        .flags = BLADERF_META_FLAG_RX_NOW
+    };
+    for (unsigned attempt = 0; attempt < 40; ++attempt) {
+        status = bladerf_sync_rx(dev, samples, 8192, &prime_metadata, 1000);
+        if (status != BLADERF_ERR_WOULD_BLOCK) break;
+        prime_metadata.flags = BLADERF_META_FLAG_RX_NOW;
+        usleep(25000);
+    }
+    if (status != 0 || prime_metadata.actual_count == 0 ||
+        !prime_metadata.rx_epoch_id_valid ||
+        prime_metadata.rx_epoch_id != transition_event.epoch_id) {
+        fprintf(stderr, "pre-fault certified read failed: %s count=%u\n",
+                bladerf_strerror(status), prime_metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
     status = bladerf_rf_events_get_since(
         dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &event_count,
         &cursor, &complete);
@@ -105,10 +165,46 @@ int main(int argc, char **argv)
         goto cleanup;
     }
 
+    /* Keep a long sync read inside sync_rx while the background monitor
+     * observes the injected fault. The event must enter native history
+     * before this read releases sync->lock (up to its 3s timeout). */
+    reader.dev = dev;
+    reader.sample_count = BLOCKING_READ_SAMPLES;
+    reader.samples = calloc((size_t)BLOCKING_READ_SAMPLES *
+        (layout == BLADERF_RX_X2 ? 4u : 2u), sizeof(*reader.samples));
+    if (reader.samples == NULL) {
+        status = BLADERF_ERR_MEM;
+        goto cleanup;
+    }
+    reader.metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    atomic_init(&reader.started, false);
+    atomic_init(&reader.finished, false);
+    status = pthread_create(&reader_thread, NULL, blocking_sync_reader,
+                            &reader);
+    if (status != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    reader_started = true;
+    for (unsigned attempt = 0; attempt < 100 &&
+         !atomic_load(&reader.started); ++attempt) {
+        usleep(1000);
+    }
+    if (!atomic_load(&reader.started)) {
+        status = BLADERF_ERR_TIMEOUT;
+        goto cleanup;
+    }
+    /* Let sync_rx enter its long read before enabling the monitor fault. */
+    usleep(20000);
+    if (setenv("BLADERF_TEST_RX_TRANSITION_STALL", fault_mode, 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+
     bool saw_fault_invalidation = false;
-    for (unsigned attempt = 0; attempt < 40 && !saw_fault_invalidation;
+    for (unsigned attempt = 0; attempt < 3000 && !saw_fault_invalidation;
          ++attempt) {
-        usleep(50000);
+        usleep(1000);
         uint64_t next_cursor = cursor;
         status = bladerf_rf_events_get_since(
             dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -135,6 +231,14 @@ int main(int argc, char **argv)
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
+    unsetenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    if (atomic_load(&reader.finished)) {
+        fprintf(stderr, "fault event was delayed until sync reader exited\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    pthread_join(reader_thread, NULL);
+    reader_started = false;
 
     for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
         samples[i] = 0x5555;
@@ -209,6 +313,10 @@ int main(int argc, char **argv)
     status = 0;
 
 cleanup:
+    if (reader_started) {
+        pthread_join(reader_thread, NULL);
+    }
+    free(reader.samples);
     if (dev != NULL) {
         if (enable_rx1) {
             bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
