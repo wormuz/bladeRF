@@ -1385,7 +1385,9 @@ static int _bladerf_rx_transition_begin(
      * images without the queue capability have nothing to cancel. */
     if (dev->board->cancel_scheduled_retunes != NULL) {
         WITH_MUTEX(&dev->lock, {
+            board_data->rf_transition_cancelling_scheduled_retunes = true;
             status = dev->board->cancel_scheduled_retunes(dev, ch);
+            board_data->rf_transition_cancelling_scheduled_retunes = false;
         });
         if (status != 0 && status != BLADERF_ERR_UNSUPPORTED) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,

@@ -165,6 +165,22 @@ int main(void)
     assert(!bladerf2_rx_scheduled_retune_blocked(
         true, false, false, false, false));
 
+    /* The public queue-clear API must obey the same RX epoch boundary: it
+     * cannot cancel a fastlock request belonging to the active transaction.
+     * The begin path retains one scoped internal cancellation exception. */
+    assert(bladerf2_rx_scheduled_retune_cancel_blocked(
+        true, true, true, true, false));
+    assert(bladerf2_rx_scheduled_retune_cancel_blocked(
+        true, false, true, false, false));
+    assert(bladerf2_rx_scheduled_retune_cancel_blocked(
+        true, false, false, true, false));
+    assert(!bladerf2_rx_scheduled_retune_cancel_blocked(
+        false, true, true, true, false));
+    assert(!bladerf2_rx_scheduled_retune_cancel_blocked(
+        true, true, true, true, true));
+    assert(!bladerf2_rx_scheduled_retune_cancel_blocked(
+        true, false, false, false, false));
+
     /* Host-data lifecycle notifications keep the epoch transaction ID. They
      * may race the waiter's final history read but must not replace its
      * transition-completion result. */

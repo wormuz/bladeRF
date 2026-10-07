@@ -147,6 +147,18 @@ static inline bool bladerf2_rx_scheduled_retune_blocked(
             sync_epoch_filter_enabled);
 }
 
+/* Clearing the RX fastlock queue can cancel the retune owned by an active
+ * epoch transaction just as surely as adding an unreported retune can bypass
+ * its RF-path contract. Only rx_transition_begin() may clear it internally. */
+static inline bool bladerf2_rx_scheduled_retune_cancel_blocked(
+    bool is_rx, bool transition_pending, bool epoch_contract_enabled,
+    bool sync_epoch_filter_enabled, bool transition_cancel)
+{
+    return is_rx && !transition_cancel &&
+           (transition_pending || epoch_contract_enabled ||
+            sync_epoch_filter_enabled);
+}
+
 /* Epoch-required transitions cannot safely hand data to a running async RX
  * consumer that has no packet-level epoch identity. */
 static inline bool bladerf2_rx_epoch_transition_blocked_by_async_format(

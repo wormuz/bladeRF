@@ -2264,6 +2264,27 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    bool epoch_contract_enabled;
+    bool sync_epoch_filter_enabled;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    epoch_contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    sync_epoch_filter_enabled =
+        board_data->sync[BLADERF_RX].initialized &&
+        sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
+
+    /* Public RX cancellation can remove a fastlock operation already issued
+     * by an event-driven transition. That would leave RF-port/profile state
+     * unconfirmed even if the LO readback happens to match. The transaction
+     * begin path sets the scoped internal-cancel flag around its own queue
+     * cleanup before arming the new epoch. */
+    if (bladerf2_rx_scheduled_retune_cancel_blocked(
+            !BLADERF_CHANNEL_IS_TX(ch), board_data->rf_transition_pending,
+            epoch_contract_enabled, sync_epoch_filter_enabled,
+            board_data->rf_transition_cancelling_scheduled_retunes)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     if (!have_cap(board_data->capabilities, BLADERF_CAP_SCHEDULED_RETUNE)) {
         log_debug("This FPGA version (%u.%u.%u) does not support "

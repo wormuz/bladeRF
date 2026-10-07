@@ -289,6 +289,7 @@ struct bladerf2_board_data {
     bool rf_transition_spi_trace_enabled;
     bool rf_transition_setter_active;
     bool rf_transition_scheduling_quick_tune;
+    bool rf_transition_cancelling_scheduled_retunes;
     uint64_t rf_transition_spi_first_write_ns;
     uint64_t rf_transition_spi_last_write_ns;
     uint32_t rf_transition_spi_write_count;
