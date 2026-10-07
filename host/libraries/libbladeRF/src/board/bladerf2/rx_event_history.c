@@ -303,8 +303,14 @@ void bladerf2_rx_data_note_first_packet_locked(
         MUTEX_LOCK(&board_data->rf_transition_event_lock);
         bladerf2_rf_event_append_locked(board_data, &event);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+        if (!already_reported) {
+            board_data->rf_transition_first_host_data_event = event;
+        }
         board_data->rf_transition_first_host_data_reported = true;
         board_data->rx_async_data_withheld_active = false;
+        if (!already_reported) {
+            COND_SIGNAL(&board_data->rx_async_epoch_cond);
+        }
     }
 
     bladerf2_rx_data_rearm_notifications_locked(board_data);

@@ -24,7 +24,8 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
                               BLADERF_RF_REQUIRE_ENSM_RX |
                               BLADERF_RF_REQUIRE_DATAPATH_ARMED |
                               BLADERF_RF_REQUIRE_EPOCH_VALID |
-                              BLADERF_RF_REQUIRE_BBPLL_LOCKED;
+                              BLADERF_RF_REQUIRE_BBPLL_LOCKED |
+                              BLADERF_RF_REQUIRE_FIRST_HOST_DATA;
 
     if (effective == NULL || (requested & ~supported) != 0) {
         return false;
@@ -32,6 +33,7 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
 
     *effective = requested;
     if (require_rx_data_valid ||
+        (requested & BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0 ||
         (requested & BLADERF_RF_REQUIRE_DATAPATH_ARMED) != 0) {
         *effective |= BLADERF_RF_REQUIRE_EPOCH_VALID;
     }
@@ -137,6 +139,20 @@ static inline bool bladerf2_rf_event_cursor_is_valid(uint64_t after_sequence,
                                                      uint64_t current_sequence)
 {
     return after_sequence <= current_sequence;
+}
+
+static inline bool bladerf2_rx_first_host_data_admissible(
+    bool required, bool already_reported, uint64_t deadline_ns,
+    uint64_t now_ns)
+{
+    return !required || already_reported ||
+           (deadline_ns != 0 && now_ns != 0 && now_ns < deadline_ns);
+}
+
+static inline bool bladerf2_rx_first_host_data_before_deadline(
+    uint64_t event_ns, uint64_t deadline_ns)
+{
+    return event_ns != 0 && deadline_ns != 0 && event_ns < deadline_ns;
 }
 
 #endif

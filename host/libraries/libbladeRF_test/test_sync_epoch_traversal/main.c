@@ -459,6 +459,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     const uint32_t capacity = BLADERF2_RF_EVENT_HISTORY_SIZE;
 
     assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     board_data.rf_transition_epoch_contract_enabled = true;
     board_data.rf_transition_epoch_certified = true;
@@ -498,6 +499,9 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(board_data.rf_transition_events[latest].transaction_id == 77);
     assert(board_data.rf_transition_events[latest].epoch_id == 5);
     assert(board_data.rf_transition_events[latest].fpga_timestamp == 1001);
+    assert(board_data.rf_transition_first_host_data_event.transaction_id == 77);
+    assert(board_data.rf_transition_first_host_data_event.event_type ==
+           BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
 
     board_data.rx_async_data_withheld_active = true;
     metadata.timestamp = 1002;
@@ -509,6 +513,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
            BLADERF_RF_EVT_RX_DATA_RESUMED);
     assert(board_data.rf_transition_events[latest].transaction_id == 77);
 
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }

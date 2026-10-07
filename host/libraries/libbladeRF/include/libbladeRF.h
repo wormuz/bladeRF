@@ -4899,7 +4899,11 @@ typedef enum {
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires RF PLL lock,
  * baseband PLL lock, and ENSM RX confirmation; these prerequisites are added
- * automatically before FPGA sample admission is opened. */
+ * automatically before FPGA sample admission is opened. Requiring
+ * BLADERF_RF_REQUIRE_FIRST_HOST_DATA also requires EPOCH_VALID and waits for
+ * the first epoch/timestamp-validated host META buffer. If it does not arrive
+ * before the wait deadline, the call returns timeout and late first data is
+ * withheld; timeout never establishes IQ validity. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
 /** Requires a sample-backed FPGA RX epoch (stronger than software arm). */
@@ -4907,6 +4911,8 @@ typedef enum {
 #define BLADERF_RF_REQUIRE_EPOCH_VALID   (1U << 3)
 /** Require the AD9361 baseband PLL lock bit before reporting completion. */
 #define BLADERF_RF_REQUIRE_BBPLL_LOCKED  (1U << 4)
+/** Also wait for the first epoch/timestamp-validated host RX META buffer. */
+#define BLADERF_RF_REQUIRE_FIRST_HOST_DATA (1U << 5)
 
 /**
  * Immutable RF transaction event (ADR-0207 §4).

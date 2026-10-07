@@ -248,11 +248,15 @@ struct bladerf2_board_data {
      * dev->lock: host setters hold dev->lock while waiting on USB control I/O. */
     MUTEX rx_async_epoch_lock;
     bool rx_async_epoch_lock_initialized;
+    COND rx_async_epoch_cond;
+    bool rx_async_epoch_cond_initialized;
     uint64_t rf_transition_requested_frequency_hz;
     uint64_t rf_transition_readback_frequency_hz;
     bladerf_rf_state rf_transition_state;
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
+    bool rf_transition_first_host_data_required;
+    uint64_t rf_transition_first_host_data_deadline_ns;
     bool rf_transition_epoch_certified;
 #ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
     bool test_rx_epoch_metadata_fault_injected;
@@ -269,6 +273,7 @@ struct bladerf2_board_data {
     uint8_t rf_transition_certified_epoch_id;
     uint64_t rf_transition_first_valid_timestamp;
     struct bladerf_rf_event rf_transition_certified_epoch_event;
+    struct bladerf_rf_event rf_transition_first_host_data_event;
     bool rf_transition_first_host_data_reported;
     bool rf_transition_pending;
     bool rf_transition_waiting;
@@ -286,9 +291,9 @@ struct bladerf2_board_data {
 #endif
 };
 
-/* Internal sync-RX hook: record when the first post-epoch META samples are
- * actually returned to the application. This is observability only and
- * never participates in determining whether the epoch is valid. */
+/* Internal sync-RX hook: record when the first post-epoch META samples pass
+ * host validation. Optional RF transition waits may require this event before
+ * reporting success; the event itself never certifies the FPGA epoch. */
 void bladerf2_rx_transition_note_first_packet(
     struct bladerf *dev, const struct bladerf_metadata *metadata);
 /* Caller holds rx_async_epoch_lock; lets async admission and host-data event

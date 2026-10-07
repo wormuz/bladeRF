@@ -20,6 +20,7 @@
  */
 
 #include <string.h>
+#include <time.h>
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
 #include <errno.h>
 #include <stdlib.h>
@@ -303,6 +304,15 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
     dev->board_data = board_data;
     MUTEX_INIT(&board_data->rx_async_epoch_lock);
     board_data->rx_async_epoch_lock_initialized = true;
+    status = COND_INIT(&board_data->rx_async_epoch_cond);
+    if (status != THREAD_SUCCESS) {
+        MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_epoch_lock_initialized = false;
+        free(board_data);
+        dev->board_data = NULL;
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    board_data->rx_async_epoch_cond_initialized = true;
     MUTEX_INIT(&board_data->rf_transition_event_lock);
     board_data->rf_transition_event_lock_initialized = true;
     board_data->phy = NULL;
@@ -644,6 +654,10 @@ static void bladerf2_close(struct bladerf *dev)
                 }
             }
 
+            if (board_data->rx_async_epoch_cond_initialized) {
+                COND_DESTROY(&board_data->rx_async_epoch_cond);
+                board_data->rx_async_epoch_cond_initialized = false;
+            }
             if (board_data->rx_async_epoch_lock_initialized) {
                 MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
                 board_data->rx_async_epoch_lock_initialized = false;
@@ -1778,6 +1792,22 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
          * a buffer validated against a stale snapshot cannot be admitted or
          * move the timestamp cursor past the invalidation. This lock is the
          * linearization point between async admission and epoch invalidation. */
+        struct timespec now_ts;
+        uint64_t now_ns = 0;
+        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
+            now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                     (uint64_t)now_ts.tv_nsec;
+        }
+        if (!bladerf2_rx_first_host_data_admissible(
+                board_data->rf_transition_first_host_data_required,
+                board_data->rf_transition_first_host_data_reported,
+                board_data->rf_transition_first_host_data_deadline_ns,
+                now_ns)) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_rx_data_withheld(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            return false;
+        }
         if (!metadata_rx_epoch_commit_timestamp(
                 contract_enabled, epoch_valid, epoch_id,
                 first_valid_timestamp,

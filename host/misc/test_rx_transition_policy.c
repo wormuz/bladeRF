@@ -63,6 +63,14 @@ int main(void)
            (BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX |
             BLADERF_RF_REQUIRE_BBPLL_LOCKED));
 
+    assert(bladerf2_rf_transition_normalize_requirements(
+        BLADERF_RF_REQUIRE_FIRST_HOST_DATA, false, &effective));
+    assert(effective == (BLADERF_RF_REQUIRE_FIRST_HOST_DATA |
+                         BLADERF_RF_REQUIRE_EPOCH_VALID |
+                         BLADERF_RF_REQUIRE_PLL_LOCKED |
+                         BLADERF_RF_REQUIRE_ENSM_RX |
+                         BLADERF_RF_REQUIRE_BBPLL_LOCKED));
+
     /* Never silently accept a requirement the implementation cannot honor. */
     assert(!bladerf2_rf_transition_normalize_requirements(
         1U << 31, false, &effective));
@@ -134,5 +142,17 @@ int main(void)
     assert(bladerf2_rf_event_cursor_is_valid(98, 99));
     assert(!bladerf2_rf_event_cursor_is_valid(100, 99));
     assert(!bladerf2_rf_event_cursor_is_valid(UINT64_MAX, 0));
+    assert(bladerf2_rx_first_host_data_admissible(false, false, 0, 0));
+    assert(bladerf2_rx_first_host_data_admissible(true, true, 0, 0));
+    assert(!bladerf2_rx_first_host_data_admissible(true, false, 0, 1));
+    assert(bladerf2_rx_first_host_data_admissible(true, false, 100, 99));
+    assert(!bladerf2_rx_first_host_data_admissible(true, false, 100, 100));
+    assert(!bladerf2_rx_first_host_data_admissible(true, false, 100, 101));
+    assert(!bladerf2_rx_first_host_data_admissible(true, false, 100, 0));
+    assert(bladerf2_rx_first_host_data_before_deadline(99, 100));
+    assert(!bladerf2_rx_first_host_data_before_deadline(100, 100));
+    assert(!bladerf2_rx_first_host_data_before_deadline(101, 100));
+    assert(!bladerf2_rx_first_host_data_before_deadline(0, 100));
+    assert(!bladerf2_rx_first_host_data_before_deadline(99, 0));
     return 0;
 }

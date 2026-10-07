@@ -373,6 +373,8 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         if (type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
             board_data->rf_transition_epoch_certified = false;
             board_data->rf_transition_first_host_data_reported = false;
+            memset(&board_data->rf_transition_first_host_data_event, 0,
+                   sizeof(board_data->rf_transition_first_host_data_event));
             board_data->rx_async_have_expected_timestamp = false;
         } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
@@ -384,6 +386,7 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         MUTEX_LOCK(&board_data->rf_transition_event_lock);
         bladerf2_rf_event_append_locked(board_data, &event);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+        COND_SIGNAL(&board_data->rx_async_epoch_cond);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_state = state;
     });
@@ -1212,6 +1215,13 @@ static int _bladerf_rx_transition_begin(
             if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rf_transition_epoch_contract_enabled = true;
+                board_data->rf_transition_first_host_data_required =
+                    (required_events_mask &
+                     BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0;
+                board_data->rf_transition_first_host_data_deadline_ns = 0;
+                board_data->rf_transition_first_host_data_reported = false;
+                memset(&board_data->rf_transition_first_host_data_event, 0,
+                       sizeof(board_data->rf_transition_first_host_data_event));
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             }
             board_data->rf_transition_requested_frequency_hz =
@@ -1561,6 +1571,67 @@ int bladerf_rx_transition_begin_quick_tune(
                                         transaction_id);
 }
 
+static int _wait_for_first_host_data(
+    struct bladerf2_board_data *board_data, uint32_t transaction_id,
+    uint64_t deadline_ns, struct bladerf_rf_event *host_data_event)
+{
+    int status = 0;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    for (;;) {
+        if (board_data->rf_transition_first_host_data_reported &&
+            board_data->rf_transition_first_host_data_event.transaction_id ==
+                transaction_id &&
+            board_data->rf_transition_first_host_data_event.event_type ==
+                BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
+            const struct bladerf_rf_event *candidate =
+                &board_data->rf_transition_first_host_data_event;
+            if (!bladerf2_rx_first_host_data_before_deadline(
+                    candidate->host_monotonic_ns, deadline_ns)) {
+                status = BLADERF_ERR_TIMEOUT;
+            } else {
+                *host_data_event = *candidate;
+            }
+            break;
+        }
+
+        if (!board_data->rf_transition_epoch_certified ||
+            board_data->rf_transition_certified_epoch_event.transaction_id !=
+                transaction_id) {
+            status = BLADERF_ERR_UNEXPECTED;
+            break;
+        }
+
+        const uint64_t now_ns = _monotonic_ns();
+        if (now_ns == 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+            break;
+        }
+        if (_deadline_expired(deadline_ns)) {
+            status = BLADERF_ERR_TIMEOUT;
+            break;
+        }
+
+        uint64_t remaining_ns = deadline_ns - now_ns;
+        uint64_t remaining_ms = (remaining_ns + 999999ULL) / 1000000ULL;
+        if (remaining_ms == 0) {
+            remaining_ms = 1;
+        } else if (remaining_ms > UINT32_MAX) {
+            remaining_ms = UINT32_MAX;
+        }
+        const int wait_status = COND_TIMED_WAIT(
+            &board_data->rx_async_epoch_cond,
+            &board_data->rx_async_epoch_lock, (uint32_t)remaining_ms);
+        if (wait_status != THREAD_SUCCESS &&
+            wait_status != THREAD_TIMEOUT) {
+            status = BLADERF_ERR_UNEXPECTED;
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return status;
+}
+
 int bladerf_rx_transition_wait(struct bladerf *dev,
                                uint32_t transaction_id,
                                struct bladerf_rf_event *final_event,
@@ -1573,7 +1644,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     bool ensm_rx    = false;
     bool transition_busy = false;
     bool transaction_valid = false;
+    bool first_host_data_required = false;
     uint8_t expected_epoch_id = 0;
+    struct bladerf_rf_event first_host_data_event = {0};
     int status;
     uint64_t wait_started_ns;
 
@@ -1588,6 +1661,9 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             board_data->rf_transition_current_id == transaction_id) {
             transaction_valid = true;
             expected_epoch_id = board_data->rf_transition_epoch_id;
+            first_host_data_required =
+                (board_data->rf_transition_required_events_mask &
+                 BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0;
             if (board_data->rf_transition_waiting) {
                 transition_busy = true;
             } else {
@@ -1607,6 +1683,12 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
     deadline_ns = _monotonic_ns() + (uint64_t)timeout_ms * 1000000ULL;
     wait_started_ns = _monotonic_ns();
+    if (board_data->rf_transition_required_events_mask &
+        BLADERF_RF_REQUIRE_FIRST_HOST_DATA) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rf_transition_first_host_data_deadline_ns = deadline_ns;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
     pll_reg = 0;
     ensm_reg = 0;
 
@@ -2042,19 +2124,39 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                     BLADERF_RF_STATE_RX_DATA_INVALID, 0, 0, 0, 0, 0);
     }
 
+    if (first_host_data_required) {
+        status = _wait_for_first_host_data(
+            board_data, transaction_id, deadline_ns,
+            &first_host_data_event);
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, 0, status,
+                        expected_epoch_id);
+            return _fail_transition(dev, board_data, status, final_event);
+        }
+    }
+
     WITH_MUTEX(&dev->lock, {
         board_data->rf_transition_pending = false;
         board_data->rf_transition_waiting = false;
         board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
-            MUTEX_LOCK(&board_data->rf_transition_event_lock);
-            const bool found = bladerf2_rf_event_latest_transition_result_for_transaction(
-                board_data->rf_transition_events,
-                BLADERF2_RF_EVENT_HISTORY_SIZE,
-                board_data->rf_transition_event_head,
-                board_data->rf_transition_event_count,
-                transaction_id, final_event);
-            MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            bool found;
+            if (first_host_data_required) {
+                *final_event = first_host_data_event;
+                found = first_host_data_event.transaction_id == transaction_id &&
+                    first_host_data_event.event_type ==
+                        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
+            } else {
+                MUTEX_LOCK(&board_data->rf_transition_event_lock);
+                found = bladerf2_rf_event_latest_transition_result_for_transaction(
+                    board_data->rf_transition_events,
+                    BLADERF2_RF_EVENT_HISTORY_SIZE,
+                    board_data->rf_transition_event_head,
+                    board_data->rf_transition_event_count,
+                    transaction_id, final_event);
+                MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            }
             if (!found) {
                 memset(final_event, 0, sizeof(*final_event));
                 final_event->transaction_id = transaction_id;
