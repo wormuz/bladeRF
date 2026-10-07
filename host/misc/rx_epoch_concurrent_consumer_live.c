@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #define RX_BLOCK_SAMPLES 8192
+#define RX_BUFFER_SAMPLES_DEFAULT 8192
 
 struct reader_state {
     struct bladerf *dev;
@@ -96,6 +97,9 @@ static int collect_overruns(struct bladerf *dev, uint64_t *cursor,
 int main(int argc, char **argv)
 {
     unsigned transitions = 1000;
+    unsigned dwell_ms = 0;
+    unsigned sample_rate = 4000000;
+    unsigned buffer_samples = RX_BUFFER_SAMPLES_DEFAULT;
     if (argc > 1) {
         char *end = NULL;
         unsigned long parsed = strtoul(argv[1], &end, 10);
@@ -106,6 +110,35 @@ int main(int argc, char **argv)
         }
         transitions = (unsigned)parsed;
     }
+    if (argc > 2) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || parsed > 60000) {
+            fprintf(stderr, "usage: %s [transition_count] [dwell_ms] [sample_rate] [buffer_samples]\n", argv[0]);
+            return 2;
+        }
+        dwell_ms = (unsigned)parsed;
+    }
+    if (argc > 3) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(argv[3], &end, 10);
+        if (end == argv[3] || *end != '\0' || parsed == 0 ||
+            parsed > 10000000) {
+            fprintf(stderr, "usage: %s [transition_count] [dwell_ms] [sample_rate]\n", argv[0]);
+            return 2;
+        }
+        sample_rate = (unsigned)parsed;
+    }
+    if (argc > 4) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(argv[4], &end, 10);
+        if (end == argv[4] || *end != '\0' || parsed < RX_BLOCK_SAMPLES ||
+            parsed > 262144 || parsed % RX_BLOCK_SAMPLES != 0) {
+            fprintf(stderr, "usage: %s [transition_count] [dwell_ms] [sample_rate] [buffer_samples]\n", argv[0]);
+            return 2;
+        }
+        buffer_samples = (unsigned)parsed;
+    }
 
     struct bladerf *dev = NULL;
     int status = bladerf_open(&dev, NULL);
@@ -115,7 +148,7 @@ int main(int argc, char **argv)
     }
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_CRITICAL);
 
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000,
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), sample_rate,
                                      NULL);
     if (status == 0) status = bladerf_set_bandwidth(
         dev, BLADERF_CHANNEL_RX(0), 5000000, NULL);
@@ -125,7 +158,7 @@ int main(int argc, char **argv)
         dev, BLADERF_CHANNEL_RX(1), 30);
     if (status == 0) status = bladerf_sync_config(
         dev, BLADERF_RX_X2, BLADERF_FORMAT_SC16_Q11_META,
-        16, RX_BLOCK_SAMPLES, 8, 1000);
+        16, buffer_samples, 8, 1000);
     if (status == 0) status = bladerf_enable_module(
         dev, BLADERF_CHANNEL_RX(0), true);
     if (status == 0) status = bladerf_enable_module(
@@ -205,6 +238,11 @@ int main(int argc, char **argv)
         }
         status = collect_overruns(dev, &event_cursor, &event_overruns);
         if (status != 0) break;
+        if (dwell_ms != 0) {
+            /* This interval is RF observation time at the current channel,
+             * not a validity delay; validity was established by FPGA events. */
+            usleep((useconds_t)dwell_ms * 1000u);
+        }
         completed = i + 1;
     }
 
@@ -214,10 +252,11 @@ done:
     usleep(250000);
     atomic_store(&reader.running, false);
     pthread_join(thread, NULL);
-    printf("RX_X2 concurrent transitions=%u/%u blocks=%u would_block=%u "
+    printf("RX_X2 concurrent transitions=%u/%u sample_rate=%u buffer_samples=%u dwell_ms=%u blocks=%u would_block=%u "
            "timeouts=%u invalid_blocks=%u sync_overruns=%u "
            "event_overruns=%u bad_timestamps=%u\n",
-           completed, transitions, atomic_load(&reader.blocks),
+           completed, transitions, sample_rate, buffer_samples, dwell_ms,
+           atomic_load(&reader.blocks),
            atomic_load(&reader.would_block), atomic_load(&reader.timeouts),
            atomic_load(&reader.invalid_blocks), atomic_load(&reader.overruns),
            event_overruns, atomic_load(&reader.bad_timestamps));

@@ -95,6 +95,52 @@ int main(void)
         assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
     }
 
+    /* Starting a new RF epoch must release already completed old-epoch
+     * buffers before the consumer resumes. This is intentional epoch
+     * invalidation, not a transport overrun. */
+    {
+        struct bladerf_sync sync = {0};
+        void *ring[4];
+        size_t lengths[4] = {64, 32, 0, 64};
+        bool dropped[4] = { false };
+        sync_buffer_status states[4] = {
+            SYNC_BUFFER_FULL, SYNC_BUFFER_PARTIAL,
+            SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_FULL,
+        };
+        unsigned char storage[4][64] = {{0}};
+        for (unsigned int i = 0; i < 4; ++i) {
+            ring[i] = storage[i];
+        }
+
+        sync.initialized = true;
+        sync.stream_config.layout = BLADERF_RX_X1;
+        sync.buf_mgmt.buffers = ring;
+        sync.buf_mgmt.status = states;
+        sync.buf_mgmt.actual_lengths = lengths;
+        sync.buf_mgmt.buffer_dropped = dropped;
+        sync.buf_mgmt.num_buffers = 4;
+        sync.buf_mgmt.prod_i = 2;
+        sync.buf_mgmt.cons_i = 0;
+        assert(MUTEX_INIT(&sync.lock) == 0);
+        assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+
+        MUTEX_LOCK(&sync.lock);
+        sync_worker_discard_rx_epoch(&sync);
+        MUTEX_UNLOCK(&sync.lock);
+
+        assert(states[0] == SYNC_BUFFER_EMPTY);
+        assert(states[1] == SYNC_BUFFER_EMPTY);
+        assert(states[2] == SYNC_BUFFER_IN_FLIGHT);
+        assert(states[3] == SYNC_BUFFER_EMPTY);
+        assert(dropped[0] && dropped[1] && dropped[3]);
+        assert(lengths[0] == 0 && lengths[1] == 0 && lengths[3] == 0);
+        assert(!sync.buf_mgmt.overrun_pending);
+        assert(!sync.buf_mgmt.stale_pending);
+
+        assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+        assert(MUTEX_DESTROY(&sync.lock) == 0);
+    }
+
     /* Rejected completions may arrive out of order around the sequence wrap.
      * Once the missing head sequence is retired, queued tombstones must flush
      * in order instead of leaving expected_seq permanently behind. */

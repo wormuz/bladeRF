@@ -588,11 +588,23 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync)
     MUTEX_LOCK(&sync->lock);
     if (sync->initialized &&
         (sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
-        sync->meta.rx_epoch_id_filter_enabled) {
+        (sync->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         sync->stream_config.format == BLADERF_FORMAT_SC8_Q7_META)) {
+        /* A first transition must establish the fence too: do not depend on
+         * a previous successful epoch having enabled the filter. */
+        sync->meta.rx_epoch_boundary_enabled = true;
+        sync->meta.rx_epoch_min_timestamp = 0;
+        sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
-        if (sync->state == SYNC_STATE_USING_BUFFER_META &&
-            sync->meta.state == SYNC_META_STATE_SAMPLES) {
-            sync->meta.msg_epoch_filtered_out = true;
+        sync_worker_discard_rx_epoch(sync);
+        if (sync->state == SYNC_STATE_BUFFER_READY ||
+            sync->state == SYNC_STATE_USING_BUFFER_META) {
+            sync->state = SYNC_STATE_WAIT_FOR_BUFFER;
+            sync->meta.state = SYNC_META_STATE_HEADER;
+            sync->meta.msg_num = 0;
+            sync->meta.curr_msg_off = 0;
+            sync->meta.msg_epoch_filtered_out = false;
+            sync->meta.msg_epoch_id_valid = false;
         }
     }
     MUTEX_UNLOCK(&sync->lock);

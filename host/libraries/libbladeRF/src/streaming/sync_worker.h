@@ -130,6 +130,39 @@ void sync_worker_submit_request(struct sync_worker *w, unsigned int request);
 /* async.c calls this for each RX transfer withheld before rx_callback(). */
 void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
 
+/* Discard completed RX ring entries that precede a newly fenced epoch.
+ * Called with the sync lock held; this function acquires buf_mgmt.lock. */
+static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
+{
+    struct buffer_mgmt *b;
+
+    if (s == NULL || !s->initialized ||
+        (s->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return;
+    }
+
+    b = &s->buf_mgmt;
+    MUTEX_LOCK(&b->lock);
+    for (unsigned int i = 0; i < b->num_buffers; ++i) {
+        if (b->status[i] == SYNC_BUFFER_FULL ||
+            b->status[i] == SYNC_BUFFER_PARTIAL) {
+            /* These samples were certified under the epoch being revoked.
+             * Free their slots immediately and let WAIT_FOR_BUFFER skip
+             * them without classifying the intentional fence as transport
+             * loss. A later completion clears this marker before reuse. */
+            b->status[i] = SYNC_BUFFER_EMPTY;
+            b->actual_lengths[i] = 0;
+            if (i == b->cons_i) {
+                b->partial_off = 0;
+            }
+            if (b->buffer_dropped != NULL) {
+                b->buffer_dropped[i] = true;
+            }
+        }
+    }
+    MUTEX_UNLOCK(&b->lock);
+}
+
 /* Hold an out-of-order RX buffer for later ordered delivery when it fits the
  * reorder window. Otherwise mark a discontinuity and wake sync_rx. The caller
  * must hold sync->buf_mgmt.lock. Returns true when the buffer was held. */

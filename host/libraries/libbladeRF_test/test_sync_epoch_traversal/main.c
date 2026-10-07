@@ -501,6 +501,20 @@ int main(void)
                                              8, 5001));
     struct fixture f;
 
+    /* The very first event-driven transition must enable epoch filtering
+     * even when sync streaming started before any certificate existed. */
+    fixture_init(&f);
+    f.sync.meta.rx_epoch_boundary_enabled = false;
+    f.sync.meta.rx_epoch_id_filter_enabled = false;
+    f.sync.meta.rx_epoch_data_invalidated = false;
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(f.sync.meta.rx_epoch_boundary_enabled);
+    assert(f.sync.meta.rx_epoch_id_filter_enabled);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    assert(f.states[0] == SYNC_BUFFER_EMPTY);
+    assert(f.states[1] == SYNC_BUFFER_EMPTY);
+    fixture_destroy(&f);
+
     /* Traverse two messages in one USB buffer: discard the stale epoch at
      * the head, then return only matching epoch samples. */
     fixture_init(&f);
@@ -583,8 +597,8 @@ int main(void)
     assert(sync_rx_epoch_invalidate(&f.sync) == 0);
     assert(sync_rx_epoch_expect_id(&f.sync, 8) == 0);
     assert(sync_rx_epoch_set_min_timestamp(&f.sync, 4000, 8) == 0);
-    /* Even though successful-boundary installation clears the invalidation
-     * latch, the already-open old message remains marked for discard. */
+    /* Invalidation discards the old partial message and resets the parser;
+     * no pre-retune IQ may survive until the next certified epoch. */
     memset(&meta, 0, sizeof(meta));
     meta.flags = BLADERF_META_FLAG_RX_NOW;
     sync_withheld_events = 0;
@@ -595,13 +609,9 @@ int main(void)
     memset(sync_withheld_timestamps, 0, sizeof(sync_withheld_timestamps));
     assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
     assert(meta.actual_count == 0);
-    assert(sync_withheld_events == 2);
-    assert(sync_withheld_reasons[0] ==
-           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
-    assert(sync_withheld_reasons[1] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
-    assert(sync_withheld_timestamp_valid[0]);
-    assert(sync_withheld_timestamps[0] == 1100);
-    assert(!sync_withheld_timestamp_valid[1]);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reasons[0] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(!sync_withheld_timestamp_valid[0]);
     fixture_destroy(&f);
 
     /* A timeout after previously admitted META data is bounded at the sync

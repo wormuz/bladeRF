@@ -115,3 +115,35 @@ Live xA4 RX_X2 test with a concurrent sync consumer:
 The separate RX1, RX2, and paired RX_X2 basic validity tests remain passed.
 Full-rate concurrent RX_X2 qualification is still open until a sweep-style
 test with a defined per-channel collection interval has zero queue overruns.
+
+Follow-up isolated the remaining burst issue and closed the stale-buffer part
+of it. `sync_rx_epoch_invalidate()` now releases completed and partially
+consumed buffers from the revoked epoch, resets an active META parser at that
+boundary, and leaves the dropped-slot markers for normal ring traversal. The
+transition does not mark those intentionally revoked samples as transport
+loss, and the reset does not certify any later samples; only the existing
+FPGA epoch/timestamp path can do that. The parser reset is limited to active
+buffer states so an idle/stopped worker still follows its normal startup path.
+
+The concurrent RX_X2 harness now supports an explicit dwell interval, sample
+rate, and stream buffer size. On this xA4, the following results were
+reproduced:
+
+| Transitions | Sample rate per RX | Stream buffer | Dwell | Valid blocks | Invalid blocks | Overrun events |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 4 MS/s | 8,192 samples | 10 ms | 359 | 73 | 88 |
+| 100 | 1 MS/s | 8,192 samples | 10 ms | 120 | 0 | 0 |
+| 100 | 4 MS/s | 65,536 samples | 10 ms | 458 | 0 | 0 |
+| 1,000 | 4 MS/s | 65,536 samples | 10 ms | 2,074 | 0 | 0 |
+
+The thousand-transition run also had zero event-history gaps, zero sync
+overruns, and zero timestamp regressions. After the first-transition filter
+activation fix, the RX1, RX2, and paired RX_X2 validity runners all passed
+again. A 100-transition zero-dwell run with 8,192-sample buffers also passed
+after stale-buffer revocation was added.
+The comparison indicates that the default small transfer buffer lacks burst
+headroom for sustained 4 MS/s RX_X2 consumption; larger stream buffers remove
+the observed overruns in this test without adding validity sleeps or sample
+discard. This result qualifies the tested xA4 host configuration, while the
+earlier 3,334-transition run remains a valid failure for its then-current
+configuration and must not be rewritten as a pass.
