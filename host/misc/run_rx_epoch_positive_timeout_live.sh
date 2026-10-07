@@ -7,6 +7,11 @@ build_dir="${BLADERF_RX_TIMEOUT_BUILD_DIR:-${TMPDIR:-/tmp}/bladerf-positive-time
 binary="$(mktemp "${TMPDIR:-/tmp}/rx_epoch_positive_timeout_live.XXXXXX")"
 trap 'rm -f "$binary"' EXIT
 
+if (($# > 1)); then
+  echo "usage: $0 [RX1|RX2|BOTH]" >&2
+  exit 2
+fi
+
 cmake -S "$repo_root/host" -B "$build_dir" \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DBUILD_DOCUMENTATION=OFF \
@@ -19,4 +24,10 @@ cc -D_DEFAULT_SOURCE -std=c11 -Wall -Wextra -Werror -O2 \
   -L"$build_dir/output" -Wl,-rpath,"$build_dir/output" \
   -lbladeRF -o "$binary"
 
-"$binary"
+if (($# == 1)); then
+  "$binary" "$1"
+else
+  for mode in RX1 RX2 BOTH; do
+    "$binary" "$mode"
+  done
+fi

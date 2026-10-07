@@ -11,6 +11,16 @@
 #define SAMPLE_COUNT 4096
 #define WAIT_TIMEOUT_MS 100
 
+struct rx_test_config {
+    bladerf_channel_layout layout;
+    bladerf_channel transition_channel;
+    bool paired;
+    bool enable_rx1;
+    bool enable_rx2;
+    unsigned int sync_samples;
+    const char *name;
+};
+
 static uint64_t monotonic_ns(void)
 {
     struct timespec ts;
@@ -20,10 +30,10 @@ static uint64_t monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
-static int transition(struct bladerf *dev, bool inject_stall,
+static int transition(struct bladerf *dev,
+                      const struct rx_test_config *config, bool inject_stall,
                       const char *stage, struct bladerf_rf_event *event)
 {
-    const bladerf_channel ch = BLADERF_CHANNEL_RX(1);
     struct bladerf_rx_transition_request request = {0};
     uint32_t transaction_id = 0;
     int status;
@@ -32,7 +42,8 @@ static int transition(struct bladerf *dev, bool inject_stall,
     request.required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID;
     request.require_rx_data_valid = true;
     request.timeout_ms = 2000;
-    status = bladerf_rx_transition_begin(dev, ch, &request, &transaction_id);
+    status = bladerf_rx_transition_begin(dev, config->transition_channel,
+                                         &request, &transaction_id);
     if (status != 0) {
         return status;
     }
@@ -65,16 +76,17 @@ static int transition(struct bladerf *dev, bool inject_stall,
     return status;
 }
 
-static int assert_sync_withheld(struct bladerf *dev)
+static int assert_sync_withheld(struct bladerf *dev,
+                                const struct rx_test_config *config)
 {
-    int16_t samples[SAMPLE_COUNT * 2];
-    int16_t sentinel[SAMPLE_COUNT * 2];
+    int16_t samples[SAMPLE_COUNT * 4];
+    int16_t sentinel[SAMPLE_COUNT * 4];
     struct bladerf_metadata metadata = {0};
     memset(samples, 0x5a, sizeof(samples));
     memcpy(sentinel, samples, sizeof(sentinel));
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
 
-    const int status = bladerf_sync_rx(dev, samples, SAMPLE_COUNT,
+    const int status = bladerf_sync_rx(dev, samples, config->sync_samples,
                                        &metadata, 200);
     if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0 ||
         memcmp(samples, sentinel, sizeof(samples)) != 0) {
@@ -88,17 +100,20 @@ static int assert_sync_withheld(struct bladerf *dev)
 }
 
 static int assert_sync_valid(struct bladerf *dev,
+                             const struct rx_test_config *config,
                              const struct bladerf_rf_event *event)
 {
-    int16_t samples[SAMPLE_COUNT * 2];
+    int16_t samples[SAMPLE_COUNT * 4];
     uint64_t expected_timestamp = event->fpga_timestamp;
     unsigned int total = 0;
-    for (unsigned int attempt = 0; total < SAMPLE_COUNT && attempt < 30;
+    for (unsigned int attempt = 0;
+         total < config->sync_samples && attempt < 30;
          ++attempt) {
         struct bladerf_metadata metadata = {0};
         metadata.flags = BLADERF_META_FLAG_RX_NOW;
         const int status = bladerf_sync_rx(
-            dev, samples + 2 * total, SAMPLE_COUNT - total, &metadata, 200);
+            dev, samples + 2 * total, config->sync_samples - total,
+            &metadata, 200);
         if (status == BLADERF_ERR_WOULD_BLOCK) {
             continue;
         }
@@ -126,45 +141,81 @@ static int assert_sync_valid(struct bladerf *dev,
             return BLADERF_ERR_UNEXPECTED;
         }
         total += metadata.actual_count;
-        expected_timestamp = metadata.timestamp + metadata.actual_count;
+        expected_timestamp = metadata.timestamp +
+            (config->paired ? metadata.actual_count / 2 :
+                              metadata.actual_count);
     }
-    if (total != SAMPLE_COUNT) {
+    if (total != config->sync_samples) {
         fprintf(stderr, "recovery block incomplete: received=%u expected=%u\n",
-                total, SAMPLE_COUNT);
+                total, config->sync_samples);
         return BLADERF_ERR_UNEXPECTED;
     }
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     static const char *const stages[] = {"PLL", "ENSM", "EPOCH"};
-    const bladerf_channel ch = BLADERF_CHANNEL_RX(1);
+    struct rx_test_config config = {
+        .layout = BLADERF_RX_X1,
+        .transition_channel = BLADERF_CHANNEL_RX(1),
+        .paired = false,
+        .enable_rx1 = false,
+        .enable_rx2 = true,
+        .sync_samples = SAMPLE_COUNT,
+        .name = "RX2",
+    };
     struct bladerf *dev = NULL;
+    if (argc > 2 || (argc == 2 && strcmp(argv[1], "RX1") != 0 &&
+                     strcmp(argv[1], "RX2") != 0 &&
+                     strcmp(argv[1], "BOTH") != 0)) {
+        fprintf(stderr, "usage: %s [RX1|RX2|BOTH]\n", argv[0]);
+        return 2;
+    }
+    if (argc == 2 && strcmp(argv[1], "RX1") == 0) {
+        config.transition_channel = BLADERF_CHANNEL_RX(0);
+        config.enable_rx1 = true;
+        config.enable_rx2 = false;
+        config.name = "RX1";
+    } else if (argc == 2 && strcmp(argv[1], "BOTH") == 0) {
+        config.layout = BLADERF_RX_X2;
+        config.transition_channel = BLADERF_CHANNEL_RX(0);
+        config.paired = true;
+        config.enable_rx1 = true;
+        config.enable_rx2 = true;
+        config.sync_samples = SAMPLE_COUNT * 2;
+        config.name = "RX1+RX2";
+    }
     int status = bladerf_open(&dev, NULL);
     if (status != 0) {
         fprintf(stderr, "open: %s\n", bladerf_strerror(status));
         return 1;
     }
 
-    status = bladerf_enable_module(dev, ch, true);
+    status = 0;
+    if (config.enable_rx1) {
+        status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true);
+    }
+    if (status == 0 && config.enable_rx2) {
+        status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), true);
+    }
     if (status == 0) {
-        status = bladerf_sync_config(dev, BLADERF_RX_X1,
+        status = bladerf_sync_config(dev, config.layout,
                                      BLADERF_FORMAT_SC16_Q11_META,
-                                     8, SAMPLE_COUNT, 4, 1000);
+                                     8, config.sync_samples, 4, 1000);
     }
     for (size_t i = 0; status == 0 && i < sizeof(stages) / sizeof(stages[0]); ++i) {
         struct bladerf_rf_event failed = {0};
         struct bladerf_rf_event recovered = {0};
-        status = transition(dev, true, stages[i], &failed);
+        status = transition(dev, &config, true, stages[i], &failed);
         if (status == 0) {
-            status = assert_sync_withheld(dev);
+            status = assert_sync_withheld(dev, &config);
         }
         if (status == 0) {
-            status = transition(dev, false, NULL, &recovered);
+            status = transition(dev, &config, false, NULL, &recovered);
         }
         if (status == 0) {
-            status = assert_sync_valid(dev, &recovered);
+            status = assert_sync_valid(dev, &config, &recovered);
         }
         if (status == 0) {
             printf("%s fail-closed recovery: PASS epoch=%u\n",
@@ -172,13 +223,19 @@ int main(void)
         }
     }
 
-    (void)bladerf_enable_module(dev, ch, false);
+    if (config.enable_rx1) {
+        (void)bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
+    }
+    if (config.enable_rx2) {
+        (void)bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
+    }
     bladerf_close(dev);
     if (status != 0) {
         fprintf(stderr, "positive-timeout qualification failed: %s\n",
                 bladerf_strerror(status));
         return 1;
     }
-    printf("RX positive-timeout qualification: PASS (RX2, PLL/ENSM/FPGA)\n");
+    printf("RX positive-timeout qualification: PASS (%s, PLL/ENSM/FPGA)\n",
+           config.name);
     return 0;
 }
