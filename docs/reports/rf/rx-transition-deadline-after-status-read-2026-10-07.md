@@ -18,9 +18,14 @@ The host timestamp fence is now two-phase. libbladeRF stages the exact
 timestamp and epoch while leaving `rx_epoch_data_invalidated` set, publishes
 `RX_EPOCH_VALID`, then activates sync RX. Activation checks the same absolute
 deadline under the parser mutex; a timeout while waiting on that lock leaves
-IQ fenced. This also orders the first host-data lifecycle event after the
-durable epoch-valid event. Async-only RX has no sync parser; it checks the
-deadline before event publication, which commits async admission.
+IQ fenced. Async RX certification now commits through the same deadline-aware
+activation callback while the parser lock (when present) is held. Publishing
+`RX_EPOCH_VALID` alone no longer certifies async IQ: the callback rechecks the
+deadline under the async admission mutex and installs the certificate while
+retaining that lock. With sync RX, the parser latch is then cleared before
+the async lock is released, so sync and async consumers cannot observe a
+half-committed admission. Async-only RX runs the same prepare/finish pair
+after its own deadline check even though no sync parser is initialized.
 
 The test-only transition fault build can delay a selected successful
 observation by 150 ms. The positive-timeout harness now covers ordinary
@@ -39,6 +44,9 @@ Validation completed:
   invalidated and withholds a matching epoch/timestamp packet;
 - sync traversal verifies staging does not release data and that activation
   after the deadline leaves the parser invalidated;
+- sync traversal verifies the admission callback is skipped after an expired
+  deadline, propagates callback failure without clearing the parser latch,
+  and runs successfully for both sync and async-only configurations;
 - a lock-contention regression starts the fence before deadline, holds the
   parser mutex past it, and verifies the fence returns timeout without
   admitting IQ;

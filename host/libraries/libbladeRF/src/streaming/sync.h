@@ -344,5 +344,12 @@ int sync_rx_epoch_stage_min_timestamp_before_deadline(
     uint64_t deadline_ns);
 int sync_rx_epoch_activate_before_deadline(struct bladerf_sync *sync,
                                            uint64_t deadline_ns);
+typedef int (*sync_rx_epoch_admission_prepare_fn)(void *context,
+                                                  uint64_t deadline_ns);
+typedef void (*sync_rx_epoch_admission_finish_fn)(void *context);
+int sync_rx_epoch_activate_with_admission_before_deadline(
+    struct bladerf_sync *sync, uint64_t deadline_ns,
+    sync_rx_epoch_admission_prepare_fn prepare,
+    sync_rx_epoch_admission_finish_fn finish, void *context);
 
 #endif

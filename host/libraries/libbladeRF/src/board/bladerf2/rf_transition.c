@@ -370,29 +370,90 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
 
         board_data->rf_transition_last_event = event;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        if (type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
-            state == BLADERF_RF_STATE_RX_DATA_VALID) {
-            board_data->rf_transition_epoch_certified = true;
-            board_data->rf_transition_certified_epoch_id =
-                (uint8_t)epoch_id;
-            board_data->rf_transition_first_valid_timestamp =
-                fpga_timestamp;
-            board_data->rf_transition_certified_epoch_event = event;
+        if (type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
+            board_data->rf_transition_epoch_certified = false;
             board_data->rf_transition_first_host_data_reported = false;
+            board_data->rx_async_have_expected_timestamp = false;
         } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
             board_data->rf_transition_first_host_data_reported = false;
         }
-        /* Publish epoch-valid and its certificate atomically with respect to
-         * async admission. Otherwise a first valid USB transfer can observe
-        * the certificate before its RX_EPOCH_VALID history entry exists and
-         * permanently miss RX_FIRST_VALID_HOST_DATA. */
+        /* RX_EPOCH_VALID is durable before the host admission commit below.
+         * Keep async admission uncertified until that commit so a late or
+         * failed host activation cannot leak IQ after wait() reports error. */
         MUTEX_LOCK(&board_data->rf_transition_event_lock);
         bladerf2_rf_event_append_locked(board_data, &event);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_state = state;
     });
+}
+
+struct rx_epoch_admission_context {
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event;
+    bool admission_lock_held;
+};
+
+static int _prepare_async_rx_epoch_admission(void *context,
+                                             uint64_t deadline_ns)
+{
+    struct rx_epoch_admission_context *admission = context;
+    struct bladerf2_board_data *board_data;
+    uint64_t now_ns;
+    int status = 0;
+
+    if (admission == NULL || admission->board_data == NULL ||
+        admission->event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        admission->event.fpga_state != BLADERF_RF_STATE_RX_DATA_VALID) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    board_data = admission->board_data;
+    now_ns = _monotonic_ns();
+    if (now_ns == 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    if (now_ns >= deadline_ns) {
+        return BLADERF_ERR_TIMEOUT;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    admission->admission_lock_held = true;
+    /* Recheck after taking the admission lock. This is the async linearizing
+     * point: callbacks blocked behind this mutex may consume samples only
+     * after the certificate and sync fence have committed successfully. */
+    now_ns = _monotonic_ns();
+    if (now_ns == 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+    } else if (now_ns >= deadline_ns) {
+        status = BLADERF_ERR_TIMEOUT;
+    } else if (!board_data->rf_transition_epoch_contract_enabled) {
+        status = BLADERF_ERR_UNEXPECTED;
+    } else {
+        board_data->rf_transition_epoch_certified = true;
+        board_data->rf_transition_certified_epoch_id =
+            (uint8_t)admission->event.epoch_id;
+        board_data->rf_transition_first_valid_timestamp =
+            admission->event.fpga_timestamp;
+        board_data->rf_transition_certified_epoch_event = admission->event;
+        board_data->rf_transition_first_host_data_reported = false;
+        board_data->rx_async_have_expected_timestamp = false;
+    }
+    if (status != 0) {
+        admission->admission_lock_held = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+    return status;
+}
+
+static void _finish_async_rx_epoch_admission(void *context)
+{
+    struct rx_epoch_admission_context *admission = context;
+    if (admission != NULL && admission->admission_lock_held) {
+        admission->admission_lock_held = false;
+        MUTEX_UNLOCK(&admission->board_data->rx_async_epoch_lock);
+    }
 }
 
 static void _emit_event(struct bladerf *dev,
@@ -1942,9 +2003,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
         /* Stage the exact FPGA boundary while keeping sync RX invalidated.
          * Publish RX_EPOCH_VALID before committing host admission so a
-         * concurrent sync reader cannot return first-host-data ahead of the
-         * epoch completion event. The activation step checks the deadline
-         * while holding sync->lock; failure leaves IQ fenced. */
+         * concurrent reader cannot return first-host-data ahead of the epoch
+         * event. Activation checks the deadline under sync->lock and holds
+         * the async admission lock through sync-latch release; failure leaves
+         * both IQ paths fenced. */
         _test_rx_transition_late_observation("LATE_HOST_FENCE");
         stage_begin_ns = _monotonic_ns();
         status = sync_rx_epoch_stage_min_timestamp_before_deadline(
@@ -1969,8 +2031,25 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    0, ((uint64_t)timestamp_hi << 32) | timestamp_lo,
                    BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
         _test_rx_transition_late_observation("LATE_HOST_ACTIVATE");
-        status = sync_rx_epoch_activate_before_deadline(
-            &board_data->sync[BLADERF_RX], deadline_ns);
+        struct rx_epoch_admission_context admission = {0};
+        admission.board_data = board_data;
+        admission.event.host_monotonic_ns = _monotonic_ns();
+        admission.event.transaction_id = transaction_id;
+        admission.event.fpga_timestamp =
+            ((uint64_t)timestamp_hi << 32) | timestamp_lo;
+        admission.event.epoch_id = expected_epoch_id;
+        admission.event.requested_rx_lo_hz =
+            board_data->rf_transition_requested_frequency_hz;
+        admission.event.readback_rx_lo_hz =
+            board_data->rf_transition_readback_frequency_hz;
+        admission.event.rfic_status = epoch_status_word;
+        admission.event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
+        admission.event.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
+        admission.event.flags = BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        status = sync_rx_epoch_activate_with_admission_before_deadline(
+            &board_data->sync[BLADERF_RX], deadline_ns,
+            _prepare_async_rx_epoch_admission,
+            _finish_async_rx_epoch_admission, &admission);
         fence_elapsed_ns = _monotonic_ns() - stage_begin_ns;
         if (status != 0) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,

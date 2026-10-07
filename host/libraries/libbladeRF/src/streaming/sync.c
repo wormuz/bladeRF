@@ -747,14 +747,31 @@ int sync_rx_epoch_stage_min_timestamp_before_deadline(
 int sync_rx_epoch_activate_before_deadline(struct bladerf_sync *sync,
                                            uint64_t deadline_ns)
 {
+    return sync_rx_epoch_activate_with_admission_before_deadline(
+        sync, deadline_ns, NULL, NULL, NULL);
+}
+
+int sync_rx_epoch_activate_with_admission_before_deadline(
+    struct bladerf_sync *sync, uint64_t deadline_ns,
+    sync_rx_epoch_admission_prepare_fn prepare,
+    sync_rx_epoch_admission_finish_fn finish, void *context)
+{
     int status = sync_rx_epoch_require_metadata(sync);
     if (status != 0 || sync == NULL) {
         return status;
     }
+    if ((prepare == NULL) != (finish == NULL)) {
+        return BLADERF_ERR_INVAL;
+    }
     if (!sync->initialized) {
-        /* Async RX admission is committed by the already-published
-         * RX_EPOCH_VALID event; there is no sync parser to unlock here. */
-        return 0;
+        status = sync_rx_epoch_check_deadline(deadline_ns);
+        if (status == 0 && prepare != NULL) {
+            status = prepare(context, deadline_ns);
+            if (status == 0 && finish != NULL) {
+                finish(context);
+            }
+        }
+        return status;
     }
 
     MUTEX_LOCK(&sync->lock);
@@ -769,7 +786,18 @@ int sync_rx_epoch_activate_before_deadline(struct bladerf_sync *sync,
          * deadline, keep the parser fenced and let the caller abort FPGA. */
         status = sync_rx_epoch_check_deadline(deadline_ns);
         if (status == 0) {
-            sync->meta.rx_epoch_data_invalidated = false;
+            if (prepare != NULL) {
+                status = prepare(context, deadline_ns);
+            }
+            if (status == 0) {
+                sync->meta.rx_epoch_data_invalidated = false;
+                if (prepare != NULL && finish != NULL) {
+                    /* The async admission lock stays held while the sync
+                     * latch changes. Neither stream can observe a half
+                     * commit, and no later failure can revoke this success. */
+                    finish(context);
+                }
+            }
         }
     }
     MUTEX_UNLOCK(&sync->lock);

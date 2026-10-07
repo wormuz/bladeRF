@@ -653,11 +653,37 @@ static void *set_deadline_fence_thread(void *arg)
     return NULL;
 }
 
+struct epoch_commit_test_context {
+    unsigned int calls;
+    int status;
+    struct bladerf_sync *sync;
+    bool observed_sync_fenced;
+};
+
+static int test_epoch_admission_prepare(void *context, uint64_t deadline_ns)
+{
+    struct epoch_commit_test_context *test = context;
+    assert(test != NULL);
+    (void)deadline_ns;
+    test->calls++;
+    if (test->sync != NULL) {
+        test->observed_sync_fenced =
+            test->sync->meta.rx_epoch_data_invalidated;
+    }
+    return test->status;
+}
+
+static void test_epoch_admission_finish(void *context)
+{
+    assert(context != NULL);
+}
+
 static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 {
     struct fixture f;
     struct bladerf_sync async_only_sync = {0};
     struct bladerf_metadata metadata = {0};
+    struct epoch_commit_test_context commit = {0};
     int16_t samples[2 * MSG_SAMPLES] = {0};
     pthread_t fence_thread;
     struct deadline_fence_call call = {0};
@@ -671,6 +697,14 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
      * transition deadline still applies before their epoch-valid event. */
     assert(sync_rx_epoch_set_min_timestamp_before_deadline(
                &async_only_sync, 2000, 8, 0) == BLADERF_ERR_TIMEOUT);
+    assert(sync_rx_epoch_activate_with_admission_before_deadline(
+               &async_only_sync, 0, test_epoch_admission_prepare,
+               test_epoch_admission_finish, &commit) == BLADERF_ERR_TIMEOUT);
+    assert(commit.calls == 0);
+    assert(sync_rx_epoch_activate_with_admission_before_deadline(
+               &async_only_sync, UINT64_MAX, test_epoch_admission_prepare,
+               test_epoch_admission_finish, &commit) == 0);
+    assert(commit.calls == 1);
 
     /* A deadline already in the past must not clear the parser's invalid
      * latch, even when the queued packet has the expected epoch and sample
@@ -696,6 +730,12 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
     assert(sync_rx_epoch_activate_before_deadline(&f.sync, 0) ==
            BLADERF_ERR_TIMEOUT);
     assert(f.sync.meta.rx_epoch_data_invalidated);
+    commit.status = BLADERF_ERR_UNEXPECTED;
+    assert(sync_rx_epoch_activate_with_admission_before_deadline(
+               &f.sync, UINT64_MAX, test_epoch_admission_prepare,
+               test_epoch_admission_finish, &commit) == BLADERF_ERR_UNEXPECTED);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    commit.status = 0;
 
     /* Also force the actual lock-wait race: the caller's deadline is live
      * when the thread starts, but expires while it is blocked on sync->lock.
@@ -717,9 +757,22 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
     assert(call.status == BLADERF_ERR_TIMEOUT);
     assert(f.sync.meta.rx_epoch_data_invalidated);
 
-    /* A fresh, non-expired explicit fence is the only operation that
-     * reopens sample admission. */
+    /* A fresh explicit fence still reopens admission through the legacy
+     * wrapper, which stages and activates with an unbounded deadline. */
     assert(sync_rx_epoch_set_min_timestamp(&f.sync, 2000, 8) == 0);
+    assert(!f.sync.meta.rx_epoch_data_invalidated);
+
+    /* The transaction commit callback runs while the parser remains fenced;
+     * only after it succeeds is the sync latch cleared. */
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    commit.sync = &f.sync;
+    assert(sync_rx_epoch_activate_with_admission_before_deadline(
+               &f.sync, UINT64_MAX, test_epoch_admission_prepare,
+               test_epoch_admission_finish, &commit) == 0);
+    assert(commit.calls == 3);
+    assert(commit.observed_sync_fenced);
+    assert(!f.sync.meta.rx_epoch_data_invalidated);
     fixture_destroy(&f);
 }
 

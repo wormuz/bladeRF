@@ -903,18 +903,37 @@ def check_rx_epoch_host_timestamp_fence():
         "sync_rx_epoch_stage_min_timestamp_before_deadline(")
     valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
     activate = transition_text.find(
-        "sync_rx_epoch_activate_before_deadline(")
+        "sync_rx_epoch_activate_with_admission_before_deadline(")
     if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or
             valid < 0 or activate < 0 or
             not (begin < fence_ack < retune and fence < valid < activate)):
         fail("rx-epoch-host-timestamp-fence",
              "host does not acknowledge the FPGA fence before retune or publish RX_EPOCH_VALID before sync-RX admission",
-             "confirm matching PENDING state before LO change; stage the timestamp boundary, publish RX_EPOCH_VALID, then activate sync RX")
+             "confirm matching PENDING state before LO change; stage the timestamp boundary, publish RX_EPOCH_VALID, then atomically commit async certificate and sync RX admission")
     if ("state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING" not in transition_text or
             "epoch == expected_epoch" not in transition_text):
         fail("rx-epoch-host-timestamp-fence",
              "FPGA fence acknowledgement does not validate state and transaction epoch",
              "wait for a matching PENDING state before retuning")
+    emit_start = transition_text.find("static void _emit_event_with_timestamp(")
+    emit_end = transition_text.find(
+        "struct rx_epoch_admission_context", emit_start)
+    admission_start = transition_text.find(
+        "static int _prepare_async_rx_epoch_admission(")
+    admission_end = transition_text.find("static ", admission_start + 1)
+    emit_body = transition_text[emit_start:emit_end]
+    admission_body = transition_text[admission_start:admission_end]
+    finish_start = transition_text.find(
+        "static void _finish_async_rx_epoch_admission(")
+    finish_end = transition_text.find("static ", finish_start + 1)
+    finish_body = transition_text[finish_start:finish_end]
+    if ("rf_transition_epoch_certified = true" in emit_body or
+            "now_ns >= deadline_ns" not in admission_body or
+            "rf_transition_epoch_certified = true" not in admission_body or
+            "MUTEX_UNLOCK(&admission->board_data->rx_async_epoch_lock)" not in finish_body):
+        fail("rx-epoch-host-timestamp-fence",
+             "RX_EPOCH_VALID publication can certify async IQ before the deadline-checked host admission commit",
+             "publish the event while async IQ remains uncertified, then hold the admission lock across certificate commit and sync parser activation")
     policy = ROOT / "host/libraries/libbladeRF/src/board/bladerf2/rf_transition_policy.h"
     policy_text = re.sub(
         r"/\*.*?\*/|//[^\n]*", "",
