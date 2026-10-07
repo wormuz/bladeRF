@@ -4708,9 +4708,11 @@ const char *CALL_CONV bladerf_strerror(int error);
  * programming. They are host request/response timestamps, not SCLK-edge
  * timestamps; NIOS-owned fastlock writes are not included. The caller waits
  * on explicit events, with a timeout that can only report failure -- a
- * timeout never implies the data is valid. Only RX_EPOCH_VALID establishes
- * application-usable IQ; a control-plane-only request completes in
- * RX_DATA_INVALID.
+ * timeout never implies the data is valid. RX_EPOCH_VALID confirms that the
+ * FPGA admitted samples at a new epoch boundary; it does not prove that a
+ * host META packet has arrived. RX_FIRST_VALID_HOST_DATA confirms that the
+ * first epoch- and timestamp-validated IQ reached the host. A control-plane-
+ * only request completes in RX_DATA_INVALID.
  *
  * @{
  */
@@ -4721,7 +4723,9 @@ const char *CALL_CONV bladerf_strerror(int error);
  * Allowed transitions:
  * RF_IDLE -> RF_CONFIG_PENDING -> RFIC_SPI_PROGRAMMING -> RFPLL_ACQUIRING
  * -> RFPLL_LOCKED -> (RF_CALIBRATING ->) RX_PATH_ARMING -> RX_DATA_INVALID
- * -> RX_DATA_VALID. Any state may transition to RF_ERROR.
+ * -> RX_DATA_VALID. Here RX_DATA_VALID means the FPGA epoch gate has opened;
+ * it does not mean that a host packet has been delivered. Any state may
+ * transition to RF_ERROR.
  */
 typedef enum {
     BLADERF_RF_STATE_IDLE = 0,
@@ -4732,6 +4736,9 @@ typedef enum {
     BLADERF_RF_STATE_CALIBRATING,
     BLADERF_RF_STATE_RX_PATH_ARMING,
     BLADERF_RF_STATE_RX_DATA_INVALID,
+    /** FPGA has opened the certified RX epoch; host IQ delivery is not yet
+     * implied. Wait for RX_FIRST_VALID_HOST_DATA when host delivery proof is
+     * required. */
     BLADERF_RF_STATE_RX_DATA_VALID,
     BLADERF_RF_STATE_ERROR
 } bladerf_rf_state;
@@ -5002,9 +5009,12 @@ struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
     uint32_t timeout_ms;
-    /** Require FPGA epoch confirmation before the call reports data-valid.
+    /** Require FPGA epoch confirmation before the call reports
+     *  BLADERF_RF_STATE_RX_DATA_VALID.
      *  When true, BLADERF_RF_REQUIRE_EPOCH_VALID and its PLL/ENSM
-     *  prerequisites are added automatically. */
+     *  prerequisites are added automatically. This confirms FPGA sample
+     *  admission only; require BLADERF_RF_REQUIRE_FIRST_HOST_DATA to wait
+     *  for a validated host META packet. */
     bool require_rx_data_valid;
     /** Deprecated compatibility field. Ignored. RX epoch correctness is
      *  based on observed RFIC completion and an FPGA sample boundary, not
@@ -5019,9 +5029,12 @@ struct bladerf_rx_transition_request {
  * internally) and arms observation of the required RF state transitions. It
  * does not block; the caller must follow up with
  * ::bladerf_rx_transition_wait to confirm the transaction reached the
- * requested state. Only a request with require_rx_data_valid=true or
- * BLADERF_RF_REQUIRE_EPOCH_VALID establishes valid IQ. Otherwise wait may
- * report control-plane completion while the final state remains
+ * requested state. A request with require_rx_data_valid=true or
+ * BLADERF_RF_REQUIRE_EPOCH_VALID confirms the FPGA epoch boundary, but does
+ * not prove host IQ delivery. Add BLADERF_RF_REQUIRE_FIRST_HOST_DATA (or
+ * BLADERF_RF_REQUIRE_RX_X2_HOST_DATA for paired RX) when the wait must also
+ * observe a validated host META buffer. Otherwise wait may report
+ * control-plane completion while the final state remains
  * BLADERF_RF_STATE_RX_DATA_INVALID. A device supports one outstanding
  * transition; a concurrent begin
  * returns ::BLADERF_ERR_WOULD_BLOCK without changing the active request.
