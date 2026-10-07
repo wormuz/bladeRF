@@ -29,6 +29,7 @@ struct mock_state {
     uint32_t expansion_gpio_value;
     uint8_t lms_5a;
     unsigned int expansion_gpio_write_calls;
+    unsigned int expansion_gpio_dir_write_calls;
     unsigned int lms_write_calls;
 };
 
@@ -130,6 +131,23 @@ static int mock_expansion_gpio_write(struct bladerf *dev, uint32_t mask,
     return 0;
 }
 
+static int mock_expansion_gpio_dir_write(struct bladerf *dev, uint32_t mask,
+                                         uint32_t value)
+{
+    struct mock_state *state = dev->board_data;
+    (void)mask;
+    (void)value;
+    state->expansion_gpio_dir_write_calls++;
+    return 0;
+}
+
+static int mock_expansion_gpio_dir_read(struct bladerf *dev, uint32_t *value)
+{
+    (void)dev;
+    *value = 0;
+    return 0;
+}
+
 static int mock_lms_read(struct bladerf *dev, uint8_t address, uint8_t *value)
 {
     struct mock_state *state = dev->board_data;
@@ -161,6 +179,8 @@ static const struct board_fns mock_board = {
 static const struct backend_fns mock_backend = {
     .expansion_gpio_read = mock_expansion_gpio_read,
     .expansion_gpio_write = mock_expansion_gpio_write,
+    .expansion_gpio_dir_write = mock_expansion_gpio_dir_write,
+    .expansion_gpio_dir_read = mock_expansion_gpio_dir_read,
     .lms_read = mock_lms_read,
     .lms_write = mock_lms_write,
 };
@@ -351,6 +371,33 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 21 && state.complete_calls == 14);
     assert(state.expansion_gpio_write_calls == gpio_writes_before_xb300);
+
+    /* Raw expansion GPIO is an opaque external path control. Its public
+     * write/direction APIs must revoke RX validity before changing pins. */
+    state.invalidate_status = 0;
+    assert(bladerf_expansion_gpio_masked_write(&dev, 0x10, 0x10) == 0);
+    assert(state.invalidate_calls == 22 && state.complete_calls == 15);
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+           state.invalidated_channel == rx0 && state.completed_channel == rx0);
+    assert(bladerf_expansion_gpio_dir_masked_write(&dev, 0x10, 0x10) == 0);
+    assert(state.invalidate_calls == 23 && state.complete_calls == 16 &&
+           state.expansion_gpio_dir_write_calls == 1);
+    assert(bladerf_expansion_gpio_write(&dev, 0x1234) == 0);
+    assert(state.invalidate_calls == 24 && state.complete_calls == 17);
+    assert(bladerf_expansion_gpio_dir_write(&dev, 0x1234) == 0);
+    assert(state.invalidate_calls == 25 && state.complete_calls == 18 &&
+           state.expansion_gpio_dir_write_calls == 2);
+    assert(bladerf_expansion_gpio_masked_write(&dev, 0, 0) == 0);
+    assert(state.invalidate_calls == 25 && state.complete_calls == 18);
+
+    /* A rejected fence must stop the opaque GPIO mutation as well. */
+    state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
+    const unsigned int expansion_writes_before_raw_gpio =
+        state.expansion_gpio_write_calls;
+    assert(bladerf_expansion_gpio_masked_write(&dev, 0x20, 0x20) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 26 && state.complete_calls == 18 &&
+           state.expansion_gpio_write_calls == expansion_writes_before_raw_gpio);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

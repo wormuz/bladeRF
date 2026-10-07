@@ -2250,11 +2250,17 @@ int bladerf_expansion_gpio_read(struct bladerf *dev, uint32_t *val)
 int bladerf_expansion_gpio_write(struct bladerf *dev, uint32_t val)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_write(dev, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -2263,11 +2269,21 @@ int bladerf_expansion_gpio_masked_write(struct bladerf *dev,
                                         uint32_t val)
 {
     int status;
+    if (mask != 0) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+        if (status != 0) {
+            return status;
+        }
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_masked_write(dev, mask, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    if (mask != 0) {
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    }
     return status;
 }
 
@@ -2285,11 +2301,17 @@ int bladerf_expansion_gpio_dir_read(struct bladerf *dev, uint32_t *val)
 int bladerf_expansion_gpio_dir_write(struct bladerf *dev, uint32_t val)
 {
     int status;
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+    if (status != 0) {
+        return status;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_dir_write(dev, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 
@@ -2298,11 +2320,21 @@ int bladerf_expansion_gpio_dir_masked_write(struct bladerf *dev,
                                             uint32_t val)
 {
     int status;
+    if (mask != 0) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+        if (status != 0) {
+            return status;
+        }
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_dir_masked_write(dev, mask, val);
 
     MUTEX_UNLOCK(&dev->lock);
+    if (mask != 0) {
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    }
     return status;
 }
 
