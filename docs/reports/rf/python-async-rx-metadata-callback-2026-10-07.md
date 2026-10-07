@@ -19,6 +19,12 @@ metadata dictionary. The snapshot includes timestamp, flags, status,
 and an `iq_valid` marker. The legacy `set_rx_callback()` keeps its four-argument
 signature and clears the metadata-aware callback when selected.
 
+The initial implementation briefly synthesized `iq_valid` from a nonzero
+sample count. Review caught that native async RX accepts untagged buffers when
+the epoch contract is disabled, so sample count alone cannot certify validity.
+That field was removed before finalizing this evidence. The callback exposes
+provenance only; callers must use the transition/event validity contract.
+
 The snapshot is Python-owned; it does not retain a pointer to the native
 callback metadata. RX_X2 layout is included so consumers can preserve paired
 lane provenance. Event-only zero-sample wakes continue through the existing RF
