@@ -83,20 +83,26 @@ int main(void)
     events[2].event_type = BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
     events[3].transaction_id = 42;
     events[3].event_type = BLADERF_RF_EVT_RX_DATA_RESUMED;
-    assert(bladerf2_rf_event_latest_for_transaction(
+    assert(bladerf2_rf_event_latest_transition_result_for_transaction(
         events, 4, 0, 4, 42, &final_event));
     assert(final_event.transaction_id == 42);
     assert(final_event.event_type == BLADERF_RF_EVT_RX_EPOCH_VALID);
+
+    /* If ring pressure evicts every transition-completion event, lifecycle
+     * notices and CONFIG_ACCEPTED are not enough to claim success. */
+    events[1].event_type = BLADERF_RF_EVT_CONFIG_ACCEPTED;
+    assert(!bladerf2_rf_event_latest_transition_result_for_transaction(
+        events, 4, 0, 4, 42, &final_event));
 
     /* Reverse traversal remains correct after the ring wraps. */
     events[0].transaction_id = 7;
     events[0].event_type = BLADERF_RF_EVT_ERROR;
     events[3].transaction_id = 7;
     events[3].event_type = BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED;
-    assert(bladerf2_rf_event_latest_for_transaction(
+    assert(bladerf2_rf_event_latest_transition_result_for_transaction(
         events, 4, 1, 3, 7, &final_event));
     assert(final_event.event_type == BLADERF_RF_EVT_ERROR);
-    assert(!bladerf2_rf_event_latest_for_transaction(
+    assert(!bladerf2_rf_event_latest_transition_result_for_transaction(
         events, 4, 1, 3, 99, &final_event));
     return 0;
 }

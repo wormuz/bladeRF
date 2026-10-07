@@ -275,7 +275,7 @@ static void _abort_transition(struct bladerf *dev,
         board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
             MUTEX_LOCK(&board_data->rf_transition_event_lock);
-            const bool found = bladerf2_rf_event_latest_for_transaction(
+            const bool found = bladerf2_rf_event_latest_transition_result_for_transaction(
                 board_data->rf_transition_events,
                 BLADERF2_RF_EVENT_HISTORY_SIZE,
                 board_data->rf_transition_event_head,
@@ -1910,7 +1910,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         board_data->rf_transition_setter_active = false;
         if (final_event != NULL) {
             MUTEX_LOCK(&board_data->rf_transition_event_lock);
-            const bool found = bladerf2_rf_event_latest_for_transaction(
+            const bool found = bladerf2_rf_event_latest_transition_result_for_transaction(
                 board_data->rf_transition_events,
                 BLADERF2_RF_EVENT_HISTORY_SIZE,
                 board_data->rf_transition_event_head,

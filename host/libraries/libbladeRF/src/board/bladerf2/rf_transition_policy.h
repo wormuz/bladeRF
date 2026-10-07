@@ -39,11 +39,23 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
+static inline bool bladerf2_rf_event_is_transition_terminal(
+    bladerf_rf_event_type type)
+{
+    return type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
+           type == BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
+           type == BLADERF_RF_EVT_RX_DATAPATH_ARMED ||
+           type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
+           type == BLADERF_RF_EVT_ERROR;
+}
+
 /* Runtime RX notifications share the history ring with transition events.
  * Host-data lifecycle events carry the epoch's transaction ID, but happen
  * after transition completion and must not replace the event returned by
- * rx_transition_wait(). */
-static inline bool bladerf2_rf_event_latest_for_transaction(
+ * rx_transition_wait(). If ring pressure has also evicted the terminal
+ * transition event, fail closed instead of returning CONFIG_ACCEPTED as
+ * successful completion. */
+static inline bool bladerf2_rf_event_latest_transition_result_for_transaction(
     const struct bladerf_rf_event *events, uint32_t capacity, uint32_t head,
     uint32_t count, uint32_t transaction_id,
     struct bladerf_rf_event *result)
@@ -56,9 +68,8 @@ static inline bool bladerf2_rf_event_latest_for_transaction(
     for (uint32_t i = 0; i < count; ++i) {
         const uint32_t slot = (head + capacity - 1u - i) % capacity;
         if (events[slot].transaction_id == transaction_id) {
-            if (events[slot].event_type ==
-                    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
-                events[slot].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) {
+            if (!bladerf2_rf_event_is_transition_terminal(
+                    events[slot].event_type)) {
                 continue;
             }
             *result = events[slot];
