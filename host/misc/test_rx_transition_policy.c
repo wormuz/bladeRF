@@ -10,6 +10,18 @@ int main(void)
     struct bladerf_rf_event events[4] = {0};
     struct bladerf_rf_event final_event = {0};
 
+    assert(bladerf2_rx_transition_channel_event_flags(
+               BLADERF_CHANNEL_RX(0), true) ==
+           BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID);
+    assert(bladerf2_rx_transition_channel_event_flags(
+               BLADERF_CHANNEL_RX(1), true) ==
+           (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2));
+    assert(bladerf2_rx_transition_channel_event_flags(
+               BLADERF_CHANNEL_RX(1), false) == 0);
+    assert(bladerf2_rx_transition_channel_event_flags(
+               BLADERF_CHANNEL_TX(0), true) == 0);
+
     /* A status read which returns at or after the deadline is not a timely
      * completion, even if its sampled hardware bit is already asserted. */
     assert(!bladerf2_rf_transition_deadline_expired(99, 100));

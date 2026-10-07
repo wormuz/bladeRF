@@ -8,6 +8,23 @@
 
 #include <libbladeRF.h>
 
+/* Preserve the transition handle that scoped an RX epoch on invalid-data
+ * notifications. The epoch is shared by both RX lanes, but its requested
+ * control channel is useful provenance for RX1/RX2 consumers. */
+static inline uint32_t bladerf2_rx_transition_channel_event_flags(
+    bladerf_channel channel, bool channel_valid)
+{
+    if (!channel_valid ||
+        (channel != BLADERF_CHANNEL_RX(0) &&
+         channel != BLADERF_CHANNEL_RX(1))) {
+        return 0;
+    }
+
+    return BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+           (channel == BLADERF_CHANNEL_RX(1)
+                ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
+}
+
 /* A hardware observation is timely only if it completed strictly before the
  * caller's deadline. Checking only before a blocking SPI/NIOS read can accept
  * a late completion and turn an expired wait into success. */

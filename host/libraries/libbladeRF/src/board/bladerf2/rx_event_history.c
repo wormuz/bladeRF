@@ -216,6 +216,7 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     uint64_t first_unvalidated_timestamp = 0;
     bool timestamp_valid = false;
     bool should_report = false;
+    uint32_t transition_channel_flags = 0;
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
@@ -242,6 +243,14 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     }
     epoch_id = explicit_source ? event_epoch_id :
                                 board_data->rf_transition_epoch_id;
+    /* A withheld async buffer is still associated with the transition that
+     * established the shared RX epoch. Preserve the selected control channel
+     * so wrappers can distinguish an RX1-initiated transition from RX2 while
+     * still treating loss as affecting the shared two-lane epoch. */
+    transition_channel_flags =
+        bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled);
     /* This cursor is the first sample expected after the last admitted async
      * META buffer. Publish it only while it still belongs to the certified
      * epoch; never borrow it for a synchronous timeout or an invalid epoch. */
@@ -270,7 +279,8 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     event.flags = reason | ((explicit_source
                                  ? explicit_timestamp_valid
                                  : timestamp_valid)
-        ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
+        ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0) |
+        transition_channel_flags;
     bladerf2_rf_event_append(board_data, &event);
 }
 
