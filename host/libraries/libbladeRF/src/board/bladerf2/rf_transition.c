@@ -162,6 +162,21 @@ static int _read_rx_epoch_state(struct bladerf *dev, uint32_t *status_word,
     return 0;
 }
 
+/* Keep test-only NIOS ABORT failure injection on the shared command path
+ * so both failed-transition cleanup and legacy-setter fencing exercise the
+ * same failure boundary. Production builds always issue the real command. */
+static int _rx_epoch_abort_command(struct bladerf *dev)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    const char *fail_setting = getenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
+    if (fail_setting != NULL && fail_setting[0] != '\0') {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+#endif
+    return nios_rx_epoch_ctrl_cmd(
+        dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+}
+
 /* A previous handle may have closed while its FPGA gate was still fenced.
  * Invalidate that incomplete epoch, then allocate the next ID relative to
  * the persistent FPGA epoch rather than the new handle. The gate remains
@@ -214,17 +229,7 @@ static void _abort_transition(struct bladerf *dev,
 
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_EPOCH_VALID) {
-#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
-        /* Test-only NIOS command fault; normal builds have no injection path. */
-        if (getenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT") != NULL &&
-            getenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT")[0] != '\0') {
-            abort_status = BLADERF_ERR_UNEXPECTED;
-        } else
-#endif
-        {
-            abort_status = nios_rx_epoch_ctrl_cmd(
-                dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
-        }
+        abort_status = _rx_epoch_abort_command(dev);
     }
 
     if (abort_status != 0) {
@@ -420,8 +425,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 #endif
         /* Close the FPGA gate for both sync and async epoch consumers before
          * the legacy setter mutates the RFIC. ABORT is fail-closed (ERROR). */
-        status = nios_rx_epoch_ctrl_cmd(
-            dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
+        status = _rx_epoch_abort_command(dev);
         if (status != 0) {
             event.host_monotonic_ns = _monotonic_ns();
             event.event_type = BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED;

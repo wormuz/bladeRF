@@ -539,6 +539,88 @@ int main(void)
     CHECK(read_valid_epoch(dev, samples, recovered.epoch_id,
                            recovered.fpga_timestamp));
 
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    /* Legacy setters must not mutate the RFIC when host revocation succeeds
+     * but the FPGA ABORT command fails. Capture the event cursor first so
+     * this checks the exact operation, even when prior transitions filled
+     * the bounded history ring. */
+    int gain_before = 0;
+    int gain_after = 0;
+    CHECK(bladerf_get_gain(dev, BLADERF_CHANNEL_RX(0), &gain_before));
+    struct bladerf_rf_event recent[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t recent_count = 0;
+    uint64_t event_cursor = 0;
+    bool history_complete = false;
+    int cursor_status = bladerf_rf_events_get_since(
+        dev, 0, recent, BLADERF_RF_EVENT_HISTORY_SIZE, &recent_count,
+        &event_cursor, &history_complete);
+    if (cursor_status != 0 && cursor_status != BLADERF_ERR_MEM) {
+        status = cursor_status;
+        goto out;
+    }
+
+    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+    status = bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), gain_before + 1);
+    unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
+    if (status != BLADERF_ERR_UNEXPECTED) {
+        fprintf(stderr, "setter with failed FPGA ABORT returned %s\n",
+                bladerf_strerror(status));
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+
+    recent_count = 0;
+    uint64_t next_event_cursor = event_cursor;
+    CHECK(bladerf_rf_events_get_since(
+        dev, event_cursor, recent, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &recent_count, &next_event_cursor, &history_complete));
+    bool gain_invalidated = false;
+    bool abort_failure_reported = false;
+    for (uint32_t i = 0; i < recent_count; ++i) {
+        gain_invalidated |=
+            recent[i].event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
+            recent[i].flags == BLADERF_RF_INVALIDATE_GAIN;
+        abort_failure_reported |=
+            recent[i].event_type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED &&
+            recent[i].error_code == BLADERF_ERR_UNEXPECTED;
+    }
+    CHECK(bladerf_get_gain(dev, BLADERF_CHANNEL_RX(0), &gain_after));
+    if (!history_complete || !gain_invalidated || !abort_failure_reported ||
+        gain_after != gain_before) {
+        fprintf(stderr, "failed setter ABORT contract mismatch: complete=%u "
+                "invalidated=%u abort_event=%u gain=%d->%d events=%u\n",
+                history_complete, gain_invalidated, abort_failure_reported,
+                gain_before, gain_after, recent_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+
+    int16_t sentinel[4096 * 2];
+    memset(samples, 0x5a, 4096 * 2 * sizeof(*samples));
+    memcpy(sentinel, samples, sizeof(sentinel));
+    memset(&metadata, 0, sizeof(metadata));
+    metadata.flags = BLADERF_META_FLAG_RX_NOW;
+    status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
+    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0 ||
+        memcmp(samples, sentinel, sizeof(sentinel)) != 0) {
+        fprintf(stderr, "failed setter ABORT exposed data: status=%s count=%u\n",
+                bladerf_strerror(status), metadata.actual_count);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto out;
+    }
+
+    struct bladerf_rf_event setter_recovered = {0};
+    CHECK(transition(dev, recovery_frequency_hz, &setter_recovered));
+    CHECK(read_valid_epoch(dev, samples, setter_recovered.epoch_id,
+                           setter_recovered.fpga_timestamp));
+    recovered = setter_recovered;
+    printf("RX legacy setter ABORT fault: PASS gain unchanged, IQ withheld, "
+           "explicit epoch recovery=%u\n", recovered.epoch_id);
+#endif
+
     printf("RX epoch ABORT qualification: PASS initial_epoch=%u "
            "failed_txn=%u recovered_epoch=%u; stale IQ rejected, "
            "explicit ARM recovery valid\n", initial.epoch_id,
