@@ -332,7 +332,12 @@ int sync_rx_epoch_invalidate(struct bladerf_sync *sync);
 /* Revoke queued sync-RX delivery without taking sync->lock. Used to close
  * the race before publishing asynchronous hardware-fault notifications. */
 void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync);
-void sync_rx_report_fpga_loss(struct bladerf_sync *sync);
+/* Mark an FPGA sample-loss episode and publish its device event before the
+ * pending overrun becomes visible to a sync reader. The callback runs while
+ * buf_mgmt.lock is held and must only append to an independent event queue. */
+void sync_rx_report_fpga_loss(struct bladerf_sync *sync,
+                              void (*publish_event)(void *),
+                              void *context);
 bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync);
 int sync_rx_epoch_require_transition(struct bladerf_sync *sync);
 int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id);

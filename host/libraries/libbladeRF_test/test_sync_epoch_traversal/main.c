@@ -751,6 +751,43 @@ static void test_sync_worker_overrun_published_before_sync_read(void)
     fixture_destroy(&f);
 }
 
+struct fpga_loss_publish_observation {
+    struct bladerf_sync *sync;
+    unsigned int calls;
+};
+
+static void observe_fpga_loss_event_publish(void *context)
+{
+    struct fpga_loss_publish_observation *observation = context;
+
+    /* The callback runs under buf_mgmt.lock. Reading these fields directly
+     * verifies that the cause is published after the overrun is staged but
+     * before sync_rx can observe/unlock that staged state. */
+    assert(observation->sync->buf_mgmt.overrun_pending);
+    assert(observation->sync->buf_mgmt.overrun_source_flags ==
+           BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS);
+    observation->calls++;
+}
+
+static void test_fpga_loss_event_published_inside_sync_fence(void)
+{
+    struct fixture f;
+    struct fpga_loss_publish_observation observation;
+
+    fixture_init(&f);
+    observation.sync = &f.sync;
+    observation.calls = 0;
+
+    sync_rx_report_fpga_loss(&f.sync, observe_fpga_loss_event_publish,
+                             &observation);
+
+    assert(observation.calls == 1);
+    assert(f.sync.buf_mgmt.overrun_pending);
+    assert(f.sync.buf_mgmt.overrun_source_flags ==
+           BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS);
+    fixture_destroy(&f);
+}
+
 struct blocked_sync_read {
     struct fixture *fixture;
     int16_t samples[2 * MSG_SAMPLES];
@@ -1072,6 +1109,7 @@ int main(void)
 
     test_unsupported_format_event();
     test_worker_overrun_event_history_is_lock_safe();
+    test_fpga_loss_event_published_inside_sync_fence();
     test_sync_worker_overrun_published_before_sync_read();
     test_meta_withheld_event_precedes_sync_read_timeout();
     test_sync_read_fails_closed_before_parser_invalidation();

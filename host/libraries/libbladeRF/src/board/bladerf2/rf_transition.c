@@ -1039,42 +1039,57 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
     });
 }
 
+struct rx_fpga_loss_event_context {
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event;
+};
+
+static void _publish_rx_fpga_loss_event(void *context)
+{
+    struct rx_fpga_loss_event_context *loss = context;
+
+    MUTEX_LOCK(&loss->board_data->rf_transition_event_lock);
+    bladerf2_rf_event_append_locked(loss->board_data, &loss->event);
+    MUTEX_UNLOCK(&loss->board_data->rf_transition_event_lock);
+}
+
 void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
                            uint64_t loss_count)
 {
     struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event event = {0};
+    struct rx_fpga_loss_event_context loss = {0};
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
     }
     board_data = dev->board_data;
 
-    /* Preserve the discontinuity for blocking sync callers even if they are
-     * not polling the event history. META reads report the overrun bit on the
-     * next call; timestamp continuity still determines which samples are
-     * contiguous. */
-    sync_rx_report_fpga_loss(&board_data->sync[BLADERF_RX]);
+    loss.board_data = board_data;
+    loss.event.host_monotonic_ns = _monotonic_ns();
+    loss.event.epoch_id = epoch_id;
+    loss.event.rfic_status = (uint32_t)loss_count;
+    loss.event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    loss.event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    loss.event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
+                       BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+    loss.event.transaction_id = 0;
+    WITH_MUTEX(&dev->lock, {
+        loss.event.requested_rx_lo_hz =
+            board_data->rf_transition_requested_frequency_hz;
+        loss.event.readback_rx_lo_hz =
+            board_data->rf_transition_readback_frequency_hz;
+    });
 
-    event.host_monotonic_ns = _monotonic_ns();
-    event.epoch_id = epoch_id;
-    event.rfic_status = (uint32_t)loss_count;
-    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
-                  BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+    /* Store the event while holding the sync queue lock: once a sync reader
+     * can observe the pending overrun, its reason is already in RF history. */
+    sync_rx_report_fpga_loss(&board_data->sync[BLADERF_RX],
+                             _publish_rx_fpga_loss_event, &loss);
 
     WITH_MUTEX(&dev->lock, {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rx_async_data_withheld_active = true;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        event.transaction_id = 0;
-        event.requested_rx_lo_hz =
-            board_data->rf_transition_requested_frequency_hz;
-        event.readback_rx_lo_hz =
-            board_data->rf_transition_readback_frequency_hz;
-        bladerf2_rf_event_append(board_data, &event);
-        board_data->rf_transition_last_event = event;
+        board_data->rf_transition_last_event = loss.event;
     });
 }
 

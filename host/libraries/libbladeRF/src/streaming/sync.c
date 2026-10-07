@@ -637,9 +637,14 @@ void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync)
  * callers receive BLADERF_META_STATUS_OVERRUN and raw callers still trigger
  * the common RX_STREAM_OVERRUN event path. The current buffered prefix stays
  * readable; timestamps determine where continuity resumes. */
-void sync_rx_report_fpga_loss(struct bladerf_sync *sync)
+void sync_rx_report_fpga_loss(struct bladerf_sync *sync,
+                              void (*publish_event)(void *),
+                              void *context)
 {
     if (sync == NULL || !sync->initialized) {
+        if (publish_event != NULL) {
+            publish_event(context);
+        }
         return;
     }
 
@@ -647,6 +652,12 @@ void sync_rx_report_fpga_loss(struct bladerf_sync *sync)
     sync->buf_mgmt.overrun_pending = true;
     sync->buf_mgmt.overrun_source_flags |=
         BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+    /* A reader cannot consume overrun_pending and return before the event
+     * explaining it is durable. The callback must not take dev->lock or
+     * re-enter sync RX; bladeRF2 only appends under its independent event lock. */
+    if (publish_event != NULL) {
+        publish_event(context);
+    }
     MUTEX_UNLOCK(&sync->buf_mgmt.lock);
 }
 
