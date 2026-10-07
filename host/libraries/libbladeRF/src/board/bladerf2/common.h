@@ -241,6 +241,9 @@ struct bladerf2_board_data {
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
     bool rf_transition_epoch_certified;
+#ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
+    bool test_rx_epoch_metadata_fault_injected;
+#endif
     bool rx_format_unsupported_reported;
     bool rx_async_data_withheld_reported;
     /* Set while the current epoch has an unannounced/active invalid data

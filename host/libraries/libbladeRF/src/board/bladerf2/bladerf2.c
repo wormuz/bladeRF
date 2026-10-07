@@ -1674,6 +1674,43 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         bladerf2_rx_format_unsupported(dev, format, true);
         return false;
     }
+
+#ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
+    /* Exercise the actual async admission path with a corrupted first META
+     * header. This is test-build-only and one-shot per open device; production
+     * never mutates the USB transfer buffer. */
+    const char *metadata_fault =
+        getenv("BLADERF_TEST_RX_EPOCH_METADATA_FAULT");
+    if (metadata_fault != NULL && metadata_fault[0] != '\0' &&
+        first_valid_timestamp != 0) {
+        bool inject = false;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        if (board_data->rf_transition_epoch_contract_enabled &&
+            board_data->rf_transition_epoch_certified &&
+            !board_data->test_rx_epoch_metadata_fault_injected) {
+            board_data->test_rx_epoch_metadata_fault_injected = true;
+            inject = true;
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+        if (inject) {
+            uint8_t *mutable_bytes = (uint8_t *)(uintptr_t)buffer;
+            if (strcmp(metadata_fault, "stale_epoch") == 0) {
+                uint32_t stale_tag = HOST_TO_LE32(
+                    METADATA_RX_EPOCH_TAG_VALID |
+                    ((epoch_id - 1u) & METADATA_RX_EPOCH_ID_MASK));
+                memcpy(&mutable_bytes[METADATA_RESV_OFFSET], &stale_tag,
+                       sizeof(stale_tag));
+            } else if (strcmp(metadata_fault, "pre_boundary") == 0) {
+                uint64_t stale_timestamp =
+                    HOST_TO_LE64(first_valid_timestamp - 1u);
+                memcpy(&mutable_bytes[METADATA_TIMESTAMP_OFFSET],
+                       &stale_timestamp, sizeof(stale_timestamp));
+            }
+        }
+    }
+#endif
+
     if (!epoch_valid) {
         /* The interval is already fenced from callers. Do not reinterpret
          * the intentionally suppressed transition interval as USB loss; the

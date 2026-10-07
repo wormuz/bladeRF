@@ -38,6 +38,7 @@ struct live_stream {
     uint64_t event_cursor;
     atomic_uint events_drained_from_callback;
     atomic_uint data_withheld_events;
+    atomic_uint metadata_mismatch_withheld_events;
     atomic_uint timestamp_withheld_events;
     atomic_uint stream_overrun_events;
     atomic_uint event_history_gaps;
@@ -94,6 +95,12 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                             BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY) {
                             atomic_fetch_add(&live->timestamp_withheld_events,
                                              1);
+                        }
+                        if ((events[i].flags &
+                             ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+                            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH) {
+                            atomic_fetch_add(
+                                &live->metadata_mismatch_withheld_events, 1);
                         }
                     } else if (events[i].event_type ==
                                BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
@@ -288,6 +295,15 @@ int main(void)
     unsigned int cross_band_cycles = 70;
     const char *cycles_env = getenv("BLADERF_ASYNC_EPOCH_CYCLES");
     const char *active_env = getenv("BLADERF_ASYNC_RX_ACTIVE");
+    const char *metadata_fault =
+        getenv("BLADERF_TEST_RX_EPOCH_METADATA_FAULT");
+    if (metadata_fault != NULL && metadata_fault[0] != '\0' &&
+        strcmp(metadata_fault, "stale_epoch") != 0 &&
+        strcmp(metadata_fault, "pre_boundary") != 0) {
+        fprintf(stderr, "BLADERF_TEST_RX_EPOCH_METADATA_FAULT must be "
+                "stale_epoch or pre_boundary\n");
+        return 2;
+    }
     if (cycles_env != NULL && cycles_env[0] != '\0') {
         char *end = NULL;
         unsigned long requested = strtoul(cycles_env, &end, 10);
@@ -395,6 +411,23 @@ int main(void)
     }
     fprintf(stderr, "initial valid callbacks: %u\n",
             atomic_load(&live.valid_callbacks));
+
+#ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
+    if (metadata_fault != NULL && metadata_fault[0] != '\0' &&
+        !wait_for_count(&live.metadata_mismatch_withheld_events, 1, 3000)) {
+        fprintf(stderr, "one-shot injected META fault was not withheld/reported\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+#else
+    if (metadata_fault != NULL && metadata_fault[0] != '\0') {
+        fprintf(stderr, "metadata fault requested, but test injection is disabled\n");
+        status = BLADERF_ERR_INVAL;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+#endif
 
     /* Same-value configuration still invalidates a prior RX certificate. */
     fprintf(stderr, "issuing invalidating gain setter\n");
@@ -568,6 +601,7 @@ int main(void)
     printf("async RX epoch gate: PASS active=%s cross_band_cycles=%u "
            "valid=%u event_only=%u rx1_nonzero=%u rx2_nonzero=%u "
            "timestamp_discontinuities=%u timestamp_withheld=%u "
+           "metadata_mismatch_withheld=%u "
            "overrun_events=%u history_gaps=%u epoch=%u\n",
            live.active_mode == LIVE_RX_ACTIVE_RX1 ? "RX1" :
                live.active_mode == LIVE_RX_ACTIVE_RX2 ? "RX2" : "BOTH",
@@ -577,6 +611,7 @@ int main(void)
            atomic_load(&live.rx2_nonzero_slots),
            atomic_load(&live.timestamp_discontinuities),
            atomic_load(&live.timestamp_withheld_events),
+           atomic_load(&live.metadata_mismatch_withheld_events),
            atomic_load(&live.stream_overrun_events),
            atomic_load(&live.event_history_gaps), event.epoch_id);
     status = 0;
