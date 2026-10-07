@@ -2789,13 +2789,14 @@ int bladerf_get_gain_calibration_copy(
                source->file_path[path_length] != '\0') {
             path_length++;
         }
-        copy->file_path = calloc(source->file_path_len + 1, 1);
+        copy->file_path = malloc(path_length + 1);
         if (copy->file_path == NULL) {
             status = BLADERF_ERR_MEM;
             goto unlock;
         }
         memcpy(copy->file_path, source->file_path, path_length);
         copy->file_path[path_length] = '\0';
+        copy->file_path_len = path_length;
     }
 
 unlock:

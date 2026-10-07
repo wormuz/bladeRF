@@ -4438,9 +4438,10 @@ int CALL_CONV bladerf_enable_gain_calibration(struct bladerf *dev,
  *
  * Returns a read-only pointer to a specified channel's gain calibration table.
  * The lookup is protected by the device mutex, but the returned pointer is
- * borrowed: callers must not use it concurrently with a calibration-table
- * reload or device close. Use ::bladerf_get_gain_calibration_copy when the
- * table must outlive the call or be read concurrently with device operations.
+ * borrowed and the mutex is released before this function returns. Callers
+ * must coordinate its use against calibration loads, calibration enable
+ * changes, gain/frequency setters, and device close. Use
+ * ::bladerf_get_gain_calibration_copy for independent thread-safe access.
  *
  * @param[in]  dev Non-NULL pointer to a BladeRF device structure.
  * @param[in]  ch  Channel to retrieve the gain calibration table for.
