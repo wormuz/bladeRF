@@ -3691,6 +3691,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_sync_data_valid, bladerf2_rx_sync_data_valid_cb),
     FIELD_INIT(.rx_async_stream_overrun, bladerf2_rx_async_stream_overrun),
+    FIELD_INIT(.rx_worker_stream_overrun,
+               bladerf2_rx_worker_stream_overrun),
     FIELD_INIT(.rx_data_withheld, bladerf2_rx_data_withheld),
     FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),

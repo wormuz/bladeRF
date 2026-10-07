@@ -142,10 +142,11 @@ static bool hold_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
     return true;
 }
 
-static void note_rx_overrun(struct buffer_mgmt *b, uint32_t source_flags);
+static void note_rx_overrun(struct bladerf_sync *s, uint32_t source_flags);
 
-static void retire_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
+static void retire_dropped_sequence(struct bladerf_sync *s, uint32_t seq)
 {
+    struct buffer_mgmt *b = &s->buf_mgmt;
     if (seq == b->expected_seq) {
         b->expected_seq++;
         flush_reorder_entries(b);
@@ -157,15 +158,26 @@ static void retire_dropped_sequence(struct buffer_mgmt *b, uint32_t seq)
          * discontinuity and wake sync_rx so RX_NOW can discard stale ring
          * contents and the META parser can re-establish timestamp continuity.
          * Never treat queue overflow as permission to admit reordered IQ. */
-        note_rx_overrun(b, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+        note_rx_overrun(s, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
                            BLADERF_RF_STREAM_STATUS_SYNC_RX_SEQUENCE_TRACKER);
     }
 }
 
-static void note_rx_overrun(struct buffer_mgmt *b, uint32_t source_flags)
+/* Called with buf_mgmt.lock held from RX worker callback paths. Publish the
+ * first overrun of an interval immediately through the board's callback-safe
+ * event writer; sync_rx later carries the status bit without duplicating it. */
+static void note_rx_overrun(struct bladerf_sync *s, uint32_t source_flags)
 {
+    struct buffer_mgmt *b = &s->buf_mgmt;
     b->overrun_pending = true;
     b->overrun_source_flags |= source_flags;
+    if (!b->overrun_event_published && s->dev != NULL &&
+        s->dev->board != NULL &&
+        s->dev->board->rx_worker_stream_overrun != NULL) {
+        b->overrun_event_published = true;
+        s->dev->board->rx_worker_stream_overrun(
+            s->dev, b->overrun_source_flags);
+    }
     if (!b->stale_pending) {
         b->stale_pending = true;
         /* Wake the consumer once to discard stale data and resume at live
@@ -203,7 +215,7 @@ bool sync_worker_rx_reorder_buffer(struct bladerf_sync *s, uint32_t seq,
     /* The caller may forward the payload, but consumers must be told that
      * worker ordering could not be preserved. META callers see the overrun
      * bit and validate timestamps; sample-only sync reads fail closed. */
-    note_rx_overrun(b, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+    note_rx_overrun(s, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
                        BLADERF_RF_STREAM_STATUS_SYNC_RX_REORDER);
     return false;
 }
@@ -239,7 +251,7 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
     }
 
     seq = b->buffer_seq[idx];
-    retire_dropped_sequence(b, seq);
+    retire_dropped_sequence(s, seq);
     if (b->buffer_dropped != NULL) {
         b->buffer_dropped[idx] = true;
     }
@@ -263,7 +275,7 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
     } else {
         /* No ring slot is available. Keep this transport buffer in flight,
          * but retire its invalid sequence and make overrun recovery visible. */
-        note_rx_overrun(b, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+        note_rx_overrun(s, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
                            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL);
         b->status[idx] = SYNC_BUFFER_IN_FLIGHT;
         b->buffer_seq[idx] = b->next_seq++;
@@ -392,12 +404,12 @@ static void *rx_callback(struct bladerf *dev,
                 /* This completed transfer is withheld. Retire its sequence
                  * and recycle the same transport buffer; stale FULL slots
                  * are removed by the RX_NOW consumer before admission resumes. */
-                retire_dropped_sequence(b, b->buffer_seq[samples_idx]);
+                retire_dropped_sequence(s, b->buffer_seq[samples_idx]);
                 if (b->buffer_dropped != NULL) {
                     b->buffer_dropped[samples_idx] = true;
                 }
                 b->buffer_seq[samples_idx] = b->next_seq++;
-                note_rx_overrun(b,
+                note_rx_overrun(s,
                     BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
                     BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL);
                 next_buf = samples;

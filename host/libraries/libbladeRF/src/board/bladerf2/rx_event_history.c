@@ -326,3 +326,36 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
                   BLADERF_RF_STREAM_STATUS_ASYNC_USB;
     bladerf2_rf_event_append(board_data, &event);
 }
+
+void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
+                                      uint32_t source_flags)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL || source_flags == 0) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    /* Called from the sync RX worker while its ring lock may be held. Never
+     * acquire dev->lock here: configuration setters can own it while waiting
+     * for USB progress. Snapshot only the lock-protected epoch identity. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = board_data->rf_transition_epoch_certified
+        ? board_data->rf_transition_certified_epoch_id
+        : board_data->rf_transition_epoch_id;
+    event.fpga_state = board_data->rf_transition_epoch_certified
+        ? BLADERF_RF_STATE_RX_DATA_VALID
+        : BLADERF_RF_STATE_RX_DATA_INVALID;
+    if (board_data->rf_transition_epoch_contract_enabled) {
+        board_data->rx_async_data_withheld_active = true;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags;
+    event.error_code = 0;
+    bladerf2_rf_event_append(board_data, &event);
+}

@@ -94,6 +94,9 @@ struct buffer_mgmt {
      * is otherwise invisible to the caller. */
     bool overrun_pending;
     uint32_t overrun_source_flags;
+    /* The sync worker publishes the first overrun in an interval directly to
+     * the device event history; sync_rx clears this latch with the status. */
+    bool overrun_event_published;
 
     /* Async epoch gating can wake the sync worker without a sample buffer.
      * The next sync_rx() must fail closed instead of treating that callback

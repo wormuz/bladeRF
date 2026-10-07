@@ -325,6 +325,10 @@ struct board_fns {
     /* Async USB callbacks cannot acquire dev->lock: RF setters may hold it
      * while awaiting USB progress. Boards may provide a lock-safe writer. */
     void (*rx_async_stream_overrun)(struct bladerf *dev);
+    /* Sync RX worker callbacks also cannot acquire dev->lock. Publish a
+     * coalesced worker queue/reorder fault immediately with its source bits. */
+    void (*rx_worker_stream_overrun)(struct bladerf *dev,
+                                     uint32_t source_flags);
     /* Report RX IQ deliberately withheld by either the asynchronous transfer
      * validator or the synchronous META epoch parser. */
     void (*rx_data_withheld)(struct bladerf *dev, uint32_t reason);

@@ -300,6 +300,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags);
+/* Lock-safe publication for the sync worker callback context. */
+void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
+                                       uint32_t source_flags);
 void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
                            uint64_t loss_count);
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev);

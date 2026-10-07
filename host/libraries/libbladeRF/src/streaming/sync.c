@@ -351,6 +351,7 @@ int sync_init(struct bladerf_sync *sync,
             sync->meta.have_timestamp = false;
             sync->buf_mgmt.overrun_pending = false;
             sync->buf_mgmt.overrun_source_flags = 0;
+            sync->buf_mgmt.overrun_event_published = false;
             sync->buf_mgmt.rx_data_withheld_pending = false;
             sync->buf_mgmt.stale_pending = false;
 
@@ -794,6 +795,12 @@ static void sync_rx_note_withheld(uint32_t reason, uint64_t timestamp,
     }
 }
 
+static bool sync_rx_overrun_was_published(uint32_t source_flags)
+{
+    return (source_flags & BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) != 0 &&
+           (source_flags & ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) == 0;
+}
+
 int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             struct bladerf_metadata *user_meta, unsigned int timeout_ms)
 {
@@ -867,11 +874,10 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                 overrun_source_flags |= s->buf_mgmt.overrun_source_flags;
                 s->buf_mgmt.overrun_source_flags = 0;
                 notify_overrun = true;
-                overrun_already_published =
-                    (overrun_source_flags &
-                     BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) != 0 &&
-                    (overrun_source_flags &
-                     ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) == 0;
+                overrun_already_published |=
+                    s->buf_mgmt.overrun_event_published ||
+                    sync_rx_overrun_was_published(overrun_source_flags);
+                s->buf_mgmt.overrun_event_published = false;
             }
             MUTEX_UNLOCK(&s->buf_mgmt.lock);
         }
@@ -1620,20 +1626,18 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 out:
     /* The worker can detect a USB overrun in every sync format. Metadata
      * callers also receive the status bit above; the RF event must not depend
-     * on that optional format, otherwise ordinary SC16_Q11 streams silently
-     * lose the only invalidation notification. Defer the board callback until
-     * after sync->lock is released because it takes dev->lock. */
+     * on that optional format. The worker publishes queue overruns immediately
+     * through its lock-safe hook; parser and FPGA-loss events use this path. */
     MUTEX_LOCK(&s->buf_mgmt.lock);
     if (s->buf_mgmt.overrun_pending) {
         s->buf_mgmt.overrun_pending = false;
         overrun_source_flags |= s->buf_mgmt.overrun_source_flags;
         s->buf_mgmt.overrun_source_flags = 0;
         notify_overrun = true;
-        overrun_already_published =
-            (overrun_source_flags &
-             BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) != 0 &&
-            (overrun_source_flags &
-             ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS) == 0;
+        overrun_already_published |=
+            s->buf_mgmt.overrun_event_published ||
+            sync_rx_overrun_was_published(overrun_source_flags);
+        s->buf_mgmt.overrun_event_published = false;
         if (user_meta != NULL &&
             (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
              s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||

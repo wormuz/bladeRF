@@ -21,34 +21,6 @@
 #define SAMPLES_PER_BUFFER (2048u * MSGS_PER_BUFFER)
 #define BYTES_PER_BUFFER (MSG_BYTES * MSGS_PER_BUFFER)
 
-/* sync_rx() never calls these when the fixture begins with ready buffers.
- * Definitions are still needed because the production parser has other state
- * branches in the same function. */
-sync_worker_state sync_worker_get_state(struct sync_worker *worker, int *err)
-{
-    (void)worker;
-    if (err != NULL) {
-        *err = 0;
-    }
-    return SYNC_WORKER_STATE_RUNNING;
-}
-
-void sync_worker_submit_request(struct sync_worker *worker, unsigned int req)
-{
-    (void)worker;
-    (void)req;
-}
-
-int sync_worker_wait_for_state(struct sync_worker *worker,
-                               sync_worker_state state,
-                               unsigned int timeout_ms)
-{
-    (void)worker;
-    (void)state;
-    (void)timeout_ms;
-    return 0;
-}
-
 static void write_msg(uint8_t *msg, uint64_t timestamp, uint8_t epoch_id,
                       int16_t marker)
 {
@@ -75,6 +47,8 @@ struct fixture {
 
 static unsigned int rx_overrun_events;
 static uint32_t last_rx_overrun_source_flags;
+static unsigned int rx_worker_overrun_events;
+static uint32_t last_rx_worker_overrun_source_flags;
 static unsigned int async_withheld_events;
 static uint32_t async_withheld_reason;
 static unsigned int sync_withheld_events;
@@ -153,6 +127,13 @@ static void note_async_overrun(struct bladerf *dev)
     async_fault_overrun_order = ++async_fault_order;
 }
 
+static void note_worker_overrun(struct bladerf *dev, uint32_t source_flags)
+{
+    assert(dev != NULL);
+    rx_worker_overrun_events++;
+    last_rx_worker_overrun_source_flags = source_flags;
+}
+
 static unsigned int async_rx_callbacks;
 static unsigned int async_rx_event_wakeups;
 static bool allow_async_rx_buffer = true;
@@ -200,6 +181,7 @@ static const struct board_fns test_board = {
     .rx_stream_overrun = note_rx_overrun,
     .rx_sync_data_valid = note_sync_host_data,
     .rx_async_stream_overrun = note_async_overrun,
+    .rx_worker_stream_overrun = note_worker_overrun,
     .rx_data_withheld = note_sync_withheld,
     .rx_data_withheld_at = note_sync_withheld_at,
     .rx_async_buffer_valid = validate_async_rx_buffer,
@@ -221,6 +203,8 @@ static void fixture_init(struct fixture *f)
     sync_overrun_order = 0;
     sync_withheld_order = 0;
     sync_withheld_events = 0;
+    rx_worker_overrun_events = 0;
+    last_rx_worker_overrun_source_flags = 0;
     sync_withheld_reason = 0;
     memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
     memset(sync_withheld_timestamp_valid, 0,
@@ -339,6 +323,49 @@ static void test_unsupported_format_event(void)
            BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert(board_data->rf_transition_events[4].flags ==
            BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+
+    MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+    MUTEX_DESTROY(&dev.lock);
+    free(board_data);
+}
+
+static void test_worker_overrun_event_history_is_lock_safe(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data *board_data =
+        calloc(1, sizeof(*board_data));
+    assert(board_data != NULL);
+    dev.board_data = board_data;
+    assert(MUTEX_INIT(&dev.lock) == 0);
+    assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+    board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_epoch_certified = true;
+    board_data->rf_transition_certified_epoch_id = 9;
+    board_data->rf_transition_epoch_id = 10;
+
+    /* A setter may hold dev->lock while the sync worker reports ring loss.
+     * The event writer must append without taking that lock. */
+    MUTEX_LOCK(&dev.lock);
+    bladerf2_rx_worker_stream_overrun(
+        &dev, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+                  BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL);
+    MUTEX_UNLOCK(&dev.lock);
+
+    assert(board_data->rf_transition_event_count == 1);
+    uint32_t latest = (board_data->rf_transition_event_head +
+                       BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+                      BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *event =
+        &board_data->rf_transition_events[latest];
+    assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
+    assert(event->epoch_id == 9);
+    assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_VALID);
+    assert(event->flags == (BLADERF_RF_STREAM_STATUS_OVERRUN |
+                            BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+                            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
+    assert(board_data->rx_async_data_withheld_active);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
@@ -517,6 +544,36 @@ static void test_async_timestamp_continuity(void)
     free(buffer);
 }
 
+static void test_sync_worker_overrun_published_before_sync_read(void)
+{
+    struct fixture f;
+    uint32_t buffer_seq[2] = {0, 1};
+    bool buffer_dropped[2] = {false, false};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.buffer_seq = buffer_seq;
+    f.sync.buf_mgmt.buffer_dropped = buffer_dropped;
+    f.sync.buf_mgmt.expected_seq = 0;
+    f.sync.buf_mgmt.next_seq = 2;
+    f.sync.buf_mgmt.prod_i = 1;
+    f.states[0] = SYNC_BUFFER_IN_FLIGHT;
+    f.states[1] = SYNC_BUFFER_FULL;
+
+    /* Reusing the rejected completion has no free ring slot. The worker must
+     * publish an event now; waiting for a later sync_rx() could hide a fault
+     * from an independent wrapper event poller indefinitely. */
+    assert(sync_worker_rx_buffer_rejected(&f.sync, f.buffers[0]) ==
+           f.buffers[0]);
+    assert(rx_worker_overrun_events == 1);
+    assert(last_rx_worker_overrun_source_flags ==
+           (BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
+            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
+    assert(f.sync.buf_mgmt.overrun_pending);
+    assert(f.sync.buf_mgmt.overrun_event_published);
+
+    fixture_destroy(&f);
+}
+
 int main(void)
 {
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
@@ -533,6 +590,8 @@ int main(void)
     struct bladerf_metadata meta;
 
     test_unsupported_format_event();
+    test_worker_overrun_event_history_is_lock_safe();
+    test_sync_worker_overrun_published_before_sync_read();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
     test_async_timestamp_continuity();
