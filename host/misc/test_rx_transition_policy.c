@@ -10,6 +10,12 @@ int main(void)
     struct bladerf_rf_event events[4] = {0};
     struct bladerf_rf_event final_event = {0};
 
+    /* A status read which returns at or after the deadline is not a timely
+     * completion, even if its sampled hardware bit is already asserted. */
+    assert(!bladerf2_rf_transition_deadline_expired(99, 100));
+    assert(bladerf2_rf_transition_deadline_expired(100, 100));
+    assert(bladerf2_rf_transition_deadline_expired(101, 100));
+
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));
     assert(!bladerf2_rf_event_is_transition_terminal(

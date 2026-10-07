@@ -5017,6 +5017,8 @@ int CALL_CONV bladerf_rx_transition_begin_quick_tune(
  *
  * A ::BLADERF_ERR_TIMEOUT return means the required state was not
  * confirmed within timeout_ms -- this is a failure-detection signal only.
+ * Hardware status reads that finish at or after the deadline do not satisfy
+ * the wait, even if the returned register value shows the requested state.
  * It must never be interpreted as "probably valid"; the caller must treat
  * any samples associated with this transaction as invalid.
  * Only one waiter may consume a transaction at a time; a concurrent wait

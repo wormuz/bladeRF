@@ -48,8 +48,14 @@ static int transition(struct bladerf *dev,
         return status;
     }
 
-    if (inject_stall && setenv("BLADERF_TEST_RX_TRANSITION_STALL", stage, 1) != 0) {
-        return BLADERF_ERR_UNEXPECTED;
+    if (inject_stall) {
+        const bool late_observation = strncmp(stage, "LATE_", 5) == 0;
+        const char *variable = late_observation
+            ? "BLADERF_TEST_RX_TRANSITION_LATE_OBSERVATION"
+            : "BLADERF_TEST_RX_TRANSITION_STALL";
+        if (setenv(variable, stage, 1) != 0) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
     }
     const uint64_t started_ns = monotonic_ns();
     status = bladerf_rx_transition_wait(dev, transaction_id, event,
@@ -57,6 +63,7 @@ static int transition(struct bladerf *dev,
     const uint64_t elapsed_ns = monotonic_ns() - started_ns;
     if (inject_stall) {
         unsetenv("BLADERF_TEST_RX_TRANSITION_STALL");
+        unsetenv("BLADERF_TEST_RX_TRANSITION_LATE_OBSERVATION");
         if (status != BLADERF_ERR_TIMEOUT ||
             event->event_type != BLADERF_RF_EVT_ERROR ||
             event->error_code != BLADERF_ERR_TIMEOUT ||
@@ -202,7 +209,12 @@ static int assert_legacy_setter_blocked_during_transition(
 
 int main(int argc, char **argv)
 {
-    static const char *const stages[] = {"PLL", "ENSM", "BBPLL", "EPOCH"};
+    static const char *const stages[] = {
+        "PLL", "ENSM", "BBPLL", "EPOCH",
+        "LATE_PLL", "LATE_ENSM", "LATE_BBPLL", "LATE_COMPLETE",
+        "LATE_EPOCH", "LATE_TIMESTAMP", "LATE_LINK_STATUS",
+        "LATE_HOST_FENCE",
+    };
     struct rx_test_config config = {
         .layout = BLADERF_RX_X1,
         .transition_channel = BLADERF_CHANNEL_RX(1),

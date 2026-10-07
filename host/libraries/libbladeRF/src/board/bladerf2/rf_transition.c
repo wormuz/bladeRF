@@ -46,6 +46,21 @@ static bool _test_rx_transition_stall(const char *stage)
 #endif
 }
 
+static void _test_rx_transition_late_observation(const char *stage)
+{
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    const char *requested =
+        getenv("BLADERF_TEST_RX_TRANSITION_LATE_OBSERVATION");
+    if (requested != NULL && strcmp(requested, stage) == 0) {
+        /* Test-only: model a status transaction that starts before the
+         * caller's deadline but returns after it. */
+        usleep(150000);
+    }
+#else
+    (void)stage;
+#endif
+}
+
 #include "ad936x.h"
 #include "backend/usb/nios_access.h"
 #include "board/board.h"
@@ -107,6 +122,12 @@ static uint64_t _monotonic_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static bool _deadline_expired(uint64_t deadline_ns)
+{
+    return bladerf2_rf_transition_deadline_expired(
+        _monotonic_ns(), deadline_ns);
 }
 
 static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
@@ -1583,6 +1604,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
             }
+            _test_rx_transition_late_observation("LATE_PLL");
+            /* The RFIC register transaction can itself block on SPI/USB.
+             * Its observation is not timely merely because polling began
+             * before the deadline. */
+            if (_deadline_expired(deadline_ns)) {
+                break;
+            }
             if (_test_rx_transition_stall("PLL")) {
                 pll_reg &= (uint8_t)~VCO_LOCK_BIT;
             }
@@ -1614,6 +1642,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
+            }
+            _test_rx_transition_late_observation("LATE_ENSM");
+            if (_deadline_expired(deadline_ns)) {
+                break;
             }
             if (_test_rx_transition_stall("ENSM")) {
                 ensm_reg &= (uint8_t)~ENSM_STATE_MASK;
@@ -1656,6 +1688,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                             BLADERF_RF_STATE_ERROR, 0, 0,
                             bbpll_status, status, expected_epoch_id);
                 return _fail_transition(dev, board_data, status, final_event);
+            }
+            _test_rx_transition_late_observation("LATE_BBPLL");
+            if (_deadline_expired(deadline_ns)) {
+                break;
             }
             if (_test_rx_transition_stall("BBPLL")) {
                 bbpll_status &= (uint8_t)~BBPLL_LOCK_BIT;
@@ -1724,6 +1760,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                        0, 0, 0, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
         }
+        _test_rx_transition_late_observation("LATE_COMPLETE");
+        if (_deadline_expired(deadline_ns)) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, 0,
+                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
+        }
 
         while (_monotonic_ns() < deadline_ns) {
             const uint64_t read_begin_ns = _monotonic_ns();
@@ -1762,6 +1806,12 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
+            }
+            _test_rx_transition_late_observation("LATE_EPOCH");
+            /* A slow NIOS status query may finish after the deadline. Never
+             * accept ACTIVE_NEW based on that late snapshot. */
+            if (_deadline_expired(deadline_ns)) {
+                break;
             }
 
             uint8_t epoch_state = (uint8_t)((epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT)
@@ -1845,6 +1895,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                         epoch_status_word, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
         }
+        _test_rx_transition_late_observation("LATE_TIMESTAMP");
+        if (_deadline_expired(deadline_ns)) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, epoch_status_word,
+                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
+        }
 
         /* The fabric maintains a sticky, direction-specific RX fault
          * aggregate for watchdog, GPIF, protocol, speed, and FIFO-abort
@@ -1859,6 +1917,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                         BLADERF_RF_STATE_ERROR, 0, 0,
                         epoch_status_word, status, expected_epoch_id);
             return _fail_transition(dev, board_data, status, final_event);
+        }
+        _test_rx_transition_late_observation("LATE_LINK_STATUS");
+        if (_deadline_expired(deadline_ns)) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, rf_link_status,
+                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
         }
         rf_link_status = _rx_link_status_for_transition_test(rf_link_status);
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
@@ -1891,6 +1957,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                         epoch_status_word, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
         }
+        _test_rx_transition_late_observation("LATE_HOST_FENCE");
+        if (_deadline_expired(deadline_ns)) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, epoch_status_word,
+                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
+        }
 
         _emit_event_with_timestamp(
                    dev, board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
@@ -1911,6 +1985,13 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     } else {
         /* This caller requested control-plane completion only. There was no
          * FPGA sample-boundary proof, so keep the state explicitly invalid. */
+        if (_deadline_expired(deadline_ns)) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, 0,
+                        BLADERF_ERR_TIMEOUT, expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
+        }
         _emit_event(dev, board_data,
                     BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED,
                     BLADERF_RF_STATE_RX_DATA_INVALID, 0, 0, 0, 0, 0);

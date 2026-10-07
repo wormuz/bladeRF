@@ -886,8 +886,10 @@ def check_rx_epoch_host_timestamp_fence():
         sync.read_text(errors="replace"), flags=re.S)
     function_start = transition_text.find(
         "static int _bladerf_rx_transition_begin(")
-    begin = transition_text.find("sync_rx_epoch_require_metadata(",
-                                 function_start)
+    # The epoch metadata preflight is now performed from the initialized
+    # sync stream description in _bladerf_rx_transition_begin(). The durable
+    # host fence starts with invalidating queued/previous sync data.
+    begin = transition_text.find("sync_rx_epoch_invalidate(", function_start)
     fence_ack = transition_text.find("_wait_rx_epoch_fenced(",
                                      function_start)
     retune_host = transition_text.find("bladerf_set_frequency_locked(",

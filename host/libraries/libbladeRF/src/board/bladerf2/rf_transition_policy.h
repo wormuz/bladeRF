@@ -8,6 +8,15 @@
 
 #include <libbladeRF.h>
 
+/* A hardware observation is timely only if it completed strictly before the
+ * caller's deadline. Checking only before a blocking SPI/NIOS read can accept
+ * a late completion and turn an expired wait into success. */
+static inline bool bladerf2_rf_transition_deadline_expired(
+    uint64_t now_ns, uint64_t deadline_ns)
+{
+    return now_ns >= deadline_ns;
+}
+
 static inline bool bladerf2_rf_transition_normalize_requirements(
     uint32_t requested, bool require_rx_data_valid, uint32_t *effective)
 {
