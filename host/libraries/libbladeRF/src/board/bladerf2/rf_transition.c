@@ -408,7 +408,7 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     struct bladerf_rf_event event = {0};
     bool invalidate = false;
     bool epoch_contract_enabled = false;
-    int sync_status;
+    int sync_status = 0;
     int abort_status = 0;
 
     WITH_MUTEX(&dev->lock, {
@@ -437,8 +437,6 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     }
 
     bladerf2_rx_data_withheld_reset(dev);
-    sync_status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
-
     event.host_monotonic_ns = _monotonic_ns();
     event.epoch_id = observed_epoch_id;
     event.requested_rx_lo_hz =
@@ -448,7 +446,7 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
     event.flags = reason;
     event.rfic_status = rf_link_status;
-    event.error_code = monitor_error != 0 ? monitor_error : sync_status;
+    event.error_code = monitor_error;
     bladerf2_rf_event_append(board_data, &event);
 
     if (epoch_contract_enabled) {
@@ -462,11 +460,25 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
         bladerf2_rf_event_append(board_data, &event);
     }
 
+    /* Publish and close the FPGA gate before touching sync state. A reader
+     * may hold sync->lock while waiting for a buffer; waiting for that lock
+     * here would otherwise delay the first durable invalidation event until
+     * the stream timeout. */
+    sync_status = sync_rx_epoch_invalidate(&board_data->sync[BLADERF_RX]);
+    if (sync_status != 0) {
+        event.host_monotonic_ns = _monotonic_ns();
+        event.event_type = BLADERF_RF_EVT_ERROR;
+        event.fpga_state = BLADERF_RF_STATE_ERROR;
+        event.error_code = sync_status;
+        bladerf2_rf_event_append(board_data, &event);
+    }
+
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN;
-    event.error_code = sync_status != 0 ? sync_status : BLADERF_ERR_UNEXPECTED;
+    event.error_code = sync_status != 0 ? sync_status :
+        (monitor_error != 0 ? monitor_error : BLADERF_ERR_UNEXPECTED);
     bladerf2_rf_event_append(board_data, &event);
 
     WITH_MUTEX(&dev->lock, {
