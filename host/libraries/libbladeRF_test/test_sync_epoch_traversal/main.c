@@ -465,6 +465,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     board_data.rf_transition_epoch_contract_enabled = true;
     board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_rx_x2_host_data_required = true;
+    board_data.rf_transition_rx_x2_host_data_transaction_id = 123;
     board_data.rf_transition_certified_epoch_id = 5;
     board_data.rf_transition_first_valid_timestamp = 1000;
     board_data.rf_transition_certified_epoch_event.transaction_id = 77;
@@ -508,8 +510,21 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(board_data.rf_transition_first_host_data_event.flags &
            BLADERF_RF_EVENT_F_RX_X2_LAYOUT);
 
-    board_data.rx_async_data_withheld_active = true;
+    /* When the request explicitly requires paired host data, an X1 packet
+     * cannot satisfy or wake the transition waiter. */
     metadata.timestamp = 1002;
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
+                                               BLADERF_RX_X1);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    assert(board_data.rf_transition_first_host_data_reported);
+    assert(board_data.rf_transition_event_sequence == capacity + 1);
+    assert(board_data.rf_transition_first_host_data_event.fpga_timestamp ==
+           1001);
+
+    board_data.rf_transition_rx_x2_host_data_required = false;
+    board_data.rx_async_data_withheld_active = true;
+    metadata.timestamp = 1003;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
                                                BLADERF_RX_X1);
@@ -560,6 +575,37 @@ static void test_async_timestamp_continuity(void)
                MSG_SAMPLES / 2, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
     assert(next_timestamp == 9000 + MSG_SAMPLES);
     free(buffer);
+}
+
+static void test_rx_x2_layout_rejection_event(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+    board_data.rf_transition_rx_x2_host_data_required = true;
+    board_data.rf_transition_rx_x2_host_data_transaction_id = 123;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_certified_epoch_id = 9;
+    board_data.rf_transition_certified_epoch_event.transaction_id = 123;
+
+    bladerf2_rx_layout_unsupported(&dev, BLADERF_RX_X1, true);
+    assert(board_data.rf_transition_event_count == 1);
+    const uint32_t latest = (board_data.rf_transition_event_head +
+        BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *event =
+        &board_data.rf_transition_events[latest];
+    assert(event->event_type == BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED);
+    assert(event->transaction_id == 123);
+    assert(event->epoch_id == 9);
+    assert(event->flags == BLADERF_RX_X1);
+    assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
 static void test_sync_worker_overrun_published_before_sync_read(void)
@@ -879,6 +925,7 @@ int main(void)
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
+    test_rx_x2_layout_rejection_event();
     test_async_timestamp_continuity();
 
 

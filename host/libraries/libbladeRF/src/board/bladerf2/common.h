@@ -181,6 +181,8 @@ struct bladerf2_board_data {
      * epoch tag. Guarded by dev->lock. Epoch-required transitions must not
      * retune underneath one of these legacy consumers. */
     unsigned int rx_async_epochless_stream_count;
+    /* Number of active RX_X1 async streams; guarded by dev->lock. */
+    unsigned int rx_async_x1_stream_count;
 
     /* VCTCXO trim state */
     enum bladerf2_vctcxo_trim_source trim_source;
@@ -256,6 +258,8 @@ struct bladerf2_board_data {
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
     bool rf_transition_first_host_data_required;
+    bool rf_transition_rx_x2_host_data_required;
+    uint32_t rf_transition_rx_x2_host_data_transaction_id;
     uint64_t rf_transition_first_host_data_deadline_ns;
     bool rf_transition_epoch_certified;
 #ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
@@ -323,6 +327,9 @@ void bladerf2_rf_event_append_locked(
 void bladerf2_rx_format_unsupported(struct bladerf *dev,
                                     bladerf_format format,
                                     bool deduplicate);
+void bladerf2_rx_layout_unsupported(struct bladerf *dev,
+                                    bladerf_channel_layout layout,
+                                    bool active_requirement_context);
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason);
 void bladerf2_rx_data_withheld_at(struct bladerf *dev, uint32_t reason,
                                   uint8_t epoch_id,

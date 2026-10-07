@@ -4805,7 +4805,9 @@ typedef enum {
      * the preceding gap or certify analog signal quality. */
     BLADERF_RF_EVT_RX_DATA_RESUMED,
     /** AD9361 baseband PLL lock was read from REG_CH_1_OVERFLOW[7]. */
-    BLADERF_RF_EVT_RX_BBPLL_LOCKED
+    BLADERF_RF_EVT_RX_BBPLL_LOCKED,
+    /** RX stream layout does not satisfy the active transition request. */
+    BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
@@ -4908,7 +4910,12 @@ typedef enum {
  * BLADERF_RF_REQUIRE_FIRST_HOST_DATA also requires EPOCH_VALID and waits for
  * the first epoch/timestamp-validated host META buffer. If it does not arrive
  * before the wait deadline, the call returns timeout and late first data is
- * withheld; timeout never establishes IQ validity. */
+ * withheld; timeout never establishes IQ validity. RX_X2_HOST_DATA implies
+ * FIRST_HOST_DATA and waits specifically for a validated paired RX_X2 buffer;
+ * RX_X1 stream configuration/start is rejected while that request is active.
+ * For synchronous RX, an application sync_rx consumer must run concurrently
+ * with rx_transition_wait so the first valid buffer can be produced; wait
+ * does not consume or discard application IQ. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
 /** Requires a sample-backed FPGA RX epoch (stronger than software arm). */
@@ -4918,6 +4925,10 @@ typedef enum {
 #define BLADERF_RF_REQUIRE_BBPLL_LOCKED  (1U << 4)
 /** Also wait for the first epoch/timestamp-validated host RX META buffer. */
 #define BLADERF_RF_REQUIRE_FIRST_HOST_DATA (1U << 5)
+/** Require first validated host data from a paired RX_X2 stream; implies
+ * BLADERF_RF_REQUIRE_FIRST_HOST_DATA and EPOCH_VALID. RX_X1 streams are
+ * rejected while this requirement is active. */
+#define BLADERF_RF_REQUIRE_RX_X2_HOST_DATA (1U << 6)
 
 /**
  * Immutable RF transaction event (ADR-0207 §4).

@@ -1793,6 +1793,12 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
          * a buffer validated against a stale snapshot cannot be admitted or
          * move the timestamp cursor past the invalidation. This lock is the
          * linearization point between async admission and epoch invalidation. */
+        if (!bladerf2_rx_layout_satisfies_transition(
+                board_data->rf_transition_rx_x2_host_data_required, layout)) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_rx_layout_unsupported(dev, layout, true);
+            return false;
+        }
         struct timespec now_ts;
         uint64_t now_ns = 0;
         if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
@@ -2728,6 +2734,8 @@ static int bladerf2_stream(struct bladerf_stream *stream,
     bladerf_direction dir = layout & BLADERF_DIRECTION_MASK;
     struct bladerf2_board_data *board_data = stream->dev->board_data;
     bool epoch_contract_enabled = false;
+    bool rx_x2_layout_required = false;
+    bool rx_layout_unsupported = false;
     bool epochless_rx_format =
         dir == BLADERF_RX &&
         !metadata_rx_format_has_epoch_tag(stream->format);
@@ -2751,10 +2759,17 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             epoch_contract_enabled =
                 board_data->rf_transition_epoch_contract_enabled;
+            rx_x2_layout_required =
+                board_data->rf_transition_rx_x2_host_data_required;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         }
 
-        if (epoch_contract_enabled && epochless_rx_format) {
+        if (dir == BLADERF_RX &&
+            !bladerf2_rx_layout_satisfies_transition(
+                rx_x2_layout_required, layout)) {
+            rv = BLADERF_ERR_UNSUPPORTED;
+            rx_layout_unsupported = true;
+        } else if (epoch_contract_enabled && epochless_rx_format) {
             rv = BLADERF_ERR_UNSUPPORTED;
         } else {
             rv = 0;
@@ -2765,9 +2780,16 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             if (epochless_rx_format) {
                 board_data->rx_async_epochless_stream_count++;
             }
+            if (dir == BLADERF_RX && layout == BLADERF_RX_X1) {
+                board_data->rx_async_x1_stream_count++;
+            }
         }
     });
 
+    if (rx_layout_unsupported) {
+        bladerf2_rx_layout_unsupported(stream->dev, layout, true);
+        return rv;
+    }
     if (rv == BLADERF_ERR_UNSUPPORTED) {
         bladerf2_rx_format_unsupported(stream->dev, stream->format, false);
         return rv;
@@ -2780,6 +2802,10 @@ static int bladerf2_stream(struct bladerf_stream *stream,
         if (epochless_rx_format &&
             board_data->rx_async_epochless_stream_count > 0) {
             board_data->rx_async_epochless_stream_count--;
+        }
+        if (dir == BLADERF_RX && layout == BLADERF_RX_X1 &&
+            board_data->rx_async_x1_stream_count > 0) {
+            board_data->rx_async_x1_stream_count--;
         }
         if (deconfig_status < 0) {
             rv = deconfig_status;
@@ -2847,6 +2873,7 @@ static int bladerf2_sync_config(struct bladerf *dev,
 
     bladerf_direction dir = layout & BLADERF_DIRECTION_MASK;
     bool preserve_rx_epoch_contract = false;
+    bool require_rx_x2_host_data = false;
     int status;
 
     if (dir == BLADERF_RX) {
@@ -2854,6 +2881,8 @@ static int bladerf2_sync_config(struct bladerf *dev,
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         epoch_contract_enabled =
             board_data->rf_transition_epoch_contract_enabled;
+        require_rx_x2_host_data =
+            board_data->rf_transition_rx_x2_host_data_required;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
         /* The contract can be enabled by transition_begin() before a sync
@@ -2861,6 +2890,13 @@ static int bladerf2_sync_config(struct bladerf *dev,
          * raw formats cannot bypass the metadata fence in that call order. */
         preserve_rx_epoch_contract = epoch_contract_enabled ||
             sync_rx_epoch_filter_enabled(&board_data->sync[BLADERF_RX]);
+    }
+
+    if (dir == BLADERF_RX &&
+        !bladerf2_rx_layout_satisfies_transition(
+            require_rx_x2_host_data, layout)) {
+        bladerf2_rx_layout_unsupported(dev, layout, true);
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     /* Replacing a certified META stream discards the parser's epoch filter.

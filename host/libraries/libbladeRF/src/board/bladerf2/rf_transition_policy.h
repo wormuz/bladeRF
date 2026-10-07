@@ -25,7 +25,8 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
                               BLADERF_RF_REQUIRE_DATAPATH_ARMED |
                               BLADERF_RF_REQUIRE_EPOCH_VALID |
                               BLADERF_RF_REQUIRE_BBPLL_LOCKED |
-                              BLADERF_RF_REQUIRE_FIRST_HOST_DATA;
+                              BLADERF_RF_REQUIRE_FIRST_HOST_DATA |
+                              BLADERF_RF_REQUIRE_RX_X2_HOST_DATA;
 
     if (effective == NULL || (requested & ~supported) != 0) {
         return false;
@@ -34,12 +35,17 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     *effective = requested;
     if (require_rx_data_valid ||
         (requested & BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0 ||
+        (requested & BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0 ||
         (requested & BLADERF_RF_REQUIRE_DATAPATH_ARMED) != 0) {
         *effective |= BLADERF_RF_REQUIRE_EPOCH_VALID;
     }
 
     if (*effective == 0) {
         return false;
+    }
+
+    if (*effective & BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) {
+        *effective |= BLADERF_RF_REQUIRE_FIRST_HOST_DATA;
     }
 
     if ((*effective & BLADERF_RF_REQUIRE_EPOCH_VALID) != 0) {
@@ -153,6 +159,20 @@ static inline bool bladerf2_rx_first_host_data_before_deadline(
     uint64_t event_ns, uint64_t deadline_ns)
 {
     return event_ns != 0 && deadline_ns != 0 && event_ns < deadline_ns;
+}
+
+static inline bool bladerf2_rx_layout_satisfies_transition(
+    bool require_rx_x2, bladerf_channel_layout layout)
+{
+    return !require_rx_x2 || layout == BLADERF_RX_X2;
+}
+
+static inline bool bladerf2_rx_x1_consumer_blocks_x2_transition(
+    bool require_rx_x2, unsigned int active_async_rx_x1,
+    bool sync_rx_x1_configured)
+{
+    return require_rx_x2 &&
+           (active_async_rx_x1 != 0 || sync_rx_x1_configured);
 }
 
 #endif

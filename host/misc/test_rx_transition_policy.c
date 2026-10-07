@@ -71,6 +71,15 @@ int main(void)
                          BLADERF_RF_REQUIRE_ENSM_RX |
                          BLADERF_RF_REQUIRE_BBPLL_LOCKED));
 
+    assert(bladerf2_rf_transition_normalize_requirements(
+        BLADERF_RF_REQUIRE_RX_X2_HOST_DATA, false, &effective));
+    assert(effective == (BLADERF_RF_REQUIRE_RX_X2_HOST_DATA |
+                         BLADERF_RF_REQUIRE_FIRST_HOST_DATA |
+                         BLADERF_RF_REQUIRE_EPOCH_VALID |
+                         BLADERF_RF_REQUIRE_PLL_LOCKED |
+                         BLADERF_RF_REQUIRE_ENSM_RX |
+                         BLADERF_RF_REQUIRE_BBPLL_LOCKED));
+
     /* Never silently accept a requirement the implementation cannot honor. */
     assert(!bladerf2_rf_transition_normalize_requirements(
         1U << 31, false, &effective));
@@ -154,5 +163,13 @@ int main(void)
     assert(!bladerf2_rx_first_host_data_before_deadline(101, 100));
     assert(!bladerf2_rx_first_host_data_before_deadline(0, 100));
     assert(!bladerf2_rx_first_host_data_before_deadline(99, 0));
+    assert(bladerf2_rx_layout_satisfies_transition(false, BLADERF_RX_X1));
+    assert(bladerf2_rx_layout_satisfies_transition(false, BLADERF_RX_X2));
+    assert(!bladerf2_rx_layout_satisfies_transition(true, BLADERF_RX_X1));
+    assert(bladerf2_rx_layout_satisfies_transition(true, BLADERF_RX_X2));
+    assert(!bladerf2_rx_x1_consumer_blocks_x2_transition(false, 1, true));
+    assert(bladerf2_rx_x1_consumer_blocks_x2_transition(true, 1, false));
+    assert(bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, true));
+    assert(!bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, false));
     return 0;
 }

@@ -154,6 +154,38 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
+void bladerf2_rx_layout_unsupported(struct bladerf *dev,
+                                    bladerf_channel_layout layout,
+                                    bool active_requirement_context)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (active_requirement_context &&
+        board_data->rf_transition_rx_x2_host_data_required) {
+        event.transaction_id =
+            board_data->rf_transition_rx_x2_host_data_transaction_id;
+        if (board_data->rf_transition_epoch_certified &&
+            board_data->rf_transition_certified_epoch_event.transaction_id ==
+                event.transaction_id) {
+            event.epoch_id = board_data->rf_transition_certified_epoch_id;
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED;
+    event.flags = (uint32_t)layout;
+    event.error_code = BLADERF_ERR_UNSUPPORTED;
+    bladerf2_rf_event_append(board_data, &event);
+}
+
 static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
                               bool explicit_source,
                               bool explicit_timestamp_valid,
@@ -271,7 +303,9 @@ void bladerf2_rx_data_note_first_packet_locked(
     if (board_data == NULL || !metadata_rx_has_epoch_samples(metadata) ||
         (layout != BLADERF_RX_X1 && layout != BLADERF_RX_X2) ||
         !board_data->rf_transition_epoch_contract_enabled ||
-        !board_data->rf_transition_epoch_certified) {
+        !board_data->rf_transition_epoch_certified ||
+        (board_data->rf_transition_rx_x2_host_data_required &&
+         layout != BLADERF_RX_X2)) {
         return;
     }
 

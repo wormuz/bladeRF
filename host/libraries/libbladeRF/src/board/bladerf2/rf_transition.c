@@ -1142,6 +1142,7 @@ static int _bladerf_rx_transition_begin(
     bool transition_busy = false;
     bool epochless_async_stream_active = false;
     bool sync_format_unsupported = false;
+    bool rx_x2_layout_unsupported = false;
     uint64_t stage_started_ns;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
@@ -1182,6 +1183,16 @@ static int _bladerf_rx_transition_begin(
              * boundary. Reject before allocating a transaction, enabling
              * the epoch contract, or touching the RFIC. */
             epochless_async_stream_active = true;
+        } else if (bladerf2_rx_x1_consumer_blocks_x2_transition(
+                       (required_events_mask &
+                        BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0,
+                       board_data->rx_async_x1_stream_count,
+                       board_data->sync[BLADERF_RX].initialized &&
+                       board_data->sync[BLADERF_RX].stream_config.layout ==
+                           BLADERF_RX_X1)) {
+            /* A paired-data requirement cannot be met by an active RX_X1
+             * consumer. Reject before mutating RF state. */
+            rx_x2_layout_unsupported = true;
         } else if ((required_events_mask &
                     BLADERF_RF_REQUIRE_EPOCH_VALID) &&
                    board_data->sync[BLADERF_RX].initialized &&
@@ -1212,8 +1223,14 @@ static int _bladerf_rx_transition_begin(
                 board_data->rf_transition_nios_timing[timing_slot].duration_valid = false;
             }
             board_data->rf_transition_required_events_mask = required_events_mask;
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rf_transition_rx_x2_host_data_required =
+                (required_events_mask &
+                 BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0;
+            board_data->rf_transition_rx_x2_host_data_transaction_id =
+                board_data->rf_transition_rx_x2_host_data_required
+                    ? board_data->rf_transition_current_id : 0;
             if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
-                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rf_transition_epoch_contract_enabled = true;
                 board_data->rf_transition_first_host_data_required =
                     (required_events_mask &
@@ -1222,8 +1239,8 @@ static int _bladerf_rx_transition_begin(
                 board_data->rf_transition_first_host_data_reported = false;
                 memset(&board_data->rf_transition_first_host_data_event, 0,
                        sizeof(board_data->rf_transition_first_host_data_event));
-                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             board_data->rf_transition_requested_frequency_hz =
                 request->target_frequency_hz;
             board_data->rf_transition_readback_frequency_hz = 0;
@@ -1238,6 +1255,10 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_WOULD_BLOCK;
     }
     if (epochless_async_stream_active) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (rx_x2_layout_unsupported) {
+        bladerf2_rx_layout_unsupported(dev, BLADERF_RX_X1, false);
         return BLADERF_ERR_UNSUPPORTED;
     }
     if (sync_format_unsupported) {
