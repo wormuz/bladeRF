@@ -900,13 +900,16 @@ def check_rx_epoch_host_timestamp_fence():
     retune = min((pos for pos in (retune_host, retune_fastlock) if pos >= 0),
                  default=-1)
     fence = transition_text.find(
-        "sync_rx_epoch_set_min_timestamp_before_deadline(")
+        "sync_rx_epoch_stage_min_timestamp_before_deadline(")
     valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
-    if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or valid < 0 or
-            not (begin < fence_ack < retune and fence < valid)):
+    activate = transition_text.find(
+        "sync_rx_epoch_activate_before_deadline(")
+    if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or
+            valid < 0 or activate < 0 or
+            not (begin < fence_ack < retune and fence < valid < activate)):
         fail("rx-epoch-host-timestamp-fence",
-             "host does not acknowledge the FPGA fence before retune and filter queued metadata before epoch success",
-             "confirm matching PENDING state before LO change, then drop stale IQ before RX_EPOCH_VALID")
+             "host does not acknowledge the FPGA fence before retune or publish RX_EPOCH_VALID before sync-RX admission",
+             "confirm matching PENDING state before LO change; stage the timestamp boundary, publish RX_EPOCH_VALID, then activate sync RX")
     if ("state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING" not in transition_text or
             "epoch == expected_epoch" not in transition_text):
         fail("rx-epoch-host-timestamp-fence",

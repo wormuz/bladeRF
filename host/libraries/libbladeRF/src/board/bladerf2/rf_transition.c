@@ -1940,15 +1940,14 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                                     BLADERF_ERR_UNEXPECTED, final_event);
         }
 
-        /* FPGA timestamp is the authoritative first admitted sample. Install
-         * it as a lower bound before reporting transition success; sync_rx()
-         * drops stale timestamped messages already queued on USB/host. The
-         * deadline is checked again while holding sync->lock, before the
-         * invalid-data latch can be cleared, so a late mutex acquisition
-         * cannot briefly release IQ before returning timeout. */
+        /* Stage the exact FPGA boundary while keeping sync RX invalidated.
+         * Publish RX_EPOCH_VALID before committing host admission so a
+         * concurrent sync reader cannot return first-host-data ahead of the
+         * epoch completion event. The activation step checks the deadline
+         * while holding sync->lock; failure leaves IQ fenced. */
         _test_rx_transition_late_observation("LATE_HOST_FENCE");
         stage_begin_ns = _monotonic_ns();
-        status = sync_rx_epoch_set_min_timestamp_before_deadline(
+        status = sync_rx_epoch_stage_min_timestamp_before_deadline(
             &board_data->sync[BLADERF_RX],
             ((uint64_t)timestamp_hi << 32) | timestamp_lo,
             (uint8_t)((epoch_status_word >>
@@ -1969,6 +1968,16 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                    & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
                    0, ((uint64_t)timestamp_hi << 32) | timestamp_lo,
                    BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
+        _test_rx_transition_late_observation("LATE_HOST_ACTIVATE");
+        status = sync_rx_epoch_activate_before_deadline(
+            &board_data->sync[BLADERF_RX], deadline_ns);
+        fence_elapsed_ns = _monotonic_ns() - stage_begin_ns;
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        epoch_status_word, status, expected_epoch_id);
+            return _fail_transition(dev, board_data, status, final_event);
+        }
         log_debug("%s: epoch handoff transaction=%u complete_us=%.3f "
                   "status_reads=%u status_total_us=%.3f timestamp_lo_us=%.3f "
                   "timestamp_hi_us=%.3f sync_fence_us=%.3f\n",

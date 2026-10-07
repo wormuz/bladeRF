@@ -698,6 +698,18 @@ int sync_rx_epoch_set_min_timestamp_before_deadline(
     struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
     uint64_t deadline_ns)
 {
+    int status = sync_rx_epoch_stage_min_timestamp_before_deadline(
+        sync, min_timestamp, epoch_id, deadline_ns);
+    if (status == 0) {
+        status = sync_rx_epoch_activate_before_deadline(sync, deadline_ns);
+    }
+    return status;
+}
+
+int sync_rx_epoch_stage_min_timestamp_before_deadline(
+    struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
+    uint64_t deadline_ns)
+{
     int status = sync_rx_epoch_require_metadata(sync);
     if (status != 0 || sync == NULL) {
         return status;
@@ -721,12 +733,46 @@ int sync_rx_epoch_set_min_timestamp_before_deadline(
             sync->meta.rx_epoch_boundary_enabled = true;
             sync->meta.rx_epoch_expected_id = epoch_id;
             sync->meta.rx_epoch_id_filter_enabled = true;
-            sync->meta.rx_epoch_data_invalidated = false;
+            /* Do not release samples until RX_EPOCH_VALID is durable in the
+             * device event history. The commit function clears this latch. */
+            sync->meta.rx_epoch_data_invalidated = true;
             sync->buf_mgmt.rx_epoch_trace_remaining = 4;
         }
     }
     MUTEX_UNLOCK(&sync->lock);
 
+    return status;
+}
+
+int sync_rx_epoch_activate_before_deadline(struct bladerf_sync *sync,
+                                           uint64_t deadline_ns)
+{
+    int status = sync_rx_epoch_require_metadata(sync);
+    if (status != 0 || sync == NULL) {
+        return status;
+    }
+    if (!sync->initialized) {
+        /* Async RX admission is committed by the already-published
+         * RX_EPOCH_VALID event; there is no sync parser to unlock here. */
+        return 0;
+    }
+
+    MUTEX_LOCK(&sync->lock);
+    if (!sync->initialized ||
+        (sync->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        status = BLADERF_ERR_INVAL;
+    } else if (!sync->meta.rx_epoch_boundary_enabled ||
+               !sync->meta.rx_epoch_id_filter_enabled) {
+        status = BLADERF_ERR_UNEXPECTED;
+    } else {
+        /* If the event publication or lock acquisition crossed the wait
+         * deadline, keep the parser fenced and let the caller abort FPGA. */
+        status = sync_rx_epoch_check_deadline(deadline_ns);
+        if (status == 0) {
+            sync->meta.rx_epoch_data_invalidated = false;
+        }
+    }
+    MUTEX_UNLOCK(&sync->lock);
     return status;
 }
 

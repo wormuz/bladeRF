@@ -213,7 +213,7 @@ int main(int argc, char **argv)
         "PLL", "ENSM", "BBPLL", "EPOCH",
         "LATE_PLL", "LATE_ENSM", "LATE_BBPLL", "LATE_COMPLETE",
         "LATE_EPOCH", "LATE_TIMESTAMP", "LATE_LINK_STATUS",
-        "LATE_HOST_FENCE",
+        "LATE_HOST_FENCE", "LATE_HOST_ACTIVATE",
     };
     struct rx_test_config config = {
         .layout = BLADERF_RX_X1,

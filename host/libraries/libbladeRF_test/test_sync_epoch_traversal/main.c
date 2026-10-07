@@ -687,6 +687,16 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
     assert(metadata.actual_count == 0);
     assert(f.sync.meta.rx_epoch_data_invalidated);
 
+    /* Staging the FPGA boundary must not itself release samples. If event
+     * publication consumes the deadline, the later activation fails closed. */
+    assert(sync_rx_epoch_stage_min_timestamp_before_deadline(
+               &f.sync, 2000, 8, UINT64_MAX) == 0);
+    assert(f.sync.meta.rx_epoch_min_timestamp == 2000);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+    assert(sync_rx_epoch_activate_before_deadline(&f.sync, 0) ==
+           BLADERF_ERR_TIMEOUT);
+    assert(f.sync.meta.rx_epoch_data_invalidated);
+
     /* Also force the actual lock-wait race: the caller's deadline is live
      * when the thread starts, but expires while it is blocked on sync->lock.
      * The atomic deadline check must reject the update without admitting IQ. */

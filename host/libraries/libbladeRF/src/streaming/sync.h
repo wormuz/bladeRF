@@ -339,5 +339,10 @@ int sync_rx_epoch_set_min_timestamp(struct bladerf_sync *sync,
 int sync_rx_epoch_set_min_timestamp_before_deadline(
     struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
     uint64_t deadline_ns);
+int sync_rx_epoch_stage_min_timestamp_before_deadline(
+    struct bladerf_sync *sync, uint64_t min_timestamp, uint8_t epoch_id,
+    uint64_t deadline_ns);
+int sync_rx_epoch_activate_before_deadline(struct bladerf_sync *sync,
+                                           uint64_t deadline_ns);
 
 #endif

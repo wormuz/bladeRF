@@ -14,17 +14,19 @@ timestamp, link-status, or host-fence completion returns
 The public header documents that an observation at or after the deadline does
 not satisfy the wait. No sleep or sample discard establishes validity.
 
-The host timestamp fence receives the same absolute monotonic deadline. For
-sync RX, it checks the deadline while holding the parser mutex and leaves
-`rx_epoch_data_invalidated` set if the deadline expired while waiting for
-that lock. This prevents a late fence update from briefly releasing queued IQ
-before the transition returns timeout. Async-only RX performs the same
-deadline check before its epoch-valid notification.
+The host timestamp fence is now two-phase. libbladeRF stages the exact
+timestamp and epoch while leaving `rx_epoch_data_invalidated` set, publishes
+`RX_EPOCH_VALID`, then activates sync RX. Activation checks the same absolute
+deadline under the parser mutex; a timeout while waiting on that lock leaves
+IQ fenced. This also orders the first host-data lifecycle event after the
+durable epoch-valid event. Async-only RX has no sync parser; it checks the
+deadline before event publication, which commits async admission.
 
 The test-only transition fault build can delay a selected successful
 observation by 150 ms. The positive-timeout harness now covers ordinary
 missing-state stalls and late PLL, ENSM, BBPLL, COMPLETE, epoch, timestamp,
-link-status, and host-fence observations on RX1, RX2, and paired RX_X2. The
+link-status, host-fence, and post-event host-activation observations on RX1,
+RX2, and paired RX_X2. The
 deadline comparator also has exact-before/equal/after boundary assertions.
 
 Validation completed:
@@ -35,6 +37,8 @@ Validation completed:
 - sync epoch traversal and shared-clock invalidation tests passed;
 - sync traversal verifies that a past-deadline fence leaves the parser
   invalidated and withholds a matching epoch/timestamp packet;
+- sync traversal verifies staging does not release data and that activation
+  after the deadline leaves the parser invalidated;
 - a lock-contention regression starts the fence before deadline, holds the
   parser mutex past it, and verifies the fence returns timeout without
   admitting IQ;
