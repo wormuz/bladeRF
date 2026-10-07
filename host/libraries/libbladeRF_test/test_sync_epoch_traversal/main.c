@@ -365,7 +365,9 @@ static void test_unsupported_format_event(void)
     assert(MUTEX_INIT(&dev.lock) == 0);
     assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
     assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+    assert(COND_INIT(&board_data->rx_async_epoch_cond) == 0);
     board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_first_host_data_required = true;
     board_data->rf_transition_epoch_id = 7;
 
     /* Callback-side publication must not wait for dev->lock. */
@@ -380,9 +382,14 @@ static void test_unsupported_format_event(void)
     assert(event->epoch_id == 7);
     assert(event->flags == BLADERF_FORMAT_PACKET_META);
     assert(event->error_code == BLADERF_ERR_UNSUPPORTED);
+    assert(board_data->rf_transition_first_host_data_failure ==
+           BLADERF_ERR_UNSUPPORTED);
+    assert(board_data->rf_transition_first_host_data_failure_reason ==
+           BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED);
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rx_format_unsupported_reported = false;
+    board_data->rf_transition_first_host_data_required = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_SC16_Q11, true);
     assert(board_data->rf_transition_event_count == 2);
@@ -402,6 +409,7 @@ static void test_unsupported_format_event(void)
            BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
 
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    COND_DESTROY(&board_data->rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
     MUTEX_DESTROY(&dev.lock);
     free(board_data);

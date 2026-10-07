@@ -1285,6 +1285,8 @@ static int _bladerf_rx_transition_begin(
                      BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0;
                 board_data->rf_transition_first_host_data_deadline_ns = 0;
                 board_data->rf_transition_first_host_data_reported = false;
+                board_data->rf_transition_first_host_data_failure = 0;
+                board_data->rf_transition_first_host_data_failure_reason = 0;
                 memset(&board_data->rf_transition_first_host_data_event, 0,
                        sizeof(board_data->rf_transition_first_host_data_event));
             }
@@ -1648,6 +1650,10 @@ static int _wait_for_first_host_data(
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (;;) {
+        if (board_data->rf_transition_first_host_data_failure != 0) {
+            status = board_data->rf_transition_first_host_data_failure;
+            break;
+        }
         if (board_data->rf_transition_first_host_data_reported &&
             board_data->rf_transition_first_host_data_event.transaction_id ==
                 transaction_id &&

@@ -1850,6 +1850,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
          * linearization point between async admission and epoch invalidation. */
         if (!bladerf2_rx_layout_satisfies_transition(
                 board_data->rf_transition_rx_x2_host_data_required, layout)) {
+            bladerf2_rx_transition_fail_first_host_data_locked(
+                board_data, BLADERF_ERR_UNSUPPORTED,
+                BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED);
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             bladerf2_rx_layout_unsupported(dev, layout, true);
             return false;
@@ -1875,6 +1878,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 board_data->rx_channel_enable_mask_valid,
                 board_data->rx_channel_enable_mask)) {
             uint64_t rejected_timestamp = metadata_get_timestamp(bytes);
+            bladerf2_rx_transition_fail_first_host_data_locked(
+                board_data, BLADERF_ERR_UNSUPPORTED,
+                BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION);
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             bladerf2_rx_data_withheld_at(
                 dev, BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION, epoch_id,
