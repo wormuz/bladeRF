@@ -1808,7 +1808,8 @@ out:
     if (status == 0 && s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_sync_data_valid != NULL &&
         metadata_rx_has_epoch_samples(user_meta)) {
-        s->dev->board->rx_sync_data_valid(s->dev, user_meta);
+        s->dev->board->rx_sync_data_valid(s->dev, user_meta,
+                                          s->stream_config.layout);
     }
 
     /* Keep stream discontinuities in the same device event history as RF

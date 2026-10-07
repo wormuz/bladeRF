@@ -74,10 +74,12 @@ static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 
 static void note_sync_host_data(struct bladerf *dev,
-                                const struct bladerf_metadata *metadata)
+                                const struct bladerf_metadata *metadata,
+                                bladerf_channel_layout layout)
 {
     assert(dev != NULL);
     assert(metadata_rx_has_epoch_samples(metadata));
+    assert(layout == BLADERF_RX_X1 || layout == BLADERF_RX_X2);
     sync_host_data_events++;
     sync_host_data_order = ++sync_event_order;
 }
@@ -488,7 +490,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     metadata.timestamp = 1001;
 
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
-    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
+                                               BLADERF_RX_X2);
     MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
     assert(board_data.rf_transition_first_host_data_reported);
     assert(board_data.rf_transition_event_sequence == capacity + 1);
@@ -502,16 +505,21 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(board_data.rf_transition_first_host_data_event.transaction_id == 77);
     assert(board_data.rf_transition_first_host_data_event.event_type ==
            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
+    assert(board_data.rf_transition_first_host_data_event.flags &
+           BLADERF_RF_EVENT_F_RX_X2_LAYOUT);
 
     board_data.rx_async_data_withheld_active = true;
     metadata.timestamp = 1002;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
-    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
+                                               BLADERF_RX_X1);
     MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
     latest = (board_data.rf_transition_event_head + capacity - 1) % capacity;
     assert(board_data.rf_transition_events[latest].event_type ==
            BLADERF_RF_EVT_RX_DATA_RESUMED);
     assert(board_data.rf_transition_events[latest].transaction_id == 77);
+    assert(!(board_data.rf_transition_events[latest].flags &
+             BLADERF_RF_EVENT_F_RX_X2_LAYOUT));
 
     COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);

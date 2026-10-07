@@ -2174,17 +2174,20 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 }
 
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
-    struct bladerf *dev, const struct bladerf_metadata *metadata)
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout)
 {
     if (dev != NULL && dev->board_data != NULL) {
         /* Caller holds rx_async_epoch_lock. The durable epoch snapshot, not
          * the bounded event ring, links this packet to its transition. */
-        bladerf2_rx_data_note_first_packet_locked(dev->board_data, metadata);
+        bladerf2_rx_data_note_first_packet_locked(dev->board_data, metadata,
+                                                  layout);
     }
 }
 
 void bladerf2_rx_transition_note_first_packet(
-    struct bladerf *dev, const struct bladerf_metadata *metadata)
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout)
 {
     struct bladerf2_board_data *board_data;
 
@@ -2196,7 +2199,8 @@ void bladerf2_rx_transition_note_first_packet(
     /* Sync RX calls this only after returning from its parser. Async RX uses
      * the epoch-locked helper at the admission commit point. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    bladerf2_rx_transition_note_first_packet_epoch_locked(dev, metadata);
+    bladerf2_rx_transition_note_first_packet_epoch_locked(dev, metadata,
+                                                         layout);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 

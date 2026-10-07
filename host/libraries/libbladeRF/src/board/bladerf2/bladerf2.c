@@ -1661,9 +1661,10 @@ static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev,
 }
 
 static void bladerf2_rx_sync_data_valid_cb(
-    struct bladerf *dev, const struct bladerf_metadata *metadata)
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout)
 {
-    bladerf2_rx_transition_note_first_packet(dev, metadata);
+    bladerf2_rx_transition_note_first_packet(dev, metadata, layout);
 }
 
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
@@ -1836,7 +1837,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         first_packet.rx_epoch_id = epoch_id;
         first_packet.rx_epoch_id_valid = 1;
         bladerf2_rx_transition_note_first_packet_epoch_locked(
-            dev, &first_packet);
+            dev, &first_packet, layout);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return true;
     }

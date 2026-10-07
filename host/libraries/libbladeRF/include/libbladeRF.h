@@ -4759,8 +4759,9 @@ typedef enum {
     BLADERF_RF_EVT_LO_SET_RETURNED,
     BLADERF_RF_EVT_LO_READBACK_MATCH,
     /** First complete, epoch- and timestamp-validated host RX data was
-     * admitted by sync or async RX. This proves host data-path delivery, not
-     * signal quality or successful application decoding. */
+     * admitted by sync or async RX. Flags identify RX_X2 paired-layout data
+     * when applicable. This proves host data-path delivery, not signal
+     * quality or successful application decoding. */
     BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     BLADERF_RF_EVT_SPI_WRITE_BEGIN,
     /** RFIC control conditions completed; does not establish IQ validity. */
@@ -4830,6 +4831,10 @@ typedef enum {
 /** Set in bladerf_rf_event.flags when fpga_timestamp is a valid coordinate.
  * Event-specific flag/reason bits remain in the lower 31 bits. */
 #define BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID (1U << 31)
+/** Set on RX_FIRST_VALID_HOST_DATA/RX_DATA_RESUMED when the validated host
+ * buffer used the paired RX_X2 interleaved layout. Both channel lanes in that
+ * buffer share the event's RX epoch and timestamp validation. */
+#define BLADERF_RF_EVENT_F_RX_X2_LAYOUT (1U << 30)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

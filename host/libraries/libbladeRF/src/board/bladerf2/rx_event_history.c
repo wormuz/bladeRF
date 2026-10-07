@@ -261,13 +261,15 @@ void bladerf2_rx_data_rearm_notifications_locked(
 
 void bladerf2_rx_data_note_first_packet_locked(
     struct bladerf2_board_data *board_data,
-    const struct bladerf_metadata *metadata)
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout)
 {
     const struct bladerf_rf_event *epoch_event;
     struct bladerf_rf_event event = {0};
     bool already_reported;
 
     if (board_data == NULL || !metadata_rx_has_epoch_samples(metadata) ||
+        (layout != BLADERF_RX_X1 && layout != BLADERF_RX_X2) ||
         !board_data->rf_transition_epoch_contract_enabled ||
         !board_data->rf_transition_epoch_certified) {
         return;
@@ -298,6 +300,9 @@ void bladerf2_rx_data_note_first_packet_locked(
             : BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA;
         event.flags = metadata->status |
                       BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        if (layout == BLADERF_RX_X2) {
+            event.flags |= BLADERF_RF_EVENT_F_RX_X2_LAYOUT;
+        }
         event.error_code = 0;
 
         MUTEX_LOCK(&board_data->rf_transition_event_lock);

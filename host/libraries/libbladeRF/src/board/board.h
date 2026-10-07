@@ -342,7 +342,8 @@ struct board_fns {
      * before a later discontinuity in the same request. Report those samples
      * before dispatching the discontinuity notifications. */
     void (*rx_sync_data_valid)(struct bladerf *dev,
-                               const struct bladerf_metadata *metadata);
+                               const struct bladerf_metadata *metadata,
+                               bladerf_channel_layout layout);
     /* Return whether an asynchronous RX META buffer belongs to the current
      * certified epoch. NULL preserves legacy, unfiltered behavior. */
     bool (*rx_async_buffer_valid)(struct bladerf *dev,

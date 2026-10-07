@@ -295,11 +295,13 @@ struct bladerf2_board_data {
  * host validation. Optional RF transition waits may require this event before
  * reporting success; the event itself never certifies the FPGA epoch. */
 void bladerf2_rx_transition_note_first_packet(
-    struct bladerf *dev, const struct bladerf_metadata *metadata);
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout);
 /* Caller holds rx_async_epoch_lock; lets async admission and host-data event
  * publication share one linearization point without taking dev->lock. */
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
-    struct bladerf *dev, const struct bladerf_metadata *metadata);
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
@@ -335,7 +337,8 @@ void bladerf2_rx_data_rearm_notifications_locked(
  * not depend on the bounded history ring retaining RX_EPOCH_VALID. */
 void bladerf2_rx_data_note_first_packet_locked(
     struct bladerf2_board_data *board_data,
-    const struct bladerf_metadata *metadata);
+    const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout);
 void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf *dev, uint8_t expected_epoch_id,
     uint64_t first_unvalidated_timestamp);
