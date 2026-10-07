@@ -1916,8 +1916,13 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
         first_packet.rx_epoch_id = epoch_id;
         first_packet.rx_epoch_id_valid = 1;
-        bladerf2_rx_transition_note_first_packet_epoch_locked(
-            dev, &first_packet, layout);
+        if (now_ns != 0) {
+            bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+                dev, &first_packet, layout, now_ns);
+        } else {
+            bladerf2_rx_transition_note_first_packet_epoch_locked(
+                dev, &first_packet, layout);
+        }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return true;
     }

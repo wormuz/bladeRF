@@ -641,6 +641,7 @@ static void test_async_data_withheld_event(void)
 static void test_host_data_event_uses_epoch_snapshot(void)
 {
     struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
     struct bladerf_rf_event filler = {0};
     struct bladerf_metadata metadata = {0};
     const uint32_t capacity = BLADERF2_RF_EVENT_HISTORY_SIZE;
@@ -650,6 +651,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     board_data.rf_transition_epoch_contract_enabled = true;
     board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_first_host_data_required = true;
+    board_data.rf_transition_first_host_data_deadline_ns = 2000;
     board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(1);
     board_data.rx_channel_enable_mask_valid = true;
     board_data.rx_channel_enable_mask = 0x3;
@@ -669,6 +672,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
         1835000000ULL;
     board_data.rf_transition_certified_epoch_event.readback_rx_lo_hz =
         1835000000ULL;
+    dev.board_data = &board_data;
 
     /* Simulate a saturated ring whose retained entries no longer contain
      * RX_EPOCH_VALID. The durable snapshot must still produce the host IQ
@@ -683,8 +687,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     metadata.timestamp = 1001;
 
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
-    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
-                                               BLADERF_RX_X2);
+    bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+        &dev, &metadata, BLADERF_RX_X2, 1500);
     MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
     assert(board_data.rf_transition_first_host_data_reported);
     assert(board_data.rf_transition_event_sequence == capacity + 1);
@@ -702,6 +706,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
            BLADERF_RF_EVENT_F_RX_X2_LAYOUT);
     assert(board_data.rf_transition_first_host_data_event.flags &
            BLADERF_RF_EVENT_F_TRANSITION_RX2);
+    assert(board_data.rf_transition_first_host_data_event.host_monotonic_ns ==
+           1500);
 
     /* When the request explicitly requires paired host data, an X1 packet
      * cannot satisfy or wake the transition waiter. */

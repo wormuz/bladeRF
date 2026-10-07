@@ -584,6 +584,20 @@ void bladerf2_rx_data_note_first_packet_locked(
         board_data, metadata, layout, monotonic_ns());
 }
 
+void bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns)
+{
+    if (dev != NULL && dev->board_data != NULL && metadata != NULL &&
+        admission_monotonic_ns != 0) {
+        /* Async admission already captured and deadline-checked this time
+         * under rx_async_epoch_lock. Reuse it for the durable event so the
+         * event cannot diverge from the packet's admission proof. */
+        bladerf2_rx_data_note_first_packet_at_locked(
+            dev->board_data, metadata, layout, admission_monotonic_ns);
+    }
+}
+
 uint32_t bladerf2_rx_sync_data_admission_reason_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_metadata *metadata,

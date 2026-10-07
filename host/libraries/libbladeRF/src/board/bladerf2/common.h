@@ -315,6 +315,9 @@ void bladerf2_rx_transition_note_first_packet_at(
 void bladerf2_rx_transition_note_first_packet_epoch_locked(
     struct bladerf *dev, const struct bladerf_metadata *metadata,
     bladerf_channel_layout layout);
+void bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+    struct bladerf *dev, const struct bladerf_metadata *metadata,
+    bladerf_channel_layout layout, uint64_t admission_monotonic_ns);
 /* Caller holds rx_async_epoch_lock. Terminal stream incompatibilities must
  * wake a transition waiting for required first host data immediately. */
 void bladerf2_rx_transition_fail_first_host_data_locked(
