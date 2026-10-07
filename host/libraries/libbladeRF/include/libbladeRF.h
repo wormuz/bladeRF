@@ -4908,6 +4908,8 @@ typedef enum {
 #define BLADERF_RF_WITHHELD_DEVICE_LOST (1U << 7)
 /** The synchronous RX read timed out before the requested IQ was complete. */
 #define BLADERF_RF_WITHHELD_SYNC_TIMEOUT (1U << 8)
+/** RX_X1/RX_X2 layout did not match the RFIC RX channel-enable mask. */
+#define BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION (1U << 9)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
  * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires RF PLL lock,

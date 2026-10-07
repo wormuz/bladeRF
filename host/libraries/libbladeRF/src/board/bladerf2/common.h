@@ -243,6 +243,8 @@ struct bladerf2_board_data {
     uint32_t rf_transition_next_id;
     uint32_t rf_transition_current_id;
     bladerf_channel rf_transition_current_channel;
+    uint8_t rx_channel_enable_mask;
+    bool rx_channel_enable_mask_valid;
     uint32_t rf_transition_required_events_mask;
     uint8_t rf_transition_epoch_id;
     bool rx_epoch_snapshot_capability_checked;

@@ -1006,6 +1006,25 @@ static void end_rf_link_epoch(struct bladerf *dev)
     }
 }
 
+static int bladerf2_update_rx_channel_enable_mask(
+    struct bladerf *dev, struct bladerf2_board_data *board_data)
+{
+    uint32_t rffe = 0;
+    int status = dev->backend->rffe_control_read(dev, &rffe);
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (status == 0) {
+        board_data->rx_channel_enable_mask =
+            (uint8_t)(((rffe >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
+                      (((rffe >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
+        board_data->rx_channel_enable_mask_valid = true;
+    } else {
+        board_data->rx_channel_enable_mask_valid = false;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return status;
+}
+
 static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
@@ -1035,6 +1054,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
             return status;
+        }
+        if (!BLADERF_CHANNEL_IS_TX(ch)) {
+            status = bladerf2_update_rx_channel_enable_mask(dev, board_data);
+            if (status != 0) {
+                return status;
+            }
         }
         announce_rf_link_epoch(dev, ch);
         if (!BLADERF_CHANNEL_IS_TX(ch) && !board_data->rf_link_dir_on[0]) {
@@ -1079,6 +1104,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
     }
 
     status = board_data->rfic->enable_module(dev, ch, enable);
+
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        int mask_status = bladerf2_update_rx_channel_enable_mask(dev,
+                                                                 board_data);
+        if (status == 0) {
+            status = mask_status;
+        }
+    }
 
     board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = false;
     if (!board_data->rf_link_dir_on[0] && !board_data->rf_link_dir_on[1]) {

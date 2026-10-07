@@ -465,6 +465,9 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     board_data.rf_transition_epoch_contract_enabled = true;
     board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(1);
+    board_data.rx_channel_enable_mask_valid = true;
+    board_data.rx_channel_enable_mask = 0x3;
     board_data.rf_transition_rx_x2_host_data_required = true;
     board_data.rf_transition_rx_x2_host_data_transaction_id = 123;
     board_data.rf_transition_certified_epoch_id = 5;
@@ -529,6 +532,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
 
     board_data.rf_transition_rx_x2_host_data_required = false;
     board_data.rx_async_data_withheld_active = true;
+    board_data.rx_channel_enable_mask = 0x2;
     metadata.timestamp = 1003;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
@@ -542,6 +546,23 @@ static void test_host_data_event_uses_epoch_snapshot(void)
              BLADERF_RF_EVENT_F_RX_X2_LAYOUT));
     assert(board_data.rf_transition_events[latest].flags &
            BLADERF_RF_EVENT_F_TRANSITION_RX2);
+
+    /* An RX_X1 packet with only RX1 enabled cannot stand in for a transition
+     * requested through RX2. Record the mismatch and do not report IQ valid. */
+    board_data.rx_channel_enable_mask = 0x1;
+    metadata.timestamp = 1004;
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
+                                               BLADERF_RX_X1);
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    latest = (board_data.rf_transition_event_head + capacity - 1) % capacity;
+    assert(board_data.rf_transition_events[latest].event_type ==
+           BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(board_data.rf_transition_events[latest].flags ==
+           (BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION |
+            BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+            BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID));
 
     COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);

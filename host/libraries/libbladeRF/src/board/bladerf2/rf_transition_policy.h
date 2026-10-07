@@ -167,6 +167,27 @@ static inline bool bladerf2_rx_layout_satisfies_transition(
     return !require_rx_x2 || layout == BLADERF_RX_X2;
 }
 
+/* RX_X1 has no channel identity in its layout enum, so its host-data event
+ * may certify only the single RFIC lane selected by the transition. RX_X2
+ * requires both channel enables. `mask` uses bit 0 = RX1, bit 1 = RX2. */
+static inline bool bladerf2_rx_layout_matches_channel_mask(
+    bladerf_channel_layout layout, bladerf_channel transition_channel,
+    bool mask_valid, uint8_t mask)
+{
+    if (!mask_valid) {
+        return false;
+    }
+    if (layout == BLADERF_RX_X2) {
+        return mask == 0x3;
+    }
+    if (layout != BLADERF_RX_X1 || BLADERF_CHANNEL_IS_TX(transition_channel) ||
+        ((unsigned int)transition_channel >> 1) > 1) {
+        return false;
+    }
+    return mask == (uint8_t)(1u <<
+                             ((unsigned int)transition_channel >> 1));
+}
+
 static inline bool bladerf2_rx_x1_consumer_blocks_x2_transition(
     bool require_rx_x2, unsigned int active_async_rx_x1,
     bool sync_rx_x1_configured)

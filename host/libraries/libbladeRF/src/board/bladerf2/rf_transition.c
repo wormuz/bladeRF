@@ -1217,7 +1217,6 @@ static int _bladerf_rx_transition_begin(
                 bladerf2_rx_transition_next_transaction_id(
                     board_data->rf_transition_next_id);
             board_data->rf_transition_current_id = board_data->rf_transition_next_id;
-            board_data->rf_transition_current_channel = ch;
             {
                 const uint32_t timing_slot =
                     board_data->rf_transition_current_id %
@@ -1230,6 +1229,7 @@ static int _bladerf_rx_transition_begin(
             }
             board_data->rf_transition_required_events_mask = required_events_mask;
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rf_transition_current_channel = ch;
             board_data->rf_transition_rx_x2_host_data_required =
                 (required_events_mask &
                  BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0;

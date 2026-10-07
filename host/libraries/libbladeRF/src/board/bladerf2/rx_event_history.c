@@ -11,6 +11,7 @@
 #include "bladeRF.h"
 #include "board/board.h"
 #include "common.h"
+#include "rf_transition_policy.h"
 #include "streaming/metadata.h"
 
 static uint64_t monotonic_ns(void)
@@ -316,6 +317,34 @@ void bladerf2_rx_data_note_first_packet_locked(
             metadata->rx_epoch_id ||
         metadata->timestamp < board_data->rf_transition_first_valid_timestamp ||
         metadata->timestamp < epoch_event->fpga_timestamp) {
+        return;
+    }
+
+    if (!bladerf2_rx_layout_matches_channel_mask(
+            layout, board_data->rf_transition_current_channel,
+            board_data->rx_channel_enable_mask_valid,
+            board_data->rx_channel_enable_mask)) {
+        if (!board_data->rx_async_data_withheld_active) {
+            event.host_monotonic_ns = monotonic_ns();
+            event.fpga_timestamp = metadata->timestamp;
+            event.transaction_id = epoch_event->transaction_id;
+            event.epoch_id = epoch_event->epoch_id;
+            event.requested_rx_lo_hz = epoch_event->requested_rx_lo_hz;
+            event.readback_rx_lo_hz = epoch_event->readback_rx_lo_hz;
+            event.rfic_status = epoch_event->rfic_status;
+            event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+            event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
+            event.flags = BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION |
+                          BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+                          (epoch_event->flags &
+                           (BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+                            BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID));
+            event.error_code = BLADERF_ERR_UNSUPPORTED;
+            MUTEX_LOCK(&board_data->rf_transition_event_lock);
+            bladerf2_rf_event_append_locked(board_data, &event);
+            MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            board_data->rx_async_data_withheld_active = true;
+        }
         return;
     }
 

@@ -166,6 +166,18 @@ int main(void)
     assert(bladerf2_rx_layout_satisfies_transition(false, BLADERF_RX_X1));
     assert(bladerf2_rx_layout_satisfies_transition(false, BLADERF_RX_X2));
     assert(!bladerf2_rx_layout_satisfies_transition(true, BLADERF_RX_X1));
+    assert(bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X1, BLADERF_CHANNEL_RX(0), true, 0x1));
+    assert(!bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X1, BLADERF_CHANNEL_RX(1), true, 0x1));
+    assert(bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X1, BLADERF_CHANNEL_RX(1), true, 0x2));
+    assert(!bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X1, BLADERF_CHANNEL_RX(1), false, 0x2));
+    assert(bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X2, BLADERF_CHANNEL_RX(1), true, 0x3));
+    assert(!bladerf2_rx_layout_matches_channel_mask(
+        BLADERF_RX_X2, BLADERF_CHANNEL_RX(1), true, 0x1));
     assert(bladerf2_rx_layout_satisfies_transition(true, BLADERF_RX_X2));
     assert(!bladerf2_rx_x1_consumer_blocks_x2_transition(false, 1, true));
     assert(bladerf2_rx_x1_consumer_blocks_x2_transition(true, 1, false));
