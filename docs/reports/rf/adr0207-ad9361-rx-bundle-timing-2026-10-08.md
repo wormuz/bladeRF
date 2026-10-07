@@ -25,9 +25,17 @@ fitted source/destination widths and runs Quartus `report_max_skew`.
 - All four RX bundles paired at 61 active bits per endpoint.
 - `report_max_skew` worst-case slack: RX channels 0–3 were +4.855, +4.964,
   +4.853, and +4.907 ns against the 6.4 ns limits.
-- No ignored RX skew or RX no-path assignment. `qgate` passes its build,
-  warning, CDC-count, and timing-summary checks; `qcheck`, the RX fault-cause
-  CDC simulation, and `git diff --check` pass.
+- No ignored RX skew or RX no-path assignment. The build/SDC/timing checks
+  pass, but full qgate correctly remains red on the Design Assistant report:
+  D101=720 and D103=8 high violations (plus C105=1). D101 includes 112 RX
+  ADI control-bus bits, 16 TX ADI control-bus bits, 389 Nuand bundled-
+  handshake bits, and 202 NIOS/time-tamer paths. The four RX bus bounds are
+  active; their D101 classification remains visible and unwaived. D103
+  identifies eight RX/TX FIFO sticky-fault status bits and remains open
+  despite the RX snapshot simulation.
+- `qcheck`, the RX fault-cause CDC simulation, and `git diff --check` pass.
+- The generated xA4 image SHA-256 is
+  `b26a94f964e8c88cc3883d78d986e59354834c110def4cf4acb59389f39f60d9`.
 - The generated xA4 image SHA-256 is
   `b26a94f964e8c88cc3883d78d986e59354834c110def4cf4acb59389f39f60d9`.
 
@@ -37,3 +45,4 @@ does not change the validity contract: timeout or a fixed discard never
 establishes valid IQ.
 
 Raw post-fit timing output: `adr0207-ad9361-rx-bundle-timing-2026-10-08.log`.
+Design Assistant output: `adr0207-ad9361-rx-bundle-design-assistant-2026-10-08.log`.

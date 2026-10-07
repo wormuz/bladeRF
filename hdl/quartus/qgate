@@ -216,6 +216,40 @@ else
     fail=1
 fi
 
+# STA alone misses CDC structures. Require the Design Assistant report for the
+# exact same revision and reject unresolved High/Critical violations. In
+# particular, keep D101 bundled crossings and D103 sticky-fault crossings
+# visible until each class has implementation evidence; never blanket-waive.
+drc_report=""
+if [ -n "${sta:-}" ]; then
+    drc_report="${sta%.sta.summary}.drc.rpt"
+fi
+if [ -z "$drc_report" ] || [ ! -r "$drc_report" ]; then
+    note FAIL "Design Assistant report not found for this revision"
+    fail=1
+elif [ "$drc_report" -ot "$sta" ]; then
+    note FAIL "Design Assistant report predates this STA build"
+    fail=1
+else
+    drc_value() {
+        awk -F';' -v key="$1" '$2 ~ key {gsub(/[[:space:]]/, "", $3); print $3; exit}' "$drc_report"
+    }
+    drc_critical=$(drc_value "Total Critical Violations")
+    drc_high=$(drc_value "Total High Violations")
+    drc_d101=$(drc_value "- Rule D101")
+    drc_d103=$(drc_value "- Rule D103")
+    if ! grep -qE 'Design Assistant Status[[:space:]]*;[[:space:]]*Analyzed' "$drc_report" ||
+       ! [[ "$drc_critical" =~ ^[0-9]+$ && "$drc_high" =~ ^[0-9]+$ ]]; then
+        note FAIL "Design Assistant report incomplete or malformed"
+        fail=1
+    elif [ "$drc_critical" != 0 ] || [ "$drc_high" != 0 ]; then
+        note FAIL "Design Assistant violations: critical=$drc_critical high=$drc_high D101=${drc_d101:-?} D103=${drc_d103:-?}"
+        fail=1
+    else
+        note ok "Design Assistant (zero critical/high violations)"
+    fi
+fi
+
 if [ "$mode" = "--warn" ]; then
     exit 0
 fi

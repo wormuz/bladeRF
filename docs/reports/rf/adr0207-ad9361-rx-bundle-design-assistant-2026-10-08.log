@@ -1,0 +1,350 @@
+Info: *******************************************************************
+Info: Running Quartus Prime Design Assistant
+    Info: Version 25.1std.0 Build 1129 10/21/2025 SC Standard Edition
+    Info: Copyright (C) 2025  Altera Corporation. All rights reserved.
+    Info: Your use of Altera Corporation's design tools, logic functions 
+    Info: and other software and tools, and any partner logic 
+    Info: functions, and any output files from any of the foregoing 
+    Info: (including device programming or simulation files), and any 
+    Info: associated documentation or information are expressly subject 
+    Info: to the terms and conditions of the Altera Program License 
+    Info: Subscription Agreement, the Altera Quartus Prime License Agreement,
+    Info: the Altera IP License Agreement, or other applicable license
+    Info: agreement, including, without limitation, that your use is for
+    Info: the sole purpose of programming logic devices manufactured by
+    Info: Altera and sold by Altera or its authorized distributors.  Please
+    Info: refer to the Altera Software License Subscription Agreements 
+    Info: on the Quartus Prime software download page.
+    Info: Processing started: Thu Oct  8 01:14:31 2026
+Info: Command: quartus_drc bladerf -c sweep
+Info (332164): Evaluating HDL-embedded SDC commands
+    Info (332165): Entity alt_jtag_atlantic
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|jupdate}] -to [get_registers {*|alt_jtag_atlantic:*|jupdate1*}] 
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rdata[*]}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|read}] -to [get_registers {*|alt_jtag_atlantic:*|read1*}] 
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|read_req}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|rvalid}] -to [get_registers {*|alt_jtag_atlantic*|td_shift[*]}]
+        Info (332166): set_false_path -from [get_registers {*|t_dav}] -to [get_registers {*|alt_jtag_atlantic:*|tck_t_dav}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|user_saw_rvalid}] -to [get_registers {*|alt_jtag_atlantic:*|rvalid0*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|wdata[*]}] -to [get_registers {*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|write}] -to [get_registers {*|alt_jtag_atlantic:*|write1*}] 
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|write_stalled}] -to [get_registers {*|alt_jtag_atlantic:*|t_ena*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|write_stalled}] -to [get_registers {*|alt_jtag_atlantic:*|t_pause*}]
+        Info (332166): set_false_path -from [get_registers {*|alt_jtag_atlantic:*|write_valid}]
+    Info (332165): Entity altera_std_synchronizer
+        Info (332166): set_false_path -to [get_keepers {*altera_std_synchronizer:*|din_s1}]
+    Info (332165): Entity common_dcfifo
+        Info (332166): set_false_path -to [get_registers {*fifo_gen:U_dcfifo_mixed_widths|dcfifo_*:auto_generated|dffpipe_*:wraclr|dffe*a[0]}] 
+    Info (332165): Entity dcfifo_0p92
+        Info (332166): set_false_path -from *rdptr_g* -to *ws_dgrp|dffpipe_6f9:dffpipe12|dffe13a* 
+        Info (332166): set_false_path -from *delayed_wrptr_g* -to *rs_dgwp|dffpipe_5f9:dffpipe9|dffe10a* 
+    Info (332165): Entity dcfifo_bt92
+        Info (332166): set_false_path -from *rdptr_g* -to *ws_dgrp|dffpipe_ve9:dffpipe17|dffe18a* 
+        Info (332166): set_false_path -from *delayed_wrptr_g* -to *rs_dgwp|dffpipe_pe9:dffpipe13|dffe14a* 
+    Info (332165): Entity dcfifo_ct92
+        Info (332166): set_false_path -from *rdptr_g* -to *ws_dgrp|dffpipe_ue9:dffpipe19|dffe20a* 
+        Info (332166): set_false_path -from *delayed_wrptr_g* -to *rs_dgwp|dffpipe_se9:dffpipe15|dffe16a* 
+    Info (332165): Entity dcfifo_et92
+        Info (332166): set_false_path -from *rdptr_g* -to *ws_dgrp|dffpipe_2f9:dffpipe18|dffe19a* 
+        Info (332166): set_false_path -from *delayed_wrptr_g* -to *rs_dgwp|dffpipe_1f9:dffpipe15|dffe16a* 
+    Info (332165): Entity dcfifo_mu92
+        Info (332166): set_false_path -from *rdptr_g* -to *ws_dgrp|dffpipe_4f9:dffpipe15|dffe16a* 
+        Info (332166): set_false_path -from *delayed_wrptr_g* -to *rs_dgwp|dffpipe_3f9:dffpipe12|dffe13a* 
+    Info (332165): Entity reset_synchronizer
+        Info (332166): set_false_path -to [get_pins -compatibility_mode -nowarn {*reset_synchronizer:*|*|clrn}] 
+    Info (332165): Entity sld_hub
+        Info (332166): create_clock -name altera_reserved_tck [get_ports {altera_reserved_tck}] -period 30MHz   
+        Info (332166): if { [string equal quartus_fit $::TimeQuestInfo(nameofexecutable)] } { set_max_delay -to [get_ports { altera_reserved_tdo } ] 0 }
+        Info (332166): set_clock_groups -asynchronous -group {altera_reserved_tck}
+    Info (332165): Entity synchronizer
+        Info (332166): set_false_path -to [get_registers {*synchronizer:*|reg0}] 
+Info (332104): Reading SDC File: '../../../fpga/platforms/bladerf-micro/constraints/bladerf.sdc'
+Info (332110): Deriving PLL clocks
+    Info (332110): create_generated_clock -source {U_core|U_system_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|refclkin} -divide_by 6 -multiply_by 50 -duty_cycle 50.00 -name {U_core|U_system_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]} {U_core|U_system_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]}
+    Info (332110): create_generated_clock -source {U_core|U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|vco0ph[0]} -divide_by 4 -duty_cycle 50.00 -name {U_core|U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk} {U_core|U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+    Info (332110): create_generated_clock -source {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|refclkin} -divide_by 2 -multiply_by 4 -duty_cycle 50.00 -name {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]} {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL|vcoph[0]}
+    Info (332110): create_generated_clock -source {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|vco0ph[0]} -divide_by 4 -phase 315.00 -duty_cycle 50.00 -name {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk} {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk}
+    Info (332110): create_generated_clock -source {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_ena~PLL_OUTPUT_COUNTER|vco0ph[0]} -divide_by 4 -phase 180.00 -duty_cycle 25.00 -name {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_ena~PLL_OUTPUT_COUNTER|divclk} {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_ena~PLL_OUTPUT_COUNTER|divclk}
+    Info (332110): create_generated_clock -source {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_fclk~PLL_OUTPUT_COUNTER|vco0ph[0]} -phase 180.00 -duty_cycle 50.00 -name {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_fclk~PLL_OUTPUT_COUNTER|divclk} {U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_fclk~PLL_OUTPUT_COUNTER|divclk}
+    Info (332110): create_generated_clock -source {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|refclkin} -divide_by 2 -multiply_by 8 -duty_cycle 50.00 -name {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]} {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL|vcoph[0]}
+    Info (332110): create_generated_clock -source {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|vco0ph[0]} -divide_by 4 -phase -123.73 -duty_cycle 50.00 -name {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk} {U_core|U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk}
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd7|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd6|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd5|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd4|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd3|txin[0]}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd7|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd8|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd8|writeclk}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd9|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd6|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd6|writeclk}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd13|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd14|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd14|writeclk}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd12|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd12|writeclk}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd11|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd10|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd10|writeclk}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd2|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd2|writeclk}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd5|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -start 4 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd4|writeclk}]
+    Info (332110): set_multicycle_path -hold -start 3 -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd4|writeclk}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd3|dinfiforx[0]}]
+    Info (332110): set_false_path -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|sd1|dinfiforx[0]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|lvds_outclk_tx_serialiser|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|lvds_outclk_tx_serialiser|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|lvds_outclk_tx_serialiser|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|lvds_outclk_tx_serialiser|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd1|txin[0]}]
+    Info (332110): set_false_path -from [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|writeclk}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[3]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[3]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[2]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[2]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[1]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[1]}]
+    Info (332110): set_multicycle_path -setup -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[0]}]
+    Info (332110): set_multicycle_path -hold -end 3 -to [get_pins { U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_tx|i_altlvds_tx|auto_generated|sd2|txin[0]}]
+Info (332151): Clock uncertainty is not calculated until you update the timing netlist.
+Info: tamer hold_time crossing constrained on 2 instance(s)
+Info: dcfifo pointer crossings constrained on 10 instance(s)
+Info: handshake crossings constrained: 15
+Info: ADC up_xfer bundled crossings constrained: 4
+Warning: async clock groups NOT applied (set BLADERF_ASYNC_CLOCK_GROUPS=1 to enable)
+Info: readout crossings cut: 2
+Info (332104): Reading SDC File: '../../../fpga/platforms/bladerf-micro/constraints/i2c.sdc'
+Warning (332049): Ignored create_generated_clock at i2c.sdc(27): Argument -source is a collection that is not of port, pin, reg, kpr, net, comb or node type File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/i2c.sdc Line: 27
+    Info (332050): create_generated_clock -name i2c_scl_reg -source [get_clocks $system_clock] -divide_by $pwr_scl_divisor [get_registers {*bit_controller|scl_oen}] File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/i2c.sdc Line: 27
+Info (332104): Reading SDC File: '../../../fpga/platforms/bladerf-micro/constraints/spi.sdc'
+Warning (332049): Ignored create_generated_clock at spi.sdc(36): Argument -source is a collection that is not of port, pin, reg, kpr, net, comb or node type File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/spi.sdc Line: 36
+    Info (332050): create_generated_clock -name peri_sclk_reg -source [get_clocks $system_clock] -divide_by $peri_sclk_divisor [get_registers {*peripheral_spi|SCLK_reg}] File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/constraints/spi.sdc Line: 36
+Info (332104): Reading SDC File: '../../../fpga/ip/analogdevicesinc/hdl/library/common/ad_axi_ip_constr.sdc'
+Info (332104): Reading SDC File: '../../../fpga/platforms/common/bladerf/constraints/ad9361.sdc'
+Warning (332049): Ignored create_generated_clock at ad9361.sdc(44): Argument -source is a collection that is not of port, pin, reg, kpr, net, comb or node type File: /home/bonho/projects/bladerf/hdl/fpga/platforms/common/bladerf/constraints/ad9361.sdc Line: 44
+    Info (332050): create_generated_clock -name adi_sclk_reg -source [get_clocks $system_clock] -divide_by $adi_sclk_divisor [get_registers {*rffe_spi|SCLK_reg}] File: /home/bonho/projects/bladerf/hdl/fpga/platforms/common/bladerf/constraints/ad9361.sdc Line: 44
+Info (332104): Reading SDC File: '../../../fpga/platforms/common/bladerf/constraints/fx3.sdc'
+Info (332104): Reading SDC File: 'nios_system/synthesis/submodules/altera_reset_controller.sdc'
+Info (332104): Reading SDC File: 'nios_system/synthesis/submodules/nios_system_nios2_cpu.sdc'
+Warning (332087): The master clock for this clock assignment could not be derived.  Clock: pwr_scl_pin was not created.
+    Warning (332035): No clocks found on or feeding the specified source node: bladerf_core:U_core|nios_system:U_nios_system|i2c_master_top:opencores_i2c|i2c_master_byte_ctrl:byte_controller|i2c_master_bit_ctrl:bit_controller|scl_oen
+Warning (332087): The master clock for this clock assignment could not be derived.  Clock: adf_sclk_pin was not created.
+    Warning (332035): No clocks found on or feeding the specified source node: bladerf_core:U_core|nios_system:U_nios_system|nios_system_peripheral_spi:peripheral_spi|SCLK_reg
+Warning (332087): The master clock for this clock assignment could not be derived.  Clock: dac_sclk_pin was not created.
+    Warning (332035): No clocks found on or feeding the specified source node: bladerf_core:U_core|nios_system:U_nios_system|nios_system_peripheral_spi:peripheral_spi|SCLK_reg
+Warning (332087): The master clock for this clock assignment could not be derived.  Clock: adi_sclk_pin was not created.
+    Warning (332035): No clocks found on or feeding the specified source node: bladerf_core:U_core|nios_system:U_nios_system|nios_system_rffe_spi:rffe_spi|SCLK_reg
+Info (332097): The following timing edges are non-unate.  The Timing Analyzer will assume pos-unate behavior for these edges in the clock network.
+    Info (332098): Cell: U_core|U_fx3_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL  from: refclkin  to: fbclk
+    Info (332098): Cell: U_core|U_fx3_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER  from: vco0ph[0]  to: divclk
+    Info (332098): Cell: U_core|U_fx3_pll|altera_pll_i|general[0].gpll~PLL_REFCLK_SELECT  from: clkin[1]  to: clkout
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_ena~PLL_LVDS_OUTPUT  from: ccout[0]  to: lvdsclk
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_ena~PLL_OUTPUT_COUNTER  from: vco0ph[0]  to: divclk
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_fclk~PLL_OUTPUT_COUNTER  from: vco0ph[0]  to: divclk
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~FRACTIONAL_PLL  from: refclkin  to: fbclk
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER  from: vco0ph[0]  to: divclk
+    Info (332098): Cell: U_core|U_nios_system|axi_ad9361_0|i_dev_if|i_rx|i_altlvds_rx|auto_generated|pll_sclk~PLL_REFCLK_SELECT  from: clkin[0]  to: clkout
+    Info (332098): From: U_core|U_nios_system|nios2|cpu|the_nios_system_nios2_cpu_nios2_oci|the_nios_system_nios2_cpu_nios2_ocimem|nios_system_nios2_cpu_ociram_sp_ram|the_altsyncram|auto_generated|ram_block1a8|clk0  to: bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|nios_system_nios2_cpu_nios2_oci:the_nios_system_nios2_cpu_nios2_oci|nios_system_nios2_cpu_nios2_ocimem:the_nios_system_nios2_cpu_nios2_ocimem|nios_system_nios2_cpu_ociram_sp_ram_module:nios_system_nios2_cpu_ociram_sp_ram|altsyncram:the_altsyncram|altsyncram_qid1:auto_generated|ram_block1a8~CLOCK1_ENABLE1_0
+    Info (332098): Cell: U_core|U_system_pll|altera_pll_i|general[0].gpll~FRACTIONAL_PLL  from: refclkin  to: fbclk
+    Info (332098): Cell: U_core|U_system_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER  from: vco0ph[0]  to: divclk
+    Info (332098): Cell: U_core|U_system_pll|altera_pll_i|general[0].gpll~PLL_REFCLK_SELECT  from: clkin[0]  to: clkout
+Info (332123): Deriving Clock Uncertainty. Please refer to report_sdc in the Timing Analyzer to see clock uncertainties.
+Critical Warning (308042): (High) Rule C105: Clock signal should be a global signal. (Reporting threshold:25). Found 1 node(s) related to this rule.
+    Info (308076): The following clocks all contain more than 25 fanouts. You can either change the following clock signals to global signals, or adjust the reporting threshold in the Design Assistant Settings page.
+    Critical Warning (308012): Node  "altera_internal_jtag~TCKUTAP"
+Critical Warning (308060): (High) Rule D101: Data bits are not synchronized when transferred between asynchronous clock domains. (Value defined:2). Found 720 asynchronous clock domain interface structure(s) related to this rule.
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:\gen_sweep_analyzer:U_dwell_readout_handshake|source_holding[25]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_0|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[3]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_0|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[1]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_0|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_1|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[1]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_1|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[3]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_1|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_1|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[2]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_0|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[2]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[18]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[17]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[16]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[15]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[14]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[13]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[12]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[11]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[10]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[9]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[8]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[7]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[6]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[5]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[61]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[60]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[59]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[58]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[57]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[56]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Critical Warning (308012): Node  "bladerf_core:U_core|handshake:U_handshake_timestamp|source_holding[55]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Info (308002): Truncated list of Design Assistant messages to 30 messages. Go to sections under Design Assistant section of Compilation Report for complete lists of Design Assistant messages generated.
+Critical Warning (308067): (High) Rule D103: Data bits are not correctly synchronized when transferred between asynchronous clock domains. (Value defined:2). Found 8 asynchronous clock domain interface structure(s) related to this rule.
+    Critical Warning (308012): Node  "bladerf_core:U_core|rx:U_rx|fifo_writer:U_fifo_writer|fault_sticky_i[2]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd Line: 282
+    Critical Warning (308012): Node  "bladerf_core:U_core|rx:U_rx|fifo_writer:U_fifo_writer|fault_sticky_i[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd Line: 282
+    Critical Warning (308012): Node  "bladerf_core:U_core|rx:U_rx|fifo_writer:U_fifo_writer|fault_sticky_i[1]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd Line: 282
+    Critical Warning (308012): Node  "bladerf_core:U_core|rx:U_rx|fifo_writer:U_fifo_writer|fault_sticky_i[4]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd Line: 282
+    Critical Warning (308012): Node  "bladerf_core:U_core|tx:U_tx|fifo_reader:U_fifo_reader|fault_sticky_i[4]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd Line: 320
+    Critical Warning (308012): Node  "bladerf_core:U_core|tx:U_tx|fifo_reader:U_fifo_reader|fault_sticky_i[1]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd Line: 320
+    Critical Warning (308012): Node  "bladerf_core:U_core|tx:U_tx|fifo_reader:U_fifo_reader|fault_sticky_i[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd Line: 320
+    Critical Warning (308012): Node  "bladerf_core:U_core|tx:U_tx|fifo_reader:U_fifo_reader|fault_sticky_i[2]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd Line: 320
+Warning (308040): (Medium) Rule C104: Clock signal source should drive only clock input ports. Found 2 nodes related to this rule.
+    Warning (308010): Node  "c5_clock2" File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/bladerf.vhd Line: 30
+    Warning (308010): Node  "fx3_pclk" File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/bladerf.vhd Line: 104
+Warning (308027): (Medium) Rule R105: The reset signal that is generated in one clock domain and used in another clock domain should be synchronized. Found 3 node(s) related to this rule.
+    Warning (308010): Node  "bladerf_core:U_core|reset_synchronizer:U_reset_sync_pclk|sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd Line: 12
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_rx_trigger_ctl:tx_trigger_ctl|data_out[0]" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_rx_trigger_ctl.v Line: 72
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_rx_trigger_ctl:rx_trigger_ctl|data_out[0]" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_rx_trigger_ctl.v Line: 72
+Warning (308071): (Medium) Rule D102: Multiple data bits that are transferred across asynchronous clock domains are synchronized, but not all bits may be aligned in the receiving clock domain. (Value defined:2). Found 13 asynchronous clock domain interface structure(s) related to this rule.
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_control:control|data_out (Bus)" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_control.v Line: 72
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_gpio_rffe_0:gpio_rffe_0|data_out (Bus)" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_gpio_rffe_0.v Line: 78
+    Warning (308010): Node  "bladerf_core:U_core|rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/handshake.vhd Line: 72
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_0|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_1|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_1|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|rx:U_rx|fifo_writer:U_fifo_writer|fault_sticky_i (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd Line: 282
+    Warning (308010): Node  "bladerf_core:U_core|tx:U_tx|fifo_reader:U_fifo_reader|fault_sticky_i (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd Line: 320
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_3|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|axi_ad9361_tx_channel:i_tx_channel_2|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_2|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+    Warning (308010): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_3|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data (Bus)" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_xfer_cntrl.v Line: 107
+Info (308046): (Information) Rule T101: Nodes with more than the specified number of fan-outs. (Value defined:30). Found 559 node(s) with highest fan-out.
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_ram:ram|altsyncram:the_altsyncram|altsyncram_bqq1:auto_generated|sld_mod_ram_rom:mgl_prim2|ram_rom_data_reg[0]" File: /home/bonho/altera/25.1std/quartus/libraries/megafunctions/sld_mod_ram_rom.vhd Line: 575
+    Info (308011): Node  "altera_internal_jtag~TCKUTAP"
+    Info (308011): Node  "sld_hub:auto_hub|alt_sld_fab_with_jtag_input:\instrumentation_fabric_with_node_gen:fabric_gen_new_way:with_jtag_input_gen:instrumentation_fabric|alt_sld_fab:instrumentation_fabric|alt_sld_fab_alt_sld_fab:alt_sld_fab|alt_sld_fab_alt_sld_fab_sldfabric:sldfabric|sld_jtag_hub:\jtag_hub_gen:real_sld_jtag_hub|clr_reg" File: /home/bonho/altera/25.1std/quartus/libraries/megafunctions/sld_jtag_hub.vhd Line: 255
+    Info (308011): Node  "sld_hub:auto_hub|alt_sld_fab_with_jtag_input:\instrumentation_fabric_with_node_gen:fabric_gen_new_way:with_jtag_input_gen:instrumentation_fabric|alt_sld_fab:instrumentation_fabric|alt_sld_fab_alt_sld_fab:alt_sld_fab|alt_sld_fab_alt_sld_fab_sldfabric:sldfabric|sld_jtag_hub:\jtag_hub_gen:real_sld_jtag_hub|sld_shadow_jsm:shadow_jsm|state[3]" File: /home/bonho/altera/25.1std/quartus/libraries/megafunctions/sld_hub.vhd Line: 1584
+    Info (308011): Node  "sld_hub:auto_hub|alt_sld_fab_with_jtag_input:\instrumentation_fabric_with_node_gen:fabric_gen_new_way:with_jtag_input_gen:instrumentation_fabric|alt_sld_fab:instrumentation_fabric|alt_sld_fab_alt_sld_fab:alt_sld_fab|alt_sld_fab_alt_sld_fab_sldfabric:sldfabric|sld_jtag_hub:\jtag_hub_gen:real_sld_jtag_hub|sld_shadow_jsm:shadow_jsm|state[4]" File: /home/bonho/altera/25.1std/quartus/libraries/megafunctions/sld_hub.vhd Line: 1584
+    Info (308011): Node  "sld_hub:auto_hub|alt_sld_fab_with_jtag_input:\instrumentation_fabric_with_node_gen:fabric_gen_new_way:with_jtag_input_gen:instrumentation_fabric|alt_sld_fab:instrumentation_fabric|alt_sld_fab_alt_sld_fab:alt_sld_fab|alt_sld_fab_alt_sld_fab_sldfabric:sldfabric|sld_jtag_hub:\jtag_hub_gen:real_sld_jtag_hub|virtual_ir_scan_reg" File: /home/bonho/altera/25.1std/quartus/libraries/megafunctions/sld_jtag_hub.vhd Line: 247
+    Info (308011): Node  "bladerf_core:U_core|clk_ctrl:U_system_pll_ctrl|altclkctrl:clkctrl|altclkctrl_h9i:auto_generated|outclk" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/db/altclkctrl_h9i.tdf Line: 44
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|altera_reset_controller:rst_controller|r_sync_rst~CLKENA0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/altera_reset_controller.v Line: 288
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|altera_reset_controller:rst_controller|r_sync_rst" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/altera_reset_controller.v Line: 288
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|A_stall" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4072
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|E_alu_result~1" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4392
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|E_ctrl_logic" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4505
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|F_stall~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4997
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_mm_interconnect_0:mm_interconnect_0|nios_system_mm_interconnect_0_rsp_demux_009:rsp_demux_009|src1_valid~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_mm_interconnect_0_rsp_demux_009.sv Line: 65
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|d_address_line_field_nxt[3]~4" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 5952
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_iw[13]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 7566
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_iw[15]" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 7566
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_iw[12]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 7566
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_iw[14]" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 7566
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_src2_reg[27]~3" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4385
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|M_exc_any" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 5247
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|E_src1[14]~1" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 8502
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|E_src1[14]~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 8502
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|d_address_offset_field_nxt[0]~2" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 5954
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|d_write" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 3485
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_mm_interconnect_0:mm_interconnect_0|nios_system_mm_interconnect_0_router:router|Equal1~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_mm_interconnect_0_router.sv Line: 240
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|d_read~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 3484
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_mm_interconnect_0:mm_interconnect_0|nios_system_mm_interconnect_0_router:router|Equal0~2" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_mm_interconnect_0_router.sv Line: 234
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|D_ctrl_src2_choose_imm" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4173
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|E_src2[0]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 8511
+    Info (308002): Truncated list of Design Assistant messages to 30 messages. Go to sections under Design Assistant section of Compilation Report for complete lists of Design Assistant messages generated.
+Info (308044): (Information) Rule T102: Top nodes with the highest number of fan-outs. (Value defined:50). Found 50 node(s) with highest fan-out.
+    Info (308011): Node  "bladerf_core:U_core|clk_ctrl:U_system_pll_ctrl|altclkctrl:clkctrl|altclkctrl_h9i:auto_generated|outclk" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/db/altclkctrl_h9i.tdf Line: 44
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_dev_if:i_dev_if|axi_ad9361_alt_lvds_tx:i_tx|altlvds_tx:i_altlvds_tx|axi_ad9361_alt_lvds_tx_lvds_tx:auto_generated|axi_ad9361_alt_lvds_tx_altclkctrl:coreclk_buf|wire_sd10_outclk" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/db/axi_ad9361_alt_lvds_tx_lvds_tx.v Line: 48
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|altera_reset_controller:rst_controller|r_sync_rst~CLKENA0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/altera_reset_controller.v Line: 288
+    Info (308011): Node  "bladerf_core:U_core|reset_synchronizer:U_reset_sync_rx|sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd Line: 12
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|A_stall" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4072
+    Info (308011): Node  "bladerf_core:U_core|clk_ctrl:U_fx3_pll_ctrl|altclkctrl:clkctrl|altclkctrl_h9i:auto_generated|outclk" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/db/altclkctrl_h9i.tdf Line: 44
+    Info (308011): Node  "bladerf_core:U_core|reset_synchronizer:U_reset_sync_tx|sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd Line: 12
+    Info (308011): Node  "bladerf_core:U_core|reset_synchronizer:U_reset_sync_pclk|sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd Line: 12
+    Info (308011): Node  "bladerf_core:U_core|dwell_summary:\gen_sweep_analyzer:U_dwell_summary|dwell_start_pipe[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/dwell_summary.vhd Line: 127
+    Info (308011): Node  "bladerf_core:U_core|reset_synchronizer:U_reset_sync_sys|sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd Line: 12
+    Info (308011): Node  "altera_internal_jtag~TCKUTAP"
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|ad_rst:i_core_rst_reg|rst" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/ad_rst.v Line: 52
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|up_axi:i_up_axi|up_raddr[0]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_axi.v Line: 246
+    Info (308011): Node  "bladerf_core:U_core|dwell_readout:\gen_sweep_analyzer:U_dwell_readout|latched[4][11]~0" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/dwell_readout.vhd Line: 81
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|up_axi:i_up_axi|up_raddr[1]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_axi.v Line: 246
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|ad_rst:i_core_rst_reg|rst" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/ad_rst.v Line: 52
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|up_axi:i_up_axi|up_raddr[2]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_axi.v Line: 246
+    Info (308011): Node  "bladerf_core:U_core|rx:U_rx|timestamp_reset" File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/rx.vhd Line: 39
+    Info (308011): Node  "bladerf_core:U_core|tx:U_tx|timestamp_reset" File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/tx.vhd Line: 39
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|up_axi:i_up_axi|up_raddr[3]~DUPLICATE" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_axi.v Line: 246
+    Info (308011): Node  "~GND"
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_dwell_cfg:rx_epoch_ctrl|Equal0~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_dwell_cfg.v Line: 58
+    Info (308011): Node  "bladerf_core:U_core|dwell_summary:\gen_sweep_analyzer:U_dwell_summary|dwell_start_pub" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/dwell_summary.vhd Line: 150
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|up_axi:i_up_axi|up_raddr[4]" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/common/up_axi.v Line: 246
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|d_address_offset_field_nxt[0]~2" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 5954
+    Info (308011): Node  "bladerf_core:U_core|rx:U_rx|rx_fifo:U_rx_sample_fifo|common_dcfifo:U_common_dcfifo|dcfifo_mixed_widths:\mixed_fifo_gen:U_dcfifo_mixed_widths|dcfifo_et92:auto_generated|dffpipe_3dc:rdaclr|dffe13a[0]" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/db/dffpipe_3dc.tdf Line: 34
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|dac_data_sync" File: /home/bonho/projects/bladerf/hdl/fpga/ip/analogdevicesinc/hdl/library/axi_ad9361/axi_ad9361_tx.v Line: 164
+    Info (308011): Node  "c5_clock2~inputCLKENA0" File: /home/bonho/projects/bladerf/hdl/fpga/platforms/bladerf-micro/vhdl/bladerf.vhd Line: 30
+    Info (308011): Node  "bladerf_core:U_core|dwell_summary:\gen_sweep_analyzer:U_dwell_summary|window_sum[15]~0" File: /home/bonho/projects/bladerf/hdl/fpga/ip/nuand/synthesis/dwell_summary.vhd Line: 533
+    Info (308011): Node  "bladerf_core:U_core|nios_system:U_nios_system|nios_system_nios2:nios2|nios_system_nios2_cpu:cpu|F_stall~0" File: /home/bonho/projects/bladerf/hdl/quartus/work/bladerf-micro-A4-sweep/nios_system/synthesis/submodules/nios_system_nios2_cpu.v Line: 4997
+    Info (308002): Truncated list of Design Assistant messages to 30 messages. Go to sections under Design Assistant section of Compilation Report for complete lists of Design Assistant messages generated.
+Info (308007): Design Assistant information: finished post-fitting analysis of current design -- generated 609 information messages and 747 warning messages
+Info: Quartus Prime Design Assistant was successful. 0 errors, 75 warnings
+    Info: Peak virtual memory: 1081 megabytes
+    Info: Processing ended: Thu Oct  8 01:14:43 2026
+    Info: Elapsed time: 00:00:12
+    Info: Total CPU time (on all processors): 00:00:12

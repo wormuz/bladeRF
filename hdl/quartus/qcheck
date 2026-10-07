@@ -1070,6 +1070,20 @@ def check_qgate_sweep_handshake_count():
              "valid CDC constraints were rejected solely by a stale count")
 
 
+def check_full_flow_runs_design_assistant():
+    """The custom full flow must produce the DRC report consumed by qgate."""
+    build_tcl = ROOT / "hdl/quartus/build.tcl"
+    if not build_tcl.exists():
+        return
+    src = code_only(build_tcl.read_text(), comment="#")
+    sta = src.find("execute_module -tool sta")
+    drc = src.find("execute_module -tool drc")
+    if sta < 0 or drc < 0 or drc < sta:
+        fail("quartus-full-flow-design-assistant",
+             "full build flow must run post-fit Design Assistant after STA",
+             "qgate otherwise checks timing while silently missing CDC D101/D103 findings")
+
+
 def check_qgate_sta_resolution():
     """Exercise qgate with an out-of-tree log and a stale-report decoy."""
     qgate = ROOT / "hdl/quartus/qgate"
@@ -1082,11 +1096,18 @@ def check_qgate_sta_resolution():
         project = quartus / "work" / "bladerf-micro-A4-sweep"
         log_dir = quartus / "builds"
         actual_sta = project / "output_files" / "sweep.sta.summary"
+        actual_drc = project / "output_files" / "sweep.drc.rpt"
         decoy_sta = root / "output_files" / "sweep.sta.summary"
         project.joinpath("output_files").mkdir(parents=True)
         log_dir.mkdir()
         decoy_sta.parent.mkdir()
         actual_sta.write_text("Type\nSlack : 0.023\n")
+        actual_drc.write_text(
+            "; Design Assistant Status ; Analyzed ;\n"
+            "; Total Critical Violations ; 0 ;\n"
+            "; Total High Violations ; 0 ;\n"
+            "; - Rule D101 ; 0 ;\n"
+            "; - Rule D103 ; 0 ;\n")
         decoy_sta.write_text("Type\nSlack : -9.999\n")
         log = log_dir / "build.log"
         log.write_text(
@@ -1108,6 +1129,28 @@ def check_qgate_sta_resolution():
                  "the build log was outside the project tree",
                  "a stale report can reject or approve the wrong FPGA image")
             return
+
+        actual_drc.write_text(
+            "; Design Assistant Status ; Analyzed ;\n"
+            "; Total Critical Violations ; 0 ;\n"
+            "; Total High Violations ; 8 ;\n"
+            "; - Rule D101 ; 0 ;\n"
+            "; - Rule D103 ; 8 ;\n")
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "Design Assistant violations: critical=0 high=8" not in result.stdout):
+            fail("qgate-design-assistant-violations-fail-closed",
+                 "qgate accepted a successful fit with Design Assistant CDC findings",
+                 "the build flow must not report CDC-clean when D103 or D101 remains")
+            return
+        actual_drc.write_text(
+            "; Design Assistant Status ; Analyzed ;\n"
+            "; Total Critical Violations ; 0 ;\n"
+            "; Total High Violations ; 0 ;\n"
+            "; - Rule D101 ; 0 ;\n"
+            "; - Rule D103 ; 0 ;\n")
 
         actual_sta.unlink()
         result = subprocess.run(
@@ -1139,6 +1182,7 @@ rx-epoch-controller-in-rx-projects every QIP compiling rx.vhd must include rx_ep
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
 rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
 qgate-sweep-handshake-count   qgate's sweep CDC count must match the 15 constrained pairs
+quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded
 """
 
@@ -1163,6 +1207,7 @@ def main():
     check_fpga_reload_quiesces_and_reinitializes_rfic()
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
+    check_full_flow_runs_design_assistant()
     check_qgate_sta_resolution()
 
     for n in notes:

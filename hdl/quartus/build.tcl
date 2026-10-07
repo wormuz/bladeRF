@@ -197,6 +197,17 @@ if { $opts(flow) == "full" } {
         set failed 1
     }
 
+    # Run Design Assistant explicitly. This custom flow does not use
+    # quartus_sh --flow compile, which normally includes post-fit DRC. qgate
+    # requires sweep.drc.rpt and fails closed on unresolved High/Critical CDC
+    # findings; omitting this stage made a clean STA log look like full CDC
+    # closure.
+    if { $failed == 0 && [catch {execute_module -tool drc} result] } {
+        puts "Result: $result"
+        puts stderr "ERROR: Design Assistant Failed!"
+        set failed 1
+    }
+
     # Run EDA Output
     #if { $failed == 0 && [catch {execute_module -tool eda} result] } {
     #    puts "Result: $result"
