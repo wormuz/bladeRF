@@ -14,7 +14,8 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     const uint32_t supported = BLADERF_RF_REQUIRE_PLL_LOCKED |
                               BLADERF_RF_REQUIRE_ENSM_RX |
                               BLADERF_RF_REQUIRE_DATAPATH_ARMED |
-                              BLADERF_RF_REQUIRE_EPOCH_VALID;
+                              BLADERF_RF_REQUIRE_EPOCH_VALID |
+                              BLADERF_RF_REQUIRE_BBPLL_LOCKED;
 
     if (effective == NULL || (requested & ~supported) != 0) {
         return false;
@@ -32,7 +33,8 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
 
     if ((*effective & BLADERF_RF_REQUIRE_EPOCH_VALID) != 0) {
         *effective |= BLADERF_RF_REQUIRE_PLL_LOCKED |
-                      BLADERF_RF_REQUIRE_ENSM_RX;
+                      BLADERF_RF_REQUIRE_ENSM_RX |
+                      BLADERF_RF_REQUIRE_BBPLL_LOCKED;
     }
     return true;
 }

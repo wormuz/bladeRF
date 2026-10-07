@@ -155,7 +155,7 @@ static int assert_sync_valid(struct bladerf *dev,
 
 int main(int argc, char **argv)
 {
-    static const char *const stages[] = {"PLL", "ENSM", "EPOCH"};
+    static const char *const stages[] = {"PLL", "ENSM", "BBPLL", "EPOCH"};
     struct rx_test_config config = {
         .layout = BLADERF_RX_X1,
         .transition_channel = BLADERF_CHANNEL_RX(1),
@@ -235,7 +235,7 @@ int main(int argc, char **argv)
                 bladerf_strerror(status));
         return 1;
     }
-    printf("RX positive-timeout qualification: PASS (%s, PLL/ENSM/FPGA)\n",
+    printf("RX positive-timeout qualification: PASS (%s, RFPLL/ENSM/BBPLL/FPGA)\n",
            config.name);
     return 0;
 }

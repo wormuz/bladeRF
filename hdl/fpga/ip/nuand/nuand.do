@@ -70,4 +70,5 @@ proc compile_nuand { root platform } {
 proc compile_nuand_tb { root platform } {
     vcom -work nuand -2008 [file join $root ./simulation/sample_stream_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/rfic_spi_tb.vhd]
+    vcom -work nuand -2008 [file join $root ./simulation/fifo_writer_epoch_fence_tb.vhd]
 }

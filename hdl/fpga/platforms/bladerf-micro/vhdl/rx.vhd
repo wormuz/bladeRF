@@ -322,6 +322,7 @@ begin
             mini_exp            =>  mini_exp,
             rx_epoch_meta_enable => rx_epoch_meta_enable,
             rx_epoch_id          => rx_epoch_id_local,
+            rx_epoch_discard_active => rx_epoch_discard_active,
 
             link_start_toggle          =>  link_start_toggle,
             link_stop_toggle           =>  link_stop_toggle,

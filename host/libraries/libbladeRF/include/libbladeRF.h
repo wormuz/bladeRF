@@ -4785,7 +4785,9 @@ typedef enum {
     /** A previously withheld RX stream resumed after a complete host META
      * packet passed the current epoch/timestamp checks. This does not bridge
      * the preceding gap or certify analog signal quality. */
-    BLADERF_RF_EVT_RX_DATA_RESUMED
+    BLADERF_RF_EVT_RX_DATA_RESUMED,
+    /** AD9361 baseband PLL lock was read from REG_CH_1_OVERFLOW[7]. */
+    BLADERF_RF_EVT_RX_BBPLL_LOCKED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
@@ -4822,6 +4824,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX (1U << 21)
 /** AD9361 status could not be read; the certified epoch is revoked. */
 #define BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE (1U << 22)
+/** AD9361 baseband PLL lock was lost or absent. */
+#define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED (1U << 23)
 
 /** Reason flags for BLADERF_RF_EVT_RX_DATA_WITHHELD. */
 #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED (1U << 0)
@@ -4837,14 +4841,16 @@ typedef enum {
 #define BLADERF_RF_WITHHELD_SYNC_TIMEOUT (1U << 8)
 
 /** Required-events bitmask for ::bladerf_rx_transition_request.
- * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires PLL lock and
- * ENSM RX confirmation; these control-plane prerequisites are added
+ * Requiring BLADERF_RF_REQUIRE_EPOCH_VALID also requires RF PLL lock,
+ * baseband PLL lock, and ENSM RX confirmation; these prerequisites are added
  * automatically before FPGA sample admission is opened. */
 #define BLADERF_RF_REQUIRE_PLL_LOCKED    (1U << 0)
 #define BLADERF_RF_REQUIRE_ENSM_RX       (1U << 1)
 /** Requires a sample-backed FPGA RX epoch (stronger than software arm). */
 #define BLADERF_RF_REQUIRE_DATAPATH_ARMED (1U << 2)
 #define BLADERF_RF_REQUIRE_EPOCH_VALID   (1U << 3)
+/** Require the AD9361 baseband PLL lock bit before reporting completion. */
+#define BLADERF_RF_REQUIRE_BBPLL_LOCKED  (1U << 4)
 
 /**
  * Immutable RF transaction event (ADR-0207 §4).

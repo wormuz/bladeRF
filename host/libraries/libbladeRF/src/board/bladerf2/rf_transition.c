@@ -62,7 +62,9 @@ static bool _test_rx_transition_stall(const char *stage)
  * verified from the Python side against this same AD9361 driver. */
 #define REG_STATE_ADDR 0x017
 #define REG_RX_CP_VCO_LOCK_ADDR 0x247
+#define REG_BBPLL_LOCK_STATUS_ADDR 0x05e
 #define VCO_LOCK_BIT 0x02
+#define BBPLL_LOCK_BIT 0x80
 #define ENSM_STATE_MASK 0x0F
 #define ENSM_STATE_RX 0x8
 #define ENSM_STATE_FDD 0xA
@@ -522,6 +524,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint32_t rf_link_status = 0;
         uint8_t pll_status = 0;
         uint8_t ensm_status = 0;
+        uint8_t bbpll_status = 0;
         int status = 0;
         int rfic_status = 0;
 
@@ -550,6 +553,10 @@ static void *rx_fault_monitor_task(void *arg)
                     if (rfic_status == 0) {
                         rfic_status = _read_rfic_reg(
                             dev, REG_STATE_ADDR, &ensm_status);
+                    }
+                    if (rfic_status == 0) {
+                        rfic_status = _read_rfic_reg(
+                            dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
                     }
                 }
             }
@@ -587,6 +594,9 @@ static void *rx_fault_monitor_task(void *arg)
         } else if (test_mode != NULL &&
                    strcmp(test_mode, "RUNTIME_RFIC_ENSM_NOT_RX") == 0) {
             ensm_status = 0x05;
+        } else if (test_mode != NULL &&
+                   strcmp(test_mode, "RUNTIME_RFIC_BBPLL_UNLOCKED") == 0) {
+            bbpll_status &= (uint8_t)~BBPLL_LOCK_BIT;
         }
         if (_test_runtime_rx_fault()) {
             rf_link_status |= RF_LINK_STATUS_RX_FAULT;
@@ -615,6 +625,12 @@ static void *rx_fault_monitor_task(void *arg)
             _invalidate_faulted_rx_epoch(
                 dev, epoch_id, ensm_status,
                 BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX, 0);
+            continue;
+        }
+        if ((bbpll_status & BBPLL_LOCK_BIT) == 0) {
+            _invalidate_faulted_rx_epoch(
+                dev, epoch_id, bbpll_status,
+                BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED, 0);
         }
     }
 
@@ -1463,6 +1479,52 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         log_debug("%s: ENSM-RX transaction=%u cumulative %" PRIu64 " us\n",
                   __FUNCTION__, transaction_id,
                   (_monotonic_ns() - wait_started_ns) / 1000ULL);
+    }
+
+    if (board_data->rf_transition_required_events_mask &
+        BLADERF_RF_REQUIRE_BBPLL_LOCKED) {
+        uint8_t bbpll_status = 0;
+        bool bbpll_locked = false;
+        while (_monotonic_ns() < deadline_ns) {
+            status = _read_rfic_reg(dev, REG_BBPLL_LOCK_STATUS_ADDR,
+                                    &bbpll_status);
+            if (status != 0) {
+                _emit_event_with_timestamp(
+                    dev, board_data, BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+                    BLADERF_RF_STATE_RX_DATA_INVALID, 0, 0, bbpll_status,
+                    status, expected_epoch_id, 0, 0,
+                    BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE);
+                _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                            BLADERF_RF_STATE_ERROR, 0, 0,
+                            bbpll_status, status, expected_epoch_id);
+                return _fail_transition(dev, board_data, status, final_event);
+            }
+            if (_test_rx_transition_stall("BBPLL")) {
+                bbpll_status &= (uint8_t)~BBPLL_LOCK_BIT;
+            }
+            if ((bbpll_status & BBPLL_LOCK_BIT) != 0) {
+                bbpll_locked = true;
+                _emit_event(dev, board_data,
+                            BLADERF_RF_EVT_RX_BBPLL_LOCKED,
+                            BLADERF_RF_STATE_RX_PATH_ARMING, 0, 0,
+                            bbpll_status, 0, expected_epoch_id);
+                break;
+            }
+            usleep(POLL_INTERVAL_US);
+        }
+        if (!bbpll_locked) {
+            _emit_event_with_timestamp(
+                dev, board_data, BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+                BLADERF_RF_STATE_RX_DATA_INVALID, 0, 0, bbpll_status,
+                BLADERF_ERR_TIMEOUT, expected_epoch_id, 0, 0,
+                BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED);
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        bbpll_status, BLADERF_ERR_TIMEOUT,
+                        expected_epoch_id);
+            return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                    final_event);
+        }
     }
 
     /* ADR-0207 §6: the FPGA data-plane epoch gate is now wired up --

@@ -15,14 +15,18 @@ int main(void)
     assert(bladerf2_rf_transition_normalize_requirements(
         BLADERF_RF_REQUIRE_PLL_LOCKED, false, &effective));
     assert(effective == BLADERF_RF_REQUIRE_PLL_LOCKED);
+    assert(bladerf2_rf_transition_normalize_requirements(
+        BLADERF_RF_REQUIRE_BBPLL_LOCKED, false, &effective));
+    assert(effective == BLADERF_RF_REQUIRE_BBPLL_LOCKED);
 
     /* The data-valid boolean automatically requires the sample epoch and
-     * both control-plane prerequisites, even if the mask omitted them. */
+     * RFPLL, BBPLL, and ENSM prerequisites, even if omitted from the mask. */
     assert(bladerf2_rf_transition_normalize_requirements(
         BLADERF_RF_REQUIRE_PLL_LOCKED, true, &effective));
     assert(effective == (BLADERF_RF_REQUIRE_PLL_LOCKED |
                          BLADERF_RF_REQUIRE_ENSM_RX |
-                         BLADERF_RF_REQUIRE_EPOCH_VALID));
+                         BLADERF_RF_REQUIRE_EPOCH_VALID |
+                         BLADERF_RF_REQUIRE_BBPLL_LOCKED));
 
     /* The older datapath-armed request is implemented by the stronger,
      * sample-backed epoch event rather than an unobserved software claim. */
@@ -31,13 +35,16 @@ int main(void)
     assert(effective == (BLADERF_RF_REQUIRE_DATAPATH_ARMED |
                          BLADERF_RF_REQUIRE_PLL_LOCKED |
                          BLADERF_RF_REQUIRE_ENSM_RX |
-                         BLADERF_RF_REQUIRE_EPOCH_VALID));
+                         BLADERF_RF_REQUIRE_EPOCH_VALID |
+                         BLADERF_RF_REQUIRE_BBPLL_LOCKED));
 
     assert(bladerf2_rf_transition_normalize_requirements(
         BLADERF_RF_REQUIRE_EPOCH_VALID, false, &effective));
     assert((effective & (BLADERF_RF_REQUIRE_PLL_LOCKED |
-                         BLADERF_RF_REQUIRE_ENSM_RX)) ==
-           (BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX));
+                         BLADERF_RF_REQUIRE_ENSM_RX |
+                         BLADERF_RF_REQUIRE_BBPLL_LOCKED)) ==
+           (BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX |
+            BLADERF_RF_REQUIRE_BBPLL_LOCKED));
 
     /* Never silently accept a requirement the implementation cannot honor. */
     assert(!bladerf2_rf_transition_normalize_requirements(

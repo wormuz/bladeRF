@@ -32,7 +32,8 @@ entity fifo_writer is
         FIFO_USEDW_WIDTH      : natural := 12;
         FIFO_DATA_WIDTH       : natural := 32;
         META_FIFO_USEDW_WIDTH : natural := 5;
-        META_FIFO_DATA_WIDTH  : natural := 128
+        META_FIFO_DATA_WIDTH  : natural := 128;
+        PROGRESS_TIMEOUT_LOG2 : natural := 22
     );
     port (
         clock               :   in      std_logic;
@@ -49,6 +50,9 @@ entity fifo_writer is
         -- RX epoch identity is opt-in so legacy META contents stay intact.
         rx_epoch_meta_enable :  in      std_logic := '0';
         rx_epoch_id          :  in      unsigned(7 downto 0) := (others => '0');
+        -- A retune intentionally withholds IQ while RF events are pending.
+        -- Do not diagnose that fence as a no-progress transport failure.
+        rx_epoch_discard_active : in   std_logic := '0';
 
         in_sample_controls  :   in      sample_controls_t(0 to NUM_STREAMS-1) := (others => SAMPLE_CONTROL_DISABLE);
         in_samples          :   in      sample_streams_t(0 to NUM_STREAMS-1)  := (others => ZERO_SAMPLE);
@@ -172,9 +176,9 @@ architecture simple of fifo_writer is
     --
     -- The limit is in sample clocks. 2^22 is ~34 ms at 122.88 MHz and ~68 ms
     -- at 61.44 -- far longer than any legitimate gap between USB buffers,
-    -- short enough that the host learns within one poll. A power of two so
-    -- the comparison is one bit, not a magnitude compare.
-    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
+    -- short enough that the host learns within one poll. It is held at zero
+    -- while rx_epoch_discard_active marks an intentional RF transition fence.
+    -- A power of two keeps the comparison to one bit, not a magnitude compare.
     signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
                                     := (others => '0');
     signal wrote_this_epoch    : std_logic := '0';
@@ -362,6 +366,10 @@ begin
                     -- returns. Measured before this: rx_fault=1 at TX
                     -- disable in every RX+TX session, from this counter.
                     progress_count   <= (others => '0');
+                elsif( rx_epoch_discard_active = '1' ) then
+                    -- Fencing is an expected data-plane pause. Restart the
+                    -- watchdog after the gate admits the next valid epoch.
+                    progress_count   <= (others => '0');
                 elsif( fifo_write = '1' ) then
                     progress_count   <= (others => '0');
                     wrote_this_epoch <= '1';
@@ -407,6 +415,7 @@ begin
             -- above, so the clear at the top of a new epoch is not undone
             -- by a counter that has not been reset yet in the same cycle.
             if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
+                rx_epoch_discard_active = '0' and
                 progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
                 if( wrote_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';

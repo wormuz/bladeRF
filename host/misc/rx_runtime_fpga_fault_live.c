@@ -107,6 +107,9 @@ int main(int argc, char **argv)
         expected_reason = BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX;
         expected_rfic_mask = 0x0f;
         expected_rfic_value = 0x05;
+    } else if (strcmp(fault_mode, "RUNTIME_RFIC_BBPLL_UNLOCKED") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED;
+        expected_rfic_mask = 0x80;
     } else if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
         fprintf(stderr, "unknown monitor injection mode: %s\n", fault_mode);
         return 2;
