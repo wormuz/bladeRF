@@ -1244,6 +1244,10 @@ int main(void)
     write_msg(f.buffers[0] + MSG_BYTES, 9000, 9, 1311);
     f.states[0] = SYNC_BUFFER_FULL;
     f.lengths[0] = BYTES_PER_BUFFER;
+    /* The fixture has no sync_worker. A timed-out sync_rx leaves the parser
+     * in CHECK_WORKER; model the already-running production stream before
+     * injecting its next completed ring buffer. */
+    f.sync.state = SYNC_STATE_WAIT_FOR_BUFFER;
     receive(&f, out, 100, &meta);
     assert(meta.timestamp == 9000);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 9);
