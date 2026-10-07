@@ -167,6 +167,7 @@ architecture arch of rx is
     -- withholds those frames until a new epoch is certified.
     signal gated_controls           : sample_controls_t(adc_streams'range) := (others => SAMPLE_CONTROL_DISABLE);
     signal gated_streams            : sample_streams_t(adc_streams'range)  := (others => ZERO_SAMPLE);
+    signal gated_timestamp          : unsigned(63 downto 0) := (others => '0');
     signal rx_epoch_id_local        : unsigned(7 downto 0) := (others => '0');
     signal rx_epoch_discard_active_local : std_logic := '0';
 
@@ -294,6 +295,7 @@ begin
 
             out_sample_controls     => gated_controls,
             out_samples             => gated_streams,
+            out_timestamp           => gated_timestamp,
 
             out_epoch_id            => rx_epoch_id_local,
             out_state               => rx_epoch_state,
@@ -320,7 +322,7 @@ begin
             usb_speed           =>  usb_speed,
             meta_en             =>  meta_en,
             packet_en           =>  packet_en,
-            timestamp           =>  rx_timestamp,
+            timestamp           =>  gated_timestamp,
             mini_exp            =>  mini_exp,
             rx_epoch_meta_enable => rx_epoch_meta_enable,
             rx_epoch_id          => rx_epoch_id_local,

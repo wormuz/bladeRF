@@ -19,6 +19,7 @@ architecture test of rx_epoch_gate_tb is
     signal epoch_id_in : unsigned(7 downto 0) := x"2A";
     signal out_controls : sample_controls_t(0 to 1);
     signal out_samples : sample_streams_t(0 to 1);
+    signal out_timestamp : unsigned(63 downto 0);
     signal epoch_id : unsigned(7 downto 0);
     signal state : unsigned(3 downto 0);
     signal discard_active, start_event : std_logic;
@@ -33,6 +34,7 @@ begin
             epoch_arm => arm, epoch_complete => complete,
             epoch_abort => abort, epoch_id_in => epoch_id_in,
             out_sample_controls => out_controls, out_samples => out_samples,
+            out_timestamp => out_timestamp,
             out_epoch_id => epoch_id, out_state => state,
             out_discard_active => discard_active,
             epoch_start_event => start_event,
@@ -160,12 +162,19 @@ begin
         timestamp <= to_unsigned(203, 64);
         samples_in(0).data_v <= '1';
         samples_in(1).data_v <= '1';
+        samples_in(0).data_i <= to_signed(2303, 16);
+        samples_in(1).data_i <= to_signed(3203, 16);
         wait until rising_edge(clock);
         wait for 1 ns;
         assert out_controls(0).enable = '1' report "first valid post-completion sample not admitted" severity failure;
         assert start_event = '1' report "epoch start event missing" severity failure;
         assert first_valid_timestamp = to_unsigned(203, 64)
             report "first-valid timestamp does not match first admitted sample" severity failure;
+        assert out_timestamp = to_unsigned(203, 64) and
+               out_samples(0).data_i = to_signed(2303, 16) and
+               out_samples(1).data_i = to_signed(3203, 16)
+            report "registered RX_X2 sample and timestamp lost alignment"
+            severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
 
         -- The epoch opens on the first real ADC sample after COMPLETE; there

@@ -71,6 +71,9 @@ entity rx_epoch_gate is
         -- Sample-domain output (into rx_fifo).
         out_sample_controls : out sample_controls_t(0 to NUM_STREAMS-1);
         out_samples         : out sample_streams_t(0 to NUM_STREAMS-1);
+        -- Timestamp delayed with the registered sample output. Downstream
+        -- metadata must use this value, not the live timestamp counter.
+        out_timestamp       : out unsigned(63 downto 0) := (others => '0');
 
         -- Status, mirrors into rx_epoch_status PIO.
         out_epoch_id         : out unsigned(7 downto 0)  := (others => '0');
@@ -105,6 +108,7 @@ begin
             active_epoch_id      <= (others => '0');
             out_sample_controls  <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
             out_samples          <= (in_sample_controls'range => ZERO_SAMPLE);
+            out_timestamp        <= (others => '0');
             out_epoch_id         <= (others => '0');
             out_state            <= STATE_ACTIVE;
             out_discard_active   <= '0';
@@ -112,6 +116,10 @@ begin
             first_valid_timestamp <= (others => '0');
         elsif( rising_edge(clock) ) then
             epoch_start_event <= '0'; -- single-cycle pulse by default
+            -- The sample path below is registered. Keep the corresponding
+            -- timestamp in the same pipeline stage so fifo_writer metadata
+            -- names the sample it describes rather than the next ADC tick.
+            out_timestamp <= rx_timestamp;
 
             -- A common epoch boundary must be a real sample on every enabled
             -- ADC lane. RX_X1 enables one lane; RX_X2 requires both lanes.
