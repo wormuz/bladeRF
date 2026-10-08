@@ -119,17 +119,6 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
-/* AD9361 RF DC calibration is required for the first data-valid epoch and
- * when RX carrier moves more than 100 MHz from the last successfully
- * calibrated LO. */
-static inline bool bladerf2_rx_rfdc_calibration_required(
-    bool previous_lo_valid, uint64_t previous_lo_hz, uint64_t target_lo_hz)
-{
-    const uint64_t delta_hz = previous_lo_hz > target_lo_hz
-        ? previous_lo_hz - target_lo_hz : target_lo_hz - previous_lo_hz;
-    return !previous_lo_valid || delta_hz > 100000000ULL;
-}
-
 static inline bool bladerf2_rf_event_is_transition_terminal(
     bladerf_rf_event_type type)
 {

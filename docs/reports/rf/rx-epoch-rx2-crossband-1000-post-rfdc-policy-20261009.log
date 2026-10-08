@@ -1,0 +1,31 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+TRACE_SPI txn=100 writes=24 host_observed_write_us=16026.669 post_spi_to_tune_return_us=3126.122
+mode=RX2 progress=100 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=100
+TRACE_SPI txn=200 writes=24 host_observed_write_us=15932.219 post_spi_to_tune_return_us=3106.462
+mode=RX2 progress=200 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=200
+TRACE_SPI txn=300 writes=24 host_observed_write_us=15619.265 post_spi_to_tune_return_us=3121.283
+mode=RX2 progress=300 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=44
+TRACE_SPI txn=400 writes=24 host_observed_write_us=16015.394 post_spi_to_tune_return_us=3129.308
+mode=RX2 progress=400 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=144
+TRACE_SPI txn=500 writes=24 host_observed_write_us=15337.908 post_spi_to_tune_return_us=3143.514
+mode=RX2 progress=500 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=244
+TRACE_SPI txn=600 writes=24 host_observed_write_us=15872.854 post_spi_to_tune_return_us=3098.822
+mode=RX2 progress=600 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=88
+TRACE_SPI txn=700 writes=24 host_observed_write_us=16019.395 post_spi_to_tune_return_us=3133.650
+mode=RX2 progress=700 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=188
+TRACE_SPI txn=800 writes=24 host_observed_write_us=22296.612 post_spi_to_tune_return_us=4781.708
+mode=RX2 progress=800 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=32
+TRACE_SPI txn=900 writes=24 host_observed_write_us=17016.835 post_spi_to_tune_return_us=3414.150
+mode=RX2 progress=900 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=132
+TRACE_SPI txn=1000 writes=24 host_observed_write_us=16637.603 post_spi_to_tune_return_us=3165.977
+mode=RX2 progress=1000 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=232
+FINAL_EVENT_HISTORY_OK first=1 last=1000
+FINAL_RX1_DISABLE_DONE mode=RX2
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX2 transitions=1000 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=1000 transition_ms_p50=21.349_p95=27.466_p99=30.085_max=39.976

@@ -994,7 +994,6 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
             board_data, &event,
             bladerf2_rx_invalidation_channel_event_flags(
                 board_data, ch, reason));
-        board_data->rf_transition_rfdc_calibration_frequency_valid = false;
         /* Keep the reservation through the actual legacy setter only when
          * the invalidation/fence succeeded. */
         if (status != 0) {
@@ -1316,7 +1315,6 @@ static int _bladerf_rx_transition_begin(
     bool epochless_async_stream_active = false;
     bool sync_format_unsupported = false;
     bool rx_x2_layout_unsupported = false;
-    bool transition_requirement_invalid = false;
     uint64_t stage_started_ns;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
@@ -1346,28 +1344,9 @@ static int _bladerf_rx_transition_begin(
     }
 
     WITH_MUTEX(&dev->lock, {
-        if (!board_data->rf_transition_pending &&
-            !board_data->rf_transition_setter_active &&
-            (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
-            bladerf2_rx_rfdc_calibration_required(
-                board_data->rf_transition_rfdc_calibration_frequency_valid,
-                board_data->rf_transition_rfdc_calibration_frequency_hz,
-                request->target_frequency_hz)) {
-            uint32_t calibrated_requirements = 0;
-            if (bladerf2_rf_transition_normalize_requirements(
-                    required_events_mask |
-                        BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE,
-                    true, &calibrated_requirements)) {
-                required_events_mask = calibrated_requirements;
-            } else {
-                transition_requirement_invalid = true;
-            }
-        }
         if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active) {
             transition_busy = true;
-        } else if (transition_requirement_invalid) {
-            /* Reject before reserving a transaction or touching the RFIC. */
         } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
                        (required_events_mask &
                         BLADERF_RF_REQUIRE_EPOCH_VALID) != 0,
@@ -1449,9 +1428,6 @@ static int _bladerf_rx_transition_begin(
 
     if (transition_busy) {
         return BLADERF_ERR_WOULD_BLOCK;
-    }
-    if (transition_requirement_invalid) {
-        return BLADERF_ERR_INVAL;
     }
     if (epochless_async_stream_active) {
         return BLADERF_ERR_UNSUPPORTED;
@@ -1967,11 +1943,12 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
                   (_monotonic_ns() - wait_started_ns) / 1000ULL);
     }
 
-    /* Optional ADI calibration experiment/contract. The ADI API starts the
+    /* Optional ADI calibration contract. The ADI API starts the
      * RFDC calibration and returns only after its calibration-done bit clears;
      * it enters ALERT and restores the previous ENSM state internally. Keep
      * the FPGA epoch fenced across this operation and reject a late result.
-     * This is opt-in: ordinary LO hops preserve the existing fast path. */
+     * This is explicit opt-in: an LO-frequency change alone never forces
+     * RFDC calibration. */
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) {
         int adi_status;
@@ -1979,6 +1956,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         const uint64_t now_ns = calibration_begin_ns;
         const uint64_t remaining_us = now_ns < deadline_ns
             ? (deadline_ns - now_ns) / 1000ULL : 0;
+        log_debug("%s: RFDC calibration begin transaction=%u frequency=%" PRIu64
+                  " remaining=%" PRIu64 " us\n", __FUNCTION__,
+                  transaction_id,
+                  board_data->rf_transition_readback_frequency_hz,
+                  remaining_us);
         if (remaining_us == 0) {
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
@@ -1986,6 +1968,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         adi_status = ad9361_do_calib_timeout(
             board_data->phy, RFDC_CAL, 0,
             remaining_us > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining_us);
+        log_debug("%s: RFDC calibration result transaction=%u status=%d "
+                  "elapsed=%" PRIu64 " us\n", __FUNCTION__,
+                  transaction_id, adi_status,
+                  (_monotonic_ns() - calibration_begin_ns) / 1000ULL);
         if (adi_status < 0) {
             const int status = errno_ad9361_to_bladerf(adi_status);
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
@@ -2005,12 +1991,6 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
                     BLADERF_RF_STATE_CALIBRATING, 0, 0, 0, 0,
                     expected_epoch_id);
-        WITH_MUTEX(&dev->lock, {
-            board_data->rf_transition_rfdc_calibration_frequency_hz =
-                board_data->rf_transition_readback_frequency_hz;
-            board_data->rf_transition_rfdc_calibration_frequency_valid = true;
-        });
-
         /* RFDC calibration moved ENSM through ALERT. Re-confirm RFPLL lock
          * after calibration rather than carrying forward the pre-calibration
          * observation as if it proved the restored state. */
@@ -2045,12 +2025,21 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     }
 
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_ENSM_RX) {
+        uint8_t last_ensm_reg = 0xff;
         while (_monotonic_ns() < deadline_ns) {
             status = _read_rfic_reg(dev, REG_STATE_ADDR, &ensm_reg);
             if (status != 0) {
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
                            0, 0, 0, status, 0);
                 return _fail_transition(dev, board_data, status, final_event);
+            }
+            if (ensm_reg != last_ensm_reg) {
+                log_debug("%s: ENSM state observation transaction=%u "
+                          "reg=0x%02x state=0x%x elapsed=%" PRIu64 " us\n",
+                          __FUNCTION__, transaction_id, ensm_reg,
+                          ensm_reg & ENSM_STATE_MASK,
+                          (_monotonic_ns() - wait_started_ns) / 1000ULL);
+                last_ensm_reg = ensm_reg;
             }
             _test_rx_transition_late_observation("LATE_ENSM");
             if (_deadline_expired(deadline_ns)) {

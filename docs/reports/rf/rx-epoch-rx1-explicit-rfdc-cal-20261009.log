@@ -1,0 +1,11 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+FINAL_EVENT_HISTORY_OK first=1 last=1
+FINAL_RX1_DISABLE_DONE mode=RX1
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX1 transitions=1 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=1 transition_ms_p50=1330.235_p95=1330.235_p99=1330.235_max=1330.235

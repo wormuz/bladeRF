@@ -1,0 +1,19 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1259] lusb_stream_cb: RX transfer timed out after 10 full transfers
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x578ade486360: 0 of 32768 bytes, 10 transfer(s) completed on this stream
+RUNTIME_OVERRUN n=1 epoch=0 flags=0x30000009 rfic_status=0x0 error=0 timestamp=0
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x578ade49e390: 8192 of 32768 bytes, 23 transfer(s) completed on this stream
+READ_FAULT i=1 attempt=4 status=The operation would block, but has been requested to be non-blocking epoch=0/2 valid=0 count=0 meta_status=0x0 ts=0 boundary=10678083
+UNRECOVERED i=1 status=The operation would block, but has been requested to be non-blocking
+UNRECOVERED i=2 status=The operation would block, but has been requested to be non-blocking
+FINAL_EVENT_HISTORY_OK first=1 last=0
+QUALIFICATION_FAILED runtime_stream_overruns=1
+FINAL_RX1_DISABLE_DONE mode=RX2
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX2 transitions=3 unrecovered=2 first_read_faults=2 recovered=1 retry_would_block=4 retry_overruns=0 stream_overrun_events=1 data_withheld_events=5 transition_ms_p50=1330.979_p95=1330.979_p99=1330.979_max=1332.137

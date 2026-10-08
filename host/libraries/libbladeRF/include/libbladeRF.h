@@ -5021,8 +5021,7 @@ typedef enum {
 #define BLADERF_RF_REQUIRE_RX_X2_HOST_DATA (1U << 6)
 /** Force the AD9361 RX RF DC offset calibration and require its hardware
  * completion before the FPGA opens a new RX epoch, even when the LO delta is
- * small. The driver also applies this condition automatically for the first
- * data-valid epoch and LO changes greater than 100 MHz. Calibration moves
+ * small. Calibration moves
  * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
  * signal content is present. */
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)

@@ -48,6 +48,16 @@ typedef enum {
     SYNC_WORKER_STATE_STOPPED
 } sync_worker_state;
 
+/* RFDC calibration can temporarily stop the AD9361 ADC data-valid stream.
+ * Keep META RX USB transfers alive beyond the default 1 s bulk timeout so
+ * the transition's own deadline/event path, rather than a transport timeout,
+ * decides whether the transition succeeded. */
+#define SYNC_RX_META_TRANSITION_TIMEOUT_MS 2500U
+
+unsigned int sync_worker_transfer_timeout_ms(bladerf_direction direction,
+                                             bladerf_format format,
+                                             unsigned int configured_ms);
+
 struct sync_worker {
     THREAD thread;
 

@@ -27,6 +27,16 @@ int main(void)
     struct bladerf_stream stream = {0};
     struct sync_worker worker = {0};
 
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11_META, 1000) ==
+           SYNC_RX_META_TRANSITION_TIMEOUT_MS);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11_META, 3000) == 3000);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_TX,
+               BLADERF_FORMAT_SC16_Q11_META, 1000) == 1000);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11, 1000) == 1000);
+
     stream.state = STREAM_RUNNING;
     stream.layout = BLADERF_RX_X1;
     worker.stream = &stream;

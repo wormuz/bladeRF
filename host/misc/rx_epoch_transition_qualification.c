@@ -60,7 +60,8 @@ static int collect_runtime_events(struct bladerf *dev, uint64_t *cursor,
 static int validate_event_trace(struct bladerf *dev, uint32_t txn,
                                 const struct bladerf_rf_event *final_event,
                                 bool report_trace,
-                                bladerf_channel transition_channel)
+                                bladerf_channel transition_channel,
+                                bool require_rfdc_cal)
 {
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t count = 0;
@@ -114,7 +115,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         }
         return st ? st : BLADERF_ERR_UNEXPECTED;
     }
-    const bladerf_rf_event_type required[] = {
+    const bladerf_rf_event_type required_normal[] = {
         BLADERF_RF_EVT_RX_EPOCH_INVALID,
         BLADERF_RF_EVT_CONFIG_ACCEPTED,
         BLADERF_RF_EVT_SPI_WRITE_BEGIN,
@@ -126,6 +127,25 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         BLADERF_RF_EVT_RX_EPOCH_VALID,
         BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
     };
+    const bladerf_rf_event_type required_cal[] = {
+        BLADERF_RF_EVT_RX_EPOCH_INVALID,
+        BLADERF_RF_EVT_CONFIG_ACCEPTED,
+        BLADERF_RF_EVT_SPI_WRITE_BEGIN,
+        BLADERF_RF_EVT_SPI_DONE,
+        BLADERF_RF_EVT_LO_SET_RETURNED,
+        BLADERF_RF_EVT_LO_READBACK_MATCH,
+        BLADERF_RF_EVT_RX_PLL_LOCKED,
+        BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
+        BLADERF_RF_EVT_RX_PLL_LOCKED,
+        BLADERF_RF_EVT_ENSM_RX,
+        BLADERF_RF_EVT_RX_EPOCH_VALID,
+        BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
+    };
+    const bladerf_rf_event_type *required =
+        require_rfdc_cal ? required_cal : required_normal;
+    const size_t required_count = require_rfdc_cal
+        ? sizeof(required_cal) / sizeof(required_cal[0])
+        : sizeof(required_normal) / sizeof(required_normal[0]);
     unsigned next = 0;
     uint64_t spi_begin_ns = 0;
     uint64_t spi_done_ns = 0;
@@ -162,7 +182,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         } else if (events[i].event_type == BLADERF_RF_EVT_LO_SET_RETURNED) {
             lo_return_ns = events[i].host_monotonic_ns;
         }
-        if (next < sizeof(required) / sizeof(required[0]) &&
+        if (next < required_count &&
             events[i].event_type == required[next]) {
             if (next == 1 && events[i].fpga_state !=
                                 BLADERF_RF_STATE_SPI_PROGRAMMING) {
@@ -171,7 +191,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
             ++next;
         }
     }
-    if (next != sizeof(required) / sizeof(required[0]) ||
+    if (next != required_count ||
         spi_write_count == 0 || spi_done_ns == 0 || lo_return_ns == 0 ||
         spi_done_ns < spi_begin_ns || lo_return_ns < spi_done_ns) {
         return BLADERF_ERR_UNEXPECTED;
@@ -194,6 +214,7 @@ int main(int argc, char **argv) {
     uint32_t sample_rate = 4000000;
     bool count_set = false;
     bool cross_band = false;
+    bool require_rfdc_cal = false;
     bool paired = false;
     bool close_after_capture = false;
     unsigned close_pause_ms = 0;
@@ -216,6 +237,8 @@ int main(int argc, char **argv) {
             mode = argv[arg];
         } else if (strcmp(argv[arg], "--cross-band") == 0) {
             cross_band = true;
+        } else if (strcmp(argv[arg], "--require-rfdc-cal") == 0) {
+            require_rfdc_cal = true;
         } else if (strcmp(argv[arg], "--close-pause-ms") == 0 &&
                    arg + 1 < argc) {
             char *pause_end = NULL;
@@ -231,7 +254,8 @@ int main(int argc, char **argv) {
             close_after_capture = true;
         } else {
             fprintf(stderr, "usage: %s [count] [RX1|RX2|BOTH] [--cross-band] "
-                    "[--close-after-capture] [--close-pause-ms N]\n",
+                    "[--require-rfdc-cal] [--close-after-capture] "
+                    "[--close-pause-ms N]\n",
                     argv[0]);
             return 2;
         }
@@ -358,6 +382,8 @@ int main(int argc, char **argv) {
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                 BLADERF_RF_REQUIRE_ENSM_RX |
                 BLADERF_RF_REQUIRE_EPOCH_VALID |
+                (require_rfdc_cal
+                    ? BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE : 0) |
                 (paired ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA : 0),
             .timeout_ms = 2000,
             .require_rx_data_valid = true,
@@ -466,7 +492,8 @@ int main(int argc, char **argv) {
             if (valid) {
             st = validate_event_trace(dev, txn, &event,
                                       (i + 1) % 100 == 0,
-                                      transition_channel);
+                                      transition_channel,
+                                      require_rfdc_cal);
             if (st != 0) {
                 ++failures;
                 fprintf(stderr, "TRACE_INVALID i=%u status=%s\n", i,
