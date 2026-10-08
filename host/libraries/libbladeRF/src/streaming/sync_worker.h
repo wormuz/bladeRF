@@ -135,6 +135,9 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
 static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
 {
     struct buffer_mgmt *b;
+    uint32_t next_expected_seq = 0;
+    uint32_t next_expected_distance = UINT32_MAX;
+    unsigned int next_expected_index = BUFFER_MGMT_INVALID_INDEX;
 
     if (s == NULL || !s->initialized ||
         (s->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
@@ -158,9 +161,47 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
             if (b->buffer_dropped != NULL) {
                 b->buffer_dropped[i] = true;
             }
+        } else if (b->status[i] == SYNC_BUFFER_IN_FLIGHT &&
+                   b->buffer_seq != NULL) {
+            /* In-flight USB transfers survive the epoch fence, but their
+             * old-epoch payloads will be rejected. Rebase sequence tracking
+             * to the oldest still-owned transfer so discarded FULL slots do
+             * not leave an unretirable sequence hole at the next epoch. */
+            const uint32_t distance = b->buffer_seq[i] - b->expected_seq;
+            if (distance < next_expected_distance) {
+                next_expected_distance = distance;
+                next_expected_seq = b->buffer_seq[i];
+                next_expected_index = i;
+            }
+        }
+    }
+    if (next_expected_index != BUFFER_MGMT_INVALID_INDEX) {
+        b->expected_seq = next_expected_seq;
+        b->cons_i = next_expected_index;
+        b->partial_off = 0;
+        b->reorder_len = 0;
+        for (size_t i = 0; i < SYNC_RX_MAX_REORDER; ++i) {
+            b->reorder[i].seq = 0;
+            b->reorder[i].buf_idx = BUFFER_MGMT_INVALID_INDEX;
+            b->reorder[i].num_samples = 0;
+            b->reorder[i].dropped = false;
         }
     }
     MUTEX_UNLOCK(&b->lock);
+}
+
+/* A ring slot's dropped marker belongs to its previous sequence. Clear it
+ * whenever a new USB transfer is assigned to that slot. */
+static inline void sync_worker_mark_rx_slot_in_flight(
+    struct buffer_mgmt *b, unsigned int idx, uint32_t seq)
+{
+    b->status[idx] = SYNC_BUFFER_IN_FLIGHT;
+    if (b->buffer_seq != NULL) {
+        b->buffer_seq[idx] = seq;
+    }
+    if (b->buffer_dropped != NULL) {
+        b->buffer_dropped[idx] = false;
+    }
 }
 
 /* Epoch-fenced packets can visit every ring slot while the application is

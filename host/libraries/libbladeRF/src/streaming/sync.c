@@ -1553,6 +1553,29 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 copied_data);
 
                         if (epoch_disposition ==
+                                METADATA_RX_EPOCH_RETURN_VALID_PREFIX ||
+                            epoch_disposition ==
+                                METADATA_RX_EPOCH_DISCONTINUITY) {
+                            log_debug("RX META discontinuity disposition=%u "
+                                      "copied=%u off=%u msg_samples=%u "
+                                      "expected_epoch=%u msg_epoch=%u "
+                                      "epoch_match=%u timestamp=%" PRIu64 " "
+                                      "previous=%" PRIu64 " have_previous=%u "
+                                      "boundary=%" PRIu64 "\n",
+                                      (unsigned)epoch_disposition,
+                                      copied_data,
+                                      s->meta.curr_msg_off,
+                                      s->meta.samples_per_msg,
+                                      s->meta.rx_epoch_expected_id,
+                                      s->meta.msg_epoch_id,
+                                      epoch_matches,
+                                      s->meta.msg_timestamp,
+                                      s->meta.curr_timestamp,
+                                      s->meta.have_timestamp,
+                                      s->meta.rx_epoch_min_timestamp);
+                        }
+
+                        if (epoch_disposition ==
                             METADATA_RX_EPOCH_RETURN_VALID_PREFIX) {
                             /* A packet from another epoch after current-epoch
                              * samples is a real stream discontinuity. Return

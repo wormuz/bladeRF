@@ -1104,9 +1104,52 @@ static void test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun(void)
     assert(!f.sync.buf_mgmt.overrun_pending);
     assert(!f.sync.buf_mgmt.overrun_event_published);
     assert(f.states[0] == SYNC_BUFFER_IN_FLIGHT);
-    assert(buffer_dropped[0]);
+    assert(!buffer_dropped[0]);
 
     fixture_destroy(&f);
+}
+
+static void test_rejected_rx_marker_stays_on_empty_old_sequence_slot(void)
+{
+    struct fixture f;
+    uint32_t buffer_seq[2] = {4, 5};
+    bool buffer_dropped[2] = {false, true};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.buffer_seq = buffer_seq;
+    f.sync.buf_mgmt.buffer_dropped = buffer_dropped;
+    f.sync.buf_mgmt.expected_seq = 4;
+    f.sync.buf_mgmt.next_seq = 6;
+    f.sync.buf_mgmt.prod_i = 1;
+    f.states[0] = SYNC_BUFFER_IN_FLIGHT;
+    f.states[1] = SYNC_BUFFER_EMPTY;
+
+    assert(sync_worker_rx_buffer_rejected(&f.sync, f.buffers[0]) ==
+           f.buffers[1]);
+    assert(buffer_dropped[0]);
+    assert(!buffer_dropped[1]);
+    assert(f.states[0] == SYNC_BUFFER_EMPTY);
+    assert(f.states[1] == SYNC_BUFFER_IN_FLIGHT);
+    assert(buffer_seq[1] == 6);
+
+    fixture_destroy(&f);
+}
+
+static void test_rx_slot_reissue_clears_previous_dropped_marker(void)
+{
+    sync_buffer_status states[1] = {SYNC_BUFFER_EMPTY};
+    uint32_t sequences[1] = {17};
+    bool dropped[1] = {true};
+    struct buffer_mgmt buffers = {0};
+    buffers.status = states;
+    buffers.buffer_seq = sequences;
+    buffers.buffer_dropped = dropped;
+
+    sync_worker_mark_rx_slot_in_flight(&buffers, 0, 42);
+
+    assert(states[0] == SYNC_BUFFER_IN_FLIGHT);
+    assert(sequences[0] == 42);
+    assert(!dropped[0]);
 }
 
 static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
@@ -1151,6 +1194,43 @@ static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
     sequences[66] = 642;
     assert(sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 96));
     assert(f.sync.buf_mgmt.cons_i == 66);
+
+    fixture_destroy(&f);
+}
+
+static void test_rx_epoch_discard_rebases_to_oldest_inflight_sequence(void)
+{
+    struct fixture f;
+    sync_buffer_status states[4] = {
+        SYNC_BUFFER_FULL, SYNC_BUFFER_IN_FLIGHT,
+        SYNC_BUFFER_FULL, SYNC_BUFFER_IN_FLIGHT,
+    };
+    uint32_t sequences[4] = {1458, 1474, 1459, 1473};
+    bool dropped[4] = {false};
+    size_t lengths[4] = {128, 0, 128, 0};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.num_buffers = 4;
+    f.sync.buf_mgmt.status = states;
+    f.sync.buf_mgmt.buffer_seq = sequences;
+    f.sync.buf_mgmt.buffer_dropped = dropped;
+    f.sync.buf_mgmt.actual_lengths = lengths;
+    f.sync.buf_mgmt.expected_seq = 1458;
+    f.sync.buf_mgmt.cons_i = 0;
+    f.sync.buf_mgmt.reorder_len = 1;
+    f.sync.buf_mgmt.reorder[0].seq = 1460;
+    f.sync.buf_mgmt.reorder[0].buf_idx = 2;
+
+    sync_worker_discard_rx_epoch(&f.sync);
+
+    assert(states[0] == SYNC_BUFFER_EMPTY);
+    assert(states[2] == SYNC_BUFFER_EMPTY);
+    assert(dropped[0] && dropped[2]);
+    assert(states[1] == SYNC_BUFFER_IN_FLIGHT);
+    assert(states[3] == SYNC_BUFFER_IN_FLIGHT);
+    assert(f.sync.buf_mgmt.expected_seq == 1473);
+    assert(f.sync.buf_mgmt.cons_i == 3);
+    assert(f.sync.buf_mgmt.reorder_len == 0);
 
     fixture_destroy(&f);
 }
@@ -1657,7 +1737,10 @@ int main(void)
     test_worker_overrun_event_history_is_lock_safe();
     test_fpga_loss_event_published_inside_sync_fence();
     test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun();
+    test_rejected_rx_marker_stays_on_empty_old_sequence_slot();
+    test_rx_slot_reissue_clears_previous_dropped_marker();
     test_rx_consumer_reanchors_after_partial_rejected_ring_lap();
+    test_rx_epoch_discard_rebases_to_oldest_inflight_sequence();
     test_meta_withheld_event_precedes_sync_read_timeout();
     test_sync_read_fails_closed_before_parser_invalidation();
     test_first_host_event_commits_before_concurrent_invalidation();

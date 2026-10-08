@@ -64,13 +64,23 @@ rx2-long-capture-close-debug-2026-10-08.log
 RX_X2 also passed 10/10 captures with a 1,000 ms close-pause and clean final
 close (`rxx2-long-capture-10x-1000ms-2026-10-08.log`).
 
-This closes the observed stale-EMPTY/partial-rejected-ring reproduction. It
-does not close the full long-pause release gate: subsequent LTE sweeps exposed
-an intermittent parser discontinuity at the next epoch. Some 947.5→1835 MHz
-RX_X2 runs complete and confirm PCI 85; others publish `RX_STREAM_OVERRUN` and
-return only 32,704 of 6,912,000 interleaved requested samples. The fail-closed
-wrapper rejects those captures. The newer parser/event traces and immediate
-finite-capture close are recorded in the scanner repo at
-`docs/reports/rf/lte-rxx2-immediate-epoch-close-2026-10-08.md`; the intermittent
-discontinuity remains a release blocker. RX2 100-cycle final-close remains a
-separate open teardown issue.
+Follow-up parser tracing found a second sequence-marker defect. When a ring
+slot received a new in-flight sequence, an old `buffer_dropped` marker could
+survive until `sync_rx()` and make it skip that live transfer. It now clears
+the marker when either normal or rejected callback logic assigns a new
+sequence. Epoch discard also rebases `expected_seq` and `cons_i` to the oldest
+still-in-flight transfer and clears stale reorder state. Native regression
+covers slot reissue and sequence rebase. The parser now logs detailed
+epoch/timestamp/cursor context for a true discontinuity at debug level.
+
+Before the marker fix, LTE traces showed a same-epoch timestamp jump after
+skipping 10 dropped markers: expected timestamp 1,614,087, received 1,777,607;
+the paired capture returned 2,681,728 / 6,912,000 interleaved samples and
+failed closed. After the fix, five debug and twenty ordinary 947.5→1835 MHz
+RX_X2 runs had zero overruns, short reads, or timestamp discontinuities. The
+LTE cell was confirmed in all five debug runs and nineteen of twenty ordinary
+runs; one ordinary run had no PSS at 1835 MHz. This closes the reproduced host
+ring sequence skip in the test campaign but does not close overall LTE/analog
+qualification. The scanner report and raw traces are in
+`/home/bonho/projects/sdr-scanner/docs/reports/rf/lte-rxx2-immediate-epoch-close-2026-10-08.md`.
+RX2 100-cycle final-close remains a separate open teardown issue.

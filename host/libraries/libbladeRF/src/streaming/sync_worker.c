@@ -268,8 +268,8 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
     b->status[idx] = SYNC_BUFFER_EMPTY;
     if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
         next_idx = b->prod_i;
-        b->status[next_idx] = SYNC_BUFFER_IN_FLIGHT;
-        b->buffer_seq[next_idx] = b->next_seq++;
+        sync_worker_mark_rx_slot_in_flight(
+            b, next_idx, b->next_seq++);
         b->prod_i = (next_idx + 1) % b->num_buffers;
         next_buffer = b->buffers[next_idx];
     } else {
@@ -279,8 +279,10 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
          * same transport buffer and let the next sync_rx() discard/re-anchor
          * those entries. Classifying intentional epoch withholding as a
          * stream overrun would report a fault that did not affect valid data. */
-        b->status[idx] = SYNC_BUFFER_IN_FLIGHT;
-        b->buffer_seq[idx] = b->next_seq++;
+        /* This slot now represents the newly submitted sequence. The
+         * rejected old sequence was retired above; its marker must not make
+         * sync_rx skip this live in-flight sequence. */
+        sync_worker_mark_rx_slot_in_flight(b, idx, b->next_seq++);
         next_buffer = buffer;
     }
     MUTEX_UNLOCK(&b->lock);
@@ -379,10 +381,8 @@ static void *rx_callback(struct bladerf *dev,
 
             /* Update the state of the buffer being submitted next */
             next_idx = b->prod_i;
-            b->status[next_idx] = SYNC_BUFFER_IN_FLIGHT;
-            if (b->buffer_seq) {
-                b->buffer_seq[next_idx] = b->next_seq++;
-            }
+            sync_worker_mark_rx_slot_in_flight(
+                b, next_idx, b->next_seq++);
             next_buf = b->buffers[next_idx];
 
             /* Advance to the next buffer for the next callback */
