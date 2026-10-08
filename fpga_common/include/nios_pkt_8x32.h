@@ -377,9 +377,9 @@
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO   0x8a
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI   0x8b
 
-/* RX FIFO-writer sticky causes, captured from rx_clock into sys_clock as one
- * coherent word. Bits 0..4 match fifo_writer fault_sticky bit indices:
- * speed mismatch, no progress, GPIF timeout, protocol error, FIFO abort. */
+/* RX FIFO-writer causes/context, captured from rx_clock into sys_clock as one
+ * coherent word. Bits 0..5 are sticky causes; bits 6..10 are the context
+ * snapshot latched with GPIF_TIMEOUT. */
 #define NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES  0x8c
 #define NIOS_PKT_8x32_RX_FAULT_SPEED_MISMATCH    (1u << 0)
 #define NIOS_PKT_8x32_RX_FAULT_START_NO_PROGRESS (1u << 1)
@@ -388,7 +388,12 @@
 #define NIOS_PKT_8x32_RX_FAULT_FIFO_ABORT        (1u << 4)
 /* RX writer's progress watchdog expired while the FPGA sample FIFO was full. */
 #define NIOS_PKT_8x32_RX_FAULT_FIFO_FULL_AT_STALL (1u << 5)
-#define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK        0x3fu
+#define NIOS_PKT_8x32_RX_CTX_META_FIFO_FULL       (1u << 6)
+#define NIOS_PKT_8x32_RX_CTX_SAMPLE_VALID         (1u << 7)
+#define NIOS_PKT_8x32_RX_CTX_WRITER_HOLDOFF       (1u << 8)
+#define NIOS_PKT_8x32_RX_CTX_META_WRITTEN         (1u << 9)
+#define NIOS_PKT_8x32_RX_CTX_FIFO_ENOUGH          (1u << 10)
+#define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK        0x7ffu
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01

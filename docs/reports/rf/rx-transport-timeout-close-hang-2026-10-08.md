@@ -167,7 +167,38 @@ handshake bits (the 16-bit increase is the new RX fault-cause status
 handshake), 128 tamer, 129 ADI transfer, 10 ADI status, and 64 clock-monitor
 bits. qgate/qcheck were updated to validate this exact inventory; qcheck is
 clean and a direct qgate rerun now fails only on the three timing entries.
-This RBF was not loaded. Static timing must close before hardware bit-5
-readout can proceed.
+Seed 5 on the same RTL closed timing with worst setup +0.018 ns and hold
++0.012 ns, and passed qgate with all 740 D101 sources classified. Its RBF
+SHA-256 is `4633839b5bc95eb4377ce9aa379e199083f4b58e5c9c100ad4208032130a215d`.
+
+## Volatile xA4 diagnostic-image probe
+
+After the seed-5 image passed qgate, I loaded its 2,632,660-byte RBF into
+volatile FPGA RAM (no SPI flash write). The board's EEPROM size query remains
+invalid, so the documented `BLADERF_FORCE_FPGA_A4=1` override was used for
+this known xA4; the image length equals the driver's exact A4 length. The
+first CLI process stayed blocked after USB re-enumeration and was interrupted;
+a subsequent fresh `bladeRF-cli version` reported FPGA `0.16.1 (configured by
+USB host)`, and the device reopened and initialized successfully.
+
+On the loaded image, an RX2 cross-band probe reproduced two runtime overruns.
+One event carried `rfic_status=0x80000004`: cause-snapshot-valid plus
+`GPIF_TIMEOUT`, with `FIFO_FULL_AT_STALL` clear. This proves the sample FIFO's
+`wfull` signal was low at the watchdog boundary; it does not yet prove samples
+were absent, because META-FIFO backpressure and writer state were not captured.
+The non-GDB run then hung at `FINAL_DEVICE_CLOSE_BEGIN` until a 120-second
+test watchdog killed it. A second run under GDB reported two overruns and
+four unrecovered transitions out of five, but completed `bladerf_close()`.
+Thus host teardown remains intermittent.
+
+To resolve the ambiguity in the FPGA cause snapshot, the next RTL change
+captures five boundary fields alongside the sticky causes: `meta_fifo_full`,
+enabled input `sample_valid`, writer `HOLDOFF`, `meta_written`, and
+`fifo_enough` (space for a full DMA buffer). These occupy bits 6..10 of the
+existing coherent NIOS cause word; RX data path behavior is unchanged. The
+directed GHDL test now checks both a full-FIFO stall and a non-full stall
+after valid samples stop. `qcheck`, the four fifo_writer GHDL benches, the
+libbladeRF build, sync-worker stop test, and sync epoch traversal test pass.
+The expanded context snapshot has not yet been Quartus fitted or loaded.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.

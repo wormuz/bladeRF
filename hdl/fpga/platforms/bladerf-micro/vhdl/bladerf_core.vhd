@@ -294,9 +294,9 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_ts_hi_wire_sys  : std_logic_vector(31 downto 0);
     signal rx_epoch_ts_hi_sys       : std_logic_vector(31 downto 0) := (others => '0');
 
-    -- Transfer sticky RX writer causes as a coherent snapshot. A five-bit
-    -- vector must not cross through independent synchronizers because two
-    -- causes may assert together and appear as a transient combination.
+    -- Transfer sticky RX writer causes plus first-stall context as one
+    -- coherent snapshot. Independent synchronizers could combine fields
+    -- from different timeout boundaries.
     signal rx_fault_causes_word     : std_logic_vector(31 downto 0);
     signal rx_fault_causes_req_sys  : std_logic := '0';
     signal rx_fault_causes_ack_sys  : std_logic;
@@ -317,6 +317,7 @@ architecture core_bladerf of bladerf_core is
     signal clear_fault_toggle_tx  : std_logic;
 
     signal rx_fault_sticky        : std_logic_vector(5 downto 0);
+    signal rx_fault_context       : std_logic_vector(4 downto 0);
     signal tx_fault_sticky        : std_logic_vector(4 downto 0);
     signal rx_abort_active        : std_logic;
     signal tx_abort_active        : std_logic;
@@ -1377,7 +1378,8 @@ begin
         end if;
     end process;
 
-    rx_fault_causes_word <= (31 downto 6 => '0') & rx_fault_sticky;
+    rx_fault_causes_word <= (31 downto 11 => '0') & rx_fault_context &
+                            rx_fault_sticky;
 
     U_rx_fault_causes_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )
@@ -1790,6 +1792,7 @@ begin
             protocol_start_violation   => rx_protocol_start_violation,
             link_epoch_counter         => rx_link_epoch_counter,
             fault_sticky               => rx_fault_sticky,
+            fault_context              => rx_fault_context,
             abort_active               => rx_abort_active,
             epoch_ack                  => rx_epoch_ack,
             epoch_valid                => rx_epoch_valid,

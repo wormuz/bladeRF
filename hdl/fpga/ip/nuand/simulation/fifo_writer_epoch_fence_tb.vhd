@@ -34,6 +34,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal overflow_count : unsigned(63 downto 0);
     signal link_active : std_logic;
     signal fault_sticky : std_logic_vector(5 downto 0);
+    signal fault_context : std_logic_vector(4 downto 0);
     signal abort_active : std_logic;
     signal epoch_counter : unsigned(7 downto 0);
 begin
@@ -79,6 +80,7 @@ begin
             link_active => link_active,
             link_epoch_counter => epoch_counter,
             fault_sticky => fault_sticky,
+            fault_context => fault_context,
             abort_active => abort_active
         );
 
@@ -128,6 +130,35 @@ begin
         end loop;
         assert fault_sticky(2) = '1' and fault_sticky(5) = '1'
             report "full FIFO stall was not classified as GPIF backpressure"
+            severity failure;
+        assert fault_context(1) = '1' and fault_context(2) = '1'
+            report "stall context did not preserve valid input and HOLDOFF state"
+            severity failure;
+
+        -- Reset and begin a fresh epoch, admit one sample, then stop upstream
+        -- sample-valid while both FIFOs remain writable. The context snapshot
+        -- must show no downstream-full indication and no valid input sample.
+        reset <= '1';
+        wait for 3*CLK_PERIOD;
+        reset <= '0';
+        for i in 1 to 10 loop wait until rising_edge(clock); end loop;
+        fifo_full <= '0';
+        for i in 0 to 1 loop samples(i).data_v <= '1'; end loop;
+        wait until falling_edge(clock);
+        link_start_toggle <= '1';
+        wait until link_active = '1';
+        wait until fifo_write = '1';
+        for i in 0 to 1 loop samples(i).data_v <= '0'; end loop;
+        for i in 1 to 64 loop
+            wait until rising_edge(clock);
+            exit when fault_sticky(2) = '1';
+        end loop;
+        assert fault_sticky(2) = '1' and fault_sticky(5) = '0'
+            report "non-full stalled sample stream was not captured"
+            severity failure;
+        assert fault_context(0) = '0' and fault_context(1) = '0' and
+               fault_context(3) = '1'
+            report "sample-stall context did not distinguish absent valid data"
             severity failure;
 
         report "fifo_writer_epoch_fence_tb: PASS" severity note;

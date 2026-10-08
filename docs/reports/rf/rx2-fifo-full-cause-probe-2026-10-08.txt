@@ -1,0 +1,40 @@
+RX2 FIFO stall cause probe — 2026-10-08
+
+Image
+  Revision: sweep xA4, Quartus 25.1, seed 5
+  Commit: b97835f059987849ca16d4831ea04314361d664a
+  RBF SHA-256: 4633839b5bc95eb4377ce9aa379e199083f4b58e5c9c100ad4208032130a215d
+  qgate: PASS; timing min setup +0.018 ns, min hold +0.012 ns
+  Loaded into volatile FPGA RAM only; no SPI flash write.
+  FPGA size readback failed; BLADERF_FORCE_FPGA_A4=1 used for known xA4.
+  Fresh CLI after USB re-enumeration reported FPGA 0.16.1 configured by USB host.
+
+GDB-controlled command
+  host/build/output/rx_epoch_transition_qualification 5 RX2 --cross-band
+
+Relevant output
+  RX transfer timed out after 10 full transfers; a later RX transfer timed
+  out after 23 transfers.
+  RUNTIME_OVERRUN n=1 epoch=0 flags=0x30000009 rfic_status=0x0
+  READ_FAULT i=1 ... epoch=0/2 valid=0 count=0 ...
+  RUNTIME_OVERRUN n=2 epoch=2 flags=0x30000021 rfic_status=0x80000004
+  Transactions 3, 4, and 5 failed with “FPGA RX fault before epoch
+  certification”.
+  mode=RX2 transitions=5 unrecovered=4 first_read_faults=2 recovered=1
+  retry_would_block=4 retry_overruns=0 stream_overrun_events=2
+  data_withheld_events=5
+  FINAL_DEVICE_CLOSE_DONE
+
+Interpretation
+  0x80000004 is the valid-cause marker plus GPIF_TIMEOUT. FIFO_FULL_AT_STALL
+  (bit 5) is clear, so sample_fifo.wfull was low at the sampled boundary.
+  This does not distinguish an empty upstream sample stream from META FIFO
+  backpressure or FIFO-writer holdoff. The next RTL snapshot adds meta_full,
+  sample_valid, HOLDOFF, meta_written, and fifo_enough.
+
+Non-GDB follow-up
+  /tmp/rx2-fifo-full-cause-probe-2026-10-08.log
+  This run observed the same RX2 timeout/overrun and stopped at
+  FINAL_DEVICE_CLOSE_BEGIN until its 120-second test watchdog terminated it.
+  Close is therefore still intermittent; GDB changes the timing enough that
+  the second run closed successfully.

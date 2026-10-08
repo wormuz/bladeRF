@@ -87,6 +87,7 @@ entity fifo_writer is
         link_stop_toggle           :   in      std_logic := '0';
         clear_fault_toggle         :   in      std_logic := '0';
         fault_sticky               :   out     std_logic_vector(5 downto 0) := (others => '0');
+        fault_context              :   out     std_logic_vector(4 downto 0) := (others => '0');
         abort_active                :   out     std_logic := '0';
         -- Proof that THIS direction consumed the current epoch toggle.
         -- epoch_ack mirrors the toggle it acted on, so the system domain can
@@ -160,6 +161,10 @@ architecture simple of fifo_writer is
     constant FAULT_BIT_FIFO_FULL_AT_STALL : natural := 5;
 
     signal fault_sticky_i      : std_logic_vector(5 downto 0) := (others => '0');
+    -- Captured on the first GPIF-timeout edge: meta FIFO full, valid enabled
+    -- input sample present, writer in HOLDOFF, META packet written, and room
+    -- for another full DMA buffer, respectively.
+    signal fault_context_i     : std_logic_vector(4 downto 0) := (others => '0');
 
     -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
     -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
@@ -292,6 +297,7 @@ begin
         variable stop_link_pulse   : std_logic;
         variable clear_fault_pulse : std_logic;
         variable abort_active_next : std_logic;
+        variable sample_valid_at_stall : std_logic;
     begin
         if( reset = '1' ) then
             latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
@@ -303,6 +309,7 @@ begin
             link_toggle_prev   <= '0';
             settle_count       <= (others => '1');
             fault_sticky_i     <= (others => '0');
+            fault_context_i    <= (others => '0');
             progress_count     <= (others => '0');
             wrote_this_epoch   <= '0';
             abort_active_i     <= '0';
@@ -362,6 +369,7 @@ begin
                 -- A new epoch restarts both watchdogs from nothing-seen.
                 progress_count    <= (others => '0');
                 wrote_this_epoch  <= '0';
+                fault_context_i   <= (others => '0');
             elsif( link_active_i = '1' ) then
                 if( usb_speed /= latched_usb_speed ) then
                     speed_mismatch <= '1';
@@ -414,8 +422,10 @@ begin
             -- that can theoretically coincide with a start pulse).
             if( start_link_pulse = '1' ) then
                 fault_sticky_i <= (others => '0');
+                fault_context_i <= (others => '0');
             elsif( clear_fault_pulse = '1' ) then
                 fault_sticky_i <= (others => '0');
+                fault_context_i <= (others => '0');
             end if;
 
             if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
@@ -434,9 +444,31 @@ begin
                 if( wrote_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
                 else
-                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
-                    if( fifo_full = '1' ) then
-                        fault_sticky_i(FAULT_BIT_FIFO_FULL_AT_STALL) <= '1';
+                    if( fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) = '0' ) then
+                        fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                        if( fifo_full = '1' ) then
+                            fault_sticky_i(FAULT_BIT_FIFO_FULL_AT_STALL) <= '1';
+                        end if;
+                        sample_valid_at_stall := '0';
+                        for i in 0 to NUM_STREAMS-1 loop
+                            if( fifo_current.in_sample_controls_r(i).enable = '1' and
+                                fifo_current.in_samples_r(i).data_v = '1' ) then
+                                sample_valid_at_stall := '1';
+                            end if;
+                        end loop;
+                        fault_context_i(0) <= meta_fifo_full;
+                        fault_context_i(1) <= sample_valid_at_stall;
+                        if( fifo_current.state = HOLDOFF ) then
+                            fault_context_i(2) <= '1';
+                        else
+                            fault_context_i(2) <= '0';
+                        end if;
+                        fault_context_i(3) <= meta_current.meta_written;
+                        if( fifo_enough ) then
+                            fault_context_i(4) <= '1';
+                        else
+                            fault_context_i(4) <= '0';
+                        end if;
                     end if;
                 end if;
             end if;
@@ -489,6 +521,7 @@ begin
     protocol_start_violation  <= protocol_violation;
     link_epoch_counter        <= epoch_counter;
     fault_sticky              <= fault_sticky_i;
+    fault_context             <= fault_context_i;
     abort_active              <= abort_active_i;
     epoch_ack                 <= epoch_ack_i;
     epoch_valid               <= epoch_valid_i;

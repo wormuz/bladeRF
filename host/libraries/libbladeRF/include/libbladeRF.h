@@ -4909,8 +4909,9 @@ typedef enum {
 /** Sticky FPGA RX data-link fault observed during a certified epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
 /** `rfic_status` marker for an RX fault event with a coherent FPGA cause
- * snapshot in its low bits. Legacy FPGA images retain the RF link status
- * word in `rfic_status` and omit this marker. */
+ * snapshot in its low bits. Bits 6..10 carry GPIF-timeout boundary context
+ * when bit 2 (`GPIF_TIMEOUT`) is set. Legacy FPGA images retain the RF link
+ * status word in `rfic_status` and omit this marker. */
 #define BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID (1U << 31)
 #define BLADERF_RF_FPGA_RX_FAULT_SPEED_MISMATCH (1U << 0)
 #define BLADERF_RF_FPGA_RX_FAULT_START_NO_PROGRESS (1U << 1)
@@ -4919,6 +4920,16 @@ typedef enum {
 #define BLADERF_RF_FPGA_RX_FAULT_FIFO_ABORT (1U << 4)
 /** The RX progress watchdog expired while the FPGA sample FIFO was full. */
 #define BLADERF_RF_FPGA_RX_FAULT_FIFO_FULL_AT_STALL (1U << 5)
+/** META FIFO was full at the GPIF progress-watchdog boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_META_FIFO_FULL (1U << 6)
+/** An enabled input stream presented a valid sample at the boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_SAMPLE_VALID (1U << 7)
+/** The sample FIFO writer FSM was in HOLDOFF at the boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_WRITER_HOLDOFF (1U << 8)
+/** A META packet had completed before the stall boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_META_WRITTEN (1U << 9)
+/** The sample FIFO could accept one complete USB DMA buffer at the boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_FIFO_ENOUGH (1U << 10)
 /** FPGA RX-integrity status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
 /** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */
