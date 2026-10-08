@@ -156,8 +156,18 @@ ns, hold +0.007 ns), and produced RBF SHA-256
 release qgate rejected this `hosted` revision: its current CDC expectations
 do not match that older project variant (12 handshake crossings vs expected
 5, D101=674, D103=0, and 85 critical warnings). This is a gate failure, so
-the image was not loaded. The release `sweep` revision still needs its own
-full compile before deciding whether the new fault bit can be qualified on
-hardware.
+the image was not loaded. The `sweep` xA4 compile on `9ab05e1d` completed
+fit and produced RBF SHA-256
+`69c086bbc6c952e2b123b8202cece7740004ae5e03b46863245f9fbb3b6e5035`, but
+qgate rejected it for three timing violations: RX AD9361 `pll_sclk` generated
+clock setup slack −0.190 ns at 85°C and −0.221 ns at 0°C, plus hold slack
+−0.035 ns at 0°C. All max-skew paths and paired CDC bundle checks passed.
+The Design Assistant inventory is 740 D101 structures, including 409 held
+handshake bits (the 16-bit increase is the new RX fault-cause status
+handshake), 128 tamer, 129 ADI transfer, 10 ADI status, and 64 clock-monitor
+bits. qgate/qcheck were updated to validate this exact inventory; qcheck is
+clean and a direct qgate rerun now fails only on the three timing entries.
+This RBF was not loaded. Static timing must close before hardware bit-5
+readout can proceed.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.

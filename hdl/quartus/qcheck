@@ -1405,6 +1405,8 @@ def check_qgate_sta_resolution():
         categories = (
             ("held-handshake", 393,
              "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
+            ("held-handshake", 16,
+             "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|source_holding[0]"),
             ("tamer-payload", 128,
              "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
             ("adi-up-xfer", 129,
@@ -1417,9 +1419,9 @@ def check_qgate_sta_resolution():
         lines = [
             "; Design Assistant Status ; Analyzed ;",
             "; Total Critical Violations ; 0 ;",
-            "; Total High Violations ; 725 ;",
+            "; Total High Violations ; 741 ;",
             "; - Rule C105 ; 1 ;",
-            "; - Rule D101 ; 724 ;",
+            "; - Rule D101 ; 740 ;",
             "; Rule C105: Clock signal should be a global signal ; altera_internal_jtag~TCKUTAP ;",
         ]
         sources = [source for _name, count, source in categories for _ in range(count)]
@@ -1441,7 +1443,7 @@ def check_qgate_sta_resolution():
             [str(qgate), str(log)], text=True, capture_output=True,
             check=False)
         if (result.returncode != 0 or
-                "D101: all 724 sources classified" not in result.stdout or
+                "D101: all 740 sources classified" not in result.stdout or
                 "C105: exact internal JTAG TCK finding dispositioned" not in result.stdout or
                 "critical warnings (D101 and exact internal-JTAG C105 dispositioned; no others)" not in result.stdout):
             fail("qgate-classified-bundled-d101",

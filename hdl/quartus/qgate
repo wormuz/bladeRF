@@ -288,17 +288,17 @@ else
             c105_dispositioned=1
         fi
         if [ "$drc_critical" = 0 ] && [ "$c105_dispositioned" = 1 ] &&
-           [ "$drc_d101" = 724 ] && [ "$drc_d103" = 0 ] &&
+           [ "$drc_d101" = 740 ] && [ "$drc_d103" = 0 ] &&
            [ "$drc_high" = "$((drc_d101 + drc_c105))" ]; then
             classifier="$(dirname "$0")/classify_d101.py"
             if d101_inventory=$(python3 "$classifier" "$drc_report" 2>&1); then
                 if grep -q '^D101 category adi-clock-monitor: 64$' <<<"$d101_inventory" &&
                    grep -q '^D101 category adi-up-xfer: 129$' <<<"$d101_inventory" &&
                    grep -q '^D101 category adi-xfer-status: 10$' <<<"$d101_inventory" &&
-                   grep -q '^D101 category held-handshake: 393$' <<<"$d101_inventory" &&
+                   grep -q '^D101 category held-handshake: 409$' <<<"$d101_inventory" &&
                    grep -q '^D101 category tamer-payload: 128$' <<<"$d101_inventory"; then
                     d101_dispositioned=1
-                    note ok "Design Assistant D101: all 724 sources classified; fitted CDC bounds required above"
+                    note ok "Design Assistant D101: all 740 sources classified; fitted CDC bounds required above"
                     note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                 fi
             fi
@@ -315,7 +315,8 @@ else
 fi
 
 # D101 is only dispositioned when every fitted source maps to the exact
-# bundled-data inventory above: 393 held handshakes, 128 tamer payloads, and
+# bundled-data inventory above: 409 held handshakes (including the RX fault-
+# cause status crossing), 128 tamer payloads, and
 # all ADI control/status/clock snapshots. The single C105 disposition is bound
 # to the exact internal JTAG TCK node; any other C105 endpoint/count still
 # fails. Other critical warnings remain fatal.
