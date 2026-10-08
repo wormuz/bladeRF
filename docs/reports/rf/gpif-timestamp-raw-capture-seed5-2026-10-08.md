@@ -32,3 +32,18 @@ The seed-5 fit started before a later source-only guard change in
 passes `sample_stream_tb`, which exercises the single-stream bounds check.
 A new full fit is still required for the exact final source. No image was
 loaded onto hardware.
+
+## Exact-current-source rerun
+
+A second full Quartus Prime Standard 25.1 A4 sweep fit was run on the committed
+source tree (`450e0598`) with seed 5 on 2026-10-08. It completed in 15:02 and
+produced the same RBF SHA-256, `67bfc65bc8fd2c7a856c246b82d041e998ac49637ed91c62209b7fb4427c458f`.
+This confirms the single-stream structural guard is simulation/elaboration
+safety and does not change the fitted hardware image.
+
+The exact-source full log is `adr0207-current-source-seed5-2026-10-08.log`.
+`qgate` remains red: 35 critical warnings, two negative setup slack entries,
+and Design Assistant High=725 (D101=724, D103=0; C105=1). The setup report
+reproduces the -0.144 ns worst path from `fifo_writer.meta_write` to RX META
+DCFIFO write-pointer logic. Max-skew remains clean across all 168 paths. This
+fit is not a release candidate; no image was loaded.
