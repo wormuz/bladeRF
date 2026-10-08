@@ -58,3 +58,29 @@ proof of image identity; the current probe did not load an image.
 
 Raw runs: `/tmp/rx1_epoch_qual_10.log`, `/tmp/rxqual-failure.log`.
 GDB/strace traces remain local in `/tmp` and were not committed.
+
+## Follow-up: stream restart and remaining join hang
+
+Inspection found that `lusb_stream_data.done_flag` was initialized only when
+the backend stream was created. A terminal stream run sets it to 1; sync RX
+can report that error, return to idle, and invoke the same backend stream
+again. `libusb_handle_events_timeout_completed()` treats a nonzero completion
+flag as already complete, so a stale value can prevent the next run from
+reaping transfer callbacks. The backend now resets this per-run flag before
+submitting transfers. This is a valid stream-restart lifecycle fix, but it is
+not a complete fix for the close hang.
+
+After the reset, another GDB run still blocked in `pthread_join()` after an RX
+USB timeout. At the join breakpoint, `sync_worker` had state `STOPPED`, the
+stream had state `STREAM_DONE` with `error_code=-6`, `done_flag=1`, and all 8
+transfer slots were available (`num_avail=8`, `num_transfers=8`). The observed
+thread stacks did not yet establish why the join target remained live. This
+changes the next investigation: verify the exact `pthread_t` passed to join
+against created thread IDs and trace the worker's return/cleanup path; do not
+assume that pending USB callbacks are still the only cause.
+
+The test-only injected `ERROR` run also failed before it could qualify bounded
+shutdown: the test expected a withheld-event reason of `0x20`, while the
+observed event carried `0x10000020`; it then reported `withheld=0`. That is a
+separate event-mask/test expectation issue, and this run is not evidence for
+or against the join fix. Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.

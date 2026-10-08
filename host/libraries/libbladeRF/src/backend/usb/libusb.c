@@ -1694,6 +1694,15 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
 
     MUTEX_LOCK(&stream->lock);
 
+    /* done_flag belongs to one invocation of this event loop. A previous
+     * stream run sets it when all transfers have drained; sync RX can restart
+     * the same backend stream after reporting that terminal error. If the old
+     * completion value survives, libusb_handle_events_timeout_completed()
+     * returns immediately on every iteration, so new cancel completions are
+     * never reaped and shutdown can wait forever with transfers marked
+     * CANCEL_PENDING. Reset before submitting this run's first transfer. */
+    stream_data->done_flag = 0;
+
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
