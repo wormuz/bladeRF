@@ -296,3 +296,13 @@ the first GPIF watchdog event into the unused upper bits of the existing
 32-bit coherent fault snapshot. That will distinguish downstream FIFO
 backpressure from a metadata handoff stall without adding another CDC. Then
 inspect the FX3/GPIF progress side against the captured occupancies.
+
+Commit `40974899` implements that occupancy snapshot. Cause bits 11..19 carry
+sample FIFO occupancy in 16-entry units; bits 20..30 carry exact META FIFO
+occupancy, leaving bit 31 for the host-side snapshot-valid marker. The
+existing single 32-bit RX-clock-to-system-clock handshake remains unchanged.
+`fifo_writer_epoch_fence_tb` now asserts the captured occupancies; all four
+fifo-writer GHDL benches, `qcheck`, the libbladeRF shared-library build,
+sync-worker stop test, and sync epoch traversal test pass. A fresh xA4 fit
+and volatile hardware probe are still required before this diagnostic is
+usable for root-cause closure.
