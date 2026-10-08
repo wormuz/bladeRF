@@ -44,8 +44,19 @@ verified again. The calibration region has no readable `B` (FPGA size) or
 `DAC` (VCTCXO trim) key/value records; its data is erased (`0xff`). This
 explains `FPGA size: Unknown` and fallback DAC trim `0x1ffc`. It does not
 explain why the FX3's valid autoload stream did not leave NIOS responsive in
-the original session. The immediate recovery was an FPGA reload; the exact
-trigger for the original NIOS nonresponse remains unproven.
+the original session. The FPGA reload used for recovery destroyed the original
+volatile failure state; the initial failure was not captured before that
+reload, so its exact trigger cannot be inferred from the later successful
+opens. Do not reload the FPGA before collecting a first-request trace on a
+future affected cold boot.
+
+The persistent read-only probe is `host/misc/run_rx_nios_boot_probe.sh`. It
+selects FX3 RF-link USB altsetting 1, sends exactly one 16-byte legacy NIOS
+read for FPGA version byte 0, records OUT/IN status and elapsed time, then
+returns to idle altsetting 0. It never sends FPGA configuration commands,
+retries, or writes flash. On the already recovered live candidate the first
+request completed in 0.128 ms and returned version byte 0; this validates the
+probe and current NIOS responsiveness, not the lost boot failure.
 
 Candidate: `hdl/quartus/work/bladerf-micro-A4-sweep/output_files/sweep.rbf`
 
