@@ -438,9 +438,7 @@ int main(void)
         (pre_callback_fault || atomic_load(&test.recoverable_short_mode)
              ? atomic_load(&test.overrun_events) < 1
              : atomic_load(&test.overrun_events) != 1) ||
-        (pre_callback_fault || atomic_load(&test.recoverable_short_mode)
-             ? atomic_load(&test.event_callbacks) < 1
-             : atomic_load(&test.event_callbacks) != 1) ||
+        atomic_load(&test.event_callbacks) < 1 ||
         (atomic_load(&test.short_after_valid_mode)
              ? (atomic_load(&test.resumed_events) != 1 ||
                 atomic_load(&test.first_valid_events) != 1 ||

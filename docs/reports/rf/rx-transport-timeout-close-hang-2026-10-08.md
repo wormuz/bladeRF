@@ -84,11 +84,16 @@ shutdown: the test expected a withheld-event reason of `0x20`, while the
 observed event carried `0x10000020`; it then reported `withheld=0`. That is a
 separate event-mask/test expectation issue, and this run is not evidence for
 or against the join fix. The checker now compares only the documented
-withheld-reason bits. With this correction, isolated RX1 `ERROR` and
-`TIMEOUT` injections both pass and close cleanly under a 40-second watchdog.
-The delayed injection (`TIMEOUT` after 20 completed transfers) did not reach
-the expected terminal transfer-failure path: it returned stream success with
-a timestamp-discontinuity event instead. That case needs a deterministic
-fault trigger before it can qualify callback teardown after partial progress.
+withheld-reason bits. With this correction, RX1 and RX2 each pass injected
+`ERROR`, `STALL`, `TIMEOUT`, `NO_DEVICE`, and `UNKNOWN` statuses with bounded
+cleanup. The checker now allows a timestamp-discontinuity notification to
+precede the injected error, while still requiring the expected fault reason
+and overrun. The delayed injection (`TIMEOUT` after 20 completed transfers)
+did not reach the terminal transfer-failure path because this harness ended
+its capture before 20 full USB completions. A terminal `TIMEOUT` after four
+full transfers does pass, exercising cancellation while other transfers are
+in flight. These injected runs validate callback/error cleanup but do not
+reproduce the physical xA4 fault or explain the separate hardware-only join
+hang.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
