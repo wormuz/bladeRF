@@ -221,6 +221,8 @@ struct board_fns {
 
     /* Open/close */
     int (*open)(struct bladerf *dev, struct bladerf_devinfo *devinfo);
+    /* Stop background workers that may need dev->lock before close takes it. */
+    void (*pre_close)(struct bladerf *dev);
     void (*close)(struct bladerf *dev);
 
     /* Properties */

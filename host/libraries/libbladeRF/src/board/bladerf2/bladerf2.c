@@ -587,8 +587,6 @@ static void bladerf2_close(struct bladerf *dev)
         if (board_data != NULL) {
             bladerf_direction dir;
 
-            bladerf2_rx_fault_monitor_stop(dev);
-
             FOR_EACH_DIRECTION(dir)
             {
                 size_t idx;
@@ -3851,6 +3849,7 @@ static int bladerf2_expansion_get_attached(struct bladerf *dev, bladerf_xb *xb)
 struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.matches, bladerf2_matches),
     FIELD_INIT(.open, bladerf2_open),
+    FIELD_INIT(.pre_close, bladerf2_rx_fault_monitor_stop),
     FIELD_INIT(.close, bladerf2_close),
     FIELD_INIT(.device_speed, bladerf2_device_speed),
     FIELD_INIT(.get_serial, bladerf2_get_serial),

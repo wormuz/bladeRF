@@ -215,6 +215,9 @@ void bladerf_close(struct bladerf *dev)
 {
     if (dev) {
         log_debug("bladerf_close: board close begin\n");
+        if (dev->board->pre_close) {
+            dev->board->pre_close(dev);
+        }
         MUTEX_LOCK(&dev->lock);
 
         dev->board->close(dev);

@@ -306,3 +306,41 @@ fifo-writer GHDL benches, `qcheck`, the libbladeRF shared-library build,
 sync-worker stop test, and sync epoch traversal test pass. A fresh xA4 fit
 and volatile hardware probe are still required before this diagnostic is
 usable for root-cause closure.
+
+## RX fault-monitor close deadlock and occupancy measurement (2026-10-08)
+
+A later GDB trace isolated the close hang to a different lock ordering than the
+older sync-worker join issue above. `bladerf_close()` acquired `dev->lock`,
+then `bladerf2_close()` stopped and joined the RX fault monitor. The monitor
+could concurrently enter `_invalidate_faulted_rx_epoch()` and wait for the
+same `dev->lock`, producing a deterministic join cycle. The board interface
+now has an optional `pre_close` hook, called before generic close acquires
+`dev->lock`; bladeRF2 uses it to stop/join the monitor. The old stop call was
+removed from `bladerf2_close()`.
+
+The production shared library rebuilt. Native `libbladeRF_test_sync_worker_stop`
+and `libbladeRF_test_sync_epoch_traversal` both exited successfully (the
+latter prints expected timeout diagnostics from negative cases). The test
+board was then reopened using the local build and existing volatile RBF; no
+FPGA reload, SPI flash write, service stop, or system-library change occurred.
+
+A 3-transition RX2 cross-band run still hit a USB timeout and runtime overrun
+(`rfic_status=0` on that event), recovered one transition, and ended with 2/3
+unrecovered. Both module disables and `bladerf_close()` completed. A 3-transition
+RX1 cross-band run still hit two USB timeouts and two runtime overruns; its
+second overrun carried `rfic_status=0x807df984`. Decoding the coherent FPGA
+snapshot:
+
+- cause snapshot valid; `GPIF_TIMEOUT` set;
+- enabled sample input valid and sample FIFO writer in `HOLDOFF`;
+- META FIFO not full, `meta_written=0`, and `fifo_enough=0`;
+- sample FIFO occupancy is 7152 of 8192 entries (87.3%);
+- META FIFO occupancy is 7 entries.
+
+This directly observes backpressure at the FPGA FIFO writer boundary: there
+was no room for one complete DMA buffer, while sample data remained queued and
+META FIFO fullness was not the blocking condition. It narrows the transport
+failure to GPIF/FX3 drain progress or its interaction with the writer's
+full-buffer admission rule. It does not yet identify why downstream draining
+stopped. RX disable and close completed in both physical runs, fixing the
+previous shutdown hang for this monitor-lock cycle but not qualifying transport.
