@@ -96,4 +96,24 @@ in flight. These injected runs validate callback/error cleanup but do not
 reproduce the physical xA4 fault or explain the separate hardware-only join
 hang.
 
+## Follow-up: worker startup timeout use-after-free
+
+A later GDB run exposed a separate, concrete lifecycle race. When
+`bladerf_sync_config()` timed out while waiting for the new worker to reach
+`IDLE`, `sync_worker_init()` followed its generic error path, freed
+`s->worker`, and returned without stopping or joining the thread created just
+above. GDB caught that thread in `sync_worker_task()` with `s->worker == NULL`;
+it faulted in `set_state()` while locking address `0x20`. This is a confirmed
+use-after-free on the worker-startup timeout path. The path now requests stop
+and joins the created worker before freeing its state; pre-thread failures
+release only the stream and synchronization objects they initialized. Normal
+worker deinit now also destroys its synchronization objects after join.
+
+After this change, native sync worker-stop and epoch traversal tests passed.
+A five-transition RX1 cross-band hardware run still failed qualification on
+USB timeouts/overrun, but RX disable and device close both completed. This
+shows cleanup completed in that run; it does not prove the startup-timeout
+path under deterministic scheduling or close the physical USB fault. Log:
+`/tmp/rx1-sync-worker-init-cleanup.log`.
+
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.

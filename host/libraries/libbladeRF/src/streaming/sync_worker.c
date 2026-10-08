@@ -509,6 +509,12 @@ static void *tx_callback(struct bladerf *dev,
 int sync_worker_init(struct bladerf_sync *s)
 {
     int status = 0;
+    bool stream_initialized = false;
+    bool state_lock_initialized = false;
+    bool request_lock_initialized = false;
+    bool state_changed_initialized = false;
+    bool requests_pending_initialized = false;
+
     s->worker  = (struct sync_worker *)calloc(1, sizeof(*s->worker));
 
     if (s->worker == NULL) {
@@ -534,6 +540,7 @@ int sync_worker_init(struct bladerf_sync *s)
                   bladerf_strerror(status));
         goto worker_init_out;
     }
+    stream_initialized = true;
 
     status = async_set_transfer_timeout(
         s->worker->stream,
@@ -550,7 +557,9 @@ int sync_worker_init(struct bladerf_sync *s)
     }
 
     MUTEX_INIT(&s->worker->state_lock);
+    state_lock_initialized = true;
     MUTEX_INIT(&s->worker->request_lock);
+    request_lock_initialized = true;
 
     status = COND_INIT(&s->worker->state_changed);
     if (status != THREAD_SUCCESS) {
@@ -559,6 +568,7 @@ int sync_worker_init(struct bladerf_sync *s)
         status = BLADERF_ERR_UNEXPECTED;
         goto worker_init_out;
     }
+    state_changed_initialized = true;
 
     status = COND_INIT(&s->worker->requests_pending);
     if (status != THREAD_SUCCESS) {
@@ -567,6 +577,7 @@ int sync_worker_init(struct bladerf_sync *s)
         status = BLADERF_ERR_UNEXPECTED;
         goto worker_init_out;
     }
+    requests_pending_initialized = true;
 
     status = THREAD_CREATE(&s->worker->thread, sync_worker_task, s);
     if (status != THREAD_SUCCESS) {
@@ -583,11 +594,32 @@ int sync_worker_init(struct bladerf_sync *s)
         log_debug("%s worker: sync_worker_wait_for_state failed: %d\n",
                   worker2str(s), status);
         status = BLADERF_ERR_TIMEOUT;
-        goto worker_init_out;
+        /* The thread exists even if it missed the startup deadline. Stop and
+         * join it while its state locks and storage are still alive; freeing
+         * s->worker here races the worker's initial set_state(). */
+        sync_worker_deinit(s->worker, &s->buf_mgmt.lock,
+                           &s->buf_mgmt.buf_ready);
+        s->worker = NULL;
+        return status;
     }
 
 worker_init_out:
     if (status != 0) {
+        if (stream_initialized) {
+            async_deinit_stream(s->worker->stream);
+        }
+        if (requests_pending_initialized) {
+            COND_DESTROY(&s->worker->requests_pending);
+        }
+        if (state_changed_initialized) {
+            COND_DESTROY(&s->worker->state_changed);
+        }
+        if (request_lock_initialized) {
+            MUTEX_DESTROY(&s->worker->request_lock);
+        }
+        if (state_lock_initialized) {
+            MUTEX_DESTROY(&s->worker->state_lock);
+        }
         free(s->worker);
         s->worker = NULL;
     }
@@ -633,6 +665,11 @@ void sync_worker_deinit(struct sync_worker *w,
     async_deinit_stream(w->stream);
     log_debug("sync_worker_deinit: async stream deinit complete worker=%p\n",
               (void *)w);
+
+    COND_DESTROY(&w->requests_pending);
+    COND_DESTROY(&w->state_changed);
+    MUTEX_DESTROY(&w->request_lock);
+    MUTEX_DESTROY(&w->state_lock);
 
     free(w);
 }
