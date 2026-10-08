@@ -604,6 +604,7 @@ void sync_worker_deinit(struct sync_worker *w,
     }
 
     log_verbose("%s: Requesting worker %p to stop...\n", __FUNCTION__, w);
+    log_debug("sync_worker_deinit: request stop worker=%p\n", (void *)w);
 
     sync_worker_submit_request(w, SYNC_WORKER_STOP);
 
@@ -614,6 +615,8 @@ void sync_worker_deinit(struct sync_worker *w,
     }
 
     status = sync_worker_wait_for_state(w, SYNC_WORKER_STATE_STOPPED, 3000);
+    log_debug("sync_worker_deinit: stopped wait worker=%p status=%d\n",
+              (void *)w, status);
 
     if (status != 0) {
         log_warning("Timed out while stopping worker. Canceling thread.\n");
@@ -623,7 +626,11 @@ void sync_worker_deinit(struct sync_worker *w,
     THREAD_JOIN(w->thread, NULL);
     log_verbose("%s: Worker joined.\n", __FUNCTION__);
 
+    log_debug("sync_worker_deinit: async stream deinit begin worker=%p\n",
+              (void *)w);
     async_deinit_stream(w->stream);
+    log_debug("sync_worker_deinit: async stream deinit complete worker=%p\n",
+              (void *)w);
 
     free(w);
 }

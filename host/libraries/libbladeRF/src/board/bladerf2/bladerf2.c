@@ -596,7 +596,11 @@ static void bladerf2_close(struct bladerf *dev)
 
                 FOR_EACH_CHANNEL(dir, 1, idx, ch)
                 {
+                    log_debug("bladerf2_close: sync_deinit begin channel=%u\n",
+                              (unsigned)ch);
                     sync_deinit(&board_data->sync[ch]);
+                    log_debug("bladerf2_close: sync_deinit complete channel=%u\n",
+                              (unsigned)ch);
 
                     /* Tell the FX3 the direction is going away.
                      *
@@ -612,7 +616,11 @@ static void bladerf2_close(struct bladerf *dev)
                      */
                     if (board_data->state >= STATE_INITIALIZED &&
                         dev->backend->is_fpga_configured(dev)) {
+                        log_debug("bladerf2_close: disable module begin direction=%u\n",
+                                  (unsigned)dir);
                         int status = dev->backend->enable_module(dev, dir, false);
+                        log_debug("bladerf2_close: disable module complete direction=%u status=%d\n",
+                                  (unsigned)dir, status);
                         if (status != 0) {
                             log_debug("%s: could not disable %s on close: %s\n",
                                       __FUNCTION__,
@@ -641,6 +649,7 @@ static void bladerf2_close(struct bladerf *dev)
             }
 
             if (board_data->state >= STATE_INITIALIZED && rfic != NULL) {
+                log_debug("bladerf2_close: RFIC standby begin\n");
                 if (board_data->rfic_reset_on_close) {
                     /* We need to fully de-initialize the RFIC, so it can be
                      * reset on the next open. This seems to be necessary after
@@ -653,6 +662,7 @@ static void bladerf2_close(struct bladerf *dev)
                      */
                     rfic->standby(dev);
                 }
+                log_debug("bladerf2_close: RFIC standby complete\n");
             }
 
             if (board_data->rx_async_epoch_cond_initialized) {

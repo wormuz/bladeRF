@@ -214,12 +214,16 @@ int bladerf_get_backendinfo(struct bladerf *dev, struct bladerf_backendinfo *inf
 void bladerf_close(struct bladerf *dev)
 {
     if (dev) {
+        log_debug("bladerf_close: board close begin\n");
         MUTEX_LOCK(&dev->lock);
 
         dev->board->close(dev);
+        log_debug("bladerf_close: board close complete\n");
 
         if (dev->backend) {
+            log_debug("bladerf_close: backend close begin\n");
             dev->backend->close(dev);
+            log_debug("bladerf_close: backend close complete\n");
         }
 
         /** Free gain table entries */

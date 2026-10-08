@@ -498,6 +498,7 @@ error:
 void async_deinit_stream(struct bladerf_stream *stream)
 {
     size_t i;
+    unsigned int wait_seconds = 0;
 
     if (!stream) {
         log_debug("%s called with NULL stream\n", __FUNCTION__);
@@ -505,8 +506,13 @@ void async_deinit_stream(struct bladerf_stream *stream)
     }
 
     while(stream->state != STREAM_DONE && stream->state != STREAM_IDLE) {
+        if ((wait_seconds % 5) == 0) {
+            log_debug("async_deinit_stream: waiting for terminal state=%d stream=%p (%u s)\n",
+                      (int)stream->state, (void *)stream, wait_seconds);
+        }
         log_verbose( "Stream not done...\n" );
         usleep(1000000);
+        ++wait_seconds;
     }
 
     /* Free up the backend data */
