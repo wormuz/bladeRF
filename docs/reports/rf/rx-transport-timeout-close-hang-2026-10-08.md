@@ -199,6 +199,14 @@ existing coherent NIOS cause word; RX data path behavior is unchanged. The
 directed GHDL test now checks both a full-FIFO stall and a non-full stall
 after valid samples stop. `qcheck`, the four fifo_writer GHDL benches, the
 libbladeRF build, sync-worker stop test, and sync epoch traversal test pass.
-The expanded context snapshot has not yet been Quartus fitted or loaded.
+Quartus seed 5 fit of this expanded snapshot on commit `20997366` completed
+with RBF SHA-256
+`47111735df594b632ba8b5ca16af98d8dfaefb4a1d17241381d133f2bb4d1213`, but
+qgate rejected two generated `pll_sclk` setup entries (−0.123 ns at 85°C and
+−0.220 ns at 0°C); hold slack remained positive. The five additional D101
+bits exactly match the five context fields on the existing 32-bit CDC
+handshake. qgate/qcheck now expect 745 total / 414 held-handshake bits and
+classify the complete inventory; direct qgate rerun fails only on the two
+timing entries. This expanded-context RBF has not been loaded.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
