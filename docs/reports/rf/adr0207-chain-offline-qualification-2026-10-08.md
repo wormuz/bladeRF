@@ -28,6 +28,20 @@ It is in `host/misc/run_rx_fpga_recovery_load_live.sh` and
 so an unintended image is rejected. It loaded and read back FPGA v0.16.1.
 No FPGA flash write was performed.
 
+Read-only flash backups rule out a missing FPGA image: the A4 autoload page
+contains `FMT=LZMA`, `ULEN=2632660`, and `CLEN=683669`. The persistent decoder
+`host/misc/verify_fpga_autoload_backup.py` decompressed that stream to a valid
+raw RBF (SHA-256
+`3ed6ae6c1502436c3f4b14e90318b15f33c116ebbde4059dcddf630447adeb8d`). It
+differs from the current source candidate, but loads over USB and reports FPGA
+v0.16.1 with working NIOS/AD9361. The source candidate was then reloaded and
+verified again. The calibration region has no readable `B` (FPGA size) or
+`DAC` (VCTCXO trim) key/value records; its data is erased (`0xff`). This
+explains `FPGA size: Unknown` and fallback DAC trim `0x1ffc`. It does not
+explain why the FX3's valid autoload stream did not leave NIOS responsive in
+the original session. The immediate recovery was an FPGA reload; the exact
+trigger for the original NIOS nonresponse remains unproven.
+
 Candidate: `hdl/quartus/work/bladerf-micro-A4-sweep/output_files/sweep.rbf`
 
 SHA-256: `f53cd1c1fbdc8176c40397d1881a70b5081e8d489854928fb7732dc20ab4fa12`
