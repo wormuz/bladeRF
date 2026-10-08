@@ -88,6 +88,7 @@ entity fifo_writer is
         clear_fault_toggle         :   in      std_logic := '0';
         fault_sticky               :   out     std_logic_vector(5 downto 0) := (others => '0');
         fault_context              :   out     std_logic_vector(24 downto 0) := (others => '0');
+        gpif_diag                  :   in      std_logic_vector(2 downto 0) := (others => '0');
         abort_active                :   out     std_logic := '0';
         -- Proof that THIS direction consumed the current epoch toggle.
         -- epoch_ack mirrors the toggle it acted on, so the system domain can
@@ -165,6 +166,7 @@ architecture simple of fifo_writer is
     -- input sample present, writer in HOLDOFF, META packet written, and room
     -- for another full DMA buffer, respectively.
     signal fault_context_i     : std_logic_vector(24 downto 0) := (others => '0');
+    signal gpif_diag_rx        : std_logic_vector(2 downto 0) := (others => '0');
 
     -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
     -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
@@ -469,12 +471,11 @@ begin
                         else
                             fault_context_i(4) <= '0';
                         end if;
-                        -- Keep the sample FIFO occupancy in 16-entry units
-                        -- (9 bits for the 8192-entry RX FIFO) and META FIFO
-                        -- occupancy exactly (11 bits for 2048 entries).
-                        -- These values share the existing coherent snapshot;
-                        -- they distinguish a full-buffer backpressure wait
-                        -- from a metadata handoff stall without another CDC.
+                        -- Keep the sample FIFO occupancy in 16 write-word
+                        -- units (9 bits for its 8192-word depth). META FIFO
+                        -- occupancy uses 8-word units in 8 bits; meta-full
+                        -- is captured separately. The final 3 bits are
+                        -- synchronized GPIF-side drain prerequisites.
                         for i in 0 to 8 loop
                             if( i + 4 < fifo_usedw'length ) then
                                 fault_context_i(5 + i) <= fifo_usedw(i + 4);
@@ -482,13 +483,16 @@ begin
                                 fault_context_i(5 + i) <= '0';
                             end if;
                         end loop;
-                        for i in 0 to 10 loop
-                            if( i < meta_fifo_usedw'length ) then
-                                fault_context_i(14 + i) <= meta_fifo_usedw(i);
+                        for i in 0 to 7 loop
+                            if( i + 3 < meta_fifo_usedw'length ) then
+                                fault_context_i(14 + i) <= meta_fifo_usedw(i + 3);
                             else
                                 fault_context_i(14 + i) <= '0';
                             end if;
                         end loop;
+                        fault_context_i(22) <= gpif_diag_rx(0);
+                        fault_context_i(23) <= gpif_diag_rx(1);
+                        fault_context_i(24) <= gpif_diag_rx(2);
                     end if;
                 end if;
             end if;
@@ -606,6 +610,20 @@ begin
                 clock               =>  clock,
                 async               =>  mini_exp(i),
                 sync                =>  sync_mini_exp(i)
+            );
+    end generate;
+
+    -- The GPIF DMA control pins live in pclk. Synchronize the three levels
+    -- before copying them into the RX-clock fault snapshot; they are
+    -- diagnostic state, not control inputs to the sample writer.
+    generate_sync_gpif_diag : for i in gpif_diag'range generate
+        U_sync_gpif_diag : entity work.synchronizer
+            generic map (RESET_LEVEL => '0')
+            port map (
+                reset => reset,
+                clock => clock,
+                async => gpif_diag(i),
+                sync => gpif_diag_rx(i)
             );
     end generate;
 

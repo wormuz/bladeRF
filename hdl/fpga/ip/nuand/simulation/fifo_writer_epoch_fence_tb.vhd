@@ -37,6 +37,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal link_active : std_logic;
     signal fault_sticky : std_logic_vector(5 downto 0);
     signal fault_context : std_logic_vector(24 downto 0);
+    signal gpif_diag : std_logic_vector(2 downto 0) := (others => '0');
     signal abort_active : std_logic;
     signal epoch_counter : unsigned(7 downto 0);
 begin
@@ -83,6 +84,7 @@ begin
             link_epoch_counter => epoch_counter,
             fault_sticky => fault_sticky,
             fault_context => fault_context,
+            gpif_diag => gpif_diag,
             abort_active => abort_active
         );
 
@@ -126,6 +128,7 @@ begin
         end loop;
         fifo_usedw <= x"010";
         meta_fifo_usedw <= "1010";
+        gpif_diag <= "111";
         wait until fifo_write = '1';
         fifo_full <= '1';
         for i in 1 to 64 loop
@@ -139,7 +142,8 @@ begin
             report "stall context did not preserve valid input and HOLDOFF state"
             severity failure;
         assert fault_context(13 downto 5) = '0' & fifo_usedw(11 downto 4) and
-               fault_context(24 downto 14) = "0000000" & meta_fifo_usedw
+               fault_context(21 downto 14) = "0000000" & meta_fifo_usedw(3) and
+               fault_context(24 downto 22) = "111"
             report "stall context did not preserve quantized sample/META occupancy"
             severity failure;
 

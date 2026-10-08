@@ -373,6 +373,7 @@ architecture core_bladerf of bladerf_core is
     signal fx3_gpif_in            : std_logic_vector(31 downto 0);
     signal fx3_gpif_out           : std_logic_vector(31 downto 0);
     signal fx3_gpif_oe            : std_logic;
+    signal fx3_rx_diag             : std_logic_vector(2 downto 0);
 
     signal fx3_ctl_in             : std_logic_vector(12 downto 0);
     signal fx3_ctl_out            : std_logic_vector(12 downto 0);
@@ -696,7 +697,8 @@ begin
             rx_meta_fifo_full   =>  rx_meta_fifo.rfull,
             rx_meta_fifo_empty  =>  rx_meta_fifo.rempty,
             rx_meta_fifo_usedr  =>  rx_meta_fifo.rused,
-            rx_meta_fifo_data   =>  rx_meta_fifo.rdata
+            rx_meta_fifo_data   =>  rx_meta_fifo.rdata,
+            rx_diag             =>  fx3_rx_diag
         );
 
     -- FX3 GPIF bidirectional signal control
@@ -1772,6 +1774,7 @@ begin
             rx_reset               => rx_reset,
             rx_clock               => rx_clock,
             rx_enable              => rx_enable,
+            gpif_diag              => fx3_rx_diag,
 
             meta_en                => meta_en_rx,
             timestamp_reset        => rx_ts_reset,

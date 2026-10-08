@@ -4909,9 +4909,10 @@ typedef enum {
 /** Sticky FPGA RX data-link fault observed during a certified epoch. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
 /** `rfic_status` marker for an RX fault event with a coherent FPGA cause
- * snapshot in its low bits. Bits 6..10 carry GPIF-timeout boundary flags;
- * bits 11..19 carry sample-FIFO occupancy in 16-entry units, and bits
- * 20..30 carry exact META-FIFO occupancy. These fields are valid when bit 2
+ * snapshot in its low bits. Bits 6..10 carry RX writer boundary flags;
+ * bits 11..19 carry sample-FIFO occupancy in 16 64-bit write-word units;
+ * bits 20..27 carry META-FIFO occupancy in 8-word units; bits 28..30 carry
+ * synchronized GPIF drain prerequisites. These fields are valid when bit 2
  * (`GPIF_TIMEOUT`) is set. Legacy FPGA images retain the RF link status word
  * in `rfic_status` and omit this marker. */
 #define BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID (1U << 31)
@@ -4932,12 +4933,18 @@ typedef enum {
 #define BLADERF_RF_FPGA_RX_CTX_META_WRITTEN (1U << 9)
 /** The sample FIFO could accept one complete USB DMA buffer at the boundary. */
 #define BLADERF_RF_FPGA_RX_CTX_FIFO_ENOUGH (1U << 10)
-/** Sample FIFO used-word count in 16-entry units; decode with this mask/shift. */
+/** Sample FIFO used-word count in 16 64-bit write-word units. */
 #define BLADERF_RF_FPGA_RX_CTX_SAMPLE_FIFO_USEDW_SHIFT 11
 #define BLADERF_RF_FPGA_RX_CTX_SAMPLE_FIFO_USEDW_MASK  0x000ff800U
-/** META FIFO used-word count, exact entry count. */
+/** META FIFO used-word count in 8-word units; full is reported separately. */
 #define BLADERF_RF_FPGA_RX_CTX_META_FIFO_USEDW_SHIFT 20
-#define BLADERF_RF_FPGA_RX_CTX_META_FIFO_USEDW_MASK  0x7ff00000U
+#define BLADERF_RF_FPGA_RX_CTX_META_FIFO_USEDW_MASK  0x0ff00000U
+/** GPIF DMA engine reported idle at the RX stall boundary. */
+#define BLADERF_RF_FPGA_RX_CTX_GPIF_DMA_IDLE (1U << 28)
+/** FX3 asserted a request for one of the RX DMA channels. */
+#define BLADERF_RF_FPGA_RX_CTX_GPIF_RX_DMA_REQUEST (1U << 29)
+/** GPIF's registered RX arbitration predicate was true. */
+#define BLADERF_RF_FPGA_RX_CTX_GPIF_CAN_RX (1U << 30)
 /** FPGA RX-integrity status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
 /** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */

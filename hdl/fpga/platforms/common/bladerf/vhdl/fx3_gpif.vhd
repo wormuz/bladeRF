@@ -75,7 +75,11 @@ entity fx3_gpif is
     rx_meta_fifo_full   :   in  std_logic;
     rx_meta_fifo_empty  :   in  std_logic;
     rx_meta_fifo_usedr  :   in  std_logic_vector;
-    rx_meta_fifo_data   :   in  std_logic_vector(31 downto 0)
+    rx_meta_fifo_data   :   in  std_logic_vector(31 downto 0);
+
+    -- Snapshot inputs for the RX writer's fault report. These remain in the
+    -- GPIF clock domain here and are synchronized before the RX-domain latch.
+    rx_diag             :   out std_logic_vector(2 downto 0) := (others => '0')
   );
 end entity;
 
@@ -221,6 +225,10 @@ begin
     dma_req.rx1 <= not dma1_rx_reqx;
     dma_req.tx2 <= not dma2_tx_reqx;
     dma_req.tx3 <= not dma3_tx_reqx;
+
+    rx_diag(0) <= dma_idle;
+    rx_diag(1) <= dma_req.rx0 or dma_req.rx1;
+    rx_diag(2) <= '1' when can_rx else '0';
 
     -- Set FX3 control OEs and default the unused outputs
     ctl_oe                  <= CONTROL_OE;
