@@ -94,7 +94,7 @@ architecture tb of fifo_writer_enable_tb is
     signal link_start_toggle : std_logic := '0';
     signal link_stop_toggle   : std_logic := '0';
     signal clear_fault_toggle : std_logic := '0';
-    signal fault_sticky       : std_logic_vector(4 downto 0);
+    signal fault_sticky       : std_logic_vector(5 downto 0);
     signal abort_active       : std_logic;
 
     -- Observation counters

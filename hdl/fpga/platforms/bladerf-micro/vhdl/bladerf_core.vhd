@@ -316,7 +316,7 @@ architecture core_bladerf of bladerf_core is
     signal clear_fault_toggle_rx  : std_logic;
     signal clear_fault_toggle_tx  : std_logic;
 
-    signal rx_fault_sticky        : std_logic_vector(4 downto 0);
+    signal rx_fault_sticky        : std_logic_vector(5 downto 0);
     signal tx_fault_sticky        : std_logic_vector(4 downto 0);
     signal rx_abort_active        : std_logic;
     signal tx_abort_active        : std_logic;
@@ -1377,7 +1377,7 @@ begin
         end if;
     end process;
 
-    rx_fault_causes_word <= (31 downto 5 => '0') & rx_fault_sticky;
+    rx_fault_causes_word <= (31 downto 6 => '0') & rx_fault_sticky;
 
     U_rx_fault_causes_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )
@@ -1593,15 +1593,16 @@ begin
     rf_link_status(13)           <= rf_link_speed_disagree;
     -- Sticky faults, one aggregate bit per direction.
     --
-    -- Five fault bits exist per direction (fifo_writer/fifo_reader:
+    -- Six RX and five TX fault bits exist (fifo_writer/fifo_reader:
     -- SPEED_MISMATCH, START_NO_PROGRESS, GPIF_TIMEOUT, PROTOCOL_ERROR,
-    -- FIFO_ABORT) and there are three free bits in this word, so the
+    -- FIFO_ABORT, plus RX FIFO_FULL_AT_STALL) and there are three free bits
+    -- in this word, so the
     -- per-bit detail cannot go here. The aggregate answers the question the
     -- host asks first -- "did this direction fault since the last clear" --
     -- and the individual bits remain readable where they are latched.
     --
     -- OR-reduced in its OWN clock domain before crossing, not after: an OR
-    -- of five separately synchronised bits could glitch on a cycle where
+    -- of separately synchronised bits could glitch on a cycle where
     -- two of them settle differently, which is the two-domain OR this word
     -- already had deleted at bits 3 and 6.
     rf_link_status(14)           <= rx_fault_any_sys;

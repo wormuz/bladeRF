@@ -86,7 +86,7 @@ entity fifo_writer is
         -- Abort path / sticky transport-fault flags (Stage 3)
         link_stop_toggle           :   in      std_logic := '0';
         clear_fault_toggle         :   in      std_logic := '0';
-        fault_sticky               :   out     std_logic_vector(4 downto 0) := (others => '0');
+        fault_sticky               :   out     std_logic_vector(5 downto 0) := (others => '0');
         abort_active                :   out     std_logic := '0';
         -- Proof that THIS direction consumed the current epoch toggle.
         -- epoch_ack mirrors the toggle it acted on, so the system domain can
@@ -157,8 +157,9 @@ architecture simple of fifo_writer is
     constant FAULT_BIT_GPIF_TIMEOUT       : natural := 2;  -- writes were flowing, then stopped
     constant FAULT_BIT_PROTOCOL_ERROR     : natural := 3;
     constant FAULT_BIT_FIFO_ABORT         : natural := 4;
+    constant FAULT_BIT_FIFO_FULL_AT_STALL : natural := 5;
 
-    signal fault_sticky_i      : std_logic_vector(4 downto 0) := (others => '0');
+    signal fault_sticky_i      : std_logic_vector(5 downto 0) := (others => '0');
 
     -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
     -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
@@ -434,6 +435,9 @@ begin
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
                 else
                     fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                    if( fifo_full = '1' ) then
+                        fault_sticky_i(FAULT_BIT_FIFO_FULL_AT_STALL) <= '1';
+                    end if;
                 end if;
             end if;
 

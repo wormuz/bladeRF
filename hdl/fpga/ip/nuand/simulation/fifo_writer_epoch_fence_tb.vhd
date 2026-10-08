@@ -24,6 +24,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
         (others => SAMPLE_CONTROL_DISABLE);
     signal samples : sample_streams_t(0 to 1) := (others => ZERO_SAMPLE);
     signal fifo_write : std_logic;
+    signal fifo_full : std_logic := '0';
     signal fifo_clear : std_logic;
     signal fifo_data : std_logic_vector(63 downto 0);
     signal meta_write : std_logic;
@@ -32,7 +33,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal overflow_led : std_logic;
     signal overflow_count : unsigned(63 downto 0);
     signal link_active : std_logic;
-    signal fault_sticky : std_logic_vector(4 downto 0);
+    signal fault_sticky : std_logic_vector(5 downto 0);
     signal abort_active : std_logic;
     signal epoch_counter : unsigned(7 downto 0);
 begin
@@ -41,7 +42,7 @@ begin
     dut : entity work.fifo_writer
         generic map (
             NUM_STREAMS => 2,
-            FIFO_USEDW_WIDTH => 4,
+            FIFO_USEDW_WIDTH => 12,
             FIFO_DATA_WIDTH => 64,
             META_FIFO_USEDW_WIDTH => 4,
             META_FIFO_DATA_WIDTH => 128,
@@ -63,7 +64,7 @@ begin
             fifo_usedw => (others => '0'),
             fifo_clear => fifo_clear,
             fifo_write => fifo_write,
-            fifo_full => '0',
+            fifo_full => fifo_full,
             fifo_data => fifo_data,
             packet_control => PACKET_CONTROL_DEFAULT,
             packet_ready => packet_ready,
@@ -98,7 +99,7 @@ begin
 
         discard_active <= '1';
         for i in 1 to 40 loop wait until rising_edge(clock); end loop;
-        assert fault_sticky = "00000"
+        assert fault_sticky = "000000"
             report "intentional epoch fence tripped the progress watchdog"
             severity failure;
 
@@ -106,6 +107,27 @@ begin
         for i in 1 to 24 loop wait until rising_edge(clock); end loop;
         assert fault_sticky(1) = '1'
             report "progress watchdog did not resume after epoch fence"
+            severity failure;
+
+        -- Start a clean epoch, prove RX sample writes begin, then hold the
+        -- downstream sample FIFO full. The watchdog must distinguish this
+        -- backpressure from a link that never produced a sample.
+        wait until falling_edge(clock);
+        link_start_toggle <= '0';
+        for i in 1 to 5 loop wait until rising_edge(clock); end loop;
+        for i in 0 to 1 loop
+            samples(i).data_i <= to_signed(16#123#, 16);
+            samples(i).data_q <= to_signed(-16#123#, 16);
+            samples(i).data_v <= '1';
+        end loop;
+        wait until fifo_write = '1';
+        fifo_full <= '1';
+        for i in 1 to 64 loop
+            wait until rising_edge(clock);
+            exit when fault_sticky(5) = '1';
+        end loop;
+        assert fault_sticky(2) = '1' and fault_sticky(5) = '1'
+            report "full FIFO stall was not classified as GPIF backpressure"
             severity failure;
 
         report "fifo_writer_epoch_fence_tb: PASS" severity note;

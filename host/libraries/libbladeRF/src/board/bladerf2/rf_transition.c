@@ -709,7 +709,8 @@ static void *rx_fault_monitor_task(void *arg)
                     rx_fault_causes_status = nios_rx_fault_causes_read(
                         dev, &rx_fault_causes);
                     rx_fault_causes_valid = rx_fault_causes_status == 0 &&
-                        (rx_fault_causes & 0x1fu) != 0;
+                        (rx_fault_causes &
+                         NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK) != 0;
                 }
             }
         });
@@ -825,7 +826,9 @@ static void *rx_fault_monitor_task(void *arg)
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id,
                 rx_fault_causes_valid
-                    ? (0x80000000u | (rx_fault_causes & 0x1fu))
+                    ? (BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID |
+                       (rx_fault_causes &
+                        NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK))
                     : rf_link_status,
                 BLADERF_RF_INVALIDATE_FPGA_RX_FAULT,
                 bladerf2_rx_fault_causes_read_error(

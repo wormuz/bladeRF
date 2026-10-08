@@ -4917,6 +4917,8 @@ typedef enum {
 #define BLADERF_RF_FPGA_RX_FAULT_GPIF_TIMEOUT (1U << 2)
 #define BLADERF_RF_FPGA_RX_FAULT_PROTOCOL_ERROR (1U << 3)
 #define BLADERF_RF_FPGA_RX_FAULT_FIFO_ABORT (1U << 4)
+/** The RX progress watchdog expired while the FPGA sample FIFO was full. */
+#define BLADERF_RF_FPGA_RX_FAULT_FIFO_FULL_AT_STALL (1U << 5)
 /** FPGA RX-integrity status read failed or its protocol version was unsupported. */
 #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE (1U << 19)
 /** Runtime AD9361 RX PLL lock bit cleared after a certified epoch. */

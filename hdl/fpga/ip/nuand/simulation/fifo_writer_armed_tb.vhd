@@ -63,7 +63,7 @@ architecture tb of fifo_writer_armed_tb is
     signal speed_latched      : std_logic;
     signal protocol_start_violation : std_logic;
     signal link_epoch_counter : unsigned(7 downto 0);
-    signal fault_sticky       : std_logic_vector(4 downto 0);
+    signal fault_sticky       : std_logic_vector(5 downto 0);
     signal abort_active       : std_logic;
 
     -- Counted by a separate process so the stimulus can ask "did anything
@@ -184,7 +184,7 @@ begin
             report "case 1: enable before START flagged as a violation -- "
                  & "with stock FX3 this is the only order the host can achieve"
             severity error;
-        assert fault_sticky = "00000"
+        assert fault_sticky = "000000"
             report "case 1: sticky fault set while merely armed"
             severity error;
         assert abort_active = '0'
@@ -221,7 +221,7 @@ begin
         assert writes_seen > 0
             report "case 2: no samples written after START"
             severity error;
-        assert fault_sticky = "00000"
+        assert fault_sticky = "000000"
             report "case 2: sticky fault after a clean START"
             severity error;
         report "case 2 OK: START releases ARMED, " & integer'image(writes_seen)

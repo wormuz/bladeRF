@@ -80,7 +80,7 @@ architecture tb of fifo_writer_abort_tb is
     signal speed_latched      : std_logic;
     signal protocol_start_violation : std_logic;
     signal link_epoch_counter : unsigned(7 downto 0);
-    signal fault_sticky       : std_logic_vector(4 downto 0);
+    signal fault_sticky       : std_logic_vector(5 downto 0);
     signal abort_active       : std_logic;
 
 begin
@@ -263,7 +263,7 @@ begin
         wait until rising_edge(clock);
         wait until rising_edge(clock);
 
-        assert fault_sticky = "00000"
+        assert fault_sticky = "000000"
             report "case 4: fault_sticky did not clear on clear-fault pulse"
             severity failure;
 
@@ -304,7 +304,7 @@ begin
             report "case 2: abort_active did not clear on new epoch start"
             severity failure;
 
-        assert fault_sticky = "00000"
+        assert fault_sticky = "000000"
             report "case 2: fault_sticky did not clear on new epoch start"
             severity failure;
 

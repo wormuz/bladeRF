@@ -386,6 +386,9 @@
 #define NIOS_PKT_8x32_RX_FAULT_GPIF_TIMEOUT      (1u << 2)
 #define NIOS_PKT_8x32_RX_FAULT_PROTOCOL_ERROR    (1u << 3)
 #define NIOS_PKT_8x32_RX_FAULT_FIFO_ABORT        (1u << 4)
+/* RX writer's progress watchdog expired while the FPGA sample FIFO was full. */
+#define NIOS_PKT_8x32_RX_FAULT_FIFO_FULL_AT_STALL (1u << 5)
+#define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK        0x3fu
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01

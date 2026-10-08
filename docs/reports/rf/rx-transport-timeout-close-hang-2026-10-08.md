@@ -142,4 +142,15 @@ The board reported FPGA `16.1.0`, while source `fpga_version.h` carries ID
 identify the exact bitstream build/hash, so the observed watchdog behavior
 cannot yet be attributed to a particular Quartus image.
 
+To distinguish the two remaining sources of a GPIF progress stall, RX
+fault-cause bit 5 is now reserved as `FIFO_FULL_AT_STALL`. It latches with
+`GPIF_TIMEOUT` when the watchdog expires while `fifo_full` is asserted; a
+cause with bit 2 but not bit 5 means RX FIFO writes stopped while the FIFO was
+not full. The NIOS cause PIO, libbladeRF decoder, and public event flag
+definitions now carry this detail. GHDL passes the directed RX writer test
+(including full-FIFO classification) and the armed, abort, and enable tests.
+The new HDL has not yet been Quartus synthesized, loaded, or qualified on the
+board; existing hardware cannot report bit 5 until that exact image is built
+and loaded.
+
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
