@@ -230,3 +230,29 @@ so the next action is to inspect the exact TimeQuest path and compare it with
 the passing seed-5 fit before considering any RTL or constraint change.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
+
+## Sweep timing-path closure for the RX fault-context image
+
+The cold-corner path report for the expanded fault-context image identified
+the timing failure as an existing sweep-analysis path, not the new CDC
+snapshot: `dwell_threshold[14]` through the trigger threshold comparator to
+`dwell_summary.trig_time[*]` in `pll_sclk`. Seed 5 had five logic levels and
+−0.220 ns slack at 0°C; seed 7 had four levels and −0.066 ns. The dominant
+data path was 8.032 ns in seed 5 and 7.879 ns in seed 7, with approximately
+−0.117 ns clock skew in both.
+
+Commit `0391ce11` registers the per-window threshold comparison before
+trigger-history consumption. The added cycle is compensated in the captured
+timestamp. GHDL `dwell_summary_equiv_tb` compared 10 records field-by-field
+with the frozen reference, `dwell_summary_tb` passed all seven cases, the
+RX epoch-fence bench passed, and `qcheck` was clean.
+
+The matching xA4 seed-7 fit completed and passed the full release `qgate`:
+all 15 handshake pairs, 745 classified D101 sources (including 414 held
+handshake bits), fitted bundled-data checks, and all max-skew paths passed.
+Worst `pll_sclk` setup slack is +0.089 ns at 85°C and +0.137 ns at 0°C;
+worst hold slack is +0.189 ns and +0.183 ns respectively. RBF SHA-256 is
+`ab7aefef2fa72fde0cd7cd2ba67853a79aaf86b7f0f6dda4879657dea050d5d0`.
+The image has not yet been loaded. Next is volatile-only hardware
+qualification on the identified xA4, with RX1 and RX2 tested separately;
+static qgate success does not establish runtime RX validity or recovery.
