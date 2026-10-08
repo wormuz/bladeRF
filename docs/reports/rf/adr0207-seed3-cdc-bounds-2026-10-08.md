@@ -15,17 +15,33 @@ The image was not loaded onto hardware.
 - ADI transfer-status snapshots: 6/6 paired.
 - No ignored constraints, empty collections, or non-waived missing paths.
 
-## Release status
+## FPGA fit-gate status
 
-This is not a release candidate. `qgate` passes timing and physical CDC
-inventory checks, but still rejects the image on Design Assistant findings:
-724 D101 bundled-data structures and one C105 finding on
-`altera_internal_jtag~TCKUTAP`. The D101 source inventory is preserved in
-`adr0207-seed3-d101-inventory-2026-10-08.txt`; the audit script rejects missing,
-duplicate, or unclassified structures. These findings need explicit
-protocol-and-constraint disposition before qgate can accept a release.
+`qgate` passes this fit. It requires the exact D101 inventory and the fitted
+max-skew/bundle evidence above; it does not lower Design Assistant thresholds
+or alter the report. The 724 D101 structures classify into 393 held-handshake,
+128 tamer-payload, 129 ADI control, 10 ADI status, and 64 clock-monitor source
+bits. The parser fails on missing, duplicate, or unclassified structures.
+
+The single C105 finding is the generated `altera_internal_jtag~TCKUTAP` clock,
+outside the RF data/transition path. A trial promotion to a global network
+removed C105 but created a -0.831 ns JTAG TDO output violation and degraded RX
+setup; that assignment was reverted. qgate accepts only this exact C105 node
+and fails if the count or endpoint changes. D103 remains zero. The failed
+promotion and path-level diagnosis are preserved in
+`adr0207-current-source-seed3-jtag-global-2026-10-08.log.gz` and
+`adr0207-jtag-global-seed3-path-diagnostic-2026-10-08.log.gz`.
+
+This closes the FPGA static/fit gate, not the stable release of the whole
+firmware/libbladeRF/wrapper chain. Hardware qualification of RX1 transitions,
+including no stale-epoch leakage and the LTE known-cell return tests, remains
+required; RX2 qualification follows RX1.
+
+The D101 source inventory is preserved in
+`adr0207-seed3-d101-inventory-2026-10-08.txt`; qgate output is in
+`adr0207-seed3-qgate-2026-10-08.txt`.
 
 Seed 7 with these added CDC paths was slower: setup slack reached -0.066 ns at
 85°C and -0.006 ns at 0°C. Seed 3 closes both corners without changing RTL.
 
-Full build log: `adr0207-current-source-seed3-cdc-bounds-2026-10-08.log.gz`.
+Full build log: `adr0207-current-source-seed3-d101-disposition-2026-10-08.log.gz`.

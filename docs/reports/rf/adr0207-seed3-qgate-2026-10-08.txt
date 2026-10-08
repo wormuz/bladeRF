@@ -1,0 +1,22 @@
+qgate adr0207-current-source-seed3-d101-disposition-2026-10-08.log
+ok     build completed
+ok     errors
+ok     constraints ignored
+ok     empty collections
+ok     no path for assignment
+ok     invalid exceptions
+ok     unconstrained paths
+ok     sdc read failed
+ok     physical bound ignored
+ok     cdc tamer compare payload: 2
+ok     cdc handshake: 15
+ok     ADI up_xfer bundled data: 9
+ok     cdc dcfifo pointers: 10
+ok     timing (no negative slack)
+ok     max-skew (all paths within bound)
+ok     ADI up_xfer bundles
+ok     clock monitor bundles
+ok     ADI XFER status bundles
+ok     Design Assistant D101: all 724 sources classified; fitted CDC bounds required above
+ok     Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath
+ok     critical warnings (D101 and exact internal-JTAG C105 dispositioned; no others)

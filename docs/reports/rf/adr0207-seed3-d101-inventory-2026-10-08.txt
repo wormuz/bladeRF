@@ -1,4 +1,9 @@
 D101 source structures: 724
+D101 category adi-clock-monitor: 64
+D101 category adi-up-xfer: 129
+D101 category adi-xfer-status: 10
+D101 category held-handshake: 393
+D101 category tamer-payload: 128
   32 adi-clock-monitor: bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_clock_mon:i_clock_mon|d_count_hold[*]
   32 adi-clock-monitor: bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_clock_mon:i_clock_mon|d_count_hold[*]
   28 adi-up-xfer: bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[*]

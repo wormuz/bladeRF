@@ -1393,12 +1393,72 @@ def check_qgate_sta_resolution():
             [str(qgate), str(log)], text=True, capture_output=True,
             check=False)
         if (result.returncode == 0 or
-                "Design Assistant violations: critical=0 high=1 D101=1 D103=0"
+                "Design Assistant violations: critical=0 high=1 C105=0 D101=1 D103=0"
                 not in result.stdout):
             fail("qgate-omitted-zero-rule-count",
                  "qgate did not interpret an omitted zero-count D103 row as zero",
                  "Quartus omits per-rule summary rows when a rule has no findings")
             return
+
+        # A complete, exact inventory may disposition known bundled-data
+        # D101 findings only when the fitted CDC evidence above is also present.
+        categories = (
+            ("held-handshake", 393,
+             "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
+            ("tamer-payload", 128,
+             "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
+            ("adi-up-xfer", 129,
+             "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]"),
+            ("adi-xfer-status", 10,
+             "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_xfer_status:i_xfer_status|d_xfer_data[0]"),
+            ("adi-clock-monitor", 64,
+             "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_clock_mon:i_clock_mon|d_count_hold[0]"),
+        )
+        lines = [
+            "; Design Assistant Status ; Analyzed ;",
+            "; Total Critical Violations ; 0 ;",
+            "; Total High Violations ; 725 ;",
+            "; - Rule C105 ; 1 ;",
+            "; - Rule D101 ; 724 ;",
+            "; Rule C105: Clock signal should be a global signal ; altera_internal_jtag~TCKUTAP ;",
+        ]
+        sources = [source for _name, count, source in categories for _ in range(count)]
+        for number, source in enumerate(sources, 1):
+            lines.append(f"; Rule D101: test - Structure {number} ; ;")
+            if number <= 30:
+                lines.append(f";  Source node(s) from clock \\\"src\\\" ; {source} ;")
+                lines.append(f";  Destination node(s) from clock \\\"dst\\\" ; bladerf_core:U_core|dst[0] ;")
+            else:
+                lines.append(f";  Structure {number} ; {source} ;")
+        actual_drc.write_text("\n".join(lines) + "\n")
+        actual_drc.touch()
+        log.write_text(log.read_text() +
+                       "Critical Warning (308060): (High) Rule D101: Data bits are not synchronized.\n"
+                       "Critical Warning (308042): (High) Rule C105: Clock signal should be a global signal.\n"
+                       "Critical Warning (308012): Node \\\"altera_internal_jtag~TCKUTAP\\\"\n"
+                       "Critical Warning (308012): Node \\\"bladerf_core:U_core|handshake:U_test|source_holding[0]\\\"\n")
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode != 0 or
+                "D101: all 724 sources classified" not in result.stdout or
+                "C105: exact internal JTAG TCK finding dispositioned" not in result.stdout or
+                "critical warnings (D101 and exact internal-JTAG C105 dispositioned; no others)" not in result.stdout):
+            fail("qgate-classified-bundled-d101",
+                 "qgate rejected the exact physically bounded held-data D101 inventory",
+                 "known bundled crossings need endpoint classification plus fitted max-skew evidence")
+            return
+        actual_drc.write_text(actual_drc.read_text().replace(
+            "altera_internal_jtag~TCKUTAP", "unknown_clock~source"))
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode == 0 or "Design Assistant violations" not in result.stdout:
+            fail("qgate-unknown-c105-source-fails-closed",
+                 "qgate accepted a C105 finding on an unknown clock node",
+                 "only the exact internal JTAG TCK node is dispositioned")
+            return
+        # An unknown High rule must still fail after the bounded D101 case.
         actual_drc.write_text(
             "; Design Assistant Status ; Analyzed ;\n"
             "; Total Critical Violations ; 0 ;\n"
