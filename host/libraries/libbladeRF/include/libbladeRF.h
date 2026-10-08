@@ -4835,7 +4835,12 @@ typedef enum {
      * flags without overloading bits 28-30. `epoch_id`, timestamp, and
      * frequency fields match the invalidation; `flags` contains only the
      * transition-channel provenance flags. */
-    BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL
+    BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL,
+    /** Application completed a certified finite capture. The host RX
+     * certificate is revoked and the FPGA epoch gate was aborted so later
+     * samples cannot fill the sync queue while the captured copy is decoded.
+     * `epoch_id` identifies the closed epoch. */
+    BLADERF_RF_EVT_RX_CAPTURE_CLOSED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
@@ -5117,6 +5122,19 @@ int CALL_CONV bladerf_rx_transition_wait(
     uint32_t transaction_id,
     struct bladerf_rf_event *final_event,
     uint32_t timeout_ms);
+
+/** Close the currently certified RX epoch after a finite capture has been
+ * copied and validated. This revokes host admission and commands the FPGA
+ * epoch gate to suppress further IQ until the next RX transition arms a new
+ * epoch. The AD9361 remains in RX; this is a data-plane operation.
+ * Returns BLADERF_ERR_WOULD_BLOCK if a transition or RF setter is active,
+ * BLADERF_ERR_INVAL if there is no certified RX epoch, or an error if the
+ * FPGA abort is not acknowledged. On failure the host certificate remains
+ * revoked and no success event is emitted.
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_capture_close(struct bladerf *dev,
+                                      bladerf_channel ch);
 
 /**
  * Copy the retained event history for one RX transition.

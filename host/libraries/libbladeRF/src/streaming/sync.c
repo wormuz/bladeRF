@@ -1209,9 +1209,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
                 if (b->rx_data_withheld_pending) {
                     b->rx_data_withheld_pending = false;
-                    status = BLADERF_ERR_WOULD_BLOCK;
-                    MUTEX_UNLOCK(&b->lock);
-                    break;
+                    if (timeout_ms == 0) {
+                        status = BLADERF_ERR_WOULD_BLOCK;
+                        MUTEX_UNLOCK(&b->lock);
+                        break;
+                    }
+                    /* The withheld META slot was already reported through
+                     * the durable RX_DATA_WITHHELD event. A blocking RX_NOW
+                     * read with a deadline should continue to the next
+                     * buffer instead of forcing an application retry. */
                 }
 
                 /* A rejected USB transfer never reached the normal RX
@@ -1656,9 +1662,16 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 status = BLADERF_ERR_TIMEOUT;
                             } else if (s->meta.msg_channel_filtered_out ||
                                        s->meta.msg_admission_withheld_reason != 0) {
-                                if (!copied_data) {
+                                /* An RX_NOW caller with a deadline asks for
+                                 * the next valid live-edge IQ, not a report
+                                 * about an intermediate META slot fenced by
+                                 * an epoch transition. Keep consuming and
+                                 * waiting under the same call deadline. With
+                                 * timeout_ms==0 preserve the nonblocking API
+                                 * and report WOULD_BLOCK. */
+                                if (!copied_data && timeout_ms == 0) {
                                     status = BLADERF_ERR_WOULD_BLOCK;
-                                } else {
+                                } else if (copied_data) {
                                     user_meta->status |=
                                         BLADERF_META_STATUS_OVERRUN;
                                     exit_early = true;

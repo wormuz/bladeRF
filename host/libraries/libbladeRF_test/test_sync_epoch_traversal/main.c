@@ -78,6 +78,7 @@ static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 static bool allow_sync_channel_selection = true;
 static uint32_t sync_admission_withheld_reason;
+static bool sync_admission_withheld_once;
 
 static void test_rx_channel_mask_runtime_policy(void)
 {
@@ -133,7 +134,12 @@ static uint32_t sync_data_admission_reason(
                                   (uint64_t)ts.tv_nsec;
     }
     if (sync_admission_withheld_reason != 0) {
-        return sync_admission_withheld_reason;
+        const uint32_t reason = sync_admission_withheld_reason;
+        if (sync_admission_withheld_once) {
+            sync_admission_withheld_reason = 0;
+            sync_admission_withheld_once = false;
+        }
+        return reason;
     }
     return allow_sync_channel_selection
         ? 0 : BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
@@ -343,6 +349,7 @@ static void fixture_init(struct fixture *f)
     last_rx_worker_overrun_source_flags = 0;
     sync_withheld_reason = 0;
     sync_admission_withheld_reason = 0;
+    sync_admission_withheld_once = false;
     memset(sync_withheld_reasons, 0, sizeof(sync_withheld_reasons));
     memset(sync_withheld_timestamp_valid, 0,
            sizeof(sync_withheld_timestamp_valid));
@@ -1686,6 +1693,51 @@ int main(void)
     assert(sync_withheld_timestamp_valid[0]);
     assert(sync_withheld_timestamps[0] == 0);
     assert(sync_withheld_epochs[0] == 6);
+    fixture_destroy(&f);
+
+    /* A transiently withheld META slot must not force a second application
+     * call when the same RX_NOW request has a deadline. The parser skips it
+     * and returns the next admitted epoch packet; timeout=0 remains a poll. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1311);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 1411);
+    sync_admission_withheld_reason =
+        BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+    sync_admission_withheld_once = true;
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, MSG_SAMPLES, &meta, 100) == 0);
+    assert(meta.actual_count == MSG_SAMPLES);
+    assert(meta.timestamp == 1000 + MSG_SAMPLES);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
+    assert_marker(out, MSG_SAMPLES, 1411, 0);
+    assert(sync_withheld_events == 1);
+    assert(sync_host_data_events == 1);
+    fixture_destroy(&f);
+
+    /* A withheld notification already pending at the sync boundary is not
+     * itself the requested IQ. A blocking RX_NOW request consumes that
+     * notification and continues into the ready valid buffer. A zero-time
+     * poll retains the historical WOULD_BLOCK result. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1511);
+    f.sync.buf_mgmt.rx_data_withheld_pending = true;
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 64, &meta, 100) == 0);
+    assert(meta.actual_count == 64);
+    assert(meta.timestamp == 1000);
+    assert_marker(out, 64, 1511, 0);
+    fixture_destroy(&f);
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1611);
+    f.sync.buf_mgmt.rx_data_withheld_pending = true;
+    memset(&meta, 0, sizeof(meta));
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+    assert(sync_rx(&f.sync, out, 64, &meta, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(meta.actual_count == 0);
     fixture_destroy(&f);
 
     /* A stale message after copied current-epoch data returns the valid

@@ -1029,6 +1029,69 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     return status;
 }
 
+int bladerf_rx_capture_close(struct bladerf *dev, bladerf_channel ch)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    bool certified;
+    int status;
+
+    if (dev == NULL || dev->board != &bladerf2_board_fns ||
+        dev->board_data == NULL || BLADERF_CHANNEL_IS_TX(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rf_transition_pending ||
+            board_data->rf_transition_setter_active) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            certified = board_data->rf_transition_epoch_contract_enabled &&
+                        board_data->rf_transition_epoch_certified;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (!certified) {
+                status = BLADERF_ERR_INVAL;
+            } else {
+                board_data->rf_transition_setter_active = true;
+                status = 0;
+            }
+        }
+    });
+    if (status != 0) {
+        return status;
+    }
+
+    /* Close host admission first, then fence the FPGA. This ordering makes
+     * abort failure visible without allowing further IQ to be certified. */
+    bladerf2_rx_data_withheld_reset(dev);
+    status = sync_rx_epoch_invalidate_with_revoke(
+        &board_data->sync[BLADERF_RX],
+        bladerf2_rx_epoch_revoke_admission, board_data);
+    if (status == 0) {
+        status = _rx_epoch_abort_command(dev);
+    }
+
+    event.host_monotonic_ns = _monotonic_ns();
+    event.transaction_id = board_data->rf_transition_current_id;
+    event.epoch_id = board_data->rf_transition_epoch_id;
+    event.requested_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
+    event.readback_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
+    event.fpga_state = status == 0 ? BLADERF_RF_STATE_RX_DATA_INVALID :
+                                    BLADERF_RF_STATE_ERROR;
+    event.event_type = status == 0 ? BLADERF_RF_EVT_RX_CAPTURE_CLOSED :
+                                     BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED;
+    event.error_code = status;
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->rf_transition_state = event.fpga_state;
+        board_data->rf_transition_setter_active = false;
+        bladerf2_rf_event_append(board_data, &event);
+    });
+    return status;
+}
+
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch)
 {
