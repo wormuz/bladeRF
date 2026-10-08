@@ -217,4 +217,16 @@ qgate rejected two setup entries: `pll_sclk` slack −0.058 ns at 85°C and
 was not loaded. Another fit seed or a timing-path correction is needed;
 qgate criteria remain unchanged.
 
+Seed 7 fit of the expanded-context RTL at commit `a8bf7981` completed
+successfully through fitter and STA. CDC inventories (745 D101, 414 held
+handshake bits), all max-skew paths, and the fitted bundled-data checks pass.
+qgate rejects one setup entry: the generated AD9361 RX `pll_sclk` clock has
+slack +0.040 ns at 85°C but −0.066 ns at 0°C (TNS −0.837 ns); hold slack is
+positive at both corners. The sole critical warning is the corresponding
+unmet timing requirement. RBF SHA-256 is
+`74a8423d5dec7a5a87a8f84898678fca69ac55e11aad3a5e071135a42ed06a96`; it was
+not loaded. The failure remains on the generated `pll_sclk` timing domain,
+so the next action is to inspect the exact TimeQuest path and compare it with
+the passing seed-5 fit before considering any RTL or constraint change.
+
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
