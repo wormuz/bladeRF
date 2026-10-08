@@ -46,7 +46,12 @@ The bladeRF 2.0 micro enumerates as USB bus 2, address 4, serial
 `LD_LIBRARY_PATH=host/build/output host/build/output/bladeRF-cli -e 'version'`
 and `/usr/local/bin/bladeRF-cli -e 'version'` fail during open with
 `get_fpga_version ... Operation timed out`. Resetting USB device `2cf0:5250`
-did not restore protocol access. No FPGA image or flash contents were changed.
+did not restore protocol access. Debug verbosity localizes the timeout to the
+first legacy NIOS reply while reading FPGA version byte 0:
+`nios_legacy_access.c:128 Failed to receive NIOS II response`; USB enumeration
+and FX3 firmware-version access succeed, but there is no reply on the NIOS
+peripheral IN transaction. Forcing A4 detection does not change this. No FPGA
+image or flash contents were changed.
 
 ## Release gate still required
 
