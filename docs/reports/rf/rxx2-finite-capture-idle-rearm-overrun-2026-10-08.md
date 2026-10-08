@@ -34,6 +34,13 @@ stream-overrun event, but the qualification harness did not accept either
 capture's validity trace. It is therefore diagnostic only, not a pass. Raw
 trace: `rxx2-long-capture-immediate-rearm-2026-10-08.log`.
 
+The same 23.04 Msps / 150 ms / 250 ms close-pause profile passed two cycles
+each on RX1 and RX2: exact full reads, zero first-read faults/retries, and zero
+stream overruns. Their raw logs are `rx1-long-capture-250ms-rearm-2026-10-08.log`
+and `rx2-long-capture-250ms-rearm-2026-10-08.log`. This narrows the reproduced
+failure to paired RX_X2 under the tested stream geometry; it does not qualify
+longer single-channel soaks or all RX_X2 configurations.
+
 ## Interpretation
 
 `bladerf_rx_capture_close()` revokes host IQ admission and aborts the FPGA RX
