@@ -25,6 +25,8 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal samples : sample_streams_t(0 to 1) := (others => ZERO_SAMPLE);
     signal fifo_write : std_logic;
     signal fifo_full : std_logic := '0';
+    signal fifo_usedw : std_logic_vector(11 downto 0) := (others => '0');
+    signal meta_fifo_usedw : std_logic_vector(3 downto 0) := (others => '0');
     signal fifo_clear : std_logic;
     signal fifo_data : std_logic_vector(63 downto 0);
     signal meta_write : std_logic;
@@ -34,7 +36,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal overflow_count : unsigned(63 downto 0);
     signal link_active : std_logic;
     signal fault_sticky : std_logic_vector(5 downto 0);
-    signal fault_context : std_logic_vector(4 downto 0);
+    signal fault_context : std_logic_vector(24 downto 0);
     signal abort_active : std_logic;
     signal epoch_counter : unsigned(7 downto 0);
 begin
@@ -62,7 +64,7 @@ begin
             rx_epoch_discard_active => discard_active,
             in_sample_controls => sample_ctrls,
             in_samples => samples,
-            fifo_usedw => (others => '0'),
+            fifo_usedw => fifo_usedw,
             fifo_clear => fifo_clear,
             fifo_write => fifo_write,
             fifo_full => fifo_full,
@@ -70,7 +72,7 @@ begin
             packet_control => PACKET_CONTROL_DEFAULT,
             packet_ready => packet_ready,
             meta_fifo_full => '0',
-            meta_fifo_usedw => (others => '0'),
+            meta_fifo_usedw => meta_fifo_usedw,
             meta_fifo_data => meta_data,
             meta_fifo_write => meta_write,
             overflow_led => overflow_led,
@@ -122,6 +124,8 @@ begin
             samples(i).data_q <= to_signed(-16#123#, 16);
             samples(i).data_v <= '1';
         end loop;
+        fifo_usedw <= x"010";
+        meta_fifo_usedw <= "1010";
         wait until fifo_write = '1';
         fifo_full <= '1';
         for i in 1 to 64 loop
@@ -133,6 +137,10 @@ begin
             severity failure;
         assert fault_context(1) = '1' and fault_context(2) = '1'
             report "stall context did not preserve valid input and HOLDOFF state"
+            severity failure;
+        assert fault_context(13 downto 5) = '0' & fifo_usedw(11 downto 4) and
+               fault_context(24 downto 14) = "0000000" & meta_fifo_usedw
+            report "stall context did not preserve quantized sample/META occupancy"
             severity failure;
 
         -- Reset and begin a fresh epoch, admit one sample, then stop upstream

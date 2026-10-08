@@ -87,7 +87,7 @@ entity fifo_writer is
         link_stop_toggle           :   in      std_logic := '0';
         clear_fault_toggle         :   in      std_logic := '0';
         fault_sticky               :   out     std_logic_vector(5 downto 0) := (others => '0');
-        fault_context              :   out     std_logic_vector(4 downto 0) := (others => '0');
+        fault_context              :   out     std_logic_vector(24 downto 0) := (others => '0');
         abort_active                :   out     std_logic := '0';
         -- Proof that THIS direction consumed the current epoch toggle.
         -- epoch_ack mirrors the toggle it acted on, so the system domain can
@@ -164,7 +164,7 @@ architecture simple of fifo_writer is
     -- Captured on the first GPIF-timeout edge: meta FIFO full, valid enabled
     -- input sample present, writer in HOLDOFF, META packet written, and room
     -- for another full DMA buffer, respectively.
-    signal fault_context_i     : std_logic_vector(4 downto 0) := (others => '0');
+    signal fault_context_i     : std_logic_vector(24 downto 0) := (others => '0');
 
     -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
     -- FAULT_BIT_GPIF_TIMEOUT. Both watch the same event -- a write into the
@@ -469,6 +469,26 @@ begin
                         else
                             fault_context_i(4) <= '0';
                         end if;
+                        -- Keep the sample FIFO occupancy in 16-entry units
+                        -- (9 bits for the 8192-entry RX FIFO) and META FIFO
+                        -- occupancy exactly (11 bits for 2048 entries).
+                        -- These values share the existing coherent snapshot;
+                        -- they distinguish a full-buffer backpressure wait
+                        -- from a metadata handoff stall without another CDC.
+                        for i in 0 to 8 loop
+                            if( i + 4 < fifo_usedw'length ) then
+                                fault_context_i(5 + i) <= fifo_usedw(i + 4);
+                            else
+                                fault_context_i(5 + i) <= '0';
+                            end if;
+                        end loop;
+                        for i in 0 to 10 loop
+                            if( i < meta_fifo_usedw'length ) then
+                                fault_context_i(14 + i) <= meta_fifo_usedw(i);
+                            else
+                                fault_context_i(14 + i) <= '0';
+                            end if;
+                        end loop;
                     end if;
                 end if;
             end if;

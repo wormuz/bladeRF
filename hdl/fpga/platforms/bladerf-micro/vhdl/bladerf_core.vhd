@@ -317,7 +317,7 @@ architecture core_bladerf of bladerf_core is
     signal clear_fault_toggle_tx  : std_logic;
 
     signal rx_fault_sticky        : std_logic_vector(5 downto 0);
-    signal rx_fault_context       : std_logic_vector(4 downto 0);
+    signal rx_fault_context       : std_logic_vector(24 downto 0);
     signal tx_fault_sticky        : std_logic_vector(4 downto 0);
     signal rx_abort_active        : std_logic;
     signal tx_abort_active        : std_logic;
@@ -1378,8 +1378,7 @@ begin
         end if;
     end process;
 
-    rx_fault_causes_word <= (31 downto 11 => '0') & rx_fault_context &
-                            rx_fault_sticky;
+    rx_fault_causes_word <= '0' & rx_fault_context & rx_fault_sticky;
 
     U_rx_fault_causes_handshake : entity work.handshake
         generic map ( DATA_WIDTH => 32 )

@@ -60,7 +60,7 @@ entity rx is
         protocol_start_violation   : out   std_logic := '0';
         link_epoch_counter         : out   unsigned(7 downto 0) := (others => '0');
         fault_sticky               : out   std_logic_vector(5 downto 0) := (others => '0');
-        fault_context              : out   std_logic_vector(4 downto 0) := (others => '0');
+        fault_context              : out   std_logic_vector(24 downto 0) := (others => '0');
         abort_active               : out   std_logic := '0';
         epoch_ack                  : out   std_logic := '0';
         epoch_valid                : out   std_logic := '0';

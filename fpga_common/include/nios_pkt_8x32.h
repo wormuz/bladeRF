@@ -378,8 +378,8 @@
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI   0x8b
 
 /* RX FIFO-writer causes/context, captured from rx_clock into sys_clock as one
- * coherent word. Bits 0..5 are sticky causes; bits 6..10 are the context
- * snapshot latched with GPIF_TIMEOUT. */
+ * coherent word. Bits 0..5 are sticky causes; bits 6..30 are GPIF-timeout
+ * context. Bit 31 is reserved for the host-side snapshot-valid marker. */
 #define NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES  0x8c
 #define NIOS_PKT_8x32_RX_FAULT_SPEED_MISMATCH    (1u << 0)
 #define NIOS_PKT_8x32_RX_FAULT_START_NO_PROGRESS (1u << 1)
@@ -393,7 +393,11 @@
 #define NIOS_PKT_8x32_RX_CTX_WRITER_HOLDOFF       (1u << 8)
 #define NIOS_PKT_8x32_RX_CTX_META_WRITTEN         (1u << 9)
 #define NIOS_PKT_8x32_RX_CTX_FIFO_ENOUGH          (1u << 10)
-#define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK        0x7ffu
+#define NIOS_PKT_8x32_RX_CTX_SAMPLE_FIFO_USEDW_SHIFT 11
+#define NIOS_PKT_8x32_RX_CTX_SAMPLE_FIFO_USEDW_MASK  0x000ff800u /* units of 16 entries */
+#define NIOS_PKT_8x32_RX_CTX_META_FIFO_USEDW_SHIFT   20
+#define NIOS_PKT_8x32_RX_CTX_META_FIFO_USEDW_MASK    0x7ff00000u /* exact entries */
+#define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK           0x7fffffffu
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
