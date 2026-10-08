@@ -58,7 +58,8 @@ static int collect_runtime_events(struct bladerf *dev, uint64_t *cursor,
 
 static int validate_event_trace(struct bladerf *dev, uint32_t txn,
                                 const struct bladerf_rf_event *final_event,
-                                bool report_trace)
+                                bool report_trace,
+                                bladerf_channel transition_channel)
 {
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t count = 0;
@@ -124,6 +125,10 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     uint64_t spi_done_ns = 0;
     uint64_t lo_return_ns = 0;
     uint32_t spi_write_count = 0;
+    const uint32_t expected_channel_flags =
+        BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+        (transition_channel == BLADERF_CHANNEL_RX(1)
+            ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
     for (uint32_t i = 0; i < count; ++i) {
         if (events[i].transaction_id != txn ||
             (i && events[i].host_monotonic_ns < events[i - 1].host_monotonic_ns)) {
@@ -131,11 +136,19 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
             return BLADERF_ERR_UNEXPECTED;
         }
         if (events[i].event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN) {
-            if (events[i].flags == 0) return BLADERF_ERR_UNEXPECTED;
+            if ((events[i].flags & (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+                                    BLADERF_RF_EVENT_F_TRANSITION_RX2)) !=
+                    expected_channel_flags ||
+                (events[i].flags & 0x0fffffffU) == 0) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
             spi_begin_ns = events[i].host_monotonic_ns;
-            spi_write_count = events[i].flags;
+            spi_write_count = events[i].flags & 0x0fffffffU;
         } else if (events[i].event_type == BLADERF_RF_EVT_SPI_DONE) {
-            if (events[i].flags == 0 || spi_begin_ns == 0 ||
+            if ((events[i].flags & 0x0fffffffU) != spi_write_count ||
+                (events[i].flags & (BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+                                    BLADERF_RF_EVENT_F_TRANSITION_RX2)) !=
+                    expected_channel_flags || spi_begin_ns == 0 ||
                 events[i].host_monotonic_ns < spi_begin_ns) {
                 return BLADERF_ERR_UNEXPECTED;
             }
@@ -168,6 +181,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
 
 int main(int argc, char **argv) {
     unsigned n = 1000;
+    unsigned stream_buffer_samples = 8192;
     bool count_set = false;
     bool cross_band = false;
     bool paired = false;
@@ -202,8 +216,19 @@ int main(int argc, char **argv) {
         layout = BLADERF_RX_X2;
         paired = true;
     }
+    const char *buffer_env = getenv("BLADERF_QUAL_STREAM_BUFFER_SAMPLES");
+    if (buffer_env != NULL && buffer_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(buffer_env, &end, 10);
+        if (end == buffer_env || *end != '\0' ||
+            (parsed != 8192 && parsed != 65536)) {
+            fprintf(stderr, "BLADERF_QUAL_STREAM_BUFFER_SAMPLES must be 8192 or 65536\n");
+            return 2;
+        }
+        stream_buffer_samples = (unsigned)parsed;
+    }
     struct bladerf *dev = NULL;
-    int16_t *samples = calloc(8192 * 2, sizeof(*samples));
+    int16_t *samples = calloc(65536 * 2, sizeof(*samples));
     uint64_t *latencies_ns = calloc(n, sizeof(*latencies_ns));
     unsigned completed = 0;
     if (!samples || !latencies_ns) return 2;
@@ -214,7 +239,8 @@ int main(int argc, char **argv) {
     CHECK(bladerf_set_sample_rate(dev, transition_channel, 4000000, NULL));
     CHECK(bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL));
     CHECK(bladerf_set_gain(dev, transition_channel, 30));
-    CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META, 16, 8192, 8, 1000));
+    CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
+                              16, stream_buffer_samples, 8, 1000));
     CHECK(bladerf_enable_module(dev, transition_channel, true));
     if (paired) CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), true));
     uint64_t runtime_event_cursor = 0;
@@ -314,7 +340,8 @@ int main(int argc, char **argv) {
         }
         if (valid) {
             st = validate_event_trace(dev, txn, &event,
-                                      (i + 1) % 100 == 0);
+                                      (i + 1) % 100 == 0,
+                                      transition_channel);
             if (st != 0) {
                 ++failures;
                 fprintf(stderr, "TRACE_INVALID i=%u status=%s\n", i,
