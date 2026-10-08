@@ -21,6 +21,11 @@ qualification remains sequenced after RX1.
 - `run_sync_rx_epoch_traversal_test.sh` passes.
 - GHDL `rx_epoch_controller_tb`, `rx_epoch_gate_tb`, and
   `fifo_writer_epoch_fence_tb` each pass.
+- The live qualification source and script are persistent under `host/misc`;
+  commit `ab117165` also keeps the compiled runner in `host/build/output` and
+  rebuilds it only when its source, public header, or library changes. A
+  repeated invocation confirmed the binary was reused. Execution reaches the
+  device open and then stops at the documented FPGA-version timeout.
 - The Python binding builds against the current fork using
   `PYTHON_BLADERF_CFLAGS='-I/home/bonho/projects/bladerf/host/libraries/libbladeRF/include'`
   and `PYTHON_BLADERF_LDFLAGS='-L/home/bonho/projects/bladerf/host/build/output -lbladeRF'`.
