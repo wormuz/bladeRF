@@ -430,43 +430,138 @@ if { $hs_done == 0 } {
     post_message -type info "handshake crossings constrained: $hs_done"
 }
 
-# AD9361 RX control words cross from the NIOS up_clk domain into each
-# adc_clk domain through ADI's up_xfer_cntrl toggle/ack protocol. up_xfer_data
+# AD9361 RX/TX control words cross from the NIOS up_clk domain into device
+# clock domains through ADI's up_xfer_cntrl toggle/ack protocol. up_xfer_data
 # is written on the request edge and held until the synchronized destination
 # toggle returns, while d_data_cntrl captures it after the request toggle has
-# crossed three destination flops. These are bundled-data buses, not bitwise
-# synchronizers: keep setup/hold from treating the unrelated clocks as
-# synchronous, while bounding each physical data path and inter-bit skew well
-# inside the four-cycle destination capture window (adc_clk <= 61.44 MHz on
-# this device). Pair each channel separately; cross-lane pairings do not
-# exist and must not be constrained accidentally.
-set adc_xfer_done 0
+# crossed three destination flops. Bound each of the four RX channel, four TX
+# channel, and TX common control bundles separately. This hosted AD9361 does
+# not elaborate an RX common up_xfer_cntrl.
+set adc_xfer_pairs [list]
 foreach channel {0 1 2 3} {
-    set adc_xfer_instance [format {*axi_ad9361_rx_channel:i_rx_channel_%d|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl} $channel]
-    set adc_xfer_src [get_keepers -nowarn "${adc_xfer_instance}|up_xfer_data\[*\]"]
-    set adc_xfer_dst [get_keepers -nowarn "${adc_xfer_instance}|d_data_cntrl\[*\]"]
+    set rx_instance [format {*axi_ad9361_rx_channel:i_rx_channel_%d|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl} $channel]
+    lappend adc_xfer_pairs "${rx_instance}|up_xfer_data\[*\]" \
+                           "${rx_instance}|d_data_cntrl\[*\]"
+    set tx_instance [format {*axi_ad9361_tx_channel:i_tx_channel_%d|up_dac_channel:i_up_dac_channel|up_xfer_cntrl:i_xfer_cntrl} $channel]
+    lappend adc_xfer_pairs "${tx_instance}|up_xfer_data\[*\]" \
+                           "${tx_instance}|d_data_cntrl\[*\]"
+}
+lappend adc_xfer_pairs \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[*]} \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_xfer_cntrl:i_xfer_cntrl|d_data_cntrl[*]}
+set adc_xfer_done 0
+foreach { adc_xfer_src_pat adc_xfer_dst_pat } $adc_xfer_pairs {
+    set adc_xfer_src [get_keepers -nowarn $adc_xfer_src_pat]
+    set adc_xfer_dst [get_keepers -nowarn $adc_xfer_dst_pat]
     if { [get_collection_size $adc_xfer_src] > 0 &&
          [get_collection_size $adc_xfer_dst] > 0 } {
         set_max_delay 40 -from $adc_xfer_src -to $adc_xfer_dst
         set_min_delay -40 -from $adc_xfer_src -to $adc_xfer_dst
-        set_max_skew -from $adc_xfer_src -to $adc_xfer_dst 6.4
+        if { [get_collection_size $adc_xfer_src] > 1 &&
+             [get_collection_size $adc_xfer_dst] > 1 } {
+            set_max_skew -from $adc_xfer_src -to $adc_xfer_dst 6.4
+        }
         set_net_delay -from $adc_xfer_src -to $adc_xfer_dst -max 6.4
         if { [get_collection_size $adc_xfer_dst] >
              [get_collection_size $adc_xfer_src] } {
             post_message -type critical_warning \
-                "ADC up_xfer pair too wide: channel $channel source [get_collection_size $adc_xfer_src] -> destination [get_collection_size $adc_xfer_dst]"
+                "ADI up_xfer pair too wide: $adc_xfer_src_pat ([get_collection_size $adc_xfer_src]) -> $adc_xfer_dst_pat ([get_collection_size $adc_xfer_dst])"
         }
         incr adc_xfer_done
     } else {
         post_message -type critical_warning \
-            "ADC up_xfer pair not matched: channel $channel source [get_collection_size $adc_xfer_src] -> destination [get_collection_size $adc_xfer_dst]"
+            "ADI up_xfer pair not matched: $adc_xfer_src_pat ([get_collection_size $adc_xfer_src]) -> $adc_xfer_dst_pat ([get_collection_size $adc_xfer_dst])"
     }
 }
-if { $adc_xfer_done == 0 || $adc_xfer_done != 4 } {
+if { $adc_xfer_done == 0 || $adc_xfer_done != 9 } {
     post_message -type critical_warning \
-        "ADC up_xfer bundled crossings constrained: $adc_xfer_done (expected 4)"
+        "ADI up_xfer bundled crossings constrained: $adc_xfer_done (expected 9)"
 } else {
-    post_message -type info "ADC up_xfer bundled crossings constrained: $adc_xfer_done"
+    post_message -type info "ADI up_xfer bundled crossings constrained: $adc_xfer_done"
+}
+
+# ADI clock monitor snapshots a 32-bit device-clock count into d_count_hold
+# when a three-flop synchronized request toggle arrives. The system-clock
+# side samples that held word only after the return toggle is synchronized.
+# Bound each of the RX and TX snapshots independently; the count is diagnostic
+# state, but an incoherent snapshot must not escape physical CDC review.
+set clock_mon_done 0
+foreach { src_pat dst_pat } [list \
+    {*axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_clock_mon:i_clock_mon|d_count_hold[*]} \
+    {*axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_clock_mon:i_clock_mon|up_d_count[*]} \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_clock_mon:i_clock_mon|d_count_hold[*]} \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_clock_mon:i_clock_mon|up_d_count[*]}] {
+    set src [get_keepers -nowarn $src_pat]
+    set dst [get_keepers -nowarn $dst_pat]
+    if { [get_collection_size $src] > 0 && [get_collection_size $dst] > 0 } {
+        set_max_delay 40 -from $src -to $dst
+        set_min_delay -40 -from $src -to $dst
+        set_max_skew -from $src -to $dst 6.4
+        set_net_delay -from $src -to $dst -max 6.4
+        if { [get_collection_size $src] != 32 ||
+             [get_collection_size $dst] != 32 } {
+            post_message -type critical_warning \
+                "clock monitor bundle width mismatch: $src_pat ([get_collection_size $src]) -> $dst_pat ([get_collection_size $dst])"
+        }
+        incr clock_mon_done
+    } else {
+        post_message -type critical_warning \
+            "clock monitor bundle not matched: $src_pat ([get_collection_size $src]) -> $dst_pat ([get_collection_size $dst])"
+    }
+}
+if { $clock_mon_done == 0 || $clock_mon_done != 2 } {
+    post_message -type critical_warning \
+        "clock monitor bundles constrained: $clock_mon_done (expected 2)"
+} else {
+    post_message -type info \
+        "clock monitor bundles constrained: $clock_mon_done"
+}
+
+# up_xfer_status OR-accumulates device-side status until its request toggle
+# completes, snapshots it into d_xfer_data, and holds that bundle while the
+# three-flop up-domain toggle synchronizer returns. up_data_status captures
+# only on the synchronized toggle edge. Constrain all four RX channel status
+# instances plus the RX/TX common status instances as separate bundled paths.
+set status_pairs [list]
+foreach channel {0 1 2 3} {
+    set instance [format {*axi_ad9361_rx_channel:i_rx_channel_%d|up_adc_channel:i_up_adc_channel|up_xfer_status:i_xfer_status} $channel]
+    lappend status_pairs "${instance}|d_xfer_data\[*\]" \
+                         "${instance}|up_data_status\[*\]"
+}
+lappend status_pairs \
+    {*axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_xfer_status:i_xfer_status|d_xfer_data[*]} \
+    {*axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_xfer_status:i_xfer_status|up_data_status[*]} \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_xfer_status:i_xfer_status|d_xfer_data[*]} \
+    {*axi_ad9361_tx:i_tx|up_dac_common:i_up_dac_common|up_xfer_status:i_xfer_status|up_data_status[*]}
+set status_done 0
+foreach { src_pat dst_pat } $status_pairs {
+    set src [get_keepers -nowarn $src_pat]
+    set dst [get_keepers -nowarn $dst_pat]
+    if { [get_collection_size $src] > 0 && [get_collection_size $dst] > 0 } {
+        set_max_delay 40 -from $src -to $dst
+        set_min_delay -40 -from $src -to $dst
+        # A one-bit status is still max/min-delay bounded, but has no
+        # inter-bit skew to measure (Quartus rejects max_skew for one path).
+        if { [get_collection_size $src] > 1 &&
+             [get_collection_size $dst] > 1 } {
+            set_max_skew -from $src -to $dst 6.4
+        }
+        set_net_delay -from $src -to $dst -max 6.4
+        if { [get_collection_size $dst] > [get_collection_size $src] } {
+            post_message -type critical_warning \
+                "ADI XFER status pair too wide: $src_pat ([get_collection_size $src]) -> $dst_pat ([get_collection_size $dst])"
+        }
+        incr status_done
+    } else {
+        post_message -type critical_warning \
+            "ADI XFER status pair not matched: $src_pat ([get_collection_size $src]) -> $dst_pat ([get_collection_size $dst])"
+    }
+}
+if { $status_done == 0 || $status_done != 6 } {
+    post_message -type critical_warning \
+        "ADI XFER status bundles constrained: $status_done (expected 6)"
+} else {
+    post_message -type info "ADI XFER status bundles constrained: $status_done"
 }
 
 # Every handshake instance in the design is named in the pairs above. The

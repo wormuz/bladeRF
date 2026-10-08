@@ -139,38 +139,105 @@ def check_sdc():
     src = code_only(raw)
 
     # ADI's default SDC cuts every up_xfer_cntrl bundled-data path. Exclude
-    # only the four AD9361 RX destination bundles so this project's physical
-    # delay/skew bounds remain active; cutting them makes Quartus discard the
-    # set_max_skew constraint even when both endpoint collections are full.
+    # all nine elaborated AD9361 RX/TX channel/common destination bundles so this project's
+    # physical delay/skew bounds remain active; cutting them makes Quartus
+    # discard set_max_skew even when both endpoint collections are full.
     adi_sdc = ROOT / "hdl/fpga/ip/analogdevicesinc/hdl/library/common/ad_axi_ip_constr.sdc"
     adi_src = code_only(adi_sdc.read_text()) if adi_sdc.exists() else ""
     if ("remove_from_collection" not in adi_src or
-            "set adc_rx_d_data" not in adi_src or
-            "set_false_path -from [get_registers *up_xfer_cntrl:i_xfer_cntrl|up_xfer_data*] -to $adc_other_d_data" not in adi_src or
+            "set blade_xfer_cntrl_dst" not in adi_src or
+            "set_false_path -from [get_registers *up_xfer_cntrl:i_xfer_cntrl|up_xfer_data*] -to $other_xfer_cntrl_dst" not in adi_src or
             len(re.findall(r"axi_ad9361_rx_channel:i_rx_channel_[0-3]", adi_src)) < 4):
-        fail("sdc-adi-rx-bundle-false-path",
-             "ADI's broad up_xfer_cntrl false path must exclude exactly the four RX destination bundles",
-             "the FPGA's RX bus set_max_skew constraints are ignored when the vendor false path covers them")
+        fail("sdc-adi-xfer-bundle-false-path",
+             "ADI's broad up_xfer_cntrl false path must exclude all nine elaborated RX/TX destination bundles",
+             "the FPGA bus set_max_skew constraints are ignored when vendor false paths cover them")
 
-    # ADI's four RX-channel up_xfer_cntrl buses carry stable bundled data
-    # from up_clk into adc_clk. Keep all four source/destination pairs
-    # instance-scoped and physically bounded; a missing or broad pair can
-    # reintroduce torn RF control words or hide a real crossing.
+    for target in (
+            "set blade_status_data_dst",
+            "set other_status_data_dst [remove_from_collection",
+            "set blade_clock_mon_dst",
+            "set other_clock_mon_dst [remove_from_collection"):
+        if target not in adi_src:
+            fail("sdc-adi-status-cut-exclusion",
+                 "vendor status/clock-monitor false paths must exclude the six status and two clock-count bundles",
+                 "a vendor false path makes the board max-skew bounds silently disappear")
+            break
+    if ("set_false_path -from [get_registers *up_xfer_status:i_xfer_status|d_xfer_data*] -to $other_status_data_dst" not in adi_src or
+            "set_false_path -from [get_registers *up_clock_mon:i_clock_mon|d_count_hold*] -to $other_clock_mon_dst" not in adi_src):
+        fail("sdc-adi-status-cut-scope",
+             "vendor false paths must remain on non-AD9361 status/clock-monitor instances only",
+             "the board-specific bundles must retain timing paths for their physical bounds")
+    for other_dst in ("other_xfer_cntrl_dst", "other_status_data_dst", "other_clock_mon_dst"):
+        if f"if {{[get_collection_size ${other_dst}] > 0}}" not in adi_src:
+            fail("sdc-adi-empty-residual-cut",
+                 f"ADI residual false path for ${other_dst} must be skipped when the collection is empty",
+                 "Quartus reports an ignored exception as a serious warning")
+            break
+
+    # ADI's four RX-channel, four TX-channel and TX-common up_xfer_cntrl
+    # buses carry stable bundled data. Keep all nine pairs instance-scoped and
+    # physically bounded.
     adc_xfer_block = re.search(
-        r"set adc_xfer_done 0(.*?)ADC up_xfer bundled crossings constrained",
+        r"set adc_xfer_pairs \[list\](.*?)ADI up_xfer bundled crossings constrained",
         src, re.S)
     if (adc_xfer_block is None or
-            "foreach channel {0 1 2 3}" not in adc_xfer_block.group(1) or
-            "up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl" not in adc_xfer_block.group(1) or
+            "axi_ad9361_rx_channel:i_rx_channel_%d" not in adc_xfer_block.group(1) or
+            "axi_ad9361_tx_channel:i_tx_channel_%d" not in adc_xfer_block.group(1) or
+            "up_dac_common:i_up_dac_common|up_xfer_cntrl:i_xfer_cntrl" not in adc_xfer_block.group(1) or
             "|up_xfer_data\\[*\\]" not in adc_xfer_block.group(1) or
             "|d_data_cntrl\\[*\\]" not in adc_xfer_block.group(1) or
             "set_max_delay 40" not in adc_xfer_block.group(1) or
             "set_min_delay -40" not in adc_xfer_block.group(1) or
             "set_max_skew" not in adc_xfer_block.group(1) or
-            "set_net_delay" not in adc_xfer_block.group(1)):
-        fail("sdc-ad9361-rx-control-bundle",
-             "the four AD9361 RX up_xfer_cntrl source/destination pairs must be instance-scoped and bounded",
-             "a torn control word can change RX data-path state without a corresponding software transaction")
+            "set_net_delay" not in adc_xfer_block.group(1) or
+            "adc_xfer_done != 9" not in adc_xfer_block.group(1)):
+        fail("sdc-ad9361-xfer-control-bundles",
+             "all nine elaborated AD9361 RX/TX/channel/common up_xfer_cntrl pairs must be instance-scoped and bounded",
+             "a torn control word can change RF datapath state without a corresponding software transaction")
+
+    # Two ADI status CDC families were absent from the prior physical-bound
+    # inventory: the clock-monitor held counter and up_xfer_status snapshots.
+    clock_mon_block = re.search(
+        r"set clock_mon_done 0(.*?)clock monitor bundles constrained",
+        src, re.S)
+    if (clock_mon_block is None or
+            "up_clock_mon:i_clock_mon|d_count_hold[*]" not in clock_mon_block.group(1) or
+            "up_clock_mon:i_clock_mon|up_d_count[*]" not in clock_mon_block.group(1) or
+            "set_max_delay 40" not in clock_mon_block.group(1) or
+            "set_min_delay -40" not in clock_mon_block.group(1) or
+            "set_max_skew" not in clock_mon_block.group(1) or
+            "set_net_delay" not in clock_mon_block.group(1) or
+            "clock_mon_done != 2" not in clock_mon_block.group(1)):
+        fail("sdc-ad9361-clock-monitor-bundle",
+             "RX and TX ADI clock-monitor snapshots must be exact 32-bit bounded bundles",
+             "the held count is sampled across domains after a toggle; its bus needs physical bounds")
+
+    status_block = re.search(
+        r"set status_done 0(.*?)ADI XFER status bundles constrained",
+        src, re.S)
+    if (status_block is None or
+            "up_xfer_status:i_xfer_status" not in src or
+            "|d_xfer_data\\[*\\]" not in src or
+            "|up_data_status\\[*\\]" not in src or
+            "set_max_delay 40" not in status_block.group(1) or
+            "set_min_delay -40" not in status_block.group(1) or
+            "set_max_skew" not in status_block.group(1) or
+            "set_net_delay" not in status_block.group(1) or
+            "get_collection_size $src] > 1" not in status_block.group(1) or
+            "status_done != 6" not in status_block.group(1)):
+        fail("sdc-ad9361-xfer-status-bundles",
+             "four RX-channel and two common up_xfer_status pairs must be bounded and counted",
+             "status snapshots are held-data CDC transfers and must have matched physical constraints")
+
+    postfit_report = ROOT / "hdl/quartus/report_adc_xfer_cdc.tcl"
+    if postfit_report.exists():
+        report_src = code_only(postfit_report.read_text(), comment="#")
+        if ("ADI_XFER bundles paired: [expr {4 + $additional_ok}]/9" not in report_src or
+                "CLOCK_MON bundles paired: $clock_mon_ok/2" not in report_src or
+                "XFER_STATUS bundles paired: $status_ok/6" not in report_src):
+            fail("quartus-postfit-adi-status-inventory",
+                 "post-fit CDC report must prove all ADI control, clock-monitor and XFER-status inventories",
+                 "qgate needs fitted endpoints for every new physical-bound bundle")
 
     # Rules 1 and 2 (fatal message, unpinned pair) moved to
     # check_all_sdcs: they apply to every SDC the build reads, not only
@@ -1215,10 +1282,13 @@ def check_qgate_sta_resolution():
             "ADC_XFER channel=2 source_bits=61 destination_bits=61\n"
             "ADC_XFER channel=3 source_bits=61 destination_bits=61\n"
             "ADC_XFER all four RX bundles paired: PASS\n"
+            "ADI_XFER bundles paired: 9/9\n"
+            "CLOCK_MON bundles paired: 2/2\n"
+            "XFER_STATUS bundles paired: 6/6\n"
             "Info (332181): Report Max Skew: Found 168 paths (0 violated). Worst case slack is 1.528\n"
             "tamer compare payload crossing constrained on 2\n"
             "handshake crossings constrained: 15\n"
-            "ADC up_xfer bundled crossings constrained: 4\n"
+            "ADI up_xfer bundled crossings constrained: 9\n"
             "dcfifo pointer crossings constrained on 10\n")
 
         result = subprocess.run(
@@ -1230,6 +1300,23 @@ def check_qgate_sta_resolution():
                  "the build log was outside the project tree",
                  "a stale report can reject or approve the wrong FPGA image")
             return
+
+        for inventory_line, expected_failure, test_name in (
+                ("CLOCK_MON bundles paired: 2/2\n",
+                 "clock monitor bundles: required evidence missing", "qgate-clock-monitor-inventory"),
+                ("XFER_STATUS bundles paired: 6/6\n",
+                 "ADI XFER status bundles: required evidence missing", "qgate-xfer-status-inventory")):
+            original = log.read_text()
+            log.write_text(original.replace(inventory_line, ""))
+            result = subprocess.run(
+                [str(qgate), str(log)], text=True, capture_output=True,
+                check=False)
+            if result.returncode == 0 or expected_failure not in result.stdout:
+                fail(test_name,
+                     "qgate accepted a sweep without one complete bundled-data inventory",
+                     "physical CDC constraints need fitted endpoint evidence for every category")
+                return
+            log.write_text(original)
 
         log.write_text(log.read_text().replace(
             "Report Max Skew: Found 168 paths (0 violated)",
@@ -1330,6 +1417,42 @@ def check_qgate_sta_resolution():
                  "timing would be unchecked while the FPGA image appears eligible")
 
 
+def check_d101_inventory_parser():
+    """Verify the D101 parser accepts known CDC sources and rejects unknowns."""
+    script = ROOT / "hdl/quartus/classify_d101.py"
+    if not script.exists():
+        fail("d101-inventory-script", "persistent D101 source classifier is missing",
+             "release DRC evidence cannot be reviewed reproducibly")
+        return
+    with tempfile.TemporaryDirectory(prefix="qcheck-d101-") as temp:
+        report = Path(temp) / "fixture.drc.rpt"
+        report.write_text(
+            "; Rule D101: test - Structure 1 ; ;\n"
+            ";  Source node(s) from clock \"src\" ; "
+            "bladerf_core:U_core|handshake:U_test|source_holding[0] ;\n"
+            ";  Destination node(s) from clock \"dst\" ; "
+            "bladerf_core:U_core|dst_reg[0] ;\n")
+        accepted = subprocess.run(
+            [sys.executable, str(script), str(report)],
+            text=True, capture_output=True, check=False)
+        if accepted.returncode != 0 or "D101 source structures: 1" not in accepted.stdout:
+            fail("d101-inventory-known-source",
+                 "D101 classifier rejected a known held-handshake source",
+                 "the classifier must preserve valid endpoint evidence")
+            return
+        report.write_text(
+            "; Rule D101: test - Structure 1 ; ;\n"
+            ";  Source node(s) from clock \"src\" ; "
+            "bladerf_core:U_core|unknown:U_test|data[0] ;\n")
+        rejected = subprocess.run(
+            [sys.executable, str(script), str(report)],
+            text=True, capture_output=True, check=False)
+        if rejected.returncode == 0 or "unclassified" not in rejected.stderr:
+            fail("d101-inventory-unknown-source",
+                 "D101 classifier accepted an unknown source endpoint",
+                 "new CDC structures must stop release review until classified")
+
+
 RULES = """
 sdc-fatal-message          post_message -type error aborts read_sdc entirely
 sdc-unpinned-pair          both ends wildcarded, spans instances, binds to nothing
@@ -1383,6 +1506,7 @@ def main():
     check_full_flow_runs_design_assistant()
     check_full_flow_runs_rx_max_skew_report()
     check_qgate_sta_resolution()
+    check_d101_inventory_parser()
 
     for n in notes:
         print(f"note  {n}")

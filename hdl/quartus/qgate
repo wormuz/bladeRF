@@ -70,6 +70,16 @@ check() {
     fi
 }
 
+require_evidence() {
+    local label="$1" pattern="$2"
+    if grep -qE "$pattern" "$f" 2>/dev/null; then
+        note ok "$label"
+    else
+        note FAIL "$label: required evidence missing"
+        fail=1
+    fi
+}
+
 echo "qgate $(basename "$f")"
 
 # Did the build run at all? Every other check below looks for something bad
@@ -151,7 +161,7 @@ else
 fi
 expect_count "cdc tamer compare payload"  'tamer compare payload crossing constrained on [0-9]+' 2
 expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
-expect_count "adc up_xfer bundled data" 'ADC up_xfer bundled crossings constrained: [0-9]+' 4
+expect_count "ADI up_xfer bundled data" 'ADI up_xfer bundled crossings constrained: [0-9]+' 9
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
 
 # Timing: any negative slack in the summary is a failure. Resolve the exact
@@ -236,6 +246,9 @@ if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revis
             note ok "max-skew (all paths within bound)"
         fi
     fi
+    require_evidence "ADI up_xfer bundles" '^ADI_XFER bundles paired: 9/9$'
+    require_evidence "clock monitor bundles" '^CLOCK_MON bundles paired: 2/2$'
+    require_evidence "ADI XFER status bundles" '^XFER_STATUS bundles paired: 6/6$'
 fi
 
 # STA alone misses CDC structures. Require the Design Assistant report for the
