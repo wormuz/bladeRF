@@ -399,7 +399,18 @@ static void *rx_callback(struct bladerf *dev,
                 log_verbose("%s worker: delaying submission while reorder "
                             "queue drains\n", worker2str(s));
             } else {
-                log_debug("RX overrun @ buffer %u\r\n", samples_idx);
+                log_debug("RX overrun @ buffer %u prod_i=%u prod_state=%u "
+                          "completed_state=%u seq=%u expected_seq=%u "
+                          "next_seq=%u reorder_len=%u cons_i=%u dropped=%u\n",
+                          samples_idx, b->prod_i,
+                          (unsigned)b->status[b->prod_i],
+                          (unsigned)b->status[samples_idx],
+                          b->buffer_seq != NULL
+                              ? b->buffer_seq[samples_idx] : 0,
+                          b->expected_seq, b->next_seq, b->reorder_len,
+                          b->cons_i,
+                          b->buffer_dropped != NULL
+                              ? (unsigned)b->buffer_dropped[samples_idx] : 0);
 
                 /* This completed transfer is withheld. Retire its sequence
                  * and recycle the same transport buffer; stale FULL slots

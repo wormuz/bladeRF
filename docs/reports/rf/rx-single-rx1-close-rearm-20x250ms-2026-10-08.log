@@ -1,0 +1,27 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3659] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_CLOSED i=0 epoch=1 pause_ms=250
+CAPTURE_CLOSED i=1 epoch=2 pause_ms=250
+CAPTURE_CLOSED i=2 epoch=3 pause_ms=250
+CAPTURE_CLOSED i=3 epoch=4 pause_ms=250
+CAPTURE_CLOSED i=4 epoch=5 pause_ms=250
+CAPTURE_CLOSED i=5 epoch=6 pause_ms=250
+CAPTURE_CLOSED i=6 epoch=7 pause_ms=250
+CAPTURE_CLOSED i=7 epoch=8 pause_ms=250
+CAPTURE_CLOSED i=8 epoch=9 pause_ms=250
+CAPTURE_CLOSED i=9 epoch=10 pause_ms=250
+CAPTURE_CLOSED i=10 epoch=11 pause_ms=250
+CAPTURE_CLOSED i=11 epoch=12 pause_ms=250
+CAPTURE_CLOSED i=12 epoch=13 pause_ms=250
+CAPTURE_CLOSED i=13 epoch=14 pause_ms=250
+CAPTURE_CLOSED i=14 epoch=15 pause_ms=250
+CAPTURE_CLOSED i=15 epoch=16 pause_ms=250
+CAPTURE_CLOSED i=16 epoch=17 pause_ms=250
+CAPTURE_CLOSED i=17 epoch=18 pause_ms=250
+CAPTURE_CLOSED i=18 epoch=19 pause_ms=250
+CAPTURE_CLOSED i=19 epoch=20 pause_ms=250
+FINAL_EVENT_HISTORY_OK first=1 last=20
+FINAL_RX1_DISABLE_DONE mode=RX1
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN

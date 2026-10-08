@@ -1,0 +1,62 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3659] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_CLOSED i=0 epoch=61 pause_ms=250
+CAPTURE_CLOSED i=1 epoch=62 pause_ms=250
+CAPTURE_CLOSED i=2 epoch=63 pause_ms=250
+CAPTURE_CLOSED i=3 epoch=64 pause_ms=250
+CAPTURE_CLOSED i=4 epoch=65 pause_ms=250
+CAPTURE_CLOSED i=5 epoch=66 pause_ms=250
+CAPTURE_CLOSED i=6 epoch=67 pause_ms=250
+CAPTURE_CLOSED i=7 epoch=68 pause_ms=250
+CAPTURE_CLOSED i=8 epoch=69 pause_ms=250
+CAPTURE_CLOSED i=9 epoch=70 pause_ms=250
+CAPTURE_CLOSED i=10 epoch=71 pause_ms=250
+CAPTURE_CLOSED i=11 epoch=72 pause_ms=250
+CAPTURE_CLOSED i=12 epoch=73 pause_ms=250
+CAPTURE_CLOSED i=13 epoch=74 pause_ms=250
+CAPTURE_CLOSED i=14 epoch=75 pause_ms=250
+CAPTURE_CLOSED i=15 epoch=76 pause_ms=250
+CAPTURE_CLOSED i=16 epoch=77 pause_ms=250
+CAPTURE_CLOSED i=17 epoch=78 pause_ms=250
+CAPTURE_CLOSED i=18 epoch=79 pause_ms=250
+CAPTURE_CLOSED i=19 epoch=80 pause_ms=250
+CAPTURE_CLOSED i=20 epoch=81 pause_ms=250
+CAPTURE_CLOSED i=21 epoch=82 pause_ms=250
+CAPTURE_CLOSED i=22 epoch=83 pause_ms=250
+CAPTURE_CLOSED i=23 epoch=84 pause_ms=250
+CAPTURE_CLOSED i=24 epoch=85 pause_ms=250
+CAPTURE_CLOSED i=25 epoch=86 pause_ms=250
+CAPTURE_CLOSED i=26 epoch=87 pause_ms=250
+CAPTURE_CLOSED i=27 epoch=88 pause_ms=250
+CAPTURE_CLOSED i=28 epoch=89 pause_ms=250
+CAPTURE_CLOSED i=29 epoch=90 pause_ms=250
+CAPTURE_CLOSED i=30 epoch=91 pause_ms=250
+CAPTURE_CLOSED i=31 epoch=92 pause_ms=250
+CAPTURE_CLOSED i=32 epoch=93 pause_ms=250
+CAPTURE_CLOSED i=33 epoch=94 pause_ms=250
+CAPTURE_CLOSED i=34 epoch=95 pause_ms=250
+CAPTURE_CLOSED i=35 epoch=96 pause_ms=250
+CAPTURE_CLOSED i=36 epoch=97 pause_ms=250
+CAPTURE_CLOSED i=37 epoch=98 pause_ms=250
+CAPTURE_CLOSED i=38 epoch=99 pause_ms=250
+CAPTURE_CLOSED i=39 epoch=100 pause_ms=250
+CAPTURE_CLOSED i=40 epoch=101 pause_ms=250
+CAPTURE_CLOSED i=41 epoch=102 pause_ms=250
+CAPTURE_CLOSED i=42 epoch=103 pause_ms=250
+CAPTURE_CLOSED i=43 epoch=104 pause_ms=250
+CAPTURE_CLOSED i=44 epoch=105 pause_ms=250
+CAPTURE_CLOSED i=45 epoch=106 pause_ms=250
+CAPTURE_CLOSED i=46 epoch=107 pause_ms=250
+CAPTURE_CLOSED i=47 epoch=108 pause_ms=250
+CAPTURE_CLOSED i=48 epoch=109 pause_ms=250
+CAPTURE_CLOSED i=49 epoch=110 pause_ms=250
+FINAL_EVENT_HISTORY_OK first=1 last=50
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76799011 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76799011 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=50 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=100 transition_ms_p50=25.938_p95=27.642_p99=28.684_max=29.211

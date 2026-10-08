@@ -20,6 +20,7 @@
  */
 
 #include <string.h>
+#include <limits.h>
 #include <time.h>
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
 #include <errno.h>
@@ -2992,6 +2993,30 @@ static int bladerf2_sync_config(struct bladerf *dev,
             require_rx_x2_host_data, layout)) {
         bladerf2_rx_layout_unsupported(dev, layout, true);
         return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    /* A certified sync RX stream can receive a complete USB transfer window
+     * as soon as the FPGA opens an epoch, before the application thread wakes
+     * from transition_wait() and starts draining sync_rx(). Keep enough ring
+     * capacity for that in-flight window plus one further window of scheduling
+     * headroom. Without this, the RX_X2 default 64 buffers / 32 transfers has
+     * only 32 spare slots: the 33rd completion can overrun before the first
+     * sync read begins. This is native queue capacity, not caller-side discard
+     * or timing policy.
+     */
+    if (dir == BLADERF_RX &&
+        (format == BLADERF_FORMAT_SC16_Q11_META ||
+         format == BLADERF_FORMAT_SC8_Q7_META)) {
+        if (num_transfers > UINT_MAX / 3u) {
+            return BLADERF_ERR_INVAL;
+        }
+        const unsigned int min_rx_meta_buffers = num_transfers * 3u;
+        if (num_buffers < min_rx_meta_buffers) {
+            log_info("Increasing RX META ring from %u to %u buffers for "
+                     "%u in-flight transfers\n", num_buffers,
+                     min_rx_meta_buffers, num_transfers);
+            num_buffers = min_rx_meta_buffers;
+        }
     }
 
     /* Replacing a certified META stream discards the parser's epoch filter.

@@ -2819,6 +2819,11 @@ int CALL_CONV bladerf_get_loss_event_count(struct bladerf *dev,
  * @note The `num_buffers` parameter should generally be increased as the amount
  *       of work done between bladerf_sync_rx() or bladerf_sync_tx() calls
  *       increases.
+ * @note On bladeRF 2.x synchronous RX using SC16_Q11_META or SC8_Q7_META,
+ *       libbladeRF may increase `num_buffers` to at least three times
+ *       `num_transfers`. This preserves ring headroom for the in-flight USB
+ *       completion window while the application begins consuming a newly
+ *       certified RX epoch.
  *
  * @param       dev             Device to configure
  * @param[in]   layout          Stream direction and layout

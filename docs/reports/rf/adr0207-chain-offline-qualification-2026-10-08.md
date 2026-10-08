@@ -144,22 +144,28 @@ The earlier 10,000-transition campaign qualifies retune at its tested stream
 geometries; it does not qualify the newly added finite-capture close/rearm
 lifecycle. The top release blocker is native sync ordering after close.
 
-1. **P0 — Fix and regression-test native close→rearm.** On live xA4, RX1
-   close suppressed ring-full for a 1.5 s pause, but the next transition
-   reached `RX_EPOCH_VALID` and `RX_FIRST_VALID_HOST_DATA`, then sync reported
-   ring-full and timestamp discontinuity with an older timestamp after a later
-   resumed timestamp. Source audit found the FPGA epoch gate is before
-   `fifo_writer`, while sample/meta FIFO reset is currently driven by RX
-   transport disable; there is no dedicated FIFO boundary flush on an RF epoch
-   close/rearm. This is a plausible stale-data source, not yet the proven live
-   cause. Trace FIFO contents/metadata across the boundary and audit sync-worker
-   in-flight/reorder ownership in parallel; implement an explicit safe flush
-   or prove a drain fence, then add native/HDL regressions for old buffers after
-   rearm and ordered timestamp delivery.
-2. **P1 — Qualify close/rearm on RX1, RX2, RX_X2.** Repeat finite capture →
-   close → decode-length pause → rearm cycles. Require no old-epoch IQ, ordered
-   event history, continuous timestamps within each epoch, and no unexplained
-   sync/FPGA overrun.
+1. **P0 — Finish native close→rearm qualification.** Live RX_X2 at 64 buffers
+   / 32 transfers reproduced ring-full after close/rearm (2/3 and 9/10 cycles
+   at 250 ms pause). Debug trace localized the queue overrun: the producer
+   reached a FULL destination while 32 transfers remained in flight, before
+   the sync consumer retired enough buffers. A native bladeRF 2.x META RX ring
+   floor of 3× active transfers now gives enough headroom without wrapper
+   tuning. With the caller still requesting 64/32, the library allocated the
+   safe ring and 20 cross-band RX_X2 close/rearm cycles passed with zero
+   overruns and clean teardown; explicit 96/32 independently passed 20/20.
+   The caller's 64/32 request then passed 50 cross-band RX_X2 cycles with
+   250 ms pauses; RX1 and RX2 each passed 20 cycles with zero overrun. An
+   uninstrumented RX1 20-cycle run hung twice during device close, while one
+   strace run completed, so teardown remains intermittently unqualified.
+   Isolate the intermittent RX1 teardown hang and investigate the earlier
+   timestamp-discontinuity trace. Source audit also found no dedicated reset of
+   the FPGA sample/meta FIFOs on an RF epoch boundary. Keep this as an open
+   hypothesis to test, not an asserted root cause.
+2. **P1 — Complete extended close/rearm qualification.** Run at least 1,000
+   finite capture → close → decode-length pause → rearm cycles per RX1, RX2,
+   and RX_X2. Require no old-epoch IQ, ordered event history, continuous
+   timestamps within each epoch, no unexplained sync/FPGA overrun, and clean
+   teardown after every run.
 3. **P2 — Re-run RF/LTE hardware qualification.** Exercise local and cross-band
    transitions and known-cell return points, including PCI 85, after the P0
    fix, using production stream geometries. Publish transition and first-valid

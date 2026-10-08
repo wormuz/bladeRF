@@ -62,3 +62,33 @@ selection from ordinary local builds/tests.
   plus missing FPGA-size and VCTCXO trim calibration metadata. These warnings
   are environment discrepancies; no FPGA reload/reset was done during rearm
   investigation.
+
+## RX_X2 rearm queue regression and native headroom correction
+
+A persistent qualification-runner mode now performs `transition → validated
+sync read → RX_CAPTURE_CLOSED → pause → next transition`, with optional worker
+trace and independent ring/transfer counts. On xA4, the RX_X2 32,768-sample,
+64-buffer, 32-transfer configuration reproduced `SYNC_RX_QUEUE |
+SYNC_RX_RING_FULL` during 250 ms close/rearm cycles (2 overruns in 3 cycles;
+9 in 10). Debug trace showed `prod_state=FULL`, current completion
+`IN_FLIGHT`, `expected_seq=108`, `next_seq=140`, and 32 outstanding transfers: a
+full transfer completion window reached the sync ring before its consumer
+retired enough buffers.
+
+The same hardware test with a 96-buffer / 32-transfer ring passed 20 cross-band
+RX_X2 close/rearm cycles with zero overrun. libbladeRF now enforces a native
+minimum ring depth of `3 * num_transfers` for bladeRF 2.x META RX, so callers
+using 64/32 receive 96 buffers internally without wrapper-specific changes.
+The unchanged 64/32 request passed 50 cross-band RX_X2 cycles with 250 ms
+pauses, zero retry overrun, zero runtime stream-overrun events, and clean device
+teardown. Separate RX1 and RX2 20-cycle runs also had zero overrun and clean
+teardown. An RX1 20-cycle run hung twice at device close after reporting
+`FINAL_DEVICE_CLOSE_BEGIN`; the same 20-cycle test completed once under strace.
+The intermittent teardown issue is unlocalized and remains a release gate.
+Targeted native worker-stop and sync traversal tests pass. Raw traces are in
+`rx-x2-close-rearm-debug-3x250ms-2026-10-08.log`,
+`rx-x2-close-rearm-native-headroom-20x250ms-2026-10-08.log`,
+`rx-x2-close-rearm-native-headroom-50x250ms-2026-10-08.log`,
+`rx-single-rx1-close-rearm-20x250ms-2026-10-08.log`,
+`rx-single-rx1-close-rearm-strace-20x250ms-2026-10-08.log`, and
+`rx-single-rx2-close-rearm-20x250ms-2026-10-08.log`.

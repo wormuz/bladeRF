@@ -1,0 +1,32 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3659] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_CLOSED i=0 epoch=41 pause_ms=250
+CAPTURE_CLOSED i=1 epoch=42 pause_ms=250
+CAPTURE_CLOSED i=2 epoch=43 pause_ms=250
+CAPTURE_CLOSED i=3 epoch=44 pause_ms=250
+CAPTURE_CLOSED i=4 epoch=45 pause_ms=250
+CAPTURE_CLOSED i=5 epoch=46 pause_ms=250
+CAPTURE_CLOSED i=6 epoch=47 pause_ms=250
+CAPTURE_CLOSED i=7 epoch=48 pause_ms=250
+CAPTURE_CLOSED i=8 epoch=49 pause_ms=250
+CAPTURE_CLOSED i=9 epoch=50 pause_ms=250
+CAPTURE_CLOSED i=10 epoch=51 pause_ms=250
+CAPTURE_CLOSED i=11 epoch=52 pause_ms=250
+CAPTURE_CLOSED i=12 epoch=53 pause_ms=250
+CAPTURE_CLOSED i=13 epoch=54 pause_ms=250
+CAPTURE_CLOSED i=14 epoch=55 pause_ms=250
+CAPTURE_CLOSED i=15 epoch=56 pause_ms=250
+CAPTURE_CLOSED i=16 epoch=57 pause_ms=250
+CAPTURE_CLOSED i=17 epoch=58 pause_ms=250
+CAPTURE_CLOSED i=18 epoch=59 pause_ms=250
+CAPTURE_CLOSED i=19 epoch=60 pause_ms=250
+FINAL_EVENT_HISTORY_OK first=1 last=20
+FINAL_RX1_DISABLE_DONE mode=RX2
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76799011 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX2 transitions=20 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=40 transition_ms_p50=25.312_p95=31.345_p99=31.345_max=32.080

@@ -1,4 +1,5 @@
 #include <libbladeRF.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -187,6 +188,7 @@ int main(int argc, char **argv) {
     bool count_set = false;
     bool cross_band = false;
     bool paired = false;
+    unsigned close_pause_ms = 0;
     const char *mode = "RX1";
     bladerf_channel transition_channel = BLADERF_CHANNEL_RX(0);
     bladerf_channel_layout layout = BLADERF_RX_X1;
@@ -206,8 +208,19 @@ int main(int argc, char **argv) {
             mode = argv[arg];
         } else if (strcmp(argv[arg], "--cross-band") == 0) {
             cross_band = true;
+        } else if (strcmp(argv[arg], "--close-pause-ms") == 0 &&
+                   arg + 1 < argc) {
+            char *pause_end = NULL;
+            unsigned long pause = strtoul(argv[++arg], &pause_end, 10);
+            if (pause_end == argv[arg] || *pause_end != '\0' ||
+                pause > 60000) {
+                fprintf(stderr, "invalid --close-pause-ms value\n");
+                return 2;
+            }
+            close_pause_ms = (unsigned)pause;
         } else {
-            fprintf(stderr, "usage: %s [count] [RX1|RX2|BOTH] [--cross-band]\n",
+            fprintf(stderr, "usage: %s [count] [RX1|RX2|BOTH] [--cross-band] "
+                    "[--close-pause-ms N]\n",
                     argv[0]);
             return 2;
         }
@@ -238,6 +251,30 @@ int main(int argc, char **argv) {
             stream_num_transfers = 24;
         }
     }
+    const char *num_buffers_env = getenv("BLADERF_QUAL_STREAM_NUM_BUFFERS");
+    if (num_buffers_env != NULL && num_buffers_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(num_buffers_env, &end, 10);
+        if (end == num_buffers_env || *end != '\0' ||
+            parsed < stream_num_transfers || parsed > 1024) {
+            fprintf(stderr, "BLADERF_QUAL_STREAM_NUM_BUFFERS must be "
+                    "between num_transfers and 1024\n");
+            return 2;
+        }
+        stream_num_buffers = (unsigned)parsed;
+    }
+    const char *num_transfers_env = getenv("BLADERF_QUAL_STREAM_NUM_TRANSFERS");
+    if (num_transfers_env != NULL && num_transfers_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(num_transfers_env, &end, 10);
+        if (end == num_transfers_env || *end != '\0' || parsed == 0 ||
+            parsed > stream_num_buffers) {
+            fprintf(stderr, "BLADERF_QUAL_STREAM_NUM_TRANSFERS must be "
+                    "between 1 and num_buffers\n");
+            return 2;
+        }
+        stream_num_transfers = (unsigned)parsed;
+    }
     struct bladerf *dev = NULL;
     int16_t *samples = calloc(65536 * 2, sizeof(*samples));
     uint64_t *latencies_ns = calloc(n, sizeof(*latencies_ns));
@@ -245,7 +282,8 @@ int main(int argc, char **argv) {
     if (!samples || !latencies_ns) return 2;
     int st = bladerf_open(&dev, NULL);
     if (st) { fprintf(stderr, "open: %s\n", bladerf_strerror(st)); return 2; }
-    bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
+    bladerf_log_set_verbosity(getenv("BLADERF_QUAL_DEBUG") != NULL
+        ? BLADERF_LOG_LEVEL_DEBUG : BLADERF_LOG_LEVEL_WARNING);
 #define CHECK(x) do { st=(x); if(st) { fprintf(stderr,"%s: %s\n",#x,bladerf_strerror(st)); goto fail; } } while(0)
     CHECK(bladerf_set_sample_rate(dev, transition_channel, 4000000, NULL));
     CHECK(bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL));
@@ -360,6 +398,32 @@ int main(int argc, char **argv) {
                         bladerf_strerror(st));
             }
         }
+        if (valid && close_pause_ms != 0) {
+            st = bladerf_rx_capture_close(dev, transition_channel);
+            if (st != 0) {
+                ++failures;
+                fprintf(stderr, "CAPTURE_CLOSE_FAILED i=%u status=%s\n",
+                        i, bladerf_strerror(st));
+            } else {
+                fprintf(stderr, "CAPTURE_CLOSED i=%u epoch=%u pause_ms=%u\n",
+                        i, event.epoch_id, close_pause_ms);
+                struct timespec pause = {
+                    .tv_sec = close_pause_ms / 1000,
+                    .tv_nsec = (long)(close_pause_ms % 1000) * 1000000L,
+                };
+                while (nanosleep(&pause, &pause) != 0) {
+                    if (errno != EINTR) {
+                        perror("nanosleep");
+                        st = BLADERF_ERR_UNEXPECTED;
+                        break;
+                    }
+                }
+                if (st != 0) {
+                    ++failures;
+                    break;
+                }
+            }
+        }
         CHECK(collect_runtime_events(dev, &runtime_event_cursor,
                                      &stream_overrun_events,
                                      &data_withheld_events, false));
@@ -407,6 +471,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "FINAL_RX1_DISABLE_DONE mode=%s\n", mode);
     if (paired) bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
     fprintf(stderr, "FINAL_RX2_DISABLE_DONE paired=%u\n", paired);
+    fprintf(stderr, "FINAL_DEVICE_CLOSE_BEGIN\n");
     bladerf_close(dev);
     fprintf(stderr, "FINAL_DEVICE_CLOSE_DONE\n");
     free(samples); free(latencies_ns);
