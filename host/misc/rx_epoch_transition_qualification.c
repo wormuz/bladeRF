@@ -339,9 +339,9 @@ int main(int argc, char **argv) {
         char *end = NULL;
         unsigned long parsed = strtoul(num_buffers_env, &end, 10);
         if (end == num_buffers_env || *end != '\0' ||
-            parsed < stream_num_transfers || parsed > 1024) {
+            parsed == 0 || parsed > 1024) {
             fprintf(stderr, "BLADERF_QUAL_STREAM_NUM_BUFFERS must be "
-                    "between num_transfers and 1024\n");
+                    "between 1 and 1024\n");
             return 2;
         }
         stream_num_buffers = (unsigned)parsed;
@@ -357,6 +357,11 @@ int main(int argc, char **argv) {
             return 2;
         }
         stream_num_transfers = (unsigned)parsed;
+    }
+    if (stream_num_transfers > stream_num_buffers) {
+        fprintf(stderr, "BLADERF_QUAL_STREAM_NUM_TRANSFERS must not exceed "
+                "BLADERF_QUAL_STREAM_NUM_BUFFERS\n");
+        return 2;
     }
     struct bladerf *dev = NULL;
     size_t sample_words = (size_t)capture_samples * (paired ? 4 : 2);
