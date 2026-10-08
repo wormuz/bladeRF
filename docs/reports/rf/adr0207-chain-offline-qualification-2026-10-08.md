@@ -138,16 +138,43 @@ xA4 and reported FPGA v0.16.1 without the previous "newer than entries"
 warning. It still reports missing FPGA-size and VCTCXO trim keys because the
 calibration flash region is erased.
 
-## Remaining release gates
+## Priority plan to stable release
 
-1. Prevent decode-time RX queue overrun in the scanner while preserving one
-   event-certified captured block for all consumers.
-2. Investigate the erased FPGA-size/factory VCTCXO calibration keys. Record
-   how the board calibration is restored or intentionally handled before any
-   flash write.
-3. Reproduce and isolate the original NIOS nonresponse; valid autoload bytes
-   exist and their decoded FPGA loads over USB, so the boot-time failure cause
-   remains open.
-4. Build and install a matching libbladeRF + Python wrapper release artifact,
-   then rerun smoke qualification against the installed pair.
-5. Keep generic detector fan-out work sequenced after these chain-level gates.
+The earlier 10,000-transition campaign qualifies retune at its tested stream
+geometries; it does not qualify the newly added finite-capture close/rearm
+lifecycle. The top release blocker is native sync ordering after close.
+
+1. **P0 — Fix and regression-test native close→rearm.** On live xA4, RX1
+   close suppressed ring-full for a 1.5 s pause, but the next transition
+   reached `RX_EPOCH_VALID` and `RX_FIRST_VALID_HOST_DATA`, then sync reported
+   ring-full and timestamp discontinuity with an older timestamp after a later
+   resumed timestamp. Source audit found the FPGA epoch gate is before
+   `fifo_writer`, while sample/meta FIFO reset is currently driven by RX
+   transport disable; there is no dedicated FIFO boundary flush on an RF epoch
+   close/rearm. This is a plausible stale-data source, not yet the proven live
+   cause. Trace FIFO contents/metadata across the boundary and audit sync-worker
+   in-flight/reorder ownership in parallel; implement an explicit safe flush
+   or prove a drain fence, then add native/HDL regressions for old buffers after
+   rearm and ordered timestamp delivery.
+2. **P1 — Qualify close/rearm on RX1, RX2, RX_X2.** Repeat finite capture →
+   close → decode-length pause → rearm cycles. Require no old-epoch IQ, ordered
+   event history, continuous timestamps within each epoch, and no unexplained
+   sync/FPGA overrun.
+3. **P2 — Re-run RF/LTE hardware qualification.** Exercise local and cross-band
+   transitions and known-cell return points, including PCI 85, after the P0
+   fix, using production stream geometries. Publish transition and first-valid
+   latency distributions and capture/decoder results.
+4. **P3 — Produce and smoke-test one matched release set.** Package firmware,
+   FPGA image, libbladeRF and Python wrapper together; install that set and run
+   smoke and regression tests against the installed artifacts. Local sibling
+   checkout auto-selection fixes development ABI drift but is not a release
+   artifact.
+5. **P4 — Close board/image maintenance risks.** Resolve the recorded FPGA
+   version discrepancy (`v0.16.1` vs `v16.1.0`), decide/document the erased
+   FPGA-size and VCTCXO calibration-key handling before any flash write, and
+   preserve a first-request trace if NIOS no-response recurs. The original
+   NIOS failure cause remains unknown.
+
+Generic detector fan-out stays sequenced after P0–P3. Correctness remains
+hardware-event-driven: timeout reports failure and never certifies IQ; no
+caller sleep or discard arithmetic is part of the valid-data path.
