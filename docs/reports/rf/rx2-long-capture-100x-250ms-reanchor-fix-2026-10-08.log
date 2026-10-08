@@ -1,0 +1,125 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3669] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.638 status=Success
+CAPTURE_CLOSED i=0 epoch=101 pause_ms=250
+CAPTURE_TIMING i=1 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.718 status=Success
+CAPTURE_CLOSED i=1 epoch=102 pause_ms=250
+CAPTURE_TIMING i=2 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.757 status=Success
+CAPTURE_CLOSED i=2 epoch=103 pause_ms=250
+CAPTURE_TIMING i=3 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.370 status=Success
+CAPTURE_CLOSED i=3 epoch=104 pause_ms=250
+CAPTURE_TIMING i=4 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.542 status=Success
+CAPTURE_CLOSED i=4 epoch=105 pause_ms=250
+CAPTURE_TIMING i=5 samples_per_channel=3456000 sample_rate=23040000 duration_ms=152.073 status=Success
+CAPTURE_CLOSED i=5 epoch=106 pause_ms=250
+CAPTURE_TIMING i=6 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.043 status=Success
+CAPTURE_CLOSED i=6 epoch=107 pause_ms=250
+CAPTURE_TIMING i=7 samples_per_channel=3456000 sample_rate=23040000 duration_ms=150.914 status=Success
+CAPTURE_CLOSED i=7 epoch=108 pause_ms=250
+CAPTURE_TIMING i=8 samples_per_channel=3456000 sample_rate=23040000 duration_ms=150.936 status=Success
+CAPTURE_CLOSED i=8 epoch=109 pause_ms=250
+CAPTURE_TIMING i=9 samples_per_channel=3456000 sample_rate=23040000 duration_ms=152.308 status=Success
+CAPTURE_CLOSED i=9 epoch=110 pause_ms=250
+CAPTURE_TIMING i=10 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.033 status=Success
+CAPTURE_CLOSED i=10 epoch=111 pause_ms=250
+CAPTURE_TIMING i=11 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.974 status=Success
+CAPTURE_CLOSED i=11 epoch=112 pause_ms=250
+CAPTURE_TIMING i=12 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.984 status=Success
+CAPTURE_CLOSED i=12 epoch=113 pause_ms=250
+CAPTURE_TIMING i=13 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.041 status=Success
+CAPTURE_CLOSED i=13 epoch=114 pause_ms=250
+CAPTURE_TIMING i=14 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.855 status=Success
+CAPTURE_CLOSED i=14 epoch=115 pause_ms=250
+CAPTURE_TIMING i=15 samples_per_channel=3456000 sample_rate=23040000 duration_ms=151.170 status=Success
+CAPTURE_CLOSED i=15 epoch=116 pause_ms=250
+CAPTURE_CLOSED i=16 epoch=117 pause_ms=250
+CAPTURE_CLOSED i=17 epoch=118 pause_ms=250
+CAPTURE_CLOSED i=18 epoch=119 pause_ms=250
+CAPTURE_CLOSED i=19 epoch=120 pause_ms=250
+CAPTURE_CLOSED i=20 epoch=121 pause_ms=250
+CAPTURE_CLOSED i=21 epoch=122 pause_ms=250
+CAPTURE_CLOSED i=22 epoch=123 pause_ms=250
+CAPTURE_CLOSED i=23 epoch=124 pause_ms=250
+CAPTURE_CLOSED i=24 epoch=125 pause_ms=250
+CAPTURE_CLOSED i=25 epoch=126 pause_ms=250
+CAPTURE_CLOSED i=26 epoch=127 pause_ms=250
+CAPTURE_CLOSED i=27 epoch=128 pause_ms=250
+CAPTURE_CLOSED i=28 epoch=129 pause_ms=250
+CAPTURE_CLOSED i=29 epoch=130 pause_ms=250
+CAPTURE_CLOSED i=30 epoch=131 pause_ms=250
+CAPTURE_CLOSED i=31 epoch=132 pause_ms=250
+CAPTURE_CLOSED i=32 epoch=133 pause_ms=250
+CAPTURE_CLOSED i=33 epoch=134 pause_ms=250
+CAPTURE_CLOSED i=34 epoch=135 pause_ms=250
+CAPTURE_CLOSED i=35 epoch=136 pause_ms=250
+CAPTURE_CLOSED i=36 epoch=137 pause_ms=250
+CAPTURE_CLOSED i=37 epoch=138 pause_ms=250
+CAPTURE_CLOSED i=38 epoch=139 pause_ms=250
+CAPTURE_CLOSED i=39 epoch=140 pause_ms=250
+CAPTURE_CLOSED i=40 epoch=141 pause_ms=250
+CAPTURE_CLOSED i=41 epoch=142 pause_ms=250
+CAPTURE_CLOSED i=42 epoch=143 pause_ms=250
+CAPTURE_CLOSED i=43 epoch=144 pause_ms=250
+CAPTURE_CLOSED i=44 epoch=145 pause_ms=250
+CAPTURE_CLOSED i=45 epoch=146 pause_ms=250
+CAPTURE_CLOSED i=46 epoch=147 pause_ms=250
+CAPTURE_CLOSED i=47 epoch=148 pause_ms=250
+CAPTURE_CLOSED i=48 epoch=149 pause_ms=250
+CAPTURE_CLOSED i=49 epoch=150 pause_ms=250
+CAPTURE_CLOSED i=50 epoch=151 pause_ms=250
+CAPTURE_CLOSED i=51 epoch=152 pause_ms=250
+CAPTURE_CLOSED i=52 epoch=153 pause_ms=250
+CAPTURE_CLOSED i=53 epoch=154 pause_ms=250
+CAPTURE_CLOSED i=54 epoch=155 pause_ms=250
+CAPTURE_CLOSED i=55 epoch=156 pause_ms=250
+CAPTURE_CLOSED i=56 epoch=157 pause_ms=250
+CAPTURE_CLOSED i=57 epoch=158 pause_ms=250
+CAPTURE_CLOSED i=58 epoch=159 pause_ms=250
+CAPTURE_CLOSED i=59 epoch=160 pause_ms=250
+CAPTURE_CLOSED i=60 epoch=161 pause_ms=250
+CAPTURE_CLOSED i=61 epoch=162 pause_ms=250
+CAPTURE_CLOSED i=62 epoch=163 pause_ms=250
+CAPTURE_CLOSED i=63 epoch=164 pause_ms=250
+CAPTURE_CLOSED i=64 epoch=165 pause_ms=250
+CAPTURE_CLOSED i=65 epoch=166 pause_ms=250
+CAPTURE_CLOSED i=66 epoch=167 pause_ms=250
+CAPTURE_CLOSED i=67 epoch=168 pause_ms=250
+CAPTURE_CLOSED i=68 epoch=169 pause_ms=250
+CAPTURE_CLOSED i=69 epoch=170 pause_ms=250
+CAPTURE_CLOSED i=70 epoch=171 pause_ms=250
+CAPTURE_CLOSED i=71 epoch=172 pause_ms=250
+CAPTURE_CLOSED i=72 epoch=173 pause_ms=250
+CAPTURE_CLOSED i=73 epoch=174 pause_ms=250
+CAPTURE_CLOSED i=74 epoch=175 pause_ms=250
+CAPTURE_CLOSED i=75 epoch=176 pause_ms=250
+CAPTURE_CLOSED i=76 epoch=177 pause_ms=250
+CAPTURE_CLOSED i=77 epoch=178 pause_ms=250
+CAPTURE_CLOSED i=78 epoch=179 pause_ms=250
+CAPTURE_CLOSED i=79 epoch=180 pause_ms=250
+CAPTURE_CLOSED i=80 epoch=181 pause_ms=250
+CAPTURE_CLOSED i=81 epoch=182 pause_ms=250
+CAPTURE_CLOSED i=82 epoch=183 pause_ms=250
+CAPTURE_CLOSED i=83 epoch=184 pause_ms=250
+CAPTURE_CLOSED i=84 epoch=185 pause_ms=250
+CAPTURE_CLOSED i=85 epoch=186 pause_ms=250
+CAPTURE_CLOSED i=86 epoch=187 pause_ms=250
+CAPTURE_CLOSED i=87 epoch=188 pause_ms=250
+CAPTURE_CLOSED i=88 epoch=189 pause_ms=250
+CAPTURE_CLOSED i=89 epoch=190 pause_ms=250
+CAPTURE_CLOSED i=90 epoch=191 pause_ms=250
+CAPTURE_CLOSED i=91 epoch=192 pause_ms=250
+CAPTURE_CLOSED i=92 epoch=193 pause_ms=250
+CAPTURE_CLOSED i=93 epoch=194 pause_ms=250
+CAPTURE_CLOSED i=94 epoch=195 pause_ms=250
+CAPTURE_CLOSED i=95 epoch=196 pause_ms=250
+CAPTURE_CLOSED i=96 epoch=197 pause_ms=250
+CAPTURE_CLOSED i=97 epoch=198 pause_ms=250
+CAPTURE_CLOSED i=98 epoch=199 pause_ms=250
+TRACE_SPI txn=100 writes=24 host_observed_write_us=19193.303 post_spi_to_tune_return_us=3280.241
+CAPTURE_CLOSED i=99 epoch=200 pause_ms=250
+mode=RX2 progress=100 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=200
+FINAL_EVENT_HISTORY_OK first=1 last=100
+FINAL_RX1_DISABLE_DONE mode=RX2
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN

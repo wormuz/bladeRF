@@ -78,6 +78,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
                                            &count, &complete);
     bool epoch_valid_seen = false;
     bool host_data_seen = false;
+    bool terminal_event_valid;
     uint64_t epoch_valid_ts = 0;
     for (uint32_t i = 0; i < count && i < BLADERF_RF_EVENT_HISTORY_SIZE; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID &&
@@ -93,10 +94,14 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
             host_data_seen = true;
         }
     }
+    terminal_event_valid =
+        (final_event->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID ||
+         final_event->event_type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) &&
+        final_event->transaction_id == txn;
     if (st || !complete || count < 11 ||
         events[0].event_type != BLADERF_RF_EVT_CONFIG_ACCEPTED ||
         events[0].fpga_state != BLADERF_RF_STATE_CONFIG_PENDING ||
-        final_event->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+        !terminal_event_valid ||
         !epoch_valid_seen || !host_data_seen) {
         fprintf(stderr, "TRACE_TERMINAL txn=%u status=%s complete=%u count=%u\n",
                 txn, bladerf_strerror(st), complete, count);

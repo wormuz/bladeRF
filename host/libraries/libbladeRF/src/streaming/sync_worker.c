@@ -273,10 +273,12 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
         b->prod_i = (next_idx + 1) % b->num_buffers;
         next_buffer = b->buffers[next_idx];
     } else {
-        /* No ring slot is available. Keep this transport buffer in flight,
-         * but retire its invalid sequence and make overrun recovery visible. */
-        note_rx_overrun(s, BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
-                           BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL);
+        /* This completion was rejected by the RX epoch admission fence, so
+         * it contains no application-valid IQ to lose. If the consumer is
+         * paused, the ring may be occupied by old-epoch entries; recycle the
+         * same transport buffer and let the next sync_rx() discard/re-anchor
+         * those entries. Classifying intentional epoch withholding as a
+         * stream overrun would report a fault that did not affect valid data. */
         b->status[idx] = SYNC_BUFFER_IN_FLIGHT;
         b->buffer_seq[idx] = b->next_seq++;
         next_buffer = buffer;

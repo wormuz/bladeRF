@@ -1226,6 +1226,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                  * ownership remains IN_FLIGHT until the buffer is reused. */
                 if (b->buffer_dropped != NULL) {
                     unsigned int skipped = 0;
+                    unsigned int skip_start = b->cons_i;
                     while (skipped < b->num_buffers &&
                            b->buffer_dropped[b->cons_i]) {
                         b->buffer_dropped[b->cons_i] = false;
@@ -1233,16 +1234,24 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         skipped++;
                     }
                     if (skipped != 0) {
-                        log_debug("%s: skipped %u rejected RX ring slot%s\n",
+                        log_debug("%s: skipped %u rejected RX ring slot%s "
+                                  "from=%u to=%u expected_seq=%u stop_dropped=%u "
+                                  "stop_state=%u stop_seq=%u\n",
                                   __FUNCTION__, skipped,
-                                  skipped == 1 ? "" : "s");
+                                  skipped == 1 ? "" : "s", skip_start,
+                                  b->cons_i, b->expected_seq,
+                                  b->buffer_dropped[b->cons_i],
+                                  (unsigned)b->status[b->cons_i],
+                                  b->buffer_seq != NULL
+                                      ? b->buffer_seq[b->cons_i] : 0);
                     }
-                    if (skipped == b->num_buffers &&
-                        sync_worker_reanchor_rx_consumer_to_expected(s)) {
+                    if (sync_worker_reanchor_rx_consumer_after_rejections(
+                            s, skipped)) {
                         log_debug("%s: re-anchored consumer to expected RX "
-                                  "sequence=%u buffer=%u after full-ring epoch "
-                                  "fence\n", __FUNCTION__, b->expected_seq,
-                                  b->cons_i);
+                                  "sequence=%u buffer=%u after %u rejected "
+                                  "slots (ring=%u)\n", __FUNCTION__,
+                                  b->expected_seq, b->cons_i, skipped,
+                                  b->num_buffers);
                     }
                 }
 

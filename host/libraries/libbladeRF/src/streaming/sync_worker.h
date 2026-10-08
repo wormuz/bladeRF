@@ -195,6 +195,36 @@ static inline bool sync_worker_reanchor_rx_consumer_to_expected(
     return false;
 }
 
+/* A rejected-marker run can end just short of a full ring when an EMPTY slot
+ * retains a sequence from an older epoch. If that slot is not marked dropped,
+ * the consumer otherwise waits there forever even though the producer has
+ * advanced expected_seq and the matching live transfer occupies another
+ * slot. Preserve a FULL/expected head; re-anchor only from a stale EMPTY slot
+ * or after a complete ring of rejected markers. Caller holds buf_mgmt.lock. */
+static inline bool sync_worker_reanchor_rx_consumer_after_rejections(
+    struct bladerf_sync *s, unsigned int skipped)
+{
+    struct buffer_mgmt *b;
+    bool stale_empty;
+
+    if (s == NULL || !s->initialized) {
+        return false;
+    }
+    b = &s->buf_mgmt;
+    if (b->status == NULL || b->buffer_seq == NULL || b->num_buffers == 0 ||
+        b->cons_i >= b->num_buffers) {
+        return false;
+    }
+
+    stale_empty = b->status[b->cons_i] == SYNC_BUFFER_EMPTY &&
+                  b->buffer_seq[b->cons_i] != b->expected_seq;
+    if (skipped != b->num_buffers && !stale_empty) {
+        return false;
+    }
+
+    return sync_worker_reanchor_rx_consumer_to_expected(s);
+}
+
 /* Hold an out-of-order RX buffer for later ordered delivery when it fits the
  * reorder window. Otherwise mark a discontinuity and wake sync_rx. The caller
  * must hold sync->buf_mgmt.lock. Returns true when the buffer was held. */

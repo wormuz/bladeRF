@@ -1080,7 +1080,7 @@ static void test_rx_x2_layout_rejection_event(void)
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
-static void test_sync_worker_overrun_published_before_sync_read(void)
+static void test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun(void)
 {
     struct fixture f;
     uint32_t buffer_seq[2] = {0, 1};
@@ -1095,17 +1095,62 @@ static void test_sync_worker_overrun_published_before_sync_read(void)
     f.states[0] = SYNC_BUFFER_IN_FLIGHT;
     f.states[1] = SYNC_BUFFER_FULL;
 
-    /* Reusing the rejected completion has no free ring slot. The worker must
-     * publish an event now; waiting for a later sync_rx() could hide a fault
-     * from an independent wrapper event poller indefinitely. */
+    /* This completion was rejected by the epoch admission fence. With no
+     * free ring slot, recycle its transport buffer; old-epoch FULL data is
+     * discarded by the next sync_rx() and no valid IQ was lost. */
     assert(sync_worker_rx_buffer_rejected(&f.sync, f.buffers[0]) ==
            f.buffers[0]);
-    assert(rx_worker_overrun_events == 1);
-    assert(last_rx_worker_overrun_source_flags ==
-           (BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
-            BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
-    assert(f.sync.buf_mgmt.overrun_pending);
-    assert(f.sync.buf_mgmt.overrun_event_published);
+    assert(rx_worker_overrun_events == 0);
+    assert(!f.sync.buf_mgmt.overrun_pending);
+    assert(!f.sync.buf_mgmt.overrun_event_published);
+    assert(f.states[0] == SYNC_BUFFER_IN_FLIGHT);
+    assert(buffer_dropped[0]);
+
+    fixture_destroy(&f);
+}
+
+static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
+{
+    struct fixture f;
+    sync_buffer_status states[96] = {0};
+    uint32_t sequences[96] = {0};
+    bool dropped[96] = {0};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.num_buffers = 96;
+    f.sync.buf_mgmt.status = states;
+    f.sync.buf_mgmt.buffer_seq = sequences;
+    f.sync.buf_mgmt.buffer_dropped = dropped;
+    f.sync.buf_mgmt.expected_seq = 642;
+
+    /* A valid full head must remain readable even though a newer sequence is
+     * already in flight elsewhere in the ring. */
+    f.sync.buf_mgmt.cons_i = 65;
+    states[65] = SYNC_BUFFER_FULL;
+    sequences[65] = 641;
+    states[66] = SYNC_BUFFER_IN_FLIGHT;
+    sequences[66] = 642;
+    assert(!sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 12));
+    assert(f.sync.buf_mgmt.cons_i == 65);
+
+    /* A 95/96 marker lap leaves an EMPTY slot with an old sequence. The live
+     * expected transfer is in flight at slot 66; do not wait on stale slot 53. */
+    f.sync.buf_mgmt.cons_i = 53;
+    states[53] = SYNC_BUFFER_EMPTY;
+    sequences[53] = 629;
+    assert(sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 83));
+    assert(f.sync.buf_mgmt.cons_i == 66);
+
+    /* The established full-ring-fence case still re-anchors. */
+    f.sync.buf_mgmt.cons_i = 10;
+    for (unsigned int i = 0; i < 96; ++i) {
+        dropped[i] = true;
+        states[i] = SYNC_BUFFER_EMPTY;
+    }
+    states[66] = SYNC_BUFFER_IN_FLIGHT;
+    sequences[66] = 642;
+    assert(sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 96));
+    assert(f.sync.buf_mgmt.cons_i == 66);
 
     fixture_destroy(&f);
 }
@@ -1611,7 +1656,8 @@ int main(void)
     test_unsupported_format_event();
     test_worker_overrun_event_history_is_lock_safe();
     test_fpga_loss_event_published_inside_sync_fence();
-    test_sync_worker_overrun_published_before_sync_read();
+    test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun();
+    test_rx_consumer_reanchors_after_partial_rejected_ring_lap();
     test_meta_withheld_event_precedes_sync_read_timeout();
     test_sync_read_fails_closed_before_parser_invalidation();
     test_first_host_event_commits_before_concurrent_invalidation();
