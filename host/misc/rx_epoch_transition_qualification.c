@@ -182,6 +182,8 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
 int main(int argc, char **argv) {
     unsigned n = 1000;
     unsigned stream_buffer_samples = 8192;
+    unsigned stream_num_buffers = 16;
+    unsigned stream_num_transfers = 8;
     bool count_set = false;
     bool cross_band = false;
     bool paired = false;
@@ -221,11 +223,20 @@ int main(int argc, char **argv) {
         char *end = NULL;
         unsigned long parsed = strtoul(buffer_env, &end, 10);
         if (end == buffer_env || *end != '\0' ||
-            (parsed != 8192 && parsed != 65536)) {
-            fprintf(stderr, "BLADERF_QUAL_STREAM_BUFFER_SAMPLES must be 8192 or 65536\n");
+            (parsed != 8192 && parsed != 32768 &&
+             parsed != 65536 && parsed != 131072)) {
+            fprintf(stderr, "BLADERF_QUAL_STREAM_BUFFER_SAMPLES must be "
+                    "8192, 32768, 65536, or 131072\n");
             return 2;
         }
         stream_buffer_samples = (unsigned)parsed;
+        if (parsed == 32768) {
+            stream_num_buffers = 64;
+            stream_num_transfers = 32;
+        } else if (parsed == 131072) {
+            stream_num_buffers = 512;
+            stream_num_transfers = 24;
+        }
     }
     struct bladerf *dev = NULL;
     int16_t *samples = calloc(65536 * 2, sizeof(*samples));
@@ -240,7 +251,8 @@ int main(int argc, char **argv) {
     CHECK(bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL));
     CHECK(bladerf_set_gain(dev, transition_channel, 30));
     CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
-                              16, stream_buffer_samples, 8, 1000));
+                              stream_num_buffers, stream_buffer_samples,
+                              stream_num_transfers, 1000));
     CHECK(bladerf_enable_module(dev, transition_channel, true));
     if (paired) CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), true));
     uint64_t runtime_event_cursor = 0;
@@ -373,6 +385,8 @@ int main(int argc, char **argv) {
             goto fail;
         }
     }
+    fprintf(stderr, "FINAL_EVENT_HISTORY_OK first=%u last=%u\n",
+            first_txn, last_txn);
     qsort(latencies_ns, completed, sizeof(*latencies_ns), compare_u64);
     printf("mode=%s transitions=%u unrecovered=%u first_read_faults=%u recovered=%u "
            "retry_would_block=%u retry_overruns=%u stream_overrun_events=%u "
@@ -390,8 +404,12 @@ int main(int argc, char **argv) {
                 stream_overrun_events);
     }
     bladerf_enable_module(dev, transition_channel, false);
+    fprintf(stderr, "FINAL_RX1_DISABLE_DONE mode=%s\n", mode);
     if (paired) bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
-    bladerf_close(dev); free(samples); free(latencies_ns);
+    fprintf(stderr, "FINAL_RX2_DISABLE_DONE paired=%u\n", paired);
+    bladerf_close(dev);
+    fprintf(stderr, "FINAL_DEVICE_CLOSE_DONE\n");
+    free(samples); free(latencies_ns);
     return (failures || stream_overrun_events) ? 1 : 0;
 fail:
     bladerf_close(dev); free(samples); free(latencies_ns); return 2;
