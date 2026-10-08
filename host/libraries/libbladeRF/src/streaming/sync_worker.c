@@ -415,18 +415,43 @@ static void *rx_callback(struct bladerf *dev,
                 log_verbose("%s worker: delaying submission while reorder "
                             "queue drains\n", worker2str(s));
             } else {
-                log_debug("RX overrun @ buffer %u prod_i=%u prod_state=%u "
-                          "completed_state=%u seq=%u expected_seq=%u "
-                          "next_seq=%u reorder_len=%u cons_i=%u dropped=%u\n",
-                          samples_idx, b->prod_i,
-                          (unsigned)b->status[b->prod_i],
-                          (unsigned)b->status[samples_idx],
-                          b->buffer_seq != NULL
-                              ? b->buffer_seq[samples_idx] : 0,
-                          b->expected_seq, b->next_seq, b->reorder_len,
-                          b->cons_i,
-                          b->buffer_dropped != NULL
-                              ? (unsigned)b->buffer_dropped[samples_idx] : 0);
+                unsigned int full_slots = 0, partial_slots = 0;
+                unsigned int in_flight_slots = 0, empty_slots = 0;
+                unsigned int dropped_slots = 0;
+
+                /* This branch is exceptional and already declares RX data
+                 * loss. Keep the ring snapshot visible at WARNING level so
+                 * production timing is not changed by per-transfer DEBUG
+                 * logging when diagnosing an intermittent ring-full fault. */
+                for (unsigned int i = 0; i < b->num_buffers; ++i) {
+                    switch (b->status[i]) {
+                        case SYNC_BUFFER_FULL: full_slots++; break;
+                        case SYNC_BUFFER_PARTIAL: partial_slots++; break;
+                        case SYNC_BUFFER_IN_FLIGHT: in_flight_slots++; break;
+                        case SYNC_BUFFER_EMPTY: empty_slots++; break;
+                        default: break;
+                    }
+                    if (b->buffer_dropped != NULL && b->buffer_dropped[i]) {
+                        dropped_slots++;
+                    }
+                }
+                log_warning("RX sync ring full: buffers=%u slot=%u "
+                            "prod_i=%u prod_seq=%u prod_state=%u "
+                            "completed_state=%u completed_seq=%u "
+                            "states{full=%u partial=%u in_flight=%u empty=%u "
+                            "dropped=%u} cursors{cons_i=%u partial_off=%u "
+                            "expected_seq=%u next_seq=%u reorder_len=%u}\n",
+                            b->num_buffers, samples_idx, b->prod_i,
+                            b->buffer_seq != NULL
+                                ? b->buffer_seq[b->prod_i] : 0,
+                            (unsigned)b->status[b->prod_i],
+                            (unsigned)b->status[samples_idx],
+                            b->buffer_seq != NULL
+                                ? b->buffer_seq[samples_idx] : 0,
+                            full_slots, partial_slots, in_flight_slots,
+                            empty_slots, dropped_slots, b->cons_i,
+                            b->partial_off, b->expected_seq, b->next_seq,
+                            b->reorder_len);
 
                 /* This completed transfer is withheld. Retire its sequence
                  * and recycle the same transport buffer; stale FULL slots
