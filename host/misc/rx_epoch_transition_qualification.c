@@ -212,6 +212,8 @@ int main(int argc, char **argv) {
     unsigned stream_num_transfers = 8;
     unsigned capture_samples = 8192;
     uint32_t sample_rate = 4000000;
+    uint32_t stream_timeout_ms = 1000;
+    uint32_t transition_timeout_ms = 2000;
     bool count_set = false;
     bool cross_band = false;
     bool require_rfdc_cal = false;
@@ -308,6 +310,30 @@ int main(int argc, char **argv) {
         }
         sample_rate = (uint32_t)parsed;
     }
+    const char *stream_timeout_env =
+        getenv("BLADERF_QUAL_STREAM_TIMEOUT_MS");
+    if (stream_timeout_env != NULL && stream_timeout_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(stream_timeout_env, &end, 10);
+        if (end == stream_timeout_env || *end != '\0' || parsed < 100 ||
+            parsed > 120000) {
+            fprintf(stderr, "invalid BLADERF_QUAL_STREAM_TIMEOUT_MS\n");
+            return 2;
+        }
+        stream_timeout_ms = (uint32_t)parsed;
+    }
+    const char *transition_timeout_env =
+        getenv("BLADERF_QUAL_TRANSITION_TIMEOUT_MS");
+    if (transition_timeout_env != NULL && transition_timeout_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(transition_timeout_env, &end, 10);
+        if (end == transition_timeout_env || *end != '\0' || parsed < 100 ||
+            parsed > 120000) {
+            fprintf(stderr, "invalid BLADERF_QUAL_TRANSITION_TIMEOUT_MS\n");
+            return 2;
+        }
+        transition_timeout_ms = (uint32_t)parsed;
+    }
     const char *num_buffers_env = getenv("BLADERF_QUAL_STREAM_NUM_BUFFERS");
     if (num_buffers_env != NULL && num_buffers_env[0] != '\0') {
         char *end = NULL;
@@ -356,7 +382,7 @@ int main(int argc, char **argv) {
     CHECK(bladerf_set_gain(dev, transition_channel, 30));
     CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
                               stream_num_buffers, stream_buffer_samples,
-                              stream_num_transfers, 1000));
+                              stream_num_transfers, stream_timeout_ms));
     CHECK(bladerf_enable_module(dev, transition_channel, true));
     if (paired) CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), true));
     uint64_t runtime_event_cursor = 0;
@@ -385,7 +411,7 @@ int main(int argc, char **argv) {
                 (require_rfdc_cal
                     ? BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE : 0) |
                 (paired ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA : 0),
-            .timeout_ms = 2000,
+            .timeout_ms = transition_timeout_ms,
             .require_rx_data_valid = true,
             .epoch_settle_samples = 0,
         };
