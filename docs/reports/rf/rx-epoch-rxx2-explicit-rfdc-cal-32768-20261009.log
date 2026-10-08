@@ -1,0 +1,29 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1259] lusb_stream_cb: RX transfer timed out after 14 full transfers
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x72a1d9f17010: 81920 of 131072 bytes, 14 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x72a1d9ef6010: 0 of 131072 bytes, 14 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x72a1d9ed5010: 0 of 131072 bytes, 14 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x72a1d9eb4010: 0 of 131072 bytes, 14 transfer(s) completed on this stream
+TRANSITION_WAIT_FAILED i=1 txn=2 status=Operation timed out
+UNRECOVERED i=1 status=Operation timed out
+RUNTIME_OVERRUN n=1 epoch=1 flags=0x10000009 rfic_status=0x0 error=0 timestamp=0
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2329] bladerf_rx_transition_wait: FPGA RX fault before epoch certification: transaction=3 status=0x10314900 epoch=3
+TRANSITION_WAIT_FAILED i=2 txn=3 status=An unexpected error occurred
+UNRECOVERED i=2 status=An unexpected error occurred
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2329] bladerf_rx_transition_wait: FPGA RX fault before epoch certification: transaction=4 status=0x10314900 epoch=4
+TRANSITION_WAIT_FAILED i=3 txn=4 status=An unexpected error occurred
+UNRECOVERED i=3 status=An unexpected error occurred
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2329] bladerf_rx_transition_wait: FPGA RX fault before epoch certification: transaction=5 status=0x10314900 epoch=5
+TRANSITION_WAIT_FAILED i=4 txn=5 status=An unexpected error occurred
+UNRECOVERED i=4 status=An unexpected error occurred
+FINAL_EVENT_HISTORY_OK first=1 last=5
+QUALIFICATION_FAILED runtime_stream_overruns=1
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=5 unrecovered=4 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=1 data_withheld_events=3 transition_ms_p50=1332.444_p95=1342.351_p99=1342.351_max=2026.148
