@@ -46,9 +46,13 @@ yet explain why the endpoint stopped completing full transfers. It does prove
 that the sync-worker fallback cancellation is not a bounded shutdown: after a
 real transport fault, close can wait forever and hold the device lock.
 
-Next: instrument/wake the libusb event loop during stream shutdown, remove any
-device-lock hold across blocking sync teardown, and add a regression that
-injects an RX transfer timeout and asserts bounded worker join, event order,
+An experiment added a per-stream `libusb_interrupt_event_handler()` call when
+the sync worker received STOP. Debug output confirmed it was called, but the
+same 3-second worker-stop timeout and unbounded join remained. That ineffective
+change was reverted. Next: use a breakpoint/trace on the libusb event-lock
+owner and URB callback accounting to find why cancelled transfers do not drive
+`num_avail` to `num_transfers`; then fix the lock/lifecycle path and add a
+regression that injects an RX timeout and asserts bounded join, event order,
 and subsequent stream recovery. Do not treat the FPGA image version string as
 proof of image identity; the current probe did not load an image.
 
