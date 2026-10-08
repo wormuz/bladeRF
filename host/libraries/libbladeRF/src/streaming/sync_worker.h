@@ -22,6 +22,7 @@
 #include "host_config.h"
 #include "sync.h"
 #include <libbladeRF.h>
+#include "log.h"
 #include "thread.h"
 
 #if BLADERF_OS_WINDOWS || BLADERF_OS_OSX
@@ -153,6 +154,14 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
     uint32_t next_expected_seq = 0;
     uint32_t next_expected_distance = UINT32_MAX;
     unsigned int next_expected_index = BUFFER_MGMT_INVALID_INDEX;
+#ifdef LOGGING_ENABLED
+    unsigned int before_full = 0, before_partial = 0, before_inflight = 0;
+    unsigned int before_empty = 0, before_dropped = 0;
+    unsigned int after_full = 0, after_partial = 0, after_inflight = 0;
+    unsigned int after_empty = 0, after_dropped = 0;
+    unsigned int old_prod_i, old_cons_i;
+    uint32_t old_expected_seq, old_next_seq;
+#endif
 
     if (s == NULL || !s->initialized ||
         (s->stream_config.layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
@@ -161,7 +170,25 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
 
     b = &s->buf_mgmt;
     MUTEX_LOCK(&b->lock);
+#ifdef LOGGING_ENABLED
+    old_prod_i = b->prod_i;
+    old_cons_i = b->cons_i;
+    old_expected_seq = b->expected_seq;
+    old_next_seq = b->next_seq;
+#endif
     for (unsigned int i = 0; i < b->num_buffers; ++i) {
+#ifdef LOGGING_ENABLED
+        switch (b->status[i]) {
+            case SYNC_BUFFER_FULL: before_full++; break;
+            case SYNC_BUFFER_PARTIAL: before_partial++; break;
+            case SYNC_BUFFER_IN_FLIGHT: before_inflight++; break;
+            case SYNC_BUFFER_EMPTY: before_empty++; break;
+            default: break;
+        }
+        if (b->buffer_dropped != NULL && b->buffer_dropped[i]) {
+            before_dropped++;
+        }
+#endif
         if (b->status[i] == SYNC_BUFFER_FULL ||
             b->status[i] == SYNC_BUFFER_PARTIAL) {
             /* These samples were certified under the epoch being revoked.
@@ -202,6 +229,32 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
             b->reorder[i].dropped = false;
         }
     }
+#ifdef LOGGING_ENABLED
+    for (unsigned int i = 0; i < b->num_buffers; ++i) {
+        switch (b->status[i]) {
+            case SYNC_BUFFER_FULL: after_full++; break;
+            case SYNC_BUFFER_PARTIAL: after_partial++; break;
+            case SYNC_BUFFER_IN_FLIGHT: after_inflight++; break;
+            case SYNC_BUFFER_EMPTY: after_empty++; break;
+            default: break;
+        }
+        if (b->buffer_dropped != NULL && b->buffer_dropped[i]) {
+            after_dropped++;
+        }
+    }
+    log_debug("RX epoch fence ring: buffers=%u before{full=%u partial=%u "
+              "in_flight=%u empty=%u dropped=%u prod=%u cons=%u "
+              "expected=%u next=%u} after{full=%u partial=%u "
+              "in_flight=%u empty=%u dropped=%u prod=%u cons=%u "
+              "expected=%u next=%u} oldest_in_flight=%u seq=%u\n",
+              b->num_buffers, before_full, before_partial, before_inflight,
+              before_empty, before_dropped, old_prod_i, old_cons_i,
+              old_expected_seq, old_next_seq, after_full, after_partial,
+              after_inflight, after_empty, after_dropped, b->prod_i, b->cons_i,
+              b->expected_seq, b->next_seq, next_expected_index,
+              next_expected_index == BUFFER_MGMT_INVALID_INDEX ? 0 :
+                  b->buffer_seq[next_expected_index]);
+#endif
     MUTEX_UNLOCK(&b->lock);
 }
 
