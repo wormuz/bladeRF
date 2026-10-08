@@ -34,7 +34,10 @@ qualification remains sequenced after RX1.
   29 wrapper tests and 31 scanner transition/epoch integration tests pass with
   `LD_LIBRARY_PATH` selecting the current fork. The default `/usr/local`
   libbladeRF on this host is older and does not provide the new RX event API;
-  a release install must ship the wrapper with its matching library.
+  a release install must ship the wrapper with its matching library. A
+  `python_bladerf-1.5.0-cp314` wheel was built; its packaged extension retains
+  the dependency and imports successfully from the wheel when the current
+  fork is selected through `LD_LIBRARY_PATH`.
 
 ## Hardware access failure
 
