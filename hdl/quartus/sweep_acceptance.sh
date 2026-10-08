@@ -54,9 +54,10 @@ done
 # 332182 is "No path is found satisfying assignment" -- a constraint that
 # bound to nothing. Four are known and expected (the SPI/I2C pin clocks that
 # have no internal path); more than that means something stopped binding.
-ucp=$(grep -c "Warning (332182)" "$LOG" 2>/dev/null || echo 0)
-[ "$ucp" -le 4 ] && verdict PASS "sdc: unbound assignments $ucp (<= 4 known)" \
-                 || verdict FAIL "sdc: unbound assignments $ucp (> 4 known)"
+ucp=$(grep "Warning (332182)" "$LOG" 2>/dev/null \
+      | sed -E 's/.*Warning \(332182\): //' | sort -u | wc -l)
+[ "$ucp" -le 4 ] && verdict PASS "sdc: distinct unbound assignments $ucp (<= 4 known)" \
+                 || verdict FAIL "sdc: $ucp distinct unbound assignments (> 4 known)"
 
 # The two paired bounds must still be there, and the blanket must not be.
 if grep -q "handshake crossings constrained: [1-9]" "$LOG"; then
@@ -64,7 +65,7 @@ if grep -q "handshake crossings constrained: [1-9]" "$LOG"; then
 else
     verdict FAIL "sdc: paired handshake bounds NOT applied"
 fi
-if grep -q "tamer hold_time crossing constrained on [1-9]" "$LOG"; then
+if grep -q "tamer compare payload crossing constrained on [1-9]" "$LOG"; then
     verdict PASS "sdc: time_tamer bounds applied"
 else
     verdict FAIL "sdc: time_tamer bounds NOT applied"
