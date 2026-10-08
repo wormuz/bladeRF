@@ -29,7 +29,12 @@ qualification remains sequenced after RX1.
 - The Python binding builds against the current fork using
   `PYTHON_BLADERF_CFLAGS='-I/home/bonho/projects/bladerf/host/libraries/libbladeRF/include'`
   and `PYTHON_BLADERF_LDFLAGS='-L/home/bonho/projects/bladerf/host/build/output -lbladeRF'`.
-  All 29 wrapper tests pass with the current libbladeRF preloaded.
+  A link-order defect was fixed in wrapper commit `9adf65d`: the extensions now
+  retain `DT_NEEDED: libbladeRF.so.2` instead of relying on `LD_PRELOAD`. All
+  29 wrapper tests and 31 scanner transition/epoch integration tests pass with
+  `LD_LIBRARY_PATH` selecting the current fork. The default `/usr/local`
+  libbladeRF on this host is older and does not provide the new RX event API;
+  a release install must ship the wrapper with its matching library.
 
 ## Hardware access failure
 
