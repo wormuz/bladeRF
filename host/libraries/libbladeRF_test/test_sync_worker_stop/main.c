@@ -72,6 +72,44 @@ int main(void)
         assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
     }
 
+    /* If an epoch fence spans a full ring wrap, cons_i must be re-anchored to
+     * the oldest live sequence rather than wrapping back to a stale slot. */
+    {
+        struct bladerf_sync sync = {0};
+        struct buffer_mgmt buffers = {0};
+        uint32_t sequences[4] = { 10, 11, 12, 13 };
+        bool dropped[4] = { true, true, true, true };
+        sync_buffer_status states[4] = {
+            SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_EMPTY,
+            SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_FULL,
+        };
+
+        sync.initialized = true;
+        sync.buf_mgmt = buffers;
+        sync.buf_mgmt.status = states;
+        sync.buf_mgmt.buffer_seq = sequences;
+        sync.buf_mgmt.buffer_dropped = dropped;
+        sync.buf_mgmt.num_buffers = 4;
+        sync.buf_mgmt.cons_i = 0;
+        sync.buf_mgmt.expected_seq = 12;
+        assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+        MUTEX_LOCK(&sync.buf_mgmt.lock);
+        unsigned int skipped = 0;
+        while (skipped < sync.buf_mgmt.num_buffers &&
+               sync.buf_mgmt.buffer_dropped[sync.buf_mgmt.cons_i]) {
+            sync.buf_mgmt.buffer_dropped[sync.buf_mgmt.cons_i] = false;
+            sync.buf_mgmt.cons_i =
+                (sync.buf_mgmt.cons_i + 1) % sync.buf_mgmt.num_buffers;
+            skipped++;
+        }
+        assert(skipped == sync.buf_mgmt.num_buffers);
+        assert(sync_worker_reanchor_rx_consumer_to_expected(&sync));
+        assert(sync.buf_mgmt.cons_i == 2);
+        assert(sync.buf_mgmt.partial_off == 0);
+        MUTEX_UNLOCK(&sync.buf_mgmt.lock);
+        assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+    }
+
     /* A completed buffer outside the reorder window is forwarded only with
      * an explicit discontinuity pending for the sync reader. */
     {

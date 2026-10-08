@@ -1237,6 +1237,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                   __FUNCTION__, skipped,
                                   skipped == 1 ? "" : "s");
                     }
+                    if (skipped == b->num_buffers &&
+                        sync_worker_reanchor_rx_consumer_to_expected(s)) {
+                        log_debug("%s: re-anchored consumer to expected RX "
+                                  "sequence=%u buffer=%u after full-ring epoch "
+                                  "fence\n", __FUNCTION__, b->expected_seq,
+                                  b->cons_i);
+                    }
                 }
 
                 /* An overrun means every buffer that is full right now was

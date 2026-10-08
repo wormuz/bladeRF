@@ -1,0 +1,157 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3668] Failed to get VCTCXO trim value: Invalid operation or parameter
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x2)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x4)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x8)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x2000)
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:239] FX3 firmware 2.6.1 GPIF buffer size: 8192
+[DEBUG @ host/libraries/libbladeRF/src/streaming/async.c:295] FX3 firmware 2.6.1 GPIF buffer size: 8192
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x200)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=32 us IN=88 us total=121 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] RX1 operation duration: 18
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1546] _bladerf_rx_transition_begin: epoch ARM/fence transaction=1 took 576 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1683] _bladerf_rx_transition_begin: host RFIC tune transaction=1 took 18476 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1704] _bladerf_rx_transition_begin: LO readback transaction=1 took 250 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=1)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=1)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=1)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1937] bladerf_rx_transition_wait: PLL-lock transaction=1 cumulative 123 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1973] bladerf_rx_transition_wait: ENSM-RX transaction=1 cumulative 247 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2156] bladerf_rx_transition_wait: FPGA epoch status transaction=1 reads=1 sleeps=0 read_total_us=116.702 read_max_us=116.702 opened=1 status=0x83050000
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2179] bladerf_rx_transition_wait: epoch-valid transaction=1 cumulative 611 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2303] bladerf_rx_transition_wait: epoch handoff transaction=1 complete_us=115.244 status_reads=1 status_total_us=116.702 timestamp_lo_us=0.000 timestamp_hi_us=113.740 sync_fence_us=0.656
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 9 rejected RX ring slots
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 1 rejected RX ring slot
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=10 samples=8192 prod_i=18 cons_i=10 slot_state=0 seq=10 expected_seq=10
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=11 samples=8192 prod_i=19 cons_i=11 slot_state=0 seq=11 expected_seq=11
+CAPTURE_CLOSED i=0 epoch=131 pause_ms=250
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=244 us IN=236 us total=481 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] RX1 operation duration: 18
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1546] _bladerf_rx_transition_begin: epoch ARM/fence transaction=2 took 1228 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1683] _bladerf_rx_transition_begin: host RFIC tune transaction=2 took 21452 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1704] _bladerf_rx_transition_begin: LO readback transaction=2 took 251 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=2)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=2)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=2)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1937] bladerf_rx_transition_wait: PLL-lock transaction=2 cumulative 125 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1973] bladerf_rx_transition_wait: ENSM-RX transaction=2 cumulative 254 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2156] bladerf_rx_transition_wait: FPGA epoch status transaction=2 reads=1 sleeps=0 read_total_us=117.631 read_max_us=117.631 opened=1 status=0x84070000
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2179] bladerf_rx_transition_wait: epoch-valid transaction=2 cumulative 626 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2303] bladerf_rx_transition_wait: epoch handoff transaction=2 complete_us=117.849 status_reads=1 status_total_us=117.631 timestamp_lo_us=0.000 timestamp_hi_us=116.029 sync_fence_us=0.748
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 64 rejected RX ring slots
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=19 samples=8192 prod_i=27 cons_i=11 slot_state=0 seq=147 expected_seq=147
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=20 samples=8192 prod_i=28 cons_i=11 slot_state=0 seq=148 expected_seq=148
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=21 samples=8192 prod_i=29 cons_i=11 slot_state=0 seq=149 expected_seq=149
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=22 samples=8192 prod_i=30 cons_i=11 slot_state=0 seq=150 expected_seq=150
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:402] RX overrun @ buffer 11 prod_i=19 prod_state=2 completed_state=3 seq=203 expected_seq=203 next_seq=211 reorder_len=0 cons_i=11 dropped=0
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 1 rejected RX ring slot
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1311] sync_rx: dropped 56 stale buffers after overrun
+CAPTURE_CLOSED i=1 epoch=132 pause_ms=250
+RUNTIME_OVERRUN n=1 epoch=132 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=307 us IN=234 us total=541 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] RX1 operation duration: 17
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1546] _bladerf_rx_transition_begin: epoch ARM/fence transaction=3 took 1330 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1683] _bladerf_rx_transition_begin: host RFIC tune transaction=3 took 23502 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1704] _bladerf_rx_transition_begin: LO readback transaction=3 took 252 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=3)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=3)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=3)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1937] bladerf_rx_transition_wait: PLL-lock transaction=3 cumulative 124 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1973] bladerf_rx_transition_wait: ENSM-RX transaction=3 cumulative 250 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2156] bladerf_rx_transition_wait: FPGA epoch status transaction=3 reads=1 sleeps=0 read_total_us=118.303 read_max_us=118.303 opened=1 status=0x85050000
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2179] bladerf_rx_transition_wait: epoch-valid transaction=3 cumulative 620 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2303] bladerf_rx_transition_wait: epoch handoff transaction=3 complete_us=116.680 status_reads=1 status_total_us=118.303 timestamp_lo_us=0.000 timestamp_hi_us=115.668 sync_fence_us=0.821
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 64 rejected RX ring slots
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=22 samples=8192 prod_i=30 cons_i=14 slot_state=0 seq=343 expected_seq=343
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=23 samples=8192 prod_i=31 cons_i=14 slot_state=0 seq=344 expected_seq=344
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=24 samples=8192 prod_i=32 cons_i=14 slot_state=0 seq=345 expected_seq=345
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=25 samples=8192 prod_i=33 cons_i=14 slot_state=0 seq=346 expected_seq=346
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:402] RX overrun @ buffer 14 prod_i=22 prod_state=2 completed_state=3 seq=399 expected_seq=399 next_seq=407 reorder_len=0 cons_i=14 dropped=0
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 1 rejected RX ring slot
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1311] sync_rx: dropped 56 stale buffers after overrun
+CAPTURE_CLOSED i=2 epoch=133 pause_ms=250
+RUNTIME_OVERRUN n=2 epoch=133 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=340 us IN=245 us total=586 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] RX1 operation duration: 18
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1546] _bladerf_rx_transition_begin: epoch ARM/fence transaction=4 took 1762 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1683] _bladerf_rx_transition_begin: host RFIC tune transaction=4 took 23141 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1704] _bladerf_rx_transition_begin: LO readback transaction=4 took 253 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=4)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=4)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=4)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1937] bladerf_rx_transition_wait: PLL-lock transaction=4 cumulative 123 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1973] bladerf_rx_transition_wait: ENSM-RX transaction=4 cumulative 250 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2156] bladerf_rx_transition_wait: FPGA epoch status transaction=4 reads=1 sleeps=0 read_total_us=117.947 read_max_us=117.947 opened=1 status=0x86070000
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2179] bladerf_rx_transition_wait: epoch-valid transaction=4 cumulative 620 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2303] bladerf_rx_transition_wait: epoch handoff transaction=4 complete_us=116.038 status_reads=1 status_total_us=117.947 timestamp_lo_us=0.000 timestamp_hi_us=121.680 sync_fence_us=0.839
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 64 rejected RX ring slots
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=25 samples=8192 prod_i=33 cons_i=17 slot_state=0 seq=539 expected_seq=539
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=26 samples=8192 prod_i=34 cons_i=17 slot_state=0 seq=540 expected_seq=540
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=27 samples=8192 prod_i=35 cons_i=17 slot_state=0 seq=541 expected_seq=541
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=28 samples=8192 prod_i=36 cons_i=17 slot_state=0 seq=542 expected_seq=542
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:402] RX overrun @ buffer 17 prod_i=25 prod_state=2 completed_state=3 seq=595 expected_seq=595 next_seq=603 reorder_len=0 cons_i=17 dropped=0
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 1 rejected RX ring slot
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1311] sync_rx: dropped 56 stale buffers after overrun
+CAPTURE_CLOSED i=3 epoch=134 pause_ms=250
+RUNTIME_OVERRUN n=3 epoch=134 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=430 us IN=241 us total=671 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] RX1 operation duration: 17
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1546] _bladerf_rx_transition_begin: epoch ARM/fence transaction=5 took 1430 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1683] _bladerf_rx_transition_begin: host RFIC tune transaction=5 took 20471 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1704] _bladerf_rx_transition_begin: LO readback transaction=5 took 264 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=5)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=5)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:939] bladerf2_rx_data_invalidate: invalidation blocked (transition_pending=1 setter_active=0 state=3 transaction=5)
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1937] bladerf_rx_transition_wait: PLL-lock transaction=5 cumulative 127 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1973] bladerf_rx_transition_wait: ENSM-RX transaction=5 cumulative 257 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2156] bladerf_rx_transition_wait: FPGA epoch status transaction=5 reads=1 sleeps=0 read_total_us=117.990 read_max_us=117.990 opened=1 status=0x87050000
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2179] bladerf_rx_transition_wait: epoch-valid transaction=5 cumulative 634 us
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2303] bladerf_rx_transition_wait: epoch handoff transaction=5 complete_us=120.744 status_reads=1 status_total_us=117.990 timestamp_lo_us=0.000 timestamp_hi_us=119.286 sync_fence_us=0.911
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1236] sync_rx: skipped 64 rejected RX ring slots
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=27 samples=8192 prod_i=35 cons_i=20 slot_state=0 seq=734 expected_seq=734
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=28 samples=8192 prod_i=36 cons_i=20 slot_state=0 seq=735 expected_seq=735
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=29 samples=8192 prod_i=37 cons_i=20 slot_state=0 seq=736 expected_seq=736
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:333] RX epoch worker callback: buffer=30 samples=8192 prod_i=38 cons_i=20 slot_state=0 seq=737 expected_seq=737
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:402] RX overrun @ buffer 19 prod_i=27 prod_state=2 completed_state=3 seq=790 expected_seq=790 next_seq=798 reorder_len=0 cons_i=20 dropped=0
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync.c:1311] sync_rx: dropped 56 stale buffers after overrun
+CAPTURE_CLOSED i=4 epoch=135 pause_ms=250
+RUNTIME_OVERRUN n=4 epoch=135 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+FINAL_EVENT_HISTORY_OK first=1 last=5
+QUALIFICATION_FAILED runtime_stream_overruns=4
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:966] bladerf2_rx_data_invalidate: reserved RX reconfiguration (reason=0x200)
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:607] sync_worker_deinit: request stop worker=0x618f76780540
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:618] sync_worker_deinit: stopped wait worker=0x618f76780540 status=0
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:629] sync_worker_deinit: async stream deinit begin worker=0x618f76780540
+[DEBUG @ host/libraries/libbladeRF/src/streaming/sync_worker.c:632] sync_worker_deinit: async stream deinit complete worker=0x618f76780540
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:1106] bladerf2_rx_reconfigure_complete: released RX reconfiguration reservation
+FINAL_RX1_DISABLE_DONE mode=RX1
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+[DEBUG @ host/libraries/libbladeRF/src/bladerf.c:217] bladerf_close: board close begin
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:599] bladerf2_close: sync_deinit begin channel=0
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:602] bladerf2_close: sync_deinit complete channel=0
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:619] bladerf2_close: disable module begin direction=0
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:622] bladerf2_close: disable module complete direction=0 status=0
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:599] bladerf2_close: sync_deinit begin channel=1
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:602] bladerf2_close: sync_deinit complete channel=1
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:619] bladerf2_close: disable module begin direction=1
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:622] bladerf2_close: disable module complete direction=1 status=0
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:117] NIOS retune2 USB OUT=76 us IN=100 us total=177 us
+[DEBUG @ host/libraries/libbladeRF/src/backend/usb/nios_access.c:1691] TX1 operation duration: 18
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:652] bladerf2_close: RFIC standby begin
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/rfic_host.c:192] _rfic_host_deinitialize: deinitializing
+[DEBUG @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:665] bladerf2_close: RFIC standby complete
+[DEBUG @ host/libraries/libbladeRF/src/bladerf.c:221] bladerf_close: board close complete
+[DEBUG @ host/libraries/libbladeRF/src/bladerf.c:224] bladerf_close: backend close begin
+[DEBUG @ host/libraries/libbladeRF/src/bladerf.c:226] bladerf_close: backend close complete
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX1 transitions=5 unrecovered=0 first_read_faults=4 recovered=4 retry_would_block=0 retry_overruns=4 stream_overrun_events=4 data_withheld_events=10 transition_ms_p50=24.399_p95=26.590_p99=26.590_max=26.725

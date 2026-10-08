@@ -101,3 +101,38 @@ native worker-stop test and production library rebuild pass. Raw traces are in
 `rx1-teardown-lifecycle-markers-20x-2026-10-08.log`,
 `rx1-teardown-no-debug-20x-2026-10-08.log`, and
 `rx1-teardown-no-debug-100x-2026-10-08.log`.
+
+## Full-ring rejected-buffer rearm defect
+
+Longer repeats exposed that ring sizing alone did not make close→rearm
+reliable. During an epoch-closed pause, rejected USB completions marked every
+ring slot as dropped. On the next synchronous read, `sync_rx()` skipped one
+full ring of markers and wrapped `cons_i` to its old index. That index could
+belong to a later in-flight sequence while `expected_seq` referred to another
+buffer. The consumer then waited behind the wrong slot as new-epoch buffers
+filled the ring. The debug trace showed `cons_i=11`, `expected_seq=147`, and
+the buffer carrying sequence 147 at index 19; the subsequent full ring caused
+the reported overrun. Increasing the ring from 24 to 32 or 64 buffers did not
+remove this condition.
+
+The sync consumer now re-anchors to the non-empty ring slot whose sequence is
+`expected_seq` when it skips a full ring of rejected markers. This preserves
+sequence ordering and lets the consumer wait for the oldest live completion;
+it adds no caller timing or discard policy. A native regression covers a full
+marker wrap where the expected sequence is at a different buffer index.
+
+On xA4 after this change, 100 cross-band close/rearm cycles each passed on
+RX1, RX2, RX_X2 at default stream geometry, plus 100 RX_X2 cycles using the
+64-buffer/32-transfer request. All four runs reported zero unrecovered reads,
+zero retry overruns, zero stream-overrun events, and clean final close. The
+run summaries also showed no recoveries or first-read faults. Native sync
+worker-stop and sync epoch traversal tests pass. One earlier debug-only RX1
+20-cycle run still recorded a timestamp discontinuity before the re-anchor;
+the subsequent 400-cycle qualification matrix had no stream-overrun or
+timestamp-discontinuity event. The original two close hangs have not
+reproduced in the new 100-cycle runs, though their original trigger is not
+known. Evidence includes `rx1-rearm-sequence-reanchor-debug-20x-2026-10-08.log`,
+`rx1-rearm-sequence-reanchor-no-debug-100x-2026-10-08.log`,
+`rx2-rearm-sequence-reanchor-no-debug-100x-2026-10-08.log`,
+`rx-x2-rearm-sequence-reanchor-no-debug-100x-2026-10-08.log`, and
+`rx-x2-rearm-sequence-reanchor-64x32-no-debug-100x-2026-10-08.log`.

@@ -163,6 +163,38 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
     MUTEX_UNLOCK(&b->lock);
 }
 
+/* Epoch-fenced packets can visit every ring slot while the application is
+ * paused. If every dropped marker is skipped, cons_i wraps to its old value,
+ * which may now refer to a much later in-flight sequence. Re-anchor the
+ * consumer to the slot carrying expected_seq so it waits for the oldest live
+ * completion rather than blocking behind a stale ring index. Caller holds
+ * buf_mgmt.lock. */
+static inline bool sync_worker_reanchor_rx_consumer_to_expected(
+    struct bladerf_sync *s)
+{
+    struct buffer_mgmt *b;
+
+    if (s == NULL || !s->initialized) {
+        return false;
+    }
+
+    b = &s->buf_mgmt;
+    if (b->status == NULL || b->buffer_seq == NULL || b->num_buffers == 0) {
+        return false;
+    }
+
+    for (unsigned int i = 0; i < b->num_buffers; ++i) {
+        if (b->status[i] != SYNC_BUFFER_EMPTY &&
+            b->buffer_seq[i] == b->expected_seq) {
+            b->cons_i = i;
+            b->partial_off = 0;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* Hold an out-of-order RX buffer for later ordered delivery when it fits the
  * reorder window. Otherwise mark a discontinuity and wake sync_rx. The caller
  * must hold sync->buf_mgmt.lock. Returns true when the buffer was held. */

@@ -1,0 +1,49 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3668] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_CLOSED i=0 epoch=111 pause_ms=250
+CAPTURE_CLOSED i=1 epoch=112 pause_ms=250
+RUNTIME_OVERRUN n=1 epoch=112 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=2 epoch=113 pause_ms=250
+RUNTIME_OVERRUN n=2 epoch=113 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=3 epoch=114 pause_ms=250
+RUNTIME_OVERRUN n=3 epoch=114 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=4 epoch=115 pause_ms=250
+RUNTIME_OVERRUN n=4 epoch=115 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=5 epoch=116 pause_ms=250
+RUNTIME_OVERRUN n=5 epoch=116 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=6 epoch=117 pause_ms=250
+RUNTIME_OVERRUN n=6 epoch=117 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=7 epoch=118 pause_ms=250
+RUNTIME_OVERRUN n=7 epoch=118 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=8 epoch=119 pause_ms=250
+RUNTIME_OVERRUN n=8 epoch=119 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=9 epoch=120 pause_ms=250
+RUNTIME_OVERRUN n=9 epoch=120 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=10 epoch=121 pause_ms=250
+RUNTIME_OVERRUN n=10 epoch=121 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=11 epoch=122 pause_ms=250
+RUNTIME_OVERRUN n=11 epoch=122 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=12 epoch=123 pause_ms=250
+RUNTIME_OVERRUN n=12 epoch=123 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=13 epoch=124 pause_ms=250
+RUNTIME_OVERRUN n=13 epoch=124 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=14 epoch=125 pause_ms=250
+RUNTIME_OVERRUN n=14 epoch=125 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=15 epoch=126 pause_ms=250
+RUNTIME_OVERRUN n=15 epoch=126 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=16 epoch=127 pause_ms=250
+RUNTIME_OVERRUN n=16 epoch=127 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+CAPTURE_CLOSED i=17 epoch=128 pause_ms=250
+CAPTURE_CLOSED i=18 epoch=129 pause_ms=250
+CAPTURE_CLOSED i=19 epoch=130 pause_ms=250
+FINAL_EVENT_HISTORY_OK first=1 last=20
+QUALIFICATION_FAILED runtime_stream_overruns=19
+FINAL_RX1_DISABLE_DONE mode=RX1
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX1 transitions=20 unrecovered=0 first_read_faults=19 recovered=19 retry_would_block=0 retry_overruns=19 stream_overrun_events=19 data_withheld_events=45 transition_ms_p50=25.325_p95=27.754_p99=27.754_max=27.988
