@@ -62,6 +62,23 @@ static uint8_t sync_withheld_epochs[8];
 static uint64_t sync_withheld_timestamps[8];
 static atomic_bool sync_withheld_observed;
 static unsigned int async_overrun_events;
+
+static void test_rf_transition_rfdc_calibration_requirement(void)
+{
+    uint32_t effective = 0;
+    assert(bladerf2_rx_rfdc_calibration_required(false, 0, 900000000));
+    assert(!bladerf2_rx_rfdc_calibration_required(
+        true, 900000000, 1000000000));
+    assert(bladerf2_rx_rfdc_calibration_required(
+        true, 900000000, 1000000001));
+    assert(bladerf2_rf_transition_normalize_requirements(
+        BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE, false, &effective));
+    assert((effective & BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) != 0);
+    assert((effective & BLADERF_RF_REQUIRE_EPOCH_VALID) != 0);
+    assert((effective & BLADERF_RF_REQUIRE_PLL_LOCKED) != 0);
+    assert((effective & BLADERF_RF_REQUIRE_ENSM_RX) != 0);
+    assert((effective & BLADERF_RF_REQUIRE_BBPLL_LOCKED) != 0);
+}
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;
 static unsigned int async_fault_overrun_order;
@@ -1715,6 +1732,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_rf_transition_rfdc_calibration_requirement();
     test_rx_channel_mask_runtime_policy();
     test_rx_fault_causes_read_error_provenance();
     test_sync_channel_selection_fail_closed();

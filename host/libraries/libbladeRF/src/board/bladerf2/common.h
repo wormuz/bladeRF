@@ -258,6 +258,8 @@ struct bladerf2_board_data {
     bool rx_async_epoch_cond_initialized;
     uint64_t rf_transition_requested_frequency_hz;
     uint64_t rf_transition_readback_frequency_hz;
+    uint64_t rf_transition_rfdc_calibration_frequency_hz;
+    bool rf_transition_rfdc_calibration_frequency_valid;
     bladerf_rf_state rf_transition_state;
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;

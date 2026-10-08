@@ -77,7 +77,8 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
                               BLADERF_RF_REQUIRE_EPOCH_VALID |
                               BLADERF_RF_REQUIRE_BBPLL_LOCKED |
                               BLADERF_RF_REQUIRE_FIRST_HOST_DATA |
-                              BLADERF_RF_REQUIRE_RX_X2_HOST_DATA;
+                              BLADERF_RF_REQUIRE_RX_X2_HOST_DATA |
+                              BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE;
 
     if (effective == NULL || (requested & ~supported) != 0) {
         return false;
@@ -85,6 +86,7 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
 
     *effective = requested;
     if (require_rx_data_valid ||
+        (requested & BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) != 0 ||
         (requested & BLADERF_RF_REQUIRE_FIRST_HOST_DATA) != 0 ||
         (requested & BLADERF_RF_REQUIRE_RX_X2_HOST_DATA) != 0 ||
         (requested & BLADERF_RF_REQUIRE_DATAPATH_ARMED) != 0) {
@@ -105,6 +107,17 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
                       BLADERF_RF_REQUIRE_BBPLL_LOCKED;
     }
     return true;
+}
+
+/* AD9361 RF DC calibration is required for the first data-valid epoch and
+ * when RX carrier moves more than 100 MHz from the last successfully
+ * calibrated LO. */
+static inline bool bladerf2_rx_rfdc_calibration_required(
+    bool previous_lo_valid, uint64_t previous_lo_hz, uint64_t target_lo_hz)
+{
+    const uint64_t delta_hz = previous_lo_hz > target_lo_hz
+        ? previous_lo_hz - target_lo_hz : target_lo_hz - previous_lo_hz;
+    return !previous_lo_valid || delta_hz > 100000000ULL;
 }
 
 static inline bool bladerf2_rf_event_is_transition_terminal(
