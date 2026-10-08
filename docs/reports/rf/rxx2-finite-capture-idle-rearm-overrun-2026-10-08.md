@@ -37,17 +37,28 @@ trace: `rxx2-long-capture-immediate-rearm-2026-10-08.log`.
 ## Interpretation
 
 `bladerf_rx_capture_close()` revokes host IQ admission and aborts the FPGA RX
-epoch gate. It does not stop or quiesce the async USB producer. During a
-consumer pause, completed transfers can continue entering the native sync
-ring. The observed result is consistent with a high-throughput queue/lifecycle
-failure; this test does not yet isolate whether the decisive mechanism is
-ring occupancy, transfer ordering, or the transition's handling of queued
-META packets. The 250 ms idle interval is outside the 150 ms capture itself.
+epoch gate, but leaves the async worker running. The async META validator
+rejects uncertified buffers and routes them through the sync worker's rejected
+sequence path, so this evidence does **not** establish that invalid IQ simply
+fills the ring during the pause. The overrun is reported during the next
+certified epoch as `SYNC_RX_RING_FULL`. The sequence trace shows `sync_rx()`
+skipping 3 then 92 rejected ring slots; the next callbacks are buffer 56 /
+sequence 632 onward, with `expected_seq=632`. The ring then overruns at
+sequence 697 while `cons_i=53` and `prod_i=57`, after which 64 stale buffers
+are dropped. The first reported timestamp gap is expected 10,394,935 but
+received 11,899,319. The exact interaction between rejected in-flight
+transfers, sequence re-anchoring, and the high-throughput RX_X2 ring remains
+to be isolated. The 250 ms idle interval is outside the 150 ms capture itself.
+The configured 32 in-flight transfers represent roughly 1.05 million samples
+per lane, close to the 1,013,824-sample prefix returned before the reported
+gap, which makes transfer-tail ordering a specific hypothesis to test rather
+than a proven cause. Detailed native trace:
+`rxx2-long-capture-sequence-debug-2026-10-08.log`.
 
 Separate Python diagnostics on the same capture profile measured about
 742.8 ms for RX1 SC16 conversion, resampling, and PSS processing after capture
-close. That is enough time for the native producer/consumer mismatch to become
-visible. The failing condition is not evidence of LTE channel degradation.
+close. That provides a realistic interval for the native close/rearm defect to
+surface. The failing condition is not evidence of LTE channel degradation.
 
 ## Disposition
 
@@ -55,9 +66,10 @@ Release blocker for the production RX_X2 sweep profile. Do not mark the chain
 stable based on the earlier 1,000-cycle small-capture qualification. A first
 attempt to stop and restart the async worker was not retained: it introduced
 restart and transition failures and then a further RX_X2 ring overrun. The
-next implementation must make the finite-capture lifecycle explicit in
-libbladeRF, preserve FPGA epoch and host-data ordering, and prove transport
-quiescence or bounded consumption without relying on Python discard counts.
+next investigation must instrument transfer sequence IDs, metadata epoch IDs,
+and timestamps across close, the 250 ms gap, and first new-epoch delivery; then
+fix the native lifecycle while preserving FPGA epoch and host-data ordering.
+Do not rely on Python discard counts.
 
 Required regression after the fix:
 
