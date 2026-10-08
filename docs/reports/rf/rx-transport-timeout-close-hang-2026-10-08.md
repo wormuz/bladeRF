@@ -149,8 +149,15 @@ cause with bit 2 but not bit 5 means RX FIFO writes stopped while the FIFO was
 not full. The NIOS cause PIO, libbladeRF decoder, and public event flag
 definitions now carry this detail. GHDL passes the directed RX writer test
 (including full-FIFO classification) and the armed, abort, and enable tests.
-The new HDL has not yet been Quartus synthesized, loaded, or qualified on the
-board; existing hardware cannot report bit 5 until that exact image is built
-and loaded.
+The `698dbb6e` HDL was synthesized and fitted in Quartus 25.1 for hosted xA4.
+Fitter succeeded with no negative timing slack (worst reported setup +0.552
+ns, hold +0.007 ns), and produced RBF SHA-256
+`14dc3ea9eecdb3f02438eec71ac2bc55d11bbd8976d5540583a5c8491e075454`. The
+release qgate rejected this `hosted` revision: its current CDC expectations
+do not match that older project variant (12 handshake crossings vs expected
+5, D101=674, D103=0, and 85 critical warnings). This is a gate failure, so
+the image was not loaded. The release `sweep` revision still needs its own
+full compile before deciding whether the new fault bit can be qualified on
+hardware.
 
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
