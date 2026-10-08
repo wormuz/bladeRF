@@ -440,6 +440,37 @@ def check_handshake_pairs_are_crossings():
 
 # --------------------------------------------------------------- VHDL rules
 
+def check_gpif_timestamp_bundle_capture():
+    """The GPIF CDC endpoint must capture raw bundled data before math."""
+    gpif = ROOT / "hdl/fpga/platforms/common/bladerf/vhdl/fx3_gpif.vhd"
+    sdc = SDC.read_text() if SDC.exists() else ""
+    qbind = (ROOT / "hdl/quartus/qbind.tcl").read_text()
+    if not gpif.exists():
+        return
+    src = gpif.read_text()
+    pair = "{*fx3_gpif:*|current.tx_timestamp[*]}"
+    if ("tx_ts_plus32" in src or
+            "future.tx_timestamp <= tx_timestamp;" not in src or
+            "(current.tx_timestamp + 32)" not in src or
+            pair not in sdc or pair not in qbind):
+        fail("gpif-timestamp-bundle-capture",
+             "timestamp handshake must terminate at the raw pclk capture register; "
+             "the +32 arithmetic must follow that register",
+             "a carry-chain feeder was placed before the first destination register, "
+             "causing max-skew violations on the timestamp CDC")
+
+    writer = ROOT / "hdl/fpga/ip/nuand/synthesis/fifo_writer.vhd"
+    if writer.exists():
+        body = code_only(writer.read_text(), comment="--")
+        if ("in_sample_controls'length = 2 and" in body or
+                ("both_streams_enabled" not in body and
+                 "in_sample_controls_r(1).enable" in body)):
+            fail("vhdl-non-short-circuit-array-index",
+                 "fifo_writer must guard optional stream indices structurally; "
+                 "VHDL boolean 'and' does not short-circuit",
+                 "single-stream configurations elaborated with an index-1 bounds error")
+
+
 def check_vhdl():
     if not HOSTED.exists():
         return
@@ -1321,6 +1352,8 @@ qgate-sweep-handshake-count   qgate's sweep CDC count must match the 15 constrai
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded
+gpif-timestamp-bundle-capture raw timestamp must be captured before GPIF arithmetic
+vhdl-non-short-circuit-array-index optional stream arrays must be iterated within their range
 """
 
 
@@ -1332,6 +1365,7 @@ def main():
     check_all_sdcs()
     check_no_hardcoded_device_size()
     check_handshake_pairs_are_crossings()
+    check_gpif_timestamp_bundle_capture()
     check_sdc()
     check_vhdl()
     check_headers()

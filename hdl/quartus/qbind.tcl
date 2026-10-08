@@ -52,7 +52,7 @@ set crossings [list \
     "handshake snap tx"    {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]} \
                            {*time_tamer:tx_tamer|dout[*]} \
     "handshake timestamp"  {*U_handshake_timestamp|source_holding[*]} \
-                           {*fx3_gpif:*|current.tx_ts_plus32[*]} ]
+                           {*fx3_gpif:*|current.tx_timestamp[*]} ]
 
 foreach { label src_pat dst_pat } $crossings {
     set src [get_keepers -nowarn $src_pat]

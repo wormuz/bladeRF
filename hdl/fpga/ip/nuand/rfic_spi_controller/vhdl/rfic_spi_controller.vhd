@@ -98,7 +98,7 @@ begin
         -- Physical Outputs
         sclk <= current.sclk;
         cs_n <= current.cs_n;
-        mosi <= current.shift_out_reg(state_t.shift_out_reg'left);
+        mosi <= current.shift_out_reg(current.shift_out_reg'left);
 
         -- Avalon-MM outputs
         mm_dout     <= std_logic_vector(current.shift_in_reg(RFIC_DATA_WIDTH-1 downto 0));

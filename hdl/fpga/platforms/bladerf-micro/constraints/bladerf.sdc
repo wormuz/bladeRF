@@ -330,7 +330,7 @@ set hs_pairs [list \
     {*time_tamer:tx_tamer|handshake:U_current|source_holding[*]}  {*time_tamer:tx_tamer|current_time_q[*]} \
     {*time_tamer:rx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:rx_tamer|dout[*]}           \
     {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]}     {*time_tamer:tx_tamer|dout[*]}           \
-    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_ts_plus32[*]}    \
+    {*U_handshake_timestamp|source_holding[*]}                    {*fx3_gpif:*|current.tx_timestamp[*]}    \
     {*U_dwell_cfg_handshake|source_holding[*]}                    {*bladerf_core:*|dwell_cfg_rx[*]}        \
     {*U_dwell_readout_handshake|source_holding[*]}                {*bladerf_core:*|dwell_rd_data[*]}       \
     {*U_pretrig_addr_handshake|source_holding[*]}                 {*bladerf_core:*|pretrig_addr_rx[*]}     \

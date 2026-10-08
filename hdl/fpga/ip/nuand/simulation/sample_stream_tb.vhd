@@ -206,7 +206,7 @@ begin
     rx_clock    <= not rx_clock  after RX_HALF_PERIOD ;
 
     -- TX Submodule
-    U_tx : entity work.tx
+    U_tx : entity nuand.tx
         generic map (
             NUM_STREAMS          => dac_controls'length
         )
@@ -261,7 +261,7 @@ begin
         );
 
     -- RX Submodule
-    U_rx : entity work.rx
+    U_rx : entity nuand.rx
         generic map (
             NUM_STREAMS            => adc_controls'length
         )
@@ -461,9 +461,12 @@ begin
         nop( fx3_clock, 10 ) ;
         rx_enable <= '1' ;
         tx_enable <= '1' ;
-        nop( fx3_clock, 2000000 ) ;
+        -- The packet loop above has already allowed several milliseconds of
+        -- drain time; two million more GPIF clocks only made this smoke test
+        -- exceed qsim's bounded wall-clock timeout.
+        nop( fx3_clock, 100000 ) ;
         report "-- End of Simulation --" ;
-        stop(2) ;
+        stop(0) ;
         wait ;
     end process ;
 

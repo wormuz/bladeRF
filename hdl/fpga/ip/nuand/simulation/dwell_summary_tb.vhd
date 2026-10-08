@@ -117,7 +117,11 @@ begin
             dwell_start <= '1';
             wait until rising_edge(clock);
             dwell_start <= '0';
-            wait until rising_edge(clock);
+            -- The two sample stages plus the publish pipeline mean a fixed
+            -- one-cycle wait races summary_valid. Synchronize to the actual
+            -- record event instead of sampling the previous dwell's outputs.
+            wait until summary_valid = '1';
+            wait for 0 ns;
         end procedure;
 
         variable expect : natural;

@@ -63,7 +63,8 @@ run_one() {
     fi
     GHDL_FLAGS="--std=08 -frelaxed -fsynopsys -P$MF"
 
-    local analysed=""
+    local analysed_work=""
+    local analysed_nuand=""
     analyse() {
         local f="$1"
         # Only the generic multi-bit test synchronizer needs its PRESERVE
@@ -71,14 +72,29 @@ run_one() {
         # analysis set so CDC-specific benches can instantiate it.
         case "$f" in "$N/synthesis/synchronizer.vhd") return ;; esac
         [ -r "$f" ] || return
-        case " $analysed " in *" $f "*) return ;; esac
-        analysed="$analysed $f"
-        ghdl -a $GHDL_FLAGS --work=work  "$f" 2>/dev/null || true
-        ghdl -a $GHDL_FLAGS --work=nuand "$f" 2>/dev/null || true
+        case " $analysed_work " in *" $f "*) ;; *)
+            if ghdl -a $GHDL_FLAGS --work=work "$f" 2>analyse.err; then
+                analysed_work="$analysed_work $f"
+            elif [ "${QSIM_VERBOSE_ANALYZE:-0}" = 1 ]; then
+                printf 'analyse work failed: %s\n' "$f"
+                sed -n '1,3p' analyse.err
+            fi
+        esac
+        case " $analysed_nuand " in *" $f "*) ;; *)
+            if ghdl -a $GHDL_FLAGS --work=nuand "$f" 2>analyse.err; then
+                analysed_nuand="$analysed_nuand $f"
+            elif [ "${QSIM_VERBOSE_ANALYZE:-0}" = 1 ]; then
+                printf 'analyse nuand failed: %s\n' "$f"
+                sed -n '1,3p' analyse.err
+            fi
+        esac
     }
 
     analyse "$N/synthesis/fifo_readwrite_p.vhd"
     analyse "$GPIF"
+    # Frozen pre-pipeline reference used only by the dwell-summary
+    # cycle-equivalence regression; never included in a Quartus QIP.
+    analyse "$N/simulation/dwell_summary_ref.vhd"
     # The vendor benches (rfic_spi_tb, sample_stream_tb) reach for packages
     # outside ip/nuand/synthesis: nuand.util, common_dcfifo_p, bladerf_p.
     # Without these the TB itself fails to analyse and ghdl reports
@@ -87,11 +103,27 @@ run_one() {
     analyse "$N/simulation/util.vhd"
     analyse "$N/../altera/common_dcfifo/common_dcfifo.vhd"
     analyse "$N/../../platforms/bladerf-micro/vhdl/bladerf_p.vhd"
+    # Production FIFO and gate wrappers used by RX/TX. The top-level RX/TX
+    # modules are analysed after the nuand synthesis sources below.
+    for f in "$N"/../../platforms/bladerf-micro/vhdl/wrappers/*.vhd; do
+        analyse "$f"
+    done
+    analyse "$N/rfic_spi_controller/vhdl/rfic_spi_controller.vhd"
     analyse "$PWD/sync_nopreserve.vhd"
     for f in "$N"/synthesis/*.vhd; do
         case "$f" in *fifo_readwrite_p.vhd) continue ;; esac
         analyse "$f"
     done
+    # One dependency-order retry resolves same-directory entities whose
+    # filenames sort after their consumers, without claiming unrelated Qsys
+    # generated blocks are GHDL-compatible.
+    for f in "$N"/synthesis/*.vhd; do
+        case "$f" in *fifo_readwrite_p.vhd) continue ;; esac
+        analyse "$f"
+    done
+    analyse "$N/trigger/trigger.vhd"
+    analyse "$N/../../platforms/bladerf-micro/vhdl/rx.vhd"
+    analyse "$N/../../platforms/bladerf-micro/vhdl/tx.vhd"
     [ -z "$extra_src" ] || analyse "$extra_src"
     analyse "$src"
 
@@ -103,8 +135,13 @@ run_one() {
 
     local out
     local timeout_s="${QSIM_TIMEOUT_SECONDS:-30}"
+    local -a run_args=()
+    # This legacy controller bench is waveform-only and has no stop process.
+    case "$tb" in
+        rfic_spi_tb) run_args+=(--stop-time=25us) ;;
+    esac
     local run_status=0
-    out=$(timeout "$timeout_s" ghdl -r $GHDL_FLAGS "$tb" 2>&1) || run_status=$?
+    out=$(timeout "$timeout_s" ghdl -r $GHDL_FLAGS "$tb" "${run_args[@]}" 2>&1) || run_status=$?
     if [ "$run_status" -eq 124 ]; then
         printf '%-28s TIMEOUT after %ss (set QSIM_TIMEOUT_SECONDS to override)\n' "$tb" "$timeout_s"
         return 1
@@ -124,6 +161,12 @@ run_one() {
     # of per-case "OK" lines. Count that as one executed case rather than
     # misleadingly reporting "0 cases OK" after a successful simulation.
     if [ "$cases" -eq 0 ] && echo "$out" | grep -q "${tb}: PASS"; then
+        cases=1
+    fi
+    if [ "$cases" -eq 0 ] && {
+        { [ "$tb" = "sample_stream_tb" ] && echo "$out" | grep -q -- "-- End of Simulation --"; } ||
+        { [ "$tb" = "rfic_spi_tb" ] && echo "$out" | grep -q "simulation stopped"; }
+    }; then
         cases=1
     fi
     printf '%-28s %s cases OK\n' "$tb" "$cases"

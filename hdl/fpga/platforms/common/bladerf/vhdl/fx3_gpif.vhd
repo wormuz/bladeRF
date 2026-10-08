@@ -145,7 +145,10 @@ architecture sample_shuffler of fx3_gpif is
         dma_downcount   :   integer range -1 to 65536;
         meta_downcount  :   integer range -1 to META_DOWNCOUNT_RESET;
         fini_downcount  :   integer range  0 to FINI_DOWNCOUNT_RESET;
-        tx_ts_plus32    :   unsigned(63 downto 0);
+        -- Capture the bundled timestamp itself at the destination clock.
+        -- Keep arithmetic out of the CDC path: adding 32 before this register
+        -- made the first destination register sit behind a carry chain.
+        tx_timestamp    :   unsigned(63 downto 0);
         meta_buf        :   std_logic_vector(127 downto 0);
         dma_acks        :   dma_handshake_t;
         rx_current_dma  :   dma_channel_t;
@@ -170,7 +173,7 @@ architecture sample_shuffler of fx3_gpif is
         dma_downcount   =>  0,
         meta_downcount  =>  0,
         fini_downcount  =>  0,
-        tx_ts_plus32    =>  (others => '0'),
+        tx_timestamp    =>  (others => '0'),
         meta_buf        =>  (others => '0'),
         dma_acks        =>  (others => '0'),
         rx_current_dma  =>  RX0,
@@ -394,7 +397,7 @@ begin
 
         -- Register incoming signals
         future.dma_idle     <= dma_idle;
-        future.tx_ts_plus32 <= tx_timestamp + 32;
+        future.tx_timestamp <= tx_timestamp;
         future.rx_meta_en   <= meta_enable;
         future.tx_meta_en   <= meta_enable;
 
@@ -563,7 +566,7 @@ begin
                                                  to_integer(unsigned(std_logic_vector(not(current.meta_dword(0 downto 0)))));
                     end if;
                     if (unsigned(current.meta_buf(63 downto 0)) = 0 or
-                        unsigned(current.meta_buf(31 downto 0) & current.meta_buf(63 downto 32)) > current.tx_ts_plus32)
+                        unsigned(current.meta_buf(31 downto 0) & current.meta_buf(63 downto 32)) > (current.tx_timestamp + 32))
                     then
                         future.meta_downcount <= META_DOWNCOUNT_RESET;
                         future.state    <= SAMPLE_WRITE;

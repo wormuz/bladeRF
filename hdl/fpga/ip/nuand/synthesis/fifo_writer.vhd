@@ -258,6 +258,19 @@ architecture simple of fifo_writer is
     signal meta_fifo_used_v_r : unsigned(meta_fifo_usedw'length downto 0) := (others => '0');
     signal fifo_used_v_r      : unsigned(fifo_usedw'length downto 0) := (others => '0');
 
+    function both_streams_enabled( controls : sample_controls_t ) return boolean is
+    begin
+        if( controls'length /= 2 ) then
+            return false;
+        end if;
+        for i in controls'range loop
+            if( controls(i).enable /= '1' ) then
+                return false;
+            end if;
+        end loop;
+        return true;
+    end function;
+
 begin
 
     -- Throw an error if port widths don't make sense
@@ -655,9 +668,7 @@ begin
                 -- samples flow, and it is further gated on dma_downcount being
                 -- within NUM_STREAMS + 2 of the end -- a multi-cycle window,
                 -- not an exact coincidence.
-                if( in_sample_controls'length = 2 and
-                    fifo_current.in_sample_controls_r(0).enable = '1' and
-                    fifo_current.in_sample_controls_r(1).enable = '1' and
+                if( both_streams_enabled(fifo_current.in_sample_controls_r) and
                     eight_bit_mode_en = '0' and
                     meta_current.dma_downcount <= NUM_STREAMS + 2 )
                 then

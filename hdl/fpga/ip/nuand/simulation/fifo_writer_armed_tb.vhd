@@ -80,7 +80,8 @@ begin
             FIFO_USEDW_WIDTH      => fifo_usedw'length,
             FIFO_DATA_WIDTH       => fifo_data'length,
             META_FIFO_USEDW_WIDTH => meta_usedw'length,
-            META_FIFO_DATA_WIDTH  => meta_data'length
+            META_FIFO_DATA_WIDTH  => meta_data'length,
+            PROGRESS_TIMEOUT_LOG2 => 8
         )
         port map (
             clock                 => clock,
@@ -287,9 +288,9 @@ begin
         --    this a stall, now or when enable returns.
         ------------------------------------------------------------------
         enable <= '0';
-        -- One wait, not 4M iterations of "wait until": GHDL mcode takes
-        -- minutes on the loop and seconds on the single delay.
-        wait for (2**22 + 200) * CLK_PERIOD;
+        -- Use a reduced timeout exponent in this bench; the property under
+        -- test is pause/resume behavior, not the production 2^22 duration.
+        wait for (2**8 + 200) * CLK_PERIOD;
         wait until rising_edge(clock);
         assert fault_sticky(1) = '0' and fault_sticky(2) = '0'
             report "case 4: progress fault raised on a disabled direction "
