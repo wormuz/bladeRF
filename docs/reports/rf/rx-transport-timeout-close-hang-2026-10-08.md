@@ -334,7 +334,7 @@ snapshot:
 - cause snapshot valid; `GPIF_TIMEOUT` set;
 - enabled sample input valid and sample FIFO writer in `HOLDOFF`;
 - META FIFO not full, `meta_written=0`, and `fifo_enough=0`;
-- sample FIFO occupancy is 7152 of 8192 entries (87.3%);
+- sample FIFO occupancy is 7152 of 8192 64-bit write words (equivalent to 14304 of 16384 SC16 samples; 87.3%);
 - META FIFO occupancy is 7 entries.
 
 This directly observes backpressure at the FPGA FIFO writer boundary: there
@@ -344,3 +344,20 @@ failure to GPIF/FX3 drain progress or its interaction with the writer's
 full-buffer admission rule. It does not yet identify why downstream draining
 stopped. RX disable and close completed in both physical runs, fixing the
 previous shutdown hang for this monitor-lock cycle but not qualifying transport.
+
+## GPIF drain condition narrowed
+
+The occupancy word is the sample FIFO's **write-side** `wrusedw`, whose
+entries are 64-bit words; each word holds two SC16 samples. Thus the captured
+7152/8192 is 14304/16384 samples (87.3%), not 7152 samples. The writer's
+`fifo_enough` requires more free capacity than one DMA buffer and correctly
+enters `HOLDOFF` at this point. In `fx3_gpif.vhd`, RX drain eligibility also
+requires all of `dma_rx_enable`, a request from RX DMA channel 0 or 1,
+`rx_fifo_enough`, metadata availability when enabled, and `dma_idle` before
+arbitration. The existing fault snapshot is captured in the RX writer clock
+and does not show these GPIF-domain handshake inputs or FSM state. Therefore
+the next discriminator should latch GPIF-domain `dma_idle`, RX DMA request,
+`can_rx`, and GPIF FSM state at the same stall window using a coherent CDC
+snapshot. Current evidence establishes a queued-data / downstream-stall
+condition, but cannot yet distinguish a missing FX3 DMA request from a busy
+DMA engine or GPIF scheduling/state defect.
