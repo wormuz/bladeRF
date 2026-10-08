@@ -84,11 +84,20 @@ pauses, zero retry overrun, zero runtime stream-overrun events, and clean device
 teardown. Separate RX1 and RX2 20-cycle runs also had zero overrun and clean
 teardown. An RX1 20-cycle run hung twice at device close after reporting
 `FINAL_DEVICE_CLOSE_BEGIN`; the same 20-cycle test completed once under strace.
-The intermittent teardown issue is unlocalized and remains a release gate.
-Targeted native worker-stop and sync traversal tests pass. Raw traces are in
+The follow-up added native teardown markers at board/backend close, per-channel
+sync teardown, worker stop/join, stream deinit, and RFIC standby. With the
+rebuilt fork library, RX1 passed 100 cross-band close/rearm cycles at 250 ms
+pause without debug verbosity, zero overrun/retry failures, and a
+clean final device close; separate 20-cycle debug and non-debug runs also
+closed cleanly. This does not establish the cause of the earlier hang, so it
+remains an intermittent risk pending longer RX1/RX2/RX_X2 qualification. The
+native worker-stop test and production library rebuild pass. Raw traces are in
 `rx-x2-close-rearm-debug-3x250ms-2026-10-08.log`,
 `rx-x2-close-rearm-native-headroom-20x250ms-2026-10-08.log`,
 `rx-x2-close-rearm-native-headroom-50x250ms-2026-10-08.log`,
 `rx-single-rx1-close-rearm-20x250ms-2026-10-08.log`,
-`rx-single-rx1-close-rearm-strace-20x250ms-2026-10-08.log`, and
-`rx-single-rx2-close-rearm-20x250ms-2026-10-08.log`.
+`rx-single-rx1-close-rearm-strace-20x250ms-2026-10-08.log`,
+`rx-single-rx2-close-rearm-20x250ms-2026-10-08.log`, and the follow-up
+`rx1-teardown-lifecycle-markers-20x-2026-10-08.log`,
+`rx1-teardown-no-debug-20x-2026-10-08.log`, and
+`rx1-teardown-no-debug-100x-2026-10-08.log`.
