@@ -253,6 +253,46 @@ handshake bits), fitted bundled-data checks, and all max-skew paths passed.
 Worst `pll_sclk` setup slack is +0.089 ns at 85°C and +0.137 ns at 0°C;
 worst hold slack is +0.189 ns and +0.183 ns respectively. RBF SHA-256 is
 `ab7aefef2fa72fde0cd7cd2ba67853a79aaf86b7f0f6dda4879657dea050d5d0`.
-The image has not yet been loaded. Next is volatile-only hardware
-qualification on the identified xA4, with RX1 and RX2 tested separately;
-static qgate success does not establish runtime RX validity or recovery.
+At fit completion the image had not yet been loaded; the volatile hardware
+qualification result follows below. Static qgate success alone does not
+establish runtime RX validity or recovery.
+
+## Volatile hardware qualification on the timing-closed image
+
+The exact job-74 RBF was loaded to volatile FPGA RAM on xA4 serial
+`f695006ba84a40daa7b777c6a6eba78`; no SPI flash write was issued. The first
+load attempt used the stale `/usr/local/bin/bladeRF-cli` and was rejected
+because it linked `/usr/local/lib/libbladeRF.so.2`, which did not apply the
+A4 override. Repeating with the repository's `host/build/output/bladeRF-cli`
+and `LD_LIBRARY_PATH=host/build/output` accepted the known A4 override and
+the exact 2,632,660-byte RBF. The loader process remained blocked across USB
+re-enumeration and was ended by a 45-second watchdog; a fresh local CLI
+reopened the device. The subsequent fault-context fields below are also
+evidence that the new image is active.
+
+RX2 cross-band qualification under GDB reported two stream overruns,
+`transitions=5`, `unrecovered=4`, `first_read_faults=2`, `recovered=1`, and
+`data_withheld_events=5`. The second overrun carried
+`rfic_status=0x80000184`: valid cause snapshot, GPIF timeout, enabled input
+sample valid, and FIFO writer in HOLDOFF. `FIFO_FULL_AT_STALL`, META FIFO
+full, `meta_written`, and `fifo_enough` were all clear. Thus samples were
+present while the writer was held off, and the snapshot indicates insufficient
+room for a complete DMA buffer. It does not yet identify the exact FIFO
+occupancies or prove why GPIF/USB stopped draining. The non-GDB run hung in
+`bladerf_close()` through its 120-second watchdog; the GDB run closed
+successfully, confirming the teardown hang remains intermittent.
+
+RX1 cross-band qualification also failed: one USB timeout after ten full
+transfers, one runtime overrun, four unrecovered transitions of five, and
+five data-withheld events. It closed successfully under GDB. Paired `BOTH`
+qualification failed all five transitions, with one stream overrun and
+`data_withheld_events=2`; it also closed successfully under GDB. These are
+transport/event failures, not LTE or RF-signal quality failures: the test
+never received valid epochs for application IQ. No RX1, RX2, or paired
+RX_X2 configuration is release-qualified.
+
+Next diagnostic step: latch the sample- and META-FIFO occupancy values at
+the first GPIF watchdog event into the unused upper bits of the existing
+32-bit coherent fault snapshot. That will distinguish downstream FIFO
+backpressure from a metadata handoff stall without adding another CDC. Then
+inspect the FX3/GPIF progress side against the captured occupancies.
