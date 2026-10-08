@@ -83,4 +83,12 @@ The test-only injected `ERROR` run also failed before it could qualify bounded
 shutdown: the test expected a withheld-event reason of `0x20`, while the
 observed event carried `0x10000020`; it then reported `withheld=0`. That is a
 separate event-mask/test expectation issue, and this run is not evidence for
-or against the join fix. Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
+or against the join fix. The checker now compares only the documented
+withheld-reason bits. With this correction, isolated RX1 `ERROR` and
+`TIMEOUT` injections both pass and close cleanly under a 40-second watchdog.
+The delayed injection (`TIMEOUT` after 20 completed transfers) did not reach
+the expected terminal transfer-failure path: it returned stream success with
+a timestamp-discontinuity event instead. That case needs a deterministic
+fault trigger before it can qualify callback teardown after partial progress.
+
+Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.

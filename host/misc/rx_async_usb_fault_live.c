@@ -17,6 +17,17 @@
 
 #define RX_META_MESSAGE_BYTES 8192u
 #define RX_X2_IQ_COMPLEX_PER_TIMESTAMP 2u
+#define RX_WITHHELD_REASON_MASK \
+    (BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED | \
+     BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH | \
+     BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY | \
+     BLADERF_RF_WITHHELD_SHORT_TRANSFER | \
+     BLADERF_RF_WITHHELD_USB_OVERFLOW | \
+     BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR | \
+     BLADERF_RF_WITHHELD_USB_TIMEOUT | \
+     BLADERF_RF_WITHHELD_DEVICE_LOST | \
+     BLADERF_RF_WITHHELD_SYNC_TIMEOUT | \
+     BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION)
 
 enum rx_fault_layout {
     RX_FAULT_LAYOUT_X2,
@@ -74,7 +85,7 @@ static bool consume_rf_events(struct fault_test *test, struct bladerf *dev)
     test->event_cursor = next;
     for (uint32_t i = 0; i < count; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
-            (events[i].flags & ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+            (events[i].flags & RX_WITHHELD_REASON_MASK) ==
                 test->expected_reason) {
             atomic_fetch_add(&test->withheld_events, 1);
             atomic_store(&test->fault_seen, true);
