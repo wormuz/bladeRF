@@ -80,6 +80,11 @@ struct sync_worker {
  */
 int sync_worker_init(struct bladerf_sync *s);
 
+/** Request stop and join without releasing the worker's state storage. */
+void sync_worker_request_stop_and_join(struct sync_worker *w,
+                                      MUTEX *lock,
+                                      COND *cond);
+
 /**
  * Shutdown and deinitialize
  *

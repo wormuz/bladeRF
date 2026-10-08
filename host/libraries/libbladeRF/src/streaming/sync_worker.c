@@ -597,10 +597,9 @@ int sync_worker_init(struct bladerf_sync *s)
         /* The thread exists even if it missed the startup deadline. Stop and
          * join it while its state locks and storage are still alive; freeing
          * s->worker here races the worker's initial set_state(). */
-        sync_worker_deinit(s->worker, &s->buf_mgmt.lock,
-                           &s->buf_mgmt.buf_ready);
-        s->worker = NULL;
-        return status;
+        sync_worker_request_stop_and_join(s->worker, &s->buf_mgmt.lock,
+                                          &s->buf_mgmt.buf_ready);
+        goto worker_init_out;
     }
 
 worker_init_out:
@@ -627,8 +626,8 @@ worker_init_out:
     return status;
 }
 
-void sync_worker_deinit(struct sync_worker *w,
-                        MUTEX *lock, COND *cond)
+void sync_worker_request_stop_and_join(struct sync_worker *w,
+                                      MUTEX *lock, COND *cond)
 {
     int status;
 
@@ -659,6 +658,17 @@ void sync_worker_deinit(struct sync_worker *w,
 
     THREAD_JOIN(w->thread, NULL);
     log_verbose("%s: Worker joined.\n", __FUNCTION__);
+}
+
+void sync_worker_deinit(struct sync_worker *w,
+                        MUTEX *lock, COND *cond)
+{
+    if (w == NULL) {
+        log_debug("%s called with NULL ptr\n", __FUNCTION__);
+        return;
+    }
+
+    sync_worker_request_stop_and_join(w, lock, cond);
 
     log_debug("sync_worker_deinit: async stream deinit begin worker=%p\n",
               (void *)w);

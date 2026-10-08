@@ -1,8 +1,26 @@
 #include <assert.h>
+#include <stdlib.h>
 
 #include "host_config.h"
 #include "streaming/async.h"
 #include "streaming/sync_worker.h"
+
+static void *startup_waiting_worker(void *arg)
+{
+    struct sync_worker *worker = arg;
+
+    MUTEX_LOCK(&worker->request_lock);
+    while ((worker->requests & SYNC_WORKER_STOP) == 0) {
+        COND_WAIT(&worker->requests_pending, &worker->request_lock);
+    }
+    MUTEX_UNLOCK(&worker->request_lock);
+
+    MUTEX_LOCK(&worker->state_lock);
+    worker->state = SYNC_WORKER_STATE_STOPPED;
+    COND_SIGNAL(&worker->state_changed);
+    MUTEX_UNLOCK(&worker->state_lock);
+    return NULL;
+}
 
 int main(void)
 {
@@ -24,6 +42,32 @@ int main(void)
 
     assert(MUTEX_DESTROY(&worker.request_lock) == 0);
     assert(MUTEX_DESTROY(&stream.lock) == 0);
+
+    /* Startup can time out before the worker reports IDLE. Its state must
+     * stay alive until STOP is observed and the created thread is joined. */
+    {
+        struct sync_worker *startup_worker =
+            calloc(1, sizeof(*startup_worker));
+        assert(startup_worker != NULL);
+        startup_worker->state = SYNC_WORKER_STATE_STARTUP;
+        assert(MUTEX_INIT(&startup_worker->state_lock) == 0);
+        assert(MUTEX_INIT(&startup_worker->request_lock) == 0);
+        assert(COND_INIT(&startup_worker->state_changed) == 0);
+        assert(COND_INIT(&startup_worker->requests_pending) == 0);
+        assert(THREAD_CREATE(&startup_worker->thread,
+                             startup_waiting_worker, startup_worker) ==
+               THREAD_SUCCESS);
+
+        /* Request stop immediately, including the race where the task has
+         * not yet executed its first set_state(IDLE). */
+        sync_worker_request_stop_and_join(startup_worker, NULL, NULL);
+        assert(startup_worker->state == SYNC_WORKER_STATE_STOPPED);
+        assert(COND_DESTROY(&startup_worker->requests_pending) == 0);
+        assert(COND_DESTROY(&startup_worker->state_changed) == 0);
+        assert(MUTEX_DESTROY(&startup_worker->request_lock) == 0);
+        assert(MUTEX_DESTROY(&startup_worker->state_lock) == 0);
+        free(startup_worker);
+    }
 
     /* Invalid transfers are recycled by async.c without passing through the
      * normal sample callback. Their ring sequence must still be retired so a

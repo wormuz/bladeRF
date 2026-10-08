@@ -116,4 +116,30 @@ shows cleanup completed in that run; it does not prove the startup-timeout
 path under deterministic scheduling or close the physical USB fault. Log:
 `/tmp/rx1-sync-worker-init-cleanup.log`.
 
+The stop/join logic used by both normal deinit and startup-timeout cleanup is
+now shared and directly tested with a thread that has not reported `IDLE`.
+That race test passed 100/100 repetitions, and epoch traversal still passes.
+This verifies the shared stop/signal/join sequence; it does not yet force the
+full ten-second `sync_worker_init()` wait to expire in an integration test.
+
+The corresponding RX2 five-transition run also terminated on USB
+timeouts/overrun but completed both channel disables and `bladerf_close()`;
+log: `/tmp/rx2-sync-worker-init-cleanup.log`. It additionally produced an
+FPGA cause snapshot `rfic_status=0x80000004`: bit 31 marks a valid FPGA RX
+fault-cause snapshot and bit 2 is `GPIF_TIMEOUT` (`fifo_writer.vhd`). The
+watchdog latches this when RX sample-FIFO writes had occurred in the epoch
+and then stopped for `2^22` RX clock cycles while the link remained active
+and the epoch was not intentionally fenced. This is not an AD9361 status.
+It narrows the failure to an RX datapath progress stall, but does not by
+itself distinguish GPIF/FX3 backpressure (for example, a full RX FIFO) from
+an upstream stop in sample writes. The field name `rfic_status` is reused by
+the event schema with the documented `BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID`
+marker; consumers must decode the marker before treating the value as RFIC
+register state.
+
+The board reported FPGA `16.1.0`, while source `fpga_version.h` carries ID
+`0x7778` and major/minor `0.16`. That version readback is insufficient to
+identify the exact bitstream build/hash, so the observed watchdog behavior
+cannot yet be attributed to a particular Quartus image.
+
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
