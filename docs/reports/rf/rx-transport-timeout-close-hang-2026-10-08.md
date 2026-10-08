@@ -209,4 +209,12 @@ handshake. qgate/qcheck now expect 745 total / 414 held-handshake bits and
 classify the complete inventory; direct qgate rerun fails only on the two
 timing entries. This expanded-context RBF has not been loaded.
 
+Seed 1 fit of the same expanded-context RTL on commit `8e20ef85` also
+completed synthesis/fitter/STA with all CDC and max-skew checks clean, but
+qgate rejected two setup entries: `pll_sclk` slack −0.058 ns at 85°C and
+−0.303 ns at 0°C (hold slack +0.213/+0.187 ns). Its RBF SHA-256 is
+`dda3aa538ce2b7a2cd932c257281085089a948ff2a38a196f71bff697d4530f6`; it
+was not loaded. Another fit seed or a timing-path correction is needed;
+qgate criteria remain unchanged.
+
 Raw follow-up output: `/tmp/rx-terminal-injection-after-done-reset.log`.
