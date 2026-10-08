@@ -136,3 +136,9 @@ known. Evidence includes `rx1-rearm-sequence-reanchor-debug-20x-2026-10-08.log`,
 `rx2-rearm-sequence-reanchor-no-debug-100x-2026-10-08.log`,
 `rx-x2-rearm-sequence-reanchor-no-debug-100x-2026-10-08.log`, and
 `rx-x2-rearm-sequence-reanchor-64x32-no-debug-100x-2026-10-08.log`.
+
+RX1 then completed the next priority gate: 1,000 cross-band close/rearm cycles
+with 250 ms closed pauses. It reported zero first-read faults, retries,
+recoveries, sync/stream overruns, or invalid event traces; the final RX disable
+and device close also completed. The 1,000-cycle RX2 and RX_X2 runs are the
+remaining channel/layout qualification. Trace: `rx1-rearm-sequence-reanchor-no-debug-1000x-2026-10-08.log`.
