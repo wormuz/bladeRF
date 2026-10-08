@@ -213,6 +213,13 @@ architecture arch of dwell_summary is
     signal window_done_pulse : std_logic := '0';
     signal window_done_total : unsigned(WIN_BITS-1 downto 0) := (others => '0');
 
+    -- Threshold comparison is pipelined independently from trigger history.
+    -- The threshold is stable for a dwell, and window boundaries are widely
+    -- separated, so this stage removes the threshold-to-trigger critical
+    -- path without changing which completed window contributes to history.
+    signal trigger_cmp_valid : std_logic := '0';
+    signal trigger_over      : std_logic := '0';
+
     -- Set when the host programmed a threshold no window sum can reach.
     -- Registered rather than compared inline: it changes only when the host
     -- writes, so it costs one OR-reduce off the critical path instead of a
@@ -456,6 +463,22 @@ begin
         end if;
     end process;
 
+    trigger_compare : process( clock, reset )
+    begin
+        if( reset = '1' ) then
+            trigger_cmp_valid <= '0';
+            trigger_over      <= '0';
+        elsif( rising_edge(clock) ) then
+            trigger_cmp_valid <= window_done_pulse;
+            if( threshold /= 0 and threshold_high = '0' and
+                window_done_total > threshold(WIN_BITS-1 downto 0) ) then
+                trigger_over <= '1';
+            else
+                trigger_over <= '0';
+            end if;
+        end if;
+    end process;
+
     win_extrema : process( clock, reset )
     begin
         if( reset = '1' ) then
@@ -639,11 +662,9 @@ begin
         end if;
     end process;
 
-    -- Stage 3: K-of-M trigger persistence, its own process. Reads
-    -- window_done_pulse/
-    -- window_done_total (registered one cycle behind the window-boundary
-    -- event in accumulate) instead of the window_done/win_total variables,
-    -- which are process-local and cannot be shared across processes.
+    -- Stage 3: K-of-M trigger persistence, its own process. Consumes the
+    -- registered trigger comparison, which is based on window_done_total
+    -- (itself registered one cycle behind the boundary in accumulate).
         trigger_stage : process( clock, reset )
             variable over        : std_logic;
             -- Computed once. Written out twice in one clocked process (the
@@ -676,7 +697,7 @@ begin
                     trig_latched    <= '0';
                     trig_window     <= (others => '0');
                     trig_time       <= (others => '0');
-                elsif( window_done_pulse = '1' ) then
+                elsif( trigger_cmp_valid = '1' ) then
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
                     -- what a sensible threshold would be.
@@ -686,12 +707,7 @@ begin
                     -- above the physical maximum has to mean "never
                     -- triggers" rather than silently truncating into a hit:
                     -- threshold_high catches exactly that.
-                    if( threshold /= 0 and threshold_high = '0' and
-                        window_done_total > threshold(WIN_BITS-1 downto 0) ) then
-                        over := '1';
-                    else
-                        over := '0';
-                    end if;
+                    over := trigger_over;
 
                     next_history := over_history(TRIGGER_OF-2 downto 0) & over;
                     over_history <= next_history;
@@ -706,7 +722,7 @@ begin
                         -- instant. Latched once, since trig_latched gates
                         -- this branch.
                         --
-                        -- Less PIPE_DEPTH: timestamp is free-running and
+                        -- Subtract PIPE_DEPTH: timestamp is free-running and
                         -- unpipelined, while the energy that caused this
                         -- crossing left the ADC PIPE_DEPTH clocks ago.
                         -- Without the correction the mark names the
@@ -715,14 +731,14 @@ begin
                         -- receivers are correlated on. The equivalence
                         -- bench caught it as first_timestamp 44 vs 45.
                         --
-                        -- The correction is PIPE_DEPTH-1, not PIPE_DEPTH:
+                        -- The correction is PIPE_DEPTH, not PIPE_DEPTH-1:
                         -- this process reads window_done_total, which is
                         -- already registered one clock behind the window
-                        -- boundary, so one of the two stages is spent
-                        -- before the value arrives here. Subtracting the
-                        -- full depth overshoots -- measured, the bench
-                        -- then reported 44 vs 43.
-                        trig_time    <= timestamp - (PIPE_DEPTH - 1);
+                        -- boundary, and trigger_compare adds another cycle.
+                        -- The extra pipeline stage therefore requires one
+                        -- additional timestamp correction to preserve the
+                        -- exact sample coordinate.
+                        trig_time    <= timestamp - PIPE_DEPTH;
                     end if;
                 end if;
             end if;
