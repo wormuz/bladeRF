@@ -185,9 +185,12 @@ int main(int argc, char **argv) {
     unsigned stream_buffer_samples = 8192;
     unsigned stream_num_buffers = 16;
     unsigned stream_num_transfers = 8;
+    unsigned capture_samples = 8192;
+    uint32_t sample_rate = 4000000;
     bool count_set = false;
     bool cross_band = false;
     bool paired = false;
+    bool close_after_capture = false;
     unsigned close_pause_ms = 0;
     const char *mode = "RX1";
     bladerf_channel transition_channel = BLADERF_CHANNEL_RX(0);
@@ -218,9 +221,12 @@ int main(int argc, char **argv) {
                 return 2;
             }
             close_pause_ms = (unsigned)pause;
+            close_after_capture = true;
+        } else if (strcmp(argv[arg], "--close-after-capture") == 0) {
+            close_after_capture = true;
         } else {
             fprintf(stderr, "usage: %s [count] [RX1|RX2|BOTH] [--cross-band] "
-                    "[--close-pause-ms N]\n",
+                    "[--close-after-capture] [--close-pause-ms N]\n",
                     argv[0]);
             return 2;
         }
@@ -251,6 +257,28 @@ int main(int argc, char **argv) {
             stream_num_transfers = 24;
         }
     }
+    const char *capture_env = getenv("BLADERF_QUAL_CAPTURE_SAMPLES");
+    if (capture_env != NULL && capture_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(capture_env, &end, 10);
+        if (end == capture_env || *end != '\0' || parsed == 0 ||
+            parsed > UINT32_MAX / 2) {
+            fprintf(stderr, "invalid BLADERF_QUAL_CAPTURE_SAMPLES\n");
+            return 2;
+        }
+        capture_samples = (unsigned)parsed;
+    }
+    const char *rate_env = getenv("BLADERF_QUAL_SAMPLE_RATE");
+    if (rate_env != NULL && rate_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(rate_env, &end, 10);
+        if (end == rate_env || *end != '\0' || parsed < 1000000 ||
+            parsed > 61440000) {
+            fprintf(stderr, "invalid BLADERF_QUAL_SAMPLE_RATE\n");
+            return 2;
+        }
+        sample_rate = (uint32_t)parsed;
+    }
     const char *num_buffers_env = getenv("BLADERF_QUAL_STREAM_NUM_BUFFERS");
     if (num_buffers_env != NULL && num_buffers_env[0] != '\0') {
         char *end = NULL;
@@ -276,7 +304,8 @@ int main(int argc, char **argv) {
         stream_num_transfers = (unsigned)parsed;
     }
     struct bladerf *dev = NULL;
-    int16_t *samples = calloc(65536 * 2, sizeof(*samples));
+    size_t sample_words = (size_t)capture_samples * (paired ? 4 : 2);
+    int16_t *samples = calloc(sample_words, sizeof(*samples));
     uint64_t *latencies_ns = calloc(n, sizeof(*latencies_ns));
     unsigned completed = 0;
     if (!samples || !latencies_ns) return 2;
@@ -285,8 +314,16 @@ int main(int argc, char **argv) {
     bladerf_log_set_verbosity(getenv("BLADERF_QUAL_DEBUG") != NULL
         ? BLADERF_LOG_LEVEL_DEBUG : BLADERF_LOG_LEVEL_WARNING);
 #define CHECK(x) do { st=(x); if(st) { fprintf(stderr,"%s: %s\n",#x,bladerf_strerror(st)); goto fail; } } while(0)
-    CHECK(bladerf_set_sample_rate(dev, transition_channel, 4000000, NULL));
-    CHECK(bladerf_set_bandwidth(dev, transition_channel, 5000000, NULL));
+    CHECK(bladerf_set_sample_rate(dev, transition_channel, sample_rate, NULL));
+    CHECK(bladerf_set_bandwidth(dev, transition_channel,
+                                sample_rate > 20000000 ? 20000000 : 5000000,
+                                NULL));
+    if (paired) {
+        CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(1), sample_rate, NULL));
+        CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(1),
+                                    sample_rate > 20000000 ? 20000000 : 5000000,
+                                    NULL));
+    }
     CHECK(bladerf_set_gain(dev, transition_channel, 30));
     CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
                               stream_num_buffers, stream_buffer_samples,
@@ -313,7 +350,10 @@ int main(int argc, char **argv) {
             ((i & 1) ? 1835000000ULL : 1835400000ULL);
         struct bladerf_rx_transition_request req = {
             .target_frequency_hz = freq,
-            .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX | BLADERF_RF_REQUIRE_EPOCH_VALID,
+            .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                BLADERF_RF_REQUIRE_ENSM_RX |
+                BLADERF_RF_REQUIRE_EPOCH_VALID |
+                (paired ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA : 0),
             .timeout_ms = 2000,
             .require_rx_data_valid = true,
             .epoch_settle_samples = 0,
@@ -344,25 +384,34 @@ int main(int argc, char **argv) {
         }
         if (!st) {
             int competing_rate = bladerf_set_sample_rate(
-                dev, transition_channel, 4000000, NULL);
+                dev, transition_channel, sample_rate, NULL);
             if (competing_rate != BLADERF_ERR_WOULD_BLOCK) {
                 fprintf(stderr, "CONCURRENT_SAMPLE_RATE txn=%u status=%s\n",
                         txn, bladerf_strerror(competing_rate));
                 st = BLADERF_ERR_UNEXPECTED;
             }
         }
-        if (!st) st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
+        if (!st) {
+            st = bladerf_rx_transition_wait(dev, txn, &event, 2000);
+            if (st != 0) {
+                fprintf(stderr, "TRANSITION_WAIT_FAILED i=%u txn=%u status=%s\n",
+                        i, txn, bladerf_strerror(st));
+            }
+        }
         latencies_ns[i] = monotonic_ns() - start_ns;
         completed = i + 1;
         bool valid = false;
+        uint64_t capture_started_ns = monotonic_ns();
         if (!st) {
             for (unsigned attempt = 0; attempt < 4; ++attempt) {
                 meta = (struct bladerf_metadata){0};
                 meta.flags = BLADERF_META_FLAG_RX_NOW;
-                st = bladerf_sync_rx(dev, samples, 8192, &meta, 2000);
+                st = bladerf_sync_rx(dev, samples,
+                                     capture_samples * (paired ? 2 : 1),
+                                     &meta, 5000);
                 valid = !st && meta.rx_epoch_id_valid &&
                         meta.rx_epoch_id == event.epoch_id &&
-                        meta.actual_count == 8192 &&
+                        meta.actual_count == capture_samples * (paired ? 2 : 1) &&
                         !(meta.status & BLADERF_META_STATUS_OVERRUN) &&
                         meta.timestamp >= event.fpga_timestamp &&
                         (!last_ts || meta.timestamp > last_ts);
@@ -388,7 +437,28 @@ int main(int argc, char **argv) {
             fprintf(stderr,"UNRECOVERED i=%u status=%s\n", i, bladerf_strerror(st));
             if (failures >= 10) break;
         }
+        if (getenv("BLADERF_QUAL_CAPTURE_SAMPLES") != NULL && i < 16) {
+            fprintf(stderr, "CAPTURE_TIMING i=%u samples_per_channel=%u "
+                    "sample_rate=%u duration_ms=%.3f status=%s\n", i,
+                    capture_samples, sample_rate,
+                    (monotonic_ns() - capture_started_ns) / 1e6,
+                    bladerf_strerror(st));
+        }
         if (valid) {
+            bool capture_closed = false;
+            if (getenv("BLADERF_QUAL_CLOSE_BEFORE_TRACE") != NULL) {
+                st = bladerf_rx_capture_close(dev, transition_channel);
+                if (st != 0) {
+                    ++failures;
+                    fprintf(stderr, "CAPTURE_CLOSE_FAILED i=%u status=%s\n",
+                            i, bladerf_strerror(st));
+                    valid = false;
+                } else {
+                    capture_closed = true;
+                    fprintf(stderr, "CAPTURE_CLOSED_BEFORE_TRACE i=%u\n", i);
+                }
+            }
+            if (valid) {
             st = validate_event_trace(dev, txn, &event,
                                       (i + 1) % 100 == 0,
                                       transition_channel);
@@ -397,8 +467,21 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "TRACE_INVALID i=%u status=%s\n", i,
                         bladerf_strerror(st));
             }
+            }
+            if (capture_closed) {
+                fprintf(stderr, "CAPTURE_CLOSED i=%u epoch=%u pause_ms=%u\n",
+                        i, event.epoch_id, close_pause_ms);
+                if (close_pause_ms != 0) {
+                    struct timespec pause = {
+                        .tv_sec = close_pause_ms / 1000,
+                        .tv_nsec = (long)(close_pause_ms % 1000) * 1000000L,
+                    };
+                    while (nanosleep(&pause, &pause) != 0 && errno == EINTR) {}
+                }
+            }
         }
-        if (valid && close_pause_ms != 0) {
+        if (valid && close_after_capture &&
+            getenv("BLADERF_QUAL_CLOSE_BEFORE_TRACE") == NULL) {
             st = bladerf_rx_capture_close(dev, transition_channel);
             if (st != 0) {
                 ++failures;

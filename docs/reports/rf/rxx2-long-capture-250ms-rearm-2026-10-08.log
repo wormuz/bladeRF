@@ -1,0 +1,36 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/helpers/version.c:103] FPGA version (v16.1.0) is newer than entries in libbladeRF's compatibility table. Please update libbladeRF if problems arise.
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3669] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=3456000 sample_rate=23040000 duration_ms=150.099 status=Success
+TRACE_TERMINAL txn=1 status=Success complete=1 count=12
+TRACE_EVENT i=0 type=0 state=1 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=1 type=8 state=1 epoch=5 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=2 type=0 state=2 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=3 type=14 state=2 epoch=0 flags=0x10000018 error=0 ts=0
+TRACE_EVENT i=4 type=1 state=2 epoch=0 flags=0x10000018 error=0 ts=0
+TRACE_EVENT i=5 type=11 state=3 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=6 type=12 state=3 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=7 type=2 state=4 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=8 type=3 state=6 epoch=0 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=9 type=25 state=6 epoch=5 flags=0x10000000 error=0 ts=0
+TRACE_EVENT i=10 type=9 state=8 epoch=5 flags=0x90000000 error=0 ts=595038
+TRACE_EVENT i=11 type=13 state=8 epoch=5 flags=0xc0000000 error=0 ts=601582
+TRACE_INVALID i=0 status=An unexpected error occurred
+CAPTURE_CLOSED i=0 epoch=5 pause_ms=250
+READ_FAULT i=1 attempt=4 status=Success epoch=6/6 valid=1 count=1013824 meta_status=0x30001 ts=12489486 boundary=10347374
+UNRECOVERED i=1 status=Success
+CAPTURE_TIMING i=1 samples_per_channel=3456000 sample_rate=23040000 duration_ms=115.780 status=Success
+RUNTIME_OVERRUN n=1 epoch=6 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+RUNTIME_OVERRUN n=2 epoch=6 flags=0x10000001 rfic_status=0x0 error=0 timestamp=0
+RUNTIME_OVERRUN n=3 epoch=6 flags=0x10000045 rfic_status=0x0 error=0 timestamp=0
+RUNTIME_OVERRUN n=4 epoch=6 flags=0x10000001 rfic_status=0x0 error=0 timestamp=0
+FINAL_EVENT_HISTORY_OK first=1 last=2
+QUALIFICATION_FAILED runtime_stream_overruns=4
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=2 unrecovered=2 first_read_faults=1 recovered=0 retry_would_block=0 retry_overruns=4 stream_overrun_events=4 data_withheld_events=7 transition_ms_p50=22.023_p95=22.023_p99=22.023_max=22.451
