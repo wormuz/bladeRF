@@ -2390,7 +2390,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         admission.event.rfic_status = epoch_status_word;
         admission.event.fpga_state = BLADERF_RF_STATE_RX_DATA_VALID;
         admission.event.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
-        admission.event.flags = BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        admission.event.flags =
+            bladerf2_rx_epoch_admission_event_flags(
+                board_data->rf_transition_current_channel,
+                board_data->rf_transition_current_channel_valid);
         status = sync_rx_epoch_activate_with_admission_before_deadline(
             &board_data->sync[BLADERF_RX], deadline_ns,
             _prepare_async_rx_epoch_admission,

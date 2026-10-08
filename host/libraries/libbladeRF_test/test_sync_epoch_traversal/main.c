@@ -97,6 +97,21 @@ static bool allow_sync_channel_selection = true;
 static uint32_t sync_admission_withheld_reason;
 static bool sync_admission_withheld_once;
 
+static void test_rx_epoch_admission_event_preserves_channel(void)
+{
+    const uint32_t timestamp = BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+
+    assert(bladerf2_rx_epoch_admission_event_flags(
+               BLADERF_CHANNEL_RX(0), true) ==
+           (timestamp | BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID));
+    assert(bladerf2_rx_epoch_admission_event_flags(
+               BLADERF_CHANNEL_RX(1), true) ==
+           (timestamp | BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2));
+    assert(bladerf2_rx_epoch_admission_event_flags(
+               BLADERF_CHANNEL_RX(1), false) == timestamp);
+}
+
 static void test_rx_channel_mask_runtime_policy(void)
 {
     assert(bladerf2_rx_channel_mask_observation(
@@ -1733,6 +1748,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_rf_transition_rfdc_calibration_requirement();
+    test_rx_epoch_admission_event_preserves_channel();
     test_rx_channel_mask_runtime_policy();
     test_rx_fault_causes_read_error_provenance();
     test_sync_channel_selection_fail_closed();

@@ -25,6 +25,16 @@ static inline uint32_t bladerf2_rx_transition_channel_event_flags(
                 ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
 }
 
+/* The durable epoch certificate is also the snapshot used when the first
+ * host META packet is admitted. Preserve channel identity in that snapshot,
+ * not only in the separately published RX_EPOCH_VALID notification. */
+static inline uint32_t bladerf2_rx_epoch_admission_event_flags(
+    bladerf_channel channel, bool channel_valid)
+{
+    return BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+           bladerf2_rx_transition_channel_event_flags(channel, channel_valid);
+}
+
 static inline struct bladerf_rf_event
 bladerf2_rx_invalidation_channel_event(
     const struct bladerf_rf_event *invalidation, uint32_t channel_flags)
