@@ -272,6 +272,18 @@ static inline void sync_worker_mark_rx_slot_in_flight(
     }
 }
 
+/* Retire a completed RX buffer dropped by the ring-full path, then assign the
+ * same USB buffer to a new sequence. The old sequence's dropped marker must
+ * not survive that reissue: the slot now owns a live in-flight transfer. The
+ * caller holds buf_mgmt.lock. */
+void sync_worker_rx_ring_full_recycle(struct bladerf_sync *s,
+                                      unsigned int buffer_idx);
+
+/* Select an EMPTY producer slot, repairing a stale producer cursor when a
+ * different slot is free. Returns BUFFER_MGMT_INVALID_INDEX only when the
+ * RX ring has no EMPTY slots. The caller holds buf_mgmt.lock. */
+unsigned int sync_worker_rx_select_producer_slot(struct bladerf_sync *s);
+
 /* Epoch-fenced packets can visit every ring slot while the application is
  * paused. If every dropped marker is skipped, cons_i wraps to its old value,
  * which may now refer to a much later in-flight sequence. Re-anchor the

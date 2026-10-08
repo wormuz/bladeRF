@@ -177,6 +177,65 @@ static void retire_dropped_sequence(struct bladerf_sync *s, uint32_t seq)
     }
 }
 
+void sync_worker_rx_ring_full_recycle(struct bladerf_sync *s,
+                                      unsigned int buffer_idx)
+{
+    struct buffer_mgmt *b;
+
+    if (s == NULL || !s->initialized) {
+        return;
+    }
+
+    b = &s->buf_mgmt;
+    if (buffer_idx >= b->num_buffers) {
+        return;
+    }
+
+    if (b->buffer_seq != NULL) {
+        retire_dropped_sequence(s, b->buffer_seq[buffer_idx]);
+    }
+
+    /* This callback returns the same completed USB buffer for reuse. Unlike
+     * an epoch-rejected EMPTY slot, it is not left as a dropped ring entry:
+     * the slot immediately represents the new in-flight sequence. */
+    sync_worker_mark_rx_slot_in_flight(b, buffer_idx, b->next_seq++);
+}
+
+unsigned int sync_worker_rx_select_producer_slot(struct bladerf_sync *s)
+{
+    struct buffer_mgmt *b;
+    unsigned int idx;
+
+    if (s == NULL || !s->initialized) {
+        return BUFFER_MGMT_INVALID_INDEX;
+    }
+
+    b = &s->buf_mgmt;
+    if (b->status == NULL || b->num_buffers == 0 ||
+        b->prod_i >= b->num_buffers) {
+        return BUFFER_MGMT_INVALID_INDEX;
+    }
+
+    idx = b->prod_i;
+    for (unsigned int offset = 0; offset < b->num_buffers; ++offset) {
+        idx = (b->prod_i + offset) % b->num_buffers;
+        if (b->status[idx] == SYNC_BUFFER_EMPTY) {
+            if (idx != b->prod_i) {
+                log_warning("RX sync producer cursor repair: buffers=%u "
+                            "old_prod=%u old_state=%u empty_slot=%u "
+                            "cons=%u expected_seq=%u next_seq=%u\n",
+                            b->num_buffers, b->prod_i,
+                            (unsigned)b->status[b->prod_i], idx, b->cons_i,
+                            b->expected_seq, b->next_seq);
+                b->prod_i = idx;
+            }
+            return idx;
+        }
+    }
+
+    return BUFFER_MGMT_INVALID_INDEX;
+}
+
 /* Called with buf_mgmt.lock held from RX worker callback paths. Publish the
  * first overrun of an interval immediately through the board's callback-safe
  * event writer; sync_rx later carries the status bit without duplicating it. */
@@ -280,8 +339,8 @@ void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer)
      * to the same next slot that rx_callback() would have selected, so
      * producer indices and USB ownership cannot drift during an epoch fence. */
     b->status[idx] = SYNC_BUFFER_EMPTY;
-    if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
-        next_idx = b->prod_i;
+    next_idx = sync_worker_rx_select_producer_slot(s);
+    if (next_idx != BUFFER_MGMT_INVALID_INDEX) {
         sync_worker_mark_rx_slot_in_flight(
             b, next_idx, b->next_seq++);
         b->prod_i = (next_idx + 1) % b->num_buffers;
@@ -365,7 +424,8 @@ static void *rx_callback(struct bladerf *dev,
         b->buffer_dropped[samples_idx] = false;
     }
 
-    if (b->status[b->prod_i] == SYNC_BUFFER_EMPTY) {
+    next_idx = sync_worker_rx_select_producer_slot(s);
+    if (next_idx != BUFFER_MGMT_INVALID_INDEX) {
 
             bool release_now = true;
             uint32_t seq     = 0;
@@ -394,7 +454,6 @@ static void *rx_callback(struct bladerf *dev,
             }
 
             /* Update the state of the buffer being submitted next */
-            next_idx = b->prod_i;
             sync_worker_mark_rx_slot_in_flight(
                 b, next_idx, b->next_seq++);
             next_buf = b->buffers[next_idx];
@@ -455,12 +514,10 @@ static void *rx_callback(struct bladerf *dev,
 
                 /* This completed transfer is withheld. Retire its sequence
                  * and recycle the same transport buffer; stale FULL slots
-                 * are removed by the RX_NOW consumer before admission resumes. */
-                retire_dropped_sequence(s, b->buffer_seq[samples_idx]);
-                if (b->buffer_dropped != NULL) {
-                    b->buffer_dropped[samples_idx] = true;
-                }
-                b->buffer_seq[samples_idx] = b->next_seq++;
+                 * are removed by the RX_NOW consumer before admission resumes.
+                 * The reissued slot must not retain a dropped marker from its
+                 * just-retired sequence. */
+                sync_worker_rx_ring_full_recycle(s, samples_idx);
                 note_rx_overrun(s,
                     BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
                     BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL);

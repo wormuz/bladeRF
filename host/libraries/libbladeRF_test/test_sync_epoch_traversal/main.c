@@ -1183,6 +1183,82 @@ static void test_rx_slot_reissue_clears_previous_dropped_marker(void)
     assert(!dropped[0]);
 }
 
+static void test_rx_ring_full_reissue_clears_dropped_marker(void)
+{
+    struct fixture f;
+    uint32_t sequences[1] = {41};
+    bool dropped[1] = {true};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.num_buffers = 1;
+    f.sync.buf_mgmt.buffer_seq = sequences;
+    f.sync.buf_mgmt.buffer_dropped = dropped;
+    f.sync.buf_mgmt.expected_seq = 41;
+    f.sync.buf_mgmt.next_seq = 42;
+    f.states[0] = SYNC_BUFFER_IN_FLIGHT;
+
+    /* Ring-full drops sequence 41, then reuses this same USB slot as 42.
+     * The prior sequence's marker must not cause sync_rx to skip live 42. */
+    sync_worker_rx_ring_full_recycle(&f.sync, 0);
+
+    assert(f.sync.buf_mgmt.expected_seq == 42);
+    assert(f.sync.buf_mgmt.next_seq == 43);
+    assert(sequences[0] == 42);
+    assert(f.states[0] == SYNC_BUFFER_IN_FLIGHT);
+    assert(!dropped[0]);
+
+    fixture_destroy(&f);
+}
+
+static void test_rx_producer_repairs_cursor_when_other_slots_are_empty(void)
+{
+    struct fixture f;
+    sync_buffer_status states[96] = {0};
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.num_buffers = 96;
+    f.sync.buf_mgmt.status = states;
+    f.sync.buf_mgmt.prod_i = 42;
+    f.sync.buf_mgmt.cons_i = 10;
+    f.sync.buf_mgmt.expected_seq = 157754;
+    f.sync.buf_mgmt.next_seq = 157786;
+
+    /* Reproduce the callback snapshot: one stale FULL producer slot, 32
+     * transfers in flight, and 63 free slots. This is cursor drift, not a
+     * ring-capacity overrun; producer selection must recover a free slot. */
+    states[42] = SYNC_BUFFER_FULL;
+    for (unsigned int i = 10; i < 42; ++i) {
+        states[i] = SYNC_BUFFER_IN_FLIGHT;
+    }
+
+    assert(sync_worker_rx_select_producer_slot(&f.sync) == 43);
+    assert(f.sync.buf_mgmt.prod_i == 43);
+    assert(states[42] == SYNC_BUFFER_FULL);
+    assert(states[43] == SYNC_BUFFER_EMPTY);
+
+    fixture_destroy(&f);
+}
+
+static void test_rx_producer_reports_full_only_when_no_slot_is_empty(void)
+{
+    struct fixture f;
+    sync_buffer_status states[4] = {
+        SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_FULL,
+        SYNC_BUFFER_PARTIAL, SYNC_BUFFER_IN_FLIGHT,
+    };
+
+    fixture_init(&f);
+    f.sync.buf_mgmt.num_buffers = 4;
+    f.sync.buf_mgmt.status = states;
+    f.sync.buf_mgmt.prod_i = 1;
+
+    assert(sync_worker_rx_select_producer_slot(&f.sync) ==
+           BUFFER_MGMT_INVALID_INDEX);
+    assert(f.sync.buf_mgmt.prod_i == 1);
+
+    fixture_destroy(&f);
+}
+
 static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
 {
     struct fixture f;
@@ -1772,6 +1848,9 @@ int main(void)
     test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun();
     test_rejected_rx_marker_stays_on_empty_old_sequence_slot();
     test_rx_slot_reissue_clears_previous_dropped_marker();
+    test_rx_ring_full_reissue_clears_dropped_marker();
+    test_rx_producer_repairs_cursor_when_other_slots_are_empty();
+    test_rx_producer_reports_full_only_when_no_slot_is_empty();
     test_rx_consumer_reanchors_after_partial_rejected_ring_lap();
     test_rx_epoch_discard_rebases_to_oldest_inflight_sequence();
     test_meta_withheld_event_precedes_sync_read_timeout();
