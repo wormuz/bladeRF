@@ -2,9 +2,9 @@
 
 ## Change
 
-The no-OS AD9361 AXI adapters use raw `IORD_32DIRECT`/`IOWR_32DIRECT` operations without a software timeout. If `if_l_clk` is absent, a NIOS request entering that aperture can wait indefinitely. The NIOS `control` PIO is clocked from the independent FPGA system clock and had an unused GPI[27]. The hosted and sweep FPGA projects now include `if_clock_watchdog`, which monitors `adi_rx_clock` in the `sys_clock` domain, requires eight divided-clock transitions before reporting alive, and withdraws alive after 100,000 system-clock cycles without an edge (1 ms at the current system-clock rate).
+The ADI `axi_ad9361` control interface uses `s_axi_clock=system_clock`; its `up_axi` adapter has a hardware response timeout. A missing internal `up_rack` returns `0xDEADDEAD` for reads after 15 count cycles, while a timed-out write is completed with an AXI OKAY response and has no explicit timeout indication. Therefore the earlier claim that absent `if_l_clk` leaves the NIOS Avalon access blocked forever was incorrect. The independent `if_clock_watchdog` still verifies the sample-interface clock, but it does not bound the AXI transaction or prove the NIOS no-response cause. The NIOS `control` PIO is clocked from the independent FPGA system clock and had an unused GPI[27]. Hosted and sweep FPGA projects include the monitor, which requires eight divided-clock transitions before reporting alive and withdraws alive after 100,000 system-clock cycles without an edge (1 ms at the current system-clock rate).
 
-After enabling the RFIC and before `ad9361_init()` accesses the AXI core, `_rfic_initialize()` checks GPI[27] for at most 200 × 100 µs. Missing clock returns an initialization failure with stage `IF_CLOCK_TIMEOUT`; host diagnostics map that stage. This guard checks the precondition before entering the unbounded adapter. It does not protect a transaction if the clock stops after AXI access starts, and does not prove the cause of the preserved NIOS mode-switch hang.
+After enabling the RFIC and before `ad9361_init()` initializes the datapath, `_rfic_initialize()` checks GPI[27] for at most 200 × 100 µs. Missing clock returns an initialization failure with stage `IF_CLOCK_TIMEOUT`; host diagnostics map that stage. This is a sample-interface readiness preflight only. The AXI read sentinel and write-timeout reporting are not propagated through the NIOS/no-OS path yet, and this change does not explain the preserved mode-switch hang.
 
 ## Verification
 
@@ -26,4 +26,4 @@ The qgate input was reconstructed from the completed fitter report plus its revi
 
 ## Qualification limits
 
-No image was loaded and no USB reset, power cycle, or RF test was performed. The xA4 remains in its intentionally preserved NIOS nonresponse state. Host/NIOS hard-freeze diagnosis and hardware qualification remain open. The hosted and sweep RBFs are build artifacts, not release candidates.
+No image was loaded and no USB reset, power cycle, or RF test was performed. The xA4 remains in its intentionally preserved NIOS nonresponse state. Host/NIOS no-response diagnosis and hardware qualification remain open. The hosted and sweep RBFs are build artifacts, not release candidates.

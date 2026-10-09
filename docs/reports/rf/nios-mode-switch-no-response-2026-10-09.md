@@ -11,7 +11,7 @@ Before attempting recovery, the existing one-shot NIOS boot probe sent exactly o
 
 ## Source-path assessment
 
-The failed mode switch invokes the NIOS `BLADERF_RFIC_COMMAND_INIT` path. In `devices_rfic_cmds.c`, `_rfic_initialize()` clears RF control, releases reset, enables the AD9361 interface, then runs the full `ad9361_init()` and per-direction setup before returning the command response. That path accesses the AD9361 AXI core clocked by `if_l_clk`. The source itself documents that an Avalon access can stall NIOS indefinitely if that clock is absent. This is a plausible mechanism for the observed no-response, not a proven root cause: this run captured neither `init_stage` nor the NIOS program counter, and the failure may occur elsewhere in initialization or packet servicing.
+The failed mode switch invokes the NIOS `BLADERF_RFIC_COMMAND_INIT` path. In `devices_rfic_cmds.c`, `_rfic_initialize()` clears RF control, releases reset, enables the AD9361 interface, then runs `ad9361_init()` and per-direction setup before returning the command response. A subsequent source audit corrected the initial waitrequest hypothesis: `axi_ad9361.s_axi_clock` is `system_clock`, and ADI `up_axi.v` synthesizes a response after 15 count cycles if the internal register block does not acknowledge. Reads return `0xDEADDEAD`; writes complete with AXI OKAY and expose no timeout flag. The API path does not currently propagate these outcomes as a reliable NIOS command error. The observed no-response could still arise from later unbounded waits or packet servicing. This run captured neither `init_stage` nor the NIOS program counter, so root cause remains unproven.
 
 ## Handling
 

@@ -42,8 +42,9 @@
 #define BLADERF_AD9361_RFDC_CAL_MASK (1 << 1)
 
 /* The control PIO is clocked by sys_clock. This bit is driven by a separate
- * FPGA watchdog observing adi_rx_clock, so checking it cannot enter the
- * AD9361 AXI aperture whose waitrequest may stall NIOS. */
+ * FPGA watchdog observing adi_rx_clock, so the preflight is independent of
+ * the AD9361 register path. It verifies that the RF data interface clock is
+ * present before initializing the datapath; it is not an Avalon timeout. */
 #define BLADERF_AD9361_IF_CLOCK_WAIT_ATTEMPTS 200
 #define BLADERF_AD9361_IF_CLOCK_POLL_US       100
 
@@ -211,15 +212,12 @@ static bool _rfic_initialize(struct rfic_state *state)
 
         /* No hard reset here, deliberately. The host path does not do one
          * either (_rfic_host_initialize clears the RFFE control bits and goes
-         * straight into ad9361_init), and on this side the reset is actively
-         * harmful: ad9361_init reaches the FPGA's AXI ad9361 core through
-         * IOWR_32DIRECT on the Avalon bus (axi_adc_init -> no_os_axi_io_write
-         * -> adi_axi_write), and that core's logic runs on if_l_clk, the
-         * clock the AD9361 itself supplies. Reset the chip and that clock
-         * stops; the Avalon access then has nobody to answer it, waitrequest
-         * stays asserted, and the Nios freezes on the instruction. No timeout
-         * in C can catch that - the stall is below the code - which is why a
-         * wedged board only came back after reloading the bitstream.
+         * straight into ad9361_init). Keep the RFIC out of hardware reset
+         * while initializing its FPGA datapath. The AXI-Lite adapter has a
+         * short hardware response timeout, so a missing internal response
+         * returns its 0xDEADDEAD read sentinel rather than holding the NIOS
+         * Avalon master forever. How that sentinel and write timeouts affect
+         * this initialization path still needs explicit error propagation.
          *
          * Release the pin instead: after a cold power-up the part may still
          * be held in reset, and it has to be running before ad9361_init
@@ -228,17 +226,17 @@ static bool _rfic_initialize(struct rfic_state *state)
         usleep(1000);
         state->init_stage = BLADERF_RFIC_INIT_STAGE_RESET_OUT;
 
-        /* ad9361_init() ends up in axi_adc_init(), which writes the FPGA's
-         * AXI ad9361 core over the Avalon bus. That core runs on if_l_clk,
-         * supplied by the AD9361 itself, and the chip only drives its
-         * interface once ENABLE is asserted - which _clear_rffe_ctrl() above
-         * has just dropped. Write to the core while that clock is silent and
-         * the bus holds waitrequest forever: the Nios stops mid-instruction,
-         * below anything a C timeout can see, and the board answers nothing
-         * until the bitstream is reloaded.
+        /* ad9361_init() initializes the FPGA's AD9361 datapath. Keep the
+         * AD9361 interface clock running while that setup occurs. The
+         * independent clock preflight below is a fail-fast readiness check;
+         * the ADI AXI-Lite adapter itself has a finite response timeout and
+         * returns 0xDEADDEAD on a timed-out read. A NIOS no-response event is
+         * therefore not yet explained by an unbounded Avalon waitrequest.
          *
-         * Measured by ablation: an AXI_ADC_NOT_PRESENT build turned the same
-         * wedge into a plain error return with the board still responding.
+         * Earlier AXI_ADC_NOT_PRESENT ablation changed the observed failure
+         * into a returned initialization error, but did not isolate whether
+         * the cause was the clock, the timeout sentinel, or a later driver
+         * wait. Preserve this as an unresolved diagnostic, not a root cause.
          *
          * Nothing else in this firmware ever sets ENABLE (the host does it
          * from enable_module), so raise it here and give the interface time
@@ -252,8 +250,9 @@ static bool _rfic_initialize(struct rfic_state *state)
         state->init_stage = BLADERF_RFIC_INIT_STAGE_ENABLE_SET;
 
         /* Require the independently monitored AD9361 interface clock before
-         * entering no-OS AXI register access. Those raw Avalon operations
-         * have no software timeout and can otherwise wedge this Nios. */
+         * entering no-OS datapath initialization. This avoids continuing with
+         * an unavailable sample interface; AXI response timeout/error
+         * handling is a separate concern. */
         state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_WAIT;
         if (!_wait_for_ad9361_if_clock()) {
             state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_TIMEOUT;
