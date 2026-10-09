@@ -5,7 +5,7 @@ Date: 2026-10-09
 ## Bundle
 
 Local artifact: `release-staging/adr0207-event-rx-2026-10-09.tar.gz`  
-SHA-256: `79666c5cbd07e441978550a8e5eb519353061a6ab40e88f78c067e8ed711424d`
+SHA-256: `98f2dda109acc9d9640ea0d14aa6d9ae823df1214451a9b1cf8afb150875fd61`
 
 The tarball contains a manifest, checksums, the matched libbladeRF shared
 library, the exact-source FX3 firmware build, the hardware-qualified A4 RBF,
@@ -14,8 +14,8 @@ bundle's `SHA256SUMS`.
 
 ## Selection and live identity
 
-- libbladeRF `2.6.1-git-58401a8a`, SHA-256
-  `ae3cd253ab2532f3ba875dc7481a69a1bb161387a67ac4799fc5ef92fc34b7f8`.
+- libbladeRF `2.6.1-git-3c6466af`, SHA-256
+  `e61df9d53fbec1f988dac5255ff9476f20a274c4f484bebb175c573d09f6825a`.
 - FX3 firmware source commit `fc02ffd8`, rebuilt image reports
   `2.6.1-git-fc02ffd8`, SHA-256
   `d1a979d164f81222a8463526e589e82f40cfd9d47df466cb1ef5488d6608fc3c`.
@@ -28,15 +28,31 @@ bundle's `SHA256SUMS`.
   `55695aaffa1205ac6dde508a48a94b205e57ec8772a2bbea069b7704d37e90ac`.
 
 The xA4 reports firmware `2.6.1-git-fc02ffd8` and FPGA `0.16.1`. The installed
-library reports `2.6.1-git-58401a8a`. The staged wheel resolves that same
-system library with `LD_PRELOAD` and `LD_LIBRARY_PATH` unset.
+library reports `2.6.1-git-3c6466af`. The staged wheel resolves that same
+system library with `LD_PRELOAD` and `LD_LIBRARY_PATH` unset. The previous
+system library is backed up at
+`/home/bonho/.local/state/bladerf/system-library-backups/20261009/libbladeRF.so.2.pre-3c6466af`.
 
 ## Qualification linked to this candidate
 
-- Current library and already-running FPGA: 10,000 paired RX_X2 cross-band
-  transitions at 23.04 Msps and the 32k/64/32 production geometry, with zero
-  read faults or stream overruns. Report:
-  `rx-epoch-matched-release-rxx2-10k-23msps-2026-10-09.md`.
+- Exact bundled library and already-running FPGA: 10,000 paired RX_X2
+  cross-band transitions at 23.04 Msps and the 32k/64/32 production geometry,
+  with zero read faults, retries, or stream overruns. Report:
+  `rx-epoch-release-candidate-rxx2-10k-2026-10-09.md`.
+- Exact bundled library/no-RPATH wheel: 200/200 production LTE transitions
+  valid, 100/100 known-cell PCI85/100RB/four-port returns, no short reads or
+  overruns. Report:
+  `/home/bonho/projects/sdr-scanner/docs/reports/rf/lte-release-rxx2-current-candidate-100-20261009.md`.
+- Exact bundled library SHA: 10,000/10,000 paired transitions at 23.04 Msps,
+  full event history, clean RX1/RX2/device teardown, and zero unrecovered or
+  first-read faults, WOULD_BLOCK retries, or overruns. P50 21.807 ms, P95
+  22.433 ms, P99 23.103 ms, max 31.465 ms. Report:
+  `rx-epoch-release-candidate-rxx2-10k-20261009.md`.
+- Withheld-event source provenance: native traversal regression plus live
+  100-transition smoke and 10,000-transition repeat. Source epoch/timestamp
+  showed that the two extra callbacks were stale prior-epoch USB packets;
+  none reached application IQ. `transaction_id` remains zero for stale data.
+  Report: `rx-epoch-withheld-notification-detail-2026-10-09.md`.
 - Matched system library/wheel: two consecutive 100-return production LTE
   RX_X2 cycles, all 200 target returns decoded PCI85/100RB/four ports. Report:
   `/home/bonho/projects/sdr-scanner/docs/reports/rf/lte-matched-release-rxx2-100-20261009.md`.
@@ -50,8 +66,7 @@ disposition. It is not the qualified image in this bundle.
 
 ## Release limits
 
-This is a reproducible local candidate bundle, not a final release. Historical
-no-PSS IQ anomalies remain unexplained, and the production-rate event collector
-counted 10,002 `RX_DATA_WITHHELD` notifications across 10,000 transitions; two
-notifications lack event-level detail in that harness output. The bundle was
-not flashed, published, or installed as firmware.
+This is a reproducible local candidate bundle, not a final release. The
+archived wideband no-PSS/RF-content case remains unexplained, and stale
+withheld callbacks do not yet carry a host transaction ID. The bundle was not
+flashed, published, or installed as firmware.
