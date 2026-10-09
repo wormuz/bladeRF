@@ -4,8 +4,11 @@ Date: 2026-10-09
 
 ## Bundle
 
-Local artifact: `release-staging/adr0207-event-rx-2026-10-09.tar.gz`  
-SHA-256: `48e2aba1ce4542f142f05f16f6244d751153e30965332561e011b021533d99ac`
+Superseding local artifact: `release-staging/adr0207-event-rx-2026-10-09-r2.tar.gz`
+
+SHA-256: `1785cd0acb1944f24f0c993235c48e4e5c7c86ba00e3c8b881e40af624419751`
+
+The original archive remains preserved as historical candidate revision 1.
 
 The tarball contains a manifest, checksums, the matched libbladeRF shared
 library, the exact-source FX3 firmware build, the hardware-qualified A4 RBF,
@@ -25,11 +28,13 @@ bundle's `SHA256SUMS`.
   This image passed its recorded qgate and was last loaded volatilely on xA4
   serial `f695006ba84a40daa7b777c6c6eba78`. No flash write was performed.
 - Python wheel SHA-256
-  `55695aaffa1205ac6dde508a48a94b205e57ec8772a2bbea069b7704d37e90ac`.
+  `a2595b0325cb5c5181a2557f42bacfd796d873c5a77ed74b5a70a87e1f5a84b8`.
 
 The xA4 reports firmware `2.6.1-git-fc02ffd8` and FPGA `0.16.1`. The installed
-library reports `2.6.1-git-3c8b7ff4`. The staged wheel resolves that same
-system library with `LD_PRELOAD` and `LD_LIBRARY_PATH` unset. The previous
+library reports `2.6.1-git-3c8b7ff4`. The r2 staged wheel resolves that same
+system library with `LD_PRELOAD` and `LD_LIBRARY_PATH` unset. It is imported
+from an isolated `/tmp` working directory to avoid accidentally selecting the
+source-tree extension. The previous
 system library is backed up at
 `/home/bonho/.local/state/bladerf/system-library-backups/20261009/libbladeRF.so.2.pre-3c6466af`.
 
@@ -64,6 +69,8 @@ system library is backed up at
 The newer job 000075 RBF was excluded: its separate fit passed timing and
 max-skew but failed qgate on D101 source classification and critical-warning
 disposition. It is not the qualified image in this bundle.
+
+- Python scheduled-retune invalidation dispatch is fixed in `python_bladerf` commits `8a0b680` and `e7452c4`. Release builds force recompilation to prevent stale developer RUNPATH objects; the r2 wheel has no RPATH/RUNPATH and passed 21 wrapper tests. Exact staged-wheel hardware test on xA4 observed the RX frequency invalidation callback before the API returned, then cancelled the scheduled future retune. Details: `/home/bonho/projects/python_bladerf/docs/release-wheel-linkage-2026-10-09.md`.
 
 ## Release limits
 
