@@ -1,0 +1,15 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[INFO @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:460] BLADERF_FORCE_FPGA_A4 is set, assuming A4 FPGA
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3746] Failed to get VCTCXO trim value: Invalid operation or parameter
+RUNTIME_WITHHELD n=1 txn=0 epoch=0 flags=0xb0000001 state=7 error=0 fpga_ts=7086 host_ns=1336261218629239
+RUNTIME_WITHHELD n=2 txn=1 epoch=1 flags=0xb0000001 state=7 error=0 fpga_ts=113374 host_ns=1336261245214544
+RUNTIME_WITHHELD n=3 txn=2 epoch=2 flags=0xb0000001 state=7 error=0 fpga_ts=219662 host_ns=1336261271771681
+FINAL_EVENT_HISTORY_OK first=1 last=3
+FINAL_RX1_DISABLE_DONE mode=RX2
+FINAL_RX2_DISABLE_DONE paired=0
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76799011 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=RX2 transitions=3 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=3 transition_ms_p50=21.045_p95=21.045_p99=21.045_max=21.203

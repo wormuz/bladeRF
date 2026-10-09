@@ -1,0 +1,23 @@
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3251] FPGA load failed and no configured image could be confirmed (status=0); device requires a fresh FPGA load before RF operations.
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:1680] bladerf2_set_frequency: Board state insufficient for operation (current "Firmware Loaded", requires "Initialized").
+Using device: *:serial=f695006ba84a40daa7b777c6a6eba78
+Using FPGA file: /home/bonho/projects/bladerf/hdl/quartus/hostedxA4-2026-10-09_08.19.04/hostedxA4.rbf
+Testing recovery after partial FPGA bitstream transfer
+Opening device...
+bladerf2-axi-ad9361: Successfully initialized (76799011 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76799011 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+Loading FPGA image...
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+Setting sample rate to 10e6...
+Injecting one FPGA reload failure, then checking recovery...
+Checking RF tuning is refused until a fresh FPGA load...
+Reloading the FPGA image...
+bladerf2-axi-ad9361: Successfully initialized (76799011 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76799011 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+Verifying same-handle event-driven RX after backend recovery...
+POST_RECOVERY_RX_VALID txn=1 epoch=1 timestamp=44789 count=4096
+Passed failed-reload fail-closed/recovery test!

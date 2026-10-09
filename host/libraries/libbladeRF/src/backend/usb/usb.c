@@ -435,6 +435,23 @@ static int usb_load_fpga(struct bladerf *dev, const uint8_t *image, size_t image
         return status;
     }
 
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+    /* Exercise a real partial-configuration failure. The test transfers only
+     * a small prefix, then immediately retries with a known-good image. */
+    if (getenv("BLADERF_TEST_FAIL_FPGA_BULK_ONCE") != NULL) {
+        const uint32_t prefix_len = image_size < 4096U
+            ? (uint32_t)image_size : 4096U;
+        status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
+                                        (void *)image, prefix_len, timeout_ms);
+        if (status < 0) {
+            return status;
+        }
+        log_warning("Injecting FPGA backend failure after BEGIN_PROG and "
+                    "%u bitstream bytes.\n", prefix_len);
+        return BLADERF_ERR_IO;
+    }
+#endif
+
     /* Send the file down */
     assert(image_size <= UINT32_MAX);
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
