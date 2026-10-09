@@ -24,6 +24,12 @@ uint32_t find_first_bit(uint32_t word)
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
+uint64_t no_os_do_div(uint64_t *n, uint64_t base)
+{
+    uint64_t remainder = *n % base;
+    *n /= base;
+    return remainder;
+}
 void no_os_udelay(uint32_t usecs) { (void)usecs; ++delay_count; }
 void no_os_mdelay(uint32_t msecs) { (void)msecs; ++delay_count; }
 
@@ -114,6 +120,59 @@ int main(void)
         }
     }
     fail_read_reg = -1;
+
+    /* Initialization calibrations must not accept a stale completion bit
+     * after a configuration write fails. */
+    fail_write_reg = REG_RX_BBF_TUNE_DIVIDE;
+    ret = ad9361_rx_bb_analog_filter_calib(&phy, 20000000, 983040000);
+    if (ret != -EIO) {
+        fprintf(stderr, "RX BB filter calibration hid setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_TX_BBF_TUNE_DIVIDER;
+    ret = ad9361_tx_bb_analog_filter_calib(&phy, 20000000, 983040000);
+    if (ret != -EIO) {
+        fprintf(stderr, "TX BB filter calibration hid setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_RX_CP_LEVEL_DETECT;
+    spi_status = CP_CAL_VALID;
+    ret = ad9361_txrx_synth_cp_calib(&phy, 40000000, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "synth CP calibration hid setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_BB_DC_OFFSET_COUNT;
+    ret = ad9361_bb_dc_offset_calib(&phy);
+    if (ret != -EIO) {
+        fprintf(stderr, "BB DC calibration hid setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_read_reg = REG_RX_BBF_C3_MSB;
+    ret = ad9361_rx_tia_calib(&phy, 20000000);
+    if (ret != -EIO) {
+        fprintf(stderr, "RX TIA calibration hid source read failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_read_reg = -1;
+
+    fail_write_reg = REG_WAIT_COUNT;
+    ret = ad9361_rf_dc_offset_calib_with_timeout(&phy, 1800000000ULL, 1000);
+    if (ret != -EIO) {
+        fprintf(stderr, "RF DC calibration hid setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
 
     register_map_enabled = true;
     read_count = delay_count = 0;
