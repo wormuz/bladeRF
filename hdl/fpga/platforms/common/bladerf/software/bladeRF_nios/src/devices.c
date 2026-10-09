@@ -29,6 +29,8 @@
 #include "devices_inline.h"
 #include "fpga_version.h"
 #include <alt_types.h>
+#include <altera_avalon_spi.h>
+#include <altera_avalon_spi_regs.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -393,6 +395,104 @@ void lms6_write(uint8_t addr, uint8_t data)
 }
 
 #ifdef BOARD_BLADERF_MICRO
+/* The vendor alt_avalon_spi_command() polls TRDY/RRDY and TMT forever. A
+ * missing/stuck SPI controller therefore prevents the Nios main loop from
+ * servicing the USB command response. Keep the vendor transfer semantics,
+ * but make every status-poll path finite. Expiry returns an SPI error and
+ * never certifies the command as successful. */
+static int bladerf_rffe_spi_command(alt_u32 base, alt_u32 slave,
+                                    alt_u32 write_length,
+                                    const alt_u8 *write_data,
+                                    alt_u32 read_length, alt_u8 *read_data,
+                                    alt_u32 flags)
+{
+    /* This permits far more polling than a maximum-length AD9361 exchange
+     * needs, while bounding a stalled core. */
+    const alt_u32 poll_limit = 1000000;
+    alt_u32 polls = 0;
+    alt_u32 write_index = 0;
+    alt_u32 read_index = 0;
+    alt_u32 write_zeros = read_length;
+    alt_u32 read_ignore = write_length;
+    alt_u32 status;
+    alt_32 credits = 1;
+
+    if ((write_length != 0 && write_data == NULL) ||
+        (read_length != 0 && read_data == NULL)) {
+        return -1;
+    }
+
+    IOWR_ALTERA_AVALON_SPI_SLAVE_SEL(base, 1 << slave);
+    if ((flags & ALT_AVALON_SPI_COMMAND_TOGGLE_SS_N) == 0) {
+        IOWR_ALTERA_AVALON_SPI_CONTROL(
+            base, ALTERA_AVALON_SPI_CONTROL_SSO_MSK);
+    }
+
+    /* Discard stale receive data, matching the vendor driver. */
+    IORD_ALTERA_AVALON_SPI_RXDATA(base);
+
+    for (;;) {
+        if (++polls > poll_limit) {
+            goto timeout;
+        }
+        status = IORD_ALTERA_AVALON_SPI_STATUS(base);
+        if ((status & (ALTERA_AVALON_SPI_STATUS_ROE_MSK |
+                       ALTERA_AVALON_SPI_STATUS_TOE_MSK)) != 0) {
+            goto timeout;
+        }
+
+        if ((status & ALTERA_AVALON_SPI_STATUS_TRDY_MSK) != 0 &&
+            credits > 0) {
+            credits--;
+            if (write_index < write_length) {
+                IOWR_ALTERA_AVALON_SPI_TXDATA(base,
+                                             write_data[write_index++]);
+            } else if (write_zeros > 0) {
+                write_zeros--;
+                IOWR_ALTERA_AVALON_SPI_TXDATA(base, 0);
+            } else {
+                /* No more bytes to transmit; wait for pending RX bytes. */
+                credits = -1024;
+            }
+        }
+
+        if ((status & ALTERA_AVALON_SPI_STATUS_RRDY_MSK) != 0) {
+            alt_u32 rxdata = IORD_ALTERA_AVALON_SPI_RXDATA(base);
+            if (read_ignore > 0) {
+                read_ignore--;
+            } else if (read_index < read_length) {
+                read_data[read_index++] = (alt_u8)rxdata;
+            }
+            credits++;
+
+            if (read_ignore == 0 && read_index == read_length) {
+                break;
+            }
+        }
+    }
+
+    while ((IORD_ALTERA_AVALON_SPI_STATUS(base) &
+            ALTERA_AVALON_SPI_STATUS_TMT_MSK) == 0) {
+        if (++polls > poll_limit) {
+            goto timeout;
+        }
+    }
+
+    if ((flags & ALT_AVALON_SPI_COMMAND_MERGE) == 0) {
+        IOWR_ALTERA_AVALON_SPI_CONTROL(base, 0);
+    }
+
+    return (int)read_length;
+
+timeout:
+    /* Do not leave chip select asserted across a failed transaction. */
+    IOWR_ALTERA_AVALON_SPI_CONTROL(base, 0);
+    IOWR_ALTERA_AVALON_SPI_STATUS(
+        base, ALTERA_AVALON_SPI_STATUS_ROE_MSK |
+              ALTERA_AVALON_SPI_STATUS_TOE_MSK);
+    return -1;
+}
+
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
 {
     alt_u8 addr8[2];
@@ -418,8 +518,8 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     bytes = (((addr >> 12) & 0x7) + 1);
 
     // Send down the command, read the response into data8
-    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, 2, &addr8[0], bytes,
-                                    &data8[0], 0);
+    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, 2, &addr8[0], bytes,
+                                      &data8[0], 0);
     if (status < 0) {
         spi_arbiter_unlock();
         return false;
@@ -468,8 +568,8 @@ static bool adi_spi_write_unlocked(uint16_t addr, uint64_t data)
     bytes = (((addr >> 12) & 0x7) + 1) + 2;
 
     // Send down the command and the data
-    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, bytes, &data8[0],
-                                    0, 0, 0);
+    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, bytes, &data8[0],
+                                      0, 0, 0);
     return status >= 0;
 }
 
@@ -505,8 +605,8 @@ bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
 
     addr8[0] = (alt_u8)(addr >> 8);
     addr8[1] = (alt_u8)addr;
-    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, sizeof(addr8), addr8,
-                                    1, &current, 0);
+    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, sizeof(addr8), addr8,
+                                      1, &current, 0);
     if (status < 0) {
         goto done;
     }
@@ -515,8 +615,8 @@ bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
     write_buf[0] = (alt_u8)((addr >> 8) | 0x80);
     write_buf[1] = (alt_u8)addr;
     write_buf[2] = *result;
-    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, sizeof(write_buf),
-                                    write_buf, 0, NULL, 0);
+    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, sizeof(write_buf),
+                                      write_buf, 0, NULL, 0);
     success = status >= 0;
 
 done:
