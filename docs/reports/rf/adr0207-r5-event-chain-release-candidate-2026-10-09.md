@@ -2,6 +2,11 @@
 
 Date: 2026-10-09
 
+Historical r5 snapshot. Superseded as the current candidate by r6; the FPGA
+reload fail-closed recovery gate was closed after this snapshot by a
+4096-byte partial-transfer hardware test. See
+`adr0207-r6-event-chain-release-candidate-2026-10-09.md`.
+
 The r4 bundle pinned the older `e985a454` library and predated the RX fault
 publication ordering fix. This r5 candidate refreshes the library at
 `c03c1fcb`, keeps the matching no-RPATH CPython 3.14 wheel, and carries the
