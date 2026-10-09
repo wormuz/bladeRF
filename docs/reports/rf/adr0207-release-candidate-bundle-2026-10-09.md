@@ -6,7 +6,7 @@ Date: 2026-10-09
 
 Superseding local artifact: `release-staging/adr0207-event-rx-2026-10-09-r2.tar.gz`
 
-SHA-256: `1785cd0acb1944f24f0c993235c48e4e5c7c86ba00e3c8b881e40af624419751`
+SHA-256: `c558692c3bec5434446f209b84d9501d9d36fe9cf9870327ae4d25f104d1c462`
 
 The original archive remains preserved as historical candidate revision 1.
 
