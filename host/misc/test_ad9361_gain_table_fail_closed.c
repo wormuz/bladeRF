@@ -17,6 +17,8 @@ static int fail_read_reg = -1;
 static unsigned fail_after_commits;
 static unsigned table_commits;
 static bool cleanup_clock_stop_seen;
+static bool read_state_alert;
+static unsigned spi_write_calls;
 static const uint8_t (*expected_table)[3];
 static unsigned batch_row_calls;
 static unsigned batch_commits;
@@ -48,6 +50,21 @@ void no_os_udelay(uint32_t us)
     (void)us;
 }
 
+void no_os_mdelay(uint32_t ms)
+{
+    (void)ms;
+}
+
+int32_t ilog2(int32_t value)
+{
+    int32_t log = 0;
+    while (value > 1) {
+        value >>= 1;
+        ++log;
+    }
+    return log;
+}
+
 int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
                                  uint16_t bytes_number)
 {
@@ -55,6 +72,10 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     uint16_t addr = cmd & 0x0fff;
     bool is_write = (cmd & AD_WRITE) != 0;
     (void)desc;
+
+    if (is_write) {
+        ++spi_write_calls;
+    }
 
     if (is_write && addr == REG_GAIN_TABLE_CONFIG) {
         if (bytes_number >= 3 && (data[2] & WRITE_GAIN_TABLE)) {
@@ -74,8 +95,19 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 
     if (!is_write && bytes_number > 2) {
         memset(data + 2, 0, bytes_number - 2);
+        if (read_state_alert && addr == REG_STATE) {
+            data[2] = ENSM_STATE_ALERT;
+        }
     }
     return 0;
+}
+
+uint32_t clk_get_rate(struct ad9361_rf_phy *phy,
+                      struct refclk_scale *clk_priv)
+{
+    (void)phy;
+    (void)clk_priv;
+    return 1000000000U;
 }
 
 static int32_t fake_write_gain_table_row(struct no_os_spi_desc *desc,
@@ -120,12 +152,133 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     fail_after_commits = 0;
     table_commits = 0;
     cleanup_clock_stop_seen = false;
+    read_state_alert = false;
+    spi_write_calls = 0;
     expected_table = NULL;
     batch_row_calls = 0;
     batch_commits = 0;
     batch_fail_row = UINT_MAX;
     batch_bad_payload = false;
     batch_bad_delay = false;
+}
+
+static int test_rssi_setup_propagates_each_write_error(void)
+{
+    static const int regs[] = {
+        REG_MEASURE_DURATION_01, REG_MEASURE_DURATION_23,
+        REG_RSSI_WEIGHT_0, REG_RSSI_WEIGHT_1, REG_RSSI_WEIGHT_2,
+        REG_RSSI_WEIGHT_3, REG_RSSI_DELAY, REG_RSSI_WAIT_TIME,
+        REG_RSSI_CONFIG,
+    };
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+    struct rssi_control ctrl = {
+        .restart_mode = SPI_WRITE_TO_REGISTER,
+        .rssi_unit_is_rx_samples = true,
+        .rssi_duration = 1,
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+        setup_phy(&phy, &pdata, &spi);
+        fail_write_reg = regs[i];
+        if (ad9361_rssi_setup(&phy, &ctrl, false) != -EIO ||
+            spi_write_calls != i + 1) {
+            fprintf(stderr,
+                    "RSSI setup write failure reg=0x%02x calls=%u expected=%u\n",
+                    regs[i], spi_write_calls, i + 1);
+            return -1;
+        }
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    if (ad9361_rssi_setup(&phy, &ctrl, false) != 0 || spi_write_calls != 9) {
+        fprintf(stderr, "RSSI setup success: writes=%u expected=9\n",
+                spi_write_calls);
+        return -1;
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    ctrl.rssi_duration = 0;
+    if (ad9361_rssi_setup(&phy, &ctrl, false) != -ERANGE ||
+        spi_write_calls != 0) {
+        fprintf(stderr, "zero RSSI duration was not rejected before SPI\n");
+        return -1;
+    }
+    return 0;
+}
+
+static int test_auxadc_setup_propagates_each_write_error(void)
+{
+    static const int regs[] = {
+        REG_TEMP_OFFSET, REG_START_TEMP_READING, REG_TEMP_SENSE2,
+        REG_TEMP_SENSOR_CONFIG, REG_AUXADC_CLOCK_DIVIDER,
+        REG_AUXADC_CONFIG,
+    };
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+    struct auxadc_control ctrl = {
+        .temp_time_inteval_ms = 5,
+        .temp_sensor_decimation = 256,
+        .auxadc_clock_rate = 1000000,
+        .auxadc_decimation = 256,
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+        setup_phy(&phy, &pdata, &spi);
+        fail_write_reg = regs[i];
+        if (ad9361_auxadc_setup(&phy, &ctrl, 983040000U) != -EIO ||
+            spi_write_calls != i + 1) {
+            fprintf(stderr,
+                    "AuxADC setup write failure reg=0x%02x calls=%u expected=%u\n",
+                    regs[i], spi_write_calls, i + 1);
+            return -1;
+        }
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    ctrl.auxadc_clock_rate = 0;
+    if (ad9361_auxadc_setup(&phy, &ctrl, 983040000U) != -EINVAL ||
+        spi_write_calls != 0) {
+        fprintf(stderr, "zero AuxADC clock rate was not rejected before SPI\n");
+        return -1;
+    }
+    return 0;
+}
+
+static int test_rssi_calibration_and_table_loaders_fail_closed(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+
+    setup_phy(&phy, &pdata, &spi);
+    read_state_alert = true;
+    fail_write_reg = REG_MAX_MIXER_CALIBRATION_GAIN_INDEX;
+    if (ad9361_rssi_gain_step_calib(&phy) != -EIO || spi_write_calls != 3) {
+        fprintf(stderr,
+                "RSSI gain calibration failure status/calls mismatch: calls=%u\n",
+                spi_write_calls);
+        return -1;
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    fail_write_reg = REG_LNA_GAIN;
+    if (ad9361_rssi_program_lna_gain(&phy) != -EIO || spi_write_calls != 1) {
+        fprintf(stderr, "RSSI LNA table failure was not propagated\n");
+        return -1;
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    fail_write_reg = REG_CONFIG;
+    if (ad9361_rssi_write_err_tbl(&phy) != -EIO || spi_write_calls != 2) {
+        fprintf(stderr, "RSSI error table failure was not propagated\n");
+        return -1;
+    }
+    return 0;
 }
 
 static int test_mid_table_write_failure(void)
@@ -260,7 +413,10 @@ static int test_batched_row_failure_invalidates_cache(void)
 
 int main(void)
 {
-    if (test_mid_table_write_failure() != 0 ||
+    if (test_rssi_setup_propagates_each_write_error() != 0 ||
+        test_auxadc_setup_propagates_each_write_error() != 0 ||
+        test_rssi_calibration_and_table_loaders_fail_closed() != 0 ||
+        test_mid_table_write_failure() != 0 ||
         test_failed_read_before_table_programming() != 0 ||
         test_gain_index_write_failure_invalidates_cache() != 0 ||
         test_retry_reloads_complete_table() != 0 ||
@@ -269,6 +425,6 @@ int main(void)
         return EXIT_FAILURE;
     }
 
-    puts("PASS: SPI failures are propagated, table cache is invalidated, and retry loads all rows");
+    puts("PASS: AD9361 RSSI/AuxADC and gain-table SPI failures propagate; retry reloads all rows");
     return EXIT_SUCCESS;
 }
