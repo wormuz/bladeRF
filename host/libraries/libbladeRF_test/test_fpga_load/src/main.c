@@ -25,6 +25,10 @@
  * This program is intended to verify that C programs build against
  * libbladeRF without any unintended dependencies.
  */
+#if !defined(_WIN32)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <getopt.h>
@@ -39,6 +43,20 @@
         } \
     } while (0)
 
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+static int set_fpga_load_failure_injection(int enabled)
+{
+#ifdef _WIN32
+    return _putenv_s("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE",
+                     enabled ? "1" : "");
+#else
+    return enabled
+        ? setenv("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE", "1", 1)
+        : unsetenv("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE");
+#endif
+}
+#endif
+
 int main(int argc, char *argv[])
 {
     int status;
@@ -46,6 +64,7 @@ int main(int argc, char *argv[])
     const char *fpga_file = "latest.rbf";
     const char *device_string = NULL;
     int reload_only = 0;
+    int failed_reload_only = 0;
     int c;
 
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_ERROR);
@@ -57,10 +76,11 @@ int main(int argc, char *argv[])
             {"fpga",        required_argument   , 0, 'f'},
             {"verbosity",   no_argument         , 0, 'v'},
             {"reload-only", no_argument         , 0, 'r'},
+            {"failed-reload-only", no_argument  , 0, 'F'},
             {0, 0, 0, 0 }
         };
 
-        c = getopt_long(argc, argv, "d:f:vr", long_options, &option_index);
+        c = getopt_long(argc, argv, "d:f:vrF", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -83,6 +103,12 @@ int main(int argc, char *argv[])
             case 'r':
                 reload_only = 1;
                 printf("Testing same-handle FPGA reload lifecycle only\n");
+                break;
+
+            case 'F':
+                reload_only = 1;
+                failed_reload_only = 1;
+                printf("Testing failed same-handle FPGA reload recovery\n");
                 break;
 
             case '?':
@@ -108,11 +134,44 @@ int main(int argc, char *argv[])
     printf("Setting sample rate to 10e6...\n");
     CHECK_STATUS(bladerf_set_sample_rate(dev, BLADERF_MODULE_RX, 10e6, NULL));
 
+    if (failed_reload_only) {
+        printf("Injecting one FPGA reload failure, then checking recovery...\n");
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+        if (set_fpga_load_failure_injection(1) != 0) {
+            fprintf(stderr, "Could not arm FPGA load failure injection\n");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto error;
+        }
+#else
+        fprintf(stderr, "This test binary lacks FPGA load failure injection\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto error;
+#endif
+        status = bladerf_load_fpga(dev, fpga_file);
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+        if (set_fpga_load_failure_injection(0) != 0) {
+            fprintf(stderr, "Could not disarm FPGA load failure injection\n");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto error;
+        }
+#endif
+        if (status != BLADERF_ERR_UNEXPECTED) {
+            fprintf(stderr, "Expected injected BLADERF_ERR_UNEXPECTED, got %d\n",
+                    status);
+            goto error;
+        }
+        status = 0;
+    }
+
     printf("Reloading the FPGA image...\n");
     CHECK_STATUS(bladerf_load_fpga(dev, fpga_file));
 
     if (reload_only) {
-        printf("Passed same-handle FPGA reload lifecycle test!\n");
+        if (failed_reload_only) {
+            printf("Passed failed-reload recovery and subsequent reload test!\n");
+        } else {
+            printf("Passed same-handle FPGA reload lifecycle test!\n");
+        }
         goto error;
     }
 

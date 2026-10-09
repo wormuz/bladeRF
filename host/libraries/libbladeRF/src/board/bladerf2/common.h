@@ -276,6 +276,9 @@ struct bladerf2_board_data {
 #ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
     bool test_rx_epoch_metadata_fault_injected;
 #endif
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+    bool test_fpga_load_failure_injected;
+#endif
     bool rx_format_unsupported_reported;
     bool rx_async_data_withheld_reported;
     /* Set while the current epoch has an unannounced/active invalid data

@@ -3215,7 +3215,21 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         bladerf2_rx_fault_monitor_stop(dev);
     }
 
-    int status = dev->backend->load_fpga(dev, buf, length);
+    int status;
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+    /* Exercise the recovery path after stopping the old monitor without
+     * sending any reconfiguration bytes to the FPGA. The per-device latch
+     * makes this environment-variable hook one-shot. */
+    if (rfic != NULL &&
+            !board_data->test_fpga_load_failure_injected &&
+            getenv("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE") != NULL) {
+        board_data->test_fpga_load_failure_injected = true;
+        status = BLADERF_ERR_UNEXPECTED;
+    } else
+#endif
+    {
+        status = dev->backend->load_fpga(dev, buf, length);
+    }
     if (status != 0) {
         /* The previous image may still be running. Try to restore its RFIC
          * controller, while returning the primary FPGA-load failure. */

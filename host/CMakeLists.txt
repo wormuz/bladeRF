@@ -90,6 +90,13 @@ if(ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION)
     add_definitions(-DBLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION=1)
 endif()
 
+option(ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+       "Enable one-shot test-only FPGA reload failure injection."
+       OFF)
+if(ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION)
+    add_definitions(-DBLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION=1)
+endif()
+
 if(ENABLE_LOG_FILE_INFO)
     add_definitions(-DLOG_INCLUDE_FILE_INFO)
 endif()
