@@ -29,6 +29,11 @@ then continued to refresh its clock cache. RFPLL tuning also ignored the
 results of external-band callbacks and logged a failed TX quadrature retune
 calibration while still reporting the LO change as successful.
 
+The public RX/TX LO getters also returned success unconditionally. Their
+clock-rate readback path discarded SPI errors while reading synthesizer
+registers, so a transition consumer could receive an invalid frequency value
+with a success status.
+
 ## Change
 
 The initialization calibration paths now propagate configuration SPI errors.
@@ -44,9 +49,12 @@ failed write; clock-chain FIR enable writes and RFPLL fastlock/VCO-control
 operations propagate status. `clk_set_rate()` now returns errors from BBPLL,
 RFPLL, and divider setters before refreshing the clock cache. RFPLL tuning
 returns external-band and TX quadrature calibration errors, and updates its
-last-calibrated frequency only after successful calibration. The ENSM transition checks clock, state,
-VCO-calibration, lock-status, and MGC overload-counter operations before
-updating the cached state.
+last-calibrated frequency only after successful calibration. The ENSM
+transition checks clock, state, VCO-calibration, lock-status, and MGC
+overload-counter operations before updating the cached state.
+Checked RFPLL readback now propagates direct-register and fastlock-address SPI
+errors, and the public RX/TX LO getters return those failures instead of
+reporting a frequency success.
 
 ## Verification
 
@@ -55,7 +63,8 @@ updating the cached state.
   DC setup, RF DC setup, TX quadrature setup/status accesses, AGC/parallel
   port/TX monitor configuration, external LNA, mixer Gm table, RX ADC reads,
   tracking, TX attenuation, fastlock, BBPLL, ENSM mode, ENSM wake, and the
-real `clk_set_rate()` BBPLL error path are returned as `-EIO`.
+real `clk_set_rate()` BBPLL and public RX LO readback error paths are returned
+as `-EIO`.
 - `cmake --build host/build --target ad936x -j2`: PASS.
 - `git diff --check`: PASS.
 - NIOS application rebuild was attempted, but this shell has no

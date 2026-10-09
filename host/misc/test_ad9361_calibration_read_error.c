@@ -6,6 +6,7 @@
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
 
 int32_t ad9361_adjust_rx_ext_band_settings(struct ad9361_rf_phy *phy,
                                            uint64_t freq)
@@ -405,6 +406,42 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+    }
+
+    {
+        struct no_os_clk rx_refclk = { .rate = 40000000 };
+        struct refclk_scale rxpll = {
+            .spi = &spi,
+            .phy = &phy,
+            .source = RX_RFPLL_INT,
+            .parent_source = RX_REFCLK,
+        };
+        uint64_t lo_freq = UINT64_MAX;
+
+        phy.clks[RX_REFCLK] = &rx_refclk;
+        phy.ref_clk_scale[RX_RFPLL_INT] = &rxpll;
+        phy.pdata->use_ext_rx_lo = false;
+        phy.fastlock.current_profile[0] = 0;
+        fail_read_reg = REG_RX_FRACT_BYTE_2;
+        ret = ad9361_get_rx_lo_freq(&phy, &lo_freq);
+        if (ret != -EIO || lo_freq != UINT64_MAX) {
+            fprintf(stderr, "RX LO readback hid SPI failure: ret=%" PRId32
+                    " freq=%" PRIu64 "\n", ret, lo_freq);
+            return EXIT_FAILURE;
+        }
+
+        fail_read_reg = -1;
+        phy.fastlock.current_profile[0] = 1;
+        fail_write_reg = REG_RX_FAST_LOCK_PROGRAM_ADDR;
+        ret = ad9361_get_rx_lo_freq(&phy, &lo_freq);
+        if (ret != -EIO || lo_freq != UINT64_MAX) {
+            fprintf(stderr, "RX LO fastlock readback hid address write failure: ret=%" PRId32
+                    " freq=%" PRIu64 "\n", ret, lo_freq);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        fail_read_reg = -1;
+        phy.fastlock.current_profile[0] = 0;
     }
 
     /* Initialization-time ENSM wake must propagate SPI failures. */
