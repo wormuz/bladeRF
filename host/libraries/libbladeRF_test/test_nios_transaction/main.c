@@ -51,15 +51,19 @@ static void test_success(void)
     enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
     uint8_t buffer[16] = { 0 };
 
+    _Static_assert(NIOS_RFIC_RESPONSE_TIMEOUT_MS > 55000u,
+                   "RFIC response budget must exceed the preserved 55 s block");
+
     setup(&usb, &fns, &fake);
-    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 6000, NULL,
-                                NULL, &stage) == 0);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer),
+                                NIOS_RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL,
+                                &stage) == 0);
     assert(stage == NIOS_TRANSACTION_COMPLETE);
     assert(fake.calls == 2);
     assert(fake.endpoints[0] == PERIPHERAL_EP_OUT);
     assert(fake.endpoints[1] == PERIPHERAL_EP_IN);
     assert(fake.timeouts[0] == PERIPHERAL_TIMEOUT_MS);
-    assert(fake.timeouts[1] == 6000);
+    assert(fake.timeouts[1] == NIOS_RFIC_RESPONSE_TIMEOUT_MS);
     assert(!usb.peripheral_desynchronized);
     teardown(&usb);
 }
@@ -74,14 +78,16 @@ static void test_in_timeout_fails_closed(void)
 
     setup(&usb, &fns, &fake);
     fake.fail_call = 2;
-    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 6000, NULL,
-                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer),
+                                NIOS_RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL,
+                                &stage) == BLADERF_ERR_TIMEOUT);
     assert(stage == NIOS_TRANSACTION_IN_FAILED);
     assert(fake.calls == 2);
     assert(usb.peripheral_desynchronized);
 
-    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 6000, NULL,
-                                NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer),
+                                NIOS_RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL,
+                                &stage) == BLADERF_ERR_UNEXPECTED);
     assert(stage == NIOS_TRANSACTION_DESYNCHRONIZED);
     assert(fake.calls == 2);
     teardown(&usb);

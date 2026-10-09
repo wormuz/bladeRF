@@ -307,14 +307,15 @@ static int nios_8x32_write(struct bladerf *dev, uint8_t id,
     }
 }
 
-/* NIOS services requests from its main loop. An RFIC command can keep it
- * occupied long enough for the normal 250 ms IN transfer to time out. Send
- * the request exactly once, then give its response one bounded longer read.
- * Re-sending OUT after an IN timeout is unsafe: the command UART has no
- * transaction ID, so it can enqueue a duplicate side effect and a delayed
- * response cannot be matched to either request. */
-#define RFIC_RESPONSE_TIMEOUT_MS 6000
-
+/* NIOS services requests from its main loop. A full AD9361 initialization
+ * runs synchronously there. Calibration completion polls are bounded at
+ * 20,000 iterations with 1.2 ms between reads (24 s nominal per calibration,
+ * plus SPI/handler overhead). A preserved mode-switch request remained
+ * blocked for about 55 s before its host probe was interrupted; successful
+ * init duration is not known. Send the request exactly once: the command UART
+ * has no transaction ID, so retransmitting after an IN timeout could
+ * duplicate a side effect or misassociate a delayed response. This watchdog
+ * never certifies RF state or IQ validity. */
 static int nios_rfic_access_wait_response(struct bladerf *dev, uint8_t *buf)
 {
     struct bladerf_usb *usb = dev->backend_data;
@@ -322,7 +323,8 @@ static int nios_rfic_access_wait_response(struct bladerf *dev, uint8_t *buf)
 
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
     status = nios_usb_transaction(usb, buf, NIOS_PKT_LEN,
-                                  RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL, NULL);
+                                  NIOS_RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL,
+                                  NULL);
 
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
     return status;
