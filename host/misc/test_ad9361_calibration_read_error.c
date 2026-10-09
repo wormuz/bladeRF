@@ -406,6 +406,17 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+
+        fake_regs[REG_CH_1_OVERFLOW] = BBPLL_LOCK;
+        fail_read_reg = REG_INTEGER_BB_FREQ_WORD;
+        ret = clk_set_rate(&phy, &bbpll, 983040000);
+        if (ret != -EIO || bbpll_clk.rate != 1 || phy.bbpll_initialized) {
+            fprintf(stderr, "Clock framework hid BBPLL readback failure: ret=%" PRId32
+                    " cached_rate=%" PRIu32 " initialized=%d\n",
+                    ret, bbpll_clk.rate, phy.bbpll_initialized);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
     }
 
     {
