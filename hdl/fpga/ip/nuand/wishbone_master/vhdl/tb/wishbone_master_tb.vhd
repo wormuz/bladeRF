@@ -119,7 +119,7 @@ architecture arch of wishbone_master_tb is
     end procedure ;
 
     signal wb_clk_i    : std_logic := '0' ;
-    signal wb_rst_i    : std_logic ;
+    signal wb_rst_i    : std_logic := '1' ;
 
     signal wb_adr_o    : std_logic_vector(ADDR_BITS-1 downto 0) ;
     signal wb_dat_o    : std_logic_vector(DATA_BITS-1 downto 0) ;
@@ -131,7 +131,18 @@ architecture arch of wishbone_master_tb is
     signal wb_cyc_o    : std_logic ;
 begin
 
-    wb_clk_i <= not wb_clk_i after 3 ns ;
+    wb_rst_i <= reset;
+
+    -- Offset the Wishbone clock phase so the WB FSM cannot accidentally rely
+    -- on Avalon clock transitions to wake its sequential process.
+    process
+    begin
+        wait for 500 ps;
+        loop
+            wb_clk_i <= not wb_clk_i;
+            wait for 3 ns;
+        end loop;
+    end process;
     process(wb_clk_i)
         variable idx : integer := 0;
     begin
@@ -215,8 +226,15 @@ begin
 
         nop( clock, 1000) ;
         -- Read the time back
-        report "-- End of Simulation" severity failure ;
+        report "-- End of Simulation" severity note ;
+        std.env.stop;
     end process ;
+
+    watchdog : process
+    begin
+        wait for 20 us;
+        assert false report "wishbone_master_tb timed out" severity failure;
+    end process;
 
 end architecture ;
 

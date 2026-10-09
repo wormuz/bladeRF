@@ -185,9 +185,9 @@ begin
         end case;
     end process;
 
-    wb_sync_proc : process(clock, reset)
+    wb_sync_proc : process(wb_clk_i, wb_rst_i)
     begin
-        if (reset = '1' ) then
+        if (wb_rst_i = '1' ) then
             wb_current <= WB_NULL_STATE ;
         elsif (rising_edge(wb_clk_i) ) then
             wb_current <= wb_future;
@@ -228,6 +228,7 @@ begin
         lpm_widthu      =>  4,
         lpm_numwords    =>  16,
         lpm_showahead   =>  "ON",
+        intended_device_family => "Cyclone V",
         -- Stated rather than defaulted. Left unset Quartus picks 2 and warns
         -- (272007/287001) that it had to choose for you; these cross the Nios
         -- system clock to the Wishbone clock, so say 3 and mean it. The five
@@ -269,6 +270,7 @@ begin
         lpm_widthu      =>  4,
         lpm_numwords    =>  16,
         lpm_showahead   =>  "ON",
+        intended_device_family => "Cyclone V",
         -- Stated rather than defaulted. Left unset Quartus picks 2 and warns
         -- (272007/287001) that it had to choose for you; these cross the Nios
         -- system clock to the Wishbone clock, so say 3 and mean it. The five
