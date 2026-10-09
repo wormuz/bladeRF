@@ -18,7 +18,9 @@ CMake had retained an old generated version header (`2.6.1-git-e20e6e9b`) even t
 - `host/build/output/libbladeRF_test_sync_epoch_traversal` exited 0. Its timeout logs are expected fault-path cases in the test.
 - Release wheel was rebuilt with `PYTHON_BLADERF_RELEASE_BUILD=1` against current bladeRF headers and this exact library. The primary wrapper, sweep, and scan extensions have `NEEDED libbladeRF.so.2` and no RPATH/RUNPATH.
 - Extracted wheel imported from `/tmp` with `LD_PRELOAD` unset; `/proc/self/maps` showed exactly the staged `libbladeRF.so.2` when `LD_LIBRARY_PATH` pointed to the isolated pair.
-- RX transition API and dual-epoch wrapper test set: 29 passed.
+- RX transition API and dual-epoch wrapper test set in `sdr-scanner`: 29 passed.
+- Python RF-event callback/notification test set in `python_bladerf`: 21 passed.
+- Total focused wrapper/event tests against the exact pair: 50 passed.
 
 ## Limits
 
