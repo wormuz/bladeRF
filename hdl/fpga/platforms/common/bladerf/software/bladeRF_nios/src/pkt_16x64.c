@@ -72,11 +72,10 @@ static inline bool perform_read(uint8_t id, uint16_t addr, uint64_t *data)
     bool success = true;
 
     switch (id) {
-#ifdef BOARD_BLADERF_MICRO
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         case NIOS_PKT_16x64_TARGET_AD9361:
-            *data = adi_spi_read(addr);
-            break;
-#endif  // BOARD_BLADERF_MICRO
+            return adi_spi_read_checked(addr, data);
+#endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
 
 #ifdef BLADERF_NIOS_LIBAD936X
         case NIOS_PKT_16x64_TARGET_RFIC:

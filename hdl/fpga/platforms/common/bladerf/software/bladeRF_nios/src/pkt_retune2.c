@@ -159,13 +159,13 @@ static void reset_queue(struct queue *q)
     q->rem_idx = q->ins_idx = 0;
 }
 
-static inline void profile_load(bladerf_module module, fastlock_profile *p)
+static inline bool profile_load(bladerf_module module, fastlock_profile *p)
 {
     if (p == NULL) {
-        return;
+        return false;
     }
 
-    adi_fastlock_load(module, p);
+    return adi_fastlock_load(module, p);
 }
 
 static inline void profile_load_scheduled(struct queue *q,
@@ -189,9 +189,12 @@ static inline void profile_load_scheduled(struct queue *q,
             if (e->state == ENTRY_STATE_NEW) {
                 if ( !(used & (1 << e->profile->profile_num)) ) {
                     /* Profile slot is available in RFFE, fill it */
-                    profile_load(module, e->profile);
-                    /* Mark profile slot used */
-                    used |= 1 << e->profile->profile_num;
+                    if (profile_load(module, e->profile)) {
+                        /* Mark profile slot used */
+                        used |= 1 << e->profile->profile_num;
+                    } else {
+                        INCREMENT_ERROR_COUNT();
+                    }
                 }
             }
         }
@@ -215,7 +218,9 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p)
     }
 
     /* Adjust the RFFE port */
-    adi_rfport_select(p);
+    if (!adi_rfport_select(p)) {
+        return false;
+    }
 
     /* Adjust the RF switches */
     adi_rfspdt_select(module, p);
@@ -295,7 +300,11 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         case ENTRY_STATE_NEW:
 
             /* Load the fast lock profile into the RFFE */
-            profile_load(module, e->profile);
+            if (!profile_load(module, e->profile)) {
+                INCREMENT_ERROR_COUNT();
+                dequeue_retune(q, NULL);
+                break;
+            }
 
             /* Schedule the retune */
             e->state = ENTRY_STATE_SCHEDULED;
@@ -383,7 +392,11 @@ void pkt_retune2(struct pkt_buf *b)
             case BLADERF_MODULE_TX:
 
                 /* Load the profile data into RFFE memory */
-                profile_load(module, profile);
+                if (!profile_load(module, profile)) {
+                    INCREMENT_ERROR_COUNT();
+                    status = -1;
+                    break;
+                }
 
                 /* Activate the fast lock profile for this retune */
                 if (profile_activate(module, profile)) {

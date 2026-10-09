@@ -14,11 +14,12 @@ static uint64_t scheduled_timestamp;
 static bladerf_module recalled_module;
 static fastlock_profile *recalled_profile;
 
-void adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
+bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
     (void)module;
     (void)profile;
     load_count++;
+    return true;
 }
 
 bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
@@ -29,10 +30,11 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
     return true;
 }
 
-void adi_rfport_select(fastlock_profile *profile)
+bool adi_rfport_select(fastlock_profile *profile)
 {
     (void)profile;
     port_count++;
+    return true;
 }
 
 void adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)

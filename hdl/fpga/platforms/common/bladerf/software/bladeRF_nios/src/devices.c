@@ -536,13 +536,6 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     return true;
 }
 
-uint64_t adi_spi_read(uint16_t addr)
-{
-    uint64_t value = 0;
-
-    (void)adi_spi_read_checked(addr, &value);
-    return value;
-}
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
@@ -751,7 +744,7 @@ void wishbone_master_write(uint32_t addr, uint32_t data)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
+bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
 {
     uint16_t fl_prog_addr_reg;
     uint16_t fl_prog_rddata_reg;
@@ -770,14 +763,23 @@ void adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
         fastlocks          = fastlocks_rx;
     }
 
+    if (nios_profile >= NUM_BBP_FASTLOCK_PROFILES) {
+        return false;
+    }
+
     /* Read out the profile data and save to Nios memory */
     for (i = 0; i < 16; i++) {
         addr = (0x1 << 15) | (0x0 << 12) | (fl_prog_addr_reg & 0x3ff);
         data = (uint64_t)(((rffe_profile & 0x7) << 4) | (i & 0xf)) << 8 * 7;
-        adi_spi_write(addr, data);
+        if (!adi_spi_write(addr, data)) {
+            return false;
+        }
 
         addr = (0x0 << 15) | (0x0 << 12) | (fl_prog_rddata_reg & 0x3ff);
-        fastlocks[nios_profile].profile_data[i] = adi_spi_read(addr) >> 56;
+        if (!adi_spi_read_checked(addr, &data)) {
+            return false;
+        }
+        fastlocks[nios_profile].profile_data[i] = data >> 56;
     }
 
     /* Kick out any other profile stored in the Nios that was in this slot */
@@ -790,11 +792,12 @@ void adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
 
     /* Update profile state */
     fastlocks[nios_profile].state = FASTLOCK_STATE_BBP_RFFE;
+    return true;
 }
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_fastlock_load(bladerf_module m, fastlock_profile *p)
+bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 {
     static const uint8_t fl_prog_write = 1 << 1;
     static const uint8_t fl_prog_clken = 1 << 0;
@@ -816,24 +819,23 @@ void adi_fastlock_load(bladerf_module m, fastlock_profile *p)
         fastlocks        = fastlocks_rx;
     }
 
+    if (p == NULL) {
+        return false;
+    }
+
     if ((p->state == FASTLOCK_STATE_RFFE) ||
         (p->state == FASTLOCK_STATE_BBP_RFFE)) {
         /* Already loaded! */
-        return;
+        return true;
     } else {
-        /* Kick out any other loaded profile that's in this slot */
-        for (i = 0; i < NUM_BBP_FASTLOCK_PROFILES; i++) {
-            if ((fastlocks[i].profile_num == p->profile_num) &&
-                (fastlocks[i].state == FASTLOCK_STATE_BBP_RFFE)) {
-                fastlocks[i].state = FASTLOCK_STATE_BBP;
-            }
-        }
-
         /* Write 2 bytes to fast lock program data register */
         addr = (0x1 << 15) | (0x1 << 12) | (fl_prog_data_reg & 0x3ff);
+        i = 0;
         data = (uint64_t)(p->profile_data[0]) << 8 * 7;
         data |= (uint64_t)(((p->profile_num & 0x7) << 4) | (i & 0xf)) << 8 * 6;
-        adi_spi_write(addr, data);
+        if (!adi_spi_write(addr, data)) {
+            return false;
+        }
 
         for (i = 1; i < fl_prog_bytes; i++) {
             /* Write 4 bytes to fast lock program control register */
@@ -843,20 +845,35 @@ void adi_fastlock_load(bladerf_module m, fastlock_profile *p)
             data |= (uint64_t)(p->profile_data[i]) << 8 * 5;
             data |= ((uint64_t)(((p->profile_num & 0x7) << 4) | (i & 0xf))
                      << 8 * 4);
-            adi_spi_write(addr, data);
+            if (!adi_spi_write(addr, data)) {
+                return false;
+            }
         }
 
         /* Write 1 byte to fast lock program control register */
         addr = (0x1 << 15) | (0x0 << 12) | (fl_prog_ctrl_reg & 0x3ff);
         data = (uint64_t)(fl_prog_write | fl_prog_clken) << 8 * 7;
-        adi_spi_write(addr, data);
+        if (!adi_spi_write(addr, data)) {
+            return false;
+        }
 
         /* Write 1 byte to fast lock program control register */
         addr = (0x1 << 15) | (0x0 << 12) | (fl_prog_ctrl_reg & 0x3ff);
-        adi_spi_write(addr, 0);
+        if (!adi_spi_write(addr, 0)) {
+            return false;
+        }
+
+        /* Only evict another cached profile after this load has succeeded. */
+        for (i = 0; i < NUM_BBP_FASTLOCK_PROFILES; i++) {
+            if ((fastlocks[i].profile_num == p->profile_num) &&
+                (fastlocks[i].state == FASTLOCK_STATE_BBP_RFFE)) {
+                fastlocks[i].state = FASTLOCK_STATE_BBP;
+            }
+        }
 
         /* Update profile state */
         p->state = FASTLOCK_STATE_BBP_RFFE;
+        return true;
     }
 }
 #endif  // BOARD_BLADERF_MICRO
@@ -878,7 +895,13 @@ static bool adi_wait_pll_lock(uint16_t lock_reg)
     uint32_t i;
 
     for (i = 0; i < AD9361_PLL_LOCK_POLL_MAX; i++) {
-        uint8_t status = (uint8_t)(adi_spi_read(status_addr) >> 56);
+        uint64_t value;
+        uint8_t status;
+
+        if (!adi_spi_read_checked(status_addr, &value)) {
+            return false;
+        }
+        status = (uint8_t)(value >> 56);
         if ((status & AD9361_PLL_LOCK_MASK) != 0) {
             return true;
         }
@@ -899,7 +922,9 @@ bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
     addr = (0x1 << 15) | (0x0 << 12) | (fl_setup_reg & 0x3ff);
     data = (uint64_t)(((p->profile_num & 0x7) << 5) | (0x1)) << 8 * 7;
 
-    adi_spi_write(addr, data);
+    if (!adi_spi_write(addr, data)) {
+        return false;
+    }
 
     /* Wait for the actual RFPLL lock bit and report a timeout as failure. */
     return adi_wait_pll_lock(pll_lock_reg);
@@ -907,7 +932,7 @@ bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_rfport_select(fastlock_profile *p)
+bool adi_rfport_select(fastlock_profile *p)
 {
     static const uint16_t input_sel_reg = 0x4;
     static const uint8_t rx_port_mask   = 0x3f;
@@ -917,7 +942,10 @@ void adi_rfport_select(fastlock_profile *p)
 
     /* Get current port selection */
     addr = (0x0 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
-    data = adi_spi_read(addr) >> 56;
+    if (p == NULL || !adi_spi_read_checked(addr, &data)) {
+        return false;
+    }
+    data >>= 56;
 
     if (p->port >> 7) {
         /* RX bit is set, only modify RX port selection */
@@ -930,7 +958,7 @@ void adi_rfport_select(fastlock_profile *p)
     /* Write the new port selection to AD9361 */
     addr = (0x1 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
     data = data << 56;
-    adi_spi_write(addr, data);
+    return adi_spi_write(addr, data);
 }
 #endif  // BOARD_BLADERF_MICRO
 

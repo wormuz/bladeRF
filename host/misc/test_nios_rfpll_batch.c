@@ -17,6 +17,18 @@ static enum batch_mode mode;
 static unsigned int calls;
 static unsigned int update_calls;
 static bool update_success = true;
+static unsigned int read_calls;
+static bool read_success = true;
+
+bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
+{
+    read_calls++;
+    if (addr != 0x247 || value == NULL || !read_success) {
+        return false;
+    }
+    *value = UINT64_C(0x0200000000000000);
+    return true;
+}
 
 uint64_t rx_epoch_status_snapshot_read(void)
 {
@@ -151,6 +163,33 @@ static int run_epoch_snapshot_case(void)
     return 0;
 }
 
+static int run_read_case(bool requested_success, bool expected_success)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_AD9361, 0, 0,
+                 0x47, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = UINT64_MAX;
+    bool write = true, success = false;
+
+    read_success = requested_success;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+
+    if (target != NIOS_PKT_16x64_TARGET_AD9361 || write || addr != 0x247 ||
+        success != expected_success ||
+        (expected_success && response != UINT64_C(0x0200000000000000))) {
+        fprintf(stderr, "AD9361 read response mismatch: success=%u data=%016llx\n",
+                success, (unsigned long long)response);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (run_case(BATCH_SUCCESS, true, 3) ||
@@ -158,7 +197,9 @@ int main(void)
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
-        run_epoch_snapshot_case()) {
+        run_epoch_snapshot_case() ||
+        run_read_case(true, true) ||
+        run_read_case(false, false) || read_calls != 2) {
         return 1;
     }
 

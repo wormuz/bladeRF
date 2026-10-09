@@ -76,11 +76,15 @@ void lms6_write(uint8_t addr, uint8_t data)
     ASSERT(data == 0x09);
 }
 
-uint64_t adi_spi_read(uint16_t addr) {
+bool adi_spi_read_checked(uint16_t addr, uint64_t *value) {
     const uint64_t ret = 0x17;
     DBG("%s: addr=0x%04x, returning 0x%04x\n", __FUNCTION__, addr, ret);
     ASSERT(addr == 0x2f2f);
-    return ret;
+    if (value == NULL) {
+        return false;
+    }
+    *value = ret;
+    return true;
 }
 
 uint64_t rx_epoch_status_snapshot_read(void)

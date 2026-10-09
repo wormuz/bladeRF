@@ -18,6 +18,8 @@ enum response_mode {
     RESPONSE_UPDATE_FAILURE,
     RESPONSE_SNAPSHOT_SUCCESS,
     RESPONSE_SNAPSHOT_UNSUPPORTED,
+    RESPONSE_SPI_READ_SUCCESS,
+    RESPONSE_SPI_READ_FAILURE,
 };
 
 static enum response_mode response_mode;
@@ -57,6 +59,17 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
             nios_pkt_16x64_resp_pack(bytes, target, false, count,
                                      UINT64_C(0x10203040a0b0c0d0), true);
         } else if (response_mode == RESPONSE_SNAPSHOT_UNSUPPORTED) {
+            nios_pkt_16x64_resp_pack(bytes, target, false, count, 0, false);
+        } else {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        return 0;
+    }
+    if (target == NIOS_PKT_16x64_TARGET_AD9361 && !write) {
+        if (response_mode == RESPONSE_SPI_READ_SUCCESS) {
+            nios_pkt_16x64_resp_pack(bytes, target, false, count,
+                                     UINT64_C(0x0200000000000000), true);
+        } else if (response_mode == RESPONSE_SPI_READ_FAILURE) {
             nios_pkt_16x64_resp_pack(bytes, target, false, count, 0, false);
         } else {
             return BLADERF_ERR_UNEXPECTED;
@@ -174,6 +187,28 @@ static int expect_snapshot(enum response_mode mode, int expected_status)
     return 0;
 }
 
+static int expect_spi_read(enum response_mode mode, int expected_status)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint64_t data = UINT64_MAX;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = mode;
+    status = nios_ad9361_spi_read(&dev, 0x247, &data);
+    if (status != expected_status ||
+        (expected_status == 0 && data != UINT64_C(0x0200000000000000)) ||
+        (expected_status != 0 && data != 0)) {
+        fprintf(stderr, "SPI read mapping mismatch: mode=%d status=%d "
+                        "data=%016llx\n", mode, status,
+                (unsigned long long)data);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -186,7 +221,9 @@ int main(void)
         expect_snapshot(RESPONSE_SNAPSHOT_SUCCESS, 0) ||
         expect_snapshot(RESPONSE_SNAPSHOT_UNSUPPORTED,
                         BLADERF_ERR_UNSUPPORTED) ||
-        out_count != 8 || in_count != 8) {
+        expect_spi_read(RESPONSE_SPI_READ_SUCCESS, 0) ||
+        expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
+        out_count != 10 || in_count != 10) {
         return 1;
     }
 

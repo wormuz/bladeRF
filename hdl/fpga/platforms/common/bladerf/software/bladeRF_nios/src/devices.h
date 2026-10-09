@@ -184,9 +184,9 @@ void lms6_write(uint8_t addr, uint8_t data);
  *
  * @param   addr    Address to read from
  *
- * @return  Register data
+ * @param value Receives the register data on success
+ * @return  true only if the SPI transaction completed successfully
  */
-uint64_t adi_spi_read(uint16_t addr);
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value);
 
 /**
@@ -248,8 +248,8 @@ void wishbone_master_write(uint32_t addr, uint32_t data);
  * @param rffe_profile AD9361 profile number (0-::NUM_RFFE_FASTLOCK_PROFILES)
  * @param nios_profile Nios profile number (0-::NUM_BBP_FASTLOCK_PROFILES)
  */
-void adi_fastlock_save(bool is_tx, uint8_t rffe_profile,
-                          uint16_t nios_profile);
+bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile,
+                       uint16_t nios_profile);
 
 /**
  * Load fast lock profile from Nios memory into AD9361 RFIC.
@@ -257,7 +257,7 @@ void adi_fastlock_save(bool is_tx, uint8_t rffe_profile,
  * @param m    Which module to load.
  * @param *p   Fast lock profile structure
  */
-void adi_fastlock_load(bladerf_module m, fastlock_profile *p);
+bool adi_fastlock_load(bladerf_module m, fastlock_profile *p);
 
 /**
  * Recall a stored fast lock profile.
@@ -272,7 +272,7 @@ bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p);
  *
  * @param *p   Fast lock profile structure
  */
-void adi_rfport_select(fastlock_profile *p);
+bool adi_rfport_select(fastlock_profile *p);
 
 /**
  * Set the RF switches.
