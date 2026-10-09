@@ -52,23 +52,6 @@
  * stale DC-offset correction indefinitely. */
 #define BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ 100000000ULL
 
-/* REG_CALIBRATION_CTRL mask bit for Rx Quadrature Calibration
- * (ad9361.h RX_QUAD_CAL == 1<<5, ad9361.h:737). Grep across this
- * entire tree (no-OS driver, host libbladeRF, NIOS firmware) and the
- * upstream analogdevicesinc Linux driver: this calibration bit is
- * defined but never passed to ad9361_run_calibration()/ad9361_do_
- * calib() anywhere. Only Rx Quadrature TRACKING is wired up
- * (ad9361_tracking_control(), continuous correction after ENSM enters
- * Rx/FDD) -- there is no one-shot init calibration establishing the
- * tracking loop's starting point, unlike Tx (ad9361_tx_quad_calib()
- * runs explicitly at setup and on every bandwidth/retune). A residual,
- * un-calibrated RX quadrature imbalance produces exactly the kind of
- * artifact this fix targets: a spectral image around DC whose
- * magnitude is set by the imbalance and stays put until the tracking
- * loop (which only trims an already-good starting point, doesn't
- * search a wide error space) happens to converge. */
-#define BLADERF_AD9361_RX_QUAD_CAL_MASK (1 << 5)
-
 /* ad9361_dig_tune() was tried here to rerun the digital-interface
  * (DATA_CLK/RX_FRAME) timing sweep on every samplerate change. It was
  * removed -- see the comment in _rfic_cmd_wr_samplerate() below.
@@ -733,19 +716,6 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
             }
         }
 
-        /* One-shot RX Quadrature Calibration (see comment on
-         * BLADERF_AD9361_RX_QUAD_CAL_MASK above): establishes the
-         * quadrature-tracking loop's starting point. Run it once,
-         * the first time RX actually tunes to a real frequency
-         * (RESET_FREQUENCY at init doesn't count -- same convention
-         * TX_QUAD_CAL already uses by running only after init_freq is
-         * set, not after the RESET_FREQUENCY step). */
-        if (!state->rx_quad_calib_done[BLADERF_RX] &&
-            RESET_FREQUENCY != frequency) {
-            CHECK_BOOL(ad9361_do_calib(state->phy,
-                                      BLADERF_AD9361_RX_QUAD_CAL_MASK, -1));
-            state->rx_quad_calib_done[BLADERF_RX] = true;
-        }
     }
 
     return true;

@@ -83,16 +83,6 @@ struct rfic_state {
      * at this frequency" so the first real tune always calibrates. */
     bladerf_frequency last_rfdc_calib_freq[NUM_MODULES];
 
-    /* Has the one-shot RX Quadrature Calibration (RX_QUAD_CAL) run
-     * for this direction yet? Unlike RFDC_CAL, this establishes the
-     * quadrature-tracking loop's starting point rather than something
-     * that goes stale with frequency, so it only needs to run once
-     * per power-up, not on every large retune. Nothing in this driver
-     * called it before this field was added -- only the continuous
-     * tracking loop (ad9361_tracking_control) was wired up, which
-     * trims around whatever starting point the loop woke up with. */
-    bool rx_quad_calib_done[NUM_MODULES];
-
     /* TX mute state at standby */
     bool tx_mute_state[2];
 };
