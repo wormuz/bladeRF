@@ -39,6 +39,7 @@ proc short {name} {
 
 set worst [dict create]
 set count [dict create]
+set worst_path [dict create]
 
 foreach_in_collection p [get_timing_paths -setup -npaths 5000 -detail path_only] {
     set fc [get_clock_info -name [get_path_info $p -from_clock]]
@@ -49,12 +50,18 @@ foreach_in_collection p [get_timing_paths -setup -npaths 5000 -detail path_only]
     dict incr count $k
     if {![dict exists $worst $k] || $s < [dict get $worst $k]} {
         dict set worst $k $s
+        dict set worst_path $k $p
     }
 }
 
 set keys [lsort [dict keys $worst]]
 foreach k $keys {
+    set p [dict get $worst_path $k]
+    set from [get_node_info -name [get_path_info $p -from]]
+    set to [get_node_info -name [get_path_info $p -to]]
     puts [format "XFER %8.3f %6d  %s" [dict get $worst $k] [dict get $count $k] $k]
+    puts "        from $from"
+    puts "        to   $to"
 }
 puts "XFER_TOTAL [llength $keys] distinct crossings"
 

@@ -155,6 +155,8 @@ expect_count() {
 # visible to qgate.
 if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
     hs_expect=15
+elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
+    hs_expect=12
 else
     hs_expect=5
 fi
@@ -201,6 +203,15 @@ if [ -z "$sta" ] && [ -n "$revision" ]; then
             break
         fi
     done
+fi
+# Build logs may be deliberately kept beside the work directory (so the
+# complete run is reproducible), one level below Quartus' output_files.
+if [ -z "$sta" ] && [ -n "$revision" ]; then
+    log_dir=$(cd "$(dirname "$f")" && pwd)
+    candidate="$log_dir/../output_files/$revision.sta.summary"
+    if [ -r "$candidate" ]; then
+        sta="$candidate"
+    fi
 fi
 if [ -z "$sta" ] && [ -n "$revision" ]; then
     log_dir=$(dirname "$f")
@@ -287,21 +298,30 @@ else
         if [ "$drc_c105" = 1 ] && [ "$c105_node" = "altera_internal_jtag~TCKUTAP" ]; then
             c105_dispositioned=1
         fi
+        if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
+            d101_expect=735
+            held_expect=404
+        elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
+            d101_expect=699
+            held_expect=368
+        else
+            d101_expect=0
+            held_expect=0
+        fi
         if [ "$drc_critical" = 0 ] && [ "$c105_dispositioned" = 1 ] &&
-           [ "$drc_d101" = 735 ] && [ "$drc_d103" = 0 ] &&
+           [ "$drc_d101" = "$d101_expect" ] && [ "$d101_expect" != 0 ] && [ "$drc_d103" = 0 ] &&
            [ "$drc_high" = "$((drc_d101 + drc_c105))" ]; then
             classifier="$(dirname "$0")/classify_d101.py"
             if d101_inventory=$(python3 "$classifier" "$drc_report" 2>&1); then
                 if grep -q '^D101 category adi-clock-monitor: 64$' <<<"$d101_inventory" &&
                    grep -q '^D101 category adi-up-xfer: 129$' <<<"$d101_inventory" &&
                    grep -q '^D101 category adi-xfer-status: 10$' <<<"$d101_inventory" &&
-                   grep -q '^D101 category held-handshake: 404$' <<<"$d101_inventory" &&
+                   grep -q "^D101 category held-handshake: $held_expect$" <<<"$d101_inventory" &&
                    grep -q '^D101 category tamer-payload: 128$' <<<"$d101_inventory"; then
-                    if grep -Fq 'U_rx_fault_causes_handshake|source_holding[4]' "$f" &&
-                       grep -Fq 'rx_fault_causes_sys[4]' "$f"; then
+                    if grep -Fq '30 held-handshake: bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|source_holding[*]' <<<"$d101_inventory"; then
                         d101_dispositioned=1
-                        note ok "Design Assistant D101: all 735 sources classified; fitted CDC bounds required above"
-                        note ok "RX fault-status bundled crossing appears in fitted timing evidence"
+                        note ok "Design Assistant D101: all $d101_expect sources classified; fitted CDC bounds required above"
+                        note ok "RX fault-status bundle present in fitted D101 inventory; exact hosted handshake count required above"
                         note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                     fi
                 fi
@@ -319,10 +339,9 @@ else
 fi
 
 # D101 is only dispositioned when every fitted source maps to the exact
-# bundled-data inventory above: 404 held handshakes and 128 tamer payloads.
-# The RX fault-cause/context status crossing is additionally required by its
-# exact fitted source/destination path evidence because Quartus no longer
-# reports its ten low-word bits as D101 after widening the coherent snapshot.
+# revision-specific bundled-data inventory above, including the RX fault
+# status transfer. The per-revision SDC handshake count must also match, so a
+# missing or unmatched pair cannot be hidden by the DRC classification.
 # The remainder are the ADI control/status/clock snapshots. The single C105 disposition is bound
 # to the exact internal JTAG TCK node; any other C105 endpoint/count still
 # fails. Other critical warnings remain fatal.

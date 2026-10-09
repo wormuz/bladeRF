@@ -1185,7 +1185,7 @@ def check_rx_epoch_host_timestamp_fence():
 
 
 def check_qgate_sweep_handshake_count():
-    """Keep qgate's structural handshake expectation aligned with the SDC."""
+    """Keep qgate's per-revision CDC expectations aligned with fitted RTL."""
     qgate = ROOT / "hdl/quartus/qgate"
     if not qgate.exists():
         return
@@ -1197,6 +1197,24 @@ def check_qgate_sweep_handshake_count():
         fail("qgate-sweep-handshake-count",
              "sweep qgate must detect Quartus revision text and expect 15 constrained handshake pairs",
              "valid CDC constraints were rejected solely by a stale count")
+    if ("hs_expect=12" not in text or "d101_expect=699" not in text or
+            "held_expect=368" not in text):
+        fail("qgate-hosted-handshake-count",
+             "hosted qgate must require 12 handshakes and its 699/368 D101 inventory",
+             "a sweep-only inventory rejects or silently weakens the hosted release gate")
+    sdc = code_only(SDC.read_text())
+    optional = (
+        "*U_dwell_cfg_handshake|source_holding[*]",
+        "*U_dwell_readout_handshake|source_holding[*]",
+        "*U_pretrig_addr_handshake|source_holding[*]",
+    )
+    if (any(pattern not in sdc for pattern in optional) or
+            "[get_collection_size $src] == 0" not in sdc or
+            "[get_collection_size $dst] == 0" not in sdc or
+            "*U_dwell_readout*" not in sdc):
+        fail("sdc-optional-sweep-endpoint-guard",
+             "sweep-only CDC endpoints must be optional only when both ends are absent, with RTL ownership",
+             "hosted compilation otherwise emits false critical warnings or hides a broken partial pair")
 
 
 def check_build_project_close_state():
@@ -1403,8 +1421,10 @@ def check_qgate_sta_resolution():
         # A complete, exact inventory may disposition known bundled-data
         # D101 findings only when the fitted CDC evidence above is also present.
         categories = (
-            ("held-handshake", 404,
+            ("held-handshake", 374,
              "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
+            ("held-handshake", 30,
+             "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|source_holding[0]"),
             ("tamer-payload", 128,
              "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
             ("adi-up-xfer", 129,
@@ -1444,13 +1464,85 @@ def check_qgate_sta_resolution():
             check=False)
         if (result.returncode != 0 or
                 "D101: all 735 sources classified" not in result.stdout or
-                "RX fault-status bundled crossing appears in fitted timing evidence" not in result.stdout or
+                "RX fault-status bundle present in fitted D101 inventory" not in result.stdout or
                 "C105: exact internal JTAG TCK finding dispositioned" not in result.stdout or
                 "critical warnings (D101 and exact internal-JTAG C105 dispositioned; no others)" not in result.stdout):
             fail("qgate-classified-bundled-d101",
                  "qgate rejected the exact physically bounded held-data D101 inventory",
                  "known bundled crossings need endpoint classification plus fitted max-skew evidence")
             return
+
+        # Hosted omits the three sweep-only bundles. Exercise its independent
+        # 12-pair / 699-source DRC inventory and the fault-status disposition.
+        host_project = quartus / "work" / "bladerf-micro-A4-hosted"
+        host_output = host_project / "output_files"
+        host_output.mkdir(parents=True)
+        host_sta = host_output / "hosted.sta.summary"
+        host_drc = host_output / "hosted.drc.rpt"
+        host_sta.write_text("Type\nSlack : 0.073\n")
+        host_sources = (
+            (30, "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|source_holding[0]"),
+            (338, "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
+            (128, "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
+            (129, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]"),
+            (10, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_xfer_status:i_xfer_status|d_xfer_data[0]"),
+            (64, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_clock_mon:i_clock_mon|d_count_hold[0]"),
+        )
+        host_lines = [
+            "; Design Assistant Status ; Analyzed ;",
+            "; Total Critical Violations ; 0 ;",
+            "; Total High Violations ; 700 ;",
+            "; - Rule C105 ; 1 ;",
+            "; - Rule D101 ; 699 ;",
+            "; Rule C105: Clock signal should be a global signal ; altera_internal_jtag~TCKUTAP ;",
+        ]
+        host_number = 0
+        for count, source in host_sources:
+            for _ in range(count):
+                host_number += 1
+                host_lines.append(f"; Rule D101: test - Structure {host_number} ; ;")
+                if host_number <= 30:
+                    host_lines.append(f";  Source node(s) from clock \\\"src\\\" ; {source} ;")
+                    host_lines.append(";  Destination node(s) from clock \\\"dst\\\" ; bladerf_core:U_core|dst[0] ;")
+                else:
+                    host_lines.append(f";  Structure {host_number} ; {source} ;")
+        host_drc.write_text("\n".join(host_lines) + "\n")
+        host_log = log_dir / "hosted.log"
+        host_log.write_text(
+            "Info: Quartus Prime Fitter was successful\n"
+            "Info: Quartus Prime Timing Analyzer was successful\n"
+            "Info: Project = bladerf\nInfo: Revision = hosted\n"
+            "tamer compare payload crossing constrained on 2\n"
+            "handshake crossings constrained: 12\n"
+            "ADI up_xfer bundled crossings constrained: 9\n"
+            "dcfifo pointer crossings constrained on 10\n"
+            "Critical Warning (308060): Rule D101\n"
+            "Critical Warning (308042): Rule C105\n"
+            "Critical Warning (308012): Node \\\"altera_internal_jtag~TCKUTAP\\\"\n"
+            "Critical Warning (308012): Node \\\"bladerf_core:U_core|handshake:U_test|source_holding[0]\\\"\n")
+        result = subprocess.run(
+            [str(qgate), str(host_log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode != 0 or
+                "cdc handshake: 12" not in result.stdout or
+                "D101: all 699 sources classified" not in result.stdout or
+                "RX fault-status bundle present in fitted D101 inventory" not in result.stdout):
+            fail("qgate-hosted-classified-bundled-d101",
+                 "qgate rejected the exact hosted 12-pair / 699-source D101 inventory",
+                 "hosted release must validate its fitted RF status and bundled-data paths")
+            return
+        host_log.write_text(host_log.read_text().replace(
+            "handshake crossings constrained: 12",
+            "handshake crossings constrained: 11"))
+        result = subprocess.run(
+            [str(qgate), str(host_log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode == 0 or "cdc handshake: 11, expected 12" not in result.stdout:
+            fail("qgate-hosted-handshake-count-fails-closed",
+                 "qgate accepted a hosted build missing a required handshake pair",
+                 "revision-specific endpoint loss must stop the firmware release")
+            return
+
         actual_drc.write_text(actual_drc.read_text().replace(
             "altera_internal_jtag~TCKUTAP", "unknown_clock~source"))
         result = subprocess.run(
@@ -1534,7 +1626,7 @@ rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_ga
 rx-epoch-controller-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_controller.vhd
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
 rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
-qgate-sweep-handshake-count   qgate's sweep CDC count must match the 15 constrained pairs
+qgate-revision-cdc-inventory  qgate expects the separate hosted and sweep fitted CDC inventories
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded

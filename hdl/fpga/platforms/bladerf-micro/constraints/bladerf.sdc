@@ -369,6 +369,10 @@ set hs_pairs [list \
 # U_handshake_tune_mode's into tune_ref_mode.
 
 set hs_done 0
+set hs_optional_absent_patterns [list \
+    {*U_dwell_cfg_handshake|source_holding[*]} \
+    {*U_dwell_readout_handshake|source_holding[*]} \
+    {*U_pretrig_addr_handshake|source_holding[*]}]
 foreach { src_pat dst_pat } $hs_pairs {
     set src [get_keepers -nowarn $src_pat]
     set dst [get_keepers -nowarn $dst_pat]
@@ -420,6 +424,13 @@ foreach { src_pat dst_pat } $hs_pairs {
 the crossing; anchor it to the instance"
         }
         incr hs_done
+    } elseif { [get_collection_size $src] == 0 &&
+               [get_collection_size $dst] == 0 &&
+               [lsearch -exact $hs_optional_absent_patterns $src_pat] >= 0 } {
+        # These three transfers are instantiated only by ENABLE_SWEEP_ANALYZER
+        # (or its readout path). In hosted, both ends are optimized away. A
+        # partially matched pair remains a critical warning below.
+        post_message -type info "optional sweep handshake absent: $src_pat -> $dst_pat"
     } else {
         post_message -type critical_warning "handshake crossing not matched: $src_pat -> $dst_pat"
     }
@@ -743,7 +754,7 @@ set dwell_pairs_written 0
 foreach {dwell_src dwell_dst dwell_owner} {
     {*dwell_readout:*|rd_data[*]}      {*:dwell_readout|readdata[*]}   {*dwell_readout:*}
     {*pretrigger_buffer:*|rd_data[*]}  {*:pretrig_data|readdata[*]}    {*pretrigger_buffer:*}
-    {*:pretrig_addr|data_out[*]}       {*dwell_readout:*|rd_data[*]}   {*dwell_readout:*}
+    {*:pretrig_addr|data_out[*]}       {*dwell_readout:*|rd_data[*]}   {*U_dwell_readout*}
     {*:pretrig_addr|data_out[*]}       {*pretrigger_buffer:*|rd_data[*]} {*pretrigger_buffer:*}
 } {
     set dwell_present [expr {[get_collection_size [get_keepers -nowarn $dwell_owner]] > 0}]
