@@ -1,6 +1,6 @@
 # Diagnose the worst hold paths of a fitted revision.
 #
-#   ~/soft/q25 quartus_sta -t report_hold_diag.tcl
+#   ~/soft/q25 quartus_sta -t report_hold_diag.tcl [hosted|sweep]
 #
 # Hold is a fast-corner check: the shorter the data path, the less time the
 # destination has to see a stable value. Run this before reaching for any
@@ -22,7 +22,11 @@
 # Prints, per path: slack, the multicycle values in force, clock skew, both
 # endpoints and a guess at the class.
 
-project_open -revision hosted bladerf
+set revision "hosted"
+if {$argc > 0} {
+    set revision [lindex $argv 0]
+}
+project_open -revision $revision bladerf
 create_timing_netlist -model fast -temperature 0 -voltage 1100
 read_sdc
 update_timing_netlist

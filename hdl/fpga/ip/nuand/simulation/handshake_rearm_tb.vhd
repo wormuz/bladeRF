@@ -1,10 +1,9 @@
 -- Does a handshake crossing take a SECOND value, or only the first?
 --
--- Run (ghdl rejects the PRESERVE attribute on a port in the project's
--- synthesis/synchronizer.vhd, so a behavioural two-flop model of it is
--- needed; the protocol under test is handshake's, not the synchroniser's):
+-- Run (the behavioral model preserves the reset/sampling behavior while
+-- avoiding Quartus-only attributes in production synchronizer.vhd):
 --
---     ghdl -a --std=08 <sync model> ../synthesis/handshake.vhd \
+--     ghdl -a --std=08 synchronizer_model.vhd ../synthesis/handshake.vhd \
 --                      handshake_rearm_tb.vhd
 --     ghdl -e --std=08 handshake_rearm_tb && ghdl -r --std=08 handshake_rearm_tb
 --
@@ -29,17 +28,19 @@ end entity;
 
 architecture sim of handshake_rearm_tb is
     signal sclk, dclk, srst, drst : std_logic := '0';
-    signal sdata, ddata : std_logic_vector(31 downto 0) := (others => '0');
+    -- Match the RX epoch bundle: one 32-bit state word and one 64-bit
+    -- first-valid timestamp must cross together.
+    signal sdata, ddata : std_logic_vector(95 downto 0) := (others => '0');
     signal dack : std_logic;
     signal dreq : std_logic := '0';
-    signal captured : std_logic_vector(31 downto 0) := (others => '0');
+    signal captured : std_logic_vector(95 downto 0) := (others => '0');
     signal done : boolean := false;
 begin
     sclk <= not sclk after 5 ns when not done else '0';
     dclk <= not dclk after 7 ns when not done else '0';
 
     U : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
+        generic map ( DATA_WIDTH => 96 )
         port map (
             source_reset => srst, source_clock => sclk, source_data => sdata,
             dest_reset => drst, dest_clock => dclk, dest_data => ddata,
@@ -74,22 +75,22 @@ begin
     stim : process
     begin
         srst <= '1'; drst <= '1';
-        sdata <= x"AAAA0001";
+        sdata <= x"A5A5A5A5_11223344_55667788";
         wait for 100 ns;
         srst <= '0'; drst <= '0';
         wait for 300 ns;
 
         report "after reset, captured = " & to_hstring(captured);
-        assert captured = x"AAAA0001"
+        assert captured = x"A5A5A5A5_11223344_55667788"
             report "first value never crossed" severity failure;
 
         -- Host reprogrammes. This is the case that matters: config changes
         -- between dwells for the whole life of the design.
-        sdata <= x"BBBB0002";
+        sdata <= x"5A5A5A5A_A1B2C3D4_E5F60718";
         wait for 500 ns;
         report "after reprogramme, captured = " & to_hstring(captured);
 
-        if captured = x"BBBB0002" then
+        if captured = x"5A5A5A5A_A1B2C3D4_E5F60718" then
             report "SECOND VALUE CROSSED -- handshake does re-arm";
         else
             report "SECOND VALUE NEVER CROSSED -- stuck at " & to_hstring(captured)

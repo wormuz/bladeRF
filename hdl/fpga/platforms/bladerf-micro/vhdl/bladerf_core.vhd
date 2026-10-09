@@ -281,20 +281,14 @@ architecture core_bladerf of bladerf_core is
     -- rationale as rx_ovf_lo_word/rx_ovf_hi_word ("halves of the same
     -- capture register, so a host reading both gets one whole snapshot").
     signal rx_epoch_status_word     : std_logic_vector(31 downto 0);
-    signal rx_epoch_status_req_sys  : std_logic := '0';
-    signal rx_epoch_status_ack_sys  : std_logic;
-    signal rx_epoch_status_wire_sys : std_logic_vector(31 downto 0);
-    signal rx_epoch_status_sys      : std_logic_vector(31 downto 0) := (others => '0');
-
-    signal rx_epoch_ts_lo_req_sys   : std_logic := '0';
-    signal rx_epoch_ts_lo_ack_sys   : std_logic;
-    signal rx_epoch_ts_lo_wire_sys  : std_logic_vector(31 downto 0);
-    signal rx_epoch_ts_lo_sys       : std_logic_vector(31 downto 0) := (others => '0');
-
-    signal rx_epoch_ts_hi_req_sys   : std_logic := '0';
-    signal rx_epoch_ts_hi_ack_sys   : std_logic;
-    signal rx_epoch_ts_hi_wire_sys  : std_logic_vector(31 downto 0);
-    signal rx_epoch_ts_hi_sys       : std_logic_vector(31 downto 0) := (others => '0');
+    signal rx_epoch_snapshot_word      : std_logic_vector(95 downto 0);
+    signal rx_epoch_snapshot_req_sys   : std_logic := '0';
+    signal rx_epoch_snapshot_ack_sys   : std_logic;
+    signal rx_epoch_snapshot_wire_sys  : std_logic_vector(95 downto 0);
+    signal rx_epoch_snapshot_sys       : std_logic_vector(95 downto 0) := (others => '0');
+    signal rx_epoch_status_sys         : std_logic_vector(31 downto 0);
+    signal rx_epoch_ts_lo_sys          : std_logic_vector(31 downto 0);
+    signal rx_epoch_ts_hi_sys          : std_logic_vector(31 downto 0);
 
     -- Transfer sticky RX writer causes plus first-stall context as one
     -- coherent snapshot. Independent synchronizers could combine fields
@@ -1267,17 +1261,10 @@ begin
             complete_seen => rx_epoch_complete_seen_rx
         );
 
-    -- ADR-0207 §6: rx_epoch_status crossing (rx_clock -> sys_clock), same
-    -- direction/shape as U_handshake_rx_overflow below. Three separate
-    -- 32-bit words (status+epoch_id+state+discard, timestamp lo, timestamp
-    -- hi) rather than one combined word: first_valid_timestamp is 64 bits
-    -- and does not fit alongside the other fields in a single PIO word,
-    -- so it gets its own pair -- same reasoning as rx_ovf_lo_word/
-    -- rx_ovf_hi_word being halves of ONE capture register, not two
-    -- independent ones (a host reading both gets one whole snapshot
-    -- because both halves are driven by the same rx_epoch_first_valid_rx
-    -- source register, captured by their own independent handshakes but
-    -- never written to separately).
+    -- ADR-0207 §6: transfer status and first-valid timestamp as ONE bundled
+    -- RX->system snapshot. Separate handshakes allowed ACTIVE_NEW status to
+    -- reach NIOS before the corresponding timestamp, so the host's nominal
+    -- status/timestamp snapshot could combine different RX epochs.
     -- bits [31:24] epoch_id, [23:20] state, [19] discard_active,
     -- [18] sample-META tag enabled, [17] COMPLETE toggle captured,
     -- [16] COMPLETE command decoded, [15:0] reserved=0
@@ -1289,116 +1276,49 @@ begin
                            & rx_epoch_complete_seen_rx
                            & (15 downto 0 => '0');
 
-    U_rx_epoch_status_handshake : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
+    rx_epoch_snapshot_word <= rx_epoch_status_word
+                              & std_logic_vector(rx_epoch_first_valid_rx);
+
+    U_rx_epoch_snapshot_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 96 )
         port map (
             source_reset => rx_reset,
             source_clock => rx_clock,
-            source_data  => rx_epoch_status_word,
+            source_data  => rx_epoch_snapshot_word,
             dest_reset   => sys_reset,
             dest_clock   => sys_clock,
-            dest_data    => rx_epoch_status_wire_sys,
-            dest_req     => rx_epoch_status_req_sys,
-            dest_ack     => rx_epoch_status_ack_sys
+            dest_data    => rx_epoch_snapshot_wire_sys,
+            dest_req     => rx_epoch_snapshot_req_sys,
+            dest_ack     => rx_epoch_snapshot_ack_sys
         );
 
-    drive_handshake_rx_epoch_status : process( sys_clock, sys_reset )
+    drive_handshake_rx_epoch_snapshot : process( sys_clock, sys_reset )
     begin
         if( sys_reset = '1' ) then
-            rx_epoch_status_req_sys <= '0';
+            rx_epoch_snapshot_req_sys <= '0';
         elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_status_ack_sys = '0' ) then
-                rx_epoch_status_req_sys <= '1';
+            if( rx_epoch_snapshot_ack_sys = '0' ) then
+                rx_epoch_snapshot_req_sys <= '1';
             else
-                rx_epoch_status_req_sys <= '0';
+                rx_epoch_snapshot_req_sys <= '0';
             end if;
         end if;
     end process;
 
-    rx_epoch_status_capture : process( sys_clock, sys_reset )
+    rx_epoch_snapshot_capture : process( sys_clock, sys_reset )
     begin
         if( sys_reset = '1' ) then
-            rx_epoch_status_sys <= (others => '0');
+            rx_epoch_snapshot_sys <= (others => '0');
         elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_status_ack_sys = '1' ) then
-                rx_epoch_status_sys <= rx_epoch_status_wire_sys;
+            if( rx_epoch_snapshot_ack_sys = '1' ) then
+                rx_epoch_snapshot_sys <= rx_epoch_snapshot_wire_sys;
             end if;
         end if;
     end process;
 
-    U_rx_epoch_ts_lo_handshake : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
-        port map (
-            source_reset => rx_reset,
-            source_clock => rx_clock,
-            source_data  => std_logic_vector(rx_epoch_first_valid_rx(31 downto 0)),
-            dest_reset   => sys_reset,
-            dest_clock   => sys_clock,
-            dest_data    => rx_epoch_ts_lo_wire_sys,
-            dest_req     => rx_epoch_ts_lo_req_sys,
-            dest_ack     => rx_epoch_ts_lo_ack_sys
-        );
-
-    drive_handshake_rx_epoch_ts_lo : process( sys_clock, sys_reset )
-    begin
-        if( sys_reset = '1' ) then
-            rx_epoch_ts_lo_req_sys <= '0';
-        elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_ts_lo_ack_sys = '0' ) then
-                rx_epoch_ts_lo_req_sys <= '1';
-            else
-                rx_epoch_ts_lo_req_sys <= '0';
-            end if;
-        end if;
-    end process;
-
-    rx_epoch_ts_lo_capture : process( sys_clock, sys_reset )
-    begin
-        if( sys_reset = '1' ) then
-            rx_epoch_ts_lo_sys <= (others => '0');
-        elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_ts_lo_ack_sys = '1' ) then
-                rx_epoch_ts_lo_sys <= rx_epoch_ts_lo_wire_sys;
-            end if;
-        end if;
-    end process;
-
-    U_rx_epoch_ts_hi_handshake : entity work.handshake
-        generic map ( DATA_WIDTH => 32 )
-        port map (
-            source_reset => rx_reset,
-            source_clock => rx_clock,
-            source_data  => std_logic_vector(rx_epoch_first_valid_rx(63 downto 32)),
-            dest_reset   => sys_reset,
-            dest_clock   => sys_clock,
-            dest_data    => rx_epoch_ts_hi_wire_sys,
-            dest_req     => rx_epoch_ts_hi_req_sys,
-            dest_ack     => rx_epoch_ts_hi_ack_sys
-        );
-
-    drive_handshake_rx_epoch_ts_hi : process( sys_clock, sys_reset )
-    begin
-        if( sys_reset = '1' ) then
-            rx_epoch_ts_hi_req_sys <= '0';
-        elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_ts_hi_ack_sys = '0' ) then
-                rx_epoch_ts_hi_req_sys <= '1';
-            else
-                rx_epoch_ts_hi_req_sys <= '0';
-            end if;
-        end if;
-    end process;
-
-    rx_epoch_ts_hi_capture : process( sys_clock, sys_reset )
-    begin
-        if( sys_reset = '1' ) then
-            rx_epoch_ts_hi_sys <= (others => '0');
-        elsif( rising_edge(sys_clock) ) then
-            if( rx_epoch_ts_hi_ack_sys = '1' ) then
-                rx_epoch_ts_hi_sys <= rx_epoch_ts_hi_wire_sys;
-            end if;
-        end if;
-    end process;
+    rx_epoch_status_sys <= rx_epoch_snapshot_sys(95 downto 64);
+    rx_epoch_ts_hi_sys  <= rx_epoch_snapshot_sys(63 downto 32);
+    rx_epoch_ts_lo_sys  <= rx_epoch_snapshot_sys(31 downto 0);
 
     rx_fault_causes_word <= '0' & rx_fault_context & rx_fault_sticky;
 

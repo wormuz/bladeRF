@@ -149,13 +149,14 @@ expect_count() {
 # crossings exist. If one of these ever differs between sizes, that means the
 # revision instantiates something conditionally and the difference is the news.
 #
-# The handshake count differs by revision. Sweep currently has 15 constrained
-# pairs: the hosted crossings plus dwell config, RX epoch control/status and
-# timestamps, pre-trigger address bundled-data crossing, and runtime RX status
-# monitor. Keeping this count exact makes a newly added or dropped CDC pair
-# visible to qgate.
+# The handshake count differs by revision. Sweep currently has 13 constrained
+# pairs: the hosted crossings plus dwell config, RX epoch control, the bundled
+# RX epoch status+timestamp snapshot, pre-trigger address, and RX status
+# monitor. The three previously independent status/timestamp crossings are
+# now one coherent 96-bit CDC transfer. Keep this count exact so added or
+# dropped CDC pairs remain visible to qgate.
 if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
-    hs_expect=15
+    hs_expect=13
 elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
     hs_expect=12
 else
@@ -341,13 +342,14 @@ else
                     elif [ "$d101_expect" = 720 ] &&
                          [ -r "$fit_report" ] &&
                          grep -Fq 'U_rx_fault_causes_handshake|grab_source' "$fit_report" &&
-                         grep -Fq 'U_rx_epoch_status_handshake|grab_source' "$fit_report"; then
-                        # Current sweep DRC recognizes both bundles as
+                         grep -Fq 'U_rx_epoch_snapshot_handshake|grab_source' "$fit_report"; then
+                        # Current sweep DRC recognizes the fault-cause and
+                        # bundled epoch status/timestamp snapshot as
                         # handshakes, not D101. Require the fitted structures
-                        # and 15-pair SDC inventory before dispositioning it.
+                        # and 13-pair SDC inventory before dispositioning it.
                         d101_dispositioned=1
                         note ok "Design Assistant D101: all $d101_expect current-source findings classified; fitted CDC bounds required above"
-                        note ok "RX fault-cause and epoch-status bundles present in fitted handshake evidence; not counted as D101 by this DRC run"
+                        note ok "RX fault-cause and epoch snapshot bundles present in fitted handshake evidence; not counted as D101 by this DRC run"
                         note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                     fi
                 fi

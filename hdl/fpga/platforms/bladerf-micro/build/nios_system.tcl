@@ -428,14 +428,15 @@ set_instance_parameter_value rx_fault_causes {width} {32}
 # start/stop/clear_fault decode.
 #
 #
-# rx_epoch_status (Input, fabric->host): bits[31:24]=active_epoch_id,
+# rx_epoch_status/rx_epoch_ts_lo/rx_epoch_ts_hi (Input, fabric->host) are
+# slices of one 96-bit RX->system CDC snapshot. Fabric captures status and
+# first-valid timestamp in one handshake; the PIOs are slices of that single
+# destination register image. NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT reads
+# status and timestamp-low together from these PIOs.
+# rx_epoch_status bits[31:24]=active_epoch_id,
 # bits[23:20]=state (0=ACTIVE,1=PENDING,2=WAIT_FIRST_SAMPLE,
 # 3=ACTIVE_NEW,4=ERROR),
 # bit[19]=discard_active, bits[18:0]=reserved.
-#
-# rx_epoch_ts_lo/rx_epoch_ts_hi (Input, fabric->host): halves of ONE
-# first_valid_timestamp capture register (64 bits), same "read both for
-# one whole snapshot" rationale as rx_overflow_count_lo/hi.
 add_instance rx_epoch_ctrl altera_avalon_pio
 set_instance_parameter_value rx_epoch_ctrl {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value rx_epoch_ctrl {bitModifyingOutReg} {0}

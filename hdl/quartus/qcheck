@@ -1192,10 +1192,10 @@ def check_qgate_sweep_handshake_count():
     text = code_only(qgate.read_text(), comment="#")
     if not re.search(
             r"if grep -qiE 'revision\(\[\[:space:\]\]\+name\)\?"
-            r"\[\[:space:\]\]\*\[:=\].*?hs_expect=15",
+            r"\[\[:space:\]\]\*\[:=\].*?hs_expect=13",
             text, re.S):
         fail("qgate-sweep-handshake-count",
-             "sweep qgate must detect Quartus revision text and expect 15 constrained handshake pairs",
+             "sweep qgate must detect Quartus revision text and expect 13 constrained handshake pairs",
              "valid CDC constraints were rejected solely by a stale count")
     if "d101_expect=720" not in text or "held_expect=389" not in text:
         fail("qgate-sweep-d101-inventory",
@@ -1290,7 +1290,7 @@ def check_qgate_sta_resolution():
         actual_sta.write_text("Type\nSlack : 0.023\n")
         actual_fit.write_text(
             "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n"
-            "bladerf_core:U_core|handshake:U_rx_epoch_status_handshake|grab_source~0\n")
+            "bladerf_core:U_core|handshake:U_rx_epoch_snapshot_handshake|grab_source~0\n")
         actual_drc.write_text(
             "; Design Assistant Status ; Analyzed ;\n"
             "; Total Critical Violations ; 0 ;\n"
@@ -1314,12 +1314,12 @@ def check_qgate_sta_resolution():
             "XFER_STATUS bundles paired: 6/6\n"
             "Info (332181): Report Max Skew: Found 168 paths (0 violated). Worst case slack is 1.528\n"
             "tamer compare payload crossing constrained on 2\n"
-            "handshake crossings constrained: 15\n"
+            "handshake crossings constrained: 13\n"
             "ADI up_xfer bundled crossings constrained: 9\n"
             "dcfifo pointer crossings constrained on 10\n")
         log.write_text(log.read_text() +
                        "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n"
-                       "bladerf_core:U_core|handshake:U_rx_epoch_status_handshake|grab_source~0\n")
+                       "bladerf_core:U_core|handshake:U_rx_epoch_snapshot_handshake|grab_source~0\n")
 
         result = subprocess.run(
             [str(qgate), str(log)], text=True, capture_output=True,
@@ -1491,7 +1491,7 @@ def check_qgate_sta_resolution():
             check=False)
         if (result.returncode != 0 or
                 "D101: all 720 current-source findings classified" not in result.stdout or
-                "RX fault-cause and epoch-status bundles present in fitted handshake evidence" not in result.stdout or
+                "RX fault-cause and epoch snapshot bundles present in fitted handshake evidence" not in result.stdout or
                 "C105: exact internal JTAG TCK finding dispositioned" not in result.stdout or
                 "critical warnings (D101 and exact internal-JTAG C105 dispositioned; no others)" not in result.stdout):
             fail("qgate-classified-bundled-d101",
