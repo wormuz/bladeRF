@@ -2,6 +2,10 @@
 
 Date: 2026-10-09
 
+Historical r6 candidate snapshot. Superseded by r7, which adds 100-transition
+RX1, RX2, and RX_X2 qualification on the same exact staged artifacts; see
+`adr0207-r7-event-chain-release-candidate-2026-10-09.md`.
+
 Bundle: `/home/bonho/projects/bladerf/release-staging/adr0207-event-rx-2026-10-09-r6.tar.gz`
 
 Bundle SHA-256: `00c7c7fade8050fd66907e062fe576a7c7af0690ada04c28f8765cff67b252c2`
