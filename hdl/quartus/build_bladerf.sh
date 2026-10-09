@@ -411,6 +411,7 @@ fi
 set -e
 
 work_dir="work/${platform}-${size}-${rev}"
+work_dir_abs="${SCRIPT_DIR}/${work_dir}"
 
 if [ "$clear_work_dir" == "1" ]; then
     echo -e "\nClearing ${work_dir} directory\n" >&2
@@ -528,8 +529,8 @@ nios_app_dir="bladeRF_nios"
 if [ "$rev" == "foxhunt" ]; then
     nios_app_dir="foxhunt"
 fi
-nios_ram_hex="${work_dir}/${nios_app_dir}/mem_init/nios_system_ram.hex"
-qsys_ram_hex="${work_dir}/nios_system/synthesis/submodules/nios_system_ram.hex"
+nios_ram_hex="${work_dir_abs}/${nios_app_dir}/mem_init/nios_system_ram.hex"
+qsys_ram_hex="${work_dir_abs}/nios_system/synthesis/submodules/nios_system_ram.hex"
 if [ -f "${nios_ram_hex}" ] && [ -f "${qsys_ram_hex}" ]; then
     cp -f "${nios_ram_hex}" "${qsys_ram_hex}"
 else
