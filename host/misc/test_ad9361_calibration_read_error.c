@@ -61,8 +61,10 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 int main(void)
 {
     struct ad9361_rf_phy phy = {0};
+    struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
     phy.spi = &spi;
+    phy.pdata = &pdata;
 
     spi_status = -EIO;
     int32_t ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
@@ -80,6 +82,38 @@ int main(void)
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
         return EXIT_FAILURE;
     }
+
+    /* TX quadrature calibration must fail closed on setup writes and status
+     * reads instead of reporting a successful calibration. */
+    spi_status = 0;
+    fail_write_reg = REG_QUAD_CAL_NCO_FREQ_PHASE_OFFSET;
+    ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, NULL);
+    if (ret != -EIO) {
+        fprintf(stderr, "TX quad calibration hid NCO setup write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_QUAD_CAL_CTRL;
+    ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, NULL);
+    if (ret != -EIO) {
+        fprintf(stderr, "TX quad calibration hid control write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = -1;
+    fail_read_reg = REG_QUAD_CAL_STATUS_TX1;
+    {
+        uint8_t status = 0xff;
+        ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, &status);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX quad calibration hid status read failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+    }
+    fail_read_reg = -1;
 
     register_map_enabled = true;
     read_count = delay_count = 0;
