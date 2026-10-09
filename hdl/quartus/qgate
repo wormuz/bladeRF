@@ -99,6 +99,7 @@ fi
 
 check "errors"                 '^\s*Error'
 check "constraints ignored"    'Ignored (set_|filter)'
+check "generated clocks ignored" 'Ignored create_generated_clock'
 check "empty collections"      'contains zero elements'
 check "no path for assignment" 'No path is found satisfying'
 # An exception the analyser accepted but could not apply is the same class of

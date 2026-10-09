@@ -1331,6 +1331,23 @@ def check_qgate_sta_resolution():
                  "a stale report can reject or approve the wrong FPGA image")
             return
 
+        log.write_text(log.read_text() +
+                       "Warning (332049): Ignored create_generated_clock "
+                       "at spi.sdc(36)\n")
+        result = subprocess.run(
+            [str(qgate), str(log)], text=True, capture_output=True,
+            check=False)
+        if (result.returncode == 0 or
+                "generated clocks ignored: 1" not in result.stdout):
+            fail("qgate-ignored-generated-clock-fails-closed",
+                 "qgate accepted an SDC create_generated_clock command "
+                 "Quartus had ignored",
+                 "peripheral output timing must not silently lose its source clock")
+            return
+        log.write_text(log.read_text().replace(
+            "Warning (332049): Ignored create_generated_clock "
+            "at spi.sdc(36)\n", ""))
+
         for inventory_line, expected_failure, test_name in (
                 ("CLOCK_MON bundles paired: 2/2\n",
                  "clock monitor bundles: required evidence missing", "qgate-clock-monitor-inventory"),
