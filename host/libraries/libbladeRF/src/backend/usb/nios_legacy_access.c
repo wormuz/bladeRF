@@ -114,6 +114,11 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
         return status;
     }
 
+    if (buf[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) {
+        log_error("NIOS completed the legacy request but the peripheral operation failed\n");
+        return BLADERF_ERR_FPGA_OP;
+    }
+
     if (dir == NIOS_PKT_LEGACY_MODE_DIR_READ && status == 0) {
         for (i = 0; i < len; i++) {
             cmd[i].data = buf[i * 2 + 3];

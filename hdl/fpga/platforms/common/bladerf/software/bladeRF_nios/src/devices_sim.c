@@ -152,26 +152,29 @@ void si5338_write(uint8_t addr, uint8_t data)
     ASSERT(data == 0xab);
 }
 
-void vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
+bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
 {
     DBG("%s: cmd=0x%02x, val=0x%04x\n", __FUNCTION__, cmd, val);
     ASSERT(cmd == 0x28   || cmd == 0x08);
     ASSERT(val == 0x0000 || val == 0x8012);
+    return true;
 }
 
-void vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
+bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
 {
     *val = 0x1234;
 
     DBG("%s: cmd=0x%02x, val=0x%04x\n", __FUNCTION__, cmd, *val);
 
     ASSERT(cmd == 0x98);
+    return true;
 }
 
-void adf4351_write(uint32_t val)
+bool adf4351_write(uint32_t val)
 {
     DBG("%s: val=0x%08x\n", __FUNCTION__, val);
     ASSERT(0x580005);
+    return true;
 }
 
 uint32_t control_reg_read(void)

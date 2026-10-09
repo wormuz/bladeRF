@@ -394,13 +394,12 @@ void lms6_write(uint8_t addr, uint8_t data)
     spi_arbiter_unlock();
 }
 
-#ifdef BOARD_BLADERF_MICRO
 /* The vendor alt_avalon_spi_command() polls TRDY/RRDY and TMT forever. A
  * missing/stuck SPI controller therefore prevents the Nios main loop from
  * servicing the USB command response. Keep the vendor transfer semantics,
  * but make every status-poll path finite. Expiry returns an SPI error and
  * never certifies the command as successful. */
-static int bladerf_rffe_spi_command(alt_u32 base, alt_u32 slave,
+static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
                                     alt_u32 write_length,
                                     const alt_u8 *write_data,
                                     alt_u32 read_length, alt_u8 *read_data,
@@ -493,6 +492,7 @@ timeout:
     return -1;
 }
 
+#ifdef BOARD_BLADERF_MICRO
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
 {
     alt_u8 addr8[2];
@@ -518,8 +518,8 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     bytes = (((addr >> 12) & 0x7) + 1);
 
     // Send down the command, read the response into data8
-    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, 2, &addr8[0], bytes,
-                                      &data8[0], 0);
+    status = bladerf_spi_command_bounded(RFFE_SPI_BASE, 0, 2, &addr8[0],
+                                         bytes, &data8[0], 0);
     if (status < 0) {
         spi_arbiter_unlock();
         return false;
@@ -561,8 +561,8 @@ static bool adi_spi_write_unlocked(uint16_t addr, uint64_t data)
     bytes = (((addr >> 12) & 0x7) + 1) + 2;
 
     // Send down the command and the data
-    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, bytes, &data8[0],
-                                      0, 0, 0);
+    status = bladerf_spi_command_bounded(RFFE_SPI_BASE, 0, bytes, &data8[0],
+                                         0, 0, 0);
     return status >= 0;
 }
 
@@ -598,8 +598,8 @@ bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
 
     addr8[0] = (alt_u8)(addr >> 8);
     addr8[1] = (alt_u8)addr;
-    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, sizeof(addr8), addr8,
-                                      1, &current, 0);
+    status = bladerf_spi_command_bounded(RFFE_SPI_BASE, 0, sizeof(addr8),
+                                         addr8, 1, &current, 0);
     if (status < 0) {
         goto done;
     }
@@ -608,8 +608,8 @@ bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
     write_buf[0] = (alt_u8)((addr >> 8) | 0x80);
     write_buf[1] = (alt_u8)addr;
     write_buf[2] = *result;
-    status = bladerf_rffe_spi_command(RFFE_SPI_BASE, 0, sizeof(write_buf),
-                                      write_buf, 0, NULL, 0);
+    status = bladerf_spi_command_bounded(RFFE_SPI_BASE, 0, sizeof(write_buf),
+                                         write_buf, 0, NULL, 0);
     success = status >= 0;
 
 done:
@@ -1126,7 +1126,7 @@ i2c_fail:
 }
 #endif  // BOARD_BLADERF_MICRO
 
-void vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
+bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
 {
     uint8_t data[3] = {
         cmd,
@@ -1134,35 +1134,47 @@ void vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
         val & 0xff,
     };
 
-    /* Update cached value of trim DAC setting */
-    vctcxo_trim_dac_value = val;
+    if (bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
+                                    data, 0, NULL, 0) < 0) {
+        return false;
+    }
 
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 0, 3, data, 0, 0, 0);
+    /* Cache only values confirmed by the peripheral SPI transfer. */
+    vctcxo_trim_dac_value = val;
+    return true;
 }
 
-void vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
+bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
 {
     alt_u8 data[2];
 
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 0, 1, &cmd, 0, 0,
-                           ALT_AVALON_SPI_COMMAND_MERGE);
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 0, 0, 0, 2, &data[0], 0);
+    if (val == NULL ||
+        bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, 1, &cmd, 0, NULL,
+                                    ALT_AVALON_SPI_COMMAND_MERGE) < 0 ||
+        bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, 0, NULL,
+                                    sizeof(data), data, 0) < 0) {
+        return false;
+    }
 
     *val = ((uint8_t)data[0] << 8) | (uint8_t)data[1];
+    return true;
 }
 
 #ifdef BOARD_BLADERF_MICRO
-void ad56x1_vctcxo_trim_dac_write(uint16_t val)
+bool ad56x1_vctcxo_trim_dac_write(uint16_t val)
 {
     uint8_t data[2] = {
         (val >> 8) & 0xff,
         val & 0xff,
     };
 
-    /* Update cached value of trim DAC setting */
-    vctcxo_trim_dac_value = val;
+    if (bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
+                                    data, 0, NULL, 0) < 0) {
+        return false;
+    }
 
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 0, 2, data, 0, 0, 0);
+    vctcxo_trim_dac_value = val;
+    return true;
 }
 #endif  // BOARD_BLADERF_MICRO
 
@@ -1176,15 +1188,18 @@ void ad56x1_vctcxo_trim_dac_read(uint16_t *val)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adf400x_spi_write(uint32_t val)
+bool adf400x_spi_write(uint32_t val)
 {
     uint8_t data[3] = { (val >> 16) & 0xff, (val >> 8) & 0xff,
                         (val >> 0) & 0xff };
 
-    /* Update cached value of ADF400x setting */
-    adf400x_reg[val & 0x3] = val;
+    if (bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 1, sizeof(data),
+                                    data, 0, NULL, 0) < 0) {
+        return false;
+    }
 
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 1, 3, data, 0, 0, 0);
+    adf400x_reg[val & 0x3] = val;
+    return true;
 }
 #endif  // BOARD_BLADERF_MICRO
 
@@ -1209,7 +1224,7 @@ uint32_t adf400x_spi_read(uint8_t addr)
 }
 #endif  // BOARD_BLADERF_MICRO
 
-void adf4351_write(uint32_t val)
+bool adf4351_write(uint32_t val)
 {
     union {
         uint32_t val;
@@ -1227,8 +1242,8 @@ void adf4351_write(uint32_t val)
     sval.byte[1] = sval.byte[2];
     sval.byte[2] = t;
 
-    alt_avalon_spi_command(PERIPHERAL_SPI_BASE, 1, 4, (uint8_t *)&sval.val, 0,
-                           0, 0);
+    return bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 1, sizeof(sval),
+                                       (uint8_t *)&sval.val, 0, NULL, 0) >= 0;
 }
 
 // Temporary for bladeRF2 compat

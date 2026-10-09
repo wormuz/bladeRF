@@ -322,7 +322,7 @@ void ina219_write(uint8_t addr, uint16_t data);
  * @param   cmd     DAC command
  * @param   data    command data to write
  */
-void vctcxo_trim_dac_write(uint8_t cmd, uint16_t val);
+bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val);
 
 /**
  * Read from the VCTCXO trim DAC
@@ -330,14 +330,14 @@ void vctcxo_trim_dac_write(uint8_t cmd, uint16_t val);
  * @param   cmd     DAC command
  * @param   data    Read data
  */
-void vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val);
+bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val);
 
 /**
  * Write a command to the AD56x1 VCTCXO trim DAC
  *
  * @param   data    command data to write
  */
-void ad56x1_vctcxo_trim_dac_write(uint16_t val);
+bool ad56x1_vctcxo_trim_dac_write(uint16_t val);
 
 /**
  * Read from the AD56x1 VCTCXO trim DAC
@@ -351,7 +351,7 @@ void ad56x1_vctcxo_trim_dac_read(uint16_t *val);
  *
  * @param   data    Data to shift into latch
  */
-void adf400x_spi_write(uint32_t val);
+bool adf400x_spi_write(uint32_t val);
 
 /**
  * Read from ADF400x
@@ -367,7 +367,7 @@ uint32_t adf400x_spi_read(uint8_t addr);
  *
  * @param   val     Value to write
  */
-void adf4351_write(uint32_t val);
+bool adf4351_write(uint32_t val);
 
 /**
  * Read bladeRF device control register

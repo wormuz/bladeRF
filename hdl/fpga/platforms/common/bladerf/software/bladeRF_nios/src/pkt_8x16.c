@@ -88,7 +88,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint16_t *data)
 
     switch (id) {
         case NIOS_PKT_8x16_TARGET_VCTCXO_DAC:
-            vctcxo_trim_dac_read(addr, data);
+            success = vctcxo_trim_dac_read(addr, data);
             break;
 
         case NIOS_PKT_8x16_TARGET_IQ_CORR:
@@ -128,7 +128,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
 {
     switch (id) {
         case NIOS_PKT_8x16_TARGET_VCTCXO_DAC:
-            vctcxo_trim_dac_write(addr, data);
+            if (!vctcxo_trim_dac_write(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x16_TARGET_IQ_CORR:
@@ -141,7 +143,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_AD56X1_DAC:
-            ad56x1_vctcxo_trim_dac_write(data);
+            if (!ad56x1_vctcxo_trim_dac_write(data)) {
+                return false;
+            }
             break;
 #endif  // BOARD_BLADERF_MICRO
 

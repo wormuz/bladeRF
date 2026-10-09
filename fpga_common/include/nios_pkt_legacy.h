@@ -122,6 +122,11 @@
  */
 
 #define NIOS_PKT_LEGACY_MAGIC                  'N'
+/* Response-only marker used by current firmware to report a completed
+ * legacy transaction whose peripheral operation failed. Older hosts ignore
+ * the response magic; newer hosts map this value to a device-operation
+ * error. */
+#define NIOS_PKT_LEGACY_ERROR_MAGIC             0xb1
 
 #define NIOS_PKT_LEGACY_DEV_GPIO_ADDR          0
 #define NIOS_PKT_LEGACY_DEV_RX_GAIN_ADDR       4

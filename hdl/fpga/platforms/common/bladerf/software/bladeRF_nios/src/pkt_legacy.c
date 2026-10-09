@@ -285,40 +285,41 @@ static inline void legacy_pkt_read(uint8_t dev_id, uint8_t count,
     }
 }
 
-static inline void perform_config_write(enum config_param p, uint64_t payload)
+static inline bool perform_config_write(enum config_param p,
+                                        uint64_t payload)
 {
     switch (p) {
         case CONFIG_CONTROL_REG:
             control_reg_write((uint32_t) payload);
-            break;
+            return true;
 
         case CONFIG_IQ_CORR_RX_GAIN:
             iqbal_set_gain(BLADERF_MODULE_RX, (uint16_t) payload);
-            break;
+            return true;
 
         case CONFIG_IQ_CORR_RX_PHASE:
             iqbal_set_phase(BLADERF_MODULE_RX, (uint16_t) payload);
-            break;
+            return true;
 
         case CONFIG_IQ_CORR_TX_GAIN:
             iqbal_set_gain(BLADERF_MODULE_TX, (uint16_t) payload);
-            break;
+            return true;
 
         case CONFIG_IQ_CORR_TX_PHASE:
             iqbal_set_phase(BLADERF_MODULE_TX, (uint16_t) payload);
-            break;
+            return true;
 
         case CONFIG_FPGA_VERSION:
             DBG("Error: attempted to write to FPGA version parameter.\n");
-            break;
+            return false;
 
         case CONFIG_RX_TIMESTAMP:
             time_tamer_reset(BLADERF_MODULE_RX);
-            break;
+            return true;
 
         case CONFIG_TX_TIMESTAMP:
             time_tamer_reset(BLADERF_MODULE_TX);
-            break;
+            return true;
 
         case CONFIG_VCTXCO:
             /* The legacy packet format only supported writing a value,
@@ -327,25 +328,23 @@ static inline void perform_config_write(enum config_param p, uint64_t payload)
              * Command 0x28: Set device to write-through mode
              * Command 0x08: Write value to channel 0
              */
-            vctcxo_trim_dac_write(0x28, 0);
-            vctcxo_trim_dac_write(0x08, (uint16_t) payload);
-            break;
+            return vctcxo_trim_dac_write(0x28, 0) &&
+                   vctcxo_trim_dac_write(0x08, (uint16_t) payload);
 
         case CONFIG_XB200_SYNTH:
-            adf4351_write((uint32_t) payload);
-            break;
+            return adf4351_write((uint32_t) payload);
 
         case CONFIG_EXPANSION:
             expansion_port_write(payload);
-            break;
+            return true;
 
         case CONFIG_EXPANSION_DIR:
             expansion_port_set_direction(payload);
-            break;
+            return true;
 
         default:
             DBG("Invalid config param write: 0x%x\n", p);
-            break;
+            return false;
     }
 }
 
@@ -394,7 +393,9 @@ static inline void legacy_config_write(uint8_t count, struct pkt_buf *b)
 
     /* We aggregated all the data we need - perform the write and reset */
     if (n >= config_params[param].len) {
-        perform_config_write(param, payload);
+        if (!perform_config_write(param, payload)) {
+            b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+        }
         n = 0;
         param = CONFIG_UNKNOWN;
     }
