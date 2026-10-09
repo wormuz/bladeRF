@@ -77,13 +77,10 @@ static void test_rf_transition_calibration_is_explicit(void)
     assert((effective & BLADERF_RF_REQUIRE_PLL_LOCKED) != 0);
     assert((effective & BLADERF_RF_REQUIRE_ENSM_RX) != 0);
     assert((effective & BLADERF_RF_REQUIRE_BBPLL_LOCKED) != 0);
-    assert(bladerf2_rf_transition_calibration_supported(
-        BLADERF_TUNING_MODE_HOST, effective));
-    assert(!bladerf2_rf_transition_calibration_supported(
-        BLADERF_TUNING_MODE_FPGA, effective));
-    assert(bladerf2_rf_transition_calibration_supported(
-        BLADERF_TUNING_MODE_FPGA,
-        BLADERF_RF_REQUIRE_EPOCH_VALID | BLADERF_RF_REQUIRE_PLL_LOCKED));
+    assert(bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_HOST));
+    assert(!bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_FPGA));
 }
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;

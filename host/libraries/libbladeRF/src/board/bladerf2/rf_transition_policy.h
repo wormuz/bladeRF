@@ -119,16 +119,14 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
-/* The explicit ADI RFDC calibration entry point requires the host-owned
- * AD9361 PHY object. In FPGA tuning mode that object has been removed and
- * NIOS owns RFIC commands, so reject the combination before starting a
- * transition instead of dereferencing a NULL PHY or claiming an event that
- * NIOS did not report. */
-static inline bool bladerf2_rf_transition_calibration_supported(
-    bladerf_tuning_mode mode, uint32_t required_events_mask)
+/* The event-driven transition wait reads RFIC status through the host-owned
+ * AD9361 PHY object. FPGA tuning mode removes that object and assigns RFIC
+ * ownership to NIOS, so the current transition API must reject that mode
+ * before beginning rather than dereference a NULL PHY. */
+static inline bool bladerf2_rf_transition_mode_supported(
+    bladerf_tuning_mode mode)
 {
-    return !(mode == BLADERF_TUNING_MODE_FPGA &&
-             (required_events_mask & BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE));
+    return mode == BLADERF_TUNING_MODE_HOST;
 }
 
 static inline bool bladerf2_rf_event_is_transition_terminal(

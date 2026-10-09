@@ -1382,7 +1382,7 @@ static int _bladerf_rx_transition_begin(
     bool epochless_async_stream_active = false;
     bool sync_format_unsupported = false;
     bool rx_x2_layout_unsupported = false;
-    bool calibration_unsupported = false;
+    bool tuning_mode_unsupported = false;
     uint64_t stage_started_ns;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
@@ -1415,13 +1415,12 @@ static int _bladerf_rx_transition_begin(
         if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active) {
             transition_busy = true;
-        } else if (!bladerf2_rf_transition_calibration_supported(
-                       board_data->tuning_mode, required_events_mask)) {
-            /* Explicit RFDC calibration uses the host-owned AD9361 PHY.
-             * NIOS tuning has its own threshold policy and no host CAL_DONE
-             * event, so fail before allocating a transaction or invalidating
-             * the current RX epoch. */
-            calibration_unsupported = true;
+        } else if (!bladerf2_rf_transition_mode_supported(
+                       board_data->tuning_mode)) {
+            /* Transition wait reads status through the host-owned AD9361
+             * PHY. NIOS mode has a separate RFIC owner and event path; fail
+             * before allocating a transaction or invalidating the RX epoch. */
+            tuning_mode_unsupported = true;
         } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
                        (required_events_mask &
                         BLADERF_RF_REQUIRE_EPOCH_VALID) != 0,
@@ -1504,7 +1503,7 @@ static int _bladerf_rx_transition_begin(
     if (transition_busy) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
-    if (calibration_unsupported) {
+    if (tuning_mode_unsupported) {
         return BLADERF_ERR_UNSUPPORTED;
     }
     if (epochless_async_stream_active) {

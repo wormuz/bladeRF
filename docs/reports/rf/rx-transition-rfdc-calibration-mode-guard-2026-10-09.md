@@ -1,19 +1,22 @@
-# Guard explicit RFDC calibration in NIOS tuning mode
+# Reject event-driven RX transitions in NIOS tuning mode
 
 Date: 2026-10-09
 
 ## Finding
 
-`bladerf_rx_transition_wait()` performs explicit `RX_RFDC_CAL_DONE` through the host ADI PHY pointer (`board_data->phy`). Switching a bladeRF 2 device to `BLADERF_TUNING_MODE_FPGA` deinitializes the host RFIC controller and sets that pointer to `NULL`; frequency writes then go through NIOS. Before this fix, a transition requesting explicit RFDC calibration could pass the null pointer into `ad9361_do_calib_timeout()`, whose implementation dereferences it while disabling AD9361 tracking. The caller could therefore crash instead of receiving an API error.
+The event-driven RX transition implementation is host-controller-specific. Its wait path reads AD9361 status through `board_data->phy`; switching to `BLADERF_TUNING_MODE_FPGA` deinitializes the host RFIC controller and clears that pointer, while frequency operations move to NIOS. The public begin API documented host-mode tuning but did not enforce it. A transition begun in FPGA/NIOS mode could later dereference the null host PHY while observing PLL/ENSM state. Explicit RFDC calibration had the same null-PHY hazard.
 
 ## Change
 
-Transition begin now checks the selected tuning mode while holding the device lock. If FPGA/NIOS mode is active and explicit host RFDC calibration is requested, it returns `BLADERF_ERR_UNSUPPORTED` before allocating a transaction, invalidating the current RX epoch, or touching the RFIC. Ordinary NIOS-owned transitions remain available; NIOS retains its own first-tune / ≥100 MHz RFDC policy and the event-driven wait observes its NIOS command response before subsequent RF-state checks. The public API documents the mode restriction.
+Transition begin now checks tuning-mode ownership under the device lock. Every event-driven transition request in FPGA/NIOS mode returns `BLADERF_ERR_UNSUPPORTED` before allocating a transaction, invalidating the current RX epoch, or touching the RFIC. Legacy `bladerf_set_frequency()` in NIOS mode is unchanged. The public API now states the mode restriction.
+
+This is a fail-closed boundary, not NIOS event-chain support. NIOS-owned tuning still needs a separate transition protocol that reports its RFIC and calibration completion into the shared FPGA epoch contract before it can be qualified for event-driven RX.
 
 ## Verification
 
-- Rebuilt the affected libbladeRF shared library and `libbladeRF_test_sync_epoch_traversal` from the configured CMake tree.
-- Native sync/epoch traversal test passed, including policy checks for host explicit-calibration support, NIOS explicit-calibration rejection, and normal NIOS epoch requests.
+- Built production `libbladeRF.so` with all test fault-injection options OFF.
+- Rebuilt and ran `libbladeRF_test_sync_epoch_traversal`; exit status 0, including mode-policy assertions.
+- Verified the production shared library has SONAME `libbladeRF.so.2`, no RPATH/RUNPATH, and no test-injection strings.
 - `git diff --check` passed.
 
-A connected-hardware NIOS-mode transition run is still required before qualifying that full path for release; this fix only removes an unsafe unsupported combination and does not claim NIOS-mode hardware qualification.
+No live NIOS-mode hardware transition was attempted; the guard returns before changing mode-specific RF state. Hardware qualification of NIOS event reporting remains open.

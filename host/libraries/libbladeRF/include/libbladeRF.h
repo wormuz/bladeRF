@@ -5036,10 +5036,10 @@ typedef enum {
  * completion before the FPGA opens a new RX epoch, even when the LO delta is
  * small. Calibration moves
  * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
- * signal content is present. This explicit operation is supported only in
- * host tuning mode; FPGA/NIOS tuning owns a separate RFIC control path and
- * rejects this request with BLADERF_ERR_UNSUPPORTED before starting a
- * transition. */
+ * signal content is present. Event-driven transitions, including this
+ * explicit operation, are supported only in host tuning mode; FPGA/NIOS
+ * tuning owns a separate RFIC control path and is rejected with
+ * BLADERF_ERR_UNSUPPORTED before starting a transition. */
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)
 
 /**
@@ -5115,6 +5115,9 @@ struct bladerf_rx_transition_request {
  * changing RF state while an RX async stream using a format without sample
  * epoch metadata is active. Stop that stream or use a supported sample-META
  * format before requesting an epoch.
+ * Event-driven transitions require host RFIC ownership and return
+ * ::BLADERF_ERR_UNSUPPORTED in FPGA/NIOS tuning mode without allocating a
+ * transaction or changing RF state.
  *
  * @param       dev             Device handle
  * @param[in]   ch              RX channel
