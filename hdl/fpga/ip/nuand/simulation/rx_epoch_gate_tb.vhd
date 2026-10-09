@@ -24,6 +24,19 @@ architecture test of rx_epoch_gate_tb is
     signal state : unsigned(3 downto 0);
     signal discard_active, start_event : std_logic;
     signal first_valid_timestamp : unsigned(63 downto 0);
+    -- RX1 configuration uses only lane 0; lane 1 remains disabled even when
+    -- the paired RX_X2 test below deliberately withholds its valid sample.
+    signal rx1_controls_in : sample_controls_t(0 to 1) := (
+        0 => SAMPLE_CONTROL_ENABLE,
+        1 => SAMPLE_CONTROL_DISABLE
+    );
+    signal rx1_controls_out : sample_controls_t(0 to 1);
+    signal rx1_samples_out : sample_streams_t(0 to 1);
+    signal rx1_timestamp_out : unsigned(63 downto 0);
+    signal rx1_epoch_id : unsigned(7 downto 0);
+    signal rx1_state : unsigned(3 downto 0);
+    signal rx1_discard_active, rx1_start_event : std_logic;
+    signal rx1_first_valid_timestamp : unsigned(63 downto 0);
 begin
     clock <= not clock after 5 ns;
     dut : entity work.rx_epoch_gate
@@ -39,6 +52,25 @@ begin
             out_discard_active => discard_active,
             epoch_start_event => start_event,
             first_valid_timestamp => first_valid_timestamp
+        );
+
+    rx1_dut : entity work.rx_epoch_gate
+        generic map ( NUM_STREAMS => 2 )
+        port map (
+            clock => clock, reset => reset,
+            in_sample_controls => rx1_controls_in,
+            in_samples => samples_in,
+            rx_timestamp => timestamp,
+            epoch_arm => arm, epoch_complete => complete,
+            epoch_abort => abort, epoch_id_in => epoch_id_in,
+            out_sample_controls => rx1_controls_out,
+            out_samples => rx1_samples_out,
+            out_timestamp => rx1_timestamp_out,
+            out_epoch_id => rx1_epoch_id,
+            out_state => rx1_state,
+            out_discard_active => rx1_discard_active,
+            epoch_start_event => rx1_start_event,
+            first_valid_timestamp => rx1_first_valid_timestamp
         );
 
     test_process : process
@@ -157,6 +189,12 @@ begin
                first_valid_timestamp = to_unsigned(0, 64)
             report "RX_X2 epoch opened before both enabled channels were valid"
             severity failure;
+        assert rx1_start_event = '1' and rx1_epoch_id = x"2A" and
+               rx1_first_valid_timestamp = to_unsigned(202, 64) and
+               rx1_samples_out(0).data_i = to_signed(1234, 16) and
+               rx1_controls_out(1).enable = '0'
+            report "RX1 did not open from its sole enabled valid channel"
+            severity failure;
 
         wait until falling_edge(clock);
         timestamp <= to_unsigned(203, 64);
@@ -189,6 +227,11 @@ begin
                epoch_id = x"2A" and
                first_valid_timestamp = to_unsigned(203, 64)
             report "epoch certificate was not stable after start-event pulse"
+            severity failure;
+        assert rx1_start_event = '0' and rx1_state = "0000" and
+               rx1_discard_active = '0' and rx1_epoch_id = x"2A" and
+               rx1_first_valid_timestamp = to_unsigned(202, 64)
+            report "RX1 certificate was not stable after start-event pulse"
             severity failure;
 
         -- Abort immediately after the first valid sample, while the internal
