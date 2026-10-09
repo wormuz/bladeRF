@@ -77,6 +77,38 @@ int main(void)
     assert(bladerf2_rf_transition_deadline_expired(100, 100));
     assert(bladerf2_rf_transition_deadline_expired(101, 100));
 
+    /* RF-link startup accepts only a new, fault-free generation ACK for the
+     * requested direction. A stale high direction bit cannot certify START. */
+    const uint32_t rf_link_version_mask = 0xf0000000u;
+    const uint32_t rf_link_version = 0x10000000u;
+    const uint32_t rf_link_epoch_count_mask = 0x0ff00000u;
+    const uint32_t rf_link_tx_ack = 1u << 9;
+    const uint32_t rf_link_tx_fault = 1u << 15;
+    const uint32_t rf_link_entry = rf_link_version | (7u << 20) |
+                                   rf_link_tx_ack;
+    const uint32_t rf_link_new_ack = rf_link_version | (8u << 20) |
+                                     rf_link_tx_ack;
+    assert(bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, rf_link_new_ack, rf_link_version_mask,
+        rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
+        rf_link_tx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, rf_link_entry, rf_link_version_mask,
+        rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
+        rf_link_tx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, rf_link_version | (8u << 20), rf_link_version_mask,
+        rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
+        rf_link_tx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, rf_link_new_ack | rf_link_tx_fault,
+        rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack, rf_link_tx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, 0x20000000u | (8u << 20) | rf_link_tx_ack,
+        rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack, rf_link_tx_fault));
+
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));
     assert(!bladerf2_rf_event_is_transition_terminal(
@@ -85,6 +117,12 @@ int main(void)
         BLADERF_RF_EVT_RX_DATA_RESUMED));
     assert(!bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_CONFIG_ACCEPTED));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_TX_LINK_VALID));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_TX_UNDERRUN));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_TX_LINK_FAULT));
 
     /* Empty requests are rejected; a control-only completion must still
      * identify at least one observed hardware condition. */

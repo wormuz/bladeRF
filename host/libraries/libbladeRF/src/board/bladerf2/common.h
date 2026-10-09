@@ -219,6 +219,11 @@ struct bladerf2_board_data {
     uint64_t rx_fault_monitor_stage_started_ns;
     uint64_t rx_fpga_loss_count_last;
     bool rx_fpga_loss_count_valid;
+    uint64_t tx_fpga_loss_count_last;
+    bool tx_fpga_loss_count_valid;
+    bool tx_link_fault_reported;
+    bool tx_stream_faulted;
+    bool tx_status_unavailable_reported;
 
     /* ADR-0207: bounded chronological history of host-observed RX
      * transition events. Event readers must not take dev->lock because the
@@ -352,6 +357,10 @@ int bladerf2_rx_fault_monitor_start(struct bladerf *dev);
 void bladerf2_rx_fault_monitor_stop(struct bladerf *dev);
 void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
                               const struct bladerf_rf_event *event);
+void bladerf2_tx_stream_event(struct bladerf *dev,
+                              bladerf_rf_event_type event_type,
+                              uint64_t loss_count, uint32_t link_status,
+                              int32_t error_code);
 void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event);

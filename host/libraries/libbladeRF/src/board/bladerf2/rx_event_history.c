@@ -235,6 +235,38 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
 }
 
+void bladerf2_tx_stream_event(struct bladerf *dev,
+                              bladerf_rf_event_type event_type,
+                              uint64_t loss_count, uint32_t link_status,
+                              int32_t error_code)
+{
+    struct bladerf_rf_event event = {0};
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL ||
+        (event_type != BLADERF_RF_EVT_TX_LINK_VALID &&
+         event_type != BLADERF_RF_EVT_TX_UNDERRUN &&
+         event_type != BLADERF_RF_EVT_TX_LINK_FAULT &&
+         event_type != BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE &&
+         event_type != BLADERF_RF_EVT_TX_STREAM_STOPPED)) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    event.host_monotonic_ns = monotonic_ns();
+    event.event_type = event_type;
+    event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
+                                         BLADERF_RF_STATE_ERROR;
+    if (event_type == BLADERF_RF_EVT_TX_UNDERRUN) {
+        event.flags |= (uint32_t)loss_count;
+        event.rfic_status = (uint32_t)(loss_count >> 32);
+    } else {
+        event.rfic_status = link_status;
+    }
+    event.error_code = error_code;
+    bladerf2_rf_event_append(board_data, &event);
+}
+
 void bladerf2_rf_event_append_rx_invalidation_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event, uint32_t channel_flags)

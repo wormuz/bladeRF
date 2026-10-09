@@ -82,6 +82,7 @@ static void _test_rx_transition_late_observation(const char *stage)
 #define REG_BBPLL_LOCK_STATUS_ADDR 0x05e
 #define VCO_LOCK_BIT 0x02
 #define BBPLL_LOCK_BIT 0x80
+#define RF_LINK_STATUS_TX_FAULT (1u << 15)
 #define ENSM_STATE_MASK 0x0F
 #define ENSM_STATE_RX 0x8
 #define ENSM_STATE_FDD 0xA
@@ -674,6 +675,7 @@ static void *rx_fault_monitor_task(void *arg)
         }
 
         bool should_poll = false;
+        bool should_poll_tx = false;
         bool epoch_certified = false;
         uint32_t transaction_id = 0;
         uint8_t epoch_id = 0;
@@ -689,8 +691,10 @@ static void *rx_fault_monitor_task(void *arg)
         bool expected_rx_channel_mask_valid = false;
         int rx_channel_status = 0;
         uint64_t rx_loss_count = 0;
+        uint64_t tx_loss_count = 0;
         int status = 0;
         int loss_count_status = 0;
+        int tx_loss_count_status = 0;
         int rfic_status = 0;
         int rx_fault_causes_status = 0;
 
@@ -712,20 +716,35 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rf_link_dir_on[0] && epoch_certified &&
                 !board_data->rf_transition_pending &&
                 !board_data->rf_transition_setter_active;
-            if (should_poll) {
-                _rx_fault_monitor_stage(board_data, "RFFE status");
-                rx_channel_status = dev->backend->rffe_control_read(
-                    dev, &rffe_status);
+            should_poll_tx = board_data->state == STATE_INITIALIZED &&
+                board_data->rf_link_dir_on[1] &&
+                !board_data->rf_transition_pending &&
+                !board_data->rf_transition_setter_active;
+            if (should_poll || should_poll_tx) {
+                if (should_poll) {
+                    _rx_fault_monitor_stage(board_data, "RFFE status");
+                    rx_channel_status = dev->backend->rffe_control_read(
+                        dev, &rffe_status);
+                }
                 _rx_fault_monitor_stage(board_data, "NIOS link status");
                 status = nios_rf_link_status_read(dev, &rf_link_status);
-                if (status == 0 && dev->board->get_loss_event_count != NULL) {
+                if (status == 0 && should_poll &&
+                    dev->board->get_loss_event_count != NULL) {
                     _rx_fault_monitor_stage(board_data, "NIOS loss count");
                     loss_count_status = dev->board->get_loss_event_count(
                         dev, BLADERF_RX, &rx_loss_count);
-                } else if (status == 0) {
+                } else if (status == 0 && should_poll) {
                     loss_count_status = BLADERF_ERR_UNSUPPORTED;
                 }
-                if (status == 0 &&
+                if (status == 0 && should_poll_tx &&
+                    dev->board->get_loss_event_count != NULL) {
+                    _rx_fault_monitor_stage(board_data, "NIOS TX loss count");
+                    tx_loss_count_status = dev->board->get_loss_event_count(
+                        dev, BLADERF_TX, &tx_loss_count);
+                } else if (status == 0 && should_poll_tx) {
+                    tx_loss_count_status = BLADERF_ERR_UNSUPPORTED;
+                }
+                if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                         RF_LINK_STATUS_VERSION_1 &&
                     (rf_link_status & RF_LINK_STATUS_RX_FAULT) == 0) {
@@ -742,7 +761,7 @@ static void *rx_fault_monitor_task(void *arg)
                         rfic_status = _read_rfic_reg(
                             dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
                     }
-                } else if (status == 0 &&
+                } else if (status == 0 && should_poll &&
                            (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                                RF_LINK_STATUS_VERSION_1 &&
                            (rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
@@ -757,6 +776,80 @@ static void *rx_fault_monitor_task(void *arg)
         });
 
         _rx_fault_monitor_stage(board_data, "idle");
+
+        if (!should_poll && !should_poll_tx) {
+            continue;
+        }
+        if (should_poll_tx) {
+            bool report_status_unavailable = false;
+            bool report_tx_fault = false;
+            bool report_tx_underrun = false;
+            bool counter_reset = false;
+            const int tx_link_status_error = status != 0 ? status :
+                ((rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
+                 RF_LINK_STATUS_VERSION_1 ? BLADERF_ERR_UNEXPECTED : 0);
+
+            WITH_MUTEX(&dev->lock, {
+                if (tx_link_status_error != 0 ||
+                    tx_loss_count_status != 0) {
+                    if (!board_data->tx_status_unavailable_reported) {
+                        board_data->tx_status_unavailable_reported = true;
+                        board_data->tx_stream_faulted = true;
+                        report_status_unavailable = true;
+                    }
+                }
+                if (tx_link_status_error == 0 &&
+                    (rf_link_status & RF_LINK_STATUS_TX_FAULT) != 0 &&
+                    !board_data->tx_link_fault_reported) {
+                    board_data->tx_link_fault_reported = true;
+                    board_data->tx_stream_faulted = true;
+                    report_tx_fault = true;
+                }
+                if (tx_link_status_error == 0 &&
+                    tx_loss_count_status == 0) {
+                    if (!board_data->tx_fpga_loss_count_valid) {
+                        board_data->tx_fpga_loss_count_last = tx_loss_count;
+                        board_data->tx_fpga_loss_count_valid = true;
+                    } else if (tx_loss_count <
+                               board_data->tx_fpga_loss_count_last) {
+                        board_data->tx_fpga_loss_count_last = tx_loss_count;
+                        board_data->tx_stream_faulted = true;
+                        counter_reset = true;
+                    } else if (tx_loss_count >
+                               board_data->tx_fpga_loss_count_last) {
+                        board_data->tx_fpga_loss_count_last = tx_loss_count;
+                        board_data->tx_stream_faulted = true;
+                        report_tx_underrun = true;
+                    }
+                }
+
+                /* Keep the software TX validity state and its durable event
+                 * sequence in one device-lock commit with respect to disable
+                 * and a subsequent enable. */
+                if (report_status_unavailable) {
+                    bladerf2_tx_stream_event(
+                        dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+                        rf_link_status, tx_link_status_error != 0
+                            ? tx_link_status_error : tx_loss_count_status);
+                }
+                if (report_tx_fault) {
+                    bladerf2_tx_stream_event(
+                        dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, rf_link_status,
+                        BLADERF_ERR_FPGA_OP);
+                }
+                if (report_tx_underrun) {
+                    bladerf2_tx_stream_event(
+                        dev, BLADERF_RF_EVT_TX_UNDERRUN, tx_loss_count, 0,
+                        BLADERF_ERR_FPGA_OP);
+                }
+                if (counter_reset) {
+                    bladerf2_tx_stream_event(
+                        dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+                        tx_loss_count, rf_link_status,
+                        BLADERF_ERR_UNEXPECTED);
+                }
+            });
+        }
 
         if (!should_poll) {
             continue;

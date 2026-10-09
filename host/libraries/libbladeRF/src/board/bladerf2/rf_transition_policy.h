@@ -229,6 +229,22 @@ static inline bool bladerf2_rf_event_cursor_is_valid(uint64_t after_sequence,
     return after_sequence <= current_sequence;
 }
 
+/* A direction ACK is current only when the START advanced the fabric
+ * generation, the versioned status protocol is still present, the selected
+ * direction consumed that generation, and its sticky fault bit is clear. */
+static inline bool bladerf2_rf_link_epoch_ack_valid(
+    uint32_t entry_status, uint32_t observed_status,
+    uint32_t version_mask, uint32_t version_value,
+    uint32_t epoch_count_mask, uint32_t applied_bit, uint32_t fault_bit)
+{
+    return (entry_status & version_mask) == version_value &&
+           (observed_status & version_mask) == version_value &&
+           (entry_status & epoch_count_mask) !=
+               (observed_status & epoch_count_mask) &&
+           (observed_status & applied_bit) != 0 &&
+           (observed_status & fault_bit) == 0;
+}
+
 static inline bool bladerf2_rx_first_host_data_admissible(
     bool required, bool already_reported, uint64_t deadline_ns,
     uint64_t now_ns)

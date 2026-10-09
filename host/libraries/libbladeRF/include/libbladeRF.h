@@ -4855,7 +4855,23 @@ typedef enum {
     /** ADC clipping was observed in certified RX META samples. `flags` uses
      * BLADERF_RF_EVENT_F_RX_CLIPPING_RX1/RX2. This is a sample-quality
      * notification and does not revoke the otherwise valid RX epoch. */
-    BLADERF_RF_EVT_RX_ADC_CLIPPING
+    BLADERF_RF_EVT_RX_ADC_CLIPPING,
+    /** TX RF-link generation was acknowledged by the FPGA. This certifies
+     * the host/FPGA transport link only; it does not certify analog TX power
+     * or RFIC signal quality. */
+    BLADERF_RF_EVT_TX_LINK_VALID,
+    /** FPGA TX sample FIFO underflow count advanced. `flags` contains the
+     * low 32 bits and `rfic_status` the high 32 bits of the cumulative
+     * direction-specific loss-event count. TX link validity is revoked. */
+    BLADERF_RF_EVT_TX_UNDERRUN,
+    /** FPGA sticky TX link fault was observed. `rfic_status` contains the
+     * RF-link status word. TX link validity is revoked. */
+    BLADERF_RF_EVT_TX_LINK_FAULT,
+    /** TX link status or loss counter could not be read while TX was active.
+     * TX link validity is unknown and must be treated as revoked. */
+    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+    /** TX module was disabled; no active transmission is certified. */
+    BLADERF_RF_EVT_TX_STREAM_STOPPED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
@@ -5226,8 +5242,8 @@ int CALL_CONV bladerf_rx_transition_get_events(
     bool *history_complete);
 
 /** Read all device RF events newer than an event-ring cursor. This includes
- * transaction events, unscoped RX_DATA_INVALIDATED notifications, and RX
- * stream overrun/discontinuity notifications.
+ * transaction events, unscoped RX validity/discontinuity notifications, and
+ * TX link/underrun notifications.
  *
  * The cursor is the sequence returned in `next_sequence`, not a transaction
  * ID. If `history_complete` is false, one or more events after

@@ -868,12 +868,19 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
  * NuandRFLinkStart, and never rebuilds its DMA geometry afterwards. The
  * two sides have to agree on which speed this generation runs at.
  *
- * Older gateware has no RF_LINK_CFG target and answers the write with a
- * failure; that must not stop a device from streaming, so the result is
- * logged and dropped. A device that needs the epoch will fail visibly at
- * the stream instead, which is the same signal as before this existed.
+ * Gateware with the versioned RF_LINK_STATUS protocol must acknowledge the
+ * new epoch and report no direction fault before enable succeeds. Legacy
+ * gateware that explicitly rejects the status target keeps its historical
+ * best-effort path; an NIOS transport failure is never treated as legacy.
  */
-static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
+#define RF_LINK_STATUS_VERSION_MASK 0xf0000000u
+#define RF_LINK_STATUS_VERSION_1    0x10000000u
+#define RF_LINK_STATUS_RX_FAULT     (1u << 14)
+#define RF_LINK_STATUS_TX_FAULT     (1u << 15)
+
+static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
+                                  bool *epoch_confirmed,
+                                  bool *start_accepted)
 {
     bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
     uint32_t entry_status   = 0;
@@ -882,13 +889,23 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
      * a one-direction session. Wait on the bit of the direction just
      * enabled: 8 for RX, 9 for TX. */
     uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch) ? (1u << 9) : (1u << 8);
+    uint32_t const fault_bit = BLADERF_CHANNEL_IS_TX(ch)
+        ? RF_LINK_STATUS_TX_FAULT : RF_LINK_STATUS_RX_FAULT;
+    uint8_t entry_epoch_count = 0;
+    bool strict_epoch = false;
     int status;
+
+    NULL_CHECK(epoch_confirmed);
+    NULL_CHECK(start_accepted);
+    *epoch_confirmed = false;
+    *start_accepted = false;
 
     /* What the link looked like on arrival, before this session touches it.
      * Printed unconditionally at verbose because the captures that fail do
      * so silently, and the question "what state did the previous run leave"
      * cannot be answered after the fact. */
-    if (nios_rf_link_status_read(dev, &entry_status) == 0) {
+    status = nios_rf_link_status_read(dev, &entry_status);
+    if (status == 0) {
         log_verbose("%s: link status on entry: 0x%08x "
                     "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
                     "epoch_both=%u epoch_count=%u)\n",
@@ -896,13 +913,26 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
                     (entry_status >> 16) & 1, (entry_status >> 19) & 1,
                     (entry_status >> 14) & 1, (entry_status >> 15) & 1,
                     (entry_status >> 10) & 1, (entry_status >> 20) & 0xff);
+        strict_epoch = (entry_status & RF_LINK_STATUS_VERSION_MASK) ==
+                       RF_LINK_STATUS_VERSION_1;
+        if (!strict_epoch) {
+            log_error("%s: unsupported RF-link status protocol 0x%08x\n",
+                      __FUNCTION__, entry_status);
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+        entry_epoch_count = (uint8_t)(entry_status >> 20);
+    } else if (status != BLADERF_ERR_FPGA_OP) {
+        /* An unsupported target is the legacy-gateware compatibility case.
+         * Transport failures (especially NIOS timeout) must never be
+         * reinterpreted as old firmware and followed by a successful enable. */
+        return status;
     }
 
     status = dev->backend->get_device_speed(dev, &speed);
     if (status != 0) {
         log_debug("%s: cannot read device speed (%s); epoch not announced\n",
                   __FUNCTION__, bladerf_strerror(status));
-        return;
+        return strict_epoch ? status : 0;
     }
 
     /* Make FX3 restart its RF link before the epoch is declared.
@@ -934,7 +964,7 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
         log_debug("%s: speed latch not accepted (%s); gateware may predate "
                   "the RF link epoch mechanism\n",
                   __FUNCTION__, bladerf_strerror(status));
-        return;
+        return strict_epoch ? status : 0;
     }
 
     /* No FX3 RF-link restart here. Cycling the alternate setting (NULL then
@@ -947,8 +977,9 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
     if (status != 0) {
         log_debug("%s: link start not accepted (%s)\n",
                   __FUNCTION__, bladerf_strerror(status));
-        return;
+        return strict_epoch ? status : 0;
     }
+    *start_accepted = true;
 
     /* Wait for the fabric to say it consumed this epoch.
      *
@@ -975,15 +1006,33 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
         if (status != 0) {
             log_debug("%s: cannot read link status (%s)\n",
                       __FUNCTION__, bladerf_strerror(status));
-            return;
+            return strict_epoch ? status : 0;
         }
 
-        if (st & applied_bit) {
+        if ((st & RF_LINK_STATUS_VERSION_MASK) !=
+            RF_LINK_STATUS_VERSION_1) {
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+
+        /* A direction bit left high by the preceding stream is not an ACK
+         * for this START. Require both a new fabric generation and the
+         * direction's acknowledgement before enabling the host stream. */
+        const bool epoch_advanced =
+            (uint8_t)(st >> 20) != entry_epoch_count;
+        if (epoch_advanced && (st & applied_bit) != 0 &&
+            (st & fault_bit) != 0) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+        if (bladerf2_rf_link_epoch_ack_valid(
+                entry_status, st, RF_LINK_STATUS_VERSION_MASK,
+                RF_LINK_STATUS_VERSION_1, 0x0ff00000u, applied_bit,
+                fault_bit)) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
                         "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
                         __FUNCTION__, attempt + 1, st,
                         (st >> 19) & 1, (st >> 14) & 1, (st >> 20) & 0xff);
-            return;
+            *epoch_confirmed = true;
+            return 0;
         }
 
         if (attempt == 15) {
@@ -999,6 +1048,7 @@ static void announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch)
 
     log_debug("%s: epoch not acknowledged by both directions; the stream "
               "may abort\n", __FUNCTION__);
+    return strict_epoch ? BLADERF_ERR_TIMEOUT : 0;
 }
 
 /* Counterpart to announce_rf_link_epoch: drop link_active so the next
@@ -1034,6 +1084,40 @@ static int bladerf2_update_rx_channel_enable_mask(
     return status;
 }
 
+static int bladerf2_fail_module_enable(struct bladerf *dev,
+                                       bladerf_channel ch,
+                                       int operation_status,
+                                       bool stop_accepted_link_epoch)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    const bool is_tx = BLADERF_CHANNEL_IS_TX(ch);
+    const unsigned int direction = is_tx ? 1u : 0u;
+    int rollback_status = board_data->rfic->enable_module(dev, ch, false);
+
+    if (rollback_status != 0) {
+        log_error("%s: failed to disable %s after enable failure: %s\n",
+                  __FUNCTION__, is_tx ? "TX" : "RX",
+                  bladerf_strerror(rollback_status));
+        board_data->rf_link_dir_on[direction] = true;
+    }
+    if (!is_tx) {
+        (void)bladerf2_update_rx_channel_enable_mask(dev, board_data);
+    }
+    if (is_tx) {
+        board_data->tx_stream_faulted = true;
+        board_data->tx_status_unavailable_reported = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
+            operation_status);
+    }
+    if (stop_accepted_link_epoch && !board_data->rf_link_dir_on[0] &&
+        !board_data->rf_link_dir_on[1]) {
+        end_rf_link_epoch(dev);
+    }
+
+    return operation_status;
+}
+
 static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
@@ -1060,17 +1144,26 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * the same START cleared (fifo_writer.vhd:359, :414); either way the
      * datapath streams. */
     if (enable) {
+        bool const tx_first_enable = BLADERF_CHANNEL_IS_TX(ch) &&
+                                     !board_data->rf_link_dir_on[1];
+        bool epoch_confirmed = false;
+        bool start_accepted = false;
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
-            return status;
+            return bladerf2_fail_module_enable(dev, ch, status, false);
         }
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_update_rx_channel_enable_mask(dev, board_data);
             if (status != 0) {
-                return status;
+                return bladerf2_fail_module_enable(dev, ch, status, false);
             }
         }
-        announce_rf_link_epoch(dev, ch);
+        status = announce_rf_link_epoch(dev, ch, &epoch_confirmed,
+                                        &start_accepted);
+        if (status != 0) {
+            return bladerf2_fail_module_enable(
+                dev, ch, status, start_accepted);
+        }
         if (!BLADERF_CHANNEL_IS_TX(ch) && !board_data->rf_link_dir_on[0]) {
             /* The FPGA loss counter resets with the RX sample-domain reset
              * issued by the first RX module enable. Start monitoring from
@@ -1079,7 +1172,24 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->rx_fpga_loss_count_last = 0;
             board_data->rx_fpga_loss_count_valid = true;
         }
+        if (tx_first_enable && epoch_confirmed) {
+            board_data->tx_fpga_loss_count_last = 0;
+            board_data->tx_fpga_loss_count_valid = true;
+            board_data->tx_link_fault_reported = false;
+            board_data->tx_stream_faulted = false;
+            board_data->tx_status_unavailable_reported = false;
+        } else if (tx_first_enable) {
+            board_data->tx_fpga_loss_count_valid = false;
+            board_data->tx_stream_faulted = true;
+            board_data->tx_status_unavailable_reported = true;
+        }
         board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = true;
+        if (tx_first_enable) {
+            bladerf2_tx_stream_event(
+                dev, epoch_confirmed ? BLADERF_RF_EVT_TX_LINK_VALID :
+                                       BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+                0, 0, epoch_confirmed ? 0 : BLADERF_ERR_UNSUPPORTED);
+        }
         return 0;
     }
 
@@ -1097,11 +1207,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * that is not ours to schedule. */
     {
         uint32_t st = 0;
+        int link_status = nios_rf_link_status_read(dev, &st);
 
         /* State of the link as the stream ends, with the epoch still
-         * standing -- this is the only moment the failure is observable
-         * from the host, since a STOP or a new START clears the vector. */
-        if (nios_rf_link_status_read(dev, &st) == 0) {
+         * standing -- a STOP or new START clears its sticky fault vector. */
+        if (link_status == 0) {
             log_verbose("%s: link status at %s disable: 0x%08x (rx_active=%u "
                         "tx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
                         "rx_epoch=%u tx_epoch=%u epoch_count=%u)\n",
@@ -1110,21 +1220,106 @@ static int bladerf2_enable_module(struct bladerf *dev,
                         (st >> 14) & 1, (st >> 15) & 1, (st >> 8) & 1,
                         (st >> 9) & 1, (st >> 20) & 0xff);
         }
+
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
+            uint64_t tx_loss_count = 0;
+            int tx_loss_status = link_status == 0 &&
+                                 dev->board->get_loss_event_count != NULL
+                ? dev->board->get_loss_event_count(dev, BLADERF_TX,
+                                                   &tx_loss_count)
+                : (link_status != 0 ? link_status : BLADERF_ERR_UNSUPPORTED);
+            bool report_link_fault = link_status == 0 &&
+                (st & RF_LINK_STATUS_VERSION_MASK) ==
+                    RF_LINK_STATUS_VERSION_1 &&
+                (st & RF_LINK_STATUS_TX_FAULT) != 0 &&
+                !board_data->tx_link_fault_reported;
+            bool report_status_unavailable =
+                (link_status != 0 ||
+                 (st & RF_LINK_STATUS_VERSION_MASK) !=
+                    RF_LINK_STATUS_VERSION_1 || tx_loss_status != 0) &&
+                !board_data->tx_status_unavailable_reported;
+            bool report_underrun = false;
+
+            if (report_link_fault) {
+                board_data->tx_link_fault_reported = true;
+                board_data->tx_stream_faulted = true;
+            }
+            if (report_status_unavailable) {
+                board_data->tx_status_unavailable_reported = true;
+                board_data->tx_stream_faulted = true;
+            }
+            if (tx_loss_status == 0 && board_data->tx_fpga_loss_count_valid) {
+                if (tx_loss_count > board_data->tx_fpga_loss_count_last) {
+                    board_data->tx_fpga_loss_count_last = tx_loss_count;
+                    board_data->tx_stream_faulted = true;
+                    report_underrun = true;
+                } else if (tx_loss_count <
+                           board_data->tx_fpga_loss_count_last) {
+                    board_data->tx_fpga_loss_count_last = tx_loss_count;
+                    board_data->tx_stream_faulted = true;
+                    report_status_unavailable =
+                        !board_data->tx_status_unavailable_reported;
+                    board_data->tx_status_unavailable_reported = true;
+                }
+            }
+
+            if (report_link_fault) {
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, st,
+                    BLADERF_ERR_FPGA_OP);
+            }
+            if (report_underrun) {
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_UNDERRUN, tx_loss_count, 0,
+                    BLADERF_ERR_FPGA_OP);
+            }
+            if (report_status_unavailable) {
+                int error = link_status != 0 ? link_status :
+                    (tx_loss_status != 0 ? tx_loss_status :
+                                           BLADERF_ERR_UNEXPECTED);
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+                    tx_loss_count, st, error);
+            }
+        }
     }
 
-    status = board_data->rfic->enable_module(dev, ch, enable);
+    int disable_status = board_data->rfic->enable_module(dev, ch, enable);
+    status = disable_status;
 
     if (!BLADERF_CHANNEL_IS_TX(ch)) {
         int mask_status = bladerf2_update_rx_channel_enable_mask(dev,
                                                                  board_data);
-        if (status == 0) {
+        if (disable_status == 0) {
             status = mask_status;
         }
     }
 
-    board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = false;
-    if (!board_data->rf_link_dir_on[0] && !board_data->rf_link_dir_on[1]) {
-        end_rf_link_epoch(dev);
+    /* If the RFIC did not confirm the disable, keep monitoring the direction:
+     * dropping this host-side bit would hide an active transmitter after an
+     * ambiguous control failure. */
+    if (disable_status == 0) {
+        board_data->rf_link_dir_on[BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0] = false;
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_STREAM_STOPPED, 0, 0, 0);
+            board_data->tx_fpga_loss_count_valid = false;
+            board_data->tx_link_fault_reported = false;
+            board_data->tx_status_unavailable_reported = false;
+        }
+        if (!board_data->rf_link_dir_on[0] &&
+            !board_data->rf_link_dir_on[1]) {
+            end_rf_link_epoch(dev);
+        }
+    } else if (BLADERF_CHANNEL_IS_TX(ch)) {
+        /* The RFIC may still be transmitting after an ambiguous disable.
+         * Report that uncertainty at the API boundary and keep the monitor
+         * armed through rf_link_dir_on so a later hardware fault is visible. */
+        board_data->tx_stream_faulted = true;
+        board_data->tx_status_unavailable_reported = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
+            disable_status);
     }
 
     return status;
