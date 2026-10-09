@@ -1,6 +1,7 @@
 # Reject event-driven RX transitions in NIOS tuning mode
 
-Date: 2026-10-09
+Date: 2026-10-09  
+Device: bladeRF 2.0 micro xA4, serial `f695006ba84a40daa7b777c6a6eba78`
 
 ## Finding
 
@@ -15,8 +16,10 @@ This is a fail-closed boundary, not NIOS event-chain support. NIOS-owned tuning 
 ## Verification
 
 - Built production `libbladeRF.so` with all test fault-injection options OFF.
-- Rebuilt and ran `libbladeRF_test_sync_epoch_traversal`; exit status 0, including mode-policy assertions.
-- Verified the production shared library has SONAME `libbladeRF.so.2`, no RPATH/RUNPATH, and no test-injection strings.
+- Rebuilt and ran `libbladeRF_test_sync_epoch_traversal`; exit status 0, including tuning-mode policy assertions.
+- Verified the production shared library has SONAME `libbladeRF.so.2`, no RPATH/RUNPATH, and no test-injection strings. SHA-256: `02cfc0fe8494d43bc513b909fa4652fe41d853b192115010563e0e26fda0f3f9`.
+- Compiled reusable live probe `host/misc/rx_transition_tuning_mode_probe.c` with `-Wall -Wextra -Werror` against that exact library.
+- Live xA4 probe switched Host→FPGA/NIOS, requested an epoch+RFDC-cal transition, observed `BLADERF_ERR_UNSUPPORTED` and unchanged sentinel transaction ID, then restored Host mode and closed cleanly. No RX stream, frequency retune, FPGA reload, or SPI flash write occurred.
 - `git diff --check` passed.
 
-No live NIOS-mode hardware transition was attempted; the guard returns before changing mode-specific RF state. Hardware qualification of NIOS event reporting remains open.
+The release profile for the event-driven API must select Host tuning mode. Legacy NIOS tuning remains available through its existing APIs but is not qualified as event-driven by this change.
