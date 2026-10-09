@@ -274,12 +274,10 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_abort_rx        : std_logic := '0';
     signal rx_epoch_id_in_rx        : unsigned(7 downto 0) := (others => '0');
 
-    -- rx_clock -> sys_clock status, same handshake direction as
-    -- U_handshake_rx_overflow below (source=rx_clock, dest=sys_clock).
-    -- first_valid_timestamp is 64 bits and does not fit one PIO word --
-    -- crossed as two 32-bit halves of ONE capture register, same
-    -- rationale as rx_ovf_lo_word/rx_ovf_hi_word ("halves of the same
-    -- capture register, so a host reading both gets one whole snapshot").
+    -- rx_clock -> sys_clock validity snapshot (source=rx_clock,
+    -- dest=sys_clock). Status and the 64-bit first-valid timestamp cross
+    -- together in one 96-bit handshake; the system-domain PIO words below
+    -- are slices of that single captured image.
     signal rx_epoch_status_word     : std_logic_vector(31 downto 0);
     signal rx_epoch_snapshot_word      : std_logic_vector(95 downto 0);
     signal rx_epoch_snapshot_req_sys   : std_logic := '0';
