@@ -381,6 +381,7 @@ if(ENABLE_BACKEND_USB)
     set(LIBBLADERF_SOURCE ${LIBBLADERF_SOURCE}
         src/backend/usb/nios_access.c
         src/backend/usb/nios_legacy_access.c
+        src/backend/usb/nios_transaction.c
         src/backend/usb/usb.c
     )
 endif()

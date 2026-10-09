@@ -31,6 +31,7 @@
 
 #include "usb.h"
 #include "nios_access.h"
+#include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 
 #include "board/board.h"
@@ -61,6 +62,19 @@ static uint64_t monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+struct nios_trace_context {
+    struct bladerf *dev;
+    bool enabled;
+};
+
+static void nios_trace_out_complete(void *context)
+{
+    struct nios_trace_context *trace = context;
+    if (trace->enabled) {
+        trace->dev->nios_retune_trace.usb_out_done_ns = monotonic_ns();
+    }
+}
+
 /* Buf is assumed to be NIOS_PKT_LEN bytes */
 static int nios_access(struct bladerf *dev, uint8_t *buf)
 {
@@ -69,6 +83,8 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     const bool trace_retune2 = buf[0] == NIOS_PKT_RETUNE2_MAGIC;
     uint64_t transfer_started_ns = 0;
     uint64_t transfer_out_done_ns = 0;
+    struct nios_trace_context trace = { dev, trace_retune2 };
+    enum nios_transaction_stage stage;
 
     if (trace_retune2) {
         transfer_started_ns = monotonic_ns();
@@ -81,44 +97,33 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
 
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
-    /* Send the command */
-    MUTEX_LOCK(&usb->peripheral_lock);
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
-                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
+    status = nios_usb_transaction(usb, buf, NIOS_PKT_LEN,
+                                  PERIPHERAL_TIMEOUT_MS,
+                                  nios_trace_out_complete, &trace, &stage);
     if (status != 0) {
-        if (trace_retune2) {
-            dev->nios_retune_trace.response_done_ns = monotonic_ns();
-            dev->nios_retune_trace.status = status;
+        if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
+            log_error("NIOS request channel is desynchronized; reopen the device\n");
+        } else if (stage == NIOS_TRANSACTION_OUT_FAILED) {
+            log_error("Failed to send NIOS II request: %s\n", bladerf_strerror(status));
+        } else {
+            log_error("Failed to receive NIOS II response: %s\n", bladerf_strerror(status));
         }
-        log_error("Failed to send NIOS II request: %s\n",
-                  bladerf_strerror(status));
-        MUTEX_UNLOCK(&usb->peripheral_lock);
-        return status;
     }
-
-    if (trace_retune2) {
-        transfer_out_done_ns = monotonic_ns();
-        dev->nios_retune_trace.usb_out_done_ns = transfer_out_done_ns;
-    }
-
-    /* Retrieve the request */
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
-                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
-    if (status != 0) {
-        log_error("Failed to receive NIOS II response: %s\n",
-                  bladerf_strerror(status));
-    }
-    MUTEX_UNLOCK(&usb->peripheral_lock);
 
     if (trace_retune2) {
         const uint64_t transfer_done_ns = monotonic_ns();
+        transfer_out_done_ns = dev->nios_retune_trace.usb_out_done_ns;
         dev->nios_retune_trace.response_done_ns = transfer_done_ns;
         dev->nios_retune_trace.status = status;
-        log_debug("NIOS retune2 USB OUT=%" PRIu64 " us IN=%" PRIu64
-                  " us total=%" PRIu64 " us\n",
-                  (transfer_out_done_ns - transfer_started_ns) / 1000ULL,
-                  (transfer_done_ns - transfer_out_done_ns) / 1000ULL,
-                  (transfer_done_ns - transfer_started_ns) / 1000ULL);
+        if (transfer_out_done_ns >= transfer_started_ns) {
+            log_debug("NIOS retune2 USB OUT=%" PRIu64 " us IN=%" PRIu64
+                      " us total=%" PRIu64 " us\n",
+                      (transfer_out_done_ns - transfer_started_ns) / 1000ULL,
+                      (transfer_done_ns - transfer_out_done_ns) / 1000ULL,
+                      (transfer_done_ns - transfer_started_ns) / 1000ULL);
+        } else {
+            log_debug("NIOS retune2 USB transaction failed before OUT completed\n");
+        }
     }
 
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
@@ -316,16 +321,8 @@ static int nios_rfic_access_wait_response(struct bladerf *dev, uint8_t *buf)
     int status;
 
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
-
-    MUTEX_LOCK(&usb->peripheral_lock);
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
-                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
-    if (status == 0) {
-        status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
-                                        NIOS_PKT_LEN,
-                                        RFIC_RESPONSE_TIMEOUT_MS);
-    }
-    MUTEX_UNLOCK(&usb->peripheral_lock);
+    status = nios_usb_transaction(usb, buf, NIOS_PKT_LEN,
+                                  RFIC_RESPONSE_TIMEOUT_MS, NULL, NULL, NULL);
 
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
     return status;

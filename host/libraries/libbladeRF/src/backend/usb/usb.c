@@ -349,6 +349,7 @@ static int usb_open(struct bladerf *dev, struct bladerf_devinfo *info)
         return BLADERF_ERR_NODEV;
     }
 
+    usb->peripheral_desynchronized = false;
     MUTEX_INIT(&usb->peripheral_lock);
 
     /* Default to legacy-mode access until we determine the FPGA is

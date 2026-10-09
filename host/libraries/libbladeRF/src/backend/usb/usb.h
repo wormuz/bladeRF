@@ -188,6 +188,9 @@ struct bladerf_usb {
     void *driver;
     /* Keep each NIOS OUT/IN request-response pair atomic across callers. */
     MUTEX peripheral_lock;
+    /* Without NIOS transaction IDs, a failed pair can leave a late response
+     * that would be misattributed to the next request. */
+    bool peripheral_desynchronized;
 };
 
 #endif

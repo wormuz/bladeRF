@@ -38,6 +38,7 @@
 
 #include "usb.h"
 #include "nios_legacy_access.h"
+#include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 
 #include "board/board.h"
@@ -80,6 +81,7 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
     int status;
     size_t i;
     uint8_t buf[16] = { 0 };
+    enum nios_transaction_stage stage;
     const uint8_t pkt_mode_dir = (dir == USB_DIR_HOST_TO_DEVICE) ?
                                  NIOS_PKT_LEGACY_MODE_DIR_WRITE :
                                  NIOS_PKT_LEGACY_MODE_DIR_READ;
@@ -97,24 +99,20 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
 
     print_buf("NIOS II access request:\n", buf, 16);
 
-    /* Send the command */
-    MUTEX_LOCK(&usb->peripheral_lock);
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
-                                     buf, sizeof(buf),
-                                     PERIPHERAL_TIMEOUT_MS);
+    status = nios_usb_transaction(usb, buf, sizeof(buf),
+                                  PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
     if (status != 0) {
-        MUTEX_UNLOCK(&usb->peripheral_lock);
-        log_debug("Failed to submit NIOS II request: %s\n",
-                  bladerf_strerror(status));
+        if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
+            log_error("NIOS request channel is desynchronized; reopen the device\n");
+        } else if (stage == NIOS_TRANSACTION_OUT_FAILED) {
+            log_debug("Failed to submit NIOS II request: %s\n",
+                      bladerf_strerror(status));
+        } else {
+            log_debug("Failed to receive NIOS II response: %s\n",
+                      bladerf_strerror(status));
+        }
         return status;
     }
-
-    /* Read back the ACK. The command data is only used for a read operation,
-     * and is thrown away otherwise */
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN,
-                                    buf, sizeof(buf),
-                                    PERIPHERAL_TIMEOUT_MS);
-    MUTEX_UNLOCK(&usb->peripheral_lock);
 
     if (dir == NIOS_PKT_LEGACY_MODE_DIR_READ && status == 0) {
         for (i = 0; i < len; i++) {
