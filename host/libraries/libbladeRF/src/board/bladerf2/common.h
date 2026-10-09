@@ -411,6 +411,10 @@ int bladerf2_rx_transition_spi_test_should_fail(struct bladerf *dev);
 struct bladerf_rfic_status_register {
     bool rfic_initialized;
     size_t write_queue_length;
+    /* Last _rfic_initialize progress marker reported by NIOS. This is useful
+     * when INIT retires but fails; it cannot be read if NIOS stops servicing
+     * control requests entirely. */
+    uint8_t init_stage;
     /* Result of the last command the NIOS write queue retired. The firmware
      * has always reported it (devices_rfic_cmds.c:290-301, WQSUCCESS bit);
      * the host used to discard it, so a queued command that drained and

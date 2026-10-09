@@ -97,8 +97,29 @@ static int _rfic_fpga_get_status(
          BLADERF_RFIC_STATUS_WQSUCCESS_MASK);
     rfic_status->write_queue_length = ((sreg >> BLADERF_RFIC_STATUS_WQLEN_SHIFT) &
                                      BLADERF_RFIC_STATUS_WQLEN_MASK);
+    rfic_status->init_stage = ((sreg >> BLADERF_RFIC_STATUS_STAGE_SHIFT) &
+                               BLADERF_RFIC_STATUS_STAGE_MASK);
 
     return status;
+}
+
+static const char *_rfic_fpga_init_stage_name(uint8_t stage)
+{
+    switch (stage) {
+    case BLADERF_RFIC_INIT_STAGE_IDLE: return "idle";
+    case BLADERF_RFIC_INIT_STAGE_ENTER: return "enter";
+    case BLADERF_RFIC_INIT_STAGE_RFFE_CLEARED: return "rffe-cleared";
+    case BLADERF_RFIC_INIT_STAGE_RESET_OUT: return "reset-out";
+    case BLADERF_RFIC_INIT_STAGE_ENABLE_SET: return "enable-set";
+    case BLADERF_RFIC_INIT_STAGE_AD9361_INIT: return "ad9361-init";
+    case BLADERF_RFIC_INIT_STAGE_PHY_OK: return "phy-ok";
+    case BLADERF_RFIC_INIT_STAGE_PER_MODULE: return "per-module";
+    case BLADERF_RFIC_INIT_STAGE_PER_CHANNEL: return "per-channel";
+    case BLADERF_RFIC_INIT_STAGE_DONE: return "done";
+    case BLADERF_RFIC_INIT_STAGE_PHY_NULL: return "phy-null";
+    case BLADERF_RFIC_INIT_STAGE_PDATA_NULL: return "pdata-null";
+    default: return "unknown";
+    }
 }
 
 static int _rfic_fpga_get_status_wqlen(struct bladerf *dev)
@@ -182,7 +203,10 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
      * 0xFE ("no write handler") from failure. Only the failure direction is
      * actionable here. */
     if (!rfic_status.last_write_success) {
-        log_debug("%s: queue drained but last command failed\n", __FUNCTION__);
+        log_warning("%s: NIOS RFIC command failed (initialized=%u, init_stage=%u:%s)\n",
+                    __FUNCTION__, rfic_status.rfic_initialized,
+                    rfic_status.init_stage,
+                    _rfic_fpga_init_stage_name(rfic_status.init_stage));
         return BLADERF_ERR_UNEXPECTED;
     }
 
