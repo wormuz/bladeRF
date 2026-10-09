@@ -174,6 +174,98 @@ int main(void)
     }
 
     fail_write_reg = -1;
+
+    /* Fastlock profile cache must only advance after the complete profile
+     * write, and failures must still attempt to stop the programming clock. */
+    {
+        uint8_t profile_data[RX_FAST_LOCK_CONFIG_WORD_NUM] = {0};
+        phy.fastlock.entry[0][0].flags = 0;
+        fail_write_reg = REG_RX_FAST_LOCK_PROGRAM_CTRL;
+        ret = ad9361_fastlock_load(&phy, false, 0, profile_data);
+        if (ret != -EIO || phy.fastlock.entry[0][0].flags == FASTLOOK_INIT) {
+            fprintf(stderr, "Fastlock loader hid profile SPI failure: ret=%" PRId32
+                    " flags=%" PRIu32 "\n", ret,
+                    phy.fastlock.entry[0][0].flags);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        ret = ad9361_fastlock_load(&phy, false, 8, profile_data);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "Fastlock loader accepted invalid profile: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Public status/configuration APIs must not report cached or fabricated
+     * values when their underlying SPI transaction fails. */
+    {
+        uint32_t ensm_mode = UINT32_MAX;
+        struct rf_rssi rssi = { .ant = 1 };
+        uint8_t old_agc_mode = phy.agc_mode[0];
+
+        fail_read_reg = REG_STATE;
+        ret = ad9361_get_en_state_machine_mode(&phy, &ensm_mode);
+        if (ret != -EIO || ensm_mode != UINT32_MAX) {
+            fprintf(stderr, "ENSM getter hid state read failure: ret=%" PRId32
+                    " mode=%" PRIu32 "\n", ret, ensm_mode);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_ENSM_CONFIG_1;
+        ret = ad9361_get_en_state_machine_mode(&phy, &ensm_mode);
+        if (ret != -EIO || ensm_mode != UINT32_MAX) {
+            fprintf(stderr, "ENSM getter hid config read failure: ret=%" PRId32
+                    " mode=%" PRIu32 "\n", ret, ensm_mode);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_PREAMBLE_LSB;
+        ret = ad9361_read_rssi(&phy, &rssi);
+        if (ret != -EIO) {
+            fprintf(stderr, "RSSI getter hid register read failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_AGC_CONFIG_1;
+        ret = ad9361_set_rx_gain_control_mode(&phy, 0, RF_GAIN_MGC);
+        if (ret != -EIO || phy.agc_mode[0] != old_agc_mode) {
+            fprintf(stderr, "AGC setter hid SPI failure or updated cache: ret=%" PRId32
+                    " mode=%u\n", ret, phy.agc_mode[0]);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+    }
+
+    /* Both FIR coefficient readers must propagate setup, address, data, and
+     * clock-restore SPI failures. */
+    {
+        AD9361_RXFIRConfig rx_fir = {0};
+        AD9361_TXFIRConfig tx_fir = {0};
+
+        fail_write_reg = REG_RX_FILTER_CONFIG;
+        ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
+        if (ret != -EIO) {
+            fprintf(stderr, "RX FIR getter hid setup write failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = REG_RX_FILTER_COEF_ADDR;
+        ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
+        if (ret != -EIO) {
+            fprintf(stderr, "RX FIR getter hid coefficient address failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = REG_TX_FILTER_CONF;
+        ret = ad9361_get_tx_fir_config(&phy, 0, &tx_fir);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX FIR getter hid setup write failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = REG_TX_FILTER_COEF_ADDR;
+        ret = ad9361_get_tx_fir_config(&phy, 0, &tx_fir);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX FIR getter hid coefficient address failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+    }
     fail_read_reg = REG_QUAD_CAL_STATUS_TX1;
     {
         uint8_t status = 0xff;
@@ -658,6 +750,6 @@ int main(void)
         }
     }
 
-    puts("AD9361 calibration, clock, and ENSM SPI-error propagation: PASS");
+    puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
     return EXIT_SUCCESS;
 }

@@ -31,6 +31,37 @@ These paths affected public set/get clock-chain operations, RFIC
 initialization, and BIST configuration. This audit does not claim they caused
 the preserved NIOS no-response or LTE no-PSS observations.
 
+## Adjacent fail-open paths found in the expanded sweep
+
+A broader scan of public AD9361 control APIs found additional cases in the
+same class:
+
+1. ENSM mode reads ignored one or both SPI errors; the setter ignored the
+   `ad9361_set_ensm_mode()` result and updated FDD-independent cached state
+   before the hardware transition succeeded.
+2. RX gain-control mode always returned success and updated its software mode
+   cache even if the ADI AGC configuration failed. The lower-level routine
+   also ignored RX re-enable failure after the register write.
+3. RSSI read parsed an uninitialized register buffer after a failed SPI burst.
+4. RX/TX FIR coefficient readers ignored writes selecting the FIR and each
+   coefficient address. Data-read failures also returned before clearing the
+   FIR clock-start bit.
+5. MCS ignored delay-register reads/writes, ENSM transitions, and each MCS
+   step result. A failed step could therefore be reported as success.
+6. Channel-mode reset ignored reset, soft-reset, setup, and post-setup errors;
+   its clock tree also assigned TX reference rate twice instead of updating
+   RX reference rate on the second assignment.
+7. Fastlock profile loading ignored SPI writes and populated the profile cache
+   even when programming failed. The per-word helper also combined results
+   with bitwise OR rather than stopping at the first failed write.
+
+These adjacent paths are now fail-closed: errors are returned, temporary FIR
+state is restored on read failure, software cache updates follow successful
+hardware operations, and MCS attempts to restore both ENSM states after a
+mid-sequence failure. Fastlock metadata is committed only after the complete
+profile transfer and programming-clock stop succeed. Channel-mode changes now
+propagate reset, setup, and post-setup errors.
+
 ## Implemented fix and regression coverage
 
 - Added `clk_get_rate_checked()` while preserving `clk_get_rate()` as the
@@ -43,7 +74,8 @@ the preserved NIOS no-response or LTE no-PSS observations.
   state changes only after both writes succeed.
 - Expanded `host/misc/test_ad9361_calibration_read_error.c` to inject failures
   into sample-rate setters/getters, clock-chain reads, initial clock
-  registration, and both BIST writes. The test passes.
+  registration, both BIST writes, ENSM getters, AGC/RSSI operations, FIR
+  readers, and fastlock loading. The test passes.
 - `cmake --build host/build --target ad936x -j2` passes and both repository
   `git diff --check` runs are clean.
 
