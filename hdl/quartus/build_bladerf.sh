@@ -433,34 +433,35 @@ fi
 
 echo ""
 echo "##########################################################################"
-echo "    Generating Nios II Qsys for ${board} ..."
+echo "    Regenerating Nios II Qsys for ${board} from platform sources ..."
 echo "##########################################################################"
 echo ""
 
-if [ -f nios_system.qsys ]; then
-    echo "Skipping building platform Qsys"
-else
-    echo "Building platform Qsys"
-    cmd="set nios_impl ${nios_rev}"
-    cmd="${cmd}; set device_family {${DEVICE_FAMILY}}"
-    cmd="${cmd}; set device ${DEVICE}"
-    cmd="${cmd}; set nios_impl ${nios_rev}"
-    cmd="${cmd}; set ram_size $(get_qsys_ram $size)"
-    cmd="${cmd}; set platform_revision ${rev}"
-    qsys-script \
-        --script=${build_dir}/nios_system.tcl \
-        --cmd="${cmd}"
-fi
+# -k preserves the expensive Quartus project database, but the Qsys system,
+# generated RTL, and BSP are derived artifacts and are not safe caches. The
+# platform Tcl and IP component interfaces can change while an old
+# nios_system.qsys / .sopcinfo remains present. Reusing those files silently
+# drops new ports and connections (for example, the AD9361 AXI-timeout status
+# PIO), while Quartus can still fit the stale design successfully. Rebuild
+# only the generated Nios/BSP subtree; leave Quartus db/output_files intact.
+rm -rf nios_system bladeRF_nios_bsp
+rm -f nios_system.qsys nios_system.sopcinfo settings.bsp
+
+cmd="set nios_impl ${nios_rev}"
+cmd="${cmd}; set device_family {${DEVICE_FAMILY}}"
+cmd="${cmd}; set device ${DEVICE}"
+cmd="${cmd}; set nios_impl ${nios_rev}"
+cmd="${cmd}; set ram_size $(get_qsys_ram $size)"
+cmd="${cmd}; set platform_revision ${rev}"
+qsys-script \
+    --script=${build_dir}/nios_system.tcl \
+    --cmd="${cmd}"
 
 if [ -f ${build_dir}/platform.sh ]; then
     source ${build_dir}/platform.sh
 fi
 
-if [ -f nios_system.sopcinfo ]; then
-    echo "Skipping qsys-generate, nios_system.sopcinfo already exists"
-else
-    qsys-generate --synthesis=Verilog nios_system.qsys
-fi
+qsys-generate --synthesis=Verilog nios_system.qsys
 
 echo ""
 echo "##########################################################################"

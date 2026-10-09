@@ -1240,6 +1240,25 @@ def check_build_project_close_state():
              "otherwise a completed full build exits with 'You must open a project' after fit, STA, assembly and DRC")
 
 
+def check_qsys_regenerated_on_reused_workdir():
+    """A preserved Quartus workdir must not preserve stale generated Nios RTL."""
+    build = ROOT / "hdl/quartus/build_bladerf.sh"
+    if not build.exists():
+        return
+    src = code_only(build.read_text(), comment="#")
+    cleanup = src.find("rm -rf nios_system bladeRF_nios_bsp")
+    qsys_script = src.find("qsys-script")
+    qsys_generate = src.find("qsys-generate --synthesis=Verilog nios_system.qsys")
+    if (cleanup < 0 or qsys_script < cleanup or qsys_generate < qsys_script or
+            "if [ -f nios_system.qsys ]" in src or
+            "if [ -f nios_system.sopcinfo ]" in src or
+            "Skipping building platform Qsys" in src or
+            "Skipping qsys-generate" in src):
+        fail("nios-qsys-stale-workdir-cache",
+             "every build must regenerate Qsys RTL and BSP from the current platform Tcl/IP metadata",
+             "a stale generated system can omit newly connected hardware status and control ports while Quartus still reports a successful fit")
+
+
 def check_full_flow_runs_design_assistant():
     """The custom full flow must produce the DRC report consumed by qgate."""
     build_tcl = ROOT / "hdl/quartus/build.tcl"
@@ -1670,6 +1689,7 @@ rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and
 qgate-revision-cdc-inventory  qgate expects the separate hosted and sweep fitted CDC inventories
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
+nios-qsys-stale-workdir-cache reused Quartus workdirs regenerate Nios RTL and BSP from current Qsys/IP sources
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded
 gpif-timestamp-bundle-capture raw timestamp must be captured before GPIF arithmetic
 vhdl-non-short-circuit-array-index optional stream arrays must be iterated within their range
@@ -1699,6 +1719,7 @@ def main():
     check_rx_epoch_host_timestamp_fence()
     check_qgate_sweep_handshake_count()
     check_build_project_close_state()
+    check_qsys_regenerated_on_reused_workdir()
     check_full_flow_runs_design_assistant()
     check_full_flow_runs_rx_max_skew_report()
     check_qgate_sta_resolution()
