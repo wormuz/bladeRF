@@ -94,8 +94,7 @@ static inline bool perform_read(uint8_t id, uint32_t addr, uint32_t *data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_32x32_TARGET_ADI_AXI:
-            *data = adi_axi_read(addr);
-            break;
+            return adi_axi_read(addr, data);
 
         case NIOS_PKT_32x32_TARGET_WB_MSTR:
             *data = wishbone_master_read(addr);

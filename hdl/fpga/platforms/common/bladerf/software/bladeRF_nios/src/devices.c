@@ -586,13 +586,25 @@ done:
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-uint32_t adi_axi_read(uint16_t addr)
+bool adi_axi_read(uint16_t addr, uint32_t *data)
 {
-    uint32_t data = 0;
-#ifdef AXI_AD9361_0_BASE  // Temporary hack for bladeRF1 compat
-    data = IORD_32DIRECT(AXI_AD9361_0_BASE, addr);
+#if defined(AXI_AD9361_0_BASE) && \
+    defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
+    defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
+    uint32_t clear_toggle;
+
+    /* AXI RRESP is also discarded by the NIOS Avalon bridge. Clear the
+     * sticky adapter timeout before the read, then report it independently
+     * of the 0xDEADDEAD timeout data sentinel. */
+    clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
+    IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
+    *data = IORD_32DIRECT(AXI_AD9361_0_BASE, addr);
+    return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+#else
+    (void)addr;
+    (void)data;
+    return false;
 #endif
-    return data;
 }
 #endif  // BOARD_BLADERF_MICRO
 

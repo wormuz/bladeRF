@@ -387,7 +387,7 @@ set_instance_parameter_value rfic_axi_timeout_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rfic_axi_timeout_status {simDrivenValue} {0.0}
 set_instance_parameter_value rfic_axi_timeout_status {width} {1}
 
-# Toggle output; each edge clears the sticky timeout before one ADI AXI write.
+# Toggle output; each edge clears the sticky timeout before one ADI AXI access.
 add_instance rfic_axi_timeout_clear altera_avalon_pio
 set_instance_parameter_value rfic_axi_timeout_clear {bitClearingEdgeCapReg} {0}
 set_instance_parameter_value rfic_axi_timeout_clear {bitModifyingOutReg} {0}

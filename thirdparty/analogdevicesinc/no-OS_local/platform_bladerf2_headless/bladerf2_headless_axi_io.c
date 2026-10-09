@@ -18,20 +18,11 @@
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
-    uint32_t value;
-
     if (NULL == data) {
         return -EINVAL;
     }
 
-    value = adi_axi_read((uint16_t)(base + offset));
-    if (value == UINT32_C(0xDEADDEAD)) {
-        return -EIO;
-    }
-
-    *data = value;
-
-    return 0;
+    return adi_axi_read((uint16_t)(base + offset), data) ? 0 : -EIO;
 }
 
 int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)

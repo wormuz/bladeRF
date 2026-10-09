@@ -165,8 +165,9 @@ void bladerf_nios_init(struct pkt_buf *pkt, struct vctcxo_tamer_pkt_buf *vctcxo_
  * Read from an LMS6002D register
  *
  * @param   addr    Address to read from
+ * @param   data    Receives the register value on a successful read
  *
- * @return  Register data
+ * @return  true if the AXI transaction completed without timeout
  */
 uint8_t lms6_read(uint8_t addr);
 
@@ -213,7 +214,7 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
  *
  * @return  Register data
  */
-uint32_t adi_axi_read(uint16_t addr);
+bool adi_axi_read(uint16_t addr, uint32_t *data);
 
 /**
  * Write to ADI AXI space
