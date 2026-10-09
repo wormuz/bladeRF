@@ -2326,13 +2326,27 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
         rf_link_status = _rx_link_status_for_transition_test(rf_link_status);
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
+            uint32_t rx_fault_causes = 0;
+            int rx_fault_causes_status = nios_rx_fault_causes_read(
+                dev, &rx_fault_causes);
+            bool rx_fault_causes_valid = rx_fault_causes_status == 0 &&
+                (rx_fault_causes &
+                 NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK) != 0;
+            uint32_t fault_snapshot = rx_fault_causes_valid
+                ? (BLADERF_RF_FPGA_RX_FAULT_CAUSES_VALID |
+                   (rx_fault_causes &
+                    NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK))
+                : rf_link_status;
+
             log_error("%s: FPGA RX fault before epoch certification: "
-                      "transaction=%u status=0x%08x epoch=%u\n",
+                      "transaction=%u status=0x%08x causes=0x%08x "
+                      "causes_status=%d epoch=%u\n",
                       __FUNCTION__, transaction_id, rf_link_status,
+                      rx_fault_causes, rx_fault_causes_status,
                       expected_epoch_id);
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
-                        rf_link_status, BLADERF_ERR_UNEXPECTED,
+                        fault_snapshot, BLADERF_ERR_UNEXPECTED,
                         expected_epoch_id);
             return _fail_transition(dev, board_data,
                                     BLADERF_ERR_UNEXPECTED, final_event);
