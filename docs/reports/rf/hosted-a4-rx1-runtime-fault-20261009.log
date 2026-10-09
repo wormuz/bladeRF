@@ -1,0 +1,8 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3699] Failed to get VCTCXO trim value: Invalid operation or parameter
+blocking sync reader returned after 0.078 s status=-18 count=0
+fault event was delayed until sync reader exited
+runtime FPGA RX fault test failed: An unexpected error occurred
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized

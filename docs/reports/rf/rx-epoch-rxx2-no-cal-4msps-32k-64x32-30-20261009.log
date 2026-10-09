@@ -1,0 +1,27 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.207 status=Success
+CAPTURE_TIMING i=1 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.197 status=Success
+CAPTURE_TIMING i=2 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.177 status=Success
+CAPTURE_TIMING i=3 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.194 status=Success
+CAPTURE_TIMING i=4 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.173 status=Success
+CAPTURE_TIMING i=5 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.188 status=Success
+CAPTURE_TIMING i=6 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.234 status=Success
+CAPTURE_TIMING i=7 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.190 status=Success
+CAPTURE_TIMING i=8 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.189 status=Success
+CAPTURE_TIMING i=9 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.193 status=Success
+CAPTURE_TIMING i=10 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.187 status=Success
+CAPTURE_TIMING i=11 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.179 status=Success
+CAPTURE_TIMING i=12 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.234 status=Success
+CAPTURE_TIMING i=13 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.178 status=Success
+CAPTURE_TIMING i=14 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.084 status=Success
+CAPTURE_TIMING i=15 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.180 status=Success
+FINAL_EVENT_HISTORY_OK first=1 last=30
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=30 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=30 transition_ms_p50=24.513_p95=28.563_p99=28.592_max=28.620

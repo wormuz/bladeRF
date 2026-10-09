@@ -1,0 +1,229 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3678] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.472 status=Success
+CAPTURE_CLOSED i=0 epoch=1 pause_ms=0
+RUNTIME_WITHHELD n=1 txn=0 epoch=0 flags=0x90000001 state=7 error=0 fpga_ts=94059 host_ns=1314527860115766
+CAPTURE_TIMING i=1 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.320 status=Success
+CAPTURE_CLOSED i=1 epoch=2 pause_ms=0
+RUNTIME_WITHHELD n=2 txn=0 epoch=1 flags=0x90000001 state=7 error=0 fpga_ts=633675 host_ns=1314527883559073
+CAPTURE_TIMING i=2 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.507 status=Success
+CAPTURE_CLOSED i=2 epoch=3 pause_ms=0
+RUNTIME_WITHHELD n=3 txn=0 epoch=2 flags=0x90000001 state=7 error=0 fpga_ts=1173291 host_ns=1314527906998631
+CAPTURE_TIMING i=3 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.411 status=Success
+CAPTURE_CLOSED i=3 epoch=4 pause_ms=0
+RUNTIME_WITHHELD n=4 txn=0 epoch=3 flags=0x90000001 state=7 error=0 fpga_ts=1712907 host_ns=1314527930351449
+CAPTURE_TIMING i=4 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.439 status=Success
+CAPTURE_CLOSED i=4 epoch=5 pause_ms=0
+RUNTIME_WITHHELD n=5 txn=0 epoch=4 flags=0x90000001 state=7 error=0 fpga_ts=2252523 host_ns=1314527953810234
+CAPTURE_TIMING i=5 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.418 status=Success
+CAPTURE_CLOSED i=5 epoch=6 pause_ms=0
+RUNTIME_WITHHELD n=6 txn=0 epoch=5 flags=0x90000001 state=7 error=0 fpga_ts=2792139 host_ns=1314527977194656
+CAPTURE_TIMING i=6 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.338 status=Success
+CAPTURE_CLOSED i=6 epoch=7 pause_ms=0
+RUNTIME_WITHHELD n=7 txn=0 epoch=6 flags=0x90000001 state=7 error=0 fpga_ts=3331755 host_ns=1314528000617008
+CAPTURE_TIMING i=7 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.445 status=Success
+CAPTURE_CLOSED i=7 epoch=8 pause_ms=0
+RUNTIME_WITHHELD n=8 txn=0 epoch=7 flags=0x90000001 state=7 error=0 fpga_ts=3871371 host_ns=1314528024035774
+CAPTURE_TIMING i=8 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.339 status=Success
+CAPTURE_CLOSED i=8 epoch=9 pause_ms=0
+RUNTIME_WITHHELD n=9 txn=0 epoch=8 flags=0x90000001 state=7 error=0 fpga_ts=4410987 host_ns=1314528047493482
+CAPTURE_TIMING i=9 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.515 status=Success
+CAPTURE_CLOSED i=9 epoch=10 pause_ms=0
+RUNTIME_WITHHELD n=10 txn=0 epoch=9 flags=0x90000001 state=7 error=0 fpga_ts=4950603 host_ns=1314528070878288
+CAPTURE_TIMING i=10 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.357 status=Success
+CAPTURE_CLOSED i=10 epoch=11 pause_ms=0
+RUNTIME_WITHHELD n=11 txn=0 epoch=10 flags=0x90000001 state=7 error=0 fpga_ts=5490219 host_ns=1314528094299789
+CAPTURE_TIMING i=11 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.526 status=Success
+CAPTURE_CLOSED i=11 epoch=12 pause_ms=0
+RUNTIME_WITHHELD n=12 txn=0 epoch=11 flags=0x90000001 state=7 error=0 fpga_ts=6029835 host_ns=1314528117757696
+CAPTURE_TIMING i=12 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.401 status=Success
+CAPTURE_CLOSED i=12 epoch=13 pause_ms=0
+RUNTIME_WITHHELD n=13 txn=0 epoch=12 flags=0x90000001 state=7 error=0 fpga_ts=6569451 host_ns=1314528141178157
+CAPTURE_TIMING i=13 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.337 status=Success
+CAPTURE_CLOSED i=13 epoch=14 pause_ms=0
+RUNTIME_WITHHELD n=14 txn=0 epoch=13 flags=0x90000001 state=7 error=0 fpga_ts=7109067 host_ns=1314528164619357
+CAPTURE_TIMING i=14 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.512 status=Success
+CAPTURE_CLOSED i=14 epoch=15 pause_ms=0
+RUNTIME_WITHHELD n=15 txn=0 epoch=14 flags=0x90000001 state=7 error=0 fpga_ts=7648683 host_ns=1314528187983201
+CAPTURE_TIMING i=15 samples_per_channel=32768 sample_rate=23040000 duration_ms=1.366 status=Success
+CAPTURE_CLOSED i=15 epoch=16 pause_ms=0
+RUNTIME_WITHHELD n=16 txn=0 epoch=15 flags=0x90000001 state=7 error=0 fpga_ts=8188299 host_ns=1314528211405371
+CAPTURE_CLOSED i=16 epoch=17 pause_ms=0
+RUNTIME_WITHHELD n=17 txn=0 epoch=16 flags=0x90000001 state=7 error=0 fpga_ts=8727915 host_ns=1314528234860846
+CAPTURE_CLOSED i=17 epoch=18 pause_ms=0
+RUNTIME_WITHHELD n=18 txn=0 epoch=17 flags=0x90000001 state=7 error=0 fpga_ts=9267531 host_ns=1314528258242220
+CAPTURE_CLOSED i=18 epoch=19 pause_ms=0
+RUNTIME_WITHHELD n=19 txn=0 epoch=18 flags=0x90000001 state=7 error=0 fpga_ts=9807147 host_ns=1314528281665480
+CAPTURE_CLOSED i=19 epoch=20 pause_ms=0
+RUNTIME_WITHHELD n=20 txn=0 epoch=19 flags=0x90000001 state=7 error=0 fpga_ts=10346763 host_ns=1314528305088120
+CAPTURE_CLOSED i=20 epoch=21 pause_ms=0
+RUNTIME_WITHHELD n=21 txn=0 epoch=20 flags=0x90000001 state=7 error=0 fpga_ts=10886379 host_ns=1314528328507251
+CAPTURE_CLOSED i=21 epoch=22 pause_ms=0
+RUNTIME_WITHHELD n=22 txn=0 epoch=21 flags=0x90000001 state=7 error=0 fpga_ts=11425995 host_ns=1314528351928833
+CAPTURE_CLOSED i=22 epoch=23 pause_ms=0
+RUNTIME_WITHHELD n=23 txn=0 epoch=22 flags=0x90000001 state=7 error=0 fpga_ts=11965611 host_ns=1314528375348175
+CAPTURE_CLOSED i=23 epoch=24 pause_ms=0
+RUNTIME_WITHHELD n=24 txn=0 epoch=23 flags=0x90000001 state=7 error=0 fpga_ts=12505227 host_ns=1314528398805380
+CAPTURE_CLOSED i=24 epoch=25 pause_ms=0
+RUNTIME_WITHHELD n=25 txn=0 epoch=24 flags=0x90000001 state=7 error=0 fpga_ts=13044843 host_ns=1314528422188723
+CAPTURE_CLOSED i=25 epoch=26 pause_ms=0
+RUNTIME_WITHHELD n=26 txn=0 epoch=25 flags=0x90000001 state=7 error=0 fpga_ts=13584459 host_ns=1314528445611160
+CAPTURE_CLOSED i=26 epoch=27 pause_ms=0
+RUNTIME_WITHHELD n=27 txn=0 epoch=26 flags=0x90000001 state=7 error=0 fpga_ts=14124075 host_ns=1314528469031848
+CAPTURE_CLOSED i=27 epoch=28 pause_ms=0
+RUNTIME_WITHHELD n=28 txn=0 epoch=27 flags=0x90000001 state=7 error=0 fpga_ts=14663691 host_ns=1314528492490316
+CAPTURE_CLOSED i=28 epoch=29 pause_ms=0
+RUNTIME_WITHHELD n=29 txn=0 epoch=28 flags=0x90000001 state=7 error=0 fpga_ts=15203307 host_ns=1314528515872216
+CAPTURE_CLOSED i=29 epoch=30 pause_ms=0
+RUNTIME_WITHHELD n=30 txn=0 epoch=29 flags=0x90000001 state=7 error=0 fpga_ts=15742923 host_ns=1314528539293800
+CAPTURE_CLOSED i=30 epoch=31 pause_ms=0
+RUNTIME_WITHHELD n=31 txn=0 epoch=30 flags=0x90000001 state=7 error=0 fpga_ts=16282539 host_ns=1314528562714181
+CAPTURE_CLOSED i=31 epoch=32 pause_ms=0
+RUNTIME_WITHHELD n=32 txn=0 epoch=31 flags=0x90000001 state=7 error=0 fpga_ts=16822155 host_ns=1314528586135997
+CAPTURE_CLOSED i=32 epoch=33 pause_ms=0
+RUNTIME_WITHHELD n=33 txn=0 epoch=32 flags=0x90000001 state=7 error=0 fpga_ts=17361771 host_ns=1314528609557217
+CAPTURE_CLOSED i=33 epoch=34 pause_ms=0
+RUNTIME_WITHHELD n=34 txn=0 epoch=33 flags=0x90000001 state=7 error=0 fpga_ts=17901387 host_ns=1314528632976425
+CAPTURE_CLOSED i=34 epoch=35 pause_ms=0
+RUNTIME_WITHHELD n=35 txn=0 epoch=34 flags=0x90000001 state=7 error=0 fpga_ts=18441003 host_ns=1314528656397458
+CAPTURE_CLOSED i=35 epoch=36 pause_ms=0
+RUNTIME_WITHHELD n=36 txn=0 epoch=35 flags=0x90000001 state=7 error=0 fpga_ts=18980619 host_ns=1314528679827390
+CAPTURE_CLOSED i=36 epoch=37 pause_ms=0
+RUNTIME_WITHHELD n=37 txn=0 epoch=36 flags=0x90000001 state=7 error=0 fpga_ts=19520235 host_ns=1314528703240808
+CAPTURE_CLOSED i=37 epoch=38 pause_ms=0
+RUNTIME_WITHHELD n=38 txn=0 epoch=37 flags=0x90000001 state=7 error=0 fpga_ts=20059851 host_ns=1314528726659850
+CAPTURE_CLOSED i=38 epoch=39 pause_ms=0
+RUNTIME_WITHHELD n=39 txn=0 epoch=38 flags=0x90000001 state=7 error=0 fpga_ts=20599467 host_ns=1314528750083890
+CAPTURE_CLOSED i=39 epoch=40 pause_ms=0
+RUNTIME_WITHHELD n=40 txn=0 epoch=39 flags=0x90000001 state=7 error=0 fpga_ts=21139083 host_ns=1314528773504988
+CAPTURE_CLOSED i=40 epoch=41 pause_ms=0
+RUNTIME_WITHHELD n=41 txn=0 epoch=40 flags=0x90000001 state=7 error=0 fpga_ts=21678699 host_ns=1314528796923561
+CAPTURE_CLOSED i=41 epoch=42 pause_ms=0
+RUNTIME_WITHHELD n=42 txn=0 epoch=41 flags=0x90000001 state=7 error=0 fpga_ts=22218315 host_ns=1314528820347399
+CAPTURE_CLOSED i=42 epoch=43 pause_ms=0
+RUNTIME_WITHHELD n=43 txn=0 epoch=42 flags=0x90000001 state=7 error=0 fpga_ts=22757931 host_ns=1314528843766740
+CAPTURE_CLOSED i=43 epoch=44 pause_ms=0
+RUNTIME_WITHHELD n=44 txn=0 epoch=43 flags=0x90000001 state=7 error=0 fpga_ts=23297547 host_ns=1314528867186239
+CAPTURE_CLOSED i=44 epoch=45 pause_ms=0
+RUNTIME_WITHHELD n=45 txn=0 epoch=44 flags=0x90000001 state=7 error=0 fpga_ts=23837163 host_ns=1314528890607979
+CAPTURE_CLOSED i=45 epoch=46 pause_ms=0
+RUNTIME_WITHHELD n=46 txn=0 epoch=45 flags=0x90000001 state=7 error=0 fpga_ts=24376779 host_ns=1314528914036468
+CAPTURE_CLOSED i=46 epoch=47 pause_ms=0
+RUNTIME_WITHHELD n=47 txn=0 epoch=46 flags=0x90000001 state=7 error=0 fpga_ts=24916395 host_ns=1314528937490812
+CAPTURE_CLOSED i=47 epoch=48 pause_ms=0
+RUNTIME_WITHHELD n=48 txn=0 epoch=47 flags=0x90000001 state=7 error=0 fpga_ts=25456011 host_ns=1314528960864774
+CAPTURE_CLOSED i=48 epoch=49 pause_ms=0
+RUNTIME_WITHHELD n=49 txn=0 epoch=48 flags=0x90000001 state=7 error=0 fpga_ts=25995627 host_ns=1314528984329824
+CAPTURE_CLOSED i=49 epoch=50 pause_ms=0
+RUNTIME_WITHHELD n=50 txn=0 epoch=49 flags=0x90000001 state=7 error=0 fpga_ts=26551595 host_ns=1314529008418989
+CAPTURE_CLOSED i=50 epoch=51 pause_ms=0
+RUNTIME_WITHHELD n=51 txn=0 epoch=50 flags=0x90000001 state=7 error=0 fpga_ts=27107563 host_ns=1314529032549678
+CAPTURE_CLOSED i=51 epoch=52 pause_ms=0
+RUNTIME_WITHHELD n=52 txn=0 epoch=51 flags=0x90000001 state=7 error=0 fpga_ts=27647179 host_ns=1314529055968864
+CAPTURE_CLOSED i=52 epoch=53 pause_ms=0
+RUNTIME_WITHHELD n=53 txn=0 epoch=52 flags=0x90000001 state=7 error=0 fpga_ts=28186795 host_ns=1314529079389674
+CAPTURE_CLOSED i=53 epoch=54 pause_ms=0
+RUNTIME_WITHHELD n=54 txn=0 epoch=53 flags=0x90000001 state=7 error=0 fpga_ts=28726411 host_ns=1314529102809833
+CAPTURE_CLOSED i=54 epoch=55 pause_ms=0
+RUNTIME_WITHHELD n=55 txn=0 epoch=54 flags=0x90000001 state=7 error=0 fpga_ts=29266027 host_ns=1314529126232248
+CAPTURE_CLOSED i=55 epoch=56 pause_ms=0
+RUNTIME_WITHHELD n=56 txn=0 epoch=55 flags=0x90000001 state=7 error=0 fpga_ts=29805643 host_ns=1314529149652367
+CAPTURE_CLOSED i=56 epoch=57 pause_ms=0
+RUNTIME_WITHHELD n=57 txn=0 epoch=56 flags=0x90000001 state=7 error=0 fpga_ts=30345259 host_ns=1314529173073601
+CAPTURE_CLOSED i=57 epoch=58 pause_ms=0
+RUNTIME_WITHHELD n=58 txn=0 epoch=57 flags=0x90000001 state=7 error=0 fpga_ts=30884875 host_ns=1314529196494277
+CAPTURE_CLOSED i=58 epoch=59 pause_ms=0
+RUNTIME_WITHHELD n=59 txn=0 epoch=58 flags=0x90000001 state=7 error=0 fpga_ts=31424491 host_ns=1314529219914385
+CAPTURE_CLOSED i=59 epoch=60 pause_ms=0
+RUNTIME_WITHHELD n=60 txn=0 epoch=59 flags=0x90000001 state=7 error=0 fpga_ts=31980459 host_ns=1314529244047687
+CAPTURE_CLOSED i=60 epoch=61 pause_ms=0
+RUNTIME_WITHHELD n=61 txn=0 epoch=60 flags=0x90000001 state=7 error=0 fpga_ts=32536427 host_ns=1314529268178413
+CAPTURE_CLOSED i=61 epoch=62 pause_ms=0
+RUNTIME_WITHHELD n=62 txn=0 epoch=61 flags=0x90000001 state=7 error=0 fpga_ts=33092395 host_ns=1314529292329472
+CAPTURE_CLOSED i=62 epoch=63 pause_ms=0
+RUNTIME_WITHHELD n=63 txn=0 epoch=62 flags=0x90000001 state=7 error=0 fpga_ts=33648363 host_ns=1314529316440971
+CAPTURE_CLOSED i=63 epoch=64 pause_ms=0
+RUNTIME_WITHHELD n=64 txn=0 epoch=63 flags=0x90000001 state=7 error=0 fpga_ts=34187979 host_ns=1314529339861530
+CAPTURE_CLOSED i=64 epoch=65 pause_ms=0
+RUNTIME_WITHHELD n=65 txn=0 epoch=64 flags=0x90000001 state=7 error=0 fpga_ts=34727595 host_ns=1314529363286993
+CAPTURE_CLOSED i=65 epoch=66 pause_ms=0
+RUNTIME_WITHHELD n=66 txn=0 epoch=65 flags=0x90000001 state=7 error=0 fpga_ts=35267211 host_ns=1314529386704294
+CAPTURE_CLOSED i=66 epoch=67 pause_ms=0
+RUNTIME_WITHHELD n=67 txn=0 epoch=66 flags=0x90000001 state=7 error=0 fpga_ts=35806827 host_ns=1314529410125002
+CAPTURE_CLOSED i=67 epoch=68 pause_ms=0
+RUNTIME_WITHHELD n=68 txn=0 epoch=67 flags=0x90000001 state=7 error=0 fpga_ts=36346443 host_ns=1314529433547892
+CAPTURE_CLOSED i=68 epoch=69 pause_ms=0
+RUNTIME_WITHHELD n=69 txn=0 epoch=68 flags=0x90000001 state=7 error=0 fpga_ts=36886059 host_ns=1314529456966978
+CAPTURE_CLOSED i=69 epoch=70 pause_ms=0
+RUNTIME_WITHHELD n=70 txn=0 epoch=69 flags=0x90000001 state=7 error=0 fpga_ts=37425675 host_ns=1314529480387674
+CAPTURE_CLOSED i=70 epoch=71 pause_ms=0
+RUNTIME_WITHHELD n=71 txn=0 epoch=70 flags=0x90000001 state=7 error=0 fpga_ts=37965291 host_ns=1314529503846938
+CAPTURE_CLOSED i=71 epoch=72 pause_ms=0
+RUNTIME_WITHHELD n=72 txn=0 epoch=71 flags=0x90000001 state=7 error=0 fpga_ts=38504907 host_ns=1314529527228268
+CAPTURE_CLOSED i=72 epoch=73 pause_ms=0
+RUNTIME_WITHHELD n=73 txn=0 epoch=72 flags=0x90000001 state=7 error=0 fpga_ts=39044523 host_ns=1314529550652476
+CAPTURE_CLOSED i=73 epoch=74 pause_ms=0
+RUNTIME_WITHHELD n=74 txn=0 epoch=73 flags=0x90000001 state=7 error=0 fpga_ts=39584139 host_ns=1314529574071973
+CAPTURE_CLOSED i=74 epoch=75 pause_ms=0
+RUNTIME_WITHHELD n=75 txn=0 epoch=74 flags=0x90000001 state=7 error=0 fpga_ts=40123755 host_ns=1314529597490823
+CAPTURE_CLOSED i=75 epoch=76 pause_ms=0
+RUNTIME_WITHHELD n=76 txn=0 epoch=75 flags=0x90000001 state=7 error=0 fpga_ts=40663371 host_ns=1314529620912291
+CAPTURE_CLOSED i=76 epoch=77 pause_ms=0
+RUNTIME_WITHHELD n=77 txn=0 epoch=76 flags=0x90000001 state=7 error=0 fpga_ts=41202987 host_ns=1314529644333377
+CAPTURE_CLOSED i=77 epoch=78 pause_ms=0
+RUNTIME_WITHHELD n=78 txn=0 epoch=77 flags=0x90000001 state=7 error=0 fpga_ts=41758955 host_ns=1314529668465009
+CAPTURE_CLOSED i=78 epoch=79 pause_ms=0
+RUNTIME_WITHHELD n=79 txn=0 epoch=78 flags=0x90000001 state=7 error=0 fpga_ts=42298571 host_ns=1314529691884676
+CAPTURE_CLOSED i=79 epoch=80 pause_ms=0
+RUNTIME_WITHHELD n=80 txn=0 epoch=79 flags=0x90000001 state=7 error=0 fpga_ts=42838187 host_ns=1314529715305140
+CAPTURE_CLOSED i=80 epoch=81 pause_ms=0
+RUNTIME_WITHHELD n=81 txn=0 epoch=80 flags=0x90000001 state=7 error=0 fpga_ts=43377803 host_ns=1314529738726734
+CAPTURE_CLOSED i=81 epoch=82 pause_ms=0
+RUNTIME_WITHHELD n=82 txn=0 epoch=81 flags=0x90000001 state=7 error=0 fpga_ts=43933771 host_ns=1314529762857813
+CAPTURE_CLOSED i=82 epoch=83 pause_ms=0
+RUNTIME_WITHHELD n=83 txn=0 epoch=82 flags=0x90000001 state=7 error=0 fpga_ts=44489739 host_ns=1314529786989272
+CAPTURE_CLOSED i=83 epoch=84 pause_ms=0
+RUNTIME_WITHHELD n=84 txn=0 epoch=83 flags=0x90000001 state=7 error=0 fpga_ts=45045707 host_ns=1314529811118558
+CAPTURE_CLOSED i=84 epoch=85 pause_ms=0
+RUNTIME_WITHHELD n=85 txn=0 epoch=84 flags=0x90000001 state=7 error=0 fpga_ts=45585323 host_ns=1314529834555110
+CAPTURE_CLOSED i=85 epoch=86 pause_ms=0
+RUNTIME_WITHHELD n=86 txn=0 epoch=85 flags=0x90000001 state=7 error=0 fpga_ts=46124939 host_ns=1314529857959403
+CAPTURE_CLOSED i=86 epoch=87 pause_ms=0
+RUNTIME_WITHHELD n=87 txn=0 epoch=86 flags=0x90000001 state=7 error=0 fpga_ts=46664555 host_ns=1314529881379564
+CAPTURE_CLOSED i=87 epoch=88 pause_ms=0
+RUNTIME_WITHHELD n=88 txn=0 epoch=87 flags=0x90000001 state=7 error=0 fpga_ts=47204171 host_ns=1314529904803255
+CAPTURE_CLOSED i=88 epoch=89 pause_ms=0
+RUNTIME_WITHHELD n=89 txn=0 epoch=88 flags=0x90000001 state=7 error=0 fpga_ts=47743787 host_ns=1314529928223308
+CAPTURE_CLOSED i=89 epoch=90 pause_ms=0
+RUNTIME_WITHHELD n=90 txn=0 epoch=89 flags=0x90000001 state=7 error=0 fpga_ts=48299755 host_ns=1314529952351836
+CAPTURE_CLOSED i=90 epoch=91 pause_ms=0
+RUNTIME_WITHHELD n=91 txn=0 epoch=90 flags=0x90000001 state=7 error=0 fpga_ts=48839371 host_ns=1314529975810070
+CAPTURE_CLOSED i=91 epoch=92 pause_ms=0
+RUNTIME_WITHHELD n=92 txn=0 epoch=91 flags=0x90000001 state=7 error=0 fpga_ts=49378987 host_ns=1314529999195489
+CAPTURE_CLOSED i=92 epoch=93 pause_ms=0
+RUNTIME_WITHHELD n=93 txn=0 epoch=92 flags=0x90000001 state=7 error=0 fpga_ts=49918603 host_ns=1314530022614823
+CAPTURE_CLOSED i=93 epoch=94 pause_ms=0
+RUNTIME_WITHHELD n=94 txn=0 epoch=93 flags=0x90000001 state=7 error=0 fpga_ts=50458219 host_ns=1314530046035568
+CAPTURE_CLOSED i=94 epoch=95 pause_ms=0
+RUNTIME_WITHHELD n=95 txn=0 epoch=94 flags=0x90000001 state=7 error=0 fpga_ts=50997835 host_ns=1314530069458535
+CAPTURE_CLOSED i=95 epoch=96 pause_ms=0
+RUNTIME_WITHHELD n=96 txn=0 epoch=95 flags=0x90000001 state=7 error=0 fpga_ts=51537451 host_ns=1314530092879141
+CAPTURE_CLOSED i=96 epoch=97 pause_ms=0
+RUNTIME_WITHHELD n=97 txn=0 epoch=96 flags=0x90000001 state=7 error=0 fpga_ts=52077067 host_ns=1314530116287971
+CAPTURE_CLOSED i=97 epoch=98 pause_ms=0
+RUNTIME_WITHHELD n=98 txn=0 epoch=97 flags=0x90000001 state=7 error=0 fpga_ts=52616683 host_ns=1314530139719182
+CAPTURE_CLOSED i=98 epoch=99 pause_ms=0
+RUNTIME_WITHHELD n=99 txn=0 epoch=98 flags=0x90000001 state=7 error=0 fpga_ts=53156299 host_ns=1314530163142082
+TRACE_SPI txn=100 writes=24 host_observed_write_us=15433.632 post_spi_to_tune_return_us=3506.682
+CAPTURE_CLOSED i=99 epoch=100 pause_ms=0
+RUNTIME_WITHHELD n=100 txn=0 epoch=99 flags=0x90000001 state=7 error=0 fpga_ts=53695915 host_ns=1314530186566234
+mode=BOTH progress=100 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=100
+FINAL_EVENT_HISTORY_OK first=1 last=100
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76799011 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76799011 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=100 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=100 transition_ms_p50=21.804_p95=22.504_p99=22.518_max=22.604

@@ -1,0 +1,29 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.032 status=Success
+CAPTURE_TIMING i=1 samples_per_channel=32768 sample_rate=4000000 duration_ms=7.765 status=Success
+CAPTURE_TIMING i=2 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.819 status=Success
+CAPTURE_TIMING i=3 samples_per_channel=32768 sample_rate=4000000 duration_ms=7.830 status=Success
+CAPTURE_TIMING i=4 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.195 status=Success
+CAPTURE_TIMING i=5 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.407 status=Success
+CAPTURE_TIMING i=6 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.057 status=Success
+CAPTURE_TIMING i=7 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.541 status=Success
+CAPTURE_TIMING i=8 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.012 status=Success
+CAPTURE_TIMING i=9 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.254 status=Success
+CAPTURE_TIMING i=10 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.650 status=Success
+CAPTURE_TIMING i=11 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.434 status=Success
+CAPTURE_TIMING i=12 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.496 status=Success
+CAPTURE_TIMING i=13 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.695 status=Success
+CAPTURE_TIMING i=14 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.019 status=Success
+CAPTURE_TIMING i=15 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.084 status=Success
+TRACE_SPI txn=100 writes=24 host_observed_write_us=15071.826 post_spi_to_tune_return_us=3146.973
+mode=BOTH progress=100 unrecovered=0 first_read_faults=0 recovered=0 last_epoch=100
+FINAL_EVENT_HISTORY_OK first=1 last=100
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=100 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=100 transition_ms_p50=1339.994_p95=1345.371_p99=1352.984_max=1353.110

@@ -1,0 +1,21 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.270 status=Success
+CAPTURE_TIMING i=1 samples_per_channel=32768 sample_rate=4000000 duration_ms=9.122 status=Success
+CAPTURE_TIMING i=2 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.446 status=Success
+CAPTURE_TIMING i=3 samples_per_channel=32768 sample_rate=4000000 duration_ms=9.089 status=Success
+CAPTURE_TIMING i=4 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.450 status=Success
+CAPTURE_TIMING i=5 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.154 status=Success
+CAPTURE_TIMING i=6 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.607 status=Success
+CAPTURE_TIMING i=7 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.567 status=Success
+CAPTURE_TIMING i=8 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.130 status=Success
+CAPTURE_TIMING i=9 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.283 status=Success
+FINAL_EVENT_HISTORY_OK first=1 last=10
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=10 unrecovered=0 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=0 data_withheld_events=10 transition_ms_p50=1339.926_p95=1340.368_p99=1340.368_max=1342.280

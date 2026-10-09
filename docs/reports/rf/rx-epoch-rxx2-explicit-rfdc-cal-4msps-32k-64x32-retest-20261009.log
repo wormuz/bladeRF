@@ -1,0 +1,35 @@
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:451] Failed to get FPGA size Invalid operation or parameter
+[WARNING @ host/libraries/libbladeRF/src/board/bladerf2/bladerf2.c:3667] Failed to get VCTCXO trim value: Invalid operation or parameter
+CAPTURE_TIMING i=0 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.959 status=Success
+CAPTURE_TIMING i=1 samples_per_channel=32768 sample_rate=4000000 duration_ms=8.262 status=Success
+[WARNING @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1259] lusb_stream_cb: RX transfer timed out after 24 full transfers
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b079cd010: 24576 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b079ac010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b0798b010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b0796a010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b07949010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b07928010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b07907010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+[ERROR @ host/libraries/libbladeRF/src/backend/usb/libusb.c:1381] Transfer timed out for RX buffer 0x774b078e6010: 0 of 131072 bytes, 24 transfer(s) completed on this stream
+TRANSITION_WAIT_FAILED i=2 txn=3 status=Operation timed out
+UNRECOVERED i=2 status=Operation timed out
+CAPTURE_TIMING i=2 samples_per_channel=32768 sample_rate=4000000 duration_ms=0.006 status=Operation timed out
+RUNTIME_OVERRUN n=1 epoch=2 flags=0x10000009 rfic_status=0x0 error=0 timestamp=0
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2329] bladerf_rx_transition_wait: FPGA RX fault before epoch certification: transaction=4 status=0x10214900 epoch=4
+TRANSITION_WAIT_FAILED i=3 txn=4 status=An unexpected error occurred
+UNRECOVERED i=3 status=An unexpected error occurred
+CAPTURE_TIMING i=3 samples_per_channel=32768 sample_rate=4000000 duration_ms=0.002 status=An unexpected error occurred
+[ERROR @ host/libraries/libbladeRF/src/board/bladerf2/rf_transition.c:2329] bladerf_rx_transition_wait: FPGA RX fault before epoch certification: transaction=5 status=0x10214900 epoch=5
+TRANSITION_WAIT_FAILED i=4 txn=5 status=An unexpected error occurred
+UNRECOVERED i=4 status=An unexpected error occurred
+CAPTURE_TIMING i=4 samples_per_channel=32768 sample_rate=4000000 duration_ms=0.006 status=An unexpected error occurred
+FINAL_EVENT_HISTORY_OK first=1 last=5
+QUALIFICATION_FAILED runtime_stream_overruns=1
+FINAL_RX1_DISABLE_DONE mode=BOTH
+FINAL_RX2_DISABLE_DONE paired=1
+FINAL_DEVICE_CLOSE_BEGIN
+FINAL_DEVICE_CLOSE_DONE
+bladerf2-axi-ad9361: Successfully initialized (76800537 Hz)
+bladerf2-axi-ad9361-tx: Successfully initialized (76800537 Hz)
+ad9361_init : AD936x Rev 2 successfully initialized
+mode=BOTH transitions=5 unrecovered=3 first_read_faults=0 recovered=0 retry_would_block=0 retry_overruns=0 stream_overrun_events=1 data_withheld_events=4 transition_ms_p50=1344.223_p95=1345.603_p99=1345.603_max=2021.133
