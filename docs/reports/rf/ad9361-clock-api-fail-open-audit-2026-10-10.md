@@ -54,13 +54,30 @@ same class:
 7. Fastlock profile loading ignored SPI writes and populated the profile cache
    even when programming failed. The per-word helper also combined results
    with bitwise OR rather than stopping at the first failed write.
+8. RX gain get/set paths ignored status reads, and the table getters could
+   return fabricated gain after a failed SPI read or index an invalid table
+   entry. Split-table reads also failed to restore the indirect table address
+   on later errors.
+9. FIR coefficient loading ignored setup and per-tap SPI writes, then restored
+   filter state without checking that restoration succeeded. The debug FIR
+   verifier had the same unchecked access pattern.
+10. Temperature/AuxADC getters ignored power/read/restore failures; foreign
+    fastlock exit ignored every recovery write before clearing cached profile
+    state; and clock/data-delay helpers reported success with incomplete
+    hardware or cached values.
+11. TX mute cached failed attenuation reads as real settings and combined two
+    restore-operation statuses. TX attenuation read also treated every channel
+    number other than one as TX2.
 
 These adjacent paths are now fail-closed: errors are returned, temporary FIR
 state is restored on read failure, software cache updates follow successful
 hardware operations, and MCS attempts to restore both ENSM states after a
 mid-sequence failure. Fastlock metadata is committed only after the complete
 profile transfer and programming-clock stop succeed. Channel-mode changes now
-propagate reset, setup, and post-setup errors.
+propagate reset, setup, and post-setup errors. RX gain output is committed only
+after the complete checked table read; invalid gain indexes are rejected.
+Temperature/AuxADC and clock-delay paths preserve read errors and report failed
+cleanup writes.
 
 ## Implemented fix and regression coverage
 
@@ -74,8 +91,9 @@ propagate reset, setup, and post-setup errors.
   state changes only after both writes succeed.
 - Expanded `host/misc/test_ad9361_calibration_read_error.c` to inject failures
   into sample-rate setters/getters, clock-chain reads, initial clock
-  registration, both BIST writes, ENSM getters, AGC/RSSI operations, FIR
-  readers, and fastlock loading. The test passes.
+  registration, both BIST writes, ENSM getters, RX gain get/set, AGC/RSSI,
+  temperature/AuxADC, RX/TX FIR readers and loader, fastlock load/exit, clock
+  delay reads/writes, and TX mute. The test passes.
 - `cmake --build host/build --target ad936x -j2` passes and both repository
   `git diff --check` runs are clean.
 

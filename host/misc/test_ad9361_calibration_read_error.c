@@ -201,6 +201,7 @@ int main(void)
     {
         uint32_t ensm_mode = UINT32_MAX;
         struct rf_rssi rssi = { .ant = 1 };
+        struct rf_rx_gain rx_gain = { .ant = 1, .gain_db = 0x1234 };
         uint8_t old_agc_mode = phy.agc_mode[0];
 
         fail_read_reg = REG_STATE;
@@ -231,7 +232,62 @@ int main(void)
                     " mode=%u\n", ret, phy.agc_mode[0]);
             return EXIT_FAILURE;
         }
+        phy.gt_info = ad9361_adi_gt_info;
+        phy.current_table = TBL_200_1300_MHZ;
+        register_map_enabled = true;
+        fake_regs[REG_RX_ENABLE_FILTER_CTRL] = RX_CHANNEL_ENABLE(RX_1);
+        fail_read_reg = REG_RX_ENABLE_FILTER_CTRL;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter hid enable read failure or changed output: ret=%"
+                    PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_AGC_CONFIG_1;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter hid AGC read failure or changed output: ret=%"
+                    PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_GAIN_RX1;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter hid full-table read failure or changed output: ret=%"
+                    PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
         fail_read_reg = -1;
+        fake_regs[REG_GAIN_RX1] = 0xff;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter accepted invalid table index: ret=%" PRId32
+                    " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_GAIN_RX1] = 0;
+        phy.pdata->split_gt = true;
+        phy.current_table = TBL_200_1300_MHZ + RXGAIN_TBLS_END;
+        fail_read_reg = REG_GAIN_TABLE_ADDRESS;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter hid split-table address read failure: ret=%"
+                    PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        fail_write_reg = REG_GAIN_TABLE_ADDRESS;
+        ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
+        if (ret != -EIO || rx_gain.gain_db != 0x1234) {
+            fprintf(stderr, "RX gain getter hid split-table address write failure: ret=%"
+                    PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        phy.pdata->split_gt = false;
+        phy.current_table = TBL_200_1300_MHZ;
+        fail_read_reg = -1;
+        register_map_enabled = false;
     }
 
     /* Both FIR coefficient readers must propagate setup, address, data, and
@@ -239,6 +295,7 @@ int main(void)
     {
         AD9361_RXFIRConfig rx_fir = {0};
         AD9361_TXFIRConfig tx_fir = {0};
+        int16_t fir_coef[16] = {0};
 
         fail_write_reg = REG_RX_FILTER_CONFIG;
         ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
@@ -265,6 +322,95 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+
+        register_map_enabled = true;
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        phy.rx_fir_ntaps = 64;
+        fail_write_reg = REG_RX_FILTER_GAIN;
+        ret = ad9361_load_fir_filter_coef(&phy, FIR_RX1, 0, 16, fir_coef);
+        if (ret != -EIO || phy.rx_fir_ntaps != 64) {
+            fprintf(stderr, "RX FIR loader hid gain write failure or changed cache: ret=%"
+                    PRId32 " taps=%" PRIu32 "\n", ret, phy.rx_fir_ntaps);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = REG_RX_FILTER_COEF_ADDR;
+        ret = ad9361_load_fir_filter_coef(&phy, FIR_RX1, 0, 16, fir_coef);
+        if (ret != -EIO || phy.rx_fir_ntaps != 64) {
+            fprintf(stderr, "RX FIR loader hid coefficient write failure or changed cache: ret=%"
+                    PRId32 " taps=%" PRIu32 "\n", ret, phy.rx_fir_ntaps);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        register_map_enabled = false;
+    }
+    /* Measurement and multi-register helpers must return transport errors
+     * instead of manufacturing values or committing partial cache state. */
+    {
+        uint8_t old_rx_delay = pdata.port_ctrl.rx_clk_data_delay;
+        uint8_t old_tx_delay = pdata.port_ctrl.tx_clk_data_delay;
+
+        register_map_enabled = true;
+        fail_read_reg = REG_TEMPERATURE;
+        ret = ad9361_get_temp(&phy);
+        if (ret != -EIO) {
+            fprintf(stderr, "Temperature getter hid SPI read failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_AUXADC_LSB;
+        ret = ad9361_get_auxadc(&phy);
+        if (ret != -EIO) {
+            fprintf(stderr, "AuxADC getter hid SPI read failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_RX_CLOCK_DATA_DELAY;
+        ret = ad9361_read_clock_data_delays(&phy);
+        if (ret != -EIO || pdata.port_ctrl.rx_clk_data_delay != old_rx_delay ||
+            pdata.port_ctrl.tx_clk_data_delay != old_tx_delay) {
+            fprintf(stderr, "Clock-delay getter hid RX failure or changed cached data\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_TX_CLOCK_DATA_DELAY;
+        ret = ad9361_read_clock_data_delays(&phy);
+        if (ret != -EIO || pdata.port_ctrl.rx_clk_data_delay != old_rx_delay ||
+            pdata.port_ctrl.tx_clk_data_delay != old_tx_delay) {
+            fprintf(stderr, "Clock-delay getter hid TX failure or partially changed cache\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        fail_write_reg = REG_RX_FAST_LOCK_SETUP;
+        phy.fastlock.current_profile[0] = 7;
+        fake_regs[REG_RX_FAST_LOCK_SETUP] = RX_FAST_LOCK_MODE_ENABLE;
+        ret = ad9361_fastlock_exit_foreign(&phy, false);
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 7) {
+            fprintf(stderr, "Fastlock exit hid setup write failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        phy.fastlock.current_profile[0] = 0;
+        phy.tx1_atten_cached = 111;
+        phy.tx2_atten_cached = 222;
+        fail_read_reg = REG_TX1_ATTEN_1;
+        ret = ad9361_tx_mute(&phy, 1);
+        if (ret != -EIO || phy.tx1_atten_cached != 111 ||
+            phy.tx2_atten_cached != 222) {
+            fprintf(stderr, "TX mute hid attenuation read failure or changed cache\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_AGC_CONFIG_1;
+        ret = ad9361_set_rx_gain(&phy, 1, &(struct rf_rx_gain){ .gain_db = 10 });
+        if (ret != -EIO) {
+            fprintf(stderr, "RX gain setter hid AGC read failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        fail_write_reg = REG_RX_CLOCK_DATA_DELAY;
+        ret = ad9361_write_clock_data_delays(&phy);
+        if (ret != -EIO) {
+            fprintf(stderr, "Clock-delay writer hid RX write failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        register_map_enabled = false;
     }
     fail_read_reg = REG_QUAD_CAL_STATUS_TX1;
     {
