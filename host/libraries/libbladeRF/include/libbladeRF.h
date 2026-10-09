@@ -5036,7 +5036,10 @@ typedef enum {
  * completion before the FPGA opens a new RX epoch, even when the LO delta is
  * small. Calibration moves
  * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
- * signal content is present. */
+ * signal content is present. This explicit operation is supported only in
+ * host tuning mode; FPGA/NIOS tuning owns a separate RFIC control path and
+ * rejects this request with BLADERF_ERR_UNSUPPORTED before starting a
+ * transition. */
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)
 
 /**
