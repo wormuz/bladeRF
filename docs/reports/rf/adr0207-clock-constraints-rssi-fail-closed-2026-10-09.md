@@ -35,6 +35,15 @@ waiver: the ignored generated-clock class was a real constraint defect and is
 now fixed and gated. Four post-fit `set_max_skew` no-path notices refer to
 same-output-clock-to-port constraints; qgate classifies these separately.
 
+For the 65 repeated A&S warnings on `U_av2wb` RAM `q_b[0..64]`, source
+inspection confirms the FIFO `q` output is connected to the 65-bit `wb_bus`;
+its address, data, and write-enable slices drive `wb_adr_o`, `wb_dat_o`, and
+`wb_we_o` in `wishbone_master.vhd`. The warnings name internal mapped RAM
+nodes, so they do not indicate that this whole Avalon-to-Wishbone payload is
+disconnected. The `rx_epoch_start_event_rx` unused-signal warning is separate:
+host notification currently polls the durable epoch status, and the pulse is
+not used as a hardware interrupt.
+
 | Image | RBF SHA-256 | Setup slack | Hold slack | ADC transfer CDC |
 | --- | --- | ---: | ---: | --- |
 | hosted | `51f8a792f3067af278d75c0a5ecd8b4c049a7ca6aa93a9f757b637e1bd893ccf` | +0.741 ns | +0.184 ns | qgate PASS |
