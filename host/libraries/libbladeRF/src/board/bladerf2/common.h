@@ -213,6 +213,10 @@ struct bladerf2_board_data {
     bool rx_fault_monitor_sync_initialized;
     bool rx_fault_monitor_started;
     bool rx_fault_monitor_stop;
+    /* Current blocking point, sampled by pre_close before joining the
+     * monitor. Protected by rx_fault_monitor_lock. */
+    char rx_fault_monitor_stage[32];
+    uint64_t rx_fault_monitor_stage_started_ns;
     uint64_t rx_fpga_loss_count_last;
     bool rx_fpga_loss_count_valid;
 

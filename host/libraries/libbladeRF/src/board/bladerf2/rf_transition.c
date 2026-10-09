@@ -27,6 +27,7 @@
  * License along with this program.
  */
 #include <errno.h>
+#include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 #include <inttypes.h>
@@ -123,6 +124,16 @@ static uint64_t _monotonic_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+static void _rx_fault_monitor_stage(struct bladerf2_board_data *board_data,
+                                   const char *stage)
+{
+    MUTEX_LOCK(&board_data->rx_fault_monitor_lock);
+    snprintf(board_data->rx_fault_monitor_stage,
+             sizeof(board_data->rx_fault_monitor_stage), "%s", stage);
+    board_data->rx_fault_monitor_stage_started_ns = _monotonic_ns();
+    MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
 }
 
 static bool _deadline_expired(uint64_t deadline_ns)
@@ -678,10 +689,13 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_pending &&
                 !board_data->rf_transition_setter_active;
             if (should_poll) {
+                _rx_fault_monitor_stage(board_data, "RFFE status");
                 rx_channel_status = dev->backend->rffe_control_read(
                     dev, &rffe_status);
+                _rx_fault_monitor_stage(board_data, "NIOS link status");
                 status = nios_rf_link_status_read(dev, &rf_link_status);
                 if (status == 0 && dev->board->get_loss_event_count != NULL) {
+                    _rx_fault_monitor_stage(board_data, "NIOS loss count");
                     loss_count_status = dev->board->get_loss_event_count(
                         dev, BLADERF_RX, &rx_loss_count);
                 } else if (status == 0) {
@@ -691,13 +705,16 @@ static void *rx_fault_monitor_task(void *arg)
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                         RF_LINK_STATUS_VERSION_1 &&
                     (rf_link_status & RF_LINK_STATUS_RX_FAULT) == 0) {
+                    _rx_fault_monitor_stage(board_data, "RFIC PLL status");
                     rfic_status = _read_rfic_reg(
                         dev, REG_RX_CP_VCO_LOCK_ADDR, &pll_status);
                     if (rfic_status == 0) {
+                        _rx_fault_monitor_stage(board_data, "RFIC ENSM status");
                         rfic_status = _read_rfic_reg(
                             dev, REG_STATE_ADDR, &ensm_status);
                     }
                     if (rfic_status == 0) {
+                        _rx_fault_monitor_stage(board_data, "RFIC BBPLL status");
                         rfic_status = _read_rfic_reg(
                             dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
                     }
@@ -714,6 +731,8 @@ static void *rx_fault_monitor_task(void *arg)
                 }
             }
         });
+
+        _rx_fault_monitor_stage(board_data, "idle");
 
         if (!should_poll) {
             continue;
@@ -884,6 +903,9 @@ int bladerf2_rx_fault_monitor_start(struct bladerf *dev)
     }
     board_data->rx_fault_monitor_sync_initialized = true;
     board_data->rx_fault_monitor_stop = false;
+    snprintf(board_data->rx_fault_monitor_stage,
+             sizeof(board_data->rx_fault_monitor_stage), "starting");
+    board_data->rx_fault_monitor_stage_started_ns = _monotonic_ns();
     status = THREAD_CREATE(&board_data->rx_fault_monitor_thread,
                            rx_fault_monitor_task, dev);
     if (status != THREAD_SUCCESS) {
@@ -899,6 +921,7 @@ int bladerf2_rx_fault_monitor_start(struct bladerf *dev)
 void bladerf2_rx_fault_monitor_stop(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
+    uint64_t join_started_ns;
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
@@ -906,10 +929,24 @@ void bladerf2_rx_fault_monitor_stop(struct bladerf *dev)
     board_data = dev->board_data;
     if (board_data->rx_fault_monitor_started) {
         MUTEX_LOCK(&board_data->rx_fault_monitor_lock);
+        {
+            const uint64_t now_ns = _monotonic_ns();
+            const uint64_t stage_elapsed_ns =
+                now_ns - board_data->rx_fault_monitor_stage_started_ns;
+            log_debug("rx_fault_monitor_stop: stopping at stage=%s "
+                      "stage_elapsed_us=%" PRIu64 "\n",
+                      board_data->rx_fault_monitor_stage[0] != '\0' ?
+                          board_data->rx_fault_monitor_stage : "not entered",
+                      stage_elapsed_ns / 1000ULL);
+        }
         board_data->rx_fault_monitor_stop = true;
         COND_SIGNAL(&board_data->rx_fault_monitor_cond);
         MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
+        join_started_ns = _monotonic_ns();
         THREAD_JOIN(board_data->rx_fault_monitor_thread, NULL);
+        log_debug("rx_fault_monitor_stop: join_complete "
+                  "elapsed_us=%" PRIu64 "\n",
+                  (_monotonic_ns() - join_started_ns) / 1000ULL);
         board_data->rx_fault_monitor_started = false;
     }
     if (board_data->rx_fault_monitor_sync_initialized) {
