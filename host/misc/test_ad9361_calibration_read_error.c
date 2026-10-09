@@ -6,7 +6,62 @@
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
+
+static int32_t fake_clock_chain_status;
+static unsigned fake_bandwidth_update_count;
+
+static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
+                                            uint32_t tx_sample_rate,
+                                            uint32_t rate_governor,
+                                            uint32_t *rx_path_clks,
+                                            uint32_t *tx_path_clks);
+static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
+                                        uint32_t *rx_path_clks,
+                                        uint32_t *tx_path_clks);
+static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
+                                        uint32_t rx_bw, uint32_t tx_bw);
+
+#define ad9361_calculate_rf_clock_chain test_calculate_rf_clock_chain
+#define ad9361_set_trx_clock_chain test_set_trx_clock_chain
+#define ad9361_update_rf_bandwidth test_update_rf_bandwidth
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
+#undef ad9361_calculate_rf_clock_chain
+#undef ad9361_set_trx_clock_chain
+#undef ad9361_update_rf_bandwidth
+
+static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
+                                            uint32_t tx_sample_rate,
+                                            uint32_t rate_governor,
+                                            uint32_t *rx_path_clks,
+                                            uint32_t *tx_path_clks)
+{
+    (void)phy;
+    (void)tx_sample_rate;
+    (void)rate_governor;
+    rx_path_clks[0] = 1;
+    tx_path_clks[0] = 1;
+    return 0;
+}
+
+static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
+                                        uint32_t *rx_path_clks,
+                                        uint32_t *tx_path_clks)
+{
+    (void)phy;
+    (void)rx_path_clks;
+    (void)tx_path_clks;
+    return fake_clock_chain_status;
+}
+
+static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
+                                        uint32_t rx_bw, uint32_t tx_bw)
+{
+    (void)phy;
+    (void)rx_bw;
+    (void)tx_bw;
+    ++fake_bandwidth_update_count;
+    return 0;
+}
 
 int32_t ad9361_adjust_rx_ext_band_settings(struct ad9361_rf_phy *phy,
                                            uint64_t freq)
@@ -484,6 +539,125 @@ int main(void)
     }
     fail_write_reg = -1;
 
-    puts("AD9361 calibration and ENSM SPI-error propagation: PASS");
+    /* BIST must propagate both writes and update cached state only after the
+     * complete register transaction succeeds. */
+    phy.bist_tone_mode = BIST_INJ_TX;
+    phy.bist_tone_freq_Hz = 7;
+    phy.bist_tone_level_dB = 12;
+    phy.bist_tone_mask = 3;
+    phy.bist_config = 0x1234;
+    fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
+    ret = ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0);
+    if (ret != -EIO || phy.bist_tone_mode != BIST_INJ_TX ||
+        phy.bist_config != 0x1234) {
+        fprintf(stderr, "BIST hid mask write failure or changed cache: ret=%" PRId32
+                " mode=%d config=0x%" PRIx32 "\n",
+                ret, phy.bist_tone_mode, phy.bist_config);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_BIST_CONFIG;
+    ret = ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0);
+    if (ret != -EIO || phy.bist_tone_mode != BIST_INJ_TX ||
+        phy.bist_config != 0x1234) {
+        fprintf(stderr, "BIST hid config write failure or changed cache: ret=%" PRId32
+                " mode=%d config=0x%" PRIx32 "\n",
+                ret, phy.bist_tone_mode, phy.bist_config);
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+
+    /* Public sampling-rate setters must not hide clock-chain failures behind
+     * a later successful bandwidth update. */
+    fake_clock_chain_status = -EIO;
+    fake_bandwidth_update_count = 0;
+    ret = ad9361_set_rx_sampling_freq(&phy, 1000000);
+    if (ret != -EIO || fake_bandwidth_update_count != 0) {
+        fprintf(stderr, "RX sample-rate setter hid clock-chain failure: ret=%" PRId32
+                " bandwidth_updates=%u\n", ret, fake_bandwidth_update_count);
+        return EXIT_FAILURE;
+    }
+    ret = ad9361_set_tx_sampling_freq(&phy, 1000000);
+    if (ret != -EIO || fake_bandwidth_update_count != 0) {
+        fprintf(stderr, "TX sample-rate setter hid clock-chain failure: ret=%" PRId32
+                " bandwidth_updates=%u\n", ret, fake_bandwidth_update_count);
+        return EXIT_FAILURE;
+    }
+
+    /* Checked clock-rate reads preserve the SPI error, and the public clock
+     * tree getter cannot claim success with a zero-filled clock path. */
+    {
+        struct no_os_clk bbpll_clk = { .rate = 983040000 };
+        struct refclk_scale adc_clk = {
+            .spi = &spi,
+            .phy = &phy,
+            .source = ADC_CLK,
+            .parent_source = BBPLL_CLK,
+        };
+        uint32_t rx_path[6] = {0};
+
+        phy.clks[BBPLL_CLK] = &bbpll_clk;
+        phy.ref_clk_scale[ADC_CLK] = &adc_clk;
+        phy.clks[ADC_CLK] = &(struct no_os_clk){ .rate = 491520000 };
+        fail_read_reg = REG_BBPLL;
+        ret = ad9361_get_trx_clock_chain(&phy, rx_path, NULL);
+        if (ret != -EIO) {
+            fprintf(stderr, "Clock-chain getter hid SPI read failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+    }
+
+    {
+        struct refclk_scale rx_sample_clk = {
+            .spi = &spi,
+            .phy = &phy,
+            .source = RX_SAMPL_CLK,
+            .parent_source = CLKRF_CLK,
+        };
+        struct no_os_clk clkrf_clk = { .rate = 30720000 };
+        uint32_t sample_rate = UINT32_MAX;
+
+        phy.clks[CLKRF_CLK] = &clkrf_clk;
+        phy.ref_clk_scale[RX_SAMPL_CLK] = &rx_sample_clk;
+        fail_read_reg = REG_RX_ENABLE_FILTER_CTRL;
+        ret = ad9361_get_rx_sampling_freq(&phy, &sample_rate);
+        if (ret != -EIO || sample_rate != UINT32_MAX) {
+            fprintf(stderr, "RX sample-rate getter hid clock read failure: ret=%" PRId32
+                    " rate=%" PRIu32 "\n", ret, sample_rate);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+    }
+
+    /* Initial clock registration must fail and free a partial tree if its
+     * first register read fails. */
+    {
+        struct no_os_clk ext_ref = { .rate = 40000000 };
+        size_t i;
+
+        for (i = 0; i < NUM_AD9361_CLKS; ++i) {
+            phy.clks[i] = NULL;
+            phy.ref_clk_scale[i] = NULL;
+        }
+        phy.clk_refin = &ext_ref;
+        fail_read_reg = REG_REF_DIVIDE_CONFIG_2;
+        ret = ad9361_register_clocks(&phy);
+        if (ret != -EIO) {
+            fprintf(stderr, "Clock registration hid scaler read failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        for (i = 0; i < NUM_AD9361_CLKS; ++i) {
+            if (phy.clks[i] != NULL || phy.ref_clk_scale[i] != NULL) {
+                fprintf(stderr, "Clock registration left partial clock %zu\n", i);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+
+    puts("AD9361 calibration, clock, and ENSM SPI-error propagation: PASS");
     return EXIT_SUCCESS;
 }

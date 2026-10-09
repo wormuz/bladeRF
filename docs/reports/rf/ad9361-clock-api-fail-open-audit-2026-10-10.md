@@ -1,4 +1,4 @@
-# AD9361 clock API failure-propagation audit
+# AD9361 clock/BIST failure-propagation audit and fix
 
 Date: 2026-10-10
 
@@ -17,32 +17,40 @@ clock API:
    errors to rate zero, while `get_trx_clock_chain()` returns success without
    validating the component rates. Callers can receive a partially zeroed
    clock plan as valid.
-3. `ad9361_clk_register()` uses the checked recalculation functions through
-   unchecked wrappers. `ad9361_register_clocks()` stores every returned
-   pointer without checking `NO_OS_IS_ERR()`. Thus an SPI failure while the
-   initial clock tree is read can leave zero rates or an encoded error pointer
-   in `phy->clks[]` while registration returns success.
+3. `ad9361_clk_register()` used unchecked recalculation wrappers.
+   `ad9361_register_clocks()` stored the results without checking errors, so
+   a failed initial clock-tree read could leave zero rates and still return
+   success.
+4. `ad9361_bist_tone()` ignored the first of its two SPI writes, updated its
+   cached mode/configuration before either write completed, and used the
+   unchecked rate helper for injected tone modes. The second successful write
+   could hide a failed first write and report a configuration the hardware
+   did not accept.
 
-The first two paths affect public set/get clock-chain operations. The third
-affects initialization and is the highest-priority fix because subsequent
-RFIC setup can proceed from an unverified clock tree. This audit does not
-claim that any of these paths caused the preserved NIOS no-response or LTE
-no-PSS observations.
+These paths affected public set/get clock-chain operations, RFIC
+initialization, and BIST configuration. This audit does not claim they caused
+the preserved NIOS no-response or LTE no-PSS observations.
 
-## Planned fix and regression coverage
+## Implemented fix and regression coverage
 
-- Propagate the clock-chain setter result before running bandwidth updates.
-- Add checked clock-rate retrieval for the public clock-chain getter and
-  preserve negative SPI errors.
-- Make clock registration stop on the first checked recalc failure, free the
-  partial tree safely, and return the original error to `ad9361_init()`.
-- Extend the existing SPI fault-injection test to fail representative BBPLL,
-  RFPLL, and clock-chain reads/writes and assert that no public API reports
-  success or a complete clock tree.
+- Added `clk_get_rate_checked()` while preserving `clk_get_rate()` as the
+  legacy zero-on-error compatibility wrapper.
+- RX/TX sample-rate getters preserve the underlying clock SPI error; setters
+  return clock-chain failures before running bandwidth updates.
+- Clock-tree registration returns the first checked recalculation error and
+  frees all partial clock allocations before returning to `ad9361_init()`.
+- BIST now checks sample-clock readback and both register writes; cached BIST
+  state changes only after both writes succeed.
+- Expanded `host/misc/test_ad9361_calibration_read_error.c` to inject failures
+  into sample-rate setters/getters, clock-chain reads, initial clock
+  registration, and both BIST writes. The test passes.
+- `cmake --build host/build --target ad936x -j2` passes and both repository
+  `git diff --check` runs are clean.
 
-Source audit only; no runtime device operation or RF setting change was made.
-Implementation is pending the active exact-source Quartus build so its source
-identity remains unambiguous.
+No runtime device operation or RF setting change was made. The no-OS fix is
+committed as `analogdevicesinc/no-OS` commit `bedcc7236`; the bladeRF test and
+submodule pointer update are committed separately. A fresh Quartus/NIOS build
+is required before this fix can be included in an FPGA release image.
 
 ## Source locations
 
