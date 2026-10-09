@@ -2403,7 +2403,9 @@ const char * CALL_CONV bladerf_format_to_string(bladerf_format format);
  * This generally only occurs on the TX channel when the FPGA is starved of
  * samples.
  *
- * @note libbladeRF does not report this status. It is here for future use.
+ * @note libbladeRF does not set this bit in `bladerf_metadata.status`.
+ * On bladeRF 2 devices with RF-link event support, TX FIFO underflow is
+ * reported through `BLADERF_RF_EVT_TX_UNDERRUN` in the RF event history.
  */
 #define BLADERF_META_STATUS_UNDERRUN (1 << 1)
 
