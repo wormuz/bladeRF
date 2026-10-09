@@ -248,7 +248,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
          event_type != BLADERF_RF_EVT_TX_UNDERRUN &&
          event_type != BLADERF_RF_EVT_TX_LINK_FAULT &&
          event_type != BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE &&
-         event_type != BLADERF_RF_EVT_TX_STREAM_STOPPED)) {
+         event_type != BLADERF_RF_EVT_TX_STREAM_STOPPED &&
+         event_type != BLADERF_RF_EVT_TX_COUNTER_RESET)) {
         return;
     }
 
@@ -257,7 +258,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     event.event_type = event_type;
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
-    if (event_type == BLADERF_RF_EVT_TX_UNDERRUN) {
+    if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||
+        event_type == BLADERF_RF_EVT_TX_COUNTER_RESET) {
         event.flags |= (uint32_t)loss_count;
         event.rfic_status = (uint32_t)(loss_count >> 32);
     } else {
