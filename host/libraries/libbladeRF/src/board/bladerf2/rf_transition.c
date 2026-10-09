@@ -788,6 +788,8 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_fault = false;
             bool report_tx_underrun = false;
             bool counter_reset = false;
+            bool report_tx_recovered = false;
+            bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
                 ((rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
                  RF_LINK_STATUS_VERSION_1 ? BLADERF_ERR_UNEXPECTED : 0);
@@ -809,10 +811,13 @@ static void *rx_fault_monitor_task(void *arg)
                         !board_data->tx_link_fault_reported) {
                         board_data->tx_link_fault_reported = true;
                         board_data->tx_stream_faulted = true;
+                        board_data->tx_recovery_blocked = true;
                         report_tx_fault = true;
                     }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0) {
+                        tx_counter_baseline_was_valid =
+                            board_data->tx_fpga_loss_count_valid;
                         if (!board_data->tx_fpga_loss_count_valid) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_fpga_loss_count_valid = true;
@@ -820,13 +825,27 @@ static void *rx_fault_monitor_task(void *arg)
                                    board_data->tx_fpga_loss_count_last) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_stream_faulted = true;
+                            board_data->tx_recovery_blocked = true;
                             counter_reset = true;
                         } else if (tx_loss_count >
                                    board_data->tx_fpga_loss_count_last) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_stream_faulted = true;
+                            board_data->tx_recovery_blocked = true;
                             report_tx_underrun = true;
                         }
+                    }
+                    if (tx_link_status_error == 0 &&
+                        tx_loss_count_status == 0 &&
+                        board_data->tx_status_unavailable_reported &&
+                        !board_data->tx_recovery_blocked &&
+                        board_data->tx_fpga_loss_count_valid &&
+                        tx_counter_baseline_was_valid &&
+                        !report_tx_fault && !report_tx_underrun &&
+                        !counter_reset) {
+                        board_data->tx_status_unavailable_reported = false;
+                        board_data->tx_stream_faulted = false;
+                        report_tx_recovered = true;
                     }
 
                 /* Keep the software TX validity state and its durable event
@@ -853,6 +872,11 @@ static void *rx_fault_monitor_task(void *arg)
                             dev, BLADERF_RF_EVT_TX_COUNTER_RESET,
                             tx_loss_count, rf_link_status,
                             BLADERF_ERR_UNEXPECTED);
+                    }
+                    if (report_tx_recovered) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_STATUS_RECOVERED, 0,
+                            rf_link_status, 0);
                     }
                 }
             });

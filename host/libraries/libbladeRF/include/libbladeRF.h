@@ -4880,7 +4880,10 @@ typedef enum {
     BLADERF_RF_EVT_TX_STREAM_STOPPED,
     /** TX underflow counter decreased while a stream was active, indicating
      * a counter reset/generation boundary. TX link validity is revoked. */
-    BLADERF_RF_EVT_TX_COUNTER_RESET
+    BLADERF_RF_EVT_TX_COUNTER_RESET,
+    /** TX status polling recovered and the cumulative counter proved no
+     * underrun across the observation gap. TX transport validity is restored. */
+    BLADERF_RF_EVT_TX_STATUS_RECOVERED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

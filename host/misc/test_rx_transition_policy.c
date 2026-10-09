@@ -125,6 +125,8 @@ int main(void)
         BLADERF_RF_EVT_TX_LINK_FAULT));
     assert(!bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_TX_COUNTER_RESET));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_TX_STATUS_RECOVERED));
 
     /* Empty requests are rejected; a control-only completion must still
      * identify at least one observed hardware condition. */

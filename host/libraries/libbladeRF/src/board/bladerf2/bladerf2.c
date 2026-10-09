@@ -1118,6 +1118,7 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
     (void)bladerf2_update_channel_enable_masks(dev, board_data);
     if (is_tx) {
         board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
@@ -1227,10 +1228,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_stream_faulted = false;
+            board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (tx_first_enable) {
             board_data->tx_fpga_loss_count_valid = false;
             board_data->tx_stream_faulted = true;
+            board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         }
         if (tx_first_enable) {
@@ -1355,6 +1358,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
                 dev, BLADERF_RF_EVT_TX_STREAM_STOPPED, 0, 0, 0);
             board_data->tx_fpga_loss_count_valid = false;
             board_data->tx_link_fault_reported = false;
+            board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         }
     } else if (BLADERF_CHANNEL_IS_TX(ch) && disable_status != 0) {
@@ -1362,12 +1366,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
          * Report that uncertainty at the API boundary and keep the monitor
          * armed through rf_link_dir_on so a later hardware fault is visible. */
         board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
             disable_status);
     } else if (BLADERF_CHANNEL_IS_TX(ch) && mask_status != 0) {
         board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0, mask_status);
