@@ -35,6 +35,9 @@
 #include "altera_avalon_pio_regs.h"
 #include "nios_pkt_8x32.h"
 
+/* Independent FPGA system-clock monitor, exposed on control PIO GPI[27]. */
+#define CONTROL_AD9361_RX_IF_CLOCK_ALIVE (1u << 27)
+
 
 static inline uint32_t control_reg_read(void)
 {

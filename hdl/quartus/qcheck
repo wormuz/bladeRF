@@ -1197,10 +1197,10 @@ def check_qgate_sweep_handshake_count():
         fail("qgate-sweep-handshake-count",
              "sweep qgate must detect Quartus revision text and expect 15 constrained handshake pairs",
              "valid CDC constraints were rejected solely by a stale count")
-    if ("hs_expect=12" not in text or "d101_expect=699" not in text or
-            "held_expect=368" not in text):
+    if ("hs_expect=12" not in text or "d101_expect=669" not in text or
+            "held_expect=338" not in text):
         fail("qgate-hosted-handshake-count",
-             "hosted qgate must require 12 handshakes and its 699/368 D101 inventory",
+             "hosted qgate must require 12 handshakes and its 669/338 current-source D101 inventory",
              "a sweep-only inventory rejects or silently weakens the hosted release gate")
     sdc = code_only(SDC.read_text())
     optional = (
@@ -1473,7 +1473,8 @@ def check_qgate_sta_resolution():
             return
 
         # Hosted omits the three sweep-only bundles. Exercise its independent
-        # 12-pair / 699-source DRC inventory and the fault-status disposition.
+        # 12-pair / 669-source DRC inventory. In this fitted DRC run the
+        # 30-bit fault-cause transfer is represented as a handshake, not D101.
         host_project = quartus / "work" / "bladerf-micro-A4-hosted"
         host_output = host_project / "output_files"
         host_output.mkdir(parents=True)
@@ -1481,7 +1482,6 @@ def check_qgate_sta_resolution():
         host_drc = host_output / "hosted.drc.rpt"
         host_sta.write_text("Type\nSlack : 0.073\n")
         host_sources = (
-            (30, "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|source_holding[0]"),
             (338, "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
             (128, "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
             (129, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]"),
@@ -1491,9 +1491,9 @@ def check_qgate_sta_resolution():
         host_lines = [
             "; Design Assistant Status ; Analyzed ;",
             "; Total Critical Violations ; 0 ;",
-            "; Total High Violations ; 700 ;",
+            "; Total High Violations ; 670 ;",
             "; - Rule C105 ; 1 ;",
-            "; - Rule D101 ; 699 ;",
+            "; - Rule D101 ; 669 ;",
             "; Rule C105: Clock signal should be a global signal ; altera_internal_jtag~TCKUTAP ;",
         ]
         host_number = 0
@@ -1516,6 +1516,7 @@ def check_qgate_sta_resolution():
             "handshake crossings constrained: 12\n"
             "ADI up_xfer bundled crossings constrained: 9\n"
             "dcfifo pointer crossings constrained on 10\n"
+            "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n"
             "Critical Warning (308060): Rule D101\n"
             "Critical Warning (308042): Rule C105\n"
             "Critical Warning (308012): Node \\\"altera_internal_jtag~TCKUTAP\\\"\n"
@@ -1525,12 +1526,24 @@ def check_qgate_sta_resolution():
             check=False)
         if (result.returncode != 0 or
                 "cdc handshake: 12" not in result.stdout or
-                "D101: all 699 sources classified" not in result.stdout or
-                "RX fault-status bundle present in fitted D101 inventory" not in result.stdout):
+                "D101: all 669 current-source findings classified" not in result.stdout or
+                "RX fault-status bundle present in fitted handshake evidence" not in result.stdout):
             fail("qgate-hosted-classified-bundled-d101",
-                 "qgate rejected the exact hosted 12-pair / 699-source D101 inventory",
+                 "qgate rejected the exact hosted 12-pair / 669-source D101 inventory",
                  "hosted release must validate its fitted RF status and bundled-data paths")
             return
+        host_log.write_text(host_log.read_text().replace(
+            "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n", ""))
+        result = subprocess.run(
+            [str(qgate), str(host_log)], text=True, capture_output=True,
+            check=False)
+        if result.returncode == 0 or "Design Assistant violations" not in result.stdout:
+            fail("qgate-hosted-fault-handshake-evidence-fails-closed",
+                 "qgate accepted the reduced D101 inventory without fitted RX fault-handshake evidence",
+                 "the dropped D101 source is dispositioned only while its independent fitted handshake remains present")
+            return
+        host_log.write_text(host_log.read_text() +
+                            "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n")
         host_log.write_text(host_log.read_text().replace(
             "handshake crossings constrained: 12",
             "handshake crossings constrained: 11"))

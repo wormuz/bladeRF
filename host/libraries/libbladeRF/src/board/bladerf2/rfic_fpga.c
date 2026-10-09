@@ -118,6 +118,9 @@ static const char *_rfic_fpga_init_stage_name(uint8_t stage)
     case BLADERF_RFIC_INIT_STAGE_DONE: return "done";
     case BLADERF_RFIC_INIT_STAGE_PHY_NULL: return "phy-null";
     case BLADERF_RFIC_INIT_STAGE_PDATA_NULL: return "pdata-null";
+    case BLADERF_RFIC_INIT_STAGE_IF_CLOCK_WAIT: return "if-clock-wait";
+    case BLADERF_RFIC_INIT_STAGE_IF_CLOCK_OK: return "if-clock-ok";
+    case BLADERF_RFIC_INIT_STAGE_IF_CLOCK_TIMEOUT: return "if-clock-timeout";
     default: return "unknown";
     }
 }

@@ -25,6 +25,7 @@ set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synth
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/sticky_reduce.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/handshake.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/reset_synchronizer.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/if_clock_watchdog.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/fifo_readwrite_p.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/fifo_reader.vhd]]
 

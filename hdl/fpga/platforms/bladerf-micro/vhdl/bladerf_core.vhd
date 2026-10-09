@@ -170,6 +170,8 @@ architecture core_bladerf of bladerf_core is
     signal nios_xb_gpio_oe        : std_logic_vector(31 downto 0) := (others => '0');
 
     signal nios_gpio              : nios_gpio_t;
+    signal nios_gpio_input        : std_logic_vector(31 downto 0);
+    signal ad9361_if_clock_alive  : std_logic;
     signal nios_gpo_slv           : std_logic_vector(31 downto 0);
 
     -- RF link status (RF_LINK_STATUS host register)
@@ -556,6 +558,24 @@ architecture core_bladerf of bladerf_core is
 
 begin
 
+    ad9361_if_clock_watchdog : entity work.if_clock_watchdog
+        port map (
+            system_clock    => sys_clock,
+            interface_clock => adi_rx_clock,
+            alive           => ad9361_if_clock_alive
+        );
+
+    -- GPI[27] is reserved in the control PIO. It carries an independent
+    -- alive indication so NIOS can reject AD9361 AXI initialization before
+    -- an absent if_l_clk can hold Avalon waitrequest indefinitely.
+    nios_gpio_input_pack : process(all)
+        variable gpio_input : std_logic_vector(31 downto 0);
+    begin
+        gpio_input := pack(nios_gpio.i, '0');
+        gpio_input(27) := ad9361_if_clock_alive;
+        nios_gpio_input <= gpio_input;
+    end process;
+
     U_rx_pkt_gen : entity work.rx_packet_generator
         port map(
             rx_clock               => rx_clock,
@@ -753,7 +773,7 @@ begin
             spi_MOSI                        => adi_spi_sdi,
             spi_SCLK                        => adi_spi_sclk,
             spi_SS_n                        => adi_spi_csn,
-            gpio_in_port                    => pack(nios_gpio.i, '0'),
+            gpio_in_port                    => nios_gpio_input,
             gpio_out_port                   => nios_gpo_slv,
             gpio_rffe_0_in_port             => pack(rffe_gpio),
             gpio_rffe_0_out_port            => rffe_gpio.o,

@@ -41,6 +41,27 @@
  * duplicated here rather than reaching into the private header. */
 #define BLADERF_AD9361_RFDC_CAL_MASK (1 << 1)
 
+/* The control PIO is clocked by sys_clock. This bit is driven by a separate
+ * FPGA watchdog observing adi_rx_clock, so checking it cannot enter the
+ * AD9361 AXI aperture whose waitrequest may stall NIOS. */
+#define BLADERF_AD9361_IF_CLOCK_WAIT_ATTEMPTS 200
+#define BLADERF_AD9361_IF_CLOCK_POLL_US       100
+
+static bool _wait_for_ad9361_if_clock(void)
+{
+    unsigned int attempt;
+
+    for (attempt = 0; attempt < BLADERF_AD9361_IF_CLOCK_WAIT_ATTEMPTS;
+         ++attempt) {
+        if ((control_reg_read() & CONTROL_AD9361_RX_IF_CLOCK_ALIVE) != 0) {
+            return true;
+        }
+        usleep(BLADERF_AD9361_IF_CLOCK_POLL_US);
+    }
+
+    return false;
+}
+
 /* An LO jump of this size or more invalidates the RF DC offset
  * calibration for the previous frequency (ADI EngineerZone, "AD9361
  * RF DC offset calibration timeout": "if the frequency change is more
@@ -228,8 +249,19 @@ static bool _rfic_initialize(struct rfic_state *state)
             reg |= (1 << RFFE_CONTROL_ENABLE);
             rffe_csr_write(reg);
         }
-        usleep(1000);
         state->init_stage = BLADERF_RFIC_INIT_STAGE_ENABLE_SET;
+
+        /* Require the independently monitored AD9361 interface clock before
+         * entering no-OS AXI register access. Those raw Avalon operations
+         * have no software timeout and can otherwise wedge this Nios. */
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_WAIT;
+        if (!_wait_for_ad9361_if_clock()) {
+            state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_TIMEOUT;
+            DBG("%s: AD9361 RX interface clock did not start\n",
+                __FUNCTION__);
+            return false;
+        }
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_OK;
 
         /* ad9361_init() used to take the device handle as a third argument
          * and stash it for the SPI and GPIO accessors. On this platform

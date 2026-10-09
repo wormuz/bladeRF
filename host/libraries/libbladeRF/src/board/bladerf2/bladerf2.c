@@ -3397,12 +3397,10 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
                 return BLADERF_ERR_UNSUPPORTED;
             }
 
-            /* Handing the RFIC to the NIOS means the NIOS runs
-             * _rfic_initialize(), which clears the RFFE control bits and
-             * hard-resets the AD9361 (devices_rfic_cmds.c:141-152). Doing
-             * that to a chip the host is streaming from wedges the board
-             * badly enough that only a power cycle recovers it, so refuse
-             * rather than let the caller find out the hard way. */
+            /* Handing the RFIC to NIOS runs _rfic_initialize(), which
+             * changes RFFE ownership and initializes the AD9361. The FPGA
+             * mode does not implement the event/epoch contract, so keep this
+             * transfer outside certified RX operation and fail closed. */
             if (board_data->module_format[BLADERF_RX] != (bladerf_format)-1 ||
                 board_data->module_format[BLADERF_TX] != (bladerf_format)-1) {
                 log_error("%s: refusing to hand the RFIC to the FPGA while a "

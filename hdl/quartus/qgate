@@ -302,8 +302,8 @@ else
             d101_expect=735
             held_expect=404
         elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
-            d101_expect=699
-            held_expect=368
+            d101_expect=669
+            held_expect=338
         else
             d101_expect=0
             held_expect=0
@@ -322,6 +322,17 @@ else
                         d101_dispositioned=1
                         note ok "Design Assistant D101: all $d101_expect sources classified; fitted CDC bounds required above"
                         note ok "RX fault-status bundle present in fitted D101 inventory; exact hosted handshake count required above"
+                        note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
+                    elif [ "$d101_expect" = 669 ] &&
+                         grep -Fq 'U_rx_fault_causes_handshake|grab_source' "$f"; then
+                        # The current fitter recognizes the fault-cause transfer
+                        # as a handshake and no longer emits its 30 held bits as
+                        # D101. Require both the 12-pair SDC count above and the
+                        # fitted 30-bit handshake evidence before dispositioning
+                        # the reduced DRC inventory.
+                        d101_dispositioned=1
+                        note ok "Design Assistant D101: all $d101_expect current-source findings classified; fitted CDC bounds required above"
+                        note ok "RX fault-status bundle present in fitted handshake evidence; it is not counted as D101 by this DRC run"
                         note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                     fi
                 fi
