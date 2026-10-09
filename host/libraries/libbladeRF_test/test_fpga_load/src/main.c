@@ -45,6 +45,7 @@ int main(int argc, char *argv[])
     struct bladerf *dev = NULL;
     const char *fpga_file = "latest.rbf";
     const char *device_string = NULL;
+    int reload_only = 0;
     int c;
 
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_ERROR);
@@ -55,10 +56,11 @@ int main(int argc, char *argv[])
             {"device",      required_argument   , 0, 'd'},
             {"fpga",        required_argument   , 0, 'f'},
             {"verbosity",   no_argument         , 0, 'v'},
+            {"reload-only", no_argument         , 0, 'r'},
             {0, 0, 0, 0 }
         };
 
-        c = getopt_long(argc, argv, "d:f:v", long_options, &option_index);
+        c = getopt_long(argc, argv, "d:f:vr", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -76,6 +78,11 @@ int main(int argc, char *argv[])
             case 'v':
                 printf("Setting verbosity to verbose\n");
                 bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_VERBOSE);
+                break;
+
+            case 'r':
+                reload_only = 1;
+                printf("Testing same-handle FPGA reload lifecycle only\n");
                 break;
 
             case '?':
@@ -103,6 +110,11 @@ int main(int argc, char *argv[])
 
     printf("Reloading the FPGA image...\n");
     CHECK_STATUS(bladerf_load_fpga(dev, fpga_file));
+
+    if (reload_only) {
+        printf("Passed same-handle FPGA reload lifecycle test!\n");
+        goto error;
+    }
 
     printf("Setting tuning mode to FPGA...\n");
     CHECK_STATUS(bladerf_set_tuning_mode(dev, BLADERF_TUNING_MODE_FPGA));

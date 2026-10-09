@@ -522,6 +522,25 @@ static const char *_runtime_rx_monitor_test_mode(void)
 #endif
 }
 
+struct rx_fault_event_publish_context {
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event;
+    uint32_t channel_flags;
+};
+
+/* The sync generation lock is held while this callback runs. Commit the
+ * durable invalidation event before releasing that lock, so a sync reader
+ * cannot observe revocation and return before the reason is visible in event
+ * history. */
+static void _revoke_rx_fault_and_publish_event(void *context)
+{
+    struct rx_fault_event_publish_context *publish = context;
+
+    bladerf2_rx_epoch_revoke_admission(publish->board_data);
+    bladerf2_rf_event_append_rx_invalidation(
+        publish->board_data, &publish->event, publish->channel_flags);
+}
+
 /* Revoke exactly the epoch whose sticky hardware fault was observed. The
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */
@@ -534,6 +553,7 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_rf_event event = {0};
+    struct rx_fault_event_publish_context publish = {0};
     bool invalidate = false;
     bool epoch_contract_enabled = false;
     int sync_status = 0;
@@ -557,11 +577,29 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             if (invalidate) {
                 board_data->rf_transition_setter_active = true;
-                /* Keep the async certificate and sync delivery generation
-                 * on one invalidation boundary before releasing dev->lock. */
+                event.host_monotonic_ns = _monotonic_ns();
+                event.epoch_id = observed_epoch_id;
+                event.requested_rx_lo_hz =
+                    board_data->rf_transition_requested_frequency_hz;
+                event.readback_rx_lo_hz =
+                    board_data->rf_transition_readback_frequency_hz;
+                event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+                event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
+                event.flags = reason;
+                event.rfic_status = rf_link_status;
+                event.error_code = monitor_error;
+                publish.board_data = board_data;
+                publish.event = event;
+                publish.channel_flags =
+                    bladerf2_rx_transition_channel_event_flags(
+                        board_data->rf_transition_current_channel,
+                        board_data->rf_transition_epoch_contract_enabled &&
+                            board_data->rf_transition_current_channel_valid);
+                /* Revoke async/sync admission and publish its reason while
+                 * the sync generation lock still excludes data readers. */
                 sync_rx_epoch_revoke_delivery_with_callback(
                     &board_data->sync[BLADERF_RX],
-                    bladerf2_rx_epoch_revoke_admission, board_data);
+                    _revoke_rx_fault_and_publish_event, &publish);
             }
         }
     });
@@ -570,23 +608,9 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
         return;
     }
 
-    /* Revoke sync reads before publishing the fault and issuing the NIOS
-     * ABORT request. A reader starting in that control-transfer window must
-     * not consume a queued buffer under the old certified generation. */
+    /* The sync generation fence and durable event are now committed. Reset
+     * per-epoch notification state before issuing the NIOS ABORT request. */
     bladerf2_rx_data_withheld_reset(dev);
-    event.host_monotonic_ns = _monotonic_ns();
-    event.epoch_id = observed_epoch_id;
-    event.requested_rx_lo_hz =
-        board_data->rf_transition_requested_frequency_hz;
-    event.readback_rx_lo_hz = board_data->rf_transition_readback_frequency_hz;
-    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-    event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
-    event.flags = reason;
-    event.rfic_status = rf_link_status;
-    event.error_code = monitor_error;
-    bladerf2_rf_event_append_rx_invalidation(
-        board_data, &event,
-        bladerf2_rx_current_transition_channel_event_flags(board_data));
 
     if (epoch_contract_enabled) {
         abort_status = _rx_epoch_abort_command(dev);

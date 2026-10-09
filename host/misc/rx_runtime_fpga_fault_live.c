@@ -29,6 +29,7 @@ struct blocking_reader {
     unsigned int sample_count;
     struct bladerf_metadata metadata;
     int status;
+    uint64_t completion_monotonic_ns;
     atomic_bool started;
     atomic_bool finished;
 };
@@ -43,6 +44,8 @@ static void *blocking_sync_reader(void *arg)
                                      reader->sample_count,
                                      &reader->metadata, 5000);
     clock_gettime(CLOCK_MONOTONIC, &end);
+    reader->completion_monotonic_ns =
+        (uint64_t)end.tv_sec * 1000000000ULL + (uint64_t)end.tv_nsec;
     fprintf(stderr, "blocking sync reader returned after %.3f s status=%d "
             "count=%u\n",
             (end.tv_sec - begin.tv_sec) +
@@ -242,6 +245,7 @@ int main(int argc, char **argv)
     }
 
     bool saw_fault_invalidation = false;
+    uint64_t invalidation_monotonic_ns = 0;
     for (unsigned attempt = 0; attempt < 3000 && !saw_fault_invalidation;
          ++attempt) {
         usleep(1000);
@@ -266,6 +270,7 @@ int main(int argc, char **argv)
                 (expected_error == 0 || events[i].error_code == expected_error) &&
                 events[i].epoch_id == transition_event.epoch_id) {
                 saw_fault_invalidation = true;
+                invalidation_monotonic_ns = events[i].host_monotonic_ns;
                 break;
             }
         }
@@ -276,13 +281,19 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     unsetenv("BLADERF_TEST_RX_TRANSITION_STALL");
-    if (atomic_load(&reader.finished)) {
-        fprintf(stderr, "fault event was delayed until sync reader exited\n");
+    pthread_join(reader_thread, NULL);
+    reader_started = false;
+    if (reader.status != BLADERF_ERR_WOULD_BLOCK ||
+        reader.metadata.actual_count != 0 || invalidation_monotonic_ns == 0 ||
+        invalidation_monotonic_ns > reader.completion_monotonic_ns) {
+        fprintf(stderr, "fault notification ordering invalid: event_ns=%llu "
+                "reader_done_ns=%llu read_status=%d count=%u\n",
+                (unsigned long long)invalidation_monotonic_ns,
+                (unsigned long long)reader.completion_monotonic_ns,
+                reader.status, reader.metadata.actual_count);
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
-    pthread_join(reader_thread, NULL);
-    reader_started = false;
 
     for (size_t i = 0; i < sizeof(samples) / sizeof(samples[0]); ++i) {
         samples[i] = 0x5555;
