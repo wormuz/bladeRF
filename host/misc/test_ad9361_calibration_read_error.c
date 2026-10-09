@@ -24,6 +24,21 @@ uint32_t find_first_bit(uint32_t word)
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
+uint32_t clk_get_rate(struct ad9361_rf_phy *phy, struct refclk_scale *clk_priv)
+{
+    (void)phy;
+    (void)clk_priv;
+    return 0;
+}
+int32_t ilog2(int32_t value)
+{
+    int32_t result = -1;
+    while (value > 0) {
+        value >>= 1;
+        ++result;
+    }
+    return result;
+}
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
 {
     uint64_t remainder = *n % base;
@@ -172,6 +187,71 @@ int main(void)
                 "\n", ret);
         return EXIT_FAILURE;
     }
+
+    fail_write_reg = REG_DCXO_COARSE_TUNE;
+    ret = ad9361_set_dcxo_tune(&phy, 0, 0);
+    if (ret != -EIO) {
+        fprintf(stderr, "DCXO setup hid coarse-tune write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    {
+        struct auxdac_control auxdac = {0};
+        struct gpo_control gpo = {0};
+        struct ctrl_outs_control ctrl_outs = {0};
+        struct gain_control gain = {0};
+        struct tx_monitor_control txmon = {0};
+
+        fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
+        ret = ad9361_auxdac_setup(&phy, &auxdac);
+        if (ret != -EIO) {
+            fprintf(stderr, "AuxDAC setup hid enable write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_AUTO_GPO;
+        ret = ad9361_gpo_setup(&phy, &gpo);
+        if (ret != -EIO) {
+            fprintf(stderr, "GPO setup hid auto-mode write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_CTRL_OUTPUT_POINTER;
+        ret = ad9361_ctrl_outs_setup(&phy, &ctrl_outs);
+        if (ret != -EIO) {
+            fprintf(stderr, "Control-output setup hid pointer write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_AGC_CONFIG_1;
+        ret = ad9361_gc_setup(&phy, &gain);
+        if (ret != -EIO) {
+            fprintf(stderr, "AGC setup hid initial configuration write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_PARALLEL_PORT_CONF_1;
+        ret = ad9361_pp_port_setup(&phy, false);
+        if (ret != -EIO) {
+            fprintf(stderr, "Parallel-port setup hid configuration write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        txmon.tx_mon_duration = 160;
+        fail_write_reg = REG_TPM_MODE_ENABLE;
+        ret = ad9361_txmon_setup(&phy, &txmon);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX-monitor setup hid mode write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+    }
     fail_write_reg = -1;
 
     register_map_enabled = true;
@@ -227,6 +307,35 @@ int main(void)
                 "\n", ret);
         return EXIT_FAILURE;
     }
+
+    /* Initialization-time ENSM wake must propagate SPI failures. */
+    fail_write_reg = REG_CLOCK_ENABLE;
+    phy.curr_ensm_state = ENSM_STATE_SLEEP;
+    ret = ad9361_ensm_set_state(&phy, ENSM_STATE_ALERT, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "ENSM wake hid clock-enable write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_ENSM_CONFIG_1;
+    phy.curr_ensm_state = ENSM_STATE_SLEEP;
+    ret = ad9361_ensm_set_state(&phy, ENSM_STATE_ALERT, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "ENSM wake hid ALERT write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_RX_PFD_CONFIG;
+    phy.curr_ensm_state = ENSM_STATE_SLEEP;
+    ret = ad9361_ensm_set_state(&phy, ENSM_STATE_ALERT, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "ENSM wake hid RX VCO-cal control failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
 
     puts("AD9361 calibration and ENSM SPI-error propagation: PASS");
     return EXIT_SUCCESS;
