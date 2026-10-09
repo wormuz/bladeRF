@@ -321,6 +321,8 @@ up_axi #(
 	.up_axi_rresp(s_axi_rresp),
 	.up_axi_rdata(s_axi_rdata),
 	.up_axi_rready(s_axi_rready),
+	.up_axi_timeout_clear_toggle(1'b0),
+	.up_axi_timeout(),
 	.up_wreq(up_wreq),
 	.up_waddr(up_waddr),
 	.up_wdata(up_wdata),

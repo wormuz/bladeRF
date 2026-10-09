@@ -71,6 +71,14 @@ add_interface_port s_axi s_axi_rresp rresp Output 2
 add_interface_port s_axi s_axi_rdata rdata Output 32
 add_interface_port s_axi s_axi_rready rready Input 1
 
+# Sticky timeout from up_axi is exposed independently of AXI BRESP because
+# the NIOS Avalon master path does not expose AXI response status to software.
+add_interface axi_timeout_status conduit end
+add_interface_port axi_timeout_status axi_timeout_status export Output 1
+
+add_interface axi_timeout_clear conduit end
+add_interface_port axi_timeout_clear axi_timeout_clear export Input 1
+
 # device interface
 
 add_interface device_clock clock end

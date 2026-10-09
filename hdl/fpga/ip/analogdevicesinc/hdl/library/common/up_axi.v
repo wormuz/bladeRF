@@ -64,6 +64,11 @@ module up_axi (
   up_axi_rdata,
   up_axi_rready,
 
+  // timeout status sideband
+
+  up_axi_timeout_clear_toggle,
+  up_axi_timeout,
+
   // pcore interface
 
   up_wreq,
@@ -105,6 +110,9 @@ module up_axi (
   output  [31:0]  up_axi_rdata;
   input           up_axi_rready;
 
+  input           up_axi_timeout_clear_toggle;
+  output          up_axi_timeout;
+
   // pcore interface
 
   output          up_wreq;
@@ -121,7 +129,9 @@ module up_axi (
   reg             up_axi_awready = 'd0;
   reg             up_axi_wready = 'd0;
   reg             up_axi_bvalid = 'd0;
+  reg     [ 1:0]  up_axi_bresp_reg = 'd0;
   reg             up_wack_d = 'd0;
+  reg             up_wtimeout_d = 'd0;
   reg             up_wsel = 'd0;
   reg             up_wreq = 'd0;
   reg     [AW:0]  up_waddr = 'd0;
@@ -129,6 +139,7 @@ module up_axi (
   reg     [ 4:0]  up_wcount = 'd0;
   reg             up_axi_arready = 'd0;
   reg             up_axi_rvalid = 'd0;
+  reg     [ 1:0]  up_axi_rresp_reg = 'd0;
   reg     [31:0]  up_axi_rdata = 'd0;
   reg             up_rack_d = 'd0;
   reg     [31:0]  up_rdata_d = 'd0;
@@ -136,6 +147,9 @@ module up_axi (
   reg             up_rreq = 'd0;
   reg     [AW:0]  up_raddr = 'd0;
   reg     [ 4:0]  up_rcount = 'd0;
+  reg             up_rtimeout_d = 'd0;
+  reg             up_axi_timeout_reg = 'd0;
+  reg             up_axi_timeout_clear_toggle_d = 'd0;
 
   // internal signals
 
@@ -145,13 +159,14 @@ module up_axi (
 
   // write channel interface
 
-  assign up_axi_bresp = 2'd0;
+  assign up_axi_bresp = up_axi_bresp_reg;
 
   always @(negedge up_rstn or posedge up_clk) begin
     if (up_rstn == 1'b0) begin
       up_axi_awready <= 'd0;
       up_axi_wready <= 'd0;
       up_axi_bvalid <= 'd0;
+      up_axi_bresp_reg <= 2'b00;
     end else begin
       if (up_axi_awready == 1'b1) begin
         up_axi_awready <= 1'b0;
@@ -167,6 +182,7 @@ module up_axi (
         up_axi_bvalid <= 1'b0;
       end else if (up_wack_d == 1'b1) begin
         up_axi_bvalid <= 1'b1;
+        up_axi_bresp_reg <= up_wtimeout_d ? 2'b10 : 2'b00;
       end
     end
   end
@@ -176,6 +192,7 @@ module up_axi (
   always @(negedge up_rstn or posedge up_clk) begin
     if (up_rstn == 1'b0) begin
       up_wack_d <= 'd0;
+      up_wtimeout_d <= 'd0;
       up_wsel <= 'd0;
       up_wreq <= 'd0;
       up_waddr <= 'd0;
@@ -183,6 +200,9 @@ module up_axi (
       up_wcount <= 'd0;
     end else begin
       up_wack_d <= up_wack_s;
+      if (up_wack_s == 1'b1) begin
+        up_wtimeout_d <= (up_wcount == 5'h1f) && !up_wack;
+      end
       if (up_wsel == 1'b1) begin
         if ((up_axi_bready == 1'b1) && (up_axi_bvalid == 1'b1)) begin
           up_wsel <= 1'b0;
@@ -208,13 +228,14 @@ module up_axi (
 
   // read channel interface
 
-  assign up_axi_rresp = 2'd0;
+  assign up_axi_rresp = up_axi_rresp_reg;
 
   always @(negedge up_rstn or posedge up_clk) begin
     if (up_rstn == 1'b0) begin
       up_axi_arready <= 'd0;
       up_axi_rvalid <= 'd0;
       up_axi_rdata <= 'd0;
+      up_axi_rresp_reg <= 2'b00;
     end else begin
       if (up_axi_arready == 1'b1) begin
         up_axi_arready <= 1'b0;
@@ -227,6 +248,7 @@ module up_axi (
       end else if (up_rack_d == 1'b1) begin
         up_axi_rvalid <= 1'b1;
         up_axi_rdata <= up_rdata_d;
+        up_axi_rresp_reg <= up_rtimeout_d ? 2'b10 : 2'b00;
       end
     end
   end
@@ -237,6 +259,7 @@ module up_axi (
   always @(negedge up_rstn or posedge up_clk) begin
     if (up_rstn == 1'b0) begin
       up_rack_d <= 'd0;
+      up_rtimeout_d <= 'd0;
       up_rdata_d <= 'd0;
       up_rsel <= 'd0;
       up_rreq <= 'd0;
@@ -244,6 +267,9 @@ module up_axi (
       up_rcount <= 'd0;
     end else begin
       up_rack_d <= up_rack_s;
+      if (up_rack_s == 1'b1) begin
+        up_rtimeout_d <= (up_rcount == 5'h1f) && !up_rack;
+      end
       up_rdata_d <= up_rdata_s;
       if (up_rsel == 1'b1) begin
         if ((up_axi_rready == 1'b1) && (up_axi_rvalid == 1'b1)) begin
@@ -262,6 +288,23 @@ module up_axi (
         up_rcount <= up_rcount + 1'b1;
       end else if (up_rreq == 1'b1) begin
         up_rcount <= 5'h10;
+      end
+    end
+  end
+
+  assign up_axi_timeout = up_axi_timeout_reg;
+
+  always @(negedge up_rstn or posedge up_clk) begin
+    if (up_rstn == 1'b0) begin
+      up_axi_timeout_reg <= 1'b0;
+      up_axi_timeout_clear_toggle_d <= 1'b0;
+    end else begin
+      up_axi_timeout_clear_toggle_d <= up_axi_timeout_clear_toggle;
+      if (up_axi_timeout_clear_toggle != up_axi_timeout_clear_toggle_d) begin
+        up_axi_timeout_reg <= 1'b0;
+      end else if (((up_wcount == 5'h1f) && !up_wack) ||
+                   ((up_rcount == 5'h1f) && !up_rack)) begin
+        up_axi_timeout_reg <= 1'b1;
       end
     end
   end

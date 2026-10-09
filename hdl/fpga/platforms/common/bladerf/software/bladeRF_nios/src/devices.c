@@ -597,10 +597,23 @@ uint32_t adi_axi_read(uint16_t addr)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_axi_write(uint16_t addr, uint32_t data)
+bool adi_axi_write(uint16_t addr, uint32_t data)
 {
-#ifdef AXI_AD9361_0_BASE  // Temporary hack for bladeRF1 compat
+#if defined(AXI_AD9361_0_BASE) && \
+    defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
+    defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
+    uint32_t clear_toggle;
+
+    /* NIOS's Avalon master drops AXI BRESP. Clear the sticky up_axi timeout
+     * before this access, then inspect the sideband after the write response. */
+    clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
+    IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
     IOWR_32DIRECT(AXI_AD9361_0_BASE, addr, data);
+    return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+#else
+    (void)addr;
+    (void)data;
+    return false;
 #endif
 }
 #endif  // BOARD_BLADERF_MICRO

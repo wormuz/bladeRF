@@ -36,10 +36,5 @@ int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 
 int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
 {
-    adi_axi_write((uint16_t)(base + offset), data);
-
-    /* The current ADI up_axi write timeout is returned as AXI OKAY, so this
-     * callback cannot distinguish it. A readback/status check is required by
-     * callers that need to certify writes. */
-    return 0;
+    return adi_axi_write((uint16_t)(base + offset), data) ? 0 : -EIO;
 }

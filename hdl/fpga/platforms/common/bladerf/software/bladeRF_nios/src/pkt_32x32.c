@@ -57,8 +57,7 @@ static inline bool perform_write(uint8_t id, uint32_t addr, uint32_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_32x32_TARGET_ADI_AXI:
-            adi_axi_write(addr, data);
-            break;
+            return adi_axi_write(addr, data);
 
         case NIOS_PKT_32x32_TARGET_WB_MSTR:
             wishbone_master_write(addr, data);

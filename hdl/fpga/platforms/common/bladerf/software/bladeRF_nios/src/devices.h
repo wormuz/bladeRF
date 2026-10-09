@@ -221,7 +221,7 @@ uint32_t adi_axi_read(uint16_t addr);
  * @param   addr    Register address to write to
  * @param   data    Data to write
  */
-void adi_axi_write(uint16_t addr, uint32_t data);
+bool adi_axi_write(uint16_t addr, uint32_t data);
 
 /**
  * Read from Wishbone Master space

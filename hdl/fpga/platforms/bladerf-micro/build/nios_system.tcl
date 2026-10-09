@@ -372,6 +372,35 @@ set_instance_parameter_value rf_link_status {simDoTestBenchWiring} {0}
 set_instance_parameter_value rf_link_status {simDrivenValue} {0.0}
 set_instance_parameter_value rf_link_status {width} {32}
 
+# AD9361 AXI timeout is sticky in up_axi and must be visible to NIOS
+# software: the generated Avalon master translator drops AXI response status.
+add_instance rfic_axi_timeout_status altera_avalon_pio
+set_instance_parameter_value rfic_axi_timeout_status {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rfic_axi_timeout_status {bitModifyingOutReg} {0}
+set_instance_parameter_value rfic_axi_timeout_status {captureEdge} {0}
+set_instance_parameter_value rfic_axi_timeout_status {direction} {Input}
+set_instance_parameter_value rfic_axi_timeout_status {edgeType} {RISING}
+set_instance_parameter_value rfic_axi_timeout_status {generateIRQ} {0}
+set_instance_parameter_value rfic_axi_timeout_status {irqType} {LEVEL}
+set_instance_parameter_value rfic_axi_timeout_status {resetValue} {0.0}
+set_instance_parameter_value rfic_axi_timeout_status {simDoTestBenchWiring} {0}
+set_instance_parameter_value rfic_axi_timeout_status {simDrivenValue} {0.0}
+set_instance_parameter_value rfic_axi_timeout_status {width} {1}
+
+# Toggle output; each edge clears the sticky timeout before one ADI AXI write.
+add_instance rfic_axi_timeout_clear altera_avalon_pio
+set_instance_parameter_value rfic_axi_timeout_clear {bitClearingEdgeCapReg} {0}
+set_instance_parameter_value rfic_axi_timeout_clear {bitModifyingOutReg} {0}
+set_instance_parameter_value rfic_axi_timeout_clear {captureEdge} {0}
+set_instance_parameter_value rfic_axi_timeout_clear {direction} {Output}
+set_instance_parameter_value rfic_axi_timeout_clear {edgeType} {RISING}
+set_instance_parameter_value rfic_axi_timeout_clear {generateIRQ} {0}
+set_instance_parameter_value rfic_axi_timeout_clear {irqType} {LEVEL}
+set_instance_parameter_value rfic_axi_timeout_clear {resetValue} {0.0}
+set_instance_parameter_value rfic_axi_timeout_clear {simDoTestBenchWiring} {0}
+set_instance_parameter_value rfic_axi_timeout_clear {simDrivenValue} {0.0}
+set_instance_parameter_value rfic_axi_timeout_clear {width} {1}
+
 # RX FIFO-writer sticky causes, captured coherently from rx_clock.
 add_instance rx_fault_causes altera_avalon_pio
 set_instance_parameter_value rx_fault_causes {bitClearingEdgeCapReg} {0}
@@ -686,6 +715,8 @@ add_interface ad9361_data_reset reset source
 set_interface_property ad9361_data_reset EXPORT_OF rb_ad9361_0_data.out_reset
 add_interface ad9361_device_if conduit end
 set_interface_property ad9361_device_if EXPORT_OF axi_ad9361_0.device_if
+add_connection axi_ad9361_0.axi_timeout_status rfic_axi_timeout_status.external_connection
+add_connection rfic_axi_timeout_clear.external_connection axi_ad9361_0.axi_timeout_clear
 add_interface clk clock sink
 set_interface_property clk EXPORT_OF system_clock.clk_in
 add_interface command conduit end
@@ -748,6 +779,16 @@ add_connection nios2.data_master axi_ad9361_0.s_axi
 set_connection_parameter_value nios2.data_master/axi_ad9361_0.s_axi arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/axi_ad9361_0.s_axi baseAddress {0x00010000}
 set_connection_parameter_value nios2.data_master/axi_ad9361_0.s_axi defaultConnection {0}
+
+add_connection nios2.data_master rfic_axi_timeout_status.s1
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_status.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_status.s1 baseAddress {0x9740}
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_status.s1 defaultConnection {0}
+
+add_connection nios2.data_master rfic_axi_timeout_clear.s1
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 baseAddress {0x9760}
+set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 defaultConnection {0}
 
 add_connection nios2.data_master command_uart.avalon_slave
 set_connection_parameter_value nios2.data_master/command_uart.avalon_slave arbitrationPriority {1}
@@ -986,6 +1027,8 @@ add_connection system_clock.clk rx_epoch_ctrl.clk
 add_connection system_clock.clk rx_epoch_status.clk
 add_connection system_clock.clk rx_epoch_ts_lo.clk
 add_connection system_clock.clk rx_epoch_ts_hi.clk
+add_connection system_clock.clk rfic_axi_timeout_status.clk
+add_connection system_clock.clk rfic_axi_timeout_clear.clk
 add_connection system_clock.clk rf_link_cfg.clk
 add_connection system_clock.clk xb_gpio.clk
 
@@ -1037,6 +1080,8 @@ add_connection system_clock.clk_reset rx_epoch_ctrl.reset
 add_connection system_clock.clk_reset rx_epoch_status.reset
 add_connection system_clock.clk_reset rx_epoch_ts_lo.reset
 add_connection system_clock.clk_reset rx_epoch_ts_hi.reset
+add_connection system_clock.clk_reset rfic_axi_timeout_status.reset
+add_connection system_clock.clk_reset rfic_axi_timeout_clear.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset
 add_connection system_clock.clk_reset xb_gpio.reset
 

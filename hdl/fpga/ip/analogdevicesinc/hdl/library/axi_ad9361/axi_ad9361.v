@@ -141,6 +141,10 @@ module axi_ad9361 (
   s_axi_rresp,
   s_axi_rready,
 
+  // AD9361 AXI timeout diagnostic sideband
+  axi_timeout_status,
+  axi_timeout_clear,
+
   // gpio
 
   up_enable,
@@ -265,6 +269,9 @@ module axi_ad9361 (
   output  [31:0]  s_axi_rdata;
   output  [ 1:0]  s_axi_rresp;
   input           s_axi_rready;
+
+  output          axi_timeout_status;
+  input           axi_timeout_clear;
 
   // gpio
 
@@ -581,6 +588,8 @@ module axi_ad9361 (
     .up_axi_rresp (s_axi_rresp),
     .up_axi_rdata (s_axi_rdata),
     .up_axi_rready (s_axi_rready),
+    .up_axi_timeout_clear_toggle (axi_timeout_clear),
+    .up_axi_timeout (axi_timeout_status),
     .up_wreq (up_wreq_s),
     .up_waddr (up_waddr_s),
     .up_wdata (up_wdata_s),
