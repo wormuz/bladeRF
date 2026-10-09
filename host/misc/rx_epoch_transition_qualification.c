@@ -50,6 +50,14 @@ static int collect_runtime_events(struct bladerf *dev, uint64_t *cursor,
                 }
             } else if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD) {
                 ++*withheld;
+                fprintf(stderr,
+                        "RUNTIME_WITHHELD n=%u txn=%u epoch=%u flags=0x%x "
+                        "state=%u error=%d fpga_ts=%llu host_ns=%llu\n",
+                        *withheld, events[i].transaction_id,
+                        events[i].epoch_id, events[i].flags,
+                        events[i].fpga_state, events[i].error_code,
+                        (unsigned long long)events[i].fpga_timestamp,
+                        (unsigned long long)events[i].host_monotonic_ns);
             }
         }
     }
