@@ -233,6 +233,12 @@ architecture arch of dwell_summary is
     signal cmp_gt_max        : std_logic := '0';
     signal cmp_total         : unsigned(WIN_BITS-1 downto 0) := (others => '0');
 
+    -- Compare the high and low halves in parallel. A single WIN_BITS-wide
+    -- comparator was the remaining sweep setup path at the 8 ns sample
+    -- clock; this keeps the same cycle contract while limiting each compare
+    -- chain to half the accumulator width.
+    constant CMP_SPLIT       : natural := WIN_BITS / 2;
+
     function ones( v : std_logic_vector ) return natural is
         variable n : natural := 0;
     begin
@@ -450,12 +456,22 @@ begin
         elsif( rising_edge(clock) ) then
             cmp_valid <= window_done_pulse;
             cmp_total <= window_done_total;
-            if( window_done_total < win_min ) then
+            if( window_done_total(WIN_BITS-1 downto CMP_SPLIT) <
+                win_min(WIN_BITS-1 downto CMP_SPLIT) or
+                (window_done_total(WIN_BITS-1 downto CMP_SPLIT) =
+                 win_min(WIN_BITS-1 downto CMP_SPLIT) and
+                 window_done_total(CMP_SPLIT-1 downto 0) <
+                 win_min(CMP_SPLIT-1 downto 0)) ) then
                 cmp_lt_min <= '1';
             else
                 cmp_lt_min <= '0';
             end if;
-            if( window_done_total > win_max ) then
+            if( window_done_total(WIN_BITS-1 downto CMP_SPLIT) >
+                win_max(WIN_BITS-1 downto CMP_SPLIT) or
+                (window_done_total(WIN_BITS-1 downto CMP_SPLIT) =
+                 win_max(WIN_BITS-1 downto CMP_SPLIT) and
+                 window_done_total(CMP_SPLIT-1 downto 0) >
+                 win_max(CMP_SPLIT-1 downto 0)) ) then
                 cmp_gt_max <= '1';
             else
                 cmp_gt_max <= '0';
@@ -471,7 +487,12 @@ begin
         elsif( rising_edge(clock) ) then
             trigger_cmp_valid <= window_done_pulse;
             if( threshold /= 0 and threshold_high = '0' and
-                window_done_total > threshold(WIN_BITS-1 downto 0) ) then
+                (window_done_total(WIN_BITS-1 downto CMP_SPLIT) >
+                 threshold(WIN_BITS-1 downto CMP_SPLIT) or
+                 (window_done_total(WIN_BITS-1 downto CMP_SPLIT) =
+                  threshold(WIN_BITS-1 downto CMP_SPLIT) and
+                  window_done_total(CMP_SPLIT-1 downto 0) >
+                  threshold(CMP_SPLIT-1 downto 0))) ) then
                 trigger_over <= '1';
             else
                 trigger_over <= '0';
