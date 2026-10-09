@@ -119,3 +119,53 @@ is required before this fix can be included in an FPGA release image.
 - Clock registration and clock-chain APIs:
   `thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c`
 - Current failure-injection harness: `host/misc/test_ad9361_calibration_read_error.c`
+
+## RX/TX and IIO/AXI follow-up sweep (2026-10-10)
+
+The follow-up pass extended the same fail-closed review through the shared RX
+and TX paths, IIO setters, digital interface tuning, and the AXI ADC helper
+used by the AD9361 chain. It found additional false-success and stale-cache
+cases:
+
+- IIO numeric setters accepted malformed values as zero, silently narrowed
+  RF frequency to 32 bits, or accepted partial fixed-point/GPO/fastlock input.
+  Gain parsing also accepted non-finite values, and several callbacks dropped
+  lower-level errors or returned an error for successful BB DC tracking.
+- Combined RX/TX FIR enables applied one direction before a second-direction
+  failure and did not use the existing transactional TRX API. RSSI table cache
+  rollback could also claim old tables after new tables had reached hardware
+  but ENSM restore failed.
+- The AXI ADC layer ignored register read/write failures in PN selection and
+  monitoring, clock-frequency reads, calibration scale/phase/bias access, and
+  delay calibration. Calibration getters could modify output buffers before
+  successful reads; active-channel mask cache was committed before the writes
+  and then accidentally stored the shifted mask.
+- Digital-tune state preservation called a checked ENSM helper that was
+  private to another translation unit. The compile pass exposed that interface
+  mismatch; the helper is now declared explicitly in the AD9361 header.
+
+Those paths now validate input and ranges, propagate the first SPI/AXI error,
+stage output/cache changes until success, use combined RX/TX FIR control, and
+keep the requested active-channel mask intact. The TX FIR fault-injection test
+now targets the actual TX filter configuration register. `axi_adc_pn_mon()`
+retains its existing `-1` PN-mismatch result so current no-OS applications
+remain compatible, while transport errors pass through unchanged.
+
+Validation after this pass:
+
+- `host/misc/run_ad9361_calibration_read_error.sh`: PASS.
+- `cmake --build host/build --target ad936x -j2`: PASS.
+- `cmake --build host/build -j2`: PASS.
+- `hdl/quartus/qgate qrun-final-audit.log`: PASS, including timing, fitted
+  CDC/skew evidence, and classified Design Assistant findings.
+- `hdl/quartus/qcheck`: PASS.
+- Full bladeRF-micro A4 seed-1 sweep build: PASS, 21:49 total. Fitter,
+  Timing Analyzer, Assembler, and Design Assistant reported zero errors;
+  setup slack is +0.095 ns and hold slack +0.112 ns. RBF SHA-256:
+  `5c1a077173d2f1bcee002d367f295f4e3483c890ba47877bfb9f1fe2c2e05566`.
+  The generated image remains unloaded; exact-image hardware qualification
+  and the preserved NIOS no-response investigation remain open.
+
+No claim is made that these defects caused the NIOS no-response or LTE no-PSS
+observations. The image was built from the current dirty source tree and must
+be reproduced from the final committed tree before release packaging.

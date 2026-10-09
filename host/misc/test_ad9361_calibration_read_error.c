@@ -95,6 +95,12 @@ static uint8_t fake_regs[1024];
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
+int32_t no_os_gpio_set_value(struct no_os_gpio_desc *desc, uint8_t value)
+{
+    (void)desc;
+    (void)value;
+    return 0;
+}
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
 {
     uint64_t remainder = *n % base;
@@ -256,6 +262,14 @@ int main(void)
                     PRId32 " gain=%" PRId32 "\n", ret, rx_gain.gain_db);
             return EXIT_FAILURE;
         }
+        {
+            int32_t gain_db = 4321;
+            ret = ad9361_get_rx_rf_gain(&phy, 0, &gain_db);
+            if (ret != -EIO || gain_db != 4321) {
+                fprintf(stderr, "RX gain API hid SPI error or changed output\n");
+                return EXIT_FAILURE;
+            }
+        }
         fail_read_reg = REG_GAIN_RX1;
         ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
         if (ret != -EIO || rx_gain.gain_db != 0x1234) {
@@ -327,6 +341,34 @@ int main(void)
             fprintf(stderr, "TX FIR getter hid coefficient address failure: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
         }
+		memset(&rx_fir, 0x5a, sizeof(rx_fir));
+		fail_write_reg = -1;
+		fail_read_reg = REG_RX_FILTER_COEF_READ_DATA_1;
+		ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
+		for (size_t i = 0; i < sizeof(rx_fir); ++i) {
+			if (((const unsigned char *)&rx_fir)[i] != 0x5a) {
+				fprintf(stderr, "RX FIR getter changed output on failed read\n");
+				return EXIT_FAILURE;
+			}
+		}
+		if (ret != -EIO) {
+			fprintf(stderr, "RX FIR getter hid coefficient read failure\n");
+			return EXIT_FAILURE;
+		}
+		memset(&tx_fir, 0x6b, sizeof(tx_fir));
+		fail_read_reg = REG_TX_FILTER_COEF_READ_DATA_1;
+		ret = ad9361_get_tx_fir_config(&phy, 0, &tx_fir);
+		for (size_t i = 0; i < sizeof(tx_fir); ++i) {
+			if (((const unsigned char *)&tx_fir)[i] != 0x6b) {
+				fprintf(stderr, "TX FIR getter changed output on failed read\n");
+				return EXIT_FAILURE;
+			}
+		}
+		if (ret != -EIO) {
+			fprintf(stderr, "TX FIR getter hid coefficient read failure\n");
+			return EXIT_FAILURE;
+		}
+		fail_read_reg = -1;
         fail_write_reg = -1;
 
         register_map_enabled = true;
@@ -338,6 +380,28 @@ int main(void)
             fprintf(stderr, "RX FIR loader hid gain write failure or changed cache: ret=%"
                     PRId32 " taps=%" PRIu32 "\n", ret, phy.rx_fir_ntaps);
             return EXIT_FAILURE;
+        }
+        {
+            AD9361_RXFIRConfig rx_cfg = { .rx = 1, .rx_dec = 2,
+                                         .rx_coef_size = 16 };
+            phy.rx_fir_dec = 4;
+            fail_write_reg = REG_RX_FILTER_GAIN;
+            ret = ad9361_set_rx_fir_config(&phy, rx_cfg);
+            if (ret != -EIO || phy.rx_fir_dec != 4) {
+                fprintf(stderr, "RX FIR API hid load failure or changed decimation cache\n");
+                return EXIT_FAILURE;
+            }
+        }
+        {
+            AD9361_TXFIRConfig tx_cfg = { .tx = 1, .tx_int = 2,
+                                         .tx_coef_size = 16 };
+            phy.tx_fir_int = 1;
+            fail_write_reg = REG_TX_FILTER_CONF;
+            ret = ad9361_set_tx_fir_config(&phy, tx_cfg);
+            if (ret != -EIO || phy.tx_fir_int != 1) {
+                fprintf(stderr, "TX FIR API hid load failure or changed interpolation cache\n");
+                return EXIT_FAILURE;
+            }
         }
         fail_write_reg = REG_RX_FILTER_COEF_ADDR;
         ret = ad9361_load_fir_filter_coef(&phy, FIR_RX1, 0, 16, fir_coef);
@@ -361,6 +425,14 @@ int main(void)
         if (ret != -EIO) {
             fprintf(stderr, "Temperature getter hid SPI read failure: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
+        }
+        {
+            int32_t temperature = 1234;
+            ret = ad9361_get_temperature(&phy, &temperature);
+            if (ret != -EIO || temperature != 1234) {
+                fprintf(stderr, "Temperature API hid SPI error or changed output\n");
+                return EXIT_FAILURE;
+            }
         }
         fail_read_reg = REG_AUXADC_LSB;
         ret = ad9361_get_auxadc(&phy);
@@ -439,6 +511,16 @@ int main(void)
         }
         fail_write_reg = -1;
         register_map_enabled = false;
+    }
+    ret = ad9361_set_rx_lo_int_ext(&phy, 2);
+    if (ret != -EINVAL || pdata.use_ext_rx_lo != 0) {
+        fprintf(stderr, "RX LO selector accepted invalid mode or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    ret = ad9361_set_tx_lo_int_ext(&phy, 2);
+    if (ret != -EINVAL || pdata.use_ext_tx_lo != 0) {
+        fprintf(stderr, "TX LO selector accepted invalid mode or changed cache\n");
+        return EXIT_FAILURE;
     }
     fail_read_reg = REG_QUAD_CAL_STATUS_TX1;
     {
@@ -692,6 +774,57 @@ int main(void)
     }
     fail_write_reg = -1;
 
+    /* Public tracking setters must not publish a new software state when the
+     * shared calibration-control register write fails. */
+    {
+        phy.bbdc_track_en = false;
+        phy.rfdc_track_en = false;
+        phy.quad_track_en = false;
+        fail_write_reg = REG_CALIBRATION_CONFIG_2;
+        ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 1);
+        if (ret != -EIO || phy.rfdc_track_en != 0) {
+            fprintf(stderr, "RFDC tracking setter hid error or committed cache\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_set_rx_bbdc_track_en_dis(&phy, 1);
+        if (ret != -EIO || phy.bbdc_track_en != 0) {
+            fprintf(stderr, "BB DC tracking setter hid error or committed cache\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_set_rx_quad_track_en_dis(&phy, 1);
+        if (ret != -EIO || phy.quad_track_en != 0) {
+            fprintf(stderr, "Quadrature tracking setter hid error or committed cache\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        if (ad9361_set_rx_rfdc_track_en_dis(&phy, 2) != -EINVAL ||
+            ad9361_set_rx_bbdc_track_en_dis(&phy, 2) != -EINVAL ||
+            ad9361_set_rx_quad_track_en_dis(&phy, 2) != -EINVAL) {
+            fprintf(stderr, "Tracking setters accepted invalid enable value\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    fail_write_reg = REG_ANALOG_POWER_DOWN_OVERRIDE;
+    ret = ad9361_txmon_enable(&phy, TX_1 | TX_2);
+    if (ret != -EIO) {
+        fprintf(stderr, "TX monitor enable hid first register failure\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = REG_TPM_MODE_ENABLE;
+    ret = ad9361_txmon_enable(&phy, TX_1 | TX_2);
+    if (ret != -EIO) {
+        fprintf(stderr, "TX monitor enable hid later register failure\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = REG_ENSM_CONFIG_2;
+    ret = ad9361_mcs(&phy, 1);
+    if (ret != -EIO || ad9361_mcs(&phy, 6) != -EINVAL) {
+        fprintf(stderr, "MCS hid SPI failure or accepted invalid step\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+
     {
         struct refclk_scale bbpll = { .spi = &spi, .phy = &phy };
 
@@ -807,6 +940,23 @@ int main(void)
 
     /* BIST must propagate both writes and update cached state only after the
      * complete register transaction succeeds. */
+    phy.bist_prbs_mode = BIST_INJ_TX;
+    phy.bist_config = 0x55;
+    fail_write_reg = REG_BIST_CONFIG;
+    ret = ad9361_bist_prbs(&phy, BIST_DISABLE);
+    if (ret != -EIO || phy.bist_prbs_mode != BIST_INJ_TX ||
+        phy.bist_config != 0x55) {
+        fprintf(stderr, "BIST PRBS hid write failure or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+    ret = ad9361_bist_prbs(&phy, (enum ad9361_bist_mode)99);
+    if (ret != -EINVAL || phy.bist_prbs_mode != BIST_INJ_TX ||
+        phy.bist_config != 0x55) {
+        fprintf(stderr, "BIST PRBS accepted invalid mode or changed cache\n");
+        return EXIT_FAILURE;
+    }
+
     phy.bist_loopback_mode = 2;
     fail_read_reg = REG_OBSERVE_CONFIG;
     ret = ad9361_bist_loopback(&phy, 0);
@@ -853,6 +1003,32 @@ int main(void)
         return EXIT_FAILURE;
     }
     fail_write_reg = -1;
+	phy.bist_config = 0x1234;
+	fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
+	ret = ad9361_write_bist_reg(&phy, 0x5678);
+	if (ret != -EIO || phy.bist_config != 0x1234) {
+		fprintf(stderr, "BIST register API committed cache after SPI error\n");
+		return EXIT_FAILURE;
+	}
+	fail_write_reg = -1;
+
+	/* RX and TX RF-port setters must keep their cached selection aligned with
+	 * a confirmed register write. */
+	phy.pdata->rf_rx_input_sel = 0;
+	fail_write_reg = REG_INPUT_SELECT;
+	ret = ad9361_set_rx_rf_port_input(&phy, 1);
+	if (ret != -EIO || phy.pdata->rf_rx_input_sel != 0) {
+		fprintf(stderr, "RX RF-port API hid error or committed cache\n");
+		return EXIT_FAILURE;
+	}
+	phy.pdata->rf_tx_output_sel = 0;
+	ret = ad9361_set_tx_rf_port_output(&phy, 1);
+	if (ret != -EIO || phy.pdata->rf_tx_output_sel != 0 ||
+	    ad9361_set_tx_rf_port_output(&phy, 2) != -EINVAL) {
+		fprintf(stderr, "TX RF-port API hid error, committed cache, or accepted invalid mode\n");
+		return EXIT_FAILURE;
+	}
+	fail_write_reg = -1;
 
     /* Public sampling-rate setters must not hide clock-chain failures behind
      * a later successful bandwidth update. */

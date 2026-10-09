@@ -4322,13 +4322,16 @@ int bladerf_get_rfic_temperature(struct bladerf *dev, float *val)
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
+    int32_t temperature;
 
     IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
         log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
         return BLADERF_ERR_UNSUPPORTED;
     });
 
-    WITH_MUTEX(&dev->lock, { *val = ad9361_get_temp(phy) / 1000.0F; });
+    WITH_MUTEX(&dev->lock, { temperature = ad9361_get_temp(phy); });
+    CHECK_AD936X(temperature);
+    *val = temperature / 1000.0F;
 
     return 0;
 }
