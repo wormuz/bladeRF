@@ -2574,8 +2574,14 @@ struct bladerf_metadata {
     /** Nonzero when rx_epoch_id was present on the RX metadata packet. */
     uint8_t rx_epoch_id_valid;
 
+    /** Sticky ADC clipping indicators observed in returned RX META messages.
+     * Bit 0 indicates RX1 and bit 1 indicates RX2. This reports sample
+     * quality; clipping does not invalidate an otherwise certified epoch.
+     */
+    uint8_t rx_clipping_flags;
+
     /** Reserved for future use. Callers should zero this field. */
-    uint8_t reserved[30];
+    uint8_t reserved[29];
 };
 
 /** @} (End of STREAMING_FORMAT_METADATA) */
@@ -4845,8 +4851,15 @@ typedef enum {
      * certificate is revoked and the FPGA epoch gate was aborted so later
      * samples cannot fill the sync queue while the captured copy is decoded.
      * `epoch_id` identifies the closed epoch. */
-    BLADERF_RF_EVT_RX_CAPTURE_CLOSED
+    BLADERF_RF_EVT_RX_CAPTURE_CLOSED,
+    /** ADC clipping was observed in certified RX META samples. `flags` uses
+     * BLADERF_RF_EVENT_F_RX_CLIPPING_RX1/RX2. This is a sample-quality
+     * notification and does not revoke the otherwise valid RX epoch. */
+    BLADERF_RF_EVT_RX_ADC_CLIPPING
 } bladerf_rf_event_type;
+
+#define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
+#define BLADERF_RF_EVENT_F_RX_CLIPPING_RX2 (1U << 1)
 
 #define BLADERF_RF_STREAM_STATUS_OVERRUN (1U << 0)
 /** The RX overrun event came from the FPGA sample-loss counter, not only the

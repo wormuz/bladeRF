@@ -1048,6 +1048,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             user_meta->actual_count = 0;
             user_meta->rx_epoch_id = 0;
             user_meta->rx_epoch_id_valid = 0;
+            user_meta->rx_clipping_flags = 0;
             target_timestamp = user_meta->timestamp;
 
             /* Report an overrun the worker recovered from. Its recovery
@@ -1809,6 +1810,10 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 break;
                             }
 
+                            user_meta->rx_clipping_flags |=
+                                metadata_get_rx_clipping_flags(
+                                    s->meta.curr_msg);
+
                             memcpy(samples_dest + samples2bytes(s, samples_returned),
                                    s->meta.curr_msg +
                                         METADATA_HEADER_SIZE +
@@ -1983,6 +1988,7 @@ out:
                 user_meta->actual_count = 0;
                 user_meta->rx_epoch_id_valid = 0;
                 user_meta->rx_epoch_id = 0;
+                user_meta->rx_clipping_flags = 0;
             }
         }
         /* Commit first-host-data evidence before releasing the generation

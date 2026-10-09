@@ -109,6 +109,19 @@
  * packet header and must not interpret it as an epoch tag. */
 #define METADATA_RX_EPOCH_TAG_VALID (1u << 31)
 #define METADATA_RX_EPOCH_ID_MASK   0xffu
+#define METADATA_RX_CLIPPING_RX1    (1u << 8)
+#define METADATA_RX_CLIPPING_RX2    (1u << 9)
+
+static inline uint8_t metadata_get_rx_clipping_flags(const uint8_t *header)
+{
+    uint32_t tag;
+    memcpy(&tag, &header[METADATA_RESV_OFFSET], sizeof(tag));
+    tag = LE32_TO_HOST(tag);
+    if ((tag & METADATA_RX_EPOCH_TAG_VALID) == 0) {
+        return 0;
+    }
+    return (uint8_t)((tag >> 8) & 0x3u);
+}
 
 static inline bool metadata_rx_format_has_epoch_tag(bladerf_format format)
 {

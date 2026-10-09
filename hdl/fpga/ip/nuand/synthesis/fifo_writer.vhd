@@ -195,6 +195,10 @@ architecture simple of fifo_writer is
     signal epoch_valid_i       : std_logic := '0';
     signal stop_toggle_prev    : std_logic := '0';
     signal clear_toggle_prev   : std_logic := '0';
+    -- Sticky ADC rail indicators for the current certified RX epoch.  These
+    -- are carried in reserved bits of the opt-in sample-META epoch tag.
+    signal rx_epoch_clip_sticky : std_logic_vector(1 downto 0) := (others => '0');
+    signal rx_epoch_clip_id     : unsigned(7 downto 0) := (others => '0');
 
     type meta_state_t is (
         IDLE,
@@ -646,6 +650,7 @@ begin
     -- Meta FIFO combinatorial process
     meta_fsm_comb : process( all )
         variable packet_flags : std_logic_vector(7 downto 0);
+        variable epoch_tag_flags : std_logic_vector(23 downto 0);
     begin
 
         meta_future            <= meta_current;
@@ -655,9 +660,13 @@ begin
         if( packet_en = '0' ) then
            if( rx_epoch_meta_enable = '1' ) then
                -- The first metadata dword is ignored in sample-META mode.
-               -- Preserve its size and carry an explicit marker plus epoch ID.
+               -- Preserve its size and carry an explicit marker, per-lane
+               -- sticky ADC clipping indicators, and epoch ID.
+               epoch_tag_flags := (others => '0');
+               epoch_tag_flags(23) := '1';
+               epoch_tag_flags(1 downto 0) := rx_epoch_clip_sticky;
                meta_future.meta_data <= x"FFF" & "11" & sync_mini_exp & x"FFFF" &
-                       std_logic_vector(timestamp) & x"800000" &
+                       std_logic_vector(timestamp) & epoch_tag_flags &
                        std_logic_vector(rx_epoch_id);
            else
                meta_future.meta_data <= x"FFF" & "11" & sync_mini_exp & x"FFFF" &
@@ -813,6 +822,38 @@ begin
         meta_fifo_write <= meta_current.meta_write;
         meta_fifo_data  <= meta_current.meta_data;
 
+    end process;
+
+    -- Detect signed SC16 samples at or beyond the ADC's usable rail.  The
+    -- flags deliberately remain sticky for the epoch so the host cannot miss
+    -- a short clipping burst between USB META messages.  Bits are reset when
+    -- epoch metadata is disabled or the epoch ID changes; legacy META remains
+    -- byte-for-byte unchanged.
+    track_rx_epoch_clipping : process(clock, reset)
+    begin
+        if reset = '1' then
+            rx_epoch_clip_sticky <= (others => '0');
+            rx_epoch_clip_id <= (others => '0');
+        elsif rising_edge(clock) then
+            if rx_epoch_meta_enable = '0' then
+                rx_epoch_clip_sticky <= (others => '0');
+                rx_epoch_clip_id <= rx_epoch_id;
+            else
+                if rx_epoch_clip_id /= rx_epoch_id then
+                    rx_epoch_clip_sticky <= (others => '0');
+                    rx_epoch_clip_id <= rx_epoch_id;
+                end if;
+                for i in 0 to NUM_STREAMS-1 loop
+                    if in_samples(i).data_v = '1' and i < 2 and
+                       (abs(resize(in_samples(i).data_i, 17)) >=
+                            to_signed(2044, 17) or
+                        abs(resize(in_samples(i).data_q, 17)) >=
+                            to_signed(2044, 17)) then
+                        rx_epoch_clip_sticky(i) <= '1';
+                    end if;
+                end loop;
+            end if;
+        end if;
     end process;
 
 

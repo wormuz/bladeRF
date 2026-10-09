@@ -21,6 +21,53 @@ static uint64_t monotonic_ns(void)
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 
+void bladerf2_rx_report_clipping(
+    struct bladerf *dev, const struct bladerf_metadata *metadata)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    uint8_t observed;
+
+    if (dev == NULL || dev->board_data == NULL || metadata == NULL ||
+        !metadata->rx_epoch_id_valid || metadata->rx_clipping_flags == 0) {
+        return;
+    }
+    board_data = dev->board_data;
+    observed = metadata->rx_clipping_flags & 0x3u;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->rf_transition_epoch_contract_enabled &&
+        board_data->rf_transition_epoch_certified &&
+        board_data->rf_transition_certified_epoch_id ==
+            metadata->rx_epoch_id) {
+        observed &= (uint8_t)~board_data->rf_transition_rx_clipping_reported;
+        if (observed != 0) {
+            board_data->rf_transition_rx_clipping_reported |= observed;
+            event.host_monotonic_ns = monotonic_ns();
+            event.fpga_timestamp = metadata->timestamp;
+            event.transaction_id =
+                board_data->rf_transition_certified_epoch_event.transaction_id;
+            event.epoch_id = metadata->rx_epoch_id;
+            event.requested_rx_lo_hz =
+                board_data->rf_transition_certified_epoch_event.requested_rx_lo_hz;
+            event.readback_rx_lo_hz =
+                board_data->rf_transition_certified_epoch_event.readback_rx_lo_hz;
+            event.event_type = BLADERF_RF_EVT_RX_ADC_CLIPPING;
+            event.flags |= BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+            if (observed & 0x1u) {
+                event.flags |= BLADERF_RF_EVENT_F_RX_CLIPPING_RX1;
+            }
+            if (observed & 0x2u) {
+                event.flags |= BLADERF_RF_EVENT_F_RX_CLIPPING_RX2;
+            }
+            MUTEX_LOCK(&board_data->rf_transition_event_lock);
+            bladerf2_rf_event_append_locked(board_data, &event);
+            MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
 void bladerf2_rx_transition_fail_first_host_data_locked(
     struct bladerf2_board_data *board_data, int status)
 {
@@ -141,6 +188,7 @@ int bladerf2_rx_epoch_admission_prepare(
         board_data->rf_transition_first_valid_timestamp =
             epoch_event->fpga_timestamp;
         board_data->rf_transition_certified_epoch_event = *epoch_event;
+        board_data->rf_transition_rx_clipping_reported = 0;
         board_data->rf_transition_first_host_data_reported = false;
         board_data->rx_async_have_expected_timestamp = false;
     } else {

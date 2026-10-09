@@ -267,6 +267,8 @@ struct bladerf2_board_data {
     uint64_t rf_transition_first_host_data_deadline_ns;
     int rf_transition_first_host_data_failure;
     bool rf_transition_epoch_certified;
+    /* Per-lane ADC clipping was already published for the current epoch. */
+    uint8_t rf_transition_rx_clipping_reported;
 #ifdef BLADERF_ENABLE_TEST_RX_EPOCH_METADATA_FAULT_INJECTION
     bool test_rx_epoch_metadata_fault_injected;
 #endif
@@ -322,6 +324,8 @@ void bladerf2_rx_transition_note_first_packet_epoch_locked_at(
  * wake a transition waiting for required first host data immediately. */
 void bladerf2_rx_transition_fail_first_host_data_locked(
     struct bladerf2_board_data *board_data, int status);
+void bladerf2_rx_report_clipping(struct bladerf *dev,
+                                 const struct bladerf_metadata *metadata);
 int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
                                       struct bladerf_sync *sync,
                                       int transition_status);

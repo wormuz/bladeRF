@@ -19,6 +19,8 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal done : boolean := false;
     signal enable : std_logic := '1';
     signal discard_active : std_logic := '0';
+    signal epoch_meta_enable : std_logic := '0';
+    signal epoch_id : unsigned(7 downto 0) := (others => '0');
     signal link_start_toggle : std_logic := '0';
     signal sample_ctrls : sample_controls_t(0 to 1) :=
         (others => SAMPLE_CONTROL_DISABLE);
@@ -62,6 +64,8 @@ begin
             highly_packed_mode_en => '0',
             timestamp => (others => '0'),
             mini_exp => (others => '0'),
+            rx_epoch_meta_enable => epoch_meta_enable,
+            rx_epoch_id => epoch_id,
             rx_epoch_discard_active => discard_active,
             in_sample_controls => sample_ctrls,
             in_samples => samples,
@@ -154,6 +158,25 @@ begin
         wait for 3*CLK_PERIOD;
         reset <= '0';
         for i in 1 to 10 loop wait until rising_edge(clock); end loop;
+        epoch_meta_enable <= '1';
+        epoch_id <= to_unsigned(7, 8);
+        samples(0).data_i <= to_signed(2044, 16);
+        samples(0).data_q <= to_signed(100, 16);
+        samples(0).data_v <= '1';
+        samples(1).data_i <= to_signed(-100, 16);
+        samples(1).data_q <= to_signed(-2048, 16);
+        samples(1).data_v <= '1';
+        for i in 1 to 5 loop wait until rising_edge(clock); end loop;
+        assert meta_data(31) = '1' and meta_data(9 downto 8) = "11" and
+               meta_data(7 downto 0) = x"07"
+            report "epoch META tag did not report per-lane ADC clipping"
+            severity failure;
+        epoch_meta_enable <= '0';
+        samples <= (others => ZERO_SAMPLE);
+        for i in 1 to 2 loop wait until rising_edge(clock); end loop;
+        assert meta_data(31 downto 0) = x"12344321"
+            report "legacy META tag changed when epoch metadata was disabled"
+            severity failure;
         fifo_full <= '0';
         for i in 0 to 1 loop samples(i).data_v <= '1'; end loop;
         wait until falling_edge(clock);

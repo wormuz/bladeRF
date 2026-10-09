@@ -1708,6 +1708,7 @@ static void bladerf2_rx_sync_data_valid_cb(
 {
     bladerf2_rx_transition_note_first_packet_at(
         dev, metadata, layout, admission_monotonic_ns);
+    bladerf2_rx_report_clipping(dev, metadata);
 }
 
 static uint32_t bladerf2_rx_sync_data_admission_reason(
@@ -1937,10 +1938,15 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
         first_packet.rx_epoch_id = epoch_id;
         first_packet.rx_epoch_id_valid = 1;
+        for (size_t offset = 0; offset < length; offset += message_size) {
+            first_packet.rx_clipping_flags |=
+                metadata_get_rx_clipping_flags(bytes + offset);
+        }
         if (metadata != NULL) {
             metadata->timestamp = first_packet.timestamp;
             metadata->rx_epoch_id = epoch_id;
             metadata->rx_epoch_id_valid = 1;
+            metadata->rx_clipping_flags = first_packet.rx_clipping_flags;
         }
         if (now_ns != 0) {
             bladerf2_rx_transition_note_first_packet_epoch_locked_at(
@@ -1950,6 +1956,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 dev, &first_packet, layout);
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        bladerf2_rx_report_clipping(dev, &first_packet);
         return true;
     }
 
