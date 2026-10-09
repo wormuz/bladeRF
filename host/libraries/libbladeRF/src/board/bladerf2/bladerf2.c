@@ -1832,12 +1832,23 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     if (!epoch_valid) {
         /* The interval is already fenced from callers. Do not reinterpret
          * the intentionally suppressed transition interval as USB loss; the
-         * next certified epoch establishes a fresh timestamp baseline. */
+         * next certified epoch establishes a fresh timestamp baseline. Keep
+         * the source packet's FPGA epoch/timestamp when available so delayed
+         * USB callbacks remain distinguishable from the current transition. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rx_async_have_expected_timestamp = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        bladerf2_rx_data_withheld(
-            dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+        uint8_t source_epoch_id = 0;
+        if (length >= METADATA_HEADER_SIZE &&
+            metadata_rx_format_has_epoch_tag(format) &&
+            metadata_get_rx_epoch_id(bytes, &source_epoch_id)) {
+            bladerf2_rx_data_withheld_at(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED,
+                source_epoch_id, metadata_get_timestamp(bytes), true);
+        } else {
+            bladerf2_rx_data_withheld(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+        }
         return false;
     }
 
