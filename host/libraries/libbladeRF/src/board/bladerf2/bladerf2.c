@@ -1235,8 +1235,18 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_stream_faulted = true;
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
+        } else if (BLADERF_CHANNEL_IS_TX(ch) && epoch_confirmed) {
+            /* Enabling the paired TX lane starts another shared FPGA epoch.
+             * It clears sticky link faults even though the cumulative loss
+             * counter remains in the same sample-domain reset generation. */
+            board_data->tx_link_fault_reported = false;
+            board_data->tx_status_unavailable_reported = false;
+        } else if (BLADERF_CHANNEL_IS_TX(ch)) {
+            board_data->tx_stream_faulted = true;
+            board_data->tx_recovery_blocked = true;
+            board_data->tx_status_unavailable_reported = true;
         }
-        if (tx_first_enable) {
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
             bladerf2_tx_stream_event(
                 dev, epoch_confirmed ? BLADERF_RF_EVT_TX_LINK_VALID :
                                        BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
