@@ -15,10 +15,13 @@ operation could be hidden and a later status read could make the overall
 procedure appear successful.
 
 A follow-up walk through the initialization call chain found the same issue
-in the main setup helpers: AGC configuration (69 SPI writes), parallel-port
-configuration (15), TX monitor configuration (8), and the final ENSM wake
-from SLEEP. Those helpers could continue after an unsuccessful write, or
-publish a requested ENSM state after its SPI operation failed.
+in AGC configuration (69 SPI writes), parallel-port configuration (15), TX
+monitor configuration (8), external LNA and mixer Gm table programming,
+RX ADC setup reads, tracking setup, TX attenuation, fastlock preparation,
+BBPLL programming, and the final ENSM wake from SLEEP. Some helpers continued
+after an unsuccessful write; RX ADC setup converted negative read errors to
+unsigned register values; other paths could return success after partial
+programming.
 
 ## Change
 
@@ -28,7 +31,11 @@ cleanup failures are returned when there is no earlier error. TX quadrature
 also checks the filter-control/status reads, retries, and phase search; cleanup
 attempts to restore RX phase-inversion state, prior RF bandwidth, and TX
 synthesizer powerdown state. AGC, parallel-port, and TX-monitor setup now stop
-on the first failed SPI write. The ENSM transition checks clock, state,
+on the first failed SPI write. RX ADC setup validates all three calibration-
+register reads. Tracking, external LNA, mixer Gm table, TX attenuation, and
+fastlock setup now propagate SPI failures. BBPLL setup stops on the first
+failed write; clock-chain FIR enable writes and RFPLL fastlock/VCO-control
+operations propagate status. The ENSM transition checks clock, state,
 VCO-calibration, lock-status, and MGC overload-counter operations before
 updating the cached state.
 
@@ -37,7 +44,9 @@ updating the cached state.
 - `host/misc/run_ad9361_calibration_read_error.sh`: PASS. Injected failures
   into RX/TX BB filter calibration, RX TIA reads, synth charge-pump setup, BB
   DC setup, RF DC setup, TX quadrature setup/status accesses, AGC/parallel
-  port/TX monitor configuration, and ENSM wake writes are returned as `-EIO`.
+  port/TX monitor configuration, external LNA, mixer Gm table, RX ADC reads,
+  tracking, TX attenuation, fastlock, BBPLL, ENSM mode, and ENSM wake failures
+  are returned as `-EIO`.
 - `cmake --build host/build --target ad936x -j2`: PASS.
 - `git diff --check`: PASS.
 - NIOS application rebuild was attempted, but this shell has no

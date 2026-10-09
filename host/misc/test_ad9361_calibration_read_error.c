@@ -39,6 +39,13 @@ int32_t ilog2(int32_t value)
     }
     return result;
 }
+uint32_t int_sqrt(uint32_t value)
+{
+    uint32_t result = 0;
+    while ((uint64_t)(result + 1) * (result + 1) <= value)
+        ++result;
+    return result;
+}
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
 {
     uint64_t remainder = *n % base;
@@ -202,6 +209,7 @@ int main(void)
         struct ctrl_outs_control ctrl_outs = {0};
         struct gain_control gain = {0};
         struct tx_monitor_control txmon = {0};
+        struct elna_control elna = {0};
 
         fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
         ret = ad9361_auxdac_setup(&phy, &auxdac);
@@ -251,6 +259,47 @@ int main(void)
                     "\n", ret);
             return EXIT_FAILURE;
         }
+
+        fail_write_reg = REG_EXTERNAL_LNA_CTRL;
+        ret = ad9361_setup_ext_lna(&phy, &elna);
+        if (ret != -EIO) {
+            fprintf(stderr, "External-LNA setup hid control write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_GM_SUB_TABLE_CONFIG;
+        ret = ad9361_load_mixer_gm_subtable(&phy);
+        if (ret != -EIO) {
+            fprintf(stderr, "Mixer Gm-table setup hid start write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_TX2_DIG_ATTEN;
+        ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX attenuation hid immediate-update write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = REG_RX_FAST_LOCK_SETUP_INIT_DELAY;
+        ret = ad9361_fastlock_prepare(&phy, false, 0, true);
+        if (ret != -EIO) {
+            fprintf(stderr, "Fastlock setup hid delay write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_read_reg = REG_RX_BBF_C3_MSB;
+        ret = ad9361_rx_adc_setup(&phy, 983040000, 40000000);
+        if (ret != -EIO) {
+            fprintf(stderr, "RX ADC setup hid filter read failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
     }
     fail_write_reg = -1;
 
@@ -306,6 +355,45 @@ int main(void)
         fprintf(stderr, "ENSM restore rejected confirmed RX state: ret=%" PRId32
                 "\n", ret);
         return EXIT_FAILURE;
+    }
+
+    fail_write_reg = REG_ENSM_MODE;
+    ret = ad9361_set_ensm_mode(&phy, false, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "ENSM mode hid mode write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+    fail_read_reg = REG_ENSM_CONFIG_2;
+    ret = ad9361_set_ensm_mode(&phy, false, false);
+    if (ret != -EIO) {
+        fprintf(stderr, "ENSM mode hid configuration read failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_read_reg = -1;
+
+    fail_write_reg = REG_CALIBRATION_CONFIG_2;
+    ret = ad9361_tracking_control(&phy, true, true, true);
+    if (ret != -EIO) {
+        fprintf(stderr, "Tracking setup hid calibration-control write failure: ret=%" PRId32
+                "\n", ret);
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+
+    {
+        struct refclk_scale bbpll = { .spi = &spi, .phy = &phy };
+
+        fail_write_reg = REG_CP_CURRENT;
+        ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
+        if (ret != -EIO) {
+            fprintf(stderr, "BBPLL setup hid loop-filter write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
     }
 
     /* Initialization-time ENSM wake must propagate SPI failures. */
