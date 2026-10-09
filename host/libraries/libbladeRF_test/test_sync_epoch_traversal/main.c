@@ -573,6 +573,74 @@ static void test_unsupported_format_event(void)
     free(board_data);
 }
 
+static void test_withheld_event_recovers_wrapped_epoch_transaction(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data *board_data = calloc(1, sizeof(*board_data));
+    assert(board_data != NULL);
+    dev.board_data = board_data;
+    assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+    board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_current_channel = BLADERF_CHANNEL_RX(1);
+    board_data->rf_transition_current_channel_valid = true;
+
+    const struct bladerf_rf_event epochs[] = {
+        {.transaction_id = 42, .epoch_id = 255, .fpga_timestamp = 100,
+         .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+         .flags = BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID,
+         .requested_rx_lo_hz = 800000000, .readback_rx_lo_hz = 800000000,
+         .rfic_status = 0x11},
+        {.transaction_id = 43, .epoch_id = 0, .fpga_timestamp = 200,
+         .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+         .flags = BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+                  BLADERF_RF_EVENT_F_TRANSITION_RX2,
+         .requested_rx_lo_hz = 900000000, .readback_rx_lo_hz = 900000000,
+         .rfic_status = 0x22},
+        {.transaction_id = 44, .epoch_id = 255, .fpga_timestamp = 300,
+         .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+         .flags = BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID,
+         .requested_rx_lo_hz = 1000000000, .readback_rx_lo_hz = 1000000000,
+         .rfic_status = 0x33},
+    };
+    for (unsigned i = 0; i < sizeof(epochs) / sizeof(epochs[0]); ++i) {
+        bladerf2_rf_event_append(board_data, &epochs[i]);
+    }
+
+    bladerf2_rx_data_withheld_at(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, 255, 250, true);
+    uint32_t latest = (board_data->rf_transition_event_head +
+                       BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+                      BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *event =
+        &board_data->rf_transition_events[latest];
+    assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(event->epoch_id == 255 && event->fpga_timestamp == 250);
+    assert(event->transaction_id == 42);
+    assert(event->requested_rx_lo_hz == 800000000);
+    assert(event->readback_rx_lo_hz == 800000000);
+    assert(event->rfic_status == 0x11);
+    assert((event->flags & BLADERF_RF_EVENT_F_TRANSITION_RX2) == 0);
+
+    bladerf2_rx_data_withheld_reset(&dev);
+    bladerf2_rx_data_withheld_at(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, 255, 350, true);
+    latest = (board_data->rf_transition_event_head +
+              BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+             BLADERF2_RF_EVENT_HISTORY_SIZE;
+    event = &board_data->rf_transition_events[latest];
+    assert(event->epoch_id == 255 && event->fpga_timestamp == 350);
+    assert(event->transaction_id == 44);
+    assert(event->requested_rx_lo_hz == 1000000000);
+    assert(event->readback_rx_lo_hz == 1000000000);
+    assert(event->rfic_status == 0x33);
+    assert((event->flags & BLADERF_RF_EVENT_F_TRANSITION_RX2) == 0);
+
+    MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+    free(board_data);
+}
+
 static void test_worker_overrun_event_history_is_lock_safe(void)
 {
     struct bladerf dev = {0};
@@ -1843,6 +1911,7 @@ int main(void)
     struct bladerf_metadata meta;
 
     test_unsupported_format_event();
+    test_withheld_event_recovers_wrapped_epoch_transaction();
     test_worker_overrun_event_history_is_lock_safe();
     test_fpga_loss_event_published_inside_sync_fence();
     test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun();

@@ -317,6 +317,60 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
+/* Recover transaction provenance for a delayed META buffer after the current
+ * certificate has moved to a newer epoch. The FPGA sample timestamp is
+ * monotonic across epoch changes, so matching the 8-bit epoch tag and choosing
+ * the latest retained RX_EPOCH_VALID timestamp not newer than the packet
+ * disambiguates epoch-ID wrap. */
+static void rx_withheld_event_apply_source_provenance(
+    struct bladerf2_board_data *board_data,
+    struct bladerf_rf_event *withheld_event)
+{
+    const struct bladerf_rf_event *best_epoch_event = NULL;
+    uint64_t best_timestamp = 0;
+
+    if (board_data == NULL || withheld_event == NULL ||
+        !(withheld_event->flags & BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID)) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    const uint32_t retained = board_data->rf_transition_event_count;
+    const uint32_t oldest = (board_data->rf_transition_event_head +
+                             BLADERF2_RF_EVENT_HISTORY_SIZE - retained) %
+                            BLADERF2_RF_EVENT_HISTORY_SIZE;
+    for (uint32_t i = 0; i < retained; ++i) {
+        const uint32_t slot = (oldest + i) %
+                              BLADERF2_RF_EVENT_HISTORY_SIZE;
+        const struct bladerf_rf_event *candidate =
+            &board_data->rf_transition_events[slot];
+        if (candidate->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
+            candidate->epoch_id != withheld_event->epoch_id ||
+            candidate->fpga_timestamp > withheld_event->fpga_timestamp ||
+            (best_epoch_event != NULL &&
+             candidate->fpga_timestamp <= best_timestamp)) {
+            continue;
+        }
+        best_epoch_event = candidate;
+        best_timestamp = candidate->fpga_timestamp;
+    }
+
+    if (best_epoch_event != NULL) {
+        const uint32_t channel_flags =
+            BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+            BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
+        withheld_event->transaction_id = best_epoch_event->transaction_id;
+        withheld_event->requested_rx_lo_hz =
+            best_epoch_event->requested_rx_lo_hz;
+        withheld_event->readback_rx_lo_hz =
+            best_epoch_event->readback_rx_lo_hz;
+        withheld_event->rfic_status = best_epoch_event->rfic_status;
+        withheld_event->flags = (withheld_event->flags & ~channel_flags) |
+                                (best_epoch_event->flags & channel_flags);
+    }
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+}
+
 static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
                               bool explicit_source,
                               bool explicit_timestamp_valid,
@@ -393,6 +447,9 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
                                  : timestamp_valid)
         ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0) |
         transition_channel_flags;
+    if (explicit_source) {
+        rx_withheld_event_apply_source_provenance(board_data, &event);
+    }
     bladerf2_rf_event_append(board_data, &event);
 }
 
