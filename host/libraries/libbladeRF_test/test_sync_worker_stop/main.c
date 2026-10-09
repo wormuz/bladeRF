@@ -31,7 +31,15 @@ int main(void)
                BLADERF_FORMAT_SC16_Q11_META, 1000) ==
            SYNC_RX_META_TRANSITION_TIMEOUT_MS);
     assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
-               BLADERF_FORMAT_SC16_Q11_META, 3000) == 3000);
+               BLADERF_FORMAT_SC16_Q11_META, 3000) ==
+           SYNC_RX_META_TRANSITION_TIMEOUT_MS);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11_META, 5000) ==
+           SYNC_RX_META_TRANSITION_TIMEOUT_MS);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11_META, 6000) == 6000);
+    assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
+               BLADERF_FORMAT_SC16_Q11_META, 7000) == 7000);
     assert(sync_worker_transfer_timeout_ms(BLADERF_TX,
                BLADERF_FORMAT_SC16_Q11_META, 1000) == 1000);
     assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
@@ -98,6 +106,7 @@ int main(void)
         }
 
         sync.stream_config.layout = BLADERF_RX_X1;
+        sync.initialized = true;
         sync.buf_mgmt = buffers;
         sync.buf_mgmt.buffers = ring;
         sync.buf_mgmt.status = states;
