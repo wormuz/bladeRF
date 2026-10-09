@@ -177,6 +177,20 @@ begin
             severity failure;
         assert epoch_id = x"2A" report "epoch ID mismatch" severity failure;
 
+        -- The start pulse is intentionally transient. The status path that
+        -- NIOS/libbladeRF polls must retain the certificate after that pulse
+        -- has gone away: matching epoch ID, ACTIVE state, and the exact
+        -- first-valid timestamp remain observable until the next ARM.
+        wait until rising_edge(clock);
+        -- out_state is itself registered one cycle behind the internal FSM.
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert start_event = '0' and state = "0000" and discard_active = '0' and
+               epoch_id = x"2A" and
+               first_valid_timestamp = to_unsigned(203, 64)
+            report "epoch certificate was not stable after start-event pulse"
+            severity failure;
+
         -- Abort immediately after the first valid sample, while the internal
         -- FSM is in ACTIVE_NEW. This edge must keep both enabled lanes alive
         -- as zero-IQ keepalives rather than briefly disabling the stream.
