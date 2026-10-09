@@ -5,6 +5,22 @@
 #include <string.h>
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
+
+int32_t ad9361_adjust_rx_ext_band_settings(struct ad9361_rf_phy *phy,
+                                           uint64_t freq)
+{
+    (void)phy;
+    (void)freq;
+    return 0;
+}
+int32_t ad9361_adjust_tx_ext_band_settings(struct ad9361_rf_phy *phy,
+                                           uint64_t freq)
+{
+    (void)phy;
+    (void)freq;
+    return 0;
+}
 
 static unsigned read_count;
 static unsigned delay_count;
@@ -15,37 +31,8 @@ static int32_t fail_write_reg = -1;
 static int32_t state_after_ensm_write = -1;
 static uint8_t fake_regs[1024];
 
-uint32_t find_first_bit(uint32_t word)
-{
-    uint32_t bit = 0;
-    while (bit < 32 && !(word & (1u << bit))) ++bit;
-    return bit;
-}
-
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
-uint32_t clk_get_rate(struct ad9361_rf_phy *phy, struct refclk_scale *clk_priv)
-{
-    (void)phy;
-    (void)clk_priv;
-    return 0;
-}
-int32_t ilog2(int32_t value)
-{
-    int32_t result = -1;
-    while (value > 0) {
-        value >>= 1;
-        ++result;
-    }
-    return result;
-}
-uint32_t int_sqrt(uint32_t value)
-{
-    uint32_t result = 0;
-    while ((uint64_t)(result + 1) * (result + 1) <= value)
-        ++result;
-    return result;
-}
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
 {
     uint64_t remainder = *n % base;
@@ -390,6 +377,30 @@ int main(void)
         ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
         if (ret != -EIO) {
             fprintf(stderr, "BBPLL setup hid loop-filter write failure: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+    }
+
+    {
+        struct no_os_clk refclk = { .rate = 40000000 };
+        struct no_os_clk bbpll_clk = { .rate = 1 };
+        struct refclk_scale bbpll = {
+            .spi = &spi,
+            .phy = &phy,
+            .source = BBPLL_CLK,
+            .parent_source = BB_REFCLK,
+        };
+
+        phy.clk_refin = &refclk;
+        phy.clks[BB_REFCLK] = &refclk;
+        phy.clks[BBPLL_CLK] = &bbpll_clk;
+        phy.ref_clk_scale[BBPLL_CLK] = &bbpll;
+        fail_write_reg = REG_CP_CURRENT;
+        ret = clk_set_rate(&phy, &bbpll, 983040000);
+        if (ret != -EIO) {
+            fprintf(stderr, "Clock framework hid BBPLL programming failure: ret=%" PRId32
                     "\n", ret);
             return EXIT_FAILURE;
         }

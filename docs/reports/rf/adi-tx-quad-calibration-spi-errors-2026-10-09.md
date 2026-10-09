@@ -23,6 +23,12 @@ after an unsuccessful write; RX ADC setup converted negative read errors to
 unsigned register values; other paths could return success after partial
 programming.
 
+The same propagation gap extended through the no-OS clock framework:
+`clk_set_rate()` ignored failures from BBPLL, RFPLL, and clock-divider setters,
+then continued to refresh its clock cache. RFPLL tuning also ignored the
+results of external-band callbacks and logged a failed TX quadrature retune
+calibration while still reporting the LO change as successful.
+
 ## Change
 
 The initialization calibration paths now propagate configuration SPI errors.
@@ -35,7 +41,10 @@ on the first failed SPI write. RX ADC setup validates all three calibration-
 register reads. Tracking, external LNA, mixer Gm table, TX attenuation, and
 fastlock setup now propagate SPI failures. BBPLL setup stops on the first
 failed write; clock-chain FIR enable writes and RFPLL fastlock/VCO-control
-operations propagate status. The ENSM transition checks clock, state,
+operations propagate status. `clk_set_rate()` now returns errors from BBPLL,
+RFPLL, and divider setters before refreshing the clock cache. RFPLL tuning
+returns external-band and TX quadrature calibration errors, and updates its
+last-calibrated frequency only after successful calibration. The ENSM transition checks clock, state,
 VCO-calibration, lock-status, and MGC overload-counter operations before
 updating the cached state.
 
@@ -45,8 +54,8 @@ updating the cached state.
   into RX/TX BB filter calibration, RX TIA reads, synth charge-pump setup, BB
   DC setup, RF DC setup, TX quadrature setup/status accesses, AGC/parallel
   port/TX monitor configuration, external LNA, mixer Gm table, RX ADC reads,
-  tracking, TX attenuation, fastlock, BBPLL, ENSM mode, and ENSM wake failures
-  are returned as `-EIO`.
+  tracking, TX attenuation, fastlock, BBPLL, ENSM mode, ENSM wake, and the
+real `clk_set_rate()` BBPLL error path are returned as `-EIO`.
 - `cmake --build host/build --target ad936x -j2`: PASS.
 - `git diff --check`: PASS.
 - NIOS application rebuild was attempted, but this shell has no
