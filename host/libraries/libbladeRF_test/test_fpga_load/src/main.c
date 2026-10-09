@@ -44,15 +44,27 @@
     } while (0)
 
 #ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
-static int set_fpga_load_failure_injection(int enabled)
+static int set_fpga_load_failure_injection(int enabled,
+                                          int report_unconfigured)
 {
 #ifdef _WIN32
-    return _putenv_s("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE",
-                     enabled ? "1" : "");
+    int status = _putenv_s("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE",
+                           enabled ? "1" : "");
+    if (status == 0) {
+        status = _putenv_s("BLADERF_TEST_FPGA_RELOAD_REPORT_UNCONFIGURED",
+                           report_unconfigured ? "1" : "");
+    }
+    return status;
 #else
-    return enabled
+    int status = enabled
         ? setenv("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE", "1", 1)
         : unsetenv("BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE");
+    if (status == 0) {
+        status = report_unconfigured
+            ? setenv("BLADERF_TEST_FPGA_RELOAD_REPORT_UNCONFIGURED", "1", 1)
+            : unsetenv("BLADERF_TEST_FPGA_RELOAD_REPORT_UNCONFIGURED");
+    }
+    return status;
 #endif
 }
 #endif
@@ -65,6 +77,7 @@ int main(int argc, char *argv[])
     const char *device_string = NULL;
     int reload_only = 0;
     int failed_reload_only = 0;
+    int report_unconfigured = 0;
     int c;
 
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_ERROR);
@@ -77,10 +90,11 @@ int main(int argc, char *argv[])
             {"verbosity",   no_argument         , 0, 'v'},
             {"reload-only", no_argument         , 0, 'r'},
             {"failed-reload-only", no_argument  , 0, 'F'},
+            {"failed-reload-unconfigured-only", no_argument, 0, 'U'},
             {0, 0, 0, 0 }
         };
 
-        c = getopt_long(argc, argv, "d:f:vrF", long_options, &option_index);
+        c = getopt_long(argc, argv, "d:f:vrFU", long_options, &option_index);
         if (c == -1)
             break;
 
@@ -111,6 +125,13 @@ int main(int argc, char *argv[])
                 printf("Testing failed same-handle FPGA reload recovery\n");
                 break;
 
+            case 'U':
+                reload_only = 1;
+                failed_reload_only = 1;
+                report_unconfigured = 1;
+                printf("Testing fail-closed state after unconfigured FPGA report\n");
+                break;
+
             case '?':
                 // getopt_long already printed an error message.
                 exit(EXIT_FAILURE);
@@ -137,7 +158,7 @@ int main(int argc, char *argv[])
     if (failed_reload_only) {
         printf("Injecting one FPGA reload failure, then checking recovery...\n");
 #ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
-        if (set_fpga_load_failure_injection(1) != 0) {
+        if (set_fpga_load_failure_injection(1, report_unconfigured) != 0) {
             fprintf(stderr, "Could not arm FPGA load failure injection\n");
             status = BLADERF_ERR_UNEXPECTED;
             goto error;
@@ -149,7 +170,7 @@ int main(int argc, char *argv[])
 #endif
         status = bladerf_load_fpga(dev, fpga_file);
 #ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
-        if (set_fpga_load_failure_injection(0) != 0) {
+        if (set_fpga_load_failure_injection(0, 0) != 0) {
             fprintf(stderr, "Could not disarm FPGA load failure injection\n");
             status = BLADERF_ERR_UNEXPECTED;
             goto error;
@@ -161,6 +182,22 @@ int main(int argc, char *argv[])
             goto error;
         }
         status = 0;
+        if (report_unconfigured) {
+            printf("Checking RF tuning is refused until a fresh FPGA load...\n");
+            status = bladerf_set_frequency(
+                dev, BLADERF_CHANNEL_RX(0), 1835000000ULL);
+            if (status == 0) {
+                fprintf(stderr, "RF frequency update succeeded while FPGA "
+                        "state was fail-closed\n");
+                status = BLADERF_ERR_UNEXPECTED;
+                goto error;
+            }
+            status = 0;
+        } else {
+            printf("Checking RF tuning remains available after recovery...\n");
+            CHECK_STATUS(bladerf_set_frequency(
+                dev, BLADERF_CHANNEL_RX(0), 1835000000ULL));
+        }
     }
 
     printf("Reloading the FPGA image...\n");
@@ -168,7 +205,7 @@ int main(int argc, char *argv[])
 
     if (reload_only) {
         if (failed_reload_only) {
-            printf("Passed failed-reload recovery and subsequent reload test!\n");
+            printf("Passed failed-reload fail-closed/recovery test!\n");
         } else {
             printf("Passed same-handle FPGA reload lifecycle test!\n");
         }

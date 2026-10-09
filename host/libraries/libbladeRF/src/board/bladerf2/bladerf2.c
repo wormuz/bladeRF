@@ -3178,6 +3178,10 @@ static int bladerf2_load_fpga(struct bladerf *dev,
     bladerf_rfic_init_state rfic_state = BLADERF_RFIC_INIT_STATE_OFF;
     uint32_t rffe_control;
     int restore_status;
+    int fpga_status;
+    int monitor_status;
+    bool monitor_was_started = false;
+    bool recovery_ok = true;
 
     CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
     NULL_CHECK(buf);
@@ -3201,6 +3205,7 @@ static int bladerf2_load_fpga(struct bladerf *dev,
          * software cache before loading, otherwise _bladerf2_initialize()
          * sees a stale "already initialized" PHY and skips rebuilding it. */
         rfic = board_data->rfic;
+        monitor_was_started = board_data->rx_fault_monitor_started;
         if (rfic != NULL) {
             CHECK_STATUS(rfic->get_init_state(dev, &rfic_state));
             if (rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
@@ -3231,21 +3236,49 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         status = dev->backend->load_fpga(dev, buf, length);
     }
     if (status != 0) {
-        /* The previous image may still be running. Try to restore its RFIC
-         * controller, while returning the primary FPGA-load failure. */
+        /* Do not assume that a failed backend transfer left the previous
+         * image running. Only restore RFIC operations if the FPGA still
+         * reports configured; otherwise make every FPGA-dependent board
+         * operation fail its normal state check until a fresh image loads. */
+        fpga_status = dev->backend->is_fpga_configured(dev);
+#ifdef BLADERF_ENABLE_TEST_FPGA_LOAD_FAILURE_INJECTION
+        if (getenv("BLADERF_TEST_FPGA_RELOAD_REPORT_UNCONFIGURED") != NULL) {
+            fpga_status = 0;
+        }
+#endif
+        if (fpga_status != 1) {
+            board_data->state = STATE_FIRMWARE_LOADED;
+            log_error("FPGA load failed and no configured image could be "
+                      "confirmed (status=%d); device requires a fresh FPGA "
+                      "load before RF operations.\n", fpga_status);
+            return status;
+        }
+
+        /* The old image is still configured. Restore the RFIC controller,
+         * while preserving the primary FPGA-load failure for the caller. */
         if (rfic != NULL && rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
             restore_status = rfic->initialize(dev);
             if (restore_status != 0) {
+                board_data->state = STATE_FIRMWARE_LOADED;
+                recovery_ok = false;
                 log_error("Failed to restore RFIC controller after FPGA load "
                           "failure: %s\n", bladerf_strerror(restore_status));
-            } else {
-                const int monitor_status =
-                    bladerf2_rx_fault_monitor_start(dev);
-                if (monitor_status != 0) {
-                    log_error("Failed to restart RX fault monitor after FPGA "
-                              "load failure: %s\n",
-                              bladerf_strerror(monitor_status));
+            }
+        }
+
+        if (recovery_ok && monitor_was_started) {
+            monitor_status = bladerf2_rx_fault_monitor_start(dev);
+            if (monitor_status != 0) {
+                /* A device without fault monitoring cannot safely admit new
+                 * RX data. Keep the handle open for cleanup/reload, but block
+                 * normal FPGA-dependent operations. */
+                if (rfic != NULL && rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
+                    rfic->standby(dev);
                 }
+                board_data->state = STATE_FIRMWARE_LOADED;
+                log_error("Failed to restart RX fault monitor after FPGA "
+                          "load failure: %s\n",
+                          bladerf_strerror(monitor_status));
             }
         }
         return status;

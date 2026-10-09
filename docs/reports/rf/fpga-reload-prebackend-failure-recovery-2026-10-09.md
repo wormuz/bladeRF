@@ -9,10 +9,14 @@ OFF). In an injection-enabled build, `BLADERF_TEST_FAIL_FPGA_RELOAD_ONCE`
 causes exactly one already-initialized xA4 reload to fail with
 `BLADERF_ERR_UNEXPECTED` after the RX fault monitor has been stopped and
 before `backend->load_fpga()` is called. The previous FPGA image is therefore
-left untouched. The existing recovery code reinitializes the RFIC and starts
-the monitor again. The test executable's `--failed-reload-only` option arms
-the variable only around this reload, requires the injected error, performs a
-subsequent real same-handle reload, and closes the device.
+left untouched. Recovery now queries `is_fpga_configured()` before restoring
+the RFIC. It restarts the monitor only if it was running before the reload;
+if the image is not confirmed configured, the handle is demoted to
+`STATE_FIRMWARE_LOADED` so normal RF operations fail closed until a fresh
+image load. The test executable's `--failed-reload-only` arms the variable
+only around the targeted reload, requires the injected error, verifies a
+frequency update still works when the old image is confirmed, then performs a
+subsequent real same-handle reload and closes.
 
 The fault injection and its per-device one-shot latch are absent from normal
 production builds. The default `host/build` production configuration rebuilt
@@ -30,23 +34,27 @@ SHA-256: afb9b39272e938830714a66358faf5f9c6913a96791f57fb2ccafdd66bed3113
 Device: xA4 serial f695006ba84a40daa7b777c6a6eba78
 ```
 
-Command ran `libbladeRF_test_fpga_load --failed-reload-only` against the local
-injection-enabled library with `BLADERF_FORCE_FPGA_A4=1` and a 90-second
-process timeout. Outcome: device open and initial volatile image load
-succeeded; RX sample-rate setup succeeded; the targeted second reload
-returned the expected injected `BLADERF_ERR_UNEXPECTED`; recovery logged
-successful AD9361 initialization; a subsequent actual same-handle FPGA reload
-succeeded; the program printed
-`Passed failed-reload recovery and subsequent reload test!` and exited 0.
-The API call to reload uses the volatile backend path; no SPI flash write was
-performed.
+The `--failed-reload-only` run against the local injection-enabled library
+used `BLADERF_FORCE_FPGA_A4=1` and a 90-second process timeout. Device open,
+initial volatile image load, and sample-rate setup succeeded. The targeted
+reload returned the expected injected `BLADERF_ERR_UNEXPECTED`; RFIC
+initialization and a subsequent RX frequency update both succeeded. A real
+same-handle FPGA reload then succeeded, and the test exited 0.
+
+A second run used `--failed-reload-unconfigured-only`, which additionally
+injects a host-side report that no configured image remains. The library
+logged the unconfigured status, refused the RX frequency update with
+`BLADERF_ERR_UNEXPECTED` because the board was in `Firmware Loaded` state, then
+accepted a fresh real FPGA load and exited 0. This tests fail-closed state
+handling; the FPGA itself remained configured during this synthetic status
+injection. Both runs used volatile loads; no SPI flash write was performed.
 
 ## Limits and remaining gate
 
-This proves host-side recovery after an FPGA load failure known to occur
-before any image bytes reach the backend. It does not simulate a USB/backend
+This proves host-side recovery after a pre-backend failure when the previous
+image remains configured, and verifies host fail-closed behavior when the
+configured-image query reports false. It does not simulate a USB/backend
 failure after partial FPGA reconfiguration, nor a failure to reinitialize the
-RFIC or restart the monitor. Those failure modes still need bounded handling
-and qualification before the broader failed-image-load recovery gate is
-closed. The test also checks successful recovery through a subsequent real
-reload/close, not through a live RX stream after recovery.
+RFIC or restart the monitor. It verifies RF tuning and subsequent reload after
+the restored-image path, but does not run a META RX stream before reloading.
+Those boundaries remain open for the broader failed-image-load recovery gate.
