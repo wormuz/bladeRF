@@ -126,33 +126,6 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     return status;
 }
 
-/* Variant that doesn't output to log_error on error. */
-static int nios_access_quiet(struct bladerf *dev, uint8_t *buf)
-{
-    struct bladerf_usb *usb = dev->backend_data;
-    int status;
-
-    print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
-
-    /* Send the command */
-    MUTEX_LOCK(&usb->peripheral_lock);
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
-                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
-    if (status != 0) {
-        MUTEX_UNLOCK(&usb->peripheral_lock);
-        return status;
-    }
-
-    /* Retrieve the request */
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
-                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
-    MUTEX_UNLOCK(&usb->peripheral_lock);
-
-    print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
-
-    return status;
-}
-
 static int nios_8x8_read(struct bladerf *dev, uint8_t id,
                          uint8_t addr, uint8_t *data)
 {
@@ -329,30 +302,32 @@ static int nios_8x32_write(struct bladerf *dev, uint8_t id,
     }
 }
 
-/* The Nios answers packets from its main loop, and some RFIC commands own
- * that loop for a long time: INIT hard-resets the AD9361 and runs the whole
- * ad9361_init(), calibrations included, which costs about 1.2 s (measured on
- * this board via bladerf_open, 1.19/1.20/1.20 s). While that runs, nothing is
- * answered, and a single 250 ms bulk transfer gives up long before the board
- * is back. The request itself is not lost - the command UART receives on an
- * interrupt - so retrying the read is what waits this out.
- *
- * Only the RFIC target retries: everywhere else a silent peripheral is a
- * fault worth reporting promptly, not something to sit through. */
-#define RFIC_ACCESS_ATTEMPTS 24  /* x 250 ms transfer timeout = 6 s */
+/* NIOS services requests from its main loop. An RFIC command can keep it
+ * occupied long enough for the normal 250 ms IN transfer to time out. Send
+ * the request exactly once, then give its response one bounded longer read.
+ * Re-sending OUT after an IN timeout is unsafe: the command UART has no
+ * transaction ID, so it can enqueue a duplicate side effect and a delayed
+ * response cannot be matched to either request. */
+#define RFIC_RESPONSE_TIMEOUT_MS 6000
 
-static int nios_rfic_access_retry(struct bladerf *dev, uint8_t *buf)
+static int nios_rfic_access_wait_response(struct bladerf *dev, uint8_t *buf)
 {
-    int status = BLADERF_ERR_TIMEOUT;
-    size_t i;
+    struct bladerf_usb *usb = dev->backend_data;
+    int status;
 
-    for (i = 0; i < RFIC_ACCESS_ATTEMPTS; i++) {
-        status = nios_access_quiet(dev, buf);
-        if (status != BLADERF_ERR_TIMEOUT) {
-            return status;
-        }
+    print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
+
+    MUTEX_LOCK(&usb->peripheral_lock);
+    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buf,
+                                    NIOS_PKT_LEN, PERIPHERAL_TIMEOUT_MS);
+    if (status == 0) {
+        status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buf,
+                                        NIOS_PKT_LEN,
+                                        RFIC_RESPONSE_TIMEOUT_MS);
     }
+    MUTEX_UNLOCK(&usb->peripheral_lock);
 
+    print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
     return status;
 }
 
@@ -367,9 +342,9 @@ static int nios_16x64_read(struct bladerf *dev,
 
     nios_pkt_16x64_pack(buf, id, false, addr, 0);
 
-    /* RFIC access times out occasionally, and this is fine. */
+    /* Wait for the response without retransmitting the command. */
     if (NIOS_PKT_16x64_TARGET_RFIC == id) {
-        status = nios_rfic_access_retry(dev, buf);
+        status = nios_rfic_access_wait_response(dev, buf);
     } else {
         status = nios_access(dev, buf);
     }
@@ -400,9 +375,10 @@ static int nios_16x64_write(struct bladerf *dev,
 
     nios_pkt_16x64_pack(buf, id, true, addr, data);
 
-    /* RFIC access times out occasionally, and this is fine. */
+    /* A timed-out response leaves command execution uncertain. Do not
+     * retransmit a potentially non-idempotent RFIC command. */
     if (NIOS_PKT_16x64_TARGET_RFIC == id) {
-        status = nios_rfic_access_retry(dev, buf);
+        status = nios_rfic_access_wait_response(dev, buf);
     } else {
         status = nios_access(dev, buf);
     }
