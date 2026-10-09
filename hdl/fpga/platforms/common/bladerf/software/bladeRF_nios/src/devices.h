@@ -186,6 +186,7 @@ void lms6_write(uint8_t addr, uint8_t data);
  * @return  Register data
  */
 uint64_t adi_spi_read(uint16_t addr);
+bool adi_spi_read_checked(uint16_t addr, uint64_t *value);
 
 /**
  * Write to AD9361 SPI register(s)

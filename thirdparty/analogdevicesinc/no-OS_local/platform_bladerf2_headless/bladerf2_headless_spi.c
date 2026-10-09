@@ -87,12 +87,16 @@ static int32_t bladerf2_headless_spi_write_and_read(struct no_os_spi_desc *desc,
             word |= ((uint64_t)data[2 + i]) << (8 * (7 - i));
         }
 
-        adi_spi_write(cmd, word);
+        if (!adi_spi_write(cmd, word)) {
+            return -EIO;
+        }
 
         return 0;
     }
 
-    word = adi_spi_read(cmd);
+    if (!adi_spi_read_checked(cmd, &word)) {
+        return -EIO;
+    }
 
     for (i = 0; i < payload; i++) {
         data[2 + i] = (uint8_t)((word >> (8 * (7 - i))) & 0xff);

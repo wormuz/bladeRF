@@ -31,6 +31,7 @@
 #include <alt_types.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
 
 /* Define a global variable containing the current VCTCXO DAC setting.
  * This is a 'cached' value of what is written to the DAC and is used
@@ -392,17 +393,20 @@ void lms6_write(uint8_t addr, uint8_t data)
 }
 
 #ifdef BOARD_BLADERF_MICRO
-uint64_t adi_spi_read(uint16_t addr)
+bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
 {
     alt_u8 addr8[2];
     alt_u8 data8[8];
     alt_u8 bytes;
     uint8_t i;
     uint64_t rv;
+    int status;
 
-    if (!spi_arbiter_lock()) {
-        return UINT64_C(0);
+    if (value == NULL || !spi_arbiter_lock()) {
+        return false;
     }
+
+    memset(data8, 0, sizeof(data8));
 
     // The alt_avalon_spi_command expects parameters to be arrays of bytes
 
@@ -414,7 +418,12 @@ uint64_t adi_spi_read(uint16_t addr)
     bytes = (((addr >> 12) & 0x7) + 1);
 
     // Send down the command, read the response into data8
-    alt_avalon_spi_command(RFFE_SPI_BASE, 0, 2, &addr8[0], bytes, &data8[0], 0);
+    status = alt_avalon_spi_command(RFFE_SPI_BASE, 0, 2, &addr8[0], bytes,
+                                    &data8[0], 0);
+    if (status < 0) {
+        spi_arbiter_unlock();
+        return false;
+    }
 
     // Build the uint64_t return value
     rv = UINT64_C(0x0);
@@ -423,7 +432,16 @@ uint64_t adi_spi_read(uint16_t addr)
     }
     spi_arbiter_unlock();
 
-    return rv;
+    *value = rv;
+    return true;
+}
+
+uint64_t adi_spi_read(uint16_t addr)
+{
+    uint64_t value = 0;
+
+    (void)adi_spi_read_checked(addr, &value);
+    return value;
 }
 #endif  // BOARD_BLADERF_MICRO
 
