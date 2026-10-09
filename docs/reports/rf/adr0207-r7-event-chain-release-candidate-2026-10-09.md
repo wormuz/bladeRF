@@ -2,6 +2,10 @@
 
 Date: 2026-10-09
 
+Historical r7 candidate snapshot. Superseded by r8, which repeats each exact
+artifact RX1/RX2/RX_X2 qualification at 1,000 transitions; see
+`adr0207-r8-event-chain-release-candidate-2026-10-09.md`.
+
 Bundle: `/home/bonho/projects/bladerf/release-staging/adr0207-event-rx-2026-10-09-r7.tar.gz`
 
 Bundle SHA-256: `86c78d95359ad829caec3af3f4cf5b692459a7ce9e4986ac5a49a6d2499b5eea`
