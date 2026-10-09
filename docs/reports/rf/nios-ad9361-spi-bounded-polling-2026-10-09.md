@@ -32,9 +32,18 @@ Expiry is a failure watchdog only; it does not make RF state or IQ valid.
 
 ## Verification
 
-- bladeRF2/sweep NIOS ELF rebuilt with the Quartus 25.1 NIOS toolchain and
-  `-Werror`; ELF SHA-256:
-  `93f73b4e0af5bbc13abee4c67cb5218261ab3403d63483a8b0e1fcd28e94637c`.
+- bladeRF2/hosted and bladeRF2/sweep NIOS ELFs rebuilt with the Quartus 25.1
+  NIOS toolchain and `-Werror`:
+  - hosted SHA-256: `40f530cbf46bde9722fa719279813cf00e3375d9fdcf091a85353ebebaaddade`
+  - sweep SHA-256: `93f73b4e0af5bbc13abee4c67cb5218261ab3403d63483a8b0e1fcd28e94637c`
+- Their generated NIOS RAM initialization files match exactly; SHA-256:
+  `dd93ad095cea5a7c0124d592255c90cd6d1a82619cc6695834f6aba341c8d4e1`.
+- Hosted A4 Analysis & Synthesis passed with 0 errors and 111 warnings; it
+  reported 23,839 logic cells, 637 RAM segments, 8 PLLs, and 12 DSP elements.
+  Elapsed time 1:22; total CPU time 2:08.
+- Sweep A4 Analysis & Synthesis passed with 0 errors and 110 warnings; it
+  reported 25,909 logic cells, 637 RAM segments, 8 PLLs, and 13 DSP elements.
+  Elapsed time 1:24; total CPU time 2:11.
 - Disassembly contains the bounded RFFE SPI routine and the AD9361 callbacks
   call that routine. `alt_avalon_spi_command()` remains in the image only for
   other peripheral SPI users; no direct `RFFE_SPI_BASE` call remains.
