@@ -63,11 +63,17 @@ module tb_up_axi_timeout;
       awaddr = 32'h00000100;
       wdata = 32'hcafef00d;
       cycles = 0;
+      if (ack_write) begin
+        wait (wreq);
+        @(posedge clk);
+        @(negedge clk);
+        wack = 1;
+        @(negedge clk);
+        wack = 0;
+      end
       while (!(awready && wready) && cycles < 80) begin
         @(negedge clk);
         cycles = cycles + 1;
-        if (ack_write && wreq && cycles == 3) wack = 1;
-        else wack = 0;
       end
       if (!(awready && wready)) $fatal(1, "write response timeout");
       awvalid = 0;
@@ -100,11 +106,17 @@ module tb_up_axi_timeout;
       arvalid = 1;
       araddr = 32'h00000104;
       cycles = 0;
+      if (ack_read) begin
+        wait (rreq);
+        @(posedge clk);
+        @(negedge clk);
+        rack = 1;
+        @(negedge clk);
+        rack = 0;
+      end
       while (!arready && cycles < 80) begin
         @(negedge clk);
         cycles = cycles + 1;
-        if (ack_read && rreq && cycles == 3) rack = 1;
-        else rack = 0;
       end
       if (!arready) $fatal(1, "read address timeout");
       arvalid = 0;
