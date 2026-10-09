@@ -556,9 +556,17 @@ void bladerf_version(struct bladerf_version *version)
 
 int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 {
+    const bool starts_shared_rf_link_epoch =
+        BLADERF_CHANNEL_IS_TX(ch) && enable;
     int status;
-    status = invalidate_rx_data_before_reconfigure(
-        dev, ch, BLADERF_RF_INVALIDATE_MODULE);
+    if (starts_shared_rf_link_epoch &&
+        dev->board->invalidate_rx_data != NULL) {
+        status = dev->board->invalidate_rx_data(
+            dev, ch, BLADERF_RF_INVALIDATE_MODULE);
+    } else {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, ch, BLADERF_RF_INVALIDATE_MODULE);
+    }
     if (status != 0) {
         return status;
     }
@@ -567,7 +575,12 @@ int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
     status = dev->board->enable_module(dev, ch, enable);
 
     MUTEX_UNLOCK(&dev->lock);
-    rx_reconfigure_complete(dev, ch);
+    if (starts_shared_rf_link_epoch &&
+        dev->board->rx_reconfigure_complete != NULL) {
+        dev->board->rx_reconfigure_complete(dev, ch);
+    } else {
+        rx_reconfigure_complete(dev, ch);
+    }
     return status;
 }
 

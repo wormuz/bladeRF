@@ -564,12 +564,13 @@ uint32_t bladerf2_rx_invalidation_channel_event_flags(
 {
     const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_RFIC_REG |
                                     BLADERF_RF_INVALIDATE_TX_FIR |
-                                    BLADERF_RF_INVALIDATE_CLOCK;
+                                    BLADERF_RF_INVALIDATE_CLOCK |
+                                    BLADERF_RF_INVALIDATE_MODULE;
 
     if ((reason & shared_reasons) != 0) {
-        /* These setters have no RX channel argument. Use the channel that
-         * established the shared certified epoch; if there is no active
-         * epoch contract, leave provenance unspecified. */
+        /* These operations affect a shared RX epoch. Use the channel that
+         * established the certified epoch; if no epoch contract is active,
+         * leave provenance unspecified. */
         return bladerf2_rx_current_transition_channel_event_flags(board_data);
     }
 

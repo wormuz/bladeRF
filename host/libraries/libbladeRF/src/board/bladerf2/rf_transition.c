@@ -1092,11 +1092,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     bool data_epoch_enabled;
+    bool no_active_rx_direction = false;
     int status;
 
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
-        return 0;
-    }
     if (dev == NULL || dev->board_data == NULL || reason == 0) {
         return BLADERF_ERR_INVAL;
     }
@@ -1114,6 +1112,13 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                       board_data->rf_transition_state,
                       board_data->rf_transition_current_id);
             status = BLADERF_ERR_WOULD_BLOCK;
+        } else if (BLADERF_CHANNEL_IS_TX(ch) &&
+                   !board_data->rf_link_dir_on[0]) {
+            /* TX enable starts a shared FPGA link epoch. Revoke RX only when
+             * an RX direction is actually active; TX-only startup must not
+             * depend on an unrelated RX ABORT transaction. */
+            no_active_rx_direction = true;
+            status = 0;
         } else {
             board_data->rf_transition_setter_active = true;
             status = 0;
@@ -1121,6 +1126,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     });
     if (status != 0) {
         return status;
+    }
+    if (no_active_rx_direction) {
+        return 0;
     }
 
     /* Revoke async admission before any USB control transaction. The sync
@@ -1268,7 +1276,7 @@ void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data;
 
-    if (dev == NULL || BLADERF_CHANNEL_IS_TX(ch) || dev->board_data == NULL) {
+    if (dev == NULL || dev->board_data == NULL) {
         return;
     }
     board_data = dev->board_data;

@@ -1161,8 +1161,42 @@ static int bladerf2_enable_module(struct bladerf *dev,
                                      !board_data->rf_link_dir_on[0];
         bool const tx_first_enable = BLADERF_CHANNEL_IS_TX(ch) &&
                                      !board_data->rf_link_dir_on[1];
+        bool const other_direction_active = BLADERF_CHANNEL_IS_TX(ch)
+            ? board_data->rf_link_dir_on[0] : board_data->rf_link_dir_on[1];
+        uint64_t rx_loss_count_baseline = 0;
+        uint64_t tx_loss_count_baseline = 0;
+        int rx_baseline_status = 0;
+        int tx_baseline_status = 0;
         bool epoch_confirmed = false;
         bool start_accepted = false;
+
+        /* The FPGA loss counters reset with the shared sample-domain reset,
+         * not on every lane enable. If the other direction is already live,
+         * preserve the counter value before changing this lane so earlier
+         * losses are not attributed to the new stream. */
+        if (other_direction_active && rx_first_enable &&
+            dev->board->get_loss_event_count != NULL) {
+            rx_baseline_status = dev->board->get_loss_event_count(
+                dev, BLADERF_RX, &rx_loss_count_baseline);
+        } else if (other_direction_active && rx_first_enable) {
+            rx_baseline_status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (other_direction_active && tx_first_enable &&
+            dev->board->get_loss_event_count != NULL) {
+            tx_baseline_status = dev->board->get_loss_event_count(
+                dev, BLADERF_TX, &tx_loss_count_baseline);
+        } else if (other_direction_active && tx_first_enable) {
+            tx_baseline_status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (rx_first_enable && other_direction_active &&
+            rx_baseline_status != 0) {
+            return rx_baseline_status;
+        }
+        if (tx_first_enable && other_direction_active &&
+            tx_baseline_status != 0) {
+            return tx_baseline_status;
+        }
+
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
             return bladerf2_fail_module_enable(dev, ch, status, false);
@@ -1185,15 +1219,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
                 dev, ch, status, start_accepted);
         }
         if (rx_first_enable) {
-            /* The FPGA loss counter resets with the RX sample-domain reset
-             * issued by the first RX module enable. Start monitoring from
-             * that reset boundary; later RX1/RX2 enables share the same
-             * counter and must not move its baseline. */
-            board_data->rx_fpga_loss_count_last = 0;
+            board_data->rx_fpga_loss_count_last = rx_loss_count_baseline;
             board_data->rx_fpga_loss_count_valid = true;
         }
         if (tx_first_enable && epoch_confirmed) {
-            board_data->tx_fpga_loss_count_last = 0;
+            board_data->tx_fpga_loss_count_last = tx_loss_count_baseline;
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_stream_faulted = false;

@@ -2682,6 +2682,10 @@ int CALL_CONV bladerf_deinterleave_stream_buffer(bladerf_channel_layout layout,
  * can be achieved easily when using metadata, as shown on
  * \link sync_tx_meta_bursts.html this page\endlink.)
  *
+ * On bladeRF 2, enabling a TX channel starts a shared FPGA RF-link epoch. If
+ * RX is active, its current IQ-valid certificate is revoked and a new RX
+ * transition must complete before subsequent samples are treated as valid.
+ *
  * @param       dev     Device handle
  * @param[in]   ch      Channel
  * @param[in]   enable  true to enable, false to disable
