@@ -986,9 +986,12 @@ void adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
 }
 #endif  // BOARD_BLADERF_MICRO
 
-uint8_t si5338_read(uint8_t addr)
+bool si5338_read(uint8_t addr, uint8_t *data)
 {
-    uint8_t data;
+    if (data == NULL) {
+        return false;
+    }
+    *data = 0;
 
     /* Set the address to the Si5338 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, SI5338_I2C);
@@ -1015,15 +1018,15 @@ uint8_t si5338_read(uint8_t addr)
         goto i2c_fail;
     }
 
-    data = IORD_8DIRECT(I2C, OC_I2C_DATA);
-    return data;
+    *data = IORD_8DIRECT(I2C, OC_I2C_DATA);
+    return true;
 
 i2c_fail:
     /* Bus did not complete; a zero read beats never returning. */
-    return 0;
+    return false;
 }
 
-void si5338_write(uint8_t addr, uint8_t data)
+bool si5338_write(uint8_t addr, uint8_t data)
 {
     /* Set the address to the Si5338 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, SI5338_I2C);
@@ -1040,18 +1043,20 @@ void si5338_write(uint8_t addr, uint8_t data)
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    (void)i2c_complete_transfer(0);
-    return;
+    return i2c_complete_transfer(0);
 
 i2c_fail:
     /* Bus did not complete; the write is lost, which beats never returning. */
-    return;
+    return false;
 }
 
 #ifdef BOARD_BLADERF_MICRO
-uint16_t ina219_read(uint8_t addr)
+bool ina219_read(uint8_t addr, uint16_t *data)
 {
-    uint16_t data;
+    if (data == NULL) {
+        return false;
+    }
+    *data = 0;
 
     /* Set the address to the INA219 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, INA219_I2C);
@@ -1077,24 +1082,24 @@ uint16_t ina219_read(uint8_t addr)
     if (!i2c_complete_transfer(1)) {
         goto i2c_fail;
     }
-    data = IORD_8DIRECT(I2C, OC_I2C_DATA) << 8;
+    *data = IORD_8DIRECT(I2C, OC_I2C_DATA) << 8;
 
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO);
     if (!i2c_complete_transfer(0)) {
         goto i2c_fail;
     }
 
-    data |= IORD_8DIRECT(I2C, OC_I2C_DATA);
-    return data;
+    *data |= IORD_8DIRECT(I2C, OC_I2C_DATA);
+    return true;
 
 i2c_fail:
     /* Bus did not complete; a zero read beats never returning. */
-    return 0;
+    return false;
 }
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void ina219_write(uint8_t addr, uint16_t data)
+bool ina219_write(uint8_t addr, uint16_t data)
 {
     /* Set the address to the INA219 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, INA219_I2C);
@@ -1117,12 +1122,11 @@ void ina219_write(uint8_t addr, uint16_t data)
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    (void)i2c_complete_transfer(0);
-    return;
+    return i2c_complete_transfer(0);
 
 i2c_fail:
     /* Bus did not complete; the write is lost, which beats never returning. */
-    return;
+    return false;
 }
 #endif  // BOARD_BLADERF_MICRO
 

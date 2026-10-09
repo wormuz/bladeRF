@@ -137,19 +137,21 @@ bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
     return true;
 }
 
-uint8_t si5338_read(uint8_t addr)
+bool si5338_read(uint8_t addr, uint8_t *data)
 {
     const uint8_t ret = 0x88;
     DBG("%s: addr=0x%02x, returning 0x%02x\n", __FUNCTION__, addr, ret);
     ASSERT(addr == 0x3);
-    return ret;
+    *data = ret;
+    return true;
 }
 
-void si5338_write(uint8_t addr, uint8_t data)
+bool si5338_write(uint8_t addr, uint8_t data)
 {
     DBG("%s: addr=0x%02x, data=0x%02x\n", __FUNCTION__, addr, data);
     ASSERT(addr == 0x05);
     ASSERT(data == 0xab);
+    return true;
 }
 
 bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)

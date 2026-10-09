@@ -4,12 +4,56 @@
 
 #include "devices.h"
 #include "pkt_8x16.h"
+#include "pkt_8x8.h"
 #include "pkt_8x32.h"
 #include "pkt_handler.h"
 #include "nios_pkt_8x16.h"
+#include "nios_pkt_8x8.h"
 #include "nios_pkt_8x32.h"
 
 static bool peripheral_success;
+
+bool si5338_read(uint8_t addr, uint8_t *value)
+{
+    (void)addr;
+    if (peripheral_success) {
+        *value = 0x5a;
+    }
+    return peripheral_success;
+}
+
+bool si5338_write(uint8_t addr, uint8_t value)
+{
+    (void)addr;
+    (void)value;
+    return peripheral_success;
+}
+
+bool ina219_read(uint8_t addr, uint16_t *value)
+{
+    (void)addr;
+    if (peripheral_success) {
+        *value = 0x1234;
+    }
+    return peripheral_success;
+}
+
+bool ina219_write(uint8_t addr, uint16_t value)
+{
+    (void)addr;
+    (void)value;
+    return peripheral_success;
+}
+
+uint8_t lms6_read(uint8_t addr) { (void)addr; return 0; }
+void lms6_write(uint8_t addr, uint8_t value) { (void)addr; (void)value; }
+bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode(void)
+{ return BLADERF_VCTCXO_TAMER_DISABLED; }
+void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode) { (void)mode; }
+uint8_t tx_trigger_ctl_read(void) { return 0; }
+void tx_trigger_ctl_write(uint8_t value) { (void)value; }
+uint8_t rx_trigger_ctl_read(void) { return 0; }
+void rx_trigger_ctl_write(uint8_t value) { (void)value; }
 
 bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t value)
 {
@@ -123,11 +167,28 @@ static int check_8x32_write_failure(void)
     return target == NIOS_PKT_8x32_TARGET_ADF4351 && write && !success ? 0 : 1;
 }
 
+static int check_8x8_si5338_failure(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_SI5338,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0x05, 0xab },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = false, success = true;
+
+    peripheral_success = false;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_SI5338 && write && !success ? 0 : 1;
+}
+
 int main(void)
 {
     if (check_8x16_write_failure() || check_8x16_read_failure() ||
-        check_8x32_write_failure()) {
-        fputs("peripheral SPI failure was reported as packet success\n", stderr);
+        check_8x32_write_failure() || check_8x8_si5338_failure()) {
+        fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;
     }
     puts("NIOS peripheral SPI packet failure status: PASS");

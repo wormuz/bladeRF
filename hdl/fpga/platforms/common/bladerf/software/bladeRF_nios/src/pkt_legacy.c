@@ -271,7 +271,9 @@ static inline void legacy_pkt_read(uint8_t dev_id, uint8_t count,
         case NIOS_PKT_LEGACY_DEV_SI5338:
             DBG("%s: Performing SI5338 read.\n", __FUNCTION__);
             b->resp[ADDR_IDX] = b->req[ADDR_IDX];
-            b->resp[DATA_IDX] = si5338_read(b->req[ADDR_IDX]);
+            if (!si5338_read(b->req[ADDR_IDX], &b->resp[DATA_IDX])) {
+                b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+            }
             break;
 
         case NIOS_PKT_LEGACY_DEV_CONFIG:
@@ -417,7 +419,9 @@ static inline void legacy_pkt_write(uint8_t dev_id, uint8_t count,
             break;
 
         case NIOS_PKT_LEGACY_DEV_SI5338:
-            si5338_write(b->req[ADDR_IDX], b->req[DATA_IDX]);
+            if (!si5338_write(b->req[ADDR_IDX], b->req[DATA_IDX])) {
+                b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+            }
 
             b->resp[ADDR_IDX] = b->req[ADDR_IDX];
             b->resp[DATA_IDX] = 0;

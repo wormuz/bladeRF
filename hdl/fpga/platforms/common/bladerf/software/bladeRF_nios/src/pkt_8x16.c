@@ -92,7 +92,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint16_t *data)
             break;
 
         case NIOS_PKT_8x16_TARGET_IQ_CORR:
-            iq_corr_read(addr, data);
+            success = iq_corr_read(addr, data);
             break;
 
 #ifdef BOARD_BLADERF_MICRO
@@ -103,7 +103,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint16_t *data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_INA219:
-            *data = ina219_read(addr);
+            success = ina219_read(addr, data);
             break;
 #endif  // BOARD_BLADERF_MICRO
 
@@ -134,7 +134,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
             break;
 
         case NIOS_PKT_8x16_TARGET_IQ_CORR:
-            iq_corr_write(addr, data);
+            if (!iq_corr_write(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x16_TARGET_AGC_CORR:
@@ -151,7 +153,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_INA219:
-            ina219_write(addr, data);
+            if (!ina219_write(addr, data)) {
+                return false;
+            }
             break;
 #endif  // BOARD_BLADERF_MICRO
 

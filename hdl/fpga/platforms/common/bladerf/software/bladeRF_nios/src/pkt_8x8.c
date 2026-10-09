@@ -36,7 +36,9 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint8_t *data)
             break;
 
         case NIOS_PKT_8x8_TARGET_SI5338:
-            *data = si5338_read(addr);
+            if (!si5338_read(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x8_TARGET_VCTCXO_TAMER:
@@ -85,7 +87,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint8_t data)
             break;
 
         case NIOS_PKT_8x8_TARGET_SI5338:
-            si5338_write(addr, data);
+            if (!si5338_write(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x8_TARGET_VCTCXO_TAMER:

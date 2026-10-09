@@ -289,7 +289,7 @@ void adi_rfspdt_select(bladerf_module m, fastlock_profile *p);
  *
  * @return  Register data
  */
-uint8_t si5338_read(uint8_t addr);
+bool si5338_read(uint8_t addr, uint8_t *data);
 
 /**
  * Write to Si5338 clock generator register
@@ -297,7 +297,7 @@ uint8_t si5338_read(uint8_t addr);
  * @param   addr    Register address
  * @param   data    Data to write
  */
-void si5338_write(uint8_t addr, uint8_t data);
+bool si5338_write(uint8_t addr, uint8_t data);
 
 /**
  * Read from INA219 power IC
@@ -306,7 +306,7 @@ void si5338_write(uint8_t addr, uint8_t data);
  *
  * @return  Register data
  */
-uint16_t ina219_read(uint8_t addr);
+bool ina219_read(uint8_t addr, uint16_t *data);
 
 /**
  * Write to INA219 power IC
@@ -314,7 +314,7 @@ uint16_t ina219_read(uint8_t addr);
  * @param   addr    Register address
  * @param   data    Data to write
  */
-void ina219_write(uint8_t addr, uint16_t data);
+bool ina219_write(uint8_t addr, uint16_t data);
 
 /**
  * Write a command to the VCTCXO trim DAC
