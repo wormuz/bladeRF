@@ -9,6 +9,10 @@ The production r9 mode-guard probe was rerun after a clean build. USB open succe
 
 Before attempting recovery, the existing one-shot NIOS boot probe sent exactly one legacy version-byte request. USB OUT succeeded (16 bytes, 0.057 ms); the NIOS IN response timed out after 250.382 ms (`status=-7`). The bladeRF remained enumerated as `2cf0:5250`, SuperSpeed 5 Gbps, serial unchanged. Kernel log had no device-specific event in the queried interval. Raw evidence: `nios-mode-switch-no-response-2026-10-09.log`.
 
+## Source-path assessment
+
+The failed mode switch invokes the NIOS `BLADERF_RFIC_COMMAND_INIT` path. In `devices_rfic_cmds.c`, `_rfic_initialize()` clears RF control, releases reset, enables the AD9361 interface, then runs the full `ad9361_init()` and per-direction setup before returning the command response. That path accesses the AD9361 AXI core clocked by `if_l_clk`. The source itself documents that an Avalon access can stall NIOS indefinitely if that clock is absent. This is a plausible mechanism for the observed no-response, not a proven root cause: this run captured neither `init_stage` nor the NIOS program counter, and the failure may occur elsewhere in initialization or packet servicing.
+
 ## Handling
 
 No FPGA reload, USB reset, power cycle, or subsequent RF operation was performed after the timeout. The original volatile failure state is preserved for the next diagnostic step. Do not use the normal runtime qualification runner or reload candidate images until the NIOS request/response state and host/kernel evidence are collected.
