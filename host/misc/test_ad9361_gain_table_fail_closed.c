@@ -19,6 +19,7 @@ static unsigned table_commits;
 static bool cleanup_clock_stop_seen;
 static bool read_state_alert;
 static unsigned spi_write_calls;
+static uint64_t delay_us_total;
 static const uint8_t (*expected_table)[3];
 static unsigned batch_row_calls;
 static unsigned batch_commits;
@@ -47,7 +48,7 @@ void no_os_free(void *ptr)
 
 void no_os_udelay(uint32_t us)
 {
-    (void)us;
+	delay_us_total += us;
 }
 
 void no_os_mdelay(uint32_t ms)
@@ -154,6 +155,7 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     cleanup_clock_stop_seen = false;
     read_state_alert = false;
     spi_write_calls = 0;
+    delay_us_total = 0;
     expected_table = NULL;
     batch_row_calls = 0;
     batch_commits = 0;
@@ -246,6 +248,26 @@ static int test_auxadc_setup_propagates_each_write_error(void)
         fprintf(stderr, "zero AuxADC clock rate was not rejected before SPI\n");
         return -1;
     }
+    return 0;
+}
+
+static int test_rf_calibration_status_read_failure_is_immediate(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+
+    setup_phy(&phy, &pdata, &spi);
+    fail_read_reg = REG_CALIBRATION_CTRL;
+
+    if (ad9361_run_calibration_timeout(&phy, RFDC_CAL, 2400000) != -EIO ||
+        delay_us_total != 0) {
+        fprintf(stderr,
+                "RFDC calibration status-read failure was masked/delayed: delay_us=%llu\n",
+                (unsigned long long)delay_us_total);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -415,6 +437,7 @@ int main(void)
 {
     if (test_rssi_setup_propagates_each_write_error() != 0 ||
         test_auxadc_setup_propagates_each_write_error() != 0 ||
+        test_rf_calibration_status_read_failure_is_immediate() != 0 ||
         test_rssi_calibration_and_table_loaders_fail_closed() != 0 ||
         test_mid_table_write_failure() != 0 ||
         test_failed_read_before_table_programming() != 0 ||
