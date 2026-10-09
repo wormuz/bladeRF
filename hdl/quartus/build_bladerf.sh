@@ -520,6 +520,23 @@ if [ "$rev" == "foxhunt" ]; then
     popd
 fi
 
+# Qsys-generated nios_system.qip references this RAM initialization file
+# from nios_system/synthesis/submodules. mem_init_generate writes the
+# application image under the selected application's mem_init directory,
+# so keep the file Quartus actually compiles in sync with the fresh Nios ELF.
+nios_app_dir="bladeRF_nios"
+if [ "$rev" == "foxhunt" ]; then
+    nios_app_dir="foxhunt"
+fi
+nios_ram_hex="${work_dir}/${nios_app_dir}/mem_init/nios_system_ram.hex"
+qsys_ram_hex="${work_dir}/nios_system/synthesis/submodules/nios_system_ram.hex"
+if [ -f "${nios_ram_hex}" ] && [ -f "${qsys_ram_hex}" ]; then
+    cp -f "${nios_ram_hex}" "${qsys_ram_hex}"
+else
+    echo "Error: expected Nios/Qsys RAM initialization files were not generated" >&2
+    exit 1
+fi
+
 echo ""
 echo "##########################################################################"
 echo "    Building ${board} FPGA Image: $rev, $size kLE"
