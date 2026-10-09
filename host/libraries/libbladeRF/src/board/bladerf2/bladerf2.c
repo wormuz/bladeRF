@@ -3207,6 +3207,12 @@ static int bladerf2_load_fpga(struct bladerf *dev,
                 CHECK_STATUS(rfic->deinitialize(dev));
             }
         }
+
+        /* _bladerf2_initialize() starts the RX fault monitor after a
+         * successful reload. Stop the current monitor first so its thread,
+         * mutex, and condition variable are not orphaned/reinitialized by
+         * that second initialization. */
+        bladerf2_rx_fault_monitor_stop(dev);
     }
 
     int status = dev->backend->load_fpga(dev, buf, length);
@@ -3218,6 +3224,14 @@ static int bladerf2_load_fpga(struct bladerf *dev,
             if (restore_status != 0) {
                 log_error("Failed to restore RFIC controller after FPGA load "
                           "failure: %s\n", bladerf_strerror(restore_status));
+            } else {
+                const int monitor_status =
+                    bladerf2_rx_fault_monitor_start(dev);
+                if (monitor_status != 0) {
+                    log_error("Failed to restart RX fault monitor after FPGA "
+                              "load failure: %s\n",
+                              bladerf_strerror(monitor_status));
+                }
             }
         }
         return status;

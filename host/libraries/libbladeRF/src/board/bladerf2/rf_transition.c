@@ -895,6 +895,12 @@ int bladerf2_rx_fault_monitor_start(struct bladerf *dev)
         return BLADERF_ERR_INVAL;
     }
     board_data = dev->board_data;
+    if (board_data->rx_fault_monitor_started) {
+        /* FPGA reload/reinitialization may call this again on the same
+         * handle. The existing monitor remains the single owner. */
+        log_debug("rx_fault_monitor_start: already running; keeping existing thread\n");
+        return 0;
+    }
     MUTEX_INIT(&board_data->rx_fault_monitor_lock);
     status = COND_INIT(&board_data->rx_fault_monitor_cond);
     if (status != 0) {
