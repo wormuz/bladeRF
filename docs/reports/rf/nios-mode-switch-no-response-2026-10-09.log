@@ -1,0 +1,14 @@
+Timestamp: 2026-10-09T10:14:50.583601791+03:00
+Device: bladeRF 2.0 micro xA4, serial f695006ba84a40daa7b777c6a6eba78
+USB: bus 002 device 004, 2cf0:5250, SuperSpeed 5 Gbps, still enumerated
+
+Trigger:
+- Production libbladeRF mode-guard probe started with Host tuning mode.
+- Host -> FPGA/NIOS mode switch did not complete; process blocked in poll_schedule_timeout with USB fd open.
+- Probe was interrupted after ~55 s. No FPGA reload, USB reset, or power cycle was done.
+
+One-shot NIOS version-byte probe (host/misc/run_rx_nios_boot_probe.sh):
+first_nios_out_status=0 transferred=16 elapsed_ms=0.057
+first_nios_in_status=-7 transferred=0 elapsed_ms=250.382 total_ms=250.439
+
+Kernel log had no device-specific event in the queried 10-minute interval; the only entry was the denied ptrace attach attempt used to inspect the blocked process. USB enumeration remained present after the NIOS request timeout.
