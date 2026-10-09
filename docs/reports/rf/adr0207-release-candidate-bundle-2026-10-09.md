@@ -2,9 +2,41 @@
 
 Date: 2026-10-09
 
-## Bundle
+## Current revision 3
 
-Superseding local artifact: `release-staging/adr0207-event-rx-2026-10-09-r2.tar.gz`
+Local candidate bundle: `release-staging/adr0207-event-rx-2026-10-09-r3.tar.gz`.
+SHA-256: `4908adcedc63d406873acb2ad47767a8247317d344bacd168fc6d1f03cb8e065`.
+The archive contains the exact installed libbladeRF and matching CPython 3.14
+no-RPATH wheel, plus both seed-3 hosted and sweep A4 images with fit/STA
+summaries.
+
+- libbladeRF `2.6.1-git-e985a454`, SHA-256
+  `bbac2282a44bb1ea0cf9b6e22f5cf0cda14adb5d88acbab4bb0ae3ff46af4348`.
+- CPython 3.14 no-RPATH wheel SHA-256
+  `4800cb9306ae93cb844b266fbd964ec37a1a741f0d1c7f29b7edab4ffb092b3a`.
+- sweep A4 RBF SHA-256
+  `f6f821bc82b2ffc2856847e7072550cecce730355c2a1ce022482fad15eaff2f`;
+  worst setup/hold slack +0.216/+0.017 ns.
+- hosted A4 RBF SHA-256
+  `0565d276ed4835d2e014190582ffb0b843a422fba500061d43fa967766bd40c7`;
+  worst setup/hold slack +0.352/+0.073 ns.
+- FX3 firmware remains `2.6.1-git-fc02ffd8`, SHA-256
+  `d1a979d164f81222a8463526e589e82f40cfd9d47df466cb1ef5488d6608fc3c`.
+
+The exact installed library/no-RPATH wheel/sweep-image pair passed 21 RF-event
+tests, all three induced clipping cases (RX1, RX2, RX_X2), and a production
+LTE RX_X2 smoke at 1.835 GHz (PCI 85 / 100 RB / 4 ports). A 10,000-transition
+native RX1/RX2 cross-band qualification completed with zero unrecovered
+transitions, read faults, retries, or overruns. The FPGA image is volatile;
+there was no flash write. Full bundle member hashes are in the archive's
+`SHA256SUMS`.
+
+The r3 bundle remains a local release candidate, not a final release. The
+archived wideband no-PSS/RF-content case remains unresolved.
+
+## Revision 2 (superseded)
+
+Historical artifact: `release-staging/adr0207-event-rx-2026-10-09-r2.tar.gz`
 
 SHA-256: `c558692c3bec5434446f209b84d9501d9d36fe9cf9870327ae4d25f104d1c462`
 
