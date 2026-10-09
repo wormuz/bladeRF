@@ -68,6 +68,14 @@ same class:
 11. TX mute cached failed attenuation reads as real settings and combined two
     restore-operation statuses. TX attenuation read also treated every channel
     number other than one as TX2.
+12. Fastlock profile save packed many direct SPI reads into bytes without
+    checking any of them, so an incomplete profile could be silently saved.
+13. External-LO control ignored its initial MCS-state read, overwrote the
+    first synth-control write result with a later write, and changed cached
+    synth power state before the register sequence succeeded.
+14. BIST loopback ignored observe/config reads and helper return values,
+    accepted an invalid mode only after beginning a register read, and
+    committed the cached mode before the final hardware write.
 
 These adjacent paths are now fail-closed: errors are returned, temporary FIR
 state is restored on read failure, software cache updates follow successful
@@ -77,7 +85,9 @@ profile transfer and programming-clock stop succeed. Channel-mode changes now
 propagate reset, setup, and post-setup errors. RX gain output is committed only
 after the complete checked table read; invalid gain indexes are rejected.
 Temperature/AuxADC and clock-delay paths preserve read errors and report failed
-cleanup writes.
+cleanup writes. Fastlock save and BIST loopback return the first failed
+operation, while external-LO control updates its synth-power cache only after
+the whole register sequence succeeds.
 
 ## Implemented fix and regression coverage
 
@@ -93,7 +103,8 @@ cleanup writes.
   into sample-rate setters/getters, clock-chain reads, initial clock
   registration, both BIST writes, ENSM getters, RX gain get/set, AGC/RSSI,
   temperature/AuxADC, RX/TX FIR readers and loader, fastlock load/exit, clock
-  delay reads/writes, and TX mute. The test passes.
+  delay reads/writes, TX mute, fastlock save, external-LO control, and BIST
+  loopback. The test passes.
 - `cmake --build host/build --target ad936x -j2` passes and both repository
   `git diff --check` runs are clean.
 

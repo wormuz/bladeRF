@@ -77,6 +77,12 @@ int32_t ad9361_adjust_tx_ext_band_settings(struct ad9361_rf_phy *phy,
     (void)freq;
     return 0;
 }
+int32_t ad9361_hdl_loopback(struct ad9361_rf_phy *phy, bool enable)
+{
+    (void)phy;
+    (void)enable;
+    return 0;
+}
 
 static unsigned read_count;
 static unsigned delay_count;
@@ -387,6 +393,13 @@ int main(void)
         }
         fail_write_reg = -1;
         phy.fastlock.current_profile[0] = 0;
+        fail_read_reg = REG_RX_INTEGER_BYTE_0;
+        fail_write_reg = -1;
+        ret = ad9361_fastlock_store(&phy, false, 0);
+        if (ret != -EIO) {
+            fprintf(stderr, "Fastlock store hid profile read failure: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
         phy.tx1_atten_cached = 111;
         phy.tx2_atten_cached = 222;
         fail_read_reg = REG_TX1_ATTEN_1;
@@ -403,6 +416,21 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+        phy.cached_synth_pd[1] = 0x5a;
+        fail_read_reg = REG_MULTICHIP_SYNC_AND_TX_MON_CTRL;
+        ret = ad9361_trx_ext_lo_control(&phy, false, true);
+        if (ret != -EIO || phy.cached_synth_pd[1] != 0x5a) {
+            fprintf(stderr, "External LO control hid state read failure or changed cache\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        fail_write_reg = REG_ENSM_CONFIG_2;
+        ret = ad9361_trx_ext_lo_control(&phy, false, true);
+        if (ret != -EIO || phy.cached_synth_pd[1] != 0x5a) {
+            fprintf(stderr, "External LO control hid first write failure or changed cache\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
         fail_write_reg = REG_RX_CLOCK_DATA_DELAY;
         ret = ad9361_write_clock_data_delays(&phy);
         if (ret != -EIO) {
@@ -779,6 +807,27 @@ int main(void)
 
     /* BIST must propagate both writes and update cached state only after the
      * complete register transaction succeeds. */
+    phy.bist_loopback_mode = 2;
+    fail_read_reg = REG_OBSERVE_CONFIG;
+    ret = ad9361_bist_loopback(&phy, 0);
+    if (ret != -EIO || phy.bist_loopback_mode != 2) {
+        fprintf(stderr, "BIST loopback hid config read failure or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    fail_read_reg = -1;
+    ret = ad9361_bist_loopback(&phy, 3);
+    if (ret != -EINVAL || phy.bist_loopback_mode != 2) {
+        fprintf(stderr, "BIST loopback accepted invalid mode or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = REG_OBSERVE_CONFIG;
+    ret = ad9361_bist_loopback(&phy, 0);
+    if (ret != -EIO || phy.bist_loopback_mode != 2) {
+        fprintf(stderr, "BIST loopback hid config write failure or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    fail_write_reg = -1;
+
     phy.bist_tone_mode = BIST_INJ_TX;
     phy.bist_tone_freq_Hz = 7;
     phy.bist_tone_level_dB = 12;
