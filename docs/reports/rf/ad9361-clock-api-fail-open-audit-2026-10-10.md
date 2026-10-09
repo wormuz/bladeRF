@@ -169,3 +169,10 @@ Validation after this pass:
 No claim is made that these defects caused the NIOS no-response or LTE no-PSS
 observations. The image was built from the current dirty source tree and must
 be reproduced from the final committed tree before release packaging.
+
+A final parser review found that the fastlock IIO loader still accepted a
+numeric prefix followed by junk. The parser now validates one or two complete
+unsigned fields per comma-separated item and rejects trailing characters and
+out-of-range bytes. `iio_ad9361.c` passes a direct `cc -std=gnu11 -fsyntax-only`
+check with the no-OS headers. This IIO-only parser correction is not part of
+the bladeRF NIOS firmware source selection used for the A4 image above.
