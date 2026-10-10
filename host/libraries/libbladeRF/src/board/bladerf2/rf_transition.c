@@ -99,6 +99,9 @@ static uint32_t _rx_link_status_for_transition_test(uint32_t status)
     const char *requested = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
     if (requested != NULL && strcmp(requested, "FPGA_FAULT") == 0) {
         status |= RF_LINK_STATUS_RX_FAULT;
+    } else if (requested != NULL &&
+               strcmp(requested, "FPGA_EPOCH_LOST") == 0) {
+        status &= ~BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT;
     }
 #endif
     return status;

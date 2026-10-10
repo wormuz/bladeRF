@@ -1,7 +1,7 @@
-/* Test-build xA4 check: a sticky FPGA RX fault must prevent epoch
- * certification and keep sync IQ fenced. Build the library with
- * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
- * BLADERF_TEST_RX_TRANSITION_STALL=FPGA_FAULT. */
+/* Test-build xA4 checks: a sticky FPGA RX fault or lost RF-link epoch ACK
+ * must prevent host epoch certification and keep sync IQ fenced. Build the
+ * library with ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
+ * BLADERF_TEST_RX_TRANSITION_STALL=FPGA_FAULT or FPGA_EPOCH_LOST. */
 #include <libbladeRF.h>
 
 #include <stdbool.h>
@@ -11,6 +11,9 @@
 #include <string.h>
 
 #define RX_FAULT_STATUS_BIT (1u << 14)
+#define RX_LINK_ACTIVE_BIT (1u << 16)
+#define RX_EPOCH_CURRENT_BIT (1u << 8)
+#define RX_EPOCH_VALID_BIT (1u << 11)
 
 int main(int argc, char **argv)
 {
@@ -25,6 +28,9 @@ int main(int argc, char **argv)
     bool event_history_complete = false;
     bool saw_fault_error = false;
     bool saw_epoch_valid = false;
+    const char *fault_mode = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    const bool expect_epoch_lost = fault_mode != NULL &&
+        strcmp(fault_mode, "FPGA_EPOCH_LOST") == 0;
     int status;
 
     status = bladerf_open(&dev, NULL);
@@ -99,7 +105,12 @@ int main(int argc, char **argv)
         }
         if (events[i].event_type == BLADERF_RF_EVT_ERROR &&
             events[i].error_code == BLADERF_ERR_UNEXPECTED &&
-            (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0) {
+            (expect_epoch_lost
+                ? (events[i].rfic_status &
+                   (RX_LINK_ACTIVE_BIT | RX_EPOCH_VALID_BIT |
+                    RX_EPOCH_CURRENT_BIT)) ==
+                      (RX_LINK_ACTIVE_BIT | RX_EPOCH_VALID_BIT)
+                : (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0)) {
             saw_fault_error = true;
         }
     }
@@ -128,11 +139,11 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("FPGA RX fault fence: PASS layout=%s txn=%u fault_error=1 "
-           "epoch_valid=0 iq_count=0\n",
+    printf("FPGA RX validity fence: PASS layout=%s txn=%u mode=%s "
+           "error=1 epoch_valid=0 iq_count=0\n",
            layout == BLADERF_RX_X2 ? "RX_X2" :
            (transition_channel == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
-           transaction_id);
+           transaction_id, expect_epoch_lost ? "epoch-lost" : "sticky-fault");
     status = 0;
 
 cleanup:
