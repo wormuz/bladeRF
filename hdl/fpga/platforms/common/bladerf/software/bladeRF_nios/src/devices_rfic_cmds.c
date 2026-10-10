@@ -469,7 +469,21 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
             return _rfic_deinitialize(state);
 
         case BLADERF_RFIC_INIT_STATE_ON:
-            return _rfic_initialize(state);
+            if (_rfic_initialize(state)) {
+                return true;
+            }
+
+            /* Initialization can fail after ad9361_init() has allocated a
+             * PHY and partially programmed the device. Leave init_state OFF
+             * and remove that partial instance so a later INIT request starts
+             * from a fresh ADI context instead of treating non-NULL phy as
+             * proof that initialization completed. _rfic_deinitialize()
+             * preserves init_stage, which remains available to STATUS. */
+            if (!_rfic_deinitialize(state)) {
+                DBG("%s: cleanup after failed initialization also failed\n",
+                    __FUNCTION__);
+            }
+            return false;
 
         case BLADERF_RFIC_INIT_STATE_STANDBY:
             return _rfic_standby(state);
