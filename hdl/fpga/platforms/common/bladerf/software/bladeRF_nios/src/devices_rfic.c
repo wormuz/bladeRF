@@ -287,13 +287,21 @@ static void rfic_command_work_wq(struct rfic_queue *q)
         case ENTRY_STATE_RUNNING: {
             struct rfic_command_fns const *f = _get_cmd_ptr(e->cmd);
 
-            e->rv    = 0xFE;
+            e->rv    = false;
             e->state = ENTRY_STATE_COMPLETE;
 
-            if (NULL != f->write64) {
-                e->rv = f->write64(&state, e->ch, e->value);
-            } else if (NULL != f->write32) {
-                e->rv = f->write32(&state, e->ch, e->value);
+            /* State may have changed after enqueue (for example, INIT OFF
+             * can run before a command that was accepted while initialized).
+             * Revalidate immediately before touching the PHY, and tolerate a
+             * stale/corrupt command ID without dereferencing a NULL handler. */
+            if (NULL != f && _check_validity(f, e->ch) &&
+                (NULL != f->write64 || NULL != f->write32)) {
+                e->rv = false;
+                if (NULL != f->write64) {
+                    e->rv = f->write64(&state, e->ch, e->value);
+                } else {
+                    e->rv = f->write32(&state, e->ch, (uint32_t)e->value);
+                }
             }
 
             break;
