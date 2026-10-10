@@ -4878,10 +4878,13 @@ typedef enum {
     BLADERF_RF_EVT_TX_LINK_VALID,
     /** FPGA TX sample FIFO underflow count advanced. `flags` contains the
      * low 32 bits and `rfic_status` the high 32 bits of the cumulative
-     * direction-specific loss-event count. TX link validity is revoked. */
+     * direction-specific loss-event count. TX link validity is revoked and
+     * libbladeRF aborts the FPGA TX gate; new TX data requires a recovered
+     * stream epoch and confirmed tune. */
     BLADERF_RF_EVT_TX_UNDERRUN,
     /** FPGA sticky TX link fault was observed. `rfic_status` contains the
-     * RF-link status word. TX link validity is revoked. */
+     * RF-link status word. TX link validity is revoked and libbladeRF aborts
+     * the FPGA TX gate. */
     BLADERF_RF_EVT_TX_LINK_FAULT,
     /** TX link status, loss counter, or RFIC status could not be read while
      * TX was active. Link, aggregate, RFIC-state, and frequency certificates
@@ -4891,7 +4894,8 @@ typedef enum {
     /** TX module was disabled; no active transmission is certified. */
     BLADERF_RF_EVT_TX_STREAM_STOPPED,
     /** TX underflow counter decreased while a stream was active, indicating
-     * a counter reset/generation boundary. TX link validity is revoked. */
+     * a counter reset/generation boundary. TX link validity is revoked and
+     * libbladeRF aborts the FPGA TX gate. */
     BLADERF_RF_EVT_TX_COUNTER_RESET,
     /** TX status monitoring has revalidated the FPGA link epoch and unchanged
      * cumulative counter, and AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL are
@@ -4899,10 +4903,12 @@ typedef enum {
     BLADERF_RF_EVT_TX_STATUS_RECOVERED,
     /** FPGA TX epoch acknowledgement was lost or changed without a host
      * transition. `rfic_status` contains the observed RF-link status word;
-     * TX validity is revoked until a new epoch is acknowledged. */
+     * TX validity is revoked and libbladeRF aborts the FPGA TX gate until a
+     * new epoch is acknowledged. */
     BLADERF_RF_EVT_TX_EPOCH_INVALID,
     /** TX USB/host stream terminated with an error. TX transport validity is
-     * revoked; error_code contains the libbladeRF error. */
+     * revoked; the monitor requests FPGA TX gate abort. `error_code` contains
+     * the libbladeRF error. */
     BLADERF_RF_EVT_TX_TRANSPORT_ERROR,
     /** AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL status were observed healthy
      * in the acknowledged TX epoch. This does not validate RF power or
@@ -4910,18 +4916,19 @@ typedef enum {
     BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
     /** AD9361 TX RFPLL, TX/FDD ENSM, or BBPLL status became invalid. TX RFIC
      * and frequency validity are revoked until a new acknowledged TX stream
-     * epoch and a fresh confirmed retune.
+     * epoch and a fresh confirmed retune. The FPGA TX gate is aborted and
+     * must acknowledge MUTED before the fault is considered contained.
      * `rfic_status`
      * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL
      * status in bits 7:0. */
     BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
     /** NIOS accepted a scheduled TX fastlock request but later failed while
      * loading or activating its profile. Aggregate TX validity is revoked
-     * and new submissions are blocked; this event does not change the
-     * transport-link certificate stays separate, while the RFIC and
-     * frequency certificates are revoked because the requested RF state is
-     * unknown. `flags` carries the cumulative NIOS failure counter observed
-     * by the host. */
+     * and new submissions are blocked. The transport-link certificate stays
+     * separate, while the RFIC and frequency certificates are revoked
+     * because the requested RF state is unknown. The FPGA TX gate is aborted.
+     * `flags` carries the cumulative
+     * NIOS failure counter observed by the host. */
     BLADERF_RF_EVT_TX_RETUNE_FAILED,
     /** A scheduled TX retune was accepted and is awaiting NIOS completion.
      * TX RFIC-state and frequency certificates are revoked until fresh
@@ -4932,7 +4939,8 @@ typedef enum {
      * revoked until post-retune lock/state checks pass. */
     BLADERF_RF_EVT_TX_RETUNE_APPLIED,
     /** One or more TX completion records could not be matched or read. TX
-     * frequency validity is unknown and remains revoked. */
+     * frequency validity is unknown and remains revoked; libbladeRF aborts
+     * the FPGA TX gate. */
     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
     /** The final completed TX retune has a matching LO readback and the
      * monitor has confirmed the TX PLL/ENSM/BBPLL state. A new
