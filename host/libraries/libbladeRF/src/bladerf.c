@@ -889,6 +889,7 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
                                                 uint32_t reason)
 {
+    CHECK_NULL(dev);
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -904,6 +905,7 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
  * have a TX transition API. Caller holds dev->lock. */
 static int invalidate_tx_data_before_reconfigure(struct bladerf *dev)
 {
+    CHECK_NULL(dev);
     if (dev->board->tx_config_change_begin != NULL) {
         return dev->board->tx_config_change_begin(dev);
     }

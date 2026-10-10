@@ -263,6 +263,13 @@ int main(void)
     dev.xb_data = &xb200_data;
     assert(MUTEX_INIT(&dev.lock) == 0);
 
+    /* The shared validity-fence entry point rejects a null device before
+     * attempting to inspect its board callbacks. */
+    assert(bladerf_set_sample_rate(NULL, rx0, 2000000, NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_set_frequency(NULL, rx0, 915000000) ==
+           BLADERF_ERR_INVAL);
+
     /* AD9361's TX samplerate API updates both clock chains. Fence RX before
      * calling the TX setter and release the RX reservation afterward. */
     assert(bladerf_set_sample_rate(&dev, tx0, 2000000, NULL) == 0);
