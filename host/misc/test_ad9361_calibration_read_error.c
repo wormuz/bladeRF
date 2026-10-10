@@ -171,6 +171,7 @@ int main(void)
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t rfpll_rate = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
+    uint32_t rx_rf_port = UINT32_MAX;
     uint32_t tx_rf_port = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
     uint8_t rx_gc_mode = UINT8_MAX;
@@ -1684,6 +1685,16 @@ int main(void)
 	ret = ad9361_set_rx_rf_port_input(&phy, 1);
 	if (ret != -EIO || phy.pdata->rf_rx_input_sel != 0) {
 		fprintf(stderr, "RX RF-port API hid error or committed cache\n");
+		return EXIT_FAILURE;
+	}
+	phy_without_spi.pdata = &pdata;
+	if (ad9361_set_rx_rf_port_input(NULL, 0) != -EINVAL ||
+	    ad9361_set_rx_rf_port_input(&phy_without_spi, 0) != -EINVAL ||
+	    ad9361_set_rx_rf_port_input(&phy, 12) != -EINVAL ||
+	    ad9361_get_rx_rf_port_input(NULL, &rx_rf_port) != -EINVAL ||
+	    ad9361_get_rx_rf_port_input(&phy, NULL) != -EINVAL ||
+	    rx_rf_port != UINT32_MAX || phy.pdata->rf_rx_input_sel != 0) {
+		fprintf(stderr, "RX RF-port API accepted invalid state/mode/output\n");
 		return EXIT_FAILURE;
 	}
 	phy.pdata->rf_tx_output_sel = 0;
