@@ -614,8 +614,11 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
         }
     }
 
-    /* Backend return value takes precedence over stream error status */
-    return status == 0 ? stream->error_code : status;
+    /* Return the error snapshot captured under stream->lock above. Reading
+     * stream->error_code here races with a concurrent stop or a subsequent
+     * run reusing this stream object, and can report that other operation's
+     * result instead of the run that just completed. */
+    return status == 0 ? stream_error : status;
 }
 
 int async_submit_stream_buffer(struct bladerf_stream *stream,
