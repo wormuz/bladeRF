@@ -1565,8 +1565,10 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * that is not ours to schedule. */
     uint32_t st = 0;
     int link_status = nios_rf_link_status_read(dev, &st);
-    const bool rf_link_epoch_supported = link_status == 0 &&
-        (st & RF_LINK_STATUS_VERSION_MASK) == RF_LINK_STATUS_VERSION_2;
+    const bool legacy_rf_link_unsupported =
+        link_status == BLADERF_ERR_FPGA_OP ||
+        (link_status == 0 &&
+         (st & RF_LINK_STATUS_VERSION_MASK) != RF_LINK_STATUS_VERSION_2);
     {
 
         /* State of the link as the stream ends, with the epoch still
@@ -1702,12 +1704,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
         !board_data->rf_link_dir_on[0] &&
         !board_data->rf_link_dir_on[1]) {
         int stop_status = end_rf_link_epoch(dev);
-        /* Old gateware rejects RF-link STOP with FPGA_OP; that is the
-         * documented legacy fallback. On v2, or for any transport/NIOS error,
-         * do not report module disable as successful without STOP completion. */
+        /* Old gateware rejects RF-link STOP with FPGA_OP; ignore that only
+         * when the status read positively identified unsupported gateware.
+         * A failed status read is not evidence of an old FPGA. */
         const bool stop_failure_is_actionable =
             bladerf2_rf_link_stop_failure_actionable(
-                rf_link_epoch_supported, stop_status,
+                legacy_rf_link_unsupported, stop_status,
                 BLADERF_ERR_FPGA_OP);
         if (stop_failure_is_actionable) {
             if (status == 0) {

@@ -212,13 +212,17 @@ int main(void)
     assert(!bladerf2_rf_link_stop_required(true, true, false));
     assert(!bladerf2_rf_link_stop_required(true, false, true));
     assert(bladerf2_rf_link_stop_failure_actionable(
-        true, BLADERF_ERR_FPGA_OP, BLADERF_ERR_FPGA_OP));
-    assert(!bladerf2_rf_link_stop_failure_actionable(
         false, BLADERF_ERR_FPGA_OP, BLADERF_ERR_FPGA_OP));
-    assert(bladerf2_rf_link_stop_failure_actionable(
-        false, BLADERF_ERR_TIMEOUT, BLADERF_ERR_FPGA_OP));
     assert(!bladerf2_rf_link_stop_failure_actionable(
-        true, 0, BLADERF_ERR_FPGA_OP));
+        true, BLADERF_ERR_FPGA_OP, BLADERF_ERR_FPGA_OP));
+    assert(bladerf2_rf_link_stop_failure_actionable(
+        true, BLADERF_ERR_TIMEOUT, BLADERF_ERR_FPGA_OP));
+    /* A preceding status-read timeout leaves legacy support unknown, so even
+     * FPGA_OP from STOP must be surfaced instead of treated as compatibility. */
+    assert(bladerf2_rf_link_stop_failure_actionable(
+        false, BLADERF_ERR_FPGA_OP, BLADERF_ERR_FPGA_OP));
+    assert(!bladerf2_rf_link_stop_failure_actionable(
+        false, 0, BLADERF_ERR_FPGA_OP));
 
     /* Runtime TX validity and STATUS_RECOVERED require the acknowledged epoch
      * to remain active. Readable status with an absent/stale epoch or stopped

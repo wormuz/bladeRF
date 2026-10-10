@@ -129,3 +129,13 @@ but referenced after that block when publishing `TX_EPOCH_INVALID`. Moved it
 to the enclosing disable scope. Policy regression source distinguishes v2 STOP
 failure from the legacy unsupported response. No build/test was run under the
 source-audit gate; `git diff --check` is the only validation.
+
+## Follow-up: status-read failure is not legacy proof
+
+The first STOP fix treated `FPGA_OP` as legacy whenever the status read had not
+confirmed protocol v2. That also covered a timeout or other failed status read,
+which could hide a real STOP failure. Compatibility now applies only when the
+status target explicitly returns `BLADERF_ERR_FPGA_OP` or a successful status
+read reports a non-v2 protocol. Unknown status remains fail-closed. Added policy
+source cases for confirmed legacy, status-read-unknown, timeout, and success;
+unbuilt/unrun under the source-audit gate.

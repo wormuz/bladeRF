@@ -396,16 +396,17 @@ static inline bool bladerf2_rf_link_stop_required(
     return start_attempted && !rx_direction_active && !tx_direction_active;
 }
 
-/* FPGA_OP is the expected response from legacy gateware with no RF-link
- * command support. Every other STOP failure, and every failure on protocol
- * v2, must be returned to the module-disable caller. */
+/* FPGA_OP is ignorable only when the preceding status read positively
+ * identified gateware without protocol-v2 support (or the status target
+ * itself is explicitly unsupported). A failed status read is not evidence
+ * of legacy gateware and must not mask a STOP failure. */
 static inline bool bladerf2_rf_link_stop_failure_actionable(
-    bool epoch_protocol_supported, int stop_status,
+    bool legacy_unsupported_confirmed, int stop_status,
     int legacy_unsupported_status)
 {
     return stop_status != 0 &&
-           (epoch_protocol_supported ||
-            stop_status != legacy_unsupported_status);
+           !(legacy_unsupported_confirmed &&
+             stop_status == legacy_unsupported_status);
 }
 
 /* Previous-epoch sticky flags and the direction ACK cross independently into
