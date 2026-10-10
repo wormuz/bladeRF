@@ -1630,7 +1630,7 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream_data->done_flag = 0;
 
     stream_data->transfers =
-        malloc(num_transfers * sizeof(struct libusb_transfer *));
+        calloc(num_transfers, sizeof(struct libusb_transfer *));
 
     if (stream_data->transfers == NULL) {
         log_error("Failed to allocate libusb tranfers\n");
@@ -1654,18 +1654,6 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
         /* Upon error, start tearing down anything we've started allocating
          * and report that the stream is in a bad state */
         if (stream_data->transfers[i] == NULL) {
-
-            /* Note: <= 0 not appropriate as we're dealing
-             *       with an unsigned index */
-            while (i > 0) {
-                if (--i) {
-                    libusb_free_transfer(stream_data->transfers[i]);
-                    stream_data->transfers[i] = NULL;
-                    stream_data->transfer_status[i] = TRANSFER_UNINITIALIZED;
-                    stream_data->num_avail--;
-                }
-            }
-
             status = BLADERF_ERR_MEM;
             break;
         } else {
@@ -1676,6 +1664,13 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
 
 error:
     if (status != 0) {
+        if (stream_data->transfers != NULL) {
+            for (i = 0; i < num_transfers; ++i) {
+                if (stream_data->transfers[i] != NULL) {
+                    libusb_free_transfer(stream_data->transfers[i]);
+                }
+            }
+        }
         free(stream_data->transfer_status);
         free(stream_data->transfers);
         free(stream_data);
@@ -1938,6 +1933,10 @@ static int lusb_deinit_stream(void *driver, struct bladerf_stream *stream)
 {
     size_t i;
     struct lusb_stream_data *stream_data = stream->backend_data;
+
+    if (stream_data == NULL) {
+        return 0;
+    }
 
     for (i = 0; i < stream_data->num_transfers; i++) {
         if (stream_data->transfer_status[i] != TRANSFER_AVAIL &&

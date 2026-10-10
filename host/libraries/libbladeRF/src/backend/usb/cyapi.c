@@ -474,11 +474,16 @@ static int cyapi_deinit_stream(void *driver, struct bladerf_stream *stream)
     struct stream_data *data;
 
     assert(stream != NULL);
-    data =  get_stream_data(stream);
-    assert(data != NULL);
+    data = (struct stream_data *)stream->backend_data;
+    if (data == NULL) {
+        return 0;
+    }
 
     for (unsigned int i = 0; i < data->num_transfers; i++) {
-        CloseHandle(data->transfers[i].event.hEvent);
+        if (data->transfers != NULL &&
+            data->transfers[i].event.hEvent != NULL) {
+            CloseHandle(data->transfers[i].event.hEvent);
+        }
     }
 
     free(data->transfers);
@@ -500,6 +505,7 @@ static int cyapi_init_stream(void *driver, struct bladerf_stream *stream,
     } else {
         return status;
     }
+    data->num_transfers = num_transfers;
 
     data->transfers =
         (struct transfer*) calloc(num_transfers, sizeof(struct transfer));
@@ -517,7 +523,6 @@ static int cyapi_init_stream(void *driver, struct bladerf_stream *stream,
         }
     }
 
-   data->num_transfers = num_transfers;
    data->num_avail = num_transfers;
    data->inflight_i = 0;
    data->avail_i = 0;
