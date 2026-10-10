@@ -191,3 +191,14 @@ TX channel it lacked the corresponding TX fence. It now calls the shared TX
 configuration invalidation under `dev->lock` after RX invalidation and before
 table loading, so a fence failure exits without publishing the new table.
 No build/test was run under the source-audit gate.
+
+## Follow-up: trigger controls must invalidate the affected RX or TX stream
+
+The public trigger arm path revoked RX validity even for TX, while TX trigger
+arm could alter the FPGA TX gate without revoking the TX certificate. Trigger
+fire had no RX or TX invalidation at all, so triggering could change which
+samples were admitted or when RF output began while the prior certificate
+remained visible. Trigger arm/fire now preflight channel, signal, and role;
+then revoke the corresponding RX or TX validity before touching hardware.
+Raw trigger-register writes also preflight channel and signal before fencing.
+Source-only; no build/test under the active no-build audit gate.

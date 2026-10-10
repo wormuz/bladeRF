@@ -1541,6 +1541,46 @@ int bladerf_set_correction(struct bladerf *dev,
 /* Trigger */
 /******************************************************************************/
 
+/* Validate trigger fields before revoking an RF data certificate. FPGA
+ * trigger access currently supports only channel zero; keep this check here
+ * so malformed requests cannot invalidate a stream before being rejected by
+ * the board driver. */
+static bool valid_trigger_channel_signal(bladerf_channel channel,
+                                         bladerf_trigger_signal signal)
+{
+    if (channel != BLADERF_CHANNEL_RX(0) &&
+        channel != BLADERF_CHANNEL_TX(0)) {
+        return false;
+    }
+
+    switch (signal) {
+        case BLADERF_TRIGGER_J71_4:
+        case BLADERF_TRIGGER_J51_1:
+        case BLADERF_TRIGGER_MINI_EXP_1:
+        case BLADERF_TRIGGER_USER_0:
+        case BLADERF_TRIGGER_USER_1:
+        case BLADERF_TRIGGER_USER_2:
+        case BLADERF_TRIGGER_USER_3:
+        case BLADERF_TRIGGER_USER_4:
+        case BLADERF_TRIGGER_USER_5:
+        case BLADERF_TRIGGER_USER_6:
+        case BLADERF_TRIGGER_USER_7:
+            break;
+        default:
+            return false;
+    }
+
+    return true;
+}
+
+static bool valid_trigger_config(const struct bladerf_trigger *trigger)
+{
+    return valid_trigger_channel_signal(trigger->channel, trigger->signal) &&
+           (trigger->role == BLADERF_TRIGGER_ROLE_DISABLED ||
+           trigger->role == BLADERF_TRIGGER_ROLE_MASTER ||
+            trigger->role == BLADERF_TRIGGER_ROLE_SLAVE);
+}
+
 int bladerf_trigger_init(struct bladerf *dev,
                          bladerf_channel ch,
                          bladerf_trigger_signal signal,
@@ -1568,18 +1608,33 @@ int bladerf_trigger_arm(struct bladerf *dev,
     int status;
     CHECK_NULL(dev);
     CHECK_NULL(trigger);
+    if (!valid_trigger_config(trigger)) {
+        return BLADERF_ERR_INVAL;
+    }
 
-    status = invalidate_rx_data_before_reconfigure(
-        dev, trigger->channel, BLADERF_RF_INVALIDATE_TRIGGER);
-    if (status != 0) {
-        return status;
+    if (!BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, trigger->channel, BLADERF_RF_INVALIDATE_TRIGGER);
+        if (status != 0) {
+            return status;
+        }
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
 
     status = dev->board->trigger_arm(dev, trigger, arm, resv1, resv2);
 
     MUTEX_UNLOCK(&dev->lock);
-    rx_reconfigure_complete(dev, trigger->channel);
+    if (!BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        rx_reconfigure_complete(dev, trigger->channel);
+    }
     return status;
 }
 
@@ -1589,14 +1644,33 @@ int bladerf_trigger_fire(struct bladerf *dev,
     int status;
     CHECK_NULL(dev);
     CHECK_NULL(trigger);
-    if (!valid_public_channel(trigger->channel)) {
+    if (!valid_trigger_config(trigger)) {
         return BLADERF_ERR_INVAL;
     }
+
+    if (!BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        status = invalidate_rx_data_before_reconfigure(
+            dev, trigger->channel, BLADERF_RF_INVALIDATE_TRIGGER);
+        if (status != 0) {
+            return status;
+        }
+    }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
 
     status = dev->board->trigger_fire(dev, trigger);
 
     MUTEX_UNLOCK(&dev->lock);
+    if (!BLADERF_CHANNEL_IS_TX(trigger->channel)) {
+        rx_reconfigure_complete(dev, trigger->channel);
+    }
     return status;
 }
 
@@ -2231,6 +2305,9 @@ int bladerf_write_trigger(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
+    if (!valid_trigger_channel_signal(ch, trigger)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_TRIGGER);
     if (status != 0) {
