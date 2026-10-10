@@ -34,6 +34,7 @@
 
 #include "devices_rfic_cmds.h"
 #include "devices_rfic_queue.h"
+#include "rfic_channel_validation.h"
 
 
 /******************************************************************************/
@@ -198,25 +199,9 @@ static char const RFIC_ERR_FMT[] = "%s: error: %s returned %x (-%x)\n";
         }                       \
     } while (0)
 
-#define RFIC_SYSTEM_CHANNEL 0xF
-
 static inline bool _rfic_is_initialized(struct rfic_state *state)
 {
     return BLADERF_RFIC_INIT_STATE_ON == state->init_state;
-}
-
-static inline bool _rfic_chan_is_system(bladerf_channel ch)
-{
-    return RFIC_SYSTEM_CHANNEL == ch;
-}
-
-static inline bool _rfic_chan_is_valid(bladerf_channel ch)
-{
-    return ch == BLADERF_CHANNEL_RX(0) ||
-           ch == BLADERF_CHANNEL_TX(0) ||
-           ch == BLADERF_CHANNEL_RX(1) ||
-           ch == BLADERF_CHANNEL_TX(1) ||
-           _rfic_chan_is_system(ch);
 }
 
 static inline uint8_t _rfic_unpack_chan(uint16_t addr)
