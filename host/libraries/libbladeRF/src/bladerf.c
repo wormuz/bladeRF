@@ -2215,6 +2215,8 @@ int bladerf_get_loopback_modes(struct bladerf *dev,
 {
     int status;
 
+    CHECK_NULL(dev);
+
     status = dev->board->get_loopback_modes(dev, modes);
 
     return status;
@@ -2272,6 +2274,10 @@ int bladerf_set_loopback(struct bladerf *dev, bladerf_loopback l)
 int bladerf_get_loopback(struct bladerf *dev, bladerf_loopback *l)
 {
     int status;
+
+    CHECK_NULL(dev);
+    CHECK_NULL(l);
+
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_loopback(dev, l);

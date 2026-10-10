@@ -405,6 +405,8 @@ static void test_public_sync_apis_reject_null_device(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_get_quick_tune(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
            BLADERF_ERR_INVAL);
+    assert(bladerf_get_loopback_modes(NULL, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_loopback(&dev, NULL) == BLADERF_ERR_INVAL);
 }
 
 static void test_tx_transport_fault_is_not_hidden_by_other_invalidity(void)
