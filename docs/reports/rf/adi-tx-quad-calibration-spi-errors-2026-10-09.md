@@ -1,5 +1,9 @@
 # AD9361 initialization SPI fail-open audit
 
+Source-audit follow-up (2026-10-10): corrected the public `ad9361_tx_mute()`
+parameter comment to match the implementation (`state == 1` mutes and
+`state == 0` unmutes). Documentation-only; no build or test was run.
+
 Date: 2026-10-09
 
 ## Finding
