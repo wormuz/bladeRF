@@ -6127,7 +6127,7 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
                 (!enable || clock_select == CLOCK_SELECT_EXTERNAL)) {
                 MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                 dev->board_data->rfic_reference_clock_known = true;
-                dev->board_data->tx_reference_clock_invalid_reported = false;
+                dev->board_data->tx_rf_configuration_invalid_reported = false;
                 MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             }
         }
@@ -6227,7 +6227,7 @@ static int bladerf2_set_pll_refclk_internal(
              * ADF400x lock detector only describes the onboard VCTCXO path. */
             MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
             dev->board_data->rfic_reference_clock_known = true;
-            dev->board_data->tx_reference_clock_invalid_reported = false;
+            dev->board_data->tx_rf_configuration_invalid_reported = false;
             MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
         } else if (status == 0) {
             bool pll_enabled = false;
@@ -6237,14 +6237,14 @@ static int bladerf2_set_pll_refclk_internal(
                  * VCTCXO still supplies the nominal 38.4 MHz reference. */
                 MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                 dev->board_data->rfic_reference_clock_known = true;
-                dev->board_data->tx_reference_clock_invalid_reported = false;
+                dev->board_data->tx_rf_configuration_invalid_reported = false;
                 MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             } else if (status == 0) {
                 status = bladerf2_wait_for_pll_lock(dev);
                 if (status == 0) {
                     MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                     dev->board_data->rfic_reference_clock_known = true;
-                    dev->board_data->tx_reference_clock_invalid_reported = false;
+                    dev->board_data->tx_rf_configuration_invalid_reported = false;
                     MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
                 }
             }
@@ -6435,7 +6435,7 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                          * nominal reference when its disciplining PLL is off. */
                         MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                         dev->board_data->rfic_reference_clock_known = true;
-                        dev->board_data->tx_reference_clock_invalid_reported = false;
+                        dev->board_data->tx_rf_configuration_invalid_reported = false;
                         MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
                     }
                 }

@@ -891,7 +891,8 @@ static void *rx_fault_monitor_task(void *arg)
         int rx_fault_causes_status = 0;
         int reference_clock_status = 0;
         bool reference_clock_fault = false;
-        bool frequency_model_known = false;
+        bool frequency_model_fault = false;
+        bool reference_clock_known = false;
 
         /* NIOS bulk control and AD9361 SPI requests share serialization with
          * configuration traffic. Hold dev->lock only across these short
@@ -905,10 +906,10 @@ static void *rx_fault_monitor_task(void *arg)
             expected_rx_channel_mask = board_data->rx_channel_enable_mask;
             expected_rx_channel_mask_valid =
                 board_data->rx_channel_enable_mask_valid;
-            frequency_model_known =
-                bladerf2_rfic_frequency_model_valid(
-                    board_data->rfic_reference_clock_known,
-                    board_data->rfic_frequency_model_known);
+            reference_clock_known =
+                board_data->rfic_reference_clock_known;
+            frequency_model_fault = reference_clock_known &&
+                !board_data->rfic_frequency_model_known;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             transaction_id = board_data->rf_transition_current_id;
             tx_retune2_watch_active =
@@ -936,7 +937,7 @@ static void *rx_fault_monitor_task(void *arg)
                 uint32_t config_gpio = 0;
                 reference_clock_status = dev->backend->config_gpio_read(
                     dev, &config_gpio);
-                if (reference_clock_status == 0 && !frequency_model_known) {
+                if (!reference_clock_known) {
                     reference_clock_status = BLADERF_ERR_WOULD_BLOCK;
                 }
                 if (reference_clock_status == 0 &&
@@ -1108,10 +1109,10 @@ static void *rx_fault_monitor_task(void *arg)
                 if (abort_tx_gate_pending) {
                     abort_tx_retune_gate = true;
                 }
-                if (reference_clock_fault) {
+                if (reference_clock_fault || frequency_model_fault) {
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                    if (!board_data->tx_reference_clock_invalid_reported) {
-                        board_data->tx_reference_clock_invalid_reported = true;
+                    if (!board_data->tx_rf_configuration_invalid_reported) {
+                        board_data->tx_rf_configuration_invalid_reported = true;
                         board_data->tx_retune2_completion_faulted = true;
                         board_data->tx_retune2_applied_waiting_rf_valid = false;
                         board_data->tx_retune_recovery_pending = true;
@@ -1124,8 +1125,12 @@ static void *rx_fault_monitor_task(void *arg)
                         abort_tx_retune_gate = true;
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_CONFIGURATION_INVALID,
-                            0, (uint32_t)reference_clock_status,
-                            reference_clock_status);
+                            0, (uint32_t)(reference_clock_fault
+                                ? reference_clock_status
+                                : BLADERF_ERR_WOULD_BLOCK),
+                            reference_clock_fault
+                                ? reference_clock_status
+                                : BLADERF_ERR_WOULD_BLOCK);
                     }
                 }
                 if (board_data->rf_link_dir_on[1] &&
@@ -1736,11 +1741,15 @@ static void *rx_fault_monitor_task(void *arg)
                    strcmp(test_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
             rffe_status ^= (1u << RFFE_CONTROL_MIMO_RX_EN_0);
         }
-        if (reference_clock_fault) {
+        if (reference_clock_fault || frequency_model_fault) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id,
-                (uint32_t)reference_clock_status,
-                BLADERF_RF_INVALIDATE_CLOCK, reference_clock_status);
+                (uint32_t)(reference_clock_fault
+                    ? reference_clock_status : BLADERF_ERR_WOULD_BLOCK),
+                reference_clock_fault ? BLADERF_RF_INVALIDATE_CLOCK
+                                      : BLADERF_RF_INVALIDATE_RFIC_REG,
+                reference_clock_fault ? reference_clock_status
+                                      : BLADERF_ERR_WOULD_BLOCK);
             continue;
         }
         const uint8_t observed_rx_channel_mask =
