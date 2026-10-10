@@ -3173,6 +3173,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         return BLADERF_ERR_WOULD_BLOCK;
     }
     uint32_t success_count;
+    uint32_t rx_retune_failure_baseline = 0;
+    bool watch_rx_retune_failure =
+        !BLADERF_CHANNEL_IS_TX(ch) && timestamp != BLADERF_RETUNE_NOW;
     uint8_t pending_slot = UINT8_MAX;
     unsigned int i;
 
@@ -3201,6 +3204,15 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                   board_data->fpga_version.patch);
 
         return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    /* A queued RX retune revokes the RX data certificate before reaching
+     * this function. Capture the NIOS failure counter before enqueue so a
+     * later asynchronous profile-load/activation failure cannot disappear
+     * between queue acceptance and the next event-driven transition. */
+    if (watch_rx_retune_failure) {
+        CHECK_STATUS(nios_retune2_failure_count_read(
+            dev, BLADERF_MODULE_RX, &rx_retune_failure_baseline));
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
@@ -3296,6 +3308,17 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt);
     if (status != 0) {
+        if (watch_rx_retune_failure) {
+            if (!board_data->rx_retune2_failure_count_valid) {
+                board_data->rx_retune2_failure_count_last =
+                    rx_retune_failure_baseline;
+                board_data->rx_retune2_failure_count_valid = true;
+            }
+            /* USB response failure can be ambiguous after OUT completion.
+             * Keep watching because NIOS may still have accepted the queue
+             * request and fail asynchronously. */
+            board_data->rx_retune2_failure_watch_active = true;
+        }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
                 dev, board_data, 0);
@@ -3315,6 +3338,14 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                 frequency, 0, pending_count, status);
         }
         return status;
+    }
+    if (watch_rx_retune_failure) {
+        if (!board_data->rx_retune2_failure_count_valid) {
+            board_data->rx_retune2_failure_count_last =
+                rx_retune_failure_baseline;
+            board_data->rx_retune2_failure_count_valid = true;
+        }
+        board_data->rx_retune2_failure_watch_active = true;
     }
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         if (timestamp == BLADERF_RETUNE_NOW) {

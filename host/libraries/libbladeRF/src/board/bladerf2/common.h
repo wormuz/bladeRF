@@ -236,6 +236,10 @@ struct bladerf2_board_data {
     uint32_t tx_retune2_failure_count_last;
     bool tx_retune2_failure_count_valid;
     bool tx_retune2_failure_watch_active;
+    uint32_t rx_retune2_failure_count_last;
+    bool rx_retune2_failure_count_valid;
+    bool rx_retune2_failure_watch_active;
+    bool rx_retune2_status_unavailable_reported;
     uint32_t tx_retune2_success_count_last;
     bool tx_retune2_success_count_valid;
     uint8_t tx_retune2_pending_count;

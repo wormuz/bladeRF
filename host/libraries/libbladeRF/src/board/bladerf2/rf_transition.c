@@ -974,6 +974,8 @@ static void *rx_fault_monitor_task(void *arg)
 {
     struct bladerf *dev = arg;
     struct bladerf2_board_data *board_data = dev->board_data;
+    bool rx_retune_failure_test_injected = false;
+    uint32_t rx_retune_failure_test_count = 0;
 
     for (;;) {
         bool stop;
@@ -991,8 +993,10 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool should_poll_tx = false;
+        bool should_poll_rx_retune = false;
         bool tx_fir_config_valid = false;
         bool tx_retune2_watch_active = false;
+        bool rx_retune2_watch_active = false;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
         uint32_t transaction_id = 0;
@@ -1015,11 +1019,13 @@ static void *rx_fault_monitor_task(void *arg)
         uint64_t tx_loss_count = 0;
         uint32_t tx_retune2_failure_count = 0;
         uint32_t tx_retune2_success_count = 0;
+        uint32_t rx_retune2_failure_count = 0;
         int status = 0;
         int loss_count_status = 0;
         int tx_loss_count_status = 0;
         int tx_retune2_status = 0;
         int tx_retune2_success_status = 0;
+        int rx_retune2_status = 0;
         int rfic_status = 0;
         int tx_rfic_status = 0;
         int rx_fault_causes_status = 0;
@@ -1048,6 +1054,8 @@ static void *rx_fault_monitor_task(void *arg)
             transaction_id = board_data->rf_transition_current_id;
             tx_retune2_watch_active =
                 board_data->tx_retune2_failure_watch_active;
+            rx_retune2_watch_active =
+                board_data->rx_retune2_failure_watch_active;
             tx_channel_state_generation =
                 board_data->tx_channel_state_generation;
             should_poll = board_data->state == STATE_INITIALIZED &&
@@ -1062,9 +1070,12 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active &&
                 !board_data->tx_frequency_reconfigure_active &&
                 !board_data->tx_rf_config_operation_active;
+            should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
+                board_data->rf_link_dir_on[0] && rx_retune2_watch_active &&
+                !board_data->rf_transition_setter_active;
             tx_fir_config_valid = board_data->phy != NULL &&
                 board_data->phy->fir_config_valid;
-            if (should_poll || should_poll_tx) {
+            if (should_poll || should_poll_tx || should_poll_rx_retune) {
                 if (should_poll || should_poll_tx) {
                     _rx_fault_monitor_stage(board_data, "RFFE status");
                     rx_channel_status = dev->backend->rffe_control_read(
@@ -1095,6 +1106,9 @@ static void *rx_fault_monitor_task(void *arg)
                 }
                 _rx_fault_monitor_stage(board_data, "NIOS link status");
                 status = nios_rf_link_status_read(dev, &rf_link_status);
+                if (status != 0 && should_poll_rx_retune) {
+                    rx_retune2_status = status;
+                }
                 if (status == 0 && should_poll &&
                     dev->board->get_loss_event_count != NULL) {
                     _rx_fault_monitor_stage(board_data, "NIOS loss count");
@@ -1126,6 +1140,13 @@ static void *rx_fault_monitor_task(void *arg)
                                 dev, BLADERF_MODULE_TX,
                                 &tx_retune2_success_count);
                     }
+                }
+                if (status == 0 && should_poll_rx_retune) {
+                    _rx_fault_monitor_stage(board_data,
+                                            "NIOS RX retune failures");
+                    rx_retune2_status = nios_retune2_failure_count_read(
+                        dev, BLADERF_MODULE_RX,
+                        &rx_retune2_failure_count);
                 }
                 if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
@@ -1186,10 +1207,64 @@ static void *rx_fault_monitor_task(void *arg)
 
         _rx_fault_monitor_stage(board_data, "idle");
 
-        if (!should_poll && !should_poll_tx) {
+        if (!should_poll && !should_poll_tx && !should_poll_rx_retune) {
             continue;
         }
         const char *test_mode = _runtime_rx_monitor_test_mode();
+        if (should_poll_rx_retune && test_mode != NULL &&
+            strcmp(test_mode, "RUNTIME_RX_RETUNE_FAILURE") == 0) {
+            if (!rx_retune_failure_test_injected) {
+                rx_retune2_failure_count++;
+                rx_retune_failure_test_count = rx_retune2_failure_count;
+                rx_retune_failure_test_injected = true;
+            } else {
+                rx_retune2_failure_count = rx_retune_failure_test_count;
+            }
+        }
+        if (should_poll_rx_retune) {
+            bool report_rx_retune_failure = false;
+            bool report_rx_retune_status_unavailable = false;
+            int32_t rx_retune_event_error = 0;
+
+            WITH_MUTEX(&dev->lock, {
+                if (rx_retune2_status != 0) {
+                    if (!board_data->rx_retune2_status_unavailable_reported) {
+                        board_data->rx_retune2_status_unavailable_reported =
+                            true;
+                        report_rx_retune_status_unavailable = true;
+                        rx_retune_event_error = rx_retune2_status;
+                    }
+                } else {
+                    board_data->rx_retune2_status_unavailable_reported = false;
+                    if (!board_data->rx_retune2_failure_count_valid) {
+                        board_data->rx_retune2_failure_count_last =
+                            rx_retune2_failure_count;
+                        board_data->rx_retune2_failure_count_valid = true;
+                    } else if (rx_retune2_failure_count !=
+                               board_data->rx_retune2_failure_count_last) {
+                        report_rx_retune_failure = true;
+                        rx_retune_event_error =
+                            rx_retune2_failure_count <
+                                board_data->rx_retune2_failure_count_last
+                            ? BLADERF_ERR_UNEXPECTED : BLADERF_ERR_FPGA_OP;
+                        board_data->rx_retune2_failure_count_last =
+                            rx_retune2_failure_count;
+                    }
+                }
+                if (report_rx_retune_failure ||
+                    report_rx_retune_status_unavailable) {
+                    struct bladerf_rf_event event = {0};
+                    event.host_monotonic_ns = _monotonic_ns();
+                    event.event_type = report_rx_retune_failure
+                        ? BLADERF_RF_EVT_RX_RETUNE_FAILED
+                        : BLADERF_RF_EVT_ERROR;
+                    event.fpga_state = BLADERF_RF_STATE_ERROR;
+                    event.flags = rx_retune2_failure_count;
+                    event.error_code = rx_retune_event_error;
+                    bladerf2_rf_event_append(board_data, &event);
+                }
+            });
+        }
         if (test_mode != NULL &&
             strcmp(test_mode, "RUNTIME_REFERENCE_PLL_UNLOCKED") == 0) {
             reference_clock_status = BLADERF_ERR_FPGA_OP;
