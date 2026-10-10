@@ -172,6 +172,24 @@ begin
             report "ABORT recovery admitted IQ without a fresh paired boundary"
             severity failure;
 
+        -- A newer ARM can supersede the still-pending epoch through the
+        -- actual bundled sys_clock -> rx_clock controller. Its ID must travel
+        -- with the toggle, and no old completion is sent between the arms.
+        wait until gate_state = "0000";
+        command_word(0) := '1';
+        command_word(15 downto 8) := x"33";
+        issue(command_word, '1', '0', '0');
+        wait until gate_state = "0001" and gate_epoch_id = x"33";
+
+        command_word(0) := '0';
+        command_word(15 downto 8) := x"34";
+        issue(command_word, '1', '0', '0');
+        wait until gate_state = "0001" and gate_epoch_id = x"34";
+        assert start_event = '0' and samples_out(0).data_i = to_signed(0, 16) and
+               samples_out(1).data_i = to_signed(0, 16)
+            report "bundled re-arm admitted IQ or retained the superseded ID"
+            severity failure;
+
         report "rx_epoch_controller_tb: PASS" severity note;
         stop;
         wait;
