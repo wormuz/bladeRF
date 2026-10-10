@@ -105,6 +105,30 @@ static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
     assert(!sync.meta.in_burst);
 }
 
+static void test_rx_transition_apis_reject_non_bladerf2_before_state_access(void)
+{
+    const struct board_fns unsupported_board = {
+        .name = "mock non-bladeRF2",
+    };
+    struct bladerf dev = {0};
+    struct bladerf_rx_transition_request request = {0};
+    struct bladerf_rf_event event = {0};
+    struct bladerf_rx_transition_nios_timing timing = {0};
+    uint32_t transaction_id = UINT32_MAX;
+
+    /* No board_data or mutex is initialized: each API must reject the board
+     * before interpreting board-private state or entering a critical section. */
+    dev.board = &unsupported_board;
+    assert(bladerf_rx_transition_begin(
+               &dev, BLADERF_CHANNEL_RX(0), &request,
+               &transaction_id) == BLADERF_ERR_UNSUPPORTED);
+    assert(transaction_id == 0);
+    assert(bladerf_rx_transition_wait(
+               &dev, 1, &event, 1) == BLADERF_ERR_UNSUPPORTED);
+    assert(bladerf_rx_transition_get_nios_timing(
+               &dev, 1, &timing) == BLADERF_ERR_UNSUPPORTED);
+}
+
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
     assert(dev != NULL);
@@ -2434,6 +2458,7 @@ int main(void)
 {
     test_sync_tx_x2_timestamp_units();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
+    test_rx_transition_apis_reject_non_bladerf2_before_state_access();
 
     {
         const int16_t packed_input[] = { -1, 0x123, 0x456, -0x234, 0x789, 0xabc };

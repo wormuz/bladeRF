@@ -2569,8 +2569,12 @@ static int _bladerf_rx_transition_begin(
     if (!bladerf2_rx_channel_valid(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_BOARD_IS_BLADERF2(dev);
 
     board_data = dev->board_data;
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
     if (!bladerf2_rf_transition_normalize_requirements(
             request->required_events_mask,
             request->require_rx_data_valid,
@@ -3199,8 +3203,12 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     if (dev == NULL) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_BOARD_IS_BLADERF2(dev);
 
     board_data = dev->board_data;
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
 
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_pending &&
@@ -4083,6 +4091,7 @@ int bladerf_rx_transition_get_nios_timing(
     if (dev == NULL || transaction_id == 0 || timing == NULL) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_BOARD_IS_BLADERF2(dev);
     board_data = dev->board_data;
     if (board_data == NULL) {
         return BLADERF_ERR_INVAL;
