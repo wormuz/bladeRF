@@ -554,9 +554,12 @@ static void rx_withheld_event_apply_source_provenance(
             &board_data->rf_transition_events[slot];
         if (candidate->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
             candidate->epoch_id != withheld_event->epoch_id ||
-            candidate->fpga_timestamp > withheld_event->fpga_timestamp ||
+            !metadata_timestamp_at_or_after(
+                withheld_event->fpga_timestamp, candidate->fpga_timestamp) ||
             (best_epoch_event != NULL &&
-             candidate->fpga_timestamp <= best_timestamp)) {
+             (candidate->fpga_timestamp == best_timestamp ||
+              !metadata_timestamp_at_or_after(candidate->fpga_timestamp,
+                                              best_timestamp)))) {
             continue;
         }
         best_epoch_event = candidate;
@@ -756,8 +759,11 @@ void bladerf2_rx_data_note_first_packet_at_locked(
         epoch_event->epoch_id != metadata->rx_epoch_id ||
         board_data->rf_transition_certified_epoch_id !=
             metadata->rx_epoch_id ||
-        metadata->timestamp < board_data->rf_transition_first_valid_timestamp ||
-        metadata->timestamp < epoch_event->fpga_timestamp) {
+        !metadata_timestamp_at_or_after(
+            metadata->timestamp,
+            board_data->rf_transition_first_valid_timestamp) ||
+        !metadata_timestamp_at_or_after(metadata->timestamp,
+                                        epoch_event->fpga_timestamp)) {
         return;
     }
 
@@ -884,7 +890,9 @@ uint32_t bladerf2_rx_sync_data_admission_reason_locked(
     if (!board_data->rf_transition_epoch_certified ||
         !metadata->rx_epoch_id_valid ||
         metadata->rx_epoch_id != board_data->rf_transition_certified_epoch_id ||
-        metadata->timestamp < board_data->rf_transition_first_valid_timestamp) {
+        !metadata_timestamp_at_or_after(
+            metadata->timestamp,
+            board_data->rf_transition_first_valid_timestamp)) {
         return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
     }
     if (!bladerf2_rx_layout_matches_channel_mask(

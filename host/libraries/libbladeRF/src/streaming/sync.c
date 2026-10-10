@@ -1867,7 +1867,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
                         if (!copied_data &&
                             (user_meta->flags & BLADERF_META_FLAG_RX_NOW) == 0 &&
-                            target_timestamp < s->meta.curr_timestamp) {
+                            !metadata_timestamp_at_or_after(
+                                target_timestamp, s->meta.curr_timestamp)) {
 
                             log_debug("Current timestamp is %llu, "
                                       "target=%llu (user=%llu)\n",

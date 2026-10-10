@@ -1502,7 +1502,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     board_data.rf_transition_rx_x2_host_data_required = true;
     board_data.rf_transition_rx_x2_host_data_transaction_id = 123;
     board_data.rf_transition_certified_epoch_id = 5;
-    board_data.rf_transition_first_valid_timestamp = 1000;
+    board_data.rf_transition_first_valid_timestamp = UINT64_MAX - 2;
     board_data.rf_transition_certified_epoch_event.transaction_id = 77;
     board_data.rf_transition_certified_epoch_event.epoch_id = 5;
     board_data.rf_transition_certified_epoch_event.event_type =
@@ -1510,7 +1510,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     board_data.rf_transition_certified_epoch_event.flags =
         BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
         BLADERF_RF_EVENT_F_TRANSITION_RX2;
-    board_data.rf_transition_certified_epoch_event.fpga_timestamp = 1000;
+    board_data.rf_transition_certified_epoch_event.fpga_timestamp =
+        UINT64_MAX - 2;
     board_data.rf_transition_certified_epoch_event.requested_rx_lo_hz =
         1835000000ULL;
     board_data.rf_transition_certified_epoch_event.readback_rx_lo_hz =
@@ -1527,7 +1528,8 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     metadata.actual_count = 8;
     metadata.rx_epoch_id_valid = 1;
     metadata.rx_epoch_id = 5;
-    metadata.timestamp = 1001;
+    /* The FPGA counter may wrap between certification and host delivery. */
+    metadata.timestamp = 1;
 
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_transition_note_first_packet_epoch_locked_at(
@@ -1541,7 +1543,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
     assert(board_data.rf_transition_events[latest].transaction_id == 77);
     assert(board_data.rf_transition_events[latest].epoch_id == 5);
-    assert(board_data.rf_transition_events[latest].fpga_timestamp == 1001);
+    assert(board_data.rf_transition_events[latest].fpga_timestamp == 1);
     assert(board_data.rf_transition_first_host_data_event.transaction_id == 77);
     assert(board_data.rf_transition_first_host_data_event.event_type ==
            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA);
@@ -1554,7 +1556,7 @@ static void test_host_data_event_uses_epoch_snapshot(void)
 
     /* When the request explicitly requires paired host data, an X1 packet
      * cannot satisfy or wake the transition waiter. */
-    metadata.timestamp = 1002;
+    metadata.timestamp = 2;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
                                                BLADERF_RX_X1);
@@ -1562,12 +1564,12 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     assert(board_data.rf_transition_first_host_data_reported);
     assert(board_data.rf_transition_event_sequence == capacity + 1);
     assert(board_data.rf_transition_first_host_data_event.fpga_timestamp ==
-           1001);
+           1);
 
     board_data.rf_transition_rx_x2_host_data_required = false;
     board_data.rx_async_data_withheld_active = true;
     board_data.rx_channel_enable_mask = 0x2;
-    metadata.timestamp = 1003;
+    metadata.timestamp = 3;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
                                                BLADERF_RX_X1);
@@ -1833,6 +1835,44 @@ static void test_shared_invalidation_uses_certified_rx_channel(void)
                0);
     }
 
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
+static void test_withheld_event_epoch_provenance_across_timestamp_wrap(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+    struct bladerf_rf_event epoch_event = {0};
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(COND_INIT(&board_data.rx_async_epoch_cond) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+
+    epoch_event.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
+    epoch_event.epoch_id = 9;
+    epoch_event.transaction_id = 90;
+    epoch_event.fpga_timestamp = UINT64_MAX - 10;
+    bladerf2_rf_event_append(&board_data, &epoch_event);
+    epoch_event.transaction_id = 95;
+    epoch_event.fpga_timestamp = UINT64_MAX - 5;
+    bladerf2_rf_event_append(&board_data, &epoch_event);
+
+    /* A delayed packet after wrap must select the most recent preceding
+     * RX_EPOCH_VALID record for the matching 8-bit epoch ID. */
+    bladerf2_rx_data_withheld_at(&dev, BLADERF_RF_WITHHELD_SHORT_TRANSFER,
+                                 9, 2, true);
+    uint32_t latest = (board_data.rf_transition_event_head +
+                       BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+                      BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *withheld =
+        &board_data.rf_transition_events[latest];
+    assert(withheld->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(withheld->transaction_id == 95);
+    assert(withheld->fpga_timestamp == 2);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    COND_DESTROY(&board_data.rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
@@ -2790,6 +2830,7 @@ int main(void)
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
+    test_withheld_event_epoch_provenance_across_timestamp_wrap();
     test_late_first_host_data_cannot_be_certified();
     test_sync_admission_policy_checks_deadline_before_copy();
     test_invalidation_companion_append_is_atomic_at_ring_wrap();
@@ -2973,6 +3014,20 @@ int main(void)
     assert(meta.timestamp == 25);
     assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
     assert_marker(out, 10, 701, 75);
+    fixture_destroy(&f);
+
+    /* Timestamped reads also use modulo ordering: target 2 follows a current
+     * timestamp of UINT64_MAX-5 by eight timestamp ticks. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], UINT64_MAX - 5, 7, 711);
+    write_msg(f.buffers[0] + MSG_BYTES,
+              UINT64_MAX - 5 + MSG_SAMPLES, 7, 712);
+    memset(&meta, 0, sizeof(meta));
+    meta.timestamp = 2;
+    assert(sync_rx(&f.sync, out, 10, &meta, 0) == 0);
+    assert(meta.actual_count == 10);
+    assert(meta.timestamp == 2);
+    assert_marker(out, 10, 711, 8);
     fixture_destroy(&f);
 
     /* A retune invalidates the remainder of a message that the parser had
