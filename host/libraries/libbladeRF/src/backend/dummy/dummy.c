@@ -24,6 +24,7 @@
  */
 
 #include "backend/backend.h"
+#include "streaming/async.h"
 
 #include "board/board.h"
 
@@ -386,6 +387,13 @@ static int dummy_init_stream(struct bladerf_stream *stream,
 static int dummy_stream(struct bladerf_stream *stream,
                         bladerf_channel_layout layout)
 {
+    stream->state = STREAM_DONE;
+    return 0;
+}
+
+static int dummy_shutdown_stream(struct bladerf_stream *stream)
+{
+    stream->state = STREAM_DONE;
     return 0;
 }
 
@@ -538,6 +546,7 @@ const struct backend_fns backend_fns_dummy = {
 
     FIELD_INIT(.init_stream, dummy_init_stream),
     FIELD_INIT(.stream, dummy_stream),
+    FIELD_INIT(.shutdown_stream, dummy_shutdown_stream),
     FIELD_INIT(.submit_stream_buffer, dummy_submit_stream_buffer),
     FIELD_INIT(.deinit_stream, dummy_deinit_stream),
 

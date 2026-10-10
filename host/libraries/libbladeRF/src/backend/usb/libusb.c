@@ -1112,6 +1112,28 @@ static inline void cancel_all_transfers(struct bladerf_stream *stream)
     }
 }
 
+/* Called with stream->lock held. The event loop notices SHUTTING_DOWN and
+ * drives cancellation completions to STREAM_DONE before its owner frees the
+ * transfer objects. */
+static int lusb_shutdown_stream(void *driver, struct bladerf_stream *stream)
+{
+    struct lusb_stream_data *stream_data = stream->backend_data;
+    (void)driver;
+
+    if (stream_data == NULL) {
+        stream->state = STREAM_DONE;
+        return 0;
+    }
+
+    stream->state = STREAM_SHUTTING_DOWN;
+    if (stream_data->num_avail == stream_data->num_transfers) {
+        mark_stream_done(stream);
+    } else {
+        cancel_all_transfers(stream);
+    }
+    return 0;
+}
+
 static inline size_t transfer_idx(struct lusb_stream_data *stream_data,
                                   struct libusb_transfer *transfer)
 {
@@ -1371,6 +1393,12 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 break;
 
             case LIBUSB_TRANSFER_TIMED_OUT:
+                if (stream->shutdown_requested) {
+                    /* A concurrent timeout may be the wakeup caused by a
+                     * requested shutdown. Do not turn normal teardown into
+                     * a transport fault. */
+                    break;
+                }
                 /* How much of the buffer arrived, and whether anything ever
                  * arrived on this stream, separates two very different
                  * faults that both surface as BLADERF_ERR_TIMEOUT: a device
@@ -2024,6 +2052,7 @@ static const struct usb_fns libusb_fns = {
     FIELD_INIT(.get_string_descriptor, lusb_get_string_descriptor),
     FIELD_INIT(.init_stream, lusb_init_stream),
     FIELD_INIT(.stream, lusb_stream),
+    FIELD_INIT(.shutdown_stream, lusb_shutdown_stream),
     FIELD_INIT(.submit_stream_buffer, lusb_submit_stream_buffer),
     FIELD_INIT(.deinit_stream, lusb_deinit_stream),
     FIELD_INIT(.open_bootloader, lusb_open_bootloader),

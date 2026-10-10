@@ -236,6 +236,29 @@ bool async_tx_buffer_valid(struct bladerf_stream *stream)
     return stream->dev->board->tx_async_buffer_valid(stream->dev);
 }
 
+int async_request_stream_shutdown(struct bladerf_stream *stream)
+{
+    int status = 0;
+
+    if (stream == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    MUTEX_LOCK(&stream->lock);
+    if (stream->state == STREAM_RUNNING ||
+        stream->state == STREAM_SHUTTING_DOWN) {
+        stream->shutdown_requested = true;
+        stream->state = STREAM_SHUTTING_DOWN;
+        if (stream->dev->backend->shutdown_stream == NULL) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        } else {
+            status = stream->dev->backend->shutdown_stream(stream);
+        }
+    }
+    MUTEX_UNLOCK(&stream->lock);
+    return status;
+}
+
 int async_tx_packet_meta_transfer_length(
     struct bladerf_stream *stream, const struct bladerf_metadata *metadata,
     size_t *length_bytes)
@@ -556,6 +579,7 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
      * backend stream after a terminal transfer error; carry no stale result
      * into that new run. */
     stream->error_code = 0;
+    stream->shutdown_requested = false;
     stream->state = STREAM_RUNNING;
     stream->rx_withheld_notice_active = false;
     COND_SIGNAL(&stream->stream_started);

@@ -165,6 +165,9 @@ struct usb_fns {
                   struct bladerf_stream *stream,
                   bladerf_channel_layout layout);
 
+    /* Called with stream->lock held to interrupt a blocking stream loop. */
+    int (*shutdown_stream)(void *driver, struct bladerf_stream *stream);
+
     int (*submit_stream_buffer)(void *driver,
                                 struct bladerf_stream *stream,
                                 void *buffer,

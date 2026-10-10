@@ -59,6 +59,7 @@ struct bladerf_stream {
     /* The following items must be accessed atomically */
     int error_code;
     bladerf_stream_state state;
+    bool shutdown_requested;
     /* Protected by lock; coalesces event-only callbacks while continuous RX
      * data is withheld. */
     bool rx_withheld_notice_active;
@@ -105,6 +106,9 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
 /* Returns false when native RF state revoked asynchronous TX validity. */
 bool async_tx_buffer_valid(struct bladerf_stream *stream);
+
+/* Request backend-aware termination of an active stream. */
+int async_request_stream_shutdown(struct bladerf_stream *stream);
 
 /* Validate a PACKET_META TX callback's DWORD count against its buffer. */
 int async_tx_packet_meta_transfer_length(

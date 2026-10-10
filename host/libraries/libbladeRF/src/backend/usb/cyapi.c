@@ -493,6 +493,23 @@ static int cyapi_deinit_stream(void *driver, struct bladerf_stream *stream)
     return 0;
 }
 
+/* Called with stream->lock held. Abort wakes WaitForXfer; the stream thread
+ * then retires the transfer handles before publishing STREAM_DONE. */
+static int cyapi_shutdown_stream(void *driver, struct bladerf_stream *stream)
+{
+    struct stream_data *data = get_stream_data(stream);
+    (void)driver;
+
+    if (data == NULL || data->ep == NULL) {
+        stream->state = STREAM_DONE;
+        return 0;
+    }
+
+    stream->state = STREAM_SHUTTING_DOWN;
+    data->ep->Abort();
+    return 0;
+}
+
 static int cyapi_init_stream(void *driver, struct bladerf_stream *stream,
                             size_t num_transfers)
 {
@@ -741,8 +758,18 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         success = data->ep->WaitForXfer(&xfer->event, timeout_ms);
 
         if (!success) {
-            status = BLADERF_ERR_TIMEOUT;
-            log_debug("Steam timed out.\n");
+            bool shutdown_requested;
+            MUTEX_LOCK(&stream->lock);
+            shutdown_requested = stream->shutdown_requested;
+            MUTEX_UNLOCK(&stream->lock);
+            if (shutdown_requested) {
+                /* Endpoint abort is a requested shutdown, not a transport
+                 * fault. The common exit path drains handles and marks DONE. */
+                status = 0;
+            } else {
+                status = BLADERF_ERR_TIMEOUT;
+                log_debug("Stream timed out.\n");
+            }
             break;
         }
 
@@ -757,7 +784,12 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                                            &data->transfers[i].event,
                                            xfer->handle);
 
-        if (success) {
+        if (success && stream->state == STREAM_SHUTTING_DOWN) {
+            /* Do not run the application callback or resubmit while an
+             * external teardown request is draining this completed handle. */
+            next_buffer = BLADERF_STREAM_SHUTDOWN;
+            done = true;
+        } else if (success) {
             if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
                 next_buffer = async_rx_process_buffer(
                     stream, &meta, data->transfers[i].buffer, (size_t)len);
@@ -955,6 +987,7 @@ extern "C" {
         FIELD_INIT(.get_string_descriptor, cyapi_get_string_descriptor),
         FIELD_INIT(.init_stream, cyapi_init_stream),
         FIELD_INIT(.stream, cyapi_stream),
+        FIELD_INIT(.shutdown_stream, cyapi_shutdown_stream),
         FIELD_INIT(.submit_stream_buffer, cyapi_submit_stream_buffer),
         FIELD_INIT(.deinit_stream, cyapi_deinit_stream),
         FIELD_INIT(.open_bootloader, cyapi_open_bootloader),

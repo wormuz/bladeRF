@@ -972,6 +972,15 @@ static int usb_stream(struct bladerf_stream *stream, bladerf_channel_layout layo
     return usb->fn->stream(usb->driver, stream, layout);
 }
 
+static int usb_shutdown_stream(struct bladerf_stream *stream)
+{
+    struct bladerf_usb *usb = stream->dev->backend_data;
+    if (usb->fn->shutdown_stream == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return usb->fn->shutdown_stream(usb->driver, stream);
+}
+
 int usb_submit_stream_buffer(struct bladerf_stream *stream, void *buffer,
                              size_t *length, unsigned int timeout_ms, bool nonblock)
 {
@@ -1329,6 +1338,7 @@ const struct backend_fns backend_fns_usb_legacy = {
 
     FIELD_INIT(.init_stream, usb_init_stream),
     FIELD_INIT(.stream, usb_stream),
+    FIELD_INIT(.shutdown_stream, usb_shutdown_stream),
     FIELD_INIT(.submit_stream_buffer, usb_submit_stream_buffer),
     FIELD_INIT(.deinit_stream, usb_deinit_stream),
 
@@ -1445,6 +1455,7 @@ const struct backend_fns backend_fns_usb = {
 
     FIELD_INIT(.init_stream, usb_init_stream),
     FIELD_INIT(.stream, usb_stream),
+    FIELD_INIT(.shutdown_stream, usb_shutdown_stream),
     FIELD_INIT(.submit_stream_buffer, usb_submit_stream_buffer),
     FIELD_INIT(.deinit_stream, usb_deinit_stream),
 

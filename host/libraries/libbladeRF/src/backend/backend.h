@@ -249,6 +249,8 @@ struct backend_fns {
 
     int (*init_stream)(struct bladerf_stream *stream, size_t num_transfers);
     int (*stream)(struct bladerf_stream *stream, bladerf_channel_layout layout);
+    /* Called with stream->lock held to interrupt a blocking stream loop. */
+    int (*shutdown_stream)(struct bladerf_stream *stream);
     int (*submit_stream_buffer)(struct bladerf_stream *stream,
                                 void *buffer,
                                 size_t *length,

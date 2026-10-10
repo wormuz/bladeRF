@@ -754,20 +754,31 @@ void sync_worker_request_stop_and_join(struct sync_worker *w,
 
     sync_worker_submit_request(w, SYNC_WORKER_STOP);
 
+    /* The worker may be blocked inside a backend transfer loop and cannot
+     * observe STOP through its callback until a transfer completes. Ask the
+     * backend to cancel/wake that loop before waiting for the worker. */
+    if (w->stream != NULL) {
+        status = async_request_stream_shutdown(w->stream);
+        if (status != 0) {
+            log_warning("Failed to request async stream shutdown: %s\n",
+                        bladerf_strerror(status));
+        }
+    }
+
     if (lock != NULL && cond != NULL) {
         MUTEX_LOCK(lock);
         COND_SIGNAL(cond);
         MUTEX_UNLOCK(lock);
     }
 
-    status = sync_worker_wait_for_state(w, SYNC_WORKER_STATE_STOPPED, 3000);
-    log_debug("sync_worker_deinit: stopped wait worker=%p status=%d\n",
-              (void *)w, status);
-
-    if (status != 0) {
-        log_warning("Timed out while stopping worker. Canceling thread.\n");
-        THREAD_CANCEL(w->thread);
-    }
+    do {
+        status = sync_worker_wait_for_state(
+            w, SYNC_WORKER_STATE_STOPPED, 3000);
+        if (status != 0) {
+            log_warning("Worker shutdown is still draining its backend stream; "
+                        "waiting before freeing stream state.\n");
+        }
+    } while (status != 0);
 
     THREAD_JOIN(w->thread, NULL);
     log_verbose("%s: Worker joined.\n", __FUNCTION__);
