@@ -12,6 +12,7 @@
 #include "nios_pkt_8x32.h"
 
 static bool peripheral_success;
+static bool lms_success;
 
 bool si5338_read(uint8_t addr, uint8_t *value)
 {
@@ -45,8 +46,21 @@ bool ina219_write(uint8_t addr, uint16_t value)
     return peripheral_success;
 }
 
-uint8_t lms6_read(uint8_t addr) { (void)addr; return 0; }
-void lms6_write(uint8_t addr, uint8_t value) { (void)addr; (void)value; }
+bool lms6_read(uint8_t addr, uint8_t *value)
+{
+    (void)addr;
+    if (lms_success && value != NULL) {
+        *value = 0x5a;
+        return true;
+    }
+    return false;
+}
+bool lms6_write(uint8_t addr, uint8_t value)
+{
+    (void)addr;
+    (void)value;
+    return lms_success;
+}
 bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode(void)
 { return BLADERF_VCTCXO_TAMER_DISABLED; }
 void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode) { (void)mode; }
@@ -184,10 +198,45 @@ static int check_8x8_si5338_failure(void)
     return target == NIOS_PKT_8x8_TARGET_SI5338 && write && !success ? 0 : 1;
 }
 
+static int check_8x8_lms_failure(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_LMS6,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0x05, 0xab },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = false, success = true;
+
+    lms_success = false;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_LMS6 && write && !success ? 0 : 1;
+}
+
+static int check_8x8_lms_read_failure(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_LMS6,
+                 0, 0, 0x05, 0 },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = true, success = true;
+
+    lms_success = false;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_LMS6 && !write && !success ? 0 : 1;
+}
+
 int main(void)
 {
     if (check_8x16_write_failure() || check_8x16_read_failure() ||
-        check_8x32_write_failure() || check_8x8_si5338_failure()) {
+        check_8x32_write_failure() || check_8x8_si5338_failure() ||
+        check_8x8_lms_failure() || check_8x8_lms_read_failure()) {
         fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;
     }

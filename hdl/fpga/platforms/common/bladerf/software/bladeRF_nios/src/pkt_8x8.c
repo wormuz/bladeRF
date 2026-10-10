@@ -32,7 +32,9 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint8_t *data)
 {
     switch (id) {
         case NIOS_PKT_8x8_TARGET_LMS6:
-            *data = lms6_read(addr);
+            if (!lms6_read(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x8_TARGET_SI5338:
@@ -83,7 +85,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint8_t data)
 {
     switch (id) {
         case NIOS_PKT_8x8_TARGET_LMS6:
-            lms6_write(addr, data);
+            if (!lms6_write(addr, data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x8_TARGET_SI5338:

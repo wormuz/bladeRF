@@ -455,28 +455,27 @@ void spi_arbiter_unlock()
 #endif  // ARBITER_0_BASE
 }
 
-uint8_t lms6_read(uint8_t addr)
+bool lms6_read(uint8_t addr, uint8_t *data)
 {
-    uint8_t data;
-
-    if (!spi_arbiter_lock()) {
-        return 0;
+    if (data == NULL || !spi_arbiter_lock()) {
+        return false;
     }
 
-    data = IORD_8DIRECT(RFFE_SPI_BASE, addr);
+    *data = IORD_8DIRECT(RFFE_SPI_BASE, addr);
     spi_arbiter_unlock();
 
-    return data;
+    return true;
 }
 
-void lms6_write(uint8_t addr, uint8_t data)
+bool lms6_write(uint8_t addr, uint8_t data)
 {
     if (!spi_arbiter_lock()) {
-        return;
+        return false;
     }
 
     IOWR_8DIRECT(RFFE_SPI_BASE, addr, data);
     spi_arbiter_unlock();
+    return true;
 }
 
 /* The vendor alt_avalon_spi_command() polls TRDY/RRDY and TMT forever. A

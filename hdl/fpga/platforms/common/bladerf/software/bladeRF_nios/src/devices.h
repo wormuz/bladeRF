@@ -167,17 +167,19 @@ void bladerf_nios_init(struct pkt_buf *pkt, struct vctcxo_tamer_pkt_buf *vctcxo_
  * @param   addr    Address to read from
  * @param   data    Receives the register value on a successful read
  *
- * @return  true if the AXI transaction completed without timeout
+ * @return  true if the shared SPI transaction completed
  */
-uint8_t lms6_read(uint8_t addr);
+bool lms6_read(uint8_t addr, uint8_t *data);
 
 /**
  * Write to an LMS6002D register
  *
  * @param   addr    Register address to write to
  * @param   data    Data to write
+ *
+ * @return  true if the shared SPI transaction completed
  */
-void lms6_write(uint8_t addr, uint8_t data);
+bool lms6_write(uint8_t addr, uint8_t data);
 
 /**
  * Read from AD9361 SPI register(s)

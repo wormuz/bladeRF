@@ -73,13 +73,11 @@ struct bladerf;
 
 /* Associate macros with our NIO II implementations */
 #   define LMS_WRITE(dev, addr, data) ({ \
-        lms6_write(addr, data); \
-        0; /* "Return" 0 */ \
+        lms6_write(addr, data) ? 0 : -1; \
     })
 
 #   define LMS_READ(dev, addr, data_ptr) ({ \
-        *(data_ptr) = lms6_read(addr); \
-        0; /* "Return" 0 */ \
+        lms6_read(addr, data_ptr) ? 0 : -1; \
     })
 
 #   define CONFIG_GPIO_READ(dev, data_ptr) ({ \

@@ -277,7 +277,9 @@ static inline void legacy_pkt_read(uint8_t dev_id, uint8_t count,
         case NIOS_PKT_LEGACY_DEV_LMS:
             DBG("%s: Performing LMS6 read.\n", __FUNCTION__);
             b->resp[ADDR_IDX] = b->req[ADDR_IDX];
-            b->resp[DATA_IDX] = lms6_read(b->req[ADDR_IDX]);
+            if (!lms6_read(b->req[ADDR_IDX], &b->resp[DATA_IDX])) {
+                b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+            }
             break;
 
         case NIOS_PKT_LEGACY_DEV_SI5338:
@@ -423,7 +425,9 @@ static inline void legacy_pkt_write(uint8_t dev_id, uint8_t count,
 {
     switch (dev_id) {
         case NIOS_PKT_LEGACY_DEV_LMS:
-            lms6_write(b->req[ADDR_IDX], b->req[DATA_IDX]);
+            if (!lms6_write(b->req[ADDR_IDX], b->req[DATA_IDX])) {
+                b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+            }
 
             b->resp[ADDR_IDX] = b->req[ADDR_IDX];
             b->resp[DATA_IDX] = 0;

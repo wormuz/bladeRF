@@ -190,6 +190,13 @@ failed caller had exited. Timeout now clears the request and acknowledges
 release through the same policy helper used by a focused delayed-grant/timeout
 regression source. The suite is authored but not run under the source gate.
 
+The same pass found legacy LMS SPI read/write helpers hid arbiter acquisition
+failure as zero data or a no-op, and 8x8/legacy packet handlers marked those
+operations successful. The helpers now return explicit status, which is
+propagated into both packet formats and the no-OS compatibility callbacks;
+the existing peripheral packet regression source now injects LMS read and
+write failures. bladeRF1 legacy path only; no hardware/runtime claim.
+
 ### NIOS no-OS AXI timeout and init compile-path pass
 
 The NIOS no-OS adapter forwards AXI ADC/DAC reads and writes through

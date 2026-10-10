@@ -64,18 +64,23 @@ void bladerf_nios_init(struct pkt_buf *pkt,
     DBG("%s()\n", __FUNCTION__);
 }
 
-uint8_t lms6_read(uint8_t addr) {
+bool lms6_read(uint8_t addr, uint8_t *data) {
     const uint8_t ret = 0x17;
     DBG("%s: addr=0x%02x, returning 0x%02x\n", __FUNCTION__, addr, ret);
     ASSERT(addr == 0x2f);
-    return ret;
+    if (data == NULL) {
+        return false;
+    }
+    *data = ret;
+    return true;
 }
 
-void lms6_write(uint8_t addr, uint8_t data)
+bool lms6_write(uint8_t addr, uint8_t data)
 {
     DBG("%s: addr=0x%02x, data=0x%02x\n", __FUNCTION__, addr, data);
     ASSERT(addr == 0x07);
     ASSERT(data == 0x09);
+    return true;
 }
 
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value) {
