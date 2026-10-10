@@ -287,6 +287,10 @@ int sync_init(struct bladerf_sync *sync,
         bytes_per_buffer = samples_to_bytes(format, buffer_size);
     }
 
+    if (bytes_per_buffer > INT_MAX) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Deinitialize sync handle if it's initialized */
     sync_deinit(sync);
 

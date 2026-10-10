@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 
 #include "log.h"
@@ -340,7 +341,8 @@ int async_init_stream(struct bladerf_stream **stream,
     }
 
     if (samples_per_buffer == 0 ||
-        samples_per_buffer > SIZE_MAX / bytes_per_sample) {
+        samples_per_buffer > SIZE_MAX / bytes_per_sample ||
+        samples_per_buffer > (size_t)INT_MAX / bytes_per_sample) {
         return BLADERF_ERR_INVAL;
     }
     buffer_size_bytes = samples_per_buffer * bytes_per_sample;

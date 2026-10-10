@@ -15,6 +15,12 @@ CyAPI recorded the requested transfer count only after all event handles had
 been created, so a partial event-creation failure skipped closing handles
 already created.
 
+The same backend review found that both USB implementations accepted a
+successful but short TX completion. They then called the producer as though
+the stream remained healthy, without raising the TX transport fault event.
+Very large buffer sizes could also exceed the signed transfer-length types
+used by libusb/CyAPI even when `size_t` arithmetic itself did not overflow.
+
 ## Change
 
 libusb now allocates a zeroed transfer-pointer array, frees every allocated
@@ -22,6 +28,11 @@ transfer on failure, and treats a null backend state as an already-cleaned
 stream during deinit. CyAPI records its transfer count before creating event
 handles, closes each non-null handle during partial cleanup, and makes deinit
 safe after backend initialization already cleaned its state.
+
+Both USB backends now fail a short TX completion closed with `BLADERF_ERR_IO`;
+the common stream return path publishes the TX transport failure. Async and
+sync setup reject transfer lengths that exceed the backend's signed length
+limit before submission.
 
 These are shared backend lifecycle paths for RX and TX.
 

@@ -54,6 +54,7 @@ struct transfer {
     OVERLAPPED event;           /* Transfer completion event handle */
     PUCHAR handle;              /* Handle for in-flight transfer */
     PUCHAR buffer;              /* Buffer associated with transfer */
+    size_t length;              /* Requested transfer length */
 };
 
 struct stream_data {
@@ -581,6 +582,7 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
     if (xfer != NULL) {
         data->transfers[data->avail_i].handle = xfer;
         data->transfers[data->avail_i].buffer = (PUCHAR) buffer;
+        data->transfers[data->avail_i].length = len;
 
         log_verbose("Submitted buffer %p using transfer slot %u.\n",
                     buffer, (unsigned int) data->avail_i);
@@ -743,6 +745,12 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
                 next_buffer = async_rx_process_buffer(
                     stream, &meta, data->transfers[i].buffer, (size_t)len);
+            } else if (len < 0 || (size_t)len != data->transfers[i].length) {
+                log_error("Short TX transfer: %ld of %zu bytes\n",
+                          len, data->transfers[i].length);
+                status = BLADERF_ERR_IO;
+                done = true;
+                next_buffer = BLADERF_STREAM_SHUTDOWN;
             } else {
                 next_buffer = stream->cb(stream->dev, stream, &meta,
                                          data->transfers[i].buffer,
