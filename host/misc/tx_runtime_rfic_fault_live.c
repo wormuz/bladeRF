@@ -15,6 +15,7 @@
  *   RUNTIME_TX_GATE_STATUS_READ_FAILURE
  *   RUNTIME_TX_GATE_RELEASE_FAILURE
  *   RUNTIME_TX_GATE_ABORT_FAILURE
+ *   RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE
  *
  * The test verifies durable event classification and that sync TX refuses
  * samples after the monitor or a legacy RF configuration setter revokes
@@ -129,7 +130,8 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") != 0 &&
-        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") != 0) {
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") != 0) {
         fprintf(stderr, "unsupported TX runtime injection mode: %s\n", mode);
         return 2;
     }
@@ -154,7 +156,8 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
-        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0) {
         status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
                                        915000000);
         if (status == 0) {
@@ -263,9 +266,11 @@ int main(void)
 
     if (strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
-        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0) {
         bladerf_frequency frequency = 0;
         bladerf_timestamp timestamp = 0;
+        uint64_t scheduled_cursor = cursor;
         struct bladerf_quick_tune quick_tune;
 
         status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
@@ -277,8 +282,15 @@ int main(void)
         if (status == 0) {
             status = bladerf_get_timestamp(dev, BLADERF_TX, &timestamp);
         }
-        if (status == 0 && setenv("BLADERF_TEST_TX_GATE_FAULT", mode, 1) != 0) {
-            status = BLADERF_ERR_UNEXPECTED;
+        if (status == 0) {
+            const bool transport_fault = strcmp(
+                mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0;
+            if (setenv(transport_fault
+                           ? "BLADERF_TEST_TX_TRANSPORT_FAILURE_ON_RELEASE"
+                           : "BLADERF_TEST_TX_GATE_FAULT",
+                       transport_fault ? "1" : mode, 1) != 0) {
+                status = BLADERF_ERR_UNEXPECTED;
+            }
         }
         if (status == 0) {
             status = bladerf_schedule_retune(
@@ -286,13 +298,57 @@ int main(void)
                 frequency, &quick_tune);
         }
         if (status == 0) {
+            const bladerf_rf_event_type expected_event = strcmp(
+                mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0
+                    ? BLADERF_RF_EVT_TX_TRANSPORT_ERROR
+                    : BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST;
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                                    expected_event,
                                     EVENT_WAIT_MS);
         }
         if (status != 0) {
             fprintf(stderr, "TX gate fault was not contained: %s\n",
                     bladerf_strerror(status));
+            goto cleanup;
+        }
+        if (strcmp(mode,
+                   "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0) {
+            bool history_complete = false;
+            bool tx_valid_seen = false;
+            uint64_t next = scheduled_cursor;
+            status = bladerf_rf_events_get_since(
+                dev, scheduled_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                &count, &next, &history_complete);
+            if (status != 0 || !history_complete) {
+                status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            for (uint32_t i = 0; i < count; ++i) {
+                tx_valid_seen |= events[i].event_type ==
+                                 BLADERF_RF_EVT_TX_RETUNE_VALID;
+            }
+            if (tx_valid_seen) {
+                fprintf(stderr,
+                        "TX-valid was published after transport failure\n");
+                status = BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            deadline = monotonic_ms() + 1000u;
+            while (monotonic_ms() < deadline &&
+                   atomic_load(&feeder.terminal_status) == 0) {
+                const struct timespec pause = {.tv_sec = 0,
+                                               .tv_nsec = 1000000};
+                nanosleep(&pause, NULL);
+            }
+            status = atomic_load(&feeder.terminal_status);
+            if (status != BLADERF_ERR_FPGA_OP) {
+                fprintf(stderr,
+                        "TX submission remained admitted after transport fault\n");
+                status = BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            printf("TX transport fault during mute release: PASS (no false TX-valid)\n");
+            status = 0;
             goto cleanup;
         }
         if (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {

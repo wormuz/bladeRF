@@ -1340,6 +1340,27 @@ static void *rx_fault_monitor_task(void *arg)
                             !board_data->tx_async_transport_faulted;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         if (release_still_valid) {
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+                        const char *release_transport_fault = getenv(
+                            "BLADERF_TEST_TX_TRANSPORT_FAILURE_ON_RELEASE");
+                        if (release_transport_fault != NULL &&
+                            strcmp(release_transport_fault, "1") == 0) {
+                            unsetenv(
+                                "BLADERF_TEST_TX_TRANSPORT_FAILURE_ON_RELEASE");
+                            bladerf2_tx_async_transport_failure(
+                                dev, BLADERF_ERR_IO);
+                        }
+#endif
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        release_still_valid =
+                            board_data->tx_retune2_applied_waiting_rf_valid &&
+                            board_data->tx_retune2_pending_count == 0 &&
+                            !board_data->tx_retune2_completion_faulted &&
+                            !board_data->tx_gate_abort_pending &&
+                            !board_data->tx_async_transport_faulted;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    }
+                    if (release_still_valid) {
                         uint32_t gate_status = 0;
                         int gate_read_status = nios_tx_retune_gate_status_read(
                             dev, &gate_status);
