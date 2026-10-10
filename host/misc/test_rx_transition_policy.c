@@ -439,18 +439,20 @@ int main(void)
     assert(bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, true));
     assert(!bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, false));
     assert(bladerf2_tx_admission_allowed(
-        false, false, false, 0, false, true));
+        true, false, false, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, false, true, 0, false, true));
+        true, false, false, true, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, true, false, 0, false, true));
+        true, false, true, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, false, false, 0, false, true));
+        true, true, false, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, false, false, 1, false, true));
+        true, false, false, false, 1, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, false, false, 0, true, true));
+        true, false, false, false, 0, true, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, false, false, 0, false, false));
+        true, false, false, false, 0, false, false));
+    assert(!bladerf2_tx_admission_allowed(
+        false, false, false, false, 0, false, true));
     return 0;
 }

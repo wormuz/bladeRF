@@ -262,6 +262,8 @@ struct bladerf2_board_data {
     bool tx_rfic_state_invalid_reported;
     bool tx_rf_configuration_invalid_reported;
     bool tx_stream_faulted_async;
+    /* Admission requires a confirmed FPGA TX-link generation. */
+    bool tx_async_link_certified;
     bool tx_async_transport_faulted;
     uint64_t tx_async_transport_failure_generation;
     uint8_t tx_async_link_epoch_id;

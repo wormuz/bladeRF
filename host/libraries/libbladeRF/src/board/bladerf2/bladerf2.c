@@ -1418,6 +1418,16 @@ static int bladerf2_enable_module(struct bladerf *dev,
         uint64_t const tx_transport_failure_baseline =
             bladerf2_tx_transport_failure_generation(board_data);
 
+        if (tx_direction_was_active) {
+            /* START is shared by RX and TX. Fence TX producers before RFIC or
+             * FPGA state can move; the acknowledged new epoch below restores
+             * admission only after the old link generation is retired. */
+            bladerf2_tx_stream_set_faulted(board_data, true);
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_EPOCH_INVALID, 0, 0,
+                BLADERF_ERR_WOULD_BLOCK);
+        }
+
         /* The FPGA loss counters reset with the shared sample-domain reset,
          * not on every lane enable. If the other direction is already live,
          * preserve the counter value before changing this lane so earlier
@@ -1647,6 +1657,10 @@ static int bladerf2_enable_module(struct bladerf *dev,
     if (disable_status == 0 && mask_status == 0) {
         if (BLADERF_CHANNEL_IS_TX(ch) &&
             board_data->tx_channel_enable_mask == 0) {
+            bladerf2_tx_stream_set_faulted(board_data, true);
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_EPOCH_INVALID, 0, st,
+                BLADERF_ERR_WOULD_BLOCK);
             bladerf2_tx_stream_event(
                 dev, BLADERF_RF_EVT_TX_STREAM_STOPPED, 0, 0, 0);
             board_data->tx_fpga_loss_count_valid = false;
@@ -2832,6 +2846,7 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     valid = bladerf2_tx_admission_allowed(
+        board_data->tx_async_link_certified,
         board_data->tx_stream_faulted_async,
         board_data->tx_async_transport_faulted,
         board_data->tx_gate_abort_pending,
@@ -4197,6 +4212,7 @@ static int bladerf2_sync_tx(struct bladerf *dev,
      * new link epoch restores callback-safe TX admission state. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     tx_admission_allowed = bladerf2_tx_admission_allowed(
+        board_data->tx_async_link_certified,
         board_data->tx_stream_faulted_async,
         board_data->tx_async_transport_faulted,
         board_data->tx_gate_abort_pending,
@@ -5519,6 +5535,7 @@ static int bladerf2_tx_rf_config_change_begin(
     board_data->tx_recovery_blocked = recovery_was_blocked;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_stream_faulted_async = true;
+    board_data->tx_async_link_certified = false;
     board_data->tx_retune2_completion_faulted = true;
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);

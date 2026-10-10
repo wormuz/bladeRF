@@ -65,3 +65,16 @@ They now return `BLADERF_ERR_WOULD_BLOCK`, matching both USB backends. The
 native regression covers admission already closed and revocation between the
 initial and final admission checks, and requires that no payload reaches the backend
 and no transport event is emitted. Source-only; not built or run.
+
+## TX link-certificate admission follow-up
+
+The sync and async TX admission checks previously required the stream, USB,
+FPGA abort, pending-retune, and frequency-model latches to be healthy, but did
+not require a confirmed current FPGA TX-link epoch. This allowed host buffers
+to be accepted before first TX enable or after the TX link had stopped. TX
+admission now additionally requires `tx_async_link_certified`, established
+only by an acknowledged new TX epoch or validated status recovery. Transport
+fault, stream fault, shared RX/TX START, and confirmed TX stop revoke it. The
+shared START and stop paths publish `TX_EPOCH_INVALID` so wrappers observe the
+same fence. A policy regression source covers the uncertified case. Source-only;
+no build or test has run.

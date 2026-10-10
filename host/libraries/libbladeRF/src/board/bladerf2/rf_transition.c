@@ -150,6 +150,7 @@ void bladerf2_tx_stream_set_faulted(
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     if (faulted || !board_data->tx_async_transport_faulted) {
         board_data->tx_stream_faulted_async = faulted;
+        board_data->tx_async_link_certified = !faulted;
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
@@ -205,6 +206,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     new_gate_abort = !board_data->tx_gate_abort_pending;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
+    board_data->tx_async_link_certified = false;
     board_data->tx_gate_abort_pending = true;
     if (new_gate_abort) {
         board_data->tx_gate_abort_failure_reported = false;
@@ -247,6 +249,7 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
     }
 
     board_data->tx_stream_faulted_async = false;
+    board_data->tx_async_link_certified = true;
     /* Start a new deduplication window only after the monitor has observed
      * a healthy RFIC and acknowledged TX link epoch. Configuration changes
      * are not recovery evidence on their own. */
@@ -286,6 +289,7 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
 
     board_data->tx_async_transport_faulted = false;
     board_data->tx_stream_faulted_async = false;
+    board_data->tx_async_link_certified = true;
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_TX_LINK_VALID;
     event.epoch_id = (uint8_t)(link_status >> 20);
