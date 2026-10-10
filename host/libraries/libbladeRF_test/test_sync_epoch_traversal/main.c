@@ -73,6 +73,7 @@ static int16_t test_tx_submitted_markers[4];
 static bool test_tx_buffer_valid = true;
 static unsigned int test_tx_validity_checks;
 static unsigned int test_tx_invalidate_at_check;
+static uint32_t test_rx_mux_gpio_value;
 
 static void test_sync_tx_x2_timestamp_units(void)
 {
@@ -178,7 +179,48 @@ static const struct backend_fns test_tx_backend = {
     .stream = test_tx_backend_stream,
     .submit_stream_buffer = test_tx_backend_submit,
 };
+
+static int test_rx_mux_config_gpio_read(struct bladerf *dev, uint32_t *value)
+{
+    assert(dev != NULL);
+    assert(value != NULL);
+    *value = test_rx_mux_gpio_value;
+    return 0;
+}
+
+static const struct backend_fns test_rx_mux_backend = {
+    .config_gpio_read = test_rx_mux_config_gpio_read,
+};
+
 static const struct board_fns test_async_board;
+
+static void test_epoch_transition_rejects_non_baseband_mux_before_mutation(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+    struct bladerf_rx_transition_request request = {
+        .required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID,
+    };
+    uint32_t transaction_id = UINT32_MAX;
+
+    board_data.state = STATE_INITIALIZED;
+    dev.board = &bladerf2_board_fns;
+    dev.backend = &test_rx_mux_backend;
+    dev.board_data = &board_data;
+    assert(MUTEX_INIT(&dev.lock) == 0);
+
+    test_rx_mux_gpio_value =
+        (uint32_t)BLADERF_RX_MUX_DIGITAL_LOOPBACK <<
+        BLADERF_GPIO_RX_MUX_SHIFT;
+    assert(bladerf_rx_transition_begin(
+               &dev, BLADERF_CHANNEL_RX(0), &request,
+               &transaction_id) == BLADERF_ERR_UNSUPPORTED);
+    assert(transaction_id == 0);
+    assert(board_data.rf_transition_next_id == 0);
+    assert(!board_data.rf_transition_pending);
+
+    MUTEX_DESTROY(&dev.lock);
+}
 
 static void test_rf_transition_calibration_is_explicit(void)
 {
@@ -2469,6 +2511,7 @@ int main(void)
     test_sync_tx_x2_timestamp_units();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
+    test_epoch_transition_rejects_non_baseband_mux_before_mutation();
 
     {
         const int16_t packed_input[] = { -1, 0x123, 0x456, -0x234, 0x789, 0xabc };
