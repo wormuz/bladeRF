@@ -190,9 +190,12 @@ The neighboring TX pass found that `sync_tx()` passed the full caller timeout
 to every buffer wait, so a multi-buffer call could take several multiples of
 the documented call timeout. RX also measured its newly added overall deadline
 with `CLOCK_REALTIME`, which can jump when wall time is adjusted. Both paths
-now share a monotonic remaining-time calculation, bound worker startup and each
-buffer wait by the remaining call budget, and check the RX deadline while
-consuming ready buffers. Focused timeout, long-copy, timeout-zero,
+now share a monotonic remaining-time calculation, bound worker startup and
+buffer waits by the remaining caller budget, and check the RX deadline while
+consuming ready buffers. A further trace found TX buffer submission and
+deferred-buffer reclaim still pass the configured stream timeout to the
+backend's stream-start wait. Close that path before claiming the TX caller
+deadline is enforced. Focused timeout, long-copy, timeout-zero,
 clock-adjustment, and partial TX buffer recovery regressions remain deferred
 under the source-audit gate.
 

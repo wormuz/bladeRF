@@ -586,9 +586,11 @@ static int wait_for_buffer(struct buffer_mgmt *b,
 #   define SYNC_WORKER_START_TIMEOUT_MS 250
 #endif
 
-/* Synchronous RX/TX timeout_ms is a deadline for the whole API call, not a
- * fresh allowance for every buffer wait. Use CLOCK_MONOTONIC so wall-clock
- * adjustments cannot extend or prematurely expire a stream operation. */
+/* Bound synchronous worker startup and buffer waits by the caller's remaining
+ * timeout budget. Use CLOCK_MONOTONIC so wall-clock adjustments cannot extend
+ * or prematurely expire those waits. TX's separate buffer-submit startup wait
+ * still uses the configured stream timeout and is tracked as an open audit
+ * item. */
 static int sync_timeout_remaining_ms(uint64_t call_start_ns,
                                      unsigned int timeout_ms,
                                      unsigned int *remaining_ms)
