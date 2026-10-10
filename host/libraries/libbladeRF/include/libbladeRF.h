@@ -4726,6 +4726,7 @@ void CALL_CONV bladerf_version(struct bladerf_version *version);
 #define BLADERF_ERR_NOT_INIT    (-19) /**< Device insufficiently initialized
                                        *   for operation */
 #define BLADERF_ERR_CALLBACK    (-20) /**< Application stream callback failed */
+#define BLADERF_ERR_ABORTED     (-21) /**< Operation aborted by device close */
 // clang-format on
 
 /**
@@ -5291,7 +5292,9 @@ int CALL_CONV bladerf_rx_transition_begin_quick_tune(
  * It must never be interpreted as "probably valid"; the caller must treat
  * any samples associated with this transaction as invalid.
  * Only one waiter may consume a transaction at a time; a concurrent wait
- * returns ::BLADERF_ERR_WOULD_BLOCK.
+ * returns ::BLADERF_ERR_WOULD_BLOCK. If ::bladerf_close() starts while this
+ * call is active, it wakes the waiter, performs fail-closed transition
+ * cleanup, and returns ::BLADERF_ERR_ABORTED before device state is freed.
  *
  * @param       dev             Device handle
  * @param[in]   transaction_id  Handle from bladerf_rx_transition_begin

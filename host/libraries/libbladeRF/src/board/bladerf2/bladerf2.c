@@ -703,6 +703,14 @@ static void bladerf2_close(struct bladerf *dev)
     }
 }
 
+static void bladerf2_pre_close(struct bladerf *dev)
+{
+    /* Transition waiters may be sleeping on RX host-data or polling RFIC
+     * state. Drain them before the board close path destroys their state. */
+    bladerf2_rx_transition_waiters_close(dev);
+    bladerf2_rx_fault_monitor_stop(dev);
+}
+
 
 /******************************************************************************/
 /* Properties */
@@ -5278,7 +5286,7 @@ static int bladerf2_expansion_get_attached(struct bladerf *dev, bladerf_xb *xb)
 struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.matches, bladerf2_matches),
     FIELD_INIT(.open, bladerf2_open),
-    FIELD_INIT(.pre_close, bladerf2_rx_fault_monitor_stop),
+    FIELD_INIT(.pre_close, bladerf2_pre_close),
     FIELD_INIT(.close, bladerf2_close),
     FIELD_INIT(.device_speed, bladerf2_device_speed),
     FIELD_INIT(.get_serial, bladerf2_get_serial),

@@ -2787,6 +2787,8 @@ const char *bladerf_strerror(int error)
             return "Insufficient initialization for the requested operation";
         case BLADERF_ERR_CALLBACK:
             return "Application stream callback failed";
+        case BLADERF_ERR_ABORTED:
+            return "Operation aborted by device close";
         case 0:
             return "Success";
         default:

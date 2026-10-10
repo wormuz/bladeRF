@@ -2314,6 +2314,94 @@ void bladerf2_rx_fault_monitor_stop(struct bladerf *dev)
     }
 }
 
+/* Called by the board pre-close hook before bladerf_close() acquires
+ * dev->lock. Wake a transition waiter and let it run its normal fail-closed
+ * cleanup before the condition variable, mutex, or board_data are destroyed. */
+void bladerf2_rx_transition_waiters_close(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    if (!board_data->rx_async_epoch_lock_initialized ||
+        !board_data->rx_async_epoch_cond_initialized) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rf_transition_close_requested = true;
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    while (board_data->rf_transition_call_count != 0) {
+        COND_WAIT(&board_data->rx_async_epoch_cond,
+                  &board_data->rx_async_epoch_lock);
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+int bladerf2_rx_transition_call_enter(
+    struct bladerf *dev, struct bladerf2_board_data **board_data_out)
+{
+    struct bladerf2_board_data *board_data;
+    int status = 0;
+
+    if (dev == NULL || board_data_out == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *board_data_out = NULL;
+
+    /* dev->lock serializes entry with the close path's teardown. Count the
+     * operation before releasing it; pre-close waits for this count before
+     * generic close can acquire dev->lock and free board_data. */
+    MUTEX_LOCK(&dev->lock);
+    if (dev->board != &bladerf2_board_fns || dev->board_data == NULL) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    } else {
+        board_data = dev->board_data;
+        if (!board_data->rx_async_epoch_lock_initialized ||
+            !board_data->rx_async_epoch_cond_initialized) {
+            status = BLADERF_ERR_NOT_INIT;
+        } else {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (board_data->rf_transition_close_requested) {
+                status = BLADERF_ERR_ABORTED;
+            } else {
+                board_data->rf_transition_call_count++;
+                *board_data_out = board_data;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        }
+    }
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+void bladerf2_rx_transition_call_leave(
+    struct bladerf2_board_data *board_data)
+{
+    if (board_data == NULL) {
+        return;
+    }
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->rf_transition_call_count != 0) {
+        board_data->rf_transition_call_count--;
+    }
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+static bool _rx_transition_close_requested(
+    struct bladerf2_board_data *board_data)
+{
+    bool requested;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    requested = board_data->rf_transition_close_requested;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return requested;
+}
+
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason)
 {
@@ -2929,6 +3017,9 @@ static int _bladerf_rx_transition_begin(
     if (sync_format_unsupported) {
         return BLADERF_ERR_UNSUPPORTED;
     }
+    if (_rx_transition_close_requested(board_data)) {
+        return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED, NULL);
+    }
 
     /* Retire any previously certified sync-RX data before changing RF state.
      * For epoch requests expect_id below also poisons all messages until the
@@ -3065,6 +3156,10 @@ static int _bladerf_rx_transition_begin(
             (uint64_t)timeout_ms * 1000000ULL;
     }
     for (;;) {
+        if (_rx_transition_close_requested(board_data)) {
+            return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                    NULL);
+        }
         if (_deadline_expired(calibration_deadline_ns)) {
             break;
         }
@@ -3220,6 +3315,9 @@ static int _bladerf_rx_transition_begin(
                    request->target_frequency_hz, 0, 0, status, 0);
         return _fail_transition(dev, board_data, status, NULL);
     }
+    if (_rx_transition_close_requested(board_data)) {
+        return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED, NULL);
+    }
 
     /* This timestamp is the return of the selected host/NIOS tune path.
      * It deliberately does not claim raw SPI completion or PLL lock. */
@@ -3289,6 +3387,13 @@ static int _bladerf_rx_transition_begin(
                 BLADERF_RF_STATE_PLL_ACQUIRING,
                 request->target_frequency_hz, readback_hz, 0, 0, 0);
 
+    /* This is the begin call's success linearization point. If close won the
+     * RX-state lock first, abort the transaction instead of handing its ID
+     * back to a caller while teardown is already in progress. */
+    if (_rx_transition_close_requested(board_data)) {
+        return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED, NULL);
+    }
+
     return 0;
 }
 
@@ -3296,8 +3401,18 @@ int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
                                 const struct bladerf_rx_transition_request *request,
                                 uint32_t *transaction_id)
 {
-    return _bladerf_rx_transition_begin(dev, ch, request, NULL,
-                                        transaction_id);
+    struct bladerf2_board_data *board_data;
+    int status = bladerf2_rx_transition_call_enter(dev, &board_data);
+    if (status != 0) {
+        if (transaction_id != NULL) {
+            *transaction_id = 0;
+        }
+        return status;
+    }
+    status = _bladerf_rx_transition_begin(dev, ch, request, NULL,
+                                          transaction_id);
+    bladerf2_rx_transition_call_leave(board_data);
+    return status;
 }
 
 int bladerf_rx_transition_begin_quick_tune(
@@ -3306,11 +3421,26 @@ int bladerf_rx_transition_begin_quick_tune(
     const struct bladerf_quick_tune *quick_tune,
     uint32_t *transaction_id)
 {
+    struct bladerf2_board_data *board_data;
+    int status;
+
     if (quick_tune == NULL) {
+        if (transaction_id != NULL) {
+            *transaction_id = 0;
+        }
         return BLADERF_ERR_INVAL;
     }
-    return _bladerf_rx_transition_begin(dev, ch, request, quick_tune,
-                                        transaction_id);
+    status = bladerf2_rx_transition_call_enter(dev, &board_data);
+    if (status != 0) {
+        if (transaction_id != NULL) {
+            *transaction_id = 0;
+        }
+        return status;
+    }
+    status = _bladerf_rx_transition_begin(dev, ch, request, quick_tune,
+                                          transaction_id);
+    bladerf2_rx_transition_call_leave(board_data);
+    return status;
 }
 
 static int _wait_for_first_host_data(
@@ -3321,6 +3451,10 @@ static int _wait_for_first_host_data(
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (;;) {
+        if (board_data->rf_transition_close_requested) {
+            status = BLADERF_ERR_ABORTED;
+            break;
+        }
         if (board_data->rf_transition_first_host_data_failure != 0) {
             status = board_data->rf_transition_first_host_data_failure;
             break;
@@ -3378,10 +3512,10 @@ static int _wait_for_first_host_data(
     return status;
 }
 
-int bladerf_rx_transition_wait(struct bladerf *dev,
-                               uint32_t transaction_id,
-                               struct bladerf_rf_event *final_event,
-                               uint32_t timeout_ms)
+static int _bladerf_rx_transition_wait(struct bladerf *dev,
+                                      uint32_t transaction_id,
+                                      struct bladerf_rf_event *final_event,
+                                      uint32_t timeout_ms)
 {
     struct bladerf2_board_data *board_data;
     uint64_t deadline_ns;
@@ -3394,6 +3528,7 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     bool transition_busy = false;
     bool transaction_valid = false;
     bool first_host_data_required = false;
+    bool close_before_commit = false;
     uint8_t expected_epoch_id = 0;
     struct bladerf_rf_event first_host_data_event = {0};
     int status;
@@ -3434,6 +3569,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
+    if (_rx_transition_close_requested(board_data)) {
+        return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                final_event);
+    }
+
     deadline_ns = _monotonic_ns() + (uint64_t)timeout_ms * 1000000ULL;
     wait_started_ns = _monotonic_ns();
     if (board_data->rf_transition_required_events_mask &
@@ -3451,6 +3591,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
      * Confirm every calibration start bit is clear before this request can
      * certify a new epoch. A deadline is failure detection only. */
     for (;;) {
+        if (_rx_transition_close_requested(board_data)) {
+            return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                    final_event);
+        }
         if (_deadline_expired(deadline_ns)) {
             break;
         }
@@ -3503,6 +3647,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
      * the caller only wants SPI_DONE confirmation. */
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_PLL_LOCKED) {
         while (_monotonic_ns() < deadline_ns) {
+            if (_rx_transition_close_requested(board_data)) {
+                return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                        final_event);
+            }
             status = _read_rfic_reg(dev, REG_RX_CP_VCO_LOCK_ADDR, &pll_reg);
             if (status != 0) {
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
@@ -3585,6 +3733,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
         }
+        if (_rx_transition_close_requested(board_data)) {
+            return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                    final_event);
+        }
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
                     BLADERF_RF_STATE_CALIBRATING, 0, 0, 0, 0,
                     expected_epoch_id);
@@ -3593,6 +3745,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
          * observation as if it proved the restored state. */
         pll_locked = false;
         while (_monotonic_ns() < deadline_ns) {
+            if (_rx_transition_close_requested(board_data)) {
+                return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                        final_event);
+            }
             status = _read_rfic_reg(dev, REG_RX_CP_VCO_LOCK_ADDR, &pll_reg);
             if (status != 0) {
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
@@ -3624,6 +3780,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_ENSM_RX) {
         uint8_t last_ensm_reg = 0xff;
         while (_monotonic_ns() < deadline_ns) {
+            if (_rx_transition_close_requested(board_data)) {
+                return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                        final_event);
+            }
             status = _read_rfic_reg(dev, REG_STATE_ADDR, &ensm_reg);
             if (status != 0) {
                 _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
@@ -3671,6 +3831,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         uint8_t bbpll_status = 0;
         bool bbpll_locked = false;
         while (_monotonic_ns() < deadline_ns) {
+            if (_rx_transition_close_requested(board_data)) {
+                return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                        final_event);
+            }
             status = _read_rfic_reg(dev, REG_BBPLL_LOCK_STATUS_ADDR,
                                     &bbpll_status);
             if (status != 0) {
@@ -3765,6 +3929,10 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
 
         while (_monotonic_ns() < deadline_ns) {
+            if (_rx_transition_close_requested(board_data)) {
+                return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                        final_event);
+            }
             const uint64_t read_begin_ns = _monotonic_ns();
             if (!board_data->rx_epoch_snapshot_capability_checked &&
                 getenv("BLADERF_TEST_RX_EPOCH_FORCE_LEGACY_SNAPSHOT") != NULL) {
@@ -4045,10 +4213,15 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     }
 
     WITH_MUTEX(&dev->lock, {
-        board_data->rf_transition_pending = false;
-        board_data->rf_transition_waiting = false;
-        board_data->rf_transition_setter_active = false;
-        if (final_event != NULL) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        close_before_commit = board_data->rf_transition_close_requested;
+        if (!close_before_commit) {
+            board_data->rf_transition_pending = false;
+            board_data->rf_transition_waiting = false;
+            board_data->rf_transition_setter_active = false;
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!close_before_commit && final_event != NULL) {
             bool found;
             if (first_host_data_required) {
                 *final_event = first_host_data_event;
@@ -4075,10 +4248,38 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
         }
     });
 
+    if (close_before_commit) {
+        return _fail_transition(dev, board_data, BLADERF_ERR_ABORTED,
+                                final_event);
+    }
+
     return final_event != NULL && final_event->error_code ==
            BLADERF_ERR_UNEXPECTED &&
            final_event->event_type == BLADERF_RF_EVT_ERROR
         ? BLADERF_ERR_UNEXPECTED : 0;
+}
+
+int bladerf_rx_transition_wait(struct bladerf *dev,
+                               uint32_t transaction_id,
+                               struct bladerf_rf_event *final_event,
+                               uint32_t timeout_ms)
+{
+    struct bladerf2_board_data *board_data;
+    int status;
+
+    if (transaction_id == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+    status = bladerf2_rx_transition_call_enter(dev, &board_data);
+    if (status != 0) {
+        return status;
+    }
+
+    status = _bladerf_rx_transition_wait(dev, transaction_id, final_event,
+                                         timeout_ms);
+
+    bladerf2_rx_transition_call_leave(board_data);
+    return status;
 }
 
 void bladerf2_rx_transition_note_first_packet_epoch_locked(

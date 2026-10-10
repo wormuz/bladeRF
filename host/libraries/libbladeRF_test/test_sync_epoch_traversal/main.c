@@ -158,6 +158,52 @@ static void test_rx_transition_apis_reject_non_bladerf2_before_state_access(void
                &dev, 1, &timing) == BLADERF_ERR_UNSUPPORTED);
 }
 
+struct close_waiter_fixture {
+    struct bladerf dev;
+    struct bladerf2_board_data board_data;
+};
+
+static void *test_close_waiter_thread(void *arg)
+{
+    struct close_waiter_fixture *fixture = arg;
+    struct bladerf2_board_data *board_data = &fixture->board_data;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    while (!board_data->rf_transition_close_requested) {
+        COND_WAIT(&board_data->rx_async_epoch_cond,
+                  &board_data->rx_async_epoch_lock);
+    }
+    assert(board_data->rf_transition_call_count == 1);
+    board_data->rf_transition_call_count--;
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return NULL;
+}
+
+static void test_close_wakes_and_drains_transition_waiter(void)
+{
+    struct close_waiter_fixture fixture = {0};
+    pthread_t waiter;
+
+    fixture.dev.board_data = &fixture.board_data;
+    MUTEX_INIT(&fixture.board_data.rx_async_epoch_lock);
+    fixture.board_data.rx_async_epoch_lock_initialized = true;
+    assert(COND_INIT(&fixture.board_data.rx_async_epoch_cond) ==
+           THREAD_SUCCESS);
+    fixture.board_data.rx_async_epoch_cond_initialized = true;
+    fixture.board_data.rf_transition_call_count = 1;
+
+    assert(pthread_create(&waiter, NULL, test_close_waiter_thread,
+                          &fixture) == 0);
+    bladerf2_rx_transition_waiters_close(&fixture.dev);
+    assert(pthread_join(waiter, NULL) == 0);
+    assert(fixture.board_data.rf_transition_close_requested);
+    assert(fixture.board_data.rf_transition_call_count == 0);
+
+    COND_DESTROY(&fixture.board_data.rx_async_epoch_cond);
+    MUTEX_DESTROY(&fixture.board_data.rx_async_epoch_lock);
+}
+
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
     assert(dev != NULL);
@@ -2543,6 +2589,7 @@ int main(void)
     test_async_packet_meta_tx_length_is_bounded();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
+    test_close_wakes_and_drains_transition_waiter();
     test_epoch_transition_rejects_non_baseband_mux_before_mutation();
 
     {

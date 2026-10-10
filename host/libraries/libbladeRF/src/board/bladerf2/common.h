@@ -360,6 +360,10 @@ struct bladerf2_board_data {
     bool rf_transition_first_host_data_reported;
     bool rf_transition_pending;
     bool rf_transition_waiting;
+    /* Prevent close from destroying board state while an RX transition API
+     * call still uses it. Protected by rx_async_epoch_lock. */
+    bool rf_transition_close_requested;
+    unsigned int rf_transition_call_count;
     bool rf_transition_spi_trace_enabled;
     bool rf_transition_setter_active;
     bool rf_transition_scheduling_quick_tune;
@@ -415,6 +419,11 @@ void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev);
 int bladerf2_rx_fault_monitor_start(struct bladerf *dev);
 void bladerf2_rx_fault_monitor_stop(struct bladerf *dev);
+void bladerf2_rx_transition_waiters_close(struct bladerf *dev);
+int bladerf2_rx_transition_call_enter(
+    struct bladerf *dev, struct bladerf2_board_data **board_data);
+void bladerf2_rx_transition_call_leave(
+    struct bladerf2_board_data *board_data);
 void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
                               const struct bladerf_rf_event *event);
 void bladerf2_tx_stream_event(struct bladerf *dev,
