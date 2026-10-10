@@ -186,6 +186,19 @@ int main(void)
         BLADERF2_AD9361_ENSM_STATE_TX, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_INVALID);
 
+    assert(bladerf2_retune_completion_batch_valid(0, 0, 16));
+    assert(bladerf2_retune_completion_batch_valid(16, 16, 16));
+    assert(!bladerf2_retune_completion_batch_valid(17, 17, 16));
+    assert(!bladerf2_retune_completion_batch_valid(2, 1, 16));
+    assert(bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1235, 1840000000ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840000001ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 4));
+
     /* A TX error arriving during a shared START must not be overwritten by
      * the subsequently observed link acknowledgement. */
     assert(bladerf2_tx_epoch_generation_unchanged(12, 12));

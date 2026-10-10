@@ -21,6 +21,24 @@
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
 
+/* A completion batch is usable only while every reported success still has
+ * a retained request. Counter wrap is intentional unsigned sequence math. */
+static inline bool bladerf2_retune_completion_batch_valid(
+    uint32_t completed, uint32_t pending, uint32_t ring_depth)
+{
+    return completed <= ring_depth && completed <= pending;
+}
+
+static inline bool bladerf2_retune_completion_matches(
+    uint64_t requested_timestamp, uint64_t requested_frequency_hz,
+    uint16_t requested_profile, uint64_t completed_timestamp,
+    uint64_t readback_frequency_hz, uint16_t completed_profile)
+{
+    return requested_timestamp == completed_timestamp &&
+           requested_frequency_hz == readback_frequency_hz &&
+           requested_profile == completed_profile;
+}
+
 /* The two 32-bit PIOs are read in separate NIOS transactions. The high word
  * must match around the low-word read before the host can join the snapshot. */
 static inline bool bladerf2_loss_counter_snapshot(

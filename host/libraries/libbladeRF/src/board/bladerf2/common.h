@@ -27,6 +27,7 @@
 #endif
 
 #include "bladerf2_common.h"
+#include "nios_pkt_8x32.h"
 #include "helpers/version.h"
 #include "streaming/sync.h"
 #include "thread.h"
@@ -224,6 +225,18 @@ struct bladerf2_board_data {
     uint32_t tx_retune2_failure_count_last;
     bool tx_retune2_failure_count_valid;
     bool tx_retune2_failure_watch_active;
+    uint32_t tx_retune2_success_count_last;
+    bool tx_retune2_success_count_valid;
+    uint8_t tx_retune2_pending_count;
+    bool tx_retune2_completion_faulted;
+    bool tx_retune2_applied_waiting_rf_valid;
+    uint64_t tx_retune2_applied_frequency_hz;
+    struct {
+        uint64_t timestamp;
+        uint64_t requested_frequency_hz;
+        uint16_t nios_profile;
+        bool valid;
+    } tx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
     uint8_t tx_link_epoch_id;
     bool tx_link_fault_reported;
     bool tx_epoch_invalid_reported;
@@ -376,6 +389,12 @@ void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
 void bladerf2_tx_stream_event(struct bladerf *dev,
                               bladerf_rf_event_type event_type,
                               uint64_t loss_count, uint32_t link_status,
+                              int32_t error_code);
+void bladerf2_tx_retune_event(struct bladerf *dev,
+                              bladerf_rf_event_type event_type,
+                              uint64_t requested_frequency_hz,
+                              uint64_t readback_frequency_hz,
+                              uint32_t flags,
                               int32_t error_code);
 void bladerf2_tx_stream_set_faulted(
     struct bladerf2_board_data *board_data, bool faulted);

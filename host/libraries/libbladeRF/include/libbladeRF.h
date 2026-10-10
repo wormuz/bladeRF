@@ -4918,7 +4918,20 @@ typedef enum {
      * separately observed transport-link or RFIC lock/state certificates.
      * `flags` carries the cumulative NIOS failure counter observed by the
      * host. */
-    BLADERF_RF_EVT_TX_RETUNE_FAILED
+    BLADERF_RF_EVT_TX_RETUNE_FAILED,
+    /** A scheduled TX retune was accepted and is awaiting NIOS completion.
+     * TX frequency validity is revoked until a TX_RETUNE_VALID event. */
+    BLADERF_RF_EVT_TX_RETUNE_PENDING,
+    /** NIOS completed a scheduled TX fastlock activation and its live AD9361
+     * LO readback matched the host request. PLL/RF validity may still be
+     * pending. */
+    BLADERF_RF_EVT_TX_RETUNE_APPLIED,
+    /** One or more TX completion records could not be matched or read. TX
+     * frequency validity is unknown and remains revoked. */
+    BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+    /** The final completed TX retune has a matching LO readback and the
+     * monitor has confirmed the TX PLL/ENSM/BBPLL state. */
+    BLADERF_RF_EVT_TX_RETUNE_VALID
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
@@ -5117,7 +5130,9 @@ struct bladerf_rf_event {
     uint64_t fpga_timestamp;      /**< FPGA RX sample counter, if available */
     uint32_t transaction_id;      /**< Owning RX transaction, or zero */
     uint32_t epoch_id;            /**< RX data epoch or TX RF-link generation */
+    /** Requested RX LO, or requested TX LO for TX_RETUNE_* events. */
     uint64_t requested_rx_lo_hz;
+    /** Readback RX LO, or readback TX LO for TX_RETUNE_* events. */
     uint64_t readback_rx_lo_hz;
     uint32_t rfic_status;         /**< Raw RFIC/device status snapshot */
     bladerf_rf_state fpga_state;
@@ -5290,7 +5305,10 @@ int CALL_CONV bladerf_rx_transition_get_events(
 
 /** Read all device RF events newer than an event-ring cursor. This includes
  * transaction events, unscoped RX validity/discontinuity notifications, TX
- * link/underrun notifications, and TX RFIC-state observations.
+ * link/underrun notifications, TX RFIC-state observations, and scheduled TX
+ * retune pending/applied/completion-loss events. TX_RETUNE_APPLIED carries
+ * requested/readback TX LO values in the existing frequency fields; its
+ * flags report the number of other scheduled TX retunes still pending.
  *
  * The cursor is the sequence returned in `next_sequence`, not a transaction
  * ID. If `history_complete` is false, one or more events after

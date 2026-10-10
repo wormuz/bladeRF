@@ -2495,7 +2495,9 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
 
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    valid = !board_data->tx_stream_faulted_async;
+    valid = !board_data->tx_stream_faulted_async &&
+            board_data->tx_retune2_pending_count == 0 &&
+            !board_data->tx_retune2_completion_faulted;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return valid;
 }
@@ -2761,6 +2763,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     }
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t success_count;
+    uint8_t pending_slot = UINT8_MAX;
+    unsigned int i;
 
     /* An ordinary scheduled retune has no host completion event or
      * first-valid boundary. The public API has already revoked RX validity
@@ -2782,16 +2787,113 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    CHECK_STATUS(dev->backend->retune2(dev, ch, timestamp,
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        if (board_data->tx_retune2_pending_count >=
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            if (!board_data->tx_retune2_pending[i].valid) {
+                pending_slot = (uint8_t)i;
+                break;
+            }
+        }
+        if (pending_slot == UINT8_MAX) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        if (!board_data->tx_retune2_success_count_valid) {
+            CHECK_STATUS(nios_retune2_success_count_read(
+                dev, BLADERF_MODULE_TX, &success_count));
+            board_data->tx_retune2_success_count_last = success_count;
+            board_data->tx_retune2_success_count_valid = true;
+        }
+    }
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        /* Fence TX admission before the NIOS queue write can become visible
+         * to the timer domain. The reservation is rolled back if submission
+         * itself fails. */
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->tx_retune2_pending[pending_slot].timestamp = timestamp;
+        board_data->tx_retune2_pending[pending_slot].requested_frequency_hz =
+            frequency;
+        board_data->tx_retune2_pending[pending_slot].nios_profile =
+            quick_tune->nios_profile;
+        board_data->tx_retune2_pending[pending_slot].valid = true;
+        board_data->tx_retune2_pending_count++;
+        board_data->tx_retune2_completion_faulted = true;
+        board_data->tx_retune2_applied_waiting_rf_valid = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+
+    int status = dev->backend->retune2(dev, ch, timestamp,
                                        quick_tune->nios_profile,
                                        quick_tune->rffe_profile,
-                                       quick_tune->port, quick_tune->spdt));
+                                       quick_tune->port, quick_tune->spdt);
+    if (status != 0) {
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_retune2_pending[pending_slot].valid = false;
+            board_data->tx_retune2_pending_count--;
+            board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_applied_waiting_rf_valid = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            /* A failed USB request can be ambiguous after the OUT stage.
+             * Keep monitoring so an unexpectedly accepted command cannot
+             * become an unreported RF change. */
+            board_data->tx_retune2_failure_watch_active = true;
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                frequency, 0, 0, status);
+        }
+        return status;
+    }
     if (BLADERF_CHANNEL_IS_TX(ch)) {
+        if (timestamp == BLADERF_RETUNE_NOW) {
+            bladerf_frequency readback_frequency = 0;
+            int readback_status;
+            uint8_t pending_count;
+
+            board_data->tx_retune2_failure_watch_active = true;
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
+                board_data->tx_retune2_pending_count, 0);
+            readback_status = board_data->rfic->get_frequency(
+                dev, ch, &readback_frequency);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_retune2_pending[pending_slot].valid = false;
+            board_data->tx_retune2_pending_count--;
+            pending_count = board_data->tx_retune2_pending_count;
+            board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_applied_waiting_rf_valid =
+                readback_status == 0 && readback_frequency == frequency &&
+                pending_count == 0;
+            board_data->tx_retune2_applied_frequency_hz = readback_frequency;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (readback_status != 0 || readback_frequency != frequency) {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    frequency, readback_status == 0 ? readback_frequency : 0,
+                    pending_count,
+                    readback_status != 0 ? readback_status :
+                                           BLADERF_ERR_UNEXPECTED);
+                return readback_status != 0 ? readback_status :
+                                              BLADERF_ERR_UNEXPECTED;
+            }
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED, frequency,
+                readback_frequency, pending_count, 0);
+            return 0;
+        }
         /* NIOS's request response only confirms queue insertion. Keep the
          * deferred execution-failure counter under observation for TX for
          * the remainder of this handle, even if the queue is later cleared:
          * an execution error may already have occurred before cancellation. */
         board_data->tx_retune2_failure_watch_active = true;
+        const uint8_t pending_count = board_data->tx_retune2_pending_count;
+        bladerf2_tx_retune_event(
+            dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
+            pending_count, 0);
     }
 
     /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
@@ -2843,8 +2945,24 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    return dev->backend->retune2(
+    int status = dev->backend->retune2(
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch) &&
+        board_data->tx_retune2_pending_count != 0) {
+        unsigned int i;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->tx_retune2_pending_count = 0;
+        board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_applied_waiting_rf_valid = false;
+        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            board_data->tx_retune2_pending[i].valid = false;
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        bladerf2_tx_retune_event(
+            dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST, 0, 0,
+            0, BLADERF_ERR_WOULD_BLOCK);
+    }
+    return status;
 }
 
 
@@ -3627,7 +3745,9 @@ static int bladerf2_sync_tx(struct bladerf *dev,
      * the submitted stream. Do not silently accept more IQ until a confirmed
      * new link epoch restores callback-safe TX admission state. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    tx_stream_faulted = board_data->tx_stream_faulted_async;
+    tx_stream_faulted = board_data->tx_stream_faulted_async ||
+        board_data->tx_retune2_pending_count != 0 ||
+        board_data->tx_retune2_completion_faulted;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (tx_stream_faulted) {
         log_warning("%s: TX stream is invalid; stop and re-enable TX before "

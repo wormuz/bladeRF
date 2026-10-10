@@ -240,6 +240,25 @@ static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
            BLADERF_RF_EVT_TX_LINK_FAULT);
     assert(board_data.rf_transition_events[1].epoch_id == 7);
 
+    bladerf2_tx_retune_event(
+        &dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, 1840000000ULL, 0,
+        2, 0);
+    bladerf2_tx_retune_event(
+        &dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED, 1840000000ULL,
+        1840000000ULL, 0, 0);
+    assert(board_data.rf_transition_event_count == 4);
+    assert(board_data.rf_transition_events[2].event_type ==
+           BLADERF_RF_EVT_TX_RETUNE_PENDING);
+    assert(board_data.rf_transition_events[2].requested_rx_lo_hz ==
+           1840000000ULL);
+    assert(board_data.rf_transition_events[2].flags == 2);
+    assert(board_data.rf_transition_events[3].event_type ==
+           BLADERF_RF_EVT_TX_RETUNE_APPLIED);
+    assert(board_data.rf_transition_events[3].requested_rx_lo_hz ==
+           1840000000ULL);
+    assert(board_data.rf_transition_events[3].readback_rx_lo_hz ==
+           1840000000ULL);
+
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
 }
 static unsigned int async_fault_order;

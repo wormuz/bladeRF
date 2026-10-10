@@ -280,6 +280,37 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
+void bladerf2_tx_retune_event(struct bladerf *dev,
+                              bladerf_rf_event_type event_type,
+                              uint64_t requested_frequency_hz,
+                              uint64_t readback_frequency_hz,
+                              uint32_t flags,
+                              int32_t error_code)
+{
+    struct bladerf_rf_event event = {0};
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL ||
+        (event_type != BLADERF_RF_EVT_TX_RETUNE_PENDING &&
+         event_type != BLADERF_RF_EVT_TX_RETUNE_APPLIED &&
+         event_type != BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST &&
+         event_type != BLADERF_RF_EVT_TX_RETUNE_VALID)) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    event.host_monotonic_ns = monotonic_ns();
+    event.event_type = event_type;
+    event.epoch_id = board_data->tx_link_epoch_id;
+    event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
+                                         BLADERF_RF_STATE_ERROR;
+    event.requested_rx_lo_hz = requested_frequency_hz;
+    event.readback_rx_lo_hz = readback_frequency_hz;
+    event.flags = flags;
+    event.error_code = error_code;
+    bladerf2_rf_event_append(board_data, &event);
+}
+
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status)
 {

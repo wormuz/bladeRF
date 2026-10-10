@@ -836,10 +836,12 @@ static void *rx_fault_monitor_task(void *arg)
         uint64_t rx_loss_count = 0;
         uint64_t tx_loss_count = 0;
         uint32_t tx_retune2_failure_count = 0;
+        uint32_t tx_retune2_success_count = 0;
         int status = 0;
         int loss_count_status = 0;
         int tx_loss_count_status = 0;
         int tx_retune2_status = 0;
+        int tx_retune2_success_status = 0;
         int rfic_status = 0;
         int tx_rfic_status = 0;
         int rx_fault_causes_status = 0;
@@ -901,6 +903,14 @@ static void *rx_fault_monitor_task(void *arg)
                     tx_retune2_status = nios_retune2_failure_count_read(
                         dev, BLADERF_MODULE_TX,
                         &tx_retune2_failure_count);
+                    if (tx_retune2_status == 0) {
+                        _rx_fault_monitor_stage(
+                            board_data, "NIOS TX retune completions");
+                        tx_retune2_success_status =
+                            nios_retune2_success_count_read(
+                                dev, BLADERF_MODULE_TX,
+                                &tx_retune2_success_count);
+                    }
                 }
                 if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
@@ -1006,7 +1016,8 @@ static void *rx_fault_monitor_task(void *arg)
                     if (tx_link_status_error != 0 ||
                         tx_loss_count_status != 0 || tx_rfic_status != 0 ||
                         (tx_retune2_watch_active &&
-                         tx_retune2_status != 0) ||
+                         (tx_retune2_status != 0 ||
+                          tx_retune2_success_status != 0)) ||
                         !tx_rfic_status_observed) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
@@ -1076,6 +1087,19 @@ static void *rx_fault_monitor_task(void *arg)
                             report_tx_retune_counter_reset) {
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            board_data->tx_retune2_completion_faulted = true;
+                            board_data->tx_retune2_pending_count = 0;
+                            board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            if (tx_retune2_success_status == 0) {
+                                board_data->tx_retune2_success_count_last =
+                                    tx_retune2_success_count;
+                            }
+                            for (unsigned int i = 0; i <
+                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                board_data->tx_retune2_pending[i].valid = false;
+                            }
                         }
                         if (report_tx_retune_counter_reset &&
                             !board_data->tx_status_unavailable_reported) {
@@ -1083,9 +1107,140 @@ static void *rx_fault_monitor_task(void *arg)
                             report_status_unavailable = true;
                         }
                     }
+                    if (tx_retune2_watch_active &&
+                        tx_link_status_error == 0 &&
+                        tx_retune2_success_status == 0 &&
+                        !report_tx_retune_failure &&
+                        !report_tx_retune_counter_reset &&
+                        board_data->tx_retune2_success_count_valid) {
+                        uint32_t completed = tx_retune2_success_count -
+                            board_data->tx_retune2_success_count_last;
+                        bool completion_lost = false;
+
+                        if (!bladerf2_retune_completion_batch_valid(
+                                completed,
+                                board_data->tx_retune2_pending_count,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH)) {
+                            completion_lost = completed != 0;
+                        } else {
+                            uint32_t sequence =
+                                board_data->tx_retune2_success_count_last;
+                            uint32_t completion_index;
+
+                            for (completion_index = 0;
+                                 completion_index < completed;
+                                 ++completion_index) {
+                                uint64_t readback_frequency_hz;
+                                uint64_t scheduled_timestamp;
+                                uint16_t nios_profile;
+                                uint32_t i;
+                                bool request_found = false;
+
+                                sequence++;
+                                _rx_fault_monitor_stage(
+                                    board_data,
+                                    "NIOS TX completion record");
+                                if (nios_retune2_completion_read(
+                                        dev, BLADERF_MODULE_TX, sequence,
+                                        &readback_frequency_hz,
+                                        &scheduled_timestamp,
+                                        &nios_profile) != 0) {
+                                    completion_lost = true;
+                                    break;
+                                }
+                                for (i = 0; i <
+                                     NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+                                     ++i) {
+                                    if (board_data->tx_retune2_pending[i].valid &&
+                                        board_data->tx_retune2_pending[i].timestamp ==
+                                            scheduled_timestamp &&
+                                        board_data->tx_retune2_pending[i].nios_profile ==
+                                            nios_profile) {
+                                        request_found = true;
+                                        if (!bladerf2_retune_completion_matches(
+                                                board_data->tx_retune2_pending[i].
+                                                    timestamp,
+                                                board_data->tx_retune2_pending[i].
+                                                    requested_frequency_hz,
+                                                board_data->tx_retune2_pending[i].
+                                                    nios_profile,
+                                                scheduled_timestamp,
+                                                readback_frequency_hz,
+                                                nios_profile)) {
+                                            completion_lost = true;
+                                        } else {
+                                            board_data->tx_retune2_pending[i].
+                                                valid = false;
+                                            MUTEX_LOCK(
+                                                &board_data->rx_async_epoch_lock);
+                                            board_data->tx_retune2_pending_count--;
+                                            board_data->tx_retune2_completion_faulted =
+                                                true;
+                                            board_data->tx_retune2_applied_frequency_hz =
+                                                readback_frequency_hz;
+                                            board_data->tx_retune2_applied_waiting_rf_valid =
+                                                board_data->tx_retune2_pending_count == 0;
+                                            MUTEX_UNLOCK(
+                                                &board_data->rx_async_epoch_lock);
+                                            bladerf2_tx_retune_event(
+                                                dev,
+                                                BLADERF_RF_EVT_TX_RETUNE_APPLIED,
+                                                board_data->tx_retune2_pending[i].
+                                                    requested_frequency_hz,
+                                                readback_frequency_hz,
+                                                board_data->tx_retune2_pending_count,
+                                                0);
+                                        }
+                                        break;
+                                    }
+                                }
+                                if (!request_found) {
+                                    completion_lost = true;
+                                }
+                                if (completion_lost) {
+                                    break;
+                                }
+                            }
+                        }
+                        board_data->tx_retune2_success_count_last =
+                            tx_retune2_success_count;
+                        if (completion_lost) {
+                            unsigned int i;
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            board_data->tx_retune2_completion_faulted = true;
+                            board_data->tx_retune2_pending_count = 0;
+                            board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            for (i = 0; i <
+                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                board_data->tx_retune2_pending[i].valid = false;
+                            }
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            bladerf2_tx_retune_event(
+                                dev,
+                                BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                                0, 0, 0, BLADERF_ERR_WOULD_BLOCK);
+                        }
+                    }
+                    if (board_data->tx_retune2_applied_waiting_rf_valid &&
+                        board_data->tx_retune2_pending_count == 0 &&
+                        tx_rfic_observation ==
+                            BLADERF2_TX_RFIC_OBSERVATION_VALID) {
+                        const uint64_t applied_frequency_hz =
+                            board_data->tx_retune2_applied_frequency_hz;
+                        board_data->tx_retune2_applied_waiting_rf_valid = false;
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->tx_retune2_completion_faulted = false;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        bladerf2_tx_retune_event(
+                            dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
+                            applied_frequency_hz, applied_frequency_hz, 0, 0);
+                    }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0 &&
                         tx_retune2_status == 0 &&
+                        tx_retune2_success_status == 0 &&
+                        board_data->tx_retune2_pending_count == 0 &&
+                        !board_data->tx_retune2_completion_faulted &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
                         board_data->tx_status_unavailable_reported &&
@@ -1113,9 +1268,11 @@ static void *rx_fault_monitor_task(void *arg)
                                      (tx_rfic_status != 0 ? tx_rfic_status :
                                      (tx_retune2_status != 0 ?
                                       tx_retune2_status :
+                                      (tx_retune2_success_status != 0 ?
+                                       tx_retune2_success_status :
                                       (report_tx_retune_counter_reset ?
                                        BLADERF_ERR_UNEXPECTED :
-                                       BLADERF_ERR_WOULD_BLOCK))));
+                                       BLADERF_ERR_WOULD_BLOCK)))));
                     }
                     if (tx_link_status_error == 0 &&
                         tx_rfic_observation ==
