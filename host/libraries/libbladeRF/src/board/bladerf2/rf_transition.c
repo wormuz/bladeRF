@@ -1750,6 +1750,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     struct bladerf_rf_event event = {0};
     bool data_epoch_enabled;
     bool no_active_rx_direction = false;
+    struct bladerf2_rx_invalidation_policy invalidation_policy = {0};
     int status;
 
     if (dev == NULL || dev->board_data == NULL || reason == 0) {
@@ -1769,15 +1770,12 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                       board_data->rf_transition_state,
                       board_data->rf_transition_current_id);
             status = BLADERF_ERR_WOULD_BLOCK;
-        } else if (BLADERF_CHANNEL_IS_TX(ch) &&
-                   !board_data->rf_link_dir_on[0]) {
-            /* TX enable starts a shared FPGA link epoch. Revoke RX only when
-             * an RX direction is actually active; TX-only startup must not
-             * depend on an unrelated RX ABORT transaction. */
-            no_active_rx_direction = true;
-            status = 0;
         } else {
-            board_data->rf_transition_setter_active = true;
+            invalidation_policy = bladerf2_rx_invalidation_policy(
+                ch, board_data->rf_link_dir_on[0]);
+            board_data->rf_transition_setter_active =
+                invalidation_policy.reserve_setter;
+            no_active_rx_direction = !invalidation_policy.abort_rx_epoch;
             status = 0;
         }
     });

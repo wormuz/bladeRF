@@ -8,6 +8,27 @@
 
 #include <libbladeRF.h>
 
+struct bladerf2_rx_invalidation_policy {
+    bool reserve_setter;
+    bool abort_rx_epoch;
+};
+
+/* TX startup without an RX direction must not issue an unrelated RX ABORT,
+ * but it still owns the setter reservation until the shared link START ends.
+ * Otherwise an RX setter can race into the gap between the no-RX check and
+ * TX module enable. */
+static inline struct bladerf2_rx_invalidation_policy
+bladerf2_rx_invalidation_policy(bladerf_channel channel,
+                                bool rx_direction_active)
+{
+    struct bladerf2_rx_invalidation_policy policy = {
+        .reserve_setter = true,
+        .abort_rx_epoch = !BLADERF_CHANNEL_IS_TX(channel) ||
+                          rx_direction_active,
+    };
+    return policy;
+}
+
 #define BLADERF2_RF_LINK_STATUS_VERSION_MASK 0xf0000000u
 #define BLADERF2_RF_LINK_STATUS_VERSION_2    0x20000000u
 #define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)

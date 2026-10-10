@@ -31,3 +31,7 @@ The generic `bladerf_set_gain()` and `bladerf_set_gain_stage()` APIs also change
 The generic gain callback is invoked only after taking `dev->lock`, matching the board callback's serialization contract. If fencing fails, both `set_gain` and `set_gain_stage` release the mutex before returning.
 
 The live harness now has a normal-operation `RUNTIME_TX_GAIN_SETTER` scenario: establish TX frequency validity, change gain, require `TX_CONFIGURATION_INVALID` and sync-TX rejection, then recover with a confirmed retune. It is registered in the runner and remains uncompiled/unrun under the source-audit gate.
+
+## Shared TX-start/RX-setter reservation race
+
+The RX invalidation path deliberately skips the hardware RX ABORT when TX starts with no active RX direction. It also skipped `rf_transition_setter_active`, leaving a window before TX enable in which an RX setter could reserve and mutate the shared RF state; TX enable could then clear that setter's reservation on return. The no-RX case now still reserves the setter interval while skipping only the unnecessary RX ABORT. `test_rx_transition_policy.c` covers TX with no RX (reserve, no abort), TX with RX (reserve and abort), and RX invalidation (reserve and abort). Source-only; test not compiled/run.

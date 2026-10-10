@@ -24,6 +24,20 @@ int main(void)
     };
     struct bladerf_rf_event invalidation_channel;
     uint64_t loss_count = 0;
+    struct bladerf2_rx_invalidation_policy invalidation_policy;
+
+    invalidation_policy = bladerf2_rx_invalidation_policy(
+        BLADERF_CHANNEL_TX(0), false);
+    assert(invalidation_policy.reserve_setter);
+    assert(!invalidation_policy.abort_rx_epoch);
+    invalidation_policy = bladerf2_rx_invalidation_policy(
+        BLADERF_CHANNEL_TX(0), true);
+    assert(invalidation_policy.reserve_setter);
+    assert(invalidation_policy.abort_rx_epoch);
+    invalidation_policy = bladerf2_rx_invalidation_policy(
+        BLADERF_CHANNEL_RX(1), false);
+    assert(invalidation_policy.reserve_setter);
+    assert(invalidation_policy.abort_rx_epoch);
 
     assert(bladerf2_loss_counter_snapshot(7, 0x12345678, 7, &loss_count));
     assert(loss_count == 0x0000000712345678ULL);
