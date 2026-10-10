@@ -212,6 +212,15 @@ also rejects unknown layout/format enums and X2 layouts on a one-channel board
 before touching stream state.
 Regression source was added; no build/test under the active source gate.
 
+Stream-lifecycle review then found that `sync_config()` changed shared FPGA
+format GPIOs while fencing only RX layouts. Timestamp, packet, 8-bit, and
+packed-sample modes are shared state, so TX layout configuration could alter
+RX interpretation and RX layout configuration could alter the TX datapath.
+The generic wrapper now revokes RX and TX validity for every sync format
+reconfiguration and exits before board mutation if either fence fails.
+Regression source covers both layouts and TX-fence failure; it remains
+unbuilt/unrun under the active gate.
+
 The direct RX/TX FIR setters also accepted arbitrary enum values through to
 the host RFIC controller. An invalid value was rejected only after RX/TX
 invalidation, and the controller's defensive default unlocked a mutex that the

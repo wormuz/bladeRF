@@ -1861,9 +1861,6 @@ int bladerf_sync_config(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    const bool is_rx =
-        (layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
-
     if ((format == BLADERF_FORMAT_SC8_Q7 ||
          format == BLADERF_FORMAT_SC8_Q7_META) &&
         strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
@@ -1871,25 +1868,31 @@ int bladerf_sync_config(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    if (is_rx) {
-        status = invalidate_rx_data_before_reconfigure(
-            dev, BLADERF_CHANNEL_RX(0),
-            BLADERF_RF_INVALIDATE_STREAM_CONFIG);
-        if (status != 0) {
-            return status;
-        }
+    /* Stream format controls are shared FPGA state: timestamp, packet,
+     * packed-sample, and 8-bit GPIO settings can affect either RF direction,
+     * regardless of the layout passed to this call. Revoke both certificates
+     * before the board mutates that shared data path. */
+    status = invalidate_rx_data_before_reconfigure(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_STREAM_CONFIG);
+    if (status != 0) {
+        return status;
     }
 
     MUTEX_LOCK(&dev->lock);
+
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
 
     status =
         dev->board->sync_config(dev, layout, format, num_buffers, buffer_size,
                                 num_transfers, stream_timeout);
 
     MUTEX_UNLOCK(&dev->lock);
-    if (is_rx) {
-        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
+    rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 

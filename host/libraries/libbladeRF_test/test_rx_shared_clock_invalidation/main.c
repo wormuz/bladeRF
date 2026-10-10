@@ -36,6 +36,8 @@ struct mock_state {
     unsigned int trigger_write_calls;
     unsigned int tx_fence_calls;
     int tx_fence_status;
+    unsigned int sync_config_calls;
+    bladerf_channel_layout sync_config_layout;
     unsigned int schedule_retune_calls;
     int schedule_retune_status;
     bladerf_channel scheduled_channel;
@@ -156,6 +158,25 @@ static int mock_tx_config_change_begin(struct bladerf *dev)
     return state->tx_fence_status;
 }
 
+static int mock_sync_config(struct bladerf *dev,
+                            bladerf_channel_layout layout,
+                            bladerf_format format,
+                            unsigned int num_buffers,
+                            unsigned int buffer_size,
+                            unsigned int num_transfers,
+                            unsigned int stream_timeout)
+{
+    struct mock_state *state = dev->board_data;
+    (void)format;
+    (void)num_buffers;
+    (void)buffer_size;
+    (void)num_transfers;
+    (void)stream_timeout;
+    state->sync_config_calls++;
+    state->sync_config_layout = layout;
+    return 0;
+}
+
 static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
                               bladerf_trigger_signal signal, uint8_t value)
 {
@@ -254,6 +275,7 @@ static const struct board_fns mock_board = {
     .trigger_fire = mock_trigger_fire,
     .write_trigger = mock_trigger_write,
     .tx_config_change_begin = mock_tx_config_change_begin,
+    .sync_config = mock_sync_config,
     .schedule_retune = mock_schedule_retune,
 };
 
@@ -598,6 +620,30 @@ int main(void)
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
            BLADERF_ERR_INVAL);
     assert(state.tx_fence_calls == 4 && state.trigger_arm_calls == 2);
+
+    /* Stream format GPIOs are shared by RX and TX, so either layout fences
+     * both directions before the board reconfigures the shared datapath. */
+    state.tx_fence_status = 0;
+    assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
+                               BLADERF_FORMAT_SC16_Q11,
+                               8, 1024, 4, 1000) == 0);
+    assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
+           state.tx_fence_calls == 5 && state.sync_config_calls == 1 &&
+           state.sync_config_layout == BLADERF_RX_X1);
+    assert(bladerf_sync_config(&dev, BLADERF_TX_X1,
+                               BLADERF_FORMAT_SC16_Q11,
+                               8, 1024, 4, 1000) == 0);
+    assert(state.invalidate_calls == 35 && state.complete_calls == 24 &&
+           state.tx_fence_calls == 6 && state.sync_config_calls == 2 &&
+           state.sync_config_layout == BLADERF_TX_X1);
+
+    state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
+    assert(bladerf_sync_config(&dev, BLADERF_TX_X1,
+                               BLADERF_FORMAT_SC16_Q11,
+                               8, 1024, 4, 1000) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.invalidate_calls == 36 && state.complete_calls == 25 &&
+           state.tx_fence_calls == 7 && state.sync_config_calls == 2);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
