@@ -314,12 +314,14 @@ static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
  * epoch in PENDING before changing the LO, so the data-plane fence is known
  * to be active before the RFIC starts moving. */
 static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
-                                 uint32_t timeout_ms, uint32_t *status_word)
+                                 uint64_t deadline_ns,
+                                 uint32_t *status_word)
 {
-    uint64_t deadline_ns = _monotonic_ns() +
-                           (uint64_t)timeout_ms * 1000000ULL;
     uint32_t value = 0;
 
+    if (_deadline_expired(deadline_ns)) {
+        return BLADERF_ERR_TIMEOUT;
+    }
     do {
         int status = nios_rx_epoch_status_read(dev, &value);
 #ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
@@ -403,12 +405,13 @@ static int _rx_epoch_abort_command(struct bladerf *dev)
  * Invalidate that incomplete epoch, then allocate the next ID relative to
  * the persistent FPGA epoch rather than the new handle. The gate remains
  * fail-closed in ERROR until the next explicit ARM. */
-static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
+static int _prepare_rx_epoch_id(struct bladerf *dev, uint64_t deadline_ns,
                                 uint8_t *epoch_id, uint32_t *status_word)
 {
-    uint64_t deadline_ns = _monotonic_ns() +
-                           (uint64_t)timeout_ms * 1000000ULL;
     uint8_t state, current_epoch;
+    if (_deadline_expired(deadline_ns)) {
+        return BLADERF_ERR_TIMEOUT;
+    }
     int status = _read_rx_epoch_state(dev, status_word, &state, &current_epoch);
 #ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
     _test_rx_transition_late_observation("EPOCH_PREPARE_STATUS");
@@ -2359,10 +2362,13 @@ static int _bladerf_rx_transition_begin(
         uint32_t epoch_status_word = 0;
         uint8_t epoch_id = 0;
 
+        const uint32_t epoch_timeout_ms =
+            request->timeout_ms ? request->timeout_ms : 1000;
+        const uint64_t epoch_deadline_ns = _monotonic_ns() +
+            (uint64_t)epoch_timeout_ms * 1000000ULL;
         stage_started_ns = _monotonic_ns();
         int epoch_status = _prepare_rx_epoch_id(
-            dev, request->timeout_ms ? request->timeout_ms : 1000,
-            &epoch_id, &epoch_status_word);
+            dev, epoch_deadline_ns, &epoch_id, &epoch_status_word);
         if (epoch_status == 0) {
             WITH_MUTEX(&dev->lock, {
                 board_data->rf_transition_epoch_id = epoch_id;
@@ -2376,6 +2382,9 @@ static int _bladerf_rx_transition_begin(
         if (epoch_status == 0 && board_data->sync[BLADERF_RX].initialized) {
             epoch_status = sync_rx_epoch_expect_id(
                 &board_data->sync[BLADERF_RX], epoch_id);
+        }
+        if (epoch_status == 0 && _deadline_expired(epoch_deadline_ns)) {
+            epoch_status = BLADERF_ERR_TIMEOUT;
         }
         if (epoch_status == 0) {
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
@@ -2392,11 +2401,12 @@ static int _bladerf_rx_transition_begin(
                     dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, epoch_id);
             }
         }
+        if (epoch_status == 0 && _deadline_expired(epoch_deadline_ns)) {
+            epoch_status = BLADERF_ERR_TIMEOUT;
+        }
         if (epoch_status == 0) {
             epoch_status = _wait_rx_epoch_fenced(
-                dev, epoch_id,
-                request->timeout_ms ? request->timeout_ms : 1000,
-                &epoch_status_word);
+                dev, epoch_id, epoch_deadline_ns, &epoch_status_word);
         }
         if (epoch_status != 0) {
             log_error("%s: epoch ARM/fence failed: transaction=%u epoch=%u "

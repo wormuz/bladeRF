@@ -5180,6 +5180,9 @@ struct bladerf_rx_transition_nios_timing {
 struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
+    /** Maximum time for epoch prepare, parser fencing, FPGA ARM, and the
+     *  matching FPGA PENDING acknowledgement. Zero selects the 1000 ms
+     *  default. The wait call has its own independent timeout. */
     uint32_t timeout_ms;
     /** Require FPGA epoch confirmation before the call reports
      *  BLADERF_RF_STATE_RX_DATA_VALID.
