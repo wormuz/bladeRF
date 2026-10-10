@@ -107,6 +107,18 @@ begin
         wait until rising_edge(clock);
         wait until link_active = '1';
 
+        -- With no sample writes, advance the watchdog to its terminal
+        -- count. The next edge would latch START_NO_PROGRESS. Assert the
+        -- fence during the preceding half-cycle, matching the RX gate's
+        -- combinational ARM indication, and prove it wins that same edge.
+        for i in 1 to 16 loop wait until rising_edge(clock); end loop;
+        wait until falling_edge(clock);
+        discard_active <= '1';
+        wait until rising_edge(clock);
+        assert fault_sticky = "000000"
+            report "epoch fence coincident with watchdog expiry latched a false fault"
+            severity failure;
+
         discard_active <= '1';
         for i in 1 to 40 loop wait until rising_edge(clock); end loop;
         assert fault_sticky = "000000"
