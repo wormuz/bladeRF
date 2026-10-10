@@ -2349,6 +2349,11 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                     target_hz, 0, board_data->tx_retune2_pending_count,
                     status);
+                /* Queue-clear failure leaves NIOS retunes unaccounted for.
+                 * Revoke TX at the FPGA boundary and require a mute ACK
+                 * before returning the failed direct tune. */
+                (void)bladerf2_tx_gate_abort_fail_closed(
+                    dev, board_data, 0);
             }
         }
         if (status != 0) {
