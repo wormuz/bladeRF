@@ -410,6 +410,36 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* Setup-write errors on temporary AUX ADC power changes are ambiguous;
+     * both telemetry APIs must still restore the power-down bit. */
+    {
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_AUXADC_CONFIG] = AUXADC_POWER_DOWN;
+        fail_write_once_reg = REG_AUXADC_CONFIG;
+        write_count = 0;
+        ret = ad9361_get_temp(&phy);
+        if (ret != -EIO || fail_write_once_reg != -1 || write_count != 2 ||
+            (fake_regs[REG_AUXADC_CONFIG] & AUXADC_POWER_DOWN) != 0) {
+            fprintf(stderr,
+                    "Temperature read skipped AUX ADC restore after setup error\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_regs[REG_AUXADC_CONFIG] = AUXADC_POWER_DOWN;
+        fail_write_once_reg = REG_AUXADC_CONFIG;
+        write_count = 0;
+        ret = ad9361_get_auxadc(&phy);
+        if (ret != -EIO || fail_write_once_reg != -1 || write_count != 2 ||
+            (fake_regs[REG_AUXADC_CONFIG] & AUXADC_POWER_DOWN) != 0) {
+            fprintf(stderr,
+                    "AUX ADC read skipped power restore after setup error\n");
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
+        read_count = write_count = 0;
+    }
+
     /* An ambiguous failure while temporarily clearing RX2 inversion must
      * still attempt the restore write before returning the primary error. */
     {
