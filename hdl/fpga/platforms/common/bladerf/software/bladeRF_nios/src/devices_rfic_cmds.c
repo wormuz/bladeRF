@@ -155,6 +155,11 @@ static void _reset_rfic(bool state)
  */
 static bool _rfic_deinitialize(struct rfic_state *state)
 {
+    state->samplerate_invalid[BLADERF_RX] = true;
+    state->samplerate_invalid[BLADERF_TX] = true;
+    state->filter_invalid[BLADERF_RX] = true;
+    state->filter_invalid[BLADERF_TX] = true;
+
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
 
@@ -623,6 +628,11 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
                              bladerf_channel channel,
                              uint32_t rate)
 {
+    bladerf_direction direction =
+        BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
+
+    state->samplerate_invalid[direction] = true;
+
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_set_tx_sampling_freq(state->phy, rate));
     } else {
@@ -655,6 +665,7 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
                                    DO_IDELAY | DO_ODELAY));
     }
 
+    state->samplerate_invalid[direction] = false;
     return true;
 }
 
@@ -670,6 +681,13 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
                              bladerf_channel channel,
                              uint32_t *rate)
 {
+    bladerf_direction direction =
+        BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
+
+    if (state->samplerate_invalid[direction]) {
+        return false;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_get_tx_sampling_freq(state->phy, rate));
     } else {
@@ -1091,10 +1109,12 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
                 return false;
         }
 
+        state->filter_invalid[BLADERF_TX] = true;
         CHECK_BOOL(ad9361_set_tx_fir_config(state->phy, *fir_config));
         CHECK_BOOL(ad9361_set_tx_fir_en_dis(state->phy, enable));
 
         state->txfir = txfir;
+        state->filter_invalid[BLADERF_TX] = false;
 
         return true;
     } else {
@@ -1128,10 +1148,12 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
                 return false;
         }
 
+        state->filter_invalid[BLADERF_RX] = true;
         CHECK_BOOL(ad9361_set_rx_fir_config(state->phy, *fir_config));
         CHECK_BOOL(ad9361_set_rx_fir_en_dis(state->phy, enable));
 
         state->rxfir = rxfir;
+        state->filter_invalid[BLADERF_RX] = false;
 
         return true;
     }
@@ -1152,8 +1174,14 @@ bool _rfic_cmd_rd_filter(struct rfic_state *state,
                          uint32_t *filter)
 {
     if (BLADERF_CHANNEL_IS_TX(channel)) {
+        if (state->filter_invalid[BLADERF_TX]) {
+            return false;
+        }
         *filter = (uint32_t)state->txfir;
     } else {
+        if (state->filter_invalid[BLADERF_RX]) {
+            return false;
+        }
         *filter = (uint32_t)state->rxfir;
     }
 

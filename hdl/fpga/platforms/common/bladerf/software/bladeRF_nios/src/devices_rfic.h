@@ -73,6 +73,12 @@ struct rfic_state {
     /* Frequency retrieval is invalid due to fastlock shenanigans */
     bool frequency_invalid[NUM_MODULES];
 
+    /* A failed/partial clock or FIR update makes cached configuration
+     * readback ambiguous. Keep getters fail-closed until a full setter
+     * operation commits successfully. */
+    bool samplerate_invalid[NUM_MODULES];
+    bool filter_invalid[NUM_MODULES];
+
     /* LO frequency at the last RFDC_CAL run for this direction. ADI
      * guidance (EngineerZone, RF DC offset calibration timeout thread):
      * RF DC offset cal is frequency-dependent and must be rerun after
