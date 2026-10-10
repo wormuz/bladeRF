@@ -2022,16 +2022,17 @@ static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
 static void test_rx_epoch_discard_rebases_to_oldest_inflight_sequence(void)
 {
     struct fixture f;
-    sync_buffer_status states[4] = {
+    sync_buffer_status states[5] = {
         SYNC_BUFFER_FULL, SYNC_BUFFER_IN_FLIGHT,
-        SYNC_BUFFER_FULL, SYNC_BUFFER_IN_FLIGHT,
+        SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_IN_FLIGHT,
+        SYNC_BUFFER_FULL,
     };
-    uint32_t sequences[4] = {1458, 1474, 1459, 1473};
-    bool dropped[4] = {false};
-    size_t lengths[4] = {128, 0, 128, 0};
+    uint32_t sequences[5] = {1458, 1474, 1460, 1473, 1459};
+    bool dropped[5] = {false};
+    size_t lengths[5] = {128, 0, 0, 0, 128};
 
     fixture_init(&f);
-    f.sync.buf_mgmt.num_buffers = 4;
+    f.sync.buf_mgmt.num_buffers = 5;
     f.sync.buf_mgmt.status = states;
     f.sync.buf_mgmt.buffer_seq = sequences;
     f.sync.buf_mgmt.buffer_dropped = dropped;
@@ -2046,7 +2047,9 @@ static void test_rx_epoch_discard_rebases_to_oldest_inflight_sequence(void)
 
     assert(states[0] == SYNC_BUFFER_EMPTY);
     assert(states[2] == SYNC_BUFFER_EMPTY);
-    assert(dropped[0] && dropped[2]);
+    assert(states[4] == SYNC_BUFFER_EMPTY);
+    assert(dropped[0] && dropped[4]);
+    assert(!dropped[2]);
     assert(states[1] == SYNC_BUFFER_IN_FLIGHT);
     assert(states[3] == SYNC_BUFFER_IN_FLIGHT);
     assert(f.sync.buf_mgmt.expected_seq == 1473);

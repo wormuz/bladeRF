@@ -177,6 +177,22 @@ static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)
     old_expected_seq = b->expected_seq;
     old_next_seq = b->next_seq;
 #endif
+    /* A completed out-of-order callback remains marked IN_FLIGHT while its
+     * payload is held in reorder[]. It is no longer owned by the USB stream,
+     * unlike a genuine submitted transfer. Retire those held payloads before
+     * choosing the oldest live transfer below; otherwise clearing reorder_len
+     * leaves the consumer waiting forever for a callback that already ran. */
+    for (size_t i = 0; i < b->reorder_len; ++i) {
+        const struct rx_reorder_entry *entry = &b->reorder[i];
+        if (!entry->dropped && entry->buf_idx < b->num_buffers &&
+            b->status[entry->buf_idx] == SYNC_BUFFER_IN_FLIGHT) {
+            b->status[entry->buf_idx] = SYNC_BUFFER_EMPTY;
+            b->actual_lengths[entry->buf_idx] = 0;
+            if (b->buffer_dropped != NULL) {
+                b->buffer_dropped[entry->buf_idx] = false;
+            }
+        }
+    }
     for (unsigned int i = 0; i < b->num_buffers; ++i) {
 #ifdef LOGGING_ENABLED
         switch (b->status[i]) {
