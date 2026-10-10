@@ -470,9 +470,8 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
             board_data->rf_transition_current_channel,
             board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_current_channel_valid);
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
     if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return;
     }
 
@@ -483,6 +482,7 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     event.flags = (uint32_t)format | transition_channel_flags;
     event.error_code = BLADERF_ERR_UNSUPPORTED;
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_layout_unsupported(struct bladerf *dev,
@@ -643,9 +643,8 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
         epoch_id = board_data->rf_transition_certified_epoch_id;
         timestamp_valid = true;
     }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
     if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return;
     }
 
@@ -663,7 +662,14 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     if (explicit_source) {
         rx_withheld_event_apply_source_provenance(board_data, &event);
     }
+    /* Keep the epoch snapshot and its durable event in one critical
+     * section. Otherwise a new transition and its first-valid-host-data
+     * event can be appended after this snapshot but before this withheld
+     * event, making an old diagnostic appear to revoke the new epoch. The
+     * RX event path already uses rx_async_epoch_lock -> event_lock ordering
+     * when committing epoch validity and first host data. */
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_data_withheld(struct bladerf *dev, uint32_t reason)
