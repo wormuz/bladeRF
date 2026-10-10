@@ -25,6 +25,7 @@
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
 #include "devices.h"
+#include "spi_arbiter_policy.h"
 #include "nios_axi_address_policy.h"
 #include "debug.h"
 #include "devices_inline.h"
@@ -413,23 +414,31 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
  *
  * Give up instead. Callers drive the RFIC, where a failed transfer is a bad
  * register value; a wedged Nios is a power cycle. */
+#ifdef ARBITER_0_BASE
+static void spi_arbiter_set_request(void *context, bool active)
+{
+    (void)context;
+    IOWR_32DIRECT(ARBITER_0_BASE, 0, active ? 1 : 2);
+}
+
+static uint8_t spi_arbiter_read_grant(void *context)
+{
+    (void)context;
+    return IORD_8DIRECT(ARBITER_0_BASE, 1);
+}
+#endif
+
 bool spi_arbiter_lock()
 {
 #ifdef ARBITER_0_BASE
     /* Arbitrary but bounded: a grant that has not arrived after this many
      * reads is not arriving. */
     uint32_t const TRIES = 100000;
-    uint32_t count       = 0;
-    uint8_t data;
-
-    IOWR_32DIRECT(ARBITER_0_BASE, 0, 1);
-
-    do {
-        data = IORD_8DIRECT(ARBITER_0_BASE, 1);
-        if ((data & 1) != 0) {
-            return true;
-        }
-    } while (++count < TRIES);
+    if (bladerf_spi_arbiter_acquire(TRIES, NULL,
+                                    spi_arbiter_set_request,
+                                    spi_arbiter_read_grant)) {
+        return true;
+    }
 
     DBG("%s: no SPI arbiter grant after %u tries\n", __FUNCTION__, TRIES);
     return false;
@@ -440,7 +449,7 @@ bool spi_arbiter_lock()
 
 void spi_arbiter_unlock()
 {
-// Applies only to bladeRF1
+// Built only when this board exposes the shared SPI arbiter.
 #ifdef ARBITER_0_BASE
     IOWR_32DIRECT(ARBITER_0_BASE, 0, 2);
 #endif  // ARBITER_0_BASE

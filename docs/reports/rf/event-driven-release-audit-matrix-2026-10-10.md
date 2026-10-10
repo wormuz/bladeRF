@@ -183,6 +183,13 @@ succeeds. No new defect was confirmed in these slices. The complete exported
 AD9361/no-OS and NIOS call-site inventory, fault injection, and runtime gates
 remain open; no build or test was run.
 
+The wider NIOS peripheral wait pass found a resource leak in the bounded SPI
+arbiter acquire path: timeout returned while leaving the NIOS request asserted.
+The arbiter could later grant that orphan request and remain owned after the
+failed caller had exited. Timeout now clears the request and acknowledges
+release through the same policy helper used by a focused delayed-grant/timeout
+regression source. The suite is authored but not run under the source gate.
+
 ### NIOS no-OS AXI timeout and init compile-path pass
 
 The NIOS no-OS adapter forwards AXI ADC/DAC reads and writes through
