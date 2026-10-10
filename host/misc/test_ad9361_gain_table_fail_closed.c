@@ -19,6 +19,7 @@ static unsigned table_commits;
 static bool cleanup_clock_stop_seen;
 static bool read_state_alert;
 static unsigned spi_write_calls;
+static unsigned spi_read_calls;
 static uint64_t delay_us_total;
 static const uint8_t (*expected_table)[3];
 static unsigned batch_row_calls;
@@ -76,6 +77,8 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 
     if (is_write) {
         ++spi_write_calls;
+    } else {
+        ++spi_read_calls;
     }
 
     if (is_write && addr == REG_GAIN_TABLE_CONFIG) {
@@ -155,6 +158,7 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     cleanup_clock_stop_seen = false;
     read_state_alert = false;
     spi_write_calls = 0;
+    spi_read_calls = 0;
     delay_us_total = 0;
     expected_table = NULL;
     batch_row_calls = 0;
@@ -433,6 +437,36 @@ static int test_batched_row_failure_invalidates_cache(void)
     return 0;
 }
 
+static int test_gain_access_rejects_unknown_table_before_spi(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+    struct rf_rx_gain gain = {0};
+    int status;
+
+    setup_phy(&phy, &pdata, &spi);
+    phy.current_table = NO_GAIN_TABLE;
+
+    status = ad9361_get_rx_gain(&phy, 1, &gain);
+    if (status != -EIO || spi_read_calls != 0 || spi_write_calls != 0) {
+        fprintf(stderr,
+                "get gain accepted unknown table: status=%d reads=%u writes=%u\n",
+                status, spi_read_calls, spi_write_calls);
+        return -1;
+    }
+
+    status = ad9361_set_rx_gain(&phy, 1, &gain);
+    if (status != -EIO || spi_read_calls != 0 || spi_write_calls != 0) {
+        fprintf(stderr,
+                "set gain accepted unknown table: status=%d reads=%u writes=%u\n",
+                status, spi_read_calls, spi_write_calls);
+        return -1;
+    }
+
+    return 0;
+}
+
 static int test_bist_api_rejects_missing_state_and_outputs(void)
 {
 	struct ad9361_rf_phy phy;
@@ -487,10 +521,11 @@ int main(void)
         test_retry_reloads_complete_table() != 0 ||
         test_batched_rows_preserve_payload_and_delay() != 0 ||
         test_batched_row_failure_invalidates_cache() != 0 ||
+        test_gain_access_rejects_unknown_table_before_spi() != 0 ||
 	    test_bist_api_rejects_missing_state_and_outputs() != 0) {
         return EXIT_FAILURE;
     }
 
-    puts("PASS: AD9361 RSSI/AuxADC, gain-table failure, and BIST argument guards");
+    puts("PASS: AD9361 RSSI/AuxADC, gain-table state, and BIST argument guards");
     return EXIT_SUCCESS;
 }
