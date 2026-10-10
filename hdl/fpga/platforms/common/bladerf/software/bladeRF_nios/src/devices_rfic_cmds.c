@@ -74,17 +74,12 @@ static bool _wait_for_ad9361_if_clock(void)
  * stale DC-offset correction indefinitely. */
 #define BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ 100000000ULL
 
-/* ad9361_dig_tune() was tried here to rerun the digital-interface
- * (DATA_CLK/RX_FRAME) timing sweep on every samplerate change. It was
- * removed -- see the comment in _rfic_cmd_wr_samplerate() below.
- * ad9361_dig_tune_rx() unconditionally pulses AXI_ADC_REG_RSTN on
- * axi_adc_core, which is exactly the reset axi_adc_init() guards with
- * `#ifndef BLADERF_NIOS_BUILD` for this platform. Calling it on every
- * retune produced a measured, reproducible spectral spur at a fixed
- * fraction of fs, present on both RX1 and RX2 (including a
- * 50-ohm-terminated port), that tracked the fix's presence. The
- * one-shot tuning ad9361_post_setup() already runs at init is
- * sufficient; it does not need to rerun per samplerate change. */
+/* ad9361_dig_tune() is called after an RX sample-rate change in
+ * _rfic_cmd_wr_samplerate() below. Its ADC reset was initially suspected
+ * of causing a spectral spur, but hardware ablation with the call removed
+ * showed the spur persisted and moved across Bluetooth FHSS channels. The
+ * detailed observation and reason for retaining the call are documented at
+ * the call site; do not treat the earlier suspicion as a confirmed defect. */
 
 extern int32_t ad9361_do_calib(struct ad9361_rf_phy *phy, uint32_t cal,
                                int32_t arg);
