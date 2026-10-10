@@ -21,17 +21,28 @@
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
 
+enum bladerf2_tx_rfic_observation {
+    BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE = 0,
+    BLADERF2_TX_RFIC_OBSERVATION_INVALID,
+    BLADERF2_TX_RFIC_OBSERVATION_VALID,
+};
+
 /* A TX FPGA link ACK does not prove the analog RFIC path is operational. */
-static inline bool bladerf2_tx_rfic_state_valid(
-    bool status_read_succeeded, uint8_t tx_pll_status,
-    uint8_t ensm_status, uint8_t bbpll_status)
+static inline enum bladerf2_tx_rfic_observation
+bladerf2_tx_rfic_observation(bool status_read_succeeded,
+                             uint8_t tx_pll_status,
+                             uint8_t ensm_status, uint8_t bbpll_status)
 {
+    if (!status_read_succeeded) {
+        return BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE;
+    }
     const uint8_t ensm = ensm_status & BLADERF2_AD9361_ENSM_STATE_MASK;
-    return status_read_succeeded &&
-           (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
+    return (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
            (bbpll_status & BLADERF2_AD9361_BBPLL_LOCK_BIT) != 0 &&
            (ensm == BLADERF2_AD9361_ENSM_STATE_TX ||
-            ensm == BLADERF2_AD9361_ENSM_STATE_FDD);
+            ensm == BLADERF2_AD9361_ENSM_STATE_FDD)
+        ? BLADERF2_TX_RFIC_OBSERVATION_VALID
+        : BLADERF2_TX_RFIC_OBSERVATION_INVALID;
 }
 
 /* The TX transport certificate is tied to the FPGA generation that the host
