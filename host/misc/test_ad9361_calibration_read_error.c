@@ -2357,10 +2357,11 @@ int main(void)
      * complete register transaction succeeds. */
     phy.bist_prbs_mode = BIST_INJ_TX;
     phy.bist_config = 0x55;
+    phy.bist_config_valid = true;
     fail_write_reg = REG_BIST_CONFIG;
     ret = ad9361_bist_prbs(&phy, BIST_DISABLE);
     if (ret != -EIO || phy.bist_prbs_mode != BIST_INJ_TX ||
-        phy.bist_config != 0x55) {
+        phy.bist_config != 0x55 || phy.bist_config_valid) {
         fprintf(stderr, "BIST PRBS hid write failure or changed cache\n");
         return EXIT_FAILURE;
     }
@@ -2369,6 +2370,11 @@ int main(void)
     if (ret != -EINVAL || phy.bist_prbs_mode != BIST_INJ_TX ||
         phy.bist_config != 0x55) {
         fprintf(stderr, "BIST PRBS accepted invalid mode or changed cache\n");
+        return EXIT_FAILURE;
+    }
+    ret = ad9361_bist_prbs(&phy, BIST_DISABLE);
+    if (ret != 0 || !phy.bist_config_valid) {
+        fprintf(stderr, "BIST PRBS did not revalidate confirmed state\n");
         return EXIT_FAILURE;
     }
 
