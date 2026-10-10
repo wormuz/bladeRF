@@ -32,6 +32,7 @@
 #include "ad936x_helpers.h"
 #include "devices_rfic.h"
 #include "rfic_calibration_policy.h"
+#include "rfic_init_policy.h"
 
 /* REG_CALIBRATION_CTRL mask bit for RF DC offset calibration
  * (ad9361.h RFDC_CAL == 1<<1, thirdparty/analogdevicesinc/no-OS/
@@ -207,6 +208,9 @@ static bool _rfic_initialize(struct rfic_state *state)
     bladerf_frequency init_freq;
     bladerf_sample_rate init_samprate;
     size_t i;
+    bool const restore_standby_state = rfic_init_restore_standby_state(
+        state->init_state == BLADERF_RFIC_INIT_STATE_STANDBY,
+        state->phy != NULL);
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_ENTER;
     /* Initialization can mutate clocks, ports, FIR and LO in stages. Until
@@ -215,10 +219,12 @@ static bool _rfic_initialize(struct rfic_state *state)
     /* A new PHY has its own RFDC calibration baseline. Never reuse the
      * previous instance's frequency when deciding whether a retune needs
      * calibration. */
-    rfic_rfdc_calibration_history_reset(
-        &state->last_rfdc_calib_freq[BLADERF_RX]);
-    rfic_rfdc_calibration_history_reset(
-        &state->last_rfdc_calib_freq[BLADERF_TX]);
+    if (!restore_standby_state) {
+        rfic_rfdc_calibration_history_reset(
+            &state->last_rfdc_calib_freq[BLADERF_RX]);
+        rfic_rfdc_calibration_history_reset(
+            &state->last_rfdc_calib_freq[BLADERF_TX]);
+    }
 
     /* Unset RFFE bits controlling RFIC */
     CHECK_TRUE(_clear_rffe_ctrl());
@@ -320,7 +326,7 @@ static bool _rfic_initialize(struct rfic_state *state)
     /* Per-module initialization */
     FOR_EACH_DIRECTION(dir)
     {
-        if (BLADERF_RFIC_INIT_STATE_OFF == state->init_state) {
+        if (!restore_standby_state) {
             ch = CHANNEL_IDX(dir, 0);
 
             if (BLADERF_CHANNEL_IS_TX(ch)) {
@@ -351,22 +357,14 @@ static bool _rfic_initialize(struct rfic_state *state)
     /* Per-channel initialization */
     FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
     {
-        switch (state->init_state) {
-            case BLADERF_RFIC_INIT_STATE_OFF:
-                /* Initialize TX Mute */
-                CHECK_BOOL(txmute_set_cached(state->phy, ch,
-                                             init_param->tx_attenuation_mdB));
-                CHECK_BOOL(txmute_set(state->phy, ch, false));
-                break;
-
-            case BLADERF_RFIC_INIT_STATE_STANDBY:
-                /* Restore saved TX Mute state */
-                CHECK_BOOL(
-                    txmute_set(state->phy, ch, (state->tx_mute_state[i])));
-                break;
-
-            default:
-                break;
+        if (restore_standby_state) {
+            /* Restore saved TX Mute state from the warm standby session. */
+            CHECK_BOOL(txmute_set(state->phy, ch, state->tx_mute_state[i]));
+        } else {
+            /* A cold/recovered init starts with the configured defaults. */
+            CHECK_BOOL(txmute_set_cached(state->phy, ch,
+                                         init_param->tx_attenuation_mdB));
+            CHECK_BOOL(txmute_set(state->phy, ch, false));
         }
     }
 
