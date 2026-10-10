@@ -1283,6 +1283,16 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+		phy.cached_synth_pd[0] = 0x12;
+		phy.cached_synth_pd[1] = 0x34;
+		fail_write_reg = REG_TX_SYNTH_POWER_DOWN_OVERRIDE;
+		ret = ad9361_synth_lo_powerdown(&phy, LO_OFF, LO_ON);
+		if (ret != -EIO || phy.cached_synth_pd[0] != 0x12 ||
+		    phy.cached_synth_pd[1] != 0x34) {
+			fprintf(stderr, "LO powerdown failure committed unconfirmed cache\n");
+			return EXIT_FAILURE;
+		}
+		fail_write_reg = -1;
         fail_write_reg = REG_RX_CLOCK_DATA_DELAY;
         ret = ad9361_write_clock_data_delays(&phy);
         if (ret != -EIO) {
