@@ -119,7 +119,12 @@ void pkt_16x64(struct pkt_buf *b)
         success = false;
 #endif
     } else if (!is_write && id == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT) {
-#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+#if defined(BLADERF_NIOS_PC_SIMULATION)
+        data = rx_epoch_status_snapshot_read();
+        success = true;
+#elif defined(BOARD_BLADERF_MICRO) && \
+      defined(RX_EPOCH_CTRL_BASE) && defined(RX_EPOCH_STATUS_BASE) && \
+      defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
         data = rx_epoch_status_snapshot_read();
         success = true;
 #else

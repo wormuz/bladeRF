@@ -211,16 +211,34 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * instance before the gate has ever armed, same as the other
          * BOARD_BLADERF_MICRO-only targets above. */
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
+#if defined(RX_EPOCH_CTRL_BASE) && defined(RX_EPOCH_STATUS_BASE) && \
+    defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             *data = rx_epoch_status_read();
             break;
+#else
+            *data = 0;
+            return false;
+#endif
 
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:
+#if defined(RX_EPOCH_CTRL_BASE) && defined(RX_EPOCH_STATUS_BASE) && \
+    defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             *data = rx_epoch_ts_lo_read();
             break;
+#else
+            *data = 0;
+            return false;
+#endif
 
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
+#if defined(RX_EPOCH_CTRL_BASE) && defined(RX_EPOCH_STATUS_BASE) && \
+    defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             *data = rx_epoch_ts_hi_read();
             break;
+#else
+            *data = 0;
+            return false;
+#endif
 
         case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
             if (addr != NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS) {
@@ -336,6 +354,8 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * are toggles, so the firmware (not a host shadow copy) decides
          * what changed. */
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL:
+#if defined(RX_EPOCH_CTRL_BASE) && defined(RX_EPOCH_STATUS_BASE) && \
+    defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             switch (addr) {
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_ARM:
                     rx_epoch_arm((uint8_t)data);
@@ -351,6 +371,11 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     return false;
             }
             break;
+#else
+            (void)addr;
+            (void)data;
+            return false;
+#endif
 
         /* Deprecated ABI target retained for old host packets. Fixed sample
          * discard is not part of RX epoch validity and this target has no
