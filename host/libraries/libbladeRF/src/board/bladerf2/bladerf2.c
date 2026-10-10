@@ -4767,9 +4767,15 @@ static int bladerf2_wishbone_master_write(struct bladerf *dev, uint32_t addr, ui
 
     status = dev->backend->wishbone_master_write(dev, addr, data);
     if (status == 0) {
-        /* Raw Wishbone access can write the TX gate itself. Reassert the
-         * fail-closed state after the untyped register write. */
-        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        /* Reassert mute after an untyped FPGA-bus write. The stock image has
+         * no Wishbone target, but a compatible image may expose TX controls
+         * on this path. */
+        if (board_data->rf_link_dir_on[1] ||
+            board_data->tx_retune2_failure_watch_active ||
+            board_data->tx_retune2_pending_count != 0) {
+            status = bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
+        }
     }
     return status;
 }
