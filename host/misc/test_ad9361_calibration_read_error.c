@@ -7,6 +7,7 @@
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_adc_core/axi_adc_core.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_dac_core/axi_dac_core.c"
 
 static int32_t fake_clock_chain_status;
 static unsigned fake_bandwidth_update_count;
@@ -98,6 +99,7 @@ static uint32_t fake_axi_regs[1024];
 static unsigned fake_axi_read_count;
 static unsigned fake_axi_write_count;
 static int32_t fake_axi_fail_write_offset = -1;
+static int32_t fake_axi_fail_read_offset = -1;
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
@@ -106,6 +108,8 @@ int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
         sizeof(fake_axi_regs) / sizeof(fake_axi_regs[0]))
         return -EINVAL;
     ++fake_axi_read_count;
+    if ((int32_t)offset == fake_axi_fail_read_offset)
+        return -EIO;
     *data = fake_axi_regs[offset / sizeof(uint32_t)];
     return 0;
 }
@@ -193,11 +197,16 @@ int main(void)
     struct no_os_spi_desc spi = {0};
     int32_t ret;
     struct axi_adc calibration_adc = { .num_channels = 2 };
+    struct axi_adc adc_init_error = { .name = "fake", .clock_hz = 123 };
     struct axi_adc *initialized_adc = &calibration_adc;
     struct axi_adc_init invalid_adc_init = {0};
+    struct axi_dac tx_dac = { .num_channels = 2, .clock_hz = 30000000 };
+    struct axi_dac *initialized_dac = &tx_dac;
     int32_t calib_integer = INT32_MIN;
     int32_t calib_fraction = INT32_MIN;
     uint64_t sampling_frequency = UINT64_MAX;
+    uint32_t dds_frequency = UINT32_C(0x12345678);
+    uint32_t sine_length = UINT32_MAX;
     unsigned axi_accesses_before;
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
@@ -241,6 +250,11 @@ int main(void)
         axi_adc_set_calib_bias(&calibration_adc, 0, 3, 1) != -EINVAL ||
         fake_axi_read_count + fake_axi_write_count != axi_accesses_before)
         return EXIT_FAILURE;
+    fake_axi_fail_read_offset = AXI_ADC_REG_STATUS;
+    if (axi_adc_init_finish(&adc_init_error) != -EIO ||
+        adc_init_error.clock_hz != 0)
+        return EXIT_FAILURE;
+    fake_axi_fail_read_offset = -1;
     if (axi_adc_update_active_channels(&calibration_adc, 4) != -EINVAL ||
         calibration_adc.mask_valid)
         return EXIT_FAILURE;
@@ -258,6 +272,32 @@ int main(void)
                                &calib_fraction) != 0 ||
         calib_integer != 0xfffe || calib_fraction != 0)
         return EXIT_FAILURE;
+
+    if (axi_dac_read(NULL, 0, &fake_axi_regs[0]) != -EINVAL ||
+        axi_dac_set_ddr(NULL, true) != -EINVAL ||
+        axi_dac_set_datasel(&tx_dac, 2, AXI_DAC_DATA_SEL_DMA) != -EINVAL ||
+        axi_dac_dds_set_phase(&tx_dac, 0, 360001) != -EINVAL ||
+        axi_dac_init_begin(&initialized_dac, NULL) != -EINVAL ||
+        initialized_dac != NULL ||
+        axi_dac_init(&initialized_dac, NULL) != -EINVAL ||
+        initialized_dac != NULL ||
+        axi_dac_dds_get_frequency(&tx_dac, 4, &dds_frequency) != -EINVAL ||
+        dds_frequency != UINT32_C(0x12345678))
+        return EXIT_FAILURE;
+    fake_axi_fail_read_offset = 0x48;
+    axi_accesses_before = fake_axi_write_count;
+    if (axi_dac_set_ddr(&tx_dac, true) != -EIO ||
+        fake_axi_write_count != axi_accesses_before)
+        return EXIT_FAILURE;
+    fake_axi_fail_read_offset = AXI_DAC_REG_DDS_INIT_INCR(0);
+    if (axi_dac_dds_set_frequency(&tx_dac, 0, 1000000) != -EIO)
+        return EXIT_FAILURE;
+    fake_axi_fail_read_offset = -1;
+    fake_axi_fail_write_offset = 0;
+    if (axi_dac_set_sine_lut(&tx_dac, 0, &sine_length) != -EIO ||
+        sine_length != 0)
+        return EXIT_FAILURE;
+    fake_axi_fail_write_offset = -1;
     struct refclk_scale invalid_rfpll_clock = {0};
     struct refclk_scale invalid_clock_factor = {0};
     phy.spi = &spi;
