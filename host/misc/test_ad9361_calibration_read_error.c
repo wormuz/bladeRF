@@ -2025,6 +2025,10 @@ int main(void)
      * direction's cached bytes, forcing subsequent LO verification to read
      * the actual RFIC profile. */
     {
+        uint8_t saved_rx0_flags = phy.fastlock.entry[0][0].flags;
+        uint8_t saved_rx7_flags = phy.fastlock.entry[0][7].flags;
+        uint8_t saved_tx0_flags = phy.fastlock.entry[1][0].flags;
+
         phy.fastlock.entry[0][0].flags = FASTLOOK_INIT;
         phy.fastlock.entry[0][7].flags = FASTLOOK_INIT;
         phy.fastlock.entry[1][0].flags = FASTLOOK_INIT;
@@ -2044,6 +2048,9 @@ int main(void)
             fprintf(stderr, "TX fastlock invalidation changed wrong cache entries\n");
             return EXIT_FAILURE;
         }
+        phy.fastlock.entry[0][0].flags = saved_rx0_flags;
+        phy.fastlock.entry[0][7].flags = saved_rx7_flags;
+        phy.fastlock.entry[1][0].flags = saved_tx0_flags;
     }
 
     /* Malformed clocks/durations are rejected before arithmetic or writes. */
