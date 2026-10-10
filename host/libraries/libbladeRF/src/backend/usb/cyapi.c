@@ -681,6 +681,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 
     for (unsigned int i = 0; i < data->num_transfers && status == 0; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            meta.actual_count = 0;
             next_buffer = stream->cb(stream->dev, stream, &meta, NULL,
                                      stream->samples_per_buffer,
                                      stream->user_data);
@@ -699,13 +700,28 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             } else if (next_buffer == BLADERF_STREAM_NO_DATA) {
                 continue;
             }
+
+            if (stream->format == BLADERF_FORMAT_PACKET_META) {
+                size_t packet_length;
+                status = async_tx_packet_meta_transfer_length(
+                    stream, &meta, &packet_length);
+                if (status != 0) {
+                    done = true;
+                    break;
+                }
+            }
         } else {
             next_buffer = stream->buffers[i];
         }
 
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
                 && stream->format == BLADERF_FORMAT_PACKET_META) {
-            status = submit_transfer(stream, next_buffer, meta.actual_count * sizeof(uint32_t));
+            size_t packet_length;
+            status = async_tx_packet_meta_transfer_length(
+                stream, &meta, &packet_length);
+            if (status == 0) {
+                status = submit_transfer(stream, next_buffer, packet_length);
+            }
         } else {
             status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
         }
@@ -752,6 +768,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                 done = true;
                 next_buffer = BLADERF_STREAM_SHUTDOWN;
             } else {
+                meta.actual_count = 0;
                 next_buffer = stream->cb(stream->dev, stream, &meta,
                                          data->transfers[i].buffer,
                                          bytes_to_samples(stream->format, (LONG &)len),
@@ -784,7 +801,13 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         } else if (next_buffer != BLADERF_STREAM_NO_DATA) {
             if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
                     && stream->format == BLADERF_FORMAT_PACKET_META) {
-                status = submit_transfer(stream, next_buffer, meta.actual_count * sizeof(uint32_t));
+                size_t packet_length;
+                status = async_tx_packet_meta_transfer_length(
+                    stream, &meta, &packet_length);
+                if (status == 0) {
+                    status = submit_transfer(stream, next_buffer,
+                                             packet_length);
+                }
             } else {
                 status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
             }

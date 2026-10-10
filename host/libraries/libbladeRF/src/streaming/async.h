@@ -105,6 +105,11 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
 /* Returns false when native RF state revoked asynchronous TX validity. */
 bool async_tx_buffer_valid(struct bladerf_stream *stream);
+
+/* Validate a PACKET_META TX callback's DWORD count against its buffer. */
+int async_tx_packet_meta_transfer_length(
+    struct bladerf_stream *stream, const struct bladerf_metadata *metadata,
+    size_t *length_bytes);
 /* Record a terminal TX backend error in native RF history and revoke TX. */
 void async_notify_tx_transport_failure(struct bladerf_stream *stream,
                                       int error_code);

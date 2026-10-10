@@ -90,6 +90,34 @@ static void test_sync_tx_x2_timestamp_units(void)
     assert(sync_samples_to_timestamp_delta(6, 1) == 6);
 }
 
+static void test_async_packet_meta_tx_length_is_bounded(void)
+{
+    struct bladerf_stream stream = {0};
+    struct bladerf_metadata metadata = {0};
+    size_t length_bytes = 0;
+
+    stream.layout = BLADERF_TX_X1;
+    stream.format = BLADERF_FORMAT_PACKET_META;
+    stream.samples_per_buffer = 16;
+
+    metadata.actual_count = METADATA_HEADER_SIZE / sizeof(uint32_t);
+    assert(async_tx_packet_meta_transfer_length(
+               &stream, &metadata, &length_bytes) == 0);
+    assert(length_bytes == METADATA_HEADER_SIZE);
+
+    metadata.actual_count = 16;
+    assert(async_tx_packet_meta_transfer_length(
+               &stream, &metadata, &length_bytes) == 0);
+    assert(length_bytes == sizeof(uint32_t) * 16);
+
+    metadata.actual_count = 17;
+    assert(async_tx_packet_meta_transfer_length(
+               &stream, &metadata, &length_bytes) == BLADERF_ERR_CALLBACK);
+    metadata.actual_count = METADATA_HEADER_SIZE / sizeof(uint32_t) - 1;
+    assert(async_tx_packet_meta_transfer_length(
+               &stream, &metadata, &length_bytes) == BLADERF_ERR_CALLBACK);
+}
+
 static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
 {
     struct bladerf_sync sync = {0};
@@ -2509,6 +2537,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_sync_tx_x2_timestamp_units();
+    test_async_packet_meta_tx_length_is_bounded();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
     test_epoch_transition_rejects_non_baseband_mux_before_mutation();

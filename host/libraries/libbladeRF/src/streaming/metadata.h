@@ -103,6 +103,26 @@
 
 #define METADATA_HEADER_SIZE (METADATA_FLAGS_OFFSET + METADATA_FLAGS_SIZE)
 
+/* Async TX PACKET_META callbacks report transfer length in 32-bit DWORDs.
+ * Validate it against the allocated buffer before a USB backend multiplies
+ * by sizeof(uint32_t), so malformed callbacks cannot submit an out-of-bounds
+ * read from the caller's buffer. */
+static inline bool metadata_tx_packet_length_bytes(
+    size_t buffer_bytes, unsigned int actual_count, size_t *length_bytes)
+{
+    const size_t header_dwords = METADATA_HEADER_SIZE / sizeof(uint32_t);
+    const size_t max_dwords = buffer_bytes / sizeof(uint32_t);
+
+    if (length_bytes == NULL ||
+        (METADATA_HEADER_SIZE % sizeof(uint32_t)) != 0 ||
+        actual_count < header_dwords || actual_count > max_dwords) {
+        return false;
+    }
+
+    *length_bytes = (size_t)actual_count * sizeof(uint32_t);
+    return true;
+}
+
 /* RX sample-META epoch tag occupies the otherwise unused first dword.
  * Bit 31 distinguishes it from legacy/sample metadata headers; bits 7:0
  * carry the FPGA's epoch ID. PACKET_META continues to use the dword as its

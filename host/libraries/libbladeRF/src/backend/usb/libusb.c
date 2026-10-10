@@ -1453,7 +1453,16 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             int status;
             if((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
                   && stream->format == BLADERF_FORMAT_PACKET_META) {
-               status = submit_transfer(stream, next_buffer, metadata.actual_count * sizeof(uint32_t));
+               size_t packet_length;
+               status = async_tx_packet_meta_transfer_length(
+                   stream, &metadata, &packet_length);
+               if (status == 0) {
+                   status = submit_transfer(stream, next_buffer,
+                                            packet_length);
+               } else {
+                   stream->error_code = status;
+                   stream->state = STREAM_SHUTTING_DOWN;
+               }
             } else {
                status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
             }
@@ -1725,6 +1734,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            metadata.actual_count = 0;
             buffer = stream->cb(dev,
                                 stream,
                                 &metadata,
@@ -1759,6 +1769,19 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                  * get any more buffers from the user */
                 break;
             }
+
+            if (buffer != BLADERF_STREAM_NO_DATA &&
+                (layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+                stream->format == BLADERF_FORMAT_PACKET_META) {
+                size_t packet_length;
+                status = async_tx_packet_meta_transfer_length(
+                    stream, &metadata, &packet_length);
+                if (status != 0) {
+                    stream->error_code = status;
+                    stream->state = STREAM_SHUTTING_DOWN;
+                    break;
+                }
+            }
         } else {
             buffer = stream->buffers[i];
         }
@@ -1766,7 +1789,12 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
         if (buffer != BLADERF_STREAM_NO_DATA) {
             if((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
                   && stream->format == BLADERF_FORMAT_PACKET_META) {
-               status = submit_transfer(stream, buffer, metadata.actual_count * sizeof(uint32_t));
+               size_t packet_length;
+               status = async_tx_packet_meta_transfer_length(
+                   stream, &metadata, &packet_length);
+               if (status == 0) {
+                   status = submit_transfer(stream, buffer, packet_length);
+               }
             } else {
                status = submit_transfer(stream, buffer, async_stream_buf_bytes(stream));
             }

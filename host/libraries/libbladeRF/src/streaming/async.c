@@ -30,6 +30,7 @@
 #include "backend/usb/usb.h"
 
 #include "async.h"
+#include "metadata.h"
 #include "board/board.h"
 #include "helpers/timeout.h"
 #include "helpers/have_cap.h"
@@ -227,6 +228,22 @@ bool async_tx_buffer_valid(struct bladerf_stream *stream)
     }
 
     return stream->dev->board->tx_async_buffer_valid(stream->dev);
+}
+
+int async_tx_packet_meta_transfer_length(
+    struct bladerf_stream *stream, const struct bladerf_metadata *metadata,
+    size_t *length_bytes)
+{
+    if (stream == NULL || metadata == NULL || length_bytes == NULL ||
+        stream->format != BLADERF_FORMAT_PACKET_META ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    return metadata_tx_packet_length_bytes(async_stream_buf_bytes(stream),
+                                           metadata->actual_count,
+                                           length_bytes)
+        ? 0 : BLADERF_ERR_CALLBACK;
 }
 
 void async_notify_tx_transport_failure(struct bladerf_stream *stream,

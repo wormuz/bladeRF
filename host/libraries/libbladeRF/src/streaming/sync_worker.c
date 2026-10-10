@@ -580,8 +580,11 @@ static void *tx_callback(struct bladerf *dev,
                             __FUNCTION__, b->cons_i);
 
                 ret = b->buffers[b->cons_i];
-                /* This is actually # of 32bit DWORDs for PACKET_META */
-                meta->actual_count = b->actual_lengths[b->cons_i];
+                /* Async PACKET_META actual_count is a DWORD count. The
+                 * synchronous buffer manager stores its length in bytes. */
+                assert((b->actual_lengths[b->cons_i] % sizeof(uint32_t)) == 0);
+                meta->actual_count = (unsigned int)(
+                    b->actual_lengths[b->cons_i] / sizeof(uint32_t));
                 b->status[b->cons_i] = SYNC_BUFFER_IN_FLIGHT;
                 b->cons_i = (b->cons_i + 1) % b->num_buffers;
             } else {
