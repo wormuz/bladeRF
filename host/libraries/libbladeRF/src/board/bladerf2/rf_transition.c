@@ -1731,8 +1731,8 @@ static void *rx_fault_monitor_task(void *arg)
                             false;
                     }
                     if (tx_link_status_error == 0 &&
-                        tx_rfic_observation ==
-                            BLADERF2_TX_RFIC_OBSERVATION_INVALID &&
+                        bladerf2_tx_rfic_observation_requires_hard_block(
+                            tx_rfic_observation) &&
                         !board_data->tx_rfic_state_invalid_reported) {
                         board_data->tx_rfic_state_invalid_reported = true;
                         board_data->tx_recovery_blocked = true;

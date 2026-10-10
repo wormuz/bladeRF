@@ -144,6 +144,12 @@ bladerf2_tx_rfic_observation(bool status_read_succeeded,
         : BLADERF2_TX_RFIC_OBSERVATION_INVALID;
 }
 
+static inline bool bladerf2_tx_rfic_observation_requires_hard_block(
+    enum bladerf2_tx_rfic_observation observation)
+{
+    return observation == BLADERF2_TX_RFIC_OBSERVATION_INVALID;
+}
+
 /* The TX transport certificate is tied to the FPGA generation that the host
  * acknowledged. A readable status word with a stale/missing acknowledgement
  * is a lost certificate, even when the sticky fault bit has not asserted. */
