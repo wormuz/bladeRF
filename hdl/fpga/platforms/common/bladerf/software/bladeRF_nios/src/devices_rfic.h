@@ -189,6 +189,8 @@ static char const RFIC_ERR_FMT[] = "%s: error: %s returned %x (-%x)\n";
 #define RFIC_ERR(thing, retval) \
     DBG(RFIC_ERR_FMT, __FUNCTION__, thing, retval, -retval)
 
+#include "rfic_check.h"
+
 /**
  * @brief      Error-catching wrapper
  *
@@ -196,15 +198,6 @@ static char const RFIC_ERR_FMT[] = "%s: error: %s returned %x (-%x)\n";
  *
  * @return     false on error (_fn() < 0), continues otherwise
  */
-#define CHECK_BOOL(_fn)         \
-    do {                        \
-        int _s = _fn;           \
-        if (_s < 0) {           \
-            RFIC_ERR(#_fn, _s); \
-            return false;       \
-        }                       \
-    } while (0)
-
 static inline bool _rfic_is_initialized(struct rfic_state *state)
 {
     return BLADERF_RFIC_INIT_STATE_ON == state->init_state;

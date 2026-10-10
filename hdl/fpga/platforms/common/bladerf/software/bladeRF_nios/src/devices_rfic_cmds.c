@@ -100,7 +100,7 @@ extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config_int4;
 /**
  * @brief      Clear RFFE control bits
  */
-static void _clear_rffe_ctrl()
+static bool _clear_rffe_ctrl(void)
 {
     uint32_t reg;
 
@@ -115,7 +115,8 @@ static void _clear_rffe_ctrl()
     reg &= ~(1 << RFFE_CONTROL_MIMO_TX_EN_0);
     reg &= ~(1 << RFFE_CONTROL_MIMO_RX_EN_1);
     reg &= ~(1 << RFFE_CONTROL_MIMO_TX_EN_1);
-    rffe_csr_write(reg);
+    return rffe_csr_write_checked(
+        reg, (1u << RFFE_CONTROL_ADF_MUXOUT) - 1u);
 }
 
 /**
@@ -123,7 +124,7 @@ static void _clear_rffe_ctrl()
  *
  * @param[in]  state  true to reset the device, false to un-reset device
  */
-static void _reset_rfic(bool state)
+static bool _reset_rfic(bool state)
 {
     uint32_t reg;
 
@@ -135,7 +136,7 @@ static void _reset_rfic(bool state)
         reg |= 1 << RFFE_CONTROL_RESET_N;
     }
 
-    rffe_csr_write(reg);
+    return rffe_csr_write_checked(reg, 1u << RFFE_CONTROL_RESET_N);
 }
 
 
@@ -156,7 +157,7 @@ static bool _rfic_deinitialize(struct rfic_state *state)
     state->filter_invalid[BLADERF_TX] = true;
 
     /* Unset RFFE bits controlling RFIC */
-    _clear_rffe_ctrl();
+    const bool rffe_cleared = _clear_rffe_ctrl();
     /* RFFE is already unavailable. If ADI teardown fails, do not keep
      * advertising the previous ON/STANDBY state as usable. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
@@ -181,7 +182,7 @@ static bool _rfic_deinitialize(struct rfic_state *state)
 
     DBG("*** RFIC Control Deinitialized ***\n");
 
-    return true;
+    return rffe_cleared;
 }
 
 /**
@@ -204,7 +205,7 @@ static bool _rfic_initialize(struct rfic_state *state)
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
     /* Unset RFFE bits controlling RFIC */
-    _clear_rffe_ctrl();
+    CHECK_TRUE(_clear_rffe_ctrl());
     state->init_stage = BLADERF_RFIC_INIT_STAGE_RFFE_CLEARED;
 
     /* Initialize AD9361 if it isn't initialized */
@@ -225,7 +226,7 @@ static bool _rfic_initialize(struct rfic_state *state)
          * Release the pin instead: after a cold power-up the part may still
          * be held in reset, and it has to be running before ad9361_init
          * touches the AXI core. */
-        _reset_rfic(false);
+        CHECK_TRUE(_reset_rfic(false));
         usleep(1000);
         state->init_stage = BLADERF_RFIC_INIT_STAGE_RESET_OUT;
 
@@ -248,7 +249,8 @@ static bool _rfic_initialize(struct rfic_state *state)
             uint32_t reg = rffe_csr_read();
 
             reg |= (1 << RFFE_CONTROL_ENABLE);
-            rffe_csr_write(reg);
+            CHECK_TRUE(rffe_csr_write_checked(
+                reg, 1u << RFFE_CONTROL_ENABLE));
         }
         state->init_stage = BLADERF_RFIC_INIT_STAGE_ENABLE_SET;
 
@@ -311,16 +313,16 @@ static bool _rfic_initialize(struct rfic_state *state)
 
             /* Switching the frequency twice seems essential for calibration
              * to be successful. */
-            CHECK_BOOL(_rfic_cmd_wr_frequency(state, ch, RESET_FREQUENCY));
+            CHECK_TRUE(_rfic_cmd_wr_frequency(state, ch, RESET_FREQUENCY));
 
-            CHECK_BOOL(_rfic_cmd_wr_filter(state, ch,
+            CHECK_TRUE(_rfic_cmd_wr_filter(state, ch,
                                            (BLADERF_TX == dir)
                                                ? BLADERF_RFIC_TXFIR_DEFAULT
                                                : BLADERF_RFIC_RXFIR_DEFAULT));
 
-            CHECK_BOOL(_rfic_cmd_wr_samplerate(state, ch, init_samprate));
+            CHECK_TRUE(_rfic_cmd_wr_samplerate(state, ch, init_samprate));
 
-            CHECK_BOOL(_rfic_cmd_wr_frequency(state, ch, init_freq));
+            CHECK_TRUE(_rfic_cmd_wr_frequency(state, ch, init_freq));
         }
     }
 
@@ -374,10 +376,10 @@ static bool _rfic_standby(struct rfic_state *state)
     }
 
     /* Unset RFFE bits controlling RFIC */
-    _clear_rffe_ctrl();
     /* A failed mute snapshot/write must not leave status reporting ON after
      * the RF enable path has already been cleared. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    CHECK_TRUE(_clear_rffe_ctrl());
 
     /* Cache current txmute state and put it aside */
     FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
@@ -388,13 +390,13 @@ static bool _rfic_standby(struct rfic_state *state)
 
     /* Reset frequencies if they're invalid */
     if (state->frequency_invalid[BLADERF_TX]) {
-        CHECK_BOOL(
+            CHECK_TRUE(
             _rfic_cmd_wr_frequency(state, BLADERF_CHANNEL_TX(0),
                                    init_param->tx_synthesizer_frequency_hz));
     }
 
     if (state->frequency_invalid[BLADERF_RX]) {
-        CHECK_BOOL(
+            CHECK_TRUE(
             _rfic_cmd_wr_frequency(state, BLADERF_CHANNEL_RX(0),
                                    init_param->rx_synthesizer_frequency_hz));
     }
@@ -617,7 +619,7 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
 #endif
 
     /* Write RFFE control register */
-    rffe_csr_write(reg);
+    CHECK_TRUE(rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK));
 
     return true;
 }
@@ -760,7 +762,7 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
         }
     }
 
-    rffe_csr_write(reg);
+    CHECK_TRUE(rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK));
 
     CHECK_BOOL(set_ad9361_port_by_freq(
         state->phy, port_ch, _rffe_ch_enabled(reg, port_ch), frequency));

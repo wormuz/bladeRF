@@ -241,8 +241,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             break;
 
         case NIOS_PKT_8x32_TARGET_RFFE_CSR:
-            rffe_csr_write(data);
-            break;
+            return rffe_csr_write_checked(data, RFFE_CSR_OUTPUT_MASK);
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x32_TARGET_ADF400X:

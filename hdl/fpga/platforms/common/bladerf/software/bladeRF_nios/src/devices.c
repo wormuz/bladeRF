@@ -1030,11 +1030,6 @@ bool adi_rfport_select(fastlock_profile *p)
 #ifdef BOARD_BLADERF_MICRO
 bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
 {
-#ifndef GPIO_RFFE_0_BASE
-    (void)m;
-    (void)p;
-    return false;
-#else
     static const uint32_t tx_spdt_shift = RFFE_CONTROL_TX_SPDT_1;
     static const uint32_t tx_spdt_mask  = (0xF << tx_spdt_shift);
     static const uint32_t rx_spdt_shift = RFFE_CONTROL_RX_SPDT_1;
@@ -1059,9 +1054,7 @@ bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
     }
     rffe_gpio = (rffe_gpio & ~mask) | expected;
 
-    rffe_csr_write(rffe_gpio);
-    return (rffe_csr_read() & mask) == expected;
-#endif
+    return rffe_csr_write_checked(rffe_gpio, mask);
 }
 #endif  // BOARD_BLADERF_MICRO
 

@@ -33,6 +33,7 @@
 #include "altera_avalon_spi.h"
 #include "altera_avalon_jtag_uart_regs.h"
 #include "altera_avalon_pio_regs.h"
+#include "rffe_csr_policy.h"
 #include "nios_pkt_8x32.h"
 
 /* Independent FPGA system-clock monitor, exposed on control PIO GPI[27]. */
@@ -79,6 +80,21 @@ static inline void rffe_csr_write(uint32_t value)
     #ifdef GPIO_RFFE_0_BASE
     IOWR_ALTERA_AVALON_PIO_DATA(GPIO_RFFE_0_BASE, value);
     #endif
+}
+
+/* Verify only the requested output fields, and fail closed when the PIO is
+ * absent. */
+static inline bool rffe_csr_write_checked(uint32_t value,
+                                          uint32_t verify_mask)
+{
+#ifdef GPIO_RFFE_0_BASE
+    rffe_csr_write(value);
+    return rffe_csr_outputs_match(value, rffe_csr_read(), verify_mask);
+#else
+    (void)value;
+    (void)verify_mask;
+    return false;
+#endif
 }
 
 /* RF link status: which USB speed the GPIF buffer geometry was latched at,
