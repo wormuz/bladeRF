@@ -21,6 +21,7 @@ static uint8_t recalled_port;
 static uint8_t recalled_spdt;
 static bool fail_profile_load;
 static bool fail_profile_recall;
+static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_read;
 
@@ -50,11 +51,12 @@ bool adi_rfport_select(fastlock_profile *profile)
     return true;
 }
 
-void adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)
+bool adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)
 {
     (void)module;
     (void)profile;
     spdt_count++;
+    return !fail_spdt_select;
 }
 
 bool tamer_schedule(bladerf_module module, uint64_t timestamp)
@@ -221,6 +223,26 @@ static int check_schedule_ready_lifecycle(void)
         pkt_retune2_completion_word(4) != 0x3456789au ||
         pkt_retune2_completion_word(5) != 2u) {
         fputs("TX completion record did not preserve sequence/profile\n",
+              stderr);
+        return 1;
+    }
+
+    tx_profile.profile_num = 6;
+    if (enqueue_retune(&tx_queue, &tx_profile, 6,
+                       UINT64_C(0x56789abcd)) != 1) {
+        fputs("failed to enqueue TX RF switch readback failure case\n",
+              stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    retune_isr(&tx_queue);
+    fail_spdt_select = true;
+    pkt_retune2_work();
+    fail_spdt_select = false;
+    if (tx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 2 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1) {
+        fputs("TX RF switch readback failure was reported as success\n",
               stderr);
         return 1;
     }

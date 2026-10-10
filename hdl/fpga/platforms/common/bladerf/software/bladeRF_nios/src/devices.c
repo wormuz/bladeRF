@@ -1028,26 +1028,40 @@ bool adi_rfport_select(fastlock_profile *p)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
+bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
 {
+#ifndef GPIO_RFFE_0_BASE
+    (void)m;
+    (void)p;
+    return false;
+#else
     static const uint32_t tx_spdt_shift = RFFE_CONTROL_TX_SPDT_1;
     static const uint32_t tx_spdt_mask  = (0xF << tx_spdt_shift);
     static const uint32_t rx_spdt_shift = RFFE_CONTROL_RX_SPDT_1;
     static const uint32_t rx_spdt_mask  = (0xF << rx_spdt_shift);
 
     uint32_t rffe_gpio;
+    uint32_t expected;
+    uint32_t mask;
+
+    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
+        return false;
+    }
 
     rffe_gpio = rffe_csr_read();
 
     if (BLADERF_CHANNEL_IS_TX(m)) {
-        rffe_gpio &= (~tx_spdt_mask);
-        rffe_gpio |= ((p->spdt >> 4) << tx_spdt_shift);
+        mask = tx_spdt_mask;
+        expected = ((uint32_t)(p->spdt >> 4) << tx_spdt_shift) & mask;
     } else {
-        rffe_gpio &= (~rx_spdt_mask);
-        rffe_gpio |= ((p->spdt & 0xf) << rx_spdt_shift);
+        mask = rx_spdt_mask;
+        expected = ((uint32_t)(p->spdt & 0xf) << rx_spdt_shift) & mask;
     }
+    rffe_gpio = (rffe_gpio & ~mask) | expected;
 
     rffe_csr_write(rffe_gpio);
+    return (rffe_csr_read() & mask) == expected;
+#endif
 }
 #endif  // BOARD_BLADERF_MICRO
 

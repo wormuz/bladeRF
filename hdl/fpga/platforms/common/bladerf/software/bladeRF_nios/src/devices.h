@@ -280,7 +280,7 @@ bool adi_rfport_select(fastlock_profile *p);
  * @param m    Which module's switches to control.
  * @param *p   Fast lock profile structure
  */
-void adi_rfspdt_select(bladerf_module m, fastlock_profile *p);
+bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p);
 
 /**
  * Read from Si5338 clock generator register

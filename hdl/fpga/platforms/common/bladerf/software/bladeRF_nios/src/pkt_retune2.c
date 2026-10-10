@@ -354,7 +354,9 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     }
 
     /* Adjust the RF switches */
-    adi_rfspdt_select(module, p);
+    if (!adi_rfspdt_select(module, p)) {
+        return false;
+    }
 #ifdef BLADERF_NIOS_LIBAD936X
     if (readback_frequency_hz != NULL &&
         !rfic_read_frequency_live(module, p->profile_num,
