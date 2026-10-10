@@ -2695,8 +2695,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
 
         /* Save a copy of the TX fast lock profile to the Nios */
-        dev->backend->rffe_fastlock_save(dev, true, quick_tune->rffe_profile,
-                                         quick_tune->nios_profile);
+        CHECK_STATUS(dev->backend->rffe_fastlock_save(
+            dev, true, quick_tune->rffe_profile, quick_tune->nios_profile));
 
         /* Set the TX band */
         quick_tune->port = (pm->rfic_port << 6);
@@ -2720,8 +2720,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
 
         /* Save a copy of the RX fast lock profile to the Nios */
-        dev->backend->rffe_fastlock_save(dev, false, quick_tune->rffe_profile,
-                                         quick_tune->nios_profile);
+        CHECK_STATUS(dev->backend->rffe_fastlock_save(
+            dev, false, quick_tune->rffe_profile, quick_tune->nios_profile));
 
         /* Set the RX bit */
         quick_tune->port = NIOS_PKT_RETUNE2_PORT_IS_RX_MASK;
