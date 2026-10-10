@@ -120,6 +120,20 @@ transition; queue acceptance is not IQ-valid evidence. No new source defect
 confirmed in this slice. ISR/cancel race injection, comparator stopped-clock,
 and exact-image retune timing remain open.
 
+### Sync RX delivery/invalidation linearization slice
+
+`sync_rx()` snapshots the RX generation before locking the parser, checks it
+while consuming buffers, validates the native certificate immediately before
+copying META IQ, then rechecks the generation at the return boundary while
+holding the generation lock through sync-lock release. If invalidation won the
+race, it clears `actual_count` and epoch metadata and reports a withheld-data
+reason; copied bytes are not reported as successful samples. Python drains RF
+events after the native call; if an otherwise successful read cannot complete
+event dispatch, it zeros the output buffer and raises. No additional source
+defect confirmed in this slice.
+Timestamp-boundary arithmetic, all parser failure branches, event-history
+overrun interleavings, and deferred regression execution remain open.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
