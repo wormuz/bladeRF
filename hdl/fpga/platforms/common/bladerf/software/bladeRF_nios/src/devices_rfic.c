@@ -46,7 +46,8 @@ void rfic_invalidate_frequency(bladerf_module module)
     state.frequency_invalid[module] = true;
 }
 
-bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz)
+bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
+                              uint64_t *frequency_hz)
 {
     int32_t status;
 
@@ -55,9 +56,11 @@ bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz)
     }
 
     if (module == BLADERF_MODULE_RX) {
-        status = ad9361_get_rx_lo_freq(state.phy, frequency_hz);
+        status = ad9361_rx_fastlock_get_freq(state.phy, profile,
+                                             frequency_hz);
     } else if (module == BLADERF_MODULE_TX) {
-        status = ad9361_get_tx_lo_freq(state.phy, frequency_hz);
+        status = ad9361_tx_fastlock_get_freq(state.phy, profile,
+                                             frequency_hz);
     } else {
         return false;
     }

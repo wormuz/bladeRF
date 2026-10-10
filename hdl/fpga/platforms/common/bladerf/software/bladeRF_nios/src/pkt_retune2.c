@@ -33,7 +33,8 @@
 
 #ifdef BLADERF_NIOS_LIBAD936X
 void rfic_invalidate_frequency(bladerf_module module);
-bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz);
+bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
+                              uint64_t *frequency_hz);
 #endif  // BLADERF_NIOS_LIBAD936X
 
 #ifdef BLADERF_NIOS_DEBUG
@@ -355,7 +356,8 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     adi_rfspdt_select(module, p);
 #ifdef BLADERF_NIOS_LIBAD936X
     if (readback_frequency_hz != NULL &&
-        !rfic_read_frequency_live(module, readback_frequency_hz)) {
+        !rfic_read_frequency_live(module, p->profile_num,
+                                  readback_frequency_hz)) {
         return false;
     }
 #else
@@ -598,16 +600,21 @@ void pkt_retune2(struct pkt_buf *b)
             requested_profile.spdt = spdt;
             if (timestamp == NIOS_PKT_RETUNE2_NOW) {
                 /* Fire off this retune operation now */
-                *profile = requested_profile;
                 switch (module) {
                     case BLADERF_MODULE_RX:
                     case BLADERF_MODULE_TX:
                         /* Load the profile data into RFFE memory */
-                        if (!profile_load(module, profile)) {
+                        /* Do not publish the new BBP profile cache entry
+                         * until every SPI write needed to load it has
+                         * succeeded. A failed upload must leave the prior
+                         * NIOS profile usable for a later retune. */
+                        if (!profile_load(module, &requested_profile)) {
                             INCREMENT_ERROR_COUNT();
                             status = -1;
                             break;
                         }
+
+                        *profile = requested_profile;
 
                         /* Activate the fast lock profile for this retune */
                         if (profile_activate(module, profile, NULL)) {

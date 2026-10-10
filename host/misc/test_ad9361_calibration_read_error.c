@@ -1339,6 +1339,15 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+
+        fail_read_reg = REG_TX_FAST_LOCK_PROGRAM_READ;
+        ret = ad9361_tx_fastlock_get_freq(&phy, 0, &frequency);
+        if (ret != -EIO || frequency != UINT64_C(0xfeedface)) {
+            fprintf(stderr, "TX fastlock getter hid profile SPI error: ret=%" PRId32
+                    " frequency=%" PRIu64 "\n", ret, frequency);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
     }
 
     /* Malformed clocks/durations are rejected before arithmetic or writes. */

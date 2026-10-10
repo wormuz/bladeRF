@@ -4,6 +4,9 @@
 
 #include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c"
 
+fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
+fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
+
 static unsigned load_count;
 static unsigned schedule_count;
 static unsigned recall_count;
@@ -57,6 +60,52 @@ void tamer_schedule(bladerf_module module, uint64_t timestamp)
     schedule_count++;
     scheduled_module = module;
     scheduled_timestamp = timestamp;
+}
+
+uint64_t time_tamer_read(bladerf_module module)
+{
+    (void)module;
+    return 0;
+}
+
+bool tamer_cancel(bladerf_module module)
+{
+    (void)module;
+    return true;
+}
+
+static int check_immediate_upload_failure_preserves_profile(void)
+{
+    struct pkt_buf request = {
+        .req = {
+            [NIOS_PKT_RETUNE2_IDX_MAGIC] = NIOS_PKT_RETUNE2_MAGIC,
+            [NIOS_PKT_RETUNE2_IDX_NIOS_PROFILE] = 0,
+            [NIOS_PKT_RETUNE2_IDX_RFFE_PROFILE] = 3,
+            [NIOS_PKT_RETUNE2_IDX_RFFE_PORT] = 0x40,
+            [NIOS_PKT_RETUNE2_IDX_SPDT] = 0x20,
+        },
+    };
+
+    memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
+    fastlocks_tx[0].profile_num = 1;
+    fastlocks_tx[0].port = 0x10;
+    fastlocks_tx[0].spdt = 0x04;
+    fastlocks_tx[0].state = FASTLOCK_STATE_BBP;
+
+    fail_profile_load = true;
+    pkt_retune2(&request);
+    fail_profile_load = false;
+
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        fastlocks_tx[0].profile_num != 1 ||
+        fastlocks_tx[0].port != 0x10 ||
+        fastlocks_tx[0].spdt != 0x04 ||
+        fastlocks_tx[0].state != FASTLOCK_STATE_BBP) {
+        fputs("failed immediate TX upload corrupted cached profile\n",
+              stderr);
+        return 1;
+    }
+    return 0;
 }
 
 static int check_schedule_ready_lifecycle(void)
@@ -310,6 +359,9 @@ int main(void)
     }
 
     if (check_schedule_ready_lifecycle() != 0) {
+        return 1;
+    }
+    if (check_immediate_upload_failure_preserves_profile() != 0) {
         return 1;
     }
     if (check_deferred_failure_reporting() != 0) {
