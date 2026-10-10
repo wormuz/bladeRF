@@ -586,6 +586,32 @@ static int wait_for_buffer(struct buffer_mgmt *b,
 #   define SYNC_WORKER_START_TIMEOUT_MS 250
 #endif
 
+/* Synchronous RX/TX timeout_ms is a deadline for the whole API call, not a
+ * fresh allowance for every buffer wait. Use CLOCK_MONOTONIC so wall-clock
+ * adjustments cannot extend or prematurely expire a stream operation. */
+static int sync_timeout_remaining_ms(uint64_t call_start_ns,
+                                     unsigned int timeout_ms,
+                                     unsigned int *remaining_ms)
+{
+    struct timespec now;
+    uint64_t now_ns, elapsed_ns, remaining_ns;
+
+    if (remaining_ms == NULL || timeout_ms == 0 ||
+        clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    now_ns = (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+    elapsed_ns = now_ns >= call_start_ns ? now_ns - call_start_ns : 0;
+    if (elapsed_ns >= (uint64_t)timeout_ms * 1000000ULL) {
+        return BLADERF_ERR_TIMEOUT;
+    }
+
+    remaining_ns = (uint64_t)timeout_ms * 1000000ULL - elapsed_ns;
+    *remaining_ms = (unsigned int)((remaining_ns + 999999ULL) / 1000000ULL);
+    return 0;
+}
+
 int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms)
 {
     int status;
@@ -1099,7 +1125,12 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
     if (timeout_ms != 0) {
-        call_start_ns = wallclock_get_current_nsec();
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        call_start_ns = (uint64_t)now.tv_sec * 1000000000ULL +
+                        (uint64_t)now.tv_nsec;
     }
 
     rx_epoch_generation = rx_epoch_generation_snapshot(s);
@@ -1185,12 +1216,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
          * A timestamped read can discard many packets while searching for a
          * future target; checking the deadline only in WAIT_FOR_BUFFER lets
          * a continuously busy stream run past timeout indefinitely. */
-        if (timeout_ms != 0 && call_start_ns != 0) {
-            const uint64_t now_ns = wallclock_get_current_nsec();
-            if (now_ns >= call_start_ns &&
-                now_ns - call_start_ns >=
-                    (uint64_t)timeout_ms * 1000000ULL) {
-                status = BLADERF_ERR_TIMEOUT;
+        if (timeout_ms != 0) {
+            unsigned int remaining_ms;
+            status = sync_timeout_remaining_ms(call_start_ns, timeout_ms,
+                                               &remaining_ms);
+            if (status != 0) {
                 break;
             }
         }
@@ -1253,13 +1283,27 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                 break;
 
 
-            case SYNC_STATE_START_WORKER:
+            case SYNC_STATE_START_WORKER: {
                 sync_worker_submit_request(s->worker, SYNC_WORKER_START);
+
+                unsigned int start_timeout_ms =
+                    SYNC_WORKER_START_TIMEOUT_MS;
+                if (timeout_ms != 0) {
+                    unsigned int remaining_ms;
+                    status = sync_timeout_remaining_ms(
+                        call_start_ns, timeout_ms, &remaining_ms);
+                    if (status != 0) {
+                        break;
+                    }
+                    if (remaining_ms < start_timeout_ms) {
+                        start_timeout_ms = remaining_ms;
+                    }
+                }
 
                 status = sync_worker_wait_for_state(
                                                 s->worker,
                                                 SYNC_WORKER_STATE_RUNNING,
-                                                SYNC_WORKER_START_TIMEOUT_MS);
+                                                start_timeout_ms);
 
                 if (status == 0) {
                     s->state = SYNC_STATE_WAIT_FOR_BUFFER;
@@ -1271,10 +1315,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                      * rather than a worker that never started. */
                     log_warning("%s: worker did not reach RUNNING in %u ms: "
                                 "%s\n", __FUNCTION__,
-                                SYNC_WORKER_START_TIMEOUT_MS,
+                                start_timeout_ms,
                                 bladerf_strerror(status));
                 }
                 break;
+            }
 
             case SYNC_STATE_WAIT_FOR_BUFFER:
                 MUTEX_LOCK(&b->lock);
@@ -1410,17 +1455,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 __FUNCTION__, b->cons_i);
                 } else {
                     unsigned int wait_timeout_ms = timeout_ms;
-                    if (timeout_ms != 0 && call_start_ns != 0) {
-                        const uint64_t now_ns = wallclock_get_current_nsec();
-                        if (now_ns >= call_start_ns) {
-                            const uint64_t elapsed_ms =
-                                (now_ns - call_start_ns) / 1000000u;
-                            if (elapsed_ms >= timeout_ms) {
-                                status = BLADERF_ERR_TIMEOUT;
-                                break;
-                            }
-                            wait_timeout_ms = timeout_ms -
-                                (unsigned int)elapsed_ms;
+                    if (timeout_ms != 0) {
+                        status = sync_timeout_remaining_ms(
+                            call_start_ns, timeout_ms, &wait_timeout_ms);
+                        if (status != 0) {
+                            break;
                         }
                     }
                     status = wait_for_buffer(b, wait_timeout_ms,
@@ -2487,6 +2526,7 @@ int sync_tx(struct bladerf_sync *s,
     struct tx_options op            = {
         FIELD_INIT(.flush, false), FIELD_INIT(.zero_pad, false),
     };
+    uint64_t call_start_ns = 0;
 
     log_verbose("%s: called for %u samples.\n", __FUNCTION__, num_samples);
 
@@ -2501,6 +2541,15 @@ int sync_tx(struct bladerf_sync *s,
      * lane boundary. Reject it before changing burst state or copying IQ. */
     if (!sync_sample_count_aligned(num_samples, s->meta.samples_per_ts)) {
         return BLADERF_ERR_INVAL;
+    }
+
+    if (timeout_ms != 0) {
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        call_start_ns = (uint64_t)now.tv_sec * 1000000000ULL +
+                        (uint64_t)now.tv_nsec;
     }
 
     MUTEX_LOCK(&s->lock);
@@ -2542,12 +2591,26 @@ int sync_tx(struct bladerf_sync *s,
                 assert(!"Bug");
                 break;
 
-            case SYNC_STATE_START_WORKER:
+            case SYNC_STATE_START_WORKER: {
                 sync_worker_submit_request(s->worker, SYNC_WORKER_START);
+
+                unsigned int start_timeout_ms =
+                    SYNC_WORKER_START_TIMEOUT_MS;
+                if (timeout_ms != 0) {
+                    unsigned int remaining_ms;
+                    status = sync_timeout_remaining_ms(
+                        call_start_ns, timeout_ms, &remaining_ms);
+                    if (status != 0) {
+                        break;
+                    }
+                    if (remaining_ms < start_timeout_ms) {
+                        start_timeout_ms = remaining_ms;
+                    }
+                }
 
                 status = sync_worker_wait_for_state(
                     s->worker, SYNC_WORKER_STATE_RUNNING,
-                    SYNC_WORKER_START_TIMEOUT_MS);
+                    start_timeout_ms);
 
                 if (status == 0) {
                     s->state = SYNC_STATE_WAIT_FOR_BUFFER;
@@ -2555,10 +2618,11 @@ int sync_tx(struct bladerf_sync *s,
                 } else {
                     log_warning("%s: worker did not reach RUNNING in %u ms: "
                                 "%s\n", __FUNCTION__,
-                                SYNC_WORKER_START_TIMEOUT_MS,
+                                start_timeout_ms,
                                 bladerf_strerror(status));
                 }
                 break;
+            }
 
             case SYNC_STATE_WAIT_FOR_BUFFER:
                 MUTEX_LOCK(&b->lock);
@@ -2605,8 +2669,15 @@ int sync_tx(struct bladerf_sync *s,
 
                     if (status == 0 &&
                         b->status[b->prod_i] != SYNC_BUFFER_EMPTY) {
-                        status = wait_for_buffer(b, timeout_ms, __FUNCTION__,
-                                                 b->prod_i);
+                        unsigned int wait_timeout_ms = timeout_ms;
+                        if (timeout_ms != 0) {
+                            status = sync_timeout_remaining_ms(
+                                call_start_ns, timeout_ms, &wait_timeout_ms);
+                        }
+                        if (status == 0) {
+                            status = wait_for_buffer(b, wait_timeout_ms,
+                                                     __FUNCTION__, b->prod_i);
+                        }
 
                         /* Same check after the wait: a completion may have
                          * arrived and left the duty parked again. */

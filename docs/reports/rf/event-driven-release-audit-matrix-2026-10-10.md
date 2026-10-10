@@ -184,6 +184,18 @@ regression execution. In particular, verify that each nonzero return's
 `actual_count` semantics agree with the public API for partial META reads and
 PACKET_META errors; no implementation change is made without that evidence.
 
+### Sync TX timeout accounting
+
+The neighboring TX pass found that `sync_tx()` passed the full caller timeout
+to every buffer wait, so a multi-buffer call could take several multiples of
+the documented call timeout. RX also measured its newly added overall deadline
+with `CLOCK_REALTIME`, which can jump when wall time is adjusted. Both paths
+now share a monotonic remaining-time calculation, bound worker startup and each
+buffer wait by the remaining call budget, and check the RX deadline while
+consuming ready buffers. Focused timeout, long-copy, timeout-zero,
+clock-adjustment, and partial TX buffer recovery regressions remain deferred
+under the source-audit gate.
+
 The timestamp seek boundary pass found an integer overflow in sync RX: a very
 large future timestamp multiplied by the RX_X2 lane factor before comparing
 against the remaining buffer length. It could mis-seek or wait until the read
