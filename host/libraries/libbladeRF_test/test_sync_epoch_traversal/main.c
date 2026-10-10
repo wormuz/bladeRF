@@ -51,6 +51,9 @@ struct fixture {
 
 static unsigned int rx_overrun_events;
 static uint32_t last_rx_overrun_source_flags;
+static uint8_t last_rx_overrun_epoch_id;
+static uint64_t last_rx_overrun_timestamp;
+static bool last_rx_overrun_timestamp_valid;
 static unsigned int rx_worker_overrun_events;
 static uint32_t last_rx_worker_overrun_source_flags;
 static unsigned int async_withheld_events;
@@ -872,11 +875,16 @@ static void note_sync_host_data(struct bladerf *dev,
     }
 }
 
-static void note_rx_overrun(struct bladerf *dev, uint32_t source_flags)
+static void note_rx_overrun(struct bladerf *dev, uint32_t source_flags,
+                            uint8_t epoch_id, uint64_t fpga_timestamp,
+                            bool fpga_timestamp_valid)
 {
     assert(dev != NULL);
     rx_overrun_events++;
     last_rx_overrun_source_flags = source_flags;
+    last_rx_overrun_epoch_id = epoch_id;
+    last_rx_overrun_timestamp = fpga_timestamp;
+    last_rx_overrun_timestamp_valid = fpga_timestamp_valid;
     sync_overrun_order = ++sync_event_order;
 }
 
@@ -1066,6 +1074,10 @@ static void fixture_init(struct fixture *f)
     sync_event_order = 0;
     sync_host_data_order = 0;
     sync_overrun_order = 0;
+    last_rx_overrun_source_flags = 0;
+    last_rx_overrun_epoch_id = 0;
+    last_rx_overrun_timestamp = 0;
+    last_rx_overrun_timestamp_valid = false;
     sync_withheld_order = 0;
     sync_withheld_events = 0;
     rx_worker_overrun_events = 0;
@@ -1417,6 +1429,56 @@ static void test_worker_overrun_event_history_is_lock_safe(void)
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
     MUTEX_DESTROY(&dev.lock);
+    free(board_data);
+}
+
+static void test_sync_overrun_preserves_stale_source_provenance(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data *board_data =
+        calloc(1, sizeof(*board_data));
+    struct bladerf_rf_event source_epoch = {0};
+    assert(board_data != NULL);
+    dev.board_data = board_data;
+    assert(MUTEX_INIT(&board_data->rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data->rf_transition_event_lock) == 0);
+
+    board_data->rf_transition_epoch_contract_enabled = true;
+    board_data->rf_transition_epoch_certified = true;
+    board_data->rf_transition_epoch_id = 10;
+    board_data->rf_transition_certified_epoch_id = 10;
+    board_data->rf_transition_first_valid_timestamp = 1000;
+    board_data->rf_transition_current_id = 22;
+    board_data->rf_transition_certified_epoch_event.transaction_id = 22;
+
+    source_epoch.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;
+    source_epoch.transaction_id = 21;
+    source_epoch.epoch_id = 9;
+    source_epoch.fpga_timestamp = 400;
+    source_epoch.flags = BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+    bladerf2_rf_event_append(board_data, &source_epoch);
+
+    /* A parser can publish an old packet's overrun after a new transition
+     * has certified its epoch. Keep the source transaction and do not revoke
+     * the new epoch's data-admission latch. */
+    bladerf2_rx_stream_overrun(
+        &dev, BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY,
+        9, 500, true);
+
+    assert(board_data->rf_transition_event_count == 2);
+    const uint32_t latest = (board_data->rf_transition_event_head +
+        BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *event =
+        &board_data->rf_transition_events[latest];
+    assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
+    assert(event->epoch_id == 9 && event->transaction_id == 21);
+    assert(event->fpga_timestamp == 500);
+    assert(event->flags & BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
+    assert(!board_data->rx_async_data_withheld_active);
+
+    MUTEX_DESTROY(&board_data->rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
     free(board_data);
 }
 
@@ -3011,6 +3073,7 @@ int main(void)
     test_unsupported_format_event();
     test_withheld_event_recovers_wrapped_epoch_transaction();
     test_worker_overrun_event_history_is_lock_safe();
+    test_sync_overrun_preserves_stale_source_provenance();
     test_fpga_loss_event_published_inside_sync_fence();
     test_rejected_rx_buffer_does_not_report_epoch_fence_as_overrun();
     test_rejected_rx_marker_stays_on_empty_old_sequence_slot();
@@ -3173,6 +3236,9 @@ int main(void)
     assert(sync_host_data_order < sync_overrun_order);
     assert(sync_overrun_order < sync_withheld_order);
     assert(rx_overrun_events == 1);
+    assert(last_rx_overrun_timestamp_valid);
+    assert(last_rx_overrun_epoch_id == 6);
+    assert(last_rx_overrun_timestamp == 1000 + MSG_SAMPLES);
     assert(sync_withheld_events == 1);
     assert(sync_withheld_reason ==
            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
@@ -3430,6 +3496,7 @@ int main(void)
     assert(last_rx_overrun_source_flags ==
            (BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE |
             BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL));
+    assert(!last_rx_overrun_timestamp_valid);
     assert(!f.sync.buf_mgmt.overrun_pending);
     fixture_destroy(&f);
 

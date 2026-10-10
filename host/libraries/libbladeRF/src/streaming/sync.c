@@ -2183,7 +2183,12 @@ out:
           (user_meta->status & BLADERF_META_STATUS_OVERRUN) != 0)) &&
         s->dev != NULL && s->dev->board != NULL &&
         s->dev->board->rx_stream_overrun != NULL) {
-        s->dev->board->rx_stream_overrun(s->dev, overrun_source_flags);
+        s->dev->board->rx_stream_overrun(
+            s->dev, overrun_source_flags,
+            withheld_reason != 0 ? withheld_epoch_id : sync_epoch_id,
+            withheld_reason != 0 ? withheld_timestamp : sync_timestamp,
+            withheld_reason != 0 ? withheld_timestamp_valid :
+                                   sync_timestamp_valid);
     }
 
     if (withheld_reason != 0 && !withheld_event_published &&

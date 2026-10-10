@@ -1131,6 +1131,54 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
+void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags,
+                                uint8_t epoch_id, uint64_t fpga_timestamp,
+                                bool fpga_timestamp_valid)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    bool source_is_current;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+
+    event.host_monotonic_ns = monotonic_ns();
+    event.epoch_id = epoch_id;
+    event.fpga_timestamp = fpga_timestamp;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags |
+        (fpga_timestamp_valid ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0);
+    if (fpga_timestamp_valid) {
+        rx_withheld_event_apply_source_provenance(board_data, &event);
+    }
+    if (!(event.flags & BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID)) {
+        event.flags |= bladerf2_rx_transition_channel_event_flags(
+            board_data->rf_transition_current_channel,
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
+    }
+
+    source_is_current = board_data->rf_transition_epoch_certified
+        ? event.epoch_id == board_data->rf_transition_certified_epoch_id &&
+          (event.transaction_id == 0 ||
+           board_data->rf_transition_certified_epoch_event.transaction_id == 0 ||
+           event.transaction_id ==
+               board_data->rf_transition_certified_epoch_event.transaction_id) &&
+          (!fpga_timestamp_valid || metadata_timestamp_at_or_after(
+              event.fpga_timestamp,
+              board_data->rf_transition_first_valid_timestamp))
+        : event.epoch_id == board_data->rf_transition_epoch_id;
+    if (source_is_current && board_data->rf_transition_epoch_contract_enabled) {
+        board_data->rx_async_data_withheld_active = true;
+    }
+    bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
 void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
                                       uint32_t source_flags)
 {

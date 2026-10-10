@@ -348,7 +348,9 @@ struct board_fns {
                                              int tune_status);
     /* Report an RX discontinuity surfaced by sync metadata or an async USB
      * transfer (short transfer / overflow). */
-    void (*rx_stream_overrun)(struct bladerf *dev, uint32_t source_flags);
+    void (*rx_stream_overrun)(struct bladerf *dev, uint32_t source_flags,
+                              uint8_t epoch_id, uint64_t fpga_timestamp,
+                              bool fpga_timestamp_valid);
     /* Async USB callbacks cannot acquire dev->lock: RF setters may hold it
      * while awaiting USB progress. Boards may provide a lock-safe writer. */
     void (*rx_async_stream_overrun)(struct bladerf *dev);

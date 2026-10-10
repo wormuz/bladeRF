@@ -2580,9 +2580,13 @@ static void bladerf2_tx_frequency_reconfigure_complete(
 }
 
 static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev,
-                                         uint32_t source_flags)
+                                         uint32_t source_flags,
+                                         uint8_t epoch_id,
+                                         uint64_t fpga_timestamp,
+                                         bool fpga_timestamp_valid)
 {
-    bladerf2_rx_stream_overrun(dev, source_flags);
+    bladerf2_rx_stream_overrun(dev, source_flags, epoch_id, fpga_timestamp,
+                               fpga_timestamp_valid);
 }
 
 static void bladerf2_rx_sync_data_valid_cb(

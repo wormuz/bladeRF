@@ -2628,38 +2628,6 @@ void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
     });
 }
 
-void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
-{
-    struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event event = {0};
-
-    if (dev == NULL || dev->board_data == NULL) {
-        return;
-    }
-    board_data = dev->board_data;
-    event.host_monotonic_ns = _monotonic_ns();
-    event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
-    event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags;
-    WITH_MUTEX(&dev->lock, {
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        event.flags |= bladerf2_rx_transition_channel_event_flags(
-            board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled &&
-                board_data->rf_transition_current_channel_valid);
-        board_data->rx_async_data_withheld_active = true;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        event.transaction_id = 0;
-        event.epoch_id = board_data->rf_transition_epoch_id;
-        event.requested_rx_lo_hz =
-            board_data->rf_transition_requested_frequency_hz;
-        event.readback_rx_lo_hz =
-            board_data->rf_transition_readback_frequency_hz;
-        event.fpga_state = board_data->rf_transition_state;
-        bladerf2_rf_event_append(board_data, &event);
-        board_data->rf_transition_last_event = event;
-    });
-}
-
 struct rx_fpga_loss_event_context {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event;

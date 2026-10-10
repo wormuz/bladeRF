@@ -416,7 +416,9 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
-void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags);
+void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags,
+                                uint8_t epoch_id, uint64_t fpga_timestamp,
+                                bool fpga_timestamp_valid);
 /* Lock-safe publication for the sync worker callback context. */
 void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
                                        uint32_t source_flags);
