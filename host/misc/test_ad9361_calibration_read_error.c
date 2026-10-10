@@ -196,6 +196,7 @@ int main(void)
             .ant = 1,
             .mode = RF_GAIN_MGC,
         };
+        uint32_t raw_value = UINT32_C(0xdeadbeef);
         const unsigned reads_before = read_count;
         const unsigned writes_before = write_count;
 
@@ -211,6 +212,20 @@ int main(void)
             ad9361_calculate_rf_clock_chain(NULL, 1000000, 0, NULL, NULL) != -EINVAL ||
             ad9361_calculate_rf_clock_chain(&phy, 1000000, 0, NULL, NULL) != -EINVAL ||
             ad9361_set_trx_clock_chain_freq(NULL, 1000000) != -EINVAL ||
+            ad9361_reg_read(NULL, 0, &raw_value) != -EINVAL ||
+            ad9361_reg_read(&phy_without_spi, 0, &raw_value) != -EINVAL ||
+            ad9361_reg_read(&phy, 0, NULL) != -EINVAL ||
+            raw_value != UINT32_C(0xdeadbeef) ||
+            ad9361_reg_write(NULL, 0, 0) != -EINVAL ||
+            ad9361_reg_write(&phy_without_spi, 0, 0) != -EINVAL ||
+            ad9361_reset(NULL) != -EINVAL ||
+            ad9361_reset(&phy_without_spi) != -EINVAL ||
+            ad9361_en_dis_tx(NULL, TX_1, 1) != -EINVAL ||
+            ad9361_en_dis_rx(NULL, RX_1, 1) != -EINVAL ||
+            ad9361_ensm_get_state(NULL) != -EINVAL ||
+            ad9361_set_dcxo_tune(NULL, 0, 0) != -EINVAL ||
+            ad9361_get_temp(NULL) != -EINVAL ||
+            ad9361_update_rf_bandwidth(NULL, 1000000, 1000000) != -EINVAL ||
             read_count != reads_before || write_count != writes_before) {
             fprintf(stderr,
                     "AD9361 API accepted incomplete state or touched SPI\n");
