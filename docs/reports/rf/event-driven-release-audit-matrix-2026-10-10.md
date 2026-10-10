@@ -99,8 +99,11 @@ clear sticky RX fault. Before this guard, a reset or lost START acknowledgement
 could leave host admission certified, or permit transition certification,
 without a confirmed FPGA RX link epoch. The monitor revokes admission and
 publishes an FPGA RX invalidation; the transition fails before host admission.
-Source regressions cover each missing status bit, and the runtime harness has
-`RUNTIME_FPGA_RX_EPOCH_LOST`. bladeRF commits `75bb2d63` and `e3a7adbe`.
+Source regressions cover each missing status bit. Runtime fault injection now
+covers both loss during a certified stream (`RUNTIME_FPGA_RX_EPOCH_LOST`) and
+loss at the final pre-certification status observation (`FPGA_EPOCH_LOST`),
+requiring no `RX_EPOCH_VALID` event and no IQ delivery. bladeRF commits
+`75bb2d63`, `e3a7adbe`, and `28710989`.
 Regressions and hardware qualification remain unrun under the open source-audit
 gate.
 
