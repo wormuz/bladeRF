@@ -956,6 +956,14 @@ int bladerf_set_sample_rate(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, rx_clock_channel);
+            return status;
+        }
+    }
     feature = dev->feature;
     status = dev->board->set_sample_rate(dev, ch, rate, actual);
     /*****************************************************
@@ -1043,6 +1051,14 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, rx_clock_channel);
+            return status;
+        }
+    }
     feature = dev->feature;
     status = dev->board->set_rational_sample_rate(dev, ch, rate, actual);
 
@@ -1113,6 +1129,15 @@ int bladerf_set_bandwidth(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, rx_config_channel);
+            return status;
+        }
+    }
 
     status = dev->board->set_bandwidth(dev, ch, bandwidth, actual);
 
@@ -1271,12 +1296,25 @@ int bladerf_set_rf_port(struct bladerf *dev,
                         const char *port)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch) || port == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, ch);
+            return status;
+        }
+    }
 
     status = dev->board->set_rf_port(dev, ch, port);
 
