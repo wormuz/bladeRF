@@ -13,7 +13,7 @@ architecture test of tx_retune_gate_tb is
     signal clock : std_logic := '0';
     signal reset : std_logic := '1';
     signal timestamp : unsigned(63 downto 0) := (others => '0');
-    signal arm, immediate, complete, abort : std_logic := '0';
+    signal arm, immediate, complete, abort, underflow_event : std_logic := '0';
     signal target_timestamp : unsigned(63 downto 0) := (others => '0');
     signal samples_in : sample_streams_t(0 to 1) := (others => (
         data_i => to_signed(1234, 16),
@@ -37,7 +37,7 @@ begin
             arm_immediate => immediate,
             target_timestamp => target_timestamp,
             complete => complete,
-            abort => abort,
+            abort => abort or underflow_event,
             in_samples => samples_in,
             out_samples => samples_out,
             state => state,
@@ -97,10 +97,12 @@ begin
             report "TX gate failed to resume after RFIC completion"
             severity failure;
 
-        abort <= '1';
+        -- The TX integration ORs FIFO underflow into ABORT so DAC muting
+        -- does not wait for the host's periodic status monitor.
+        underflow_event <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
-        abort <= '0';
+        underflow_event <= '0';
         assert state = "11" and muted = '1' and
                samples_out(0).data_i = to_signed(0, 16)
             report "TX abort did not fail closed" severity failure;

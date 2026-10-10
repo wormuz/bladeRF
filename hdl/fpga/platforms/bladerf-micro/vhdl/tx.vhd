@@ -128,6 +128,7 @@ architecture arch of tx is
     signal sample_fifo_holdoff            : std_logic;
     signal sample_fifo_holdoff_i          : std_logic;
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
+    signal tx_underflow_event              : std_logic := '0';
     signal retune_gate_state               : unsigned(1 downto 0);
     signal retune_gate_muted               : std_logic;
     signal retune_gate_mute_event          : std_logic;
@@ -290,7 +291,7 @@ begin
             in_sample_controls  =>  dac_controls,
             out_samples         =>  dac_streams_raw,
 
-            underflow_led       =>  tx_underflow_led,
+            underflow_led       =>  tx_underflow_event,
             underflow_count     =>  tx_underflow_count,
             underflow_duration  =>  x"ffff"
         );
@@ -307,7 +308,10 @@ begin
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
             complete             => retune_gate_complete,
-            abort                => retune_gate_abort,
+            -- Mute at the FPGA boundary as soon as FIFO starvation is
+            -- detected. The host monitor still publishes the durable event,
+            -- but it must not be on the safety-critical path to the DAC.
+            abort                => retune_gate_abort or tx_underflow_event,
             in_samples           => dac_streams_raw,
             out_samples          => dac_streams,
             state                => retune_gate_state,
@@ -317,6 +321,8 @@ begin
             mute_start_timestamp => retune_gate_mute_timestamp,
             muted_sample_count  => retune_gate_muted_sample_count
         );
+
+    tx_underflow_led <= tx_underflow_event;
 
     process(tx_clock, tx_reset)
     begin
