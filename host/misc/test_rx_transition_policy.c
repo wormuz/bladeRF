@@ -177,8 +177,9 @@ int main(void)
     assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
     assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);
 
-    /* Runtime TX validity requires the acknowledged epoch to remain active.
-     * Readable status with an absent/stale epoch or stopped link fails closed. */
+    /* Runtime TX validity and STATUS_RECOVERED require the acknowledged epoch
+     * to remain active. Readable status with an absent/stale epoch or stopped
+     * link fails closed. */
     const uint32_t tx_epoch_ok = 0x20000000u | (9u << 20) |
         BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE |
         BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT |

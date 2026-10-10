@@ -1482,6 +1482,8 @@ static void *rx_fault_monitor_task(void *arg)
                         !tx_completion_faulted &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
+                        bladerf2_rf_link_tx_epoch_valid(
+                            rf_link_status, board_data->tx_link_epoch_id) &&
                         (board_data->tx_status_unavailable_reported ||
                          board_data->tx_retune_recovery_pending) &&
                         !board_data->tx_recovery_blocked &&
