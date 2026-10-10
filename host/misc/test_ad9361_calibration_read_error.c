@@ -321,6 +321,21 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* Channel selectors and enable masks must not silently truncate bits. */
+    {
+        unsigned writes_before = write_count;
+        if (ad9361_en_dis_tx(&phy, 0, TX_1) != -EINVAL ||
+            ad9361_en_dis_tx(&phy, TX_1 | 4, TX_1) != -EINVAL ||
+            ad9361_en_dis_tx(&phy, TX_1, TX_1 | 4) != -EINVAL ||
+            ad9361_en_dis_rx(&phy, 0, RX_1) != -EINVAL ||
+            ad9361_en_dis_rx(&phy, RX_1 | 4, RX_1) != -EINVAL ||
+            ad9361_en_dis_rx(&phy, RX_1, RX_1 | 4) != -EINVAL ||
+            write_count != writes_before) {
+            fprintf(stderr, "AD9361 channel masks were not rejected pre-SPI\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Public lifecycle boundaries must reject missing arguments before
      * allocation, SPI, or teardown side effects. */
     {
