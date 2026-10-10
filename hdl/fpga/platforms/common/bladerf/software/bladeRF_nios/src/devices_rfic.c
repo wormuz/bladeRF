@@ -212,9 +212,19 @@ static bool _has_bit(command_bitmask bitmask, command_bitmask bit)
 static bool _check_validity(struct rfic_command_fns const *cmd_ptr,
                             bladerf_channel channel)
 {
-    bool is_system = _rfic_chan_is_system(channel);
-    bool is_tx     = !is_system && BLADERF_CHANNEL_IS_TX(channel);
-    bool is_rx     = !is_system && !BLADERF_CHANNEL_IS_TX(channel);
+    bool is_system;
+    bool is_tx;
+    bool is_rx;
+
+    if (!_rfic_chan_is_valid(channel)) {
+        DBG("%s: invalid RFIC channel 0x%x\n", __FUNCTION__,
+            (unsigned int)channel);
+        return false;
+    }
+
+    is_system = _rfic_chan_is_system(channel);
+    is_tx = !is_system && BLADERF_CHANNEL_IS_TX(channel);
+    is_rx = !is_system && !BLADERF_CHANNEL_IS_TX(channel);
 
     /* System channel check */
     if (is_system && !_has_bit(cmd_ptr->bitmask, RFIC_CMD_CHAN_SYSTEM)) {

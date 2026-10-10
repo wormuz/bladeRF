@@ -210,6 +210,15 @@ static inline bool _rfic_chan_is_system(uint8_t ch)
     return RFIC_SYSTEM_CHANNEL == ch;
 }
 
+static inline bool _rfic_chan_is_valid(bladerf_channel ch)
+{
+    return ch == BLADERF_CHANNEL_RX(0) ||
+           ch == BLADERF_CHANNEL_TX(0) ||
+           ch == BLADERF_CHANNEL_RX(1) ||
+           ch == BLADERF_CHANNEL_TX(1) ||
+           _rfic_chan_is_system(ch);
+}
+
 static inline uint8_t _rfic_unpack_chan(uint16_t addr)
 {
     return (addr >> 8) & 0xF;
