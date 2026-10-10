@@ -83,14 +83,24 @@ int _interleave_interleave_buf(bladerf_channel_layout layout,
     size_t samp_size, meta_size, samps_per_ch;
     size_t srcidx, dstidx, samp, ch;
 
+    if (samples == NULL || num_channels == 0 || buffer_size == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    samp_size = _interleave_calc_bytes_per_sample(format);
+    meta_size = _interleave_calc_metadata_bytes(format);
+    if (samp_size == 0 || buffer_size % num_channels != 0 ||
+        buffer_size < meta_size / samp_size ||
+        (size_t)buffer_size > (size_t)-1 / samp_size) {
+        return BLADERF_ERR_INVAL;
+    }
+
     // Easy:
     if (num_channels < 2) {
         return 0;
     }
 
     // Placeholder for an actually efficient algorithm
-    samp_size    = _interleave_calc_bytes_per_sample(format);
-    meta_size    = _interleave_calc_metadata_bytes(format);
     samps_per_ch = buffer_size / num_channels;
     buf          = malloc(samp_size * buffer_size);
     srcptr       = samples;
@@ -139,14 +149,24 @@ int _interleave_deinterleave_buf(bladerf_channel_layout layout,
     size_t samp_size, meta_size, samps_per_ch;
     size_t srcidx, dstidx, samp, ch;
 
+    if (samples == NULL || num_channels == 0 || buffer_size == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    samp_size = _interleave_calc_bytes_per_sample(format);
+    meta_size = _interleave_calc_metadata_bytes(format);
+    if (samp_size == 0 || buffer_size % num_channels != 0 ||
+        buffer_size < meta_size / samp_size ||
+        (size_t)buffer_size > (size_t)-1 / samp_size) {
+        return BLADERF_ERR_INVAL;
+    }
+
     // Easy:
     if (num_channels < 2) {
         return 0;
     }
 
     // Placeholder for an actually efficient algorithm
-    samp_size    = _interleave_calc_bytes_per_sample(format);
-    meta_size    = _interleave_calc_metadata_bytes(format);
     samps_per_ch = buffer_size / num_channels;
     buf          = malloc(samp_size * buffer_size);
     srcptr       = samples;
