@@ -2129,7 +2129,8 @@ static int _bladerf_rx_transition_begin(
 
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_pending ||
-            board_data->rf_transition_setter_active) {
+            board_data->rf_transition_setter_active ||
+            board_data->tx_frequency_reconfigure_active) {
             transition_busy = true;
         } else if (!bladerf2_rf_transition_mode_supported(
                        board_data->tuning_mode)) {

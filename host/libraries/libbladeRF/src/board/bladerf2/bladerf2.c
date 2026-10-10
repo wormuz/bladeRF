@@ -1352,6 +1352,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     int status;
 
+    if (BLADERF_CHANNEL_IS_TX(ch) &&
+        board_data->tx_frequency_reconfigure_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     /* After the RFIC path, not before it.
      *
      * rfic->enable_module ends in the BLADE_USB_CMD_RF_RX vendor command,
@@ -2287,9 +2292,14 @@ static int bladerf2_tx_frequency_reconfigure_begin(
 
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_setter_active ||
+            board_data->tx_frequency_reconfigure_active ||
             board_data->tx_retune2_pending_count != 0) {
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
+            /* The public API releases dev->lock between begin, LO write,
+             * and completion. Reserve the whole interval so other RF
+             * mutators and TX retunes cannot interleave with this tune. */
+            board_data->tx_frequency_reconfigure_active = true;
             /* Invalidate any TX RFIC snapshot collected before this
              * configuration transaction began. */
             board_data->tx_channel_state_generation++;
@@ -2337,6 +2347,9 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                     status);
             }
         }
+        if (status != 0) {
+            board_data->tx_frequency_reconfigure_active = false;
+        }
     });
 
     return status;
@@ -2382,6 +2395,7 @@ static void bladerf2_tx_frequency_reconfigure_complete(
                 readback_status != 0 ? readback_status :
                                        BLADERF_ERR_UNEXPECTED);
         }
+        board_data->tx_frequency_reconfigure_active = false;
     });
 }
 
@@ -2966,8 +2980,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     uint8_t pending_slot = UINT8_MAX;
     unsigned int i;
 
-    if (BLADERF_CHANNEL_IS_TX(ch) &&
-        board_data->rf_transition_setter_active) {
+    if (board_data->tx_frequency_reconfigure_active ||
+        (BLADERF_CHANNEL_IS_TX(ch) &&
+         board_data->rf_transition_setter_active)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -5238,6 +5253,10 @@ static int bladerf2_tx_rf_config_change_begin(
     const bool recovery_was_blocked = board_data->tx_recovery_blocked;
     const uint8_t pending_count = board_data->tx_retune2_pending_count;
     int status = 0;
+
+    if (board_data->tx_frequency_reconfigure_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     board_data->tx_channel_state_generation++;
     board_data->tx_rfic_state_valid_reported = false;

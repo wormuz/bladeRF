@@ -232,6 +232,9 @@ struct bladerf2_board_data {
     bool tx_retune2_applied_waiting_rf_valid;
     bool tx_retune_gate_release_requested;
     bool tx_retune_recovery_pending;
+    /* Serializes the unlocked gap between the public TX LO setter's begin,
+     * RFIC write, and completion callbacks. */
+    bool tx_frequency_reconfigure_active;
     bool tx_gate_abort_pending;
     bool tx_gate_abort_failure_reported;
     uint64_t tx_retune2_applied_frequency_hz;
