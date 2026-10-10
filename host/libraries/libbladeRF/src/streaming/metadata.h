@@ -220,6 +220,39 @@ static inline bool metadata_rx_buffer_matches_epoch(
     return true;
 }
 
+/* Identify the first rejected sample-META message when its epoch tag is
+ * present. This lets the event path preserve delayed packet provenance even
+ * after the host has already certified a newer epoch. Malformed or untagged
+ * buffers deliberately have no attributable source. */
+static inline bool metadata_rx_buffer_invalid_source(
+    const uint8_t *buffer, size_t length, size_t message_size,
+    uint8_t expected_epoch_id, uint64_t minimum_timestamp,
+    uint8_t *source_epoch_id, uint64_t *source_timestamp)
+{
+    if (buffer == NULL || source_epoch_id == NULL ||
+        source_timestamp == NULL || message_size <= METADATA_HEADER_SIZE ||
+        length == 0 || length % message_size != 0) {
+        return false;
+    }
+
+    for (size_t offset = 0; offset < length; offset += message_size) {
+        const uint8_t *header = buffer + offset;
+        uint8_t observed_epoch_id;
+        const uint64_t timestamp = metadata_get_timestamp(header);
+        if (!metadata_get_rx_epoch_id(header, &observed_epoch_id)) {
+            return false;
+        }
+        if (observed_epoch_id != expected_epoch_id ||
+            !metadata_timestamp_at_or_after(timestamp, minimum_timestamp)) {
+            *source_epoch_id = observed_epoch_id;
+            *source_timestamp = timestamp;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 enum metadata_rx_buffer_epoch_result {
     METADATA_RX_BUFFER_INVALID,
     METADATA_RX_BUFFER_CONTIGUOUS,
@@ -239,6 +272,19 @@ static inline bool metadata_rx_epoch_snapshot_is_current(
            current_contract_enabled && current_certified &&
            snapshot_epoch_id == current_epoch_id &&
            snapshot_first_valid_timestamp == current_first_valid_timestamp;
+}
+
+/* A delayed callback that observed an uncertified interval may clear the
+ * async timestamp cursor only if that same transition is still uncertified.
+ * It must not erase a cursor committed by a newer valid epoch. */
+static inline bool metadata_rx_uncertified_snapshot_is_current(
+    uint32_t snapshot_transaction_id, uint8_t snapshot_epoch_id,
+    uint32_t current_transaction_id, uint8_t current_epoch_id,
+    bool current_certified)
+{
+    return !current_certified &&
+           snapshot_transaction_id == current_transaction_id &&
+           snapshot_epoch_id == current_epoch_id;
 }
 
 /* Commit a successfully parsed transfer only if its certificate snapshot is

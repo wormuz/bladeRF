@@ -2619,6 +2619,23 @@ static uint32_t bladerf2_rx_sync_data_admission_reason(
     return reason;
 }
 
+static void bladerf2_rx_async_note_withheld_source(
+    struct bladerf *dev, uint32_t reason, const uint8_t *buffer,
+    size_t length, size_t message_size)
+{
+    uint8_t source_epoch_id;
+
+    if (buffer != NULL && length >= METADATA_HEADER_SIZE &&
+        message_size >= METADATA_HEADER_SIZE &&
+        metadata_get_rx_epoch_id(buffer, &source_epoch_id)) {
+        bladerf2_rx_data_withheld_at(
+            dev, reason, source_epoch_id, metadata_get_timestamp(buffer),
+            true);
+    } else {
+        bladerf2_rx_data_withheld(dev, reason);
+    }
+}
+
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
@@ -2630,6 +2647,8 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     bool contract_enabled;
     bool epoch_valid;
     uint8_t epoch_id;
+    uint8_t transition_epoch_id;
+    uint32_t transaction_id;
     uint64_t first_valid_timestamp;
     size_t message_size;
     size_t bytes_per_sample;
@@ -2652,6 +2671,8 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     contract_enabled = board_data->rf_transition_epoch_contract_enabled;
     epoch_valid = board_data->rf_transition_epoch_certified;
     epoch_id = board_data->rf_transition_certified_epoch_id;
+    transition_epoch_id = board_data->rf_transition_epoch_id;
+    transaction_id = board_data->rf_transition_current_id;
     first_valid_timestamp = board_data->rf_transition_first_valid_timestamp;
     message_size = board_data->msg_size;
     have_expected_timestamp = board_data->rx_async_have_expected_timestamp &&
@@ -2720,19 +2741,17 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
          * the source packet's FPGA epoch/timestamp when available so delayed
          * USB callbacks remain distinguishable from the current transition. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->rx_async_have_expected_timestamp = false;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        uint8_t source_epoch_id = 0;
-        if (length >= METADATA_HEADER_SIZE &&
-            metadata_rx_format_has_epoch_tag(format) &&
-            metadata_get_rx_epoch_id(bytes, &source_epoch_id)) {
-            bladerf2_rx_data_withheld_at(
-                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED,
-                source_epoch_id, metadata_get_timestamp(bytes), true);
-        } else {
-            bladerf2_rx_data_withheld(
-                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+        if (metadata_rx_uncertified_snapshot_is_current(
+                transaction_id, transition_epoch_id,
+                board_data->rf_transition_current_id,
+                board_data->rf_transition_epoch_id,
+                board_data->rf_transition_epoch_certified)) {
+            board_data->rx_async_have_expected_timestamp = false;
         }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        bladerf2_rx_async_note_withheld_source(
+            dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, bytes, length,
+            message_size);
         return false;
     }
 
@@ -2775,8 +2794,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 board_data->rf_transition_first_host_data_deadline_ns,
                 now_ns)) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            bladerf2_rx_data_withheld(
-                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            bladerf2_rx_async_note_withheld_source(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, bytes, length,
+                message_size);
             return false;
         }
         if (!bladerf2_rx_layout_matches_channel_mask(
@@ -2804,8 +2824,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 &board_data->rx_async_timestamp_epoch_id,
                 &board_data->rx_async_expected_timestamp)) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            bladerf2_rx_data_withheld(
-                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            bladerf2_rx_async_note_withheld_source(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, bytes, length,
+                message_size);
             return false;
         }
         bladerf2_rx_data_rearm_notifications_locked(board_data);
@@ -2860,16 +2881,28 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                 &board_data->rx_async_timestamp_epoch_id,
                 &board_data->rx_async_expected_timestamp)) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            bladerf2_rx_data_withheld(
-                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+            bladerf2_rx_async_note_withheld_source(
+                dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED, bytes, length,
+                message_size);
             return false;
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rx_async_timestamp_discontinuity(
             dev, epoch_id, expected_timestamp);
     } else {
-        bladerf2_rx_data_withheld(
-            dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+        uint8_t source_epoch_id;
+        uint64_t source_timestamp;
+        if (metadata_rx_buffer_invalid_source(
+                bytes, length, message_size, epoch_id,
+                first_valid_timestamp, &source_epoch_id,
+                &source_timestamp)) {
+            bladerf2_rx_data_withheld_at(
+                dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH,
+                source_epoch_id, source_timestamp, true);
+        } else {
+            bladerf2_rx_data_withheld(
+                dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+        }
     }
     return false;
 }

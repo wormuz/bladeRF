@@ -1290,6 +1290,15 @@ static void test_unsupported_format_event(void)
               BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
            BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
 
+    /* Deduplication must start a new notification interval after a new RF
+     * transaction, even if no valid packet rearmed the previous epoch. */
+    board_data->rf_transition_current_id = 22;
+    board_data->rf_transition_epoch_id = 8;
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META, true);
+    bladerf2_rx_format_unsupported(&dev, BLADERF_FORMAT_PACKET_META, true);
+    assert(board_data->rf_transition_event_count == 6);
+    assert(board_data->rf_transition_events[5].epoch_id == 8);
+
     MUTEX_DESTROY(&board_data->rf_transition_event_lock);
     COND_DESTROY(&board_data->rx_async_epoch_cond);
     MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
@@ -1961,12 +1970,79 @@ static void test_timestamp_discontinuity_keeps_source_epoch(void)
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
+static void test_withheld_reason_dedup_is_scoped_to_source_epoch(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+    struct bladerf_rf_event old_epoch = {
+        .transaction_id = 101,
+        .epoch_id = 9,
+        .fpga_timestamp = 100,
+        .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+    };
+    struct bladerf_rf_event current_epoch = {
+        .transaction_id = 102,
+        .epoch_id = 10,
+        .fpga_timestamp = 200,
+        .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+    };
+    const uint32_t reason = BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH;
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_epoch_id = 10;
+    board_data.rf_transition_certified_epoch_id = 10;
+    board_data.rf_transition_current_id = 102;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(0);
+    board_data.rf_transition_current_channel_valid = true;
+    board_data.rf_transition_certified_epoch_event = current_epoch;
+    board_data.rf_transition_first_valid_timestamp = 200;
+    bladerf2_rf_event_append(&board_data, &old_epoch);
+    bladerf2_rf_event_append(&board_data, &current_epoch);
+
+    /* The old source consumes its own dedup slot only. A current-epoch
+     * packet with the same rejection reason must still be reported. */
+    bladerf2_rx_data_withheld_at(&dev, reason, 9, 150, true);
+    bladerf2_rx_data_withheld_at(&dev, reason, 10, 250, true);
+
+    assert(board_data.rf_transition_event_count == 4);
+    uint32_t old_slot =
+        (board_data.rf_transition_event_head +
+         BLADERF2_RF_EVENT_HISTORY_SIZE - 2) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    uint32_t current_slot =
+        (board_data.rf_transition_event_head +
+         BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *old_event =
+        &board_data.rf_transition_events[old_slot];
+    const struct bladerf_rf_event *current_event =
+        &board_data.rf_transition_events[current_slot];
+    assert(old_event->transaction_id == 101 && old_event->epoch_id == 9);
+    assert(current_event->transaction_id == 102 &&
+           current_event->epoch_id == 10);
+    assert(board_data.rx_async_data_withheld_active);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
 static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
     uint64_t next_timestamp = 0;
+    uint64_t source_timestamp = 0;
+    uint8_t source_epoch_id = 0;
     const uint64_t wrap_boundary = UINT64_MAX - 20;
     assert(buffer != NULL);
+
+    assert(metadata_rx_uncertified_snapshot_is_current(4, 8, 4, 8, false));
+    assert(!metadata_rx_uncertified_snapshot_is_current(4, 8, 4, 8, true));
+    assert(!metadata_rx_uncertified_snapshot_is_current(4, 8, 5, 8, false));
+    assert(!metadata_rx_uncertified_snapshot_is_current(4, 8, 4, 9, false));
 
     write_msg(buffer, 5000, 7, 10);
     write_msg(buffer + MSG_BYTES, 5000 + MSG_SAMPLES, 7, 20);
@@ -1974,6 +2050,22 @@ static void test_async_timestamp_continuity(void)
                buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000, false, 0,
                MSG_SAMPLES, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
     assert(next_timestamp == 5000 + 2 * MSG_SAMPLES);
+
+    /* A delayed transfer from an earlier epoch must carry its packet identity
+     * into RX_DATA_WITHHELD instead of inheriting the currently certified
+     * epoch. A same-epoch pre-boundary timestamp is also attributable. */
+    write_msg(buffer, 4000, 6, 11);
+    write_msg(buffer + MSG_BYTES, 4000 + MSG_SAMPLES, 6, 12);
+    assert(metadata_rx_buffer_invalid_source(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000,
+               &source_epoch_id, &source_timestamp));
+    assert(source_epoch_id == 6 && source_timestamp == 4000);
+    write_msg(buffer, 4999, 7, 13);
+    write_msg(buffer + MSG_BYTES, 4999 + MSG_SAMPLES, 7, 14);
+    assert(metadata_rx_buffer_invalid_source(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 5000,
+               &source_epoch_id, &source_timestamp));
+    assert(source_epoch_id == 7 && source_timestamp == 4999);
 
     write_msg(buffer, next_timestamp, 7, 30);
     write_msg(buffer + MSG_BYTES, next_timestamp + MSG_SAMPLES + 2, 7, 40);
@@ -2918,6 +3010,7 @@ int main(void)
     test_host_data_event_uses_epoch_snapshot();
     test_withheld_event_epoch_provenance_across_timestamp_wrap();
     test_timestamp_discontinuity_keeps_source_epoch();
+    test_withheld_reason_dedup_is_scoped_to_source_epoch();
     test_late_first_host_data_cannot_be_certified();
     test_sync_admission_policy_checks_deadline_before_copy();
     test_invalidation_companion_append_is_atomic_at_ring_wrap();

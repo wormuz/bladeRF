@@ -461,6 +461,18 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     /* May run in a USB callback or on a synchronous format preflight. Do not
      * take dev->lock: a setter may hold it while waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (!board_data->rx_format_unsupported_identity_valid ||
+        board_data->rx_format_unsupported_transaction_id !=
+            board_data->rf_transition_current_id ||
+        board_data->rx_format_unsupported_epoch_id !=
+            board_data->rf_transition_epoch_id) {
+        board_data->rx_format_unsupported_reported = false;
+        board_data->rx_format_unsupported_transaction_id =
+            board_data->rf_transition_current_id;
+        board_data->rx_format_unsupported_epoch_id =
+            board_data->rf_transition_epoch_id;
+        board_data->rx_format_unsupported_identity_valid = true;
+    }
     if (board_data->rf_transition_epoch_contract_enabled &&
         (!deduplicate || !board_data->rx_format_unsupported_reported)) {
         bladerf2_rx_transition_fail_first_host_data_locked(
@@ -481,17 +493,16 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
             board_data->rf_transition_current_channel,
             board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_current_channel_valid);
-    if (!should_report) {
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        return;
-    }
-
     event.host_monotonic_ns = monotonic_ns();
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED;
     event.flags = (uint32_t)format | transition_channel_flags;
     event.error_code = BLADERF_ERR_UNSUPPORTED;
+    if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return;
+    }
     bladerf2_rf_event_append(board_data, &event);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
@@ -603,6 +614,7 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     uint8_t epoch_id;
     uint64_t first_unvalidated_timestamp = 0;
     bool timestamp_valid = false;
+    bool source_is_current;
     bool should_report = false;
     uint32_t transition_channel_flags = 0;
 
@@ -614,22 +626,6 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     /* This may run from the USB callback or sync parser. Keep it independent
      * of dev->lock, which can be held by a setter waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->rx_async_data_withheld_active = true;
-    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
-        reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
-        reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
-        reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
-        reason == BLADERF_RF_WITHHELD_DEVICE_LOST ||
-        reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
-        /* A USB transport failure is invalid even in legacy mode, where the
-         * epoch gate itself is disabled. Record each occurrence. */
-        should_report = true;
-    } else if (board_data->rf_transition_epoch_contract_enabled &&
-               (board_data->rx_async_data_withheld_reported_reasons &
-                reason) != reason) {
-        board_data->rx_async_data_withheld_reported_reasons |= reason;
-        should_report = true;
-    }
     epoch_id = explicit_source ? event_epoch_id :
                                 board_data->rf_transition_epoch_id;
     /* A withheld async buffer is still associated with the transition that
@@ -654,11 +650,6 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
         epoch_id = board_data->rf_transition_certified_epoch_id;
         timestamp_valid = true;
     }
-    if (!should_report) {
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        return;
-    }
-
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_timestamp = explicit_source
         ? event_timestamp : first_unvalidated_timestamp;
@@ -672,6 +663,62 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
         transition_channel_flags;
     if (explicit_source) {
         rx_withheld_event_apply_source_provenance(board_data, &event);
+    }
+    const uint32_t source_transaction_id = explicit_source
+        ? event.transaction_id : board_data->rf_transition_current_id;
+    if (!board_data->rx_async_data_withheld_identity_valid ||
+        board_data->rx_async_data_withheld_transaction_id !=
+            source_transaction_id ||
+        board_data->rx_async_data_withheld_epoch_id != event.epoch_id) {
+        /* Deduplicate within one source epoch only. A delayed packet from an
+         * older epoch must not consume the notification bit for a later
+         * current-epoch fault with the same reason. */
+        board_data->rx_async_data_withheld_reported_reasons = 0;
+        board_data->rx_async_timestamp_discontinuity_reported = false;
+        board_data->rx_async_data_withheld_transaction_id =
+            source_transaction_id;
+        board_data->rx_async_data_withheld_epoch_id = event.epoch_id;
+        board_data->rx_async_data_withheld_identity_valid = true;
+    }
+    if (board_data->rf_transition_epoch_certified) {
+        source_is_current = event.epoch_id ==
+                board_data->rf_transition_certified_epoch_id &&
+            (source_transaction_id == 0 ||
+             board_data->rf_transition_certified_epoch_event.transaction_id ==
+                 0 ||
+             source_transaction_id ==
+                 board_data->rf_transition_certified_epoch_event.transaction_id) &&
+            (!(event.flags & BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ||
+             metadata_timestamp_at_or_after(
+                 event.fpga_timestamp,
+                 board_data->rf_transition_first_valid_timestamp));
+    } else {
+        source_is_current = !explicit_source ||
+            (event.epoch_id == board_data->rf_transition_epoch_id &&
+             (source_transaction_id == 0 ||
+              source_transaction_id == board_data->rf_transition_current_id));
+    }
+    if (source_is_current) {
+        board_data->rx_async_data_withheld_active = true;
+    }
+    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
+        reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
+        reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
+        reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
+        reason == BLADERF_RF_WITHHELD_DEVICE_LOST ||
+        reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
+        /* A USB transport failure is invalid even in legacy mode, where the
+         * epoch gate itself is disabled. Record each occurrence. */
+        should_report = true;
+    } else if (board_data->rf_transition_epoch_contract_enabled &&
+               (board_data->rx_async_data_withheld_reported_reasons &
+                reason) != reason) {
+        board_data->rx_async_data_withheld_reported_reasons |= reason;
+        should_report = true;
+    }
+    if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return;
     }
     /* Keep the epoch snapshot and its durable event in one critical
      * section. Otherwise a new transition and its first-valid-host-data
@@ -749,7 +796,9 @@ void bladerf2_rx_data_rearm_notifications_locked(
     struct bladerf2_board_data *board_data)
 {
     board_data->rx_format_unsupported_reported = false;
+    board_data->rx_format_unsupported_identity_valid = false;
     board_data->rx_async_data_withheld_reported_reasons = 0;
+    board_data->rx_async_data_withheld_identity_valid = false;
     board_data->rx_async_timestamp_discontinuity_reported = false;
 }
 
@@ -961,6 +1010,8 @@ void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
     bool should_report = false;
+    bool source_is_current;
+    uint32_t source_transaction_id;
     uint32_t transition_channel_flags = 0;
 
     if (dev == NULL || dev->board_data == NULL) {
@@ -971,12 +1022,6 @@ void bladerf2_rx_async_timestamp_discontinuity(
     /* This runs in the asynchronous USB callback. Keep it independent of
      * dev->lock, which may be held by a setter waiting for USB progress. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->rf_transition_epoch_contract_enabled &&
-        !board_data->rx_async_timestamp_discontinuity_reported) {
-        board_data->rx_async_timestamp_discontinuity_reported = true;
-        board_data->rx_async_data_withheld_active = true;
-        should_report = true;
-    }
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
@@ -1003,6 +1048,47 @@ void bladerf2_rx_async_timestamp_discontinuity(
         transition_channel_flags;
     event.error_code = BLADERF_ERR_UNEXPECTED;
     rx_withheld_event_apply_source_provenance(board_data, &event);
+    source_transaction_id = event.transaction_id;
+    if (!board_data->rx_async_data_withheld_identity_valid ||
+        board_data->rx_async_data_withheld_transaction_id !=
+            source_transaction_id ||
+        board_data->rx_async_data_withheld_epoch_id != event.epoch_id) {
+        board_data->rx_async_data_withheld_reported_reasons = 0;
+        board_data->rx_async_timestamp_discontinuity_reported = false;
+        board_data->rx_async_data_withheld_transaction_id =
+            source_transaction_id;
+        board_data->rx_async_data_withheld_epoch_id = event.epoch_id;
+        board_data->rx_async_data_withheld_identity_valid = true;
+    }
+    if (board_data->rf_transition_epoch_certified) {
+        source_is_current = event.epoch_id ==
+                board_data->rf_transition_certified_epoch_id &&
+            (source_transaction_id == 0 ||
+             board_data->rf_transition_certified_epoch_event.transaction_id ==
+                 0 ||
+             source_transaction_id ==
+                 board_data->rf_transition_certified_epoch_event.transaction_id) &&
+            metadata_timestamp_at_or_after(
+                first_unvalidated_timestamp,
+                board_data->rf_transition_first_valid_timestamp);
+    } else {
+        source_is_current = event.epoch_id ==
+                board_data->rf_transition_epoch_id &&
+            (source_transaction_id == 0 ||
+             source_transaction_id == board_data->rf_transition_current_id);
+    }
+    if (board_data->rf_transition_epoch_contract_enabled &&
+        !board_data->rx_async_timestamp_discontinuity_reported) {
+        board_data->rx_async_timestamp_discontinuity_reported = true;
+        if (source_is_current) {
+            board_data->rx_async_data_withheld_active = true;
+        }
+        should_report = true;
+    }
+    if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return;
+    }
     bladerf2_rf_event_append(board_data, &event);
 
     event.host_monotonic_ns = monotonic_ns();
