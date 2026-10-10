@@ -77,7 +77,24 @@ if(GIT_FOUND)
         )
 
         if(GIT_DIRTY)
-            set(GIT_INFO "-${GIT_REV}-dirty")
+            # A plain "-dirty" cannot distinguish two different source
+            # snapshots made from the same checkout. That let downstream
+            # wrapper checks accept a library built before the latest edit.
+            # Include a deterministic fingerprint of all tracked staged and
+            # unstaged changes so consumers can reject stale local binaries.
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} diff --binary HEAD --
+                OUTPUT_VARIABLE GIT_DIFF
+                RESULT_VARIABLE GIT_DIFF_RESULT
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            )
+            if(NOT GIT_DIFF_RESULT EQUAL 0)
+                message(FATAL_ERROR
+                    "Unable to fingerprint dirty git source tree")
+            endif()
+            string(SHA256 GIT_DIFF_HASH "${GIT_DIFF}")
+            string(SUBSTRING "${GIT_DIFF_HASH}" 0 12 GIT_DIFF_HASH_SHORT)
+            set(GIT_INFO "-${GIT_REV}-dirty-${GIT_DIFF_HASH_SHORT}")
         else()
             set(GIT_INFO "-${GIT_REV}")
         endif()
