@@ -4287,8 +4287,9 @@ void bladerf2_rx_transition_note_first_packet_at(
     if (board_data->rf_transition_epoch_certified &&
         metadata->rx_epoch_id_valid &&
         metadata->rx_epoch_id == board_data->rf_transition_certified_epoch_id &&
-        metadata->timestamp >=
-            board_data->rf_transition_first_valid_timestamp) {
+        metadata_timestamp_at_or_after(
+            metadata->timestamp,
+            board_data->rf_transition_first_valid_timestamp)) {
         bladerf2_rx_data_note_first_packet_at_locked(
             board_data, metadata, layout, admission_monotonic_ns);
     }

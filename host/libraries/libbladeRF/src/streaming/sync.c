@@ -2456,7 +2456,8 @@ static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b,
 static inline bool timestamp_in_past(struct bladerf_metadata *user_meta,
                                      struct bladerf_sync *s)
 {
-    const bool in_past = user_meta->timestamp < s->meta.curr_timestamp;
+    const bool in_past = !metadata_timestamp_at_or_after(
+        user_meta->timestamp, s->meta.curr_timestamp);
 
     if (in_past) {
         log_debug("Provided timestamp=%"PRIu64" is in past: current=%"PRIu64"\n",
