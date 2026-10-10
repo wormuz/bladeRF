@@ -939,6 +939,14 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
 {
     int status;
     bladerf_feature feature;
+
+    /* Validate the public rational representation before invalidating RX
+     * state or forwarding it to a board implementation. Some implementations
+     * divide by den while reducing/programming the requested rate. */
+    if (rate == NULL || rate->den == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
     const bladerf_channel rx_clock_channel =
         rx_shared_rfic_invalidation_channel(ch);
 
