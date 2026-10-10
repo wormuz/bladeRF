@@ -48,3 +48,13 @@ the async stream runner excludes that retryable admission result from transport
 fault publication. Synchronous TX retains and defers queued buffers on the same
 status, while the board RF event carries the actual invalidation reason.
 Source-only; regression and hardware qualification remain pending.
+
+## Cypress backend parity follow-up
+
+A subsequent backend-by-backend grep found that the Cypress path still
+returned `BLADERF_ERR_FPGA_OP` from its initial-buffer, post-transfer, and
+post-capacity-wait TX admission checks. Those gate closures could therefore
+be reported by `async_run_stream()` as TX transport failures, unlike the
+libusb path. All three now return `BLADERF_ERR_WOULD_BLOCK`; the common native
+stream regression also checks that a retryable TX gate result creates no
+transport notification. Source-only; no build or test has run.

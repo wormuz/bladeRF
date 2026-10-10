@@ -681,7 +681,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             if (next_buffer != BLADERF_STREAM_SHUTDOWN &&
                 next_buffer != BLADERF_STREAM_NO_DATA &&
                 !async_tx_buffer_valid(stream)) {
-                status = BLADERF_ERR_FPGA_OP;
+                status = BLADERF_ERR_WOULD_BLOCK;
                 done = true;
                 break;
             }
@@ -757,7 +757,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             next_buffer != BLADERF_STREAM_NO_DATA &&
             !async_tx_buffer_valid(stream)) {
             next_buffer = BLADERF_STREAM_SHUTDOWN;
-            status = BLADERF_ERR_FPGA_OP;
+            status = BLADERF_ERR_WOULD_BLOCK;
             done = true;
         }
 
@@ -875,7 +875,7 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
          * only on async_submit_stream_buffer()'s pre-wait snapshot. */
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
             !async_tx_buffer_valid(stream)) {
-            return BLADERF_ERR_FPGA_OP;
+            return BLADERF_ERR_WOULD_BLOCK;
         }
 
         status = submit_transfer(stream, buffer, *length);

@@ -191,6 +191,13 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_CALLBACK);
     assert(tx_transport_failure_notifications == 0);
 
+    /* RF admission closures from either USB backend remain retryable and do
+     * not become transport events during clean backend shutdown. */
+    test_tx_backend_stream_error_code = BLADERF_ERR_WOULD_BLOCK;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(tx_transport_failure_notifications == 0);
+
     /* A backend-clean shutdown can still carry a stream-level failure. */
     test_tx_backend_stream_error_code = BLADERF_ERR_IO;
     assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_IO);
