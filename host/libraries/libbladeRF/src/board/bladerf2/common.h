@@ -420,8 +420,12 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags);
 /* Lock-safe publication for the sync worker callback context. */
 void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
                                        uint32_t source_flags);
-void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
-                           uint64_t loss_count);
+void bladerf2_rx_fpga_loss(struct bladerf *dev, uint32_t transaction_id,
+                           uint8_t epoch_id,
+                           uint64_t loss_count,
+                           bladerf_frequency requested_frequency_hz,
+                           bladerf_frequency readback_frequency_hz,
+                           uint32_t transition_channel_flags);
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev);
 int bladerf2_rx_fault_monitor_start(struct bladerf *dev);
 void bladerf2_rx_fault_monitor_stop(struct bladerf *dev);

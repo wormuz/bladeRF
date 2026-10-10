@@ -729,6 +729,16 @@ int sync_rx_epoch_invalidate_with_revoke(
         sync->meta.rx_epoch_min_timestamp = 0;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
+        /* A loss marker staged for the epoch being discarded stays in the
+         * RF event history, but must not mark samples from the next epoch. */
+        MUTEX_LOCK(&sync->buf_mgmt.lock);
+        sync->buf_mgmt.overrun_source_flags &=
+            ~BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
+        if (sync->buf_mgmt.overrun_source_flags == 0) {
+            sync->buf_mgmt.overrun_pending = false;
+            sync->buf_mgmt.overrun_event_published = false;
+        }
+        MUTEX_UNLOCK(&sync->buf_mgmt.lock);
         sync_worker_discard_rx_epoch(sync);
         if (sync->state == SYNC_STATE_BUFFER_READY ||
             sync->state == SYNC_STATE_USING_BUFFER_META) {
@@ -768,27 +778,35 @@ void sync_rx_epoch_revoke_delivery_with_callback(
  * the common RX_STREAM_OVERRUN event path. The current buffered prefix stays
  * readable; timestamps determine where continuity resumes. */
 void sync_rx_report_fpga_loss(struct bladerf_sync *sync,
-                              void (*publish_event)(void *),
+                              void (*publish_event)(struct bladerf_sync *,
+                                                    void *),
                               void *context)
 {
     if (sync == NULL || !sync->initialized) {
         if (publish_event != NULL) {
-            publish_event(context);
+            publish_event(sync, context);
         }
         return;
     }
 
     MUTEX_LOCK(&sync->buf_mgmt.lock);
+    /* Publish first. A reader cannot observe the overrun until this mutex is
+     * released, and a stale hardware observation must not poison a newer
+     * epoch's sync stream. */
+    if (publish_event != NULL) {
+        publish_event(sync, context);
+    }
+    MUTEX_UNLOCK(&sync->buf_mgmt.lock);
+}
+
+void sync_rx_stage_fpga_loss_locked(struct bladerf_sync *sync)
+{
+    if (sync == NULL || !sync->initialized) {
+        return;
+    }
     sync->buf_mgmt.overrun_pending = true;
     sync->buf_mgmt.overrun_source_flags |=
         BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS;
-    /* A reader cannot consume overrun_pending and return before the event
-     * explaining it is durable. The callback must not take dev->lock or
-     * re-enter sync RX; bladeRF2 only appends under its independent event lock. */
-    if (publish_event != NULL) {
-        publish_event(context);
-    }
-    MUTEX_UNLOCK(&sync->buf_mgmt.lock);
 }
 
 bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)

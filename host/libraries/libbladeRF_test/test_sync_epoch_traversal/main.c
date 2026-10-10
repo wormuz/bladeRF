@@ -2382,17 +2382,25 @@ struct fpga_loss_publish_observation {
     unsigned int calls;
 };
 
-static void observe_fpga_loss_event_publish(void *context)
+static void observe_fpga_loss_event_publish(struct bladerf_sync *sync,
+                                            void *context)
 {
     struct fpga_loss_publish_observation *observation = context;
 
-    /* The callback runs under buf_mgmt.lock. Reading these fields directly
-     * verifies that the cause is published after the overrun is staged but
-     * before sync_rx can observe/unlock that staged state. */
-    assert(observation->sync->buf_mgmt.overrun_pending);
-    assert(observation->sync->buf_mgmt.overrun_source_flags ==
-           BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS);
+    /* The callback runs under buf_mgmt.lock before the overrun becomes
+     * visible. A reader cannot consume the pending flag until the durable
+     * event has been committed. */
+    assert(!observation->sync->buf_mgmt.overrun_pending);
     observation->calls++;
+    sync_rx_stage_fpga_loss_locked(sync);
+}
+
+static void reject_stale_fpga_loss_event(struct bladerf_sync *sync,
+                                         void *context)
+{
+    (void)sync;
+    unsigned int *calls = context;
+    (*calls)++;
 }
 
 static void test_fpga_loss_event_published_inside_sync_fence(void)
@@ -2411,6 +2419,18 @@ static void test_fpga_loss_event_published_inside_sync_fence(void)
     assert(f.sync.buf_mgmt.overrun_pending);
     assert(f.sync.buf_mgmt.overrun_source_flags ==
            BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS);
+    assert(sync_rx_epoch_invalidate(&f.sync) == 0);
+    assert(!f.sync.buf_mgmt.overrun_pending);
+    assert(f.sync.buf_mgmt.overrun_source_flags == 0);
+    fixture_destroy(&f);
+
+    fixture_init(&f);
+    unsigned int rejected_calls = 0;
+    sync_rx_report_fpga_loss(&f.sync, reject_stale_fpga_loss_event,
+                             &rejected_calls);
+    assert(rejected_calls == 1);
+    assert(!f.sync.buf_mgmt.overrun_pending);
+    assert(f.sync.buf_mgmt.overrun_source_flags == 0);
     fixture_destroy(&f);
 }
 

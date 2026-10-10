@@ -425,6 +425,21 @@ retune schedule scoring now share equivalent modulo ordering. Missing first
 META timestamp is tracked separately from the valid value zero. Source
 regressions were added; no harness or test was executed.
 
+### RX FPGA loss observation crossing a transition
+
+The RX monitor sampled a loss counter for a certified epoch, then published
+the overrun without rechecking that transaction after the hardware reads. A
+concurrent transition could therefore stage an old overrun in the new sync
+epoch; the event used transaction ID zero, so Python could not disambiguate it
+after the 8-bit FPGA epoch wrapped. Loss publication now carries the observed
+transaction and channel/frequency snapshot, revalidates transaction plus epoch
+under the RX admission lock while the sync buffer lock excludes readers, and
+stages the overrun only when that certificate is still current. The monitor
+also avoids updating its software loss-counter baseline from stale
+observations. Runtime RX fault invalidations now retain their observed
+transaction ID. Sync traversal regression covers accepted and rejected loss
+publication; not run under the source-audit gate.
+
 ### RX transition deadline clock failure
 
 Transition polling loops previously ignored `bladerf_monotonic_now_ns()`

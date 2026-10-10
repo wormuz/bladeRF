@@ -381,12 +381,18 @@ void sync_rx_epoch_revoke_delivery(struct bladerf_sync *sync);
 void sync_rx_epoch_revoke_delivery_with_callback(
     struct bladerf_sync *sync, sync_rx_epoch_revoke_callback revoke,
     void *context);
-/* Mark an FPGA sample-loss episode and publish its device event before the
- * pending overrun becomes visible to a sync reader. The callback runs while
- * buf_mgmt.lock is held and must only append to an independent event queue. */
+/* Publish an FPGA sample-loss event while buf_mgmt.lock excludes sync readers.
+ * The callback must atomically validate provenance, publish the event, and
+ * stage the overrun, or do nothing for a stale observation. It must not
+ * re-enter sync RX. */
 void sync_rx_report_fpga_loss(struct bladerf_sync *sync,
-                              void (*publish_event)(void *),
+                              void (*publish_event)(struct bladerf_sync *,
+                                                    void *),
                               void *context);
+/* Called by the publish callback while sync_rx_report_fpga_loss holds
+ * buf_mgmt.lock, allowing epoch validation and overrun staging to commit
+ * atomically with respect to a new RX certificate. */
+void sync_rx_stage_fpga_loss_locked(struct bladerf_sync *sync);
 bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync);
 int sync_rx_epoch_require_transition(struct bladerf_sync *sync);
 int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id);

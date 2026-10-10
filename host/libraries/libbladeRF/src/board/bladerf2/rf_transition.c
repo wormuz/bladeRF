@@ -911,6 +911,7 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
             if (invalidate) {
                 board_data->rf_transition_setter_active = true;
                 event.host_monotonic_ns = _monotonic_ns();
+                event.transaction_id = observed_transaction_id;
                 event.epoch_id = observed_epoch_id;
                 event.requested_rx_lo_hz =
                     board_data->rf_transition_requested_frequency_hz;
@@ -1020,6 +1021,9 @@ static void *rx_fault_monitor_task(void *arg)
         uint32_t transaction_id = 0;
         uint32_t tx_channel_state_generation = 0;
         uint8_t epoch_id = 0;
+        uint32_t rx_channel_event_flags = 0;
+        bladerf_frequency observed_requested_rx_lo_hz = 0;
+        bladerf_frequency observed_readback_rx_lo_hz = 0;
         uint32_t rf_link_status = 0;
         uint32_t rx_epoch_status_word = 0;
         uint32_t rx_fault_causes = 0;
@@ -1065,6 +1069,11 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_epoch_certified;
             epoch_id = board_data->rf_transition_certified_epoch_id;
+            rx_channel_event_flags =
+                bladerf2_rx_transition_channel_event_flags(
+                    board_data->rf_transition_current_channel,
+                    board_data->rf_transition_epoch_contract_enabled &&
+                        board_data->rf_transition_current_channel_valid);
             expected_rx_channel_mask = board_data->rx_channel_enable_mask;
             expected_rx_channel_mask_valid =
                 board_data->rx_channel_enable_mask_valid;
@@ -1074,6 +1083,10 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rfic_frequency_model_known;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             transaction_id = board_data->rf_transition_current_id;
+            observed_requested_rx_lo_hz =
+                board_data->rf_transition_requested_frequency_hz;
+            observed_readback_rx_lo_hz =
+                board_data->rf_transition_readback_frequency_hz;
             tx_retune2_watch_active =
                 board_data->tx_retune2_failure_watch_active;
             rx_retune2_watch_active =
@@ -2218,22 +2231,41 @@ static void *rx_fault_monitor_task(void *arg)
             (void)_test_runtime_rx_loss_counter(&rx_loss_count);
             bool report_loss = false;
             bool counter_reset = false;
+            bool loss_observation_current = false;
             WITH_MUTEX(&dev->lock, {
-                if (!board_data->rx_fpga_loss_count_valid) {
-                    board_data->rx_fpga_loss_count_last = rx_loss_count;
-                    board_data->rx_fpga_loss_count_valid = true;
-                } else if (rx_loss_count <
-                           board_data->rx_fpga_loss_count_last) {
-                    board_data->rx_fpga_loss_count_last = rx_loss_count;
-                    counter_reset = true;
-                } else if (rx_loss_count >
-                           board_data->rx_fpga_loss_count_last) {
-                    board_data->rx_fpga_loss_count_last = rx_loss_count;
-                    report_loss = true;
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                loss_observation_current =
+                    !board_data->rf_transition_pending &&
+                    !board_data->rf_transition_setter_active &&
+                    board_data->rf_transition_epoch_contract_enabled &&
+                    board_data->rf_transition_epoch_certified &&
+                    bladerf2_rx_fault_observation_is_current(
+                        transaction_id,
+                        board_data->rf_transition_certified_epoch_event.
+                            transaction_id,
+                        epoch_id,
+                        board_data->rf_transition_certified_epoch_id);
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                if (loss_observation_current) {
+                    if (!board_data->rx_fpga_loss_count_valid) {
+                        board_data->rx_fpga_loss_count_last = rx_loss_count;
+                        board_data->rx_fpga_loss_count_valid = true;
+                    } else if (rx_loss_count <
+                               board_data->rx_fpga_loss_count_last) {
+                        board_data->rx_fpga_loss_count_last = rx_loss_count;
+                        counter_reset = true;
+                    } else if (rx_loss_count >
+                               board_data->rx_fpga_loss_count_last) {
+                        board_data->rx_fpga_loss_count_last = rx_loss_count;
+                        report_loss = true;
+                    }
                 }
             });
             if (report_loss) {
-                bladerf2_rx_fpga_loss(dev, epoch_id, rx_loss_count);
+                bladerf2_rx_fpga_loss(
+                    dev, transaction_id, epoch_id, rx_loss_count,
+                    observed_requested_rx_lo_hz,
+                    observed_readback_rx_lo_hz, rx_channel_event_flags);
             }
             if (counter_reset) {
                 _invalidate_faulted_rx_epoch(
@@ -2631,19 +2663,42 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
 struct rx_fpga_loss_event_context {
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event;
+    bool published;
 };
 
-static void _publish_rx_fpga_loss_event(void *context)
+static void _publish_rx_fpga_loss_event(struct bladerf_sync *sync,
+                                        void *context)
 {
     struct rx_fpga_loss_event_context *loss = context;
+    struct bladerf2_board_data *board_data = loss->board_data;
+    bool current;
 
-    MUTEX_LOCK(&loss->board_data->rf_transition_event_lock);
-    bladerf2_rf_event_append_locked(loss->board_data, &loss->event);
-    MUTEX_UNLOCK(&loss->board_data->rf_transition_event_lock);
+    /* sync_rx_report_fpga_loss holds buf_mgmt.lock. Keep the established
+     * sync → RX admission → event-history lock order, and do not let a loss
+     * sampled from an older certificate affect a newly opened epoch. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    current = board_data->rf_transition_epoch_contract_enabled &&
+        board_data->rf_transition_epoch_certified &&
+        bladerf2_rx_fault_observation_is_current(
+            loss->event.transaction_id,
+            board_data->rf_transition_certified_epoch_event.transaction_id,
+            loss->event.epoch_id,
+            board_data->rf_transition_certified_epoch_id);
+    if (current) {
+        board_data->rx_async_data_withheld_active = true;
+        bladerf2_rf_event_append(board_data, &loss->event);
+        sync_rx_stage_fpga_loss_locked(sync);
+        loss->published = true;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
-                           uint64_t loss_count)
+void bladerf2_rx_fpga_loss(struct bladerf *dev, uint32_t transaction_id,
+                           uint8_t epoch_id,
+                           uint64_t loss_count,
+                           bladerf_frequency requested_frequency_hz,
+                           bladerf_frequency readback_frequency_hz,
+                           uint32_t transition_channel_flags)
 {
     struct bladerf2_board_data *board_data;
     struct rx_fpga_loss_event_context loss = {0};
@@ -2655,33 +2710,37 @@ void bladerf2_rx_fpga_loss(struct bladerf *dev, uint8_t epoch_id,
 
     loss.board_data = board_data;
     loss.event.host_monotonic_ns = _monotonic_ns();
+    loss.event.transaction_id = transaction_id;
     loss.event.epoch_id = epoch_id;
     loss.event.rfic_status = (uint32_t)loss_count;
     loss.event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     loss.event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     loss.event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
                        BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS |
-                       bladerf2_rx_current_transition_channel_event_flags(
-                           board_data);
-    loss.event.transaction_id = 0;
-    WITH_MUTEX(&dev->lock, {
-        loss.event.requested_rx_lo_hz =
-            board_data->rf_transition_requested_frequency_hz;
-        loss.event.readback_rx_lo_hz =
-            board_data->rf_transition_readback_frequency_hz;
-    });
+                       transition_channel_flags;
+    loss.event.requested_rx_lo_hz = requested_frequency_hz;
+    loss.event.readback_rx_lo_hz = readback_frequency_hz;
 
     /* Store the event while holding the sync queue lock: once a sync reader
      * can observe the pending overrun, its reason is already in RF history. */
     sync_rx_report_fpga_loss(&board_data->sync[BLADERF_RX],
                              _publish_rx_fpga_loss_event, &loss);
 
-    WITH_MUTEX(&dev->lock, {
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->rx_async_data_withheld_active = true;
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        board_data->rf_transition_last_event = loss.event;
-    });
+    if (loss.published) {
+        WITH_MUTEX(&dev->lock, {
+            if (!board_data->rf_transition_pending &&
+                board_data->rf_transition_current_id == transaction_id) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                if (board_data->rf_transition_epoch_certified &&
+                    board_data->rf_transition_certified_epoch_id == epoch_id &&
+                    board_data->rf_transition_certified_epoch_event.transaction_id ==
+                        transaction_id) {
+                    board_data->rf_transition_last_event = loss.event;
+                }
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
+        });
+    }
 }
 
 /* Called by the AD9361 SPI platform adapter while bladerf_set_frequency()
