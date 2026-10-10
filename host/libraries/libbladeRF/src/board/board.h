@@ -317,6 +317,8 @@ struct board_fns {
      * the exact public BLADERF_RF_INVALIDATE_* reason to observers. */
     int (*invalidate_rx_data)(struct bladerf *dev, bladerf_channel ch,
                               uint32_t reason);
+    /* Revoke TX RF validity before a legacy control changes the TX RF path. */
+    int (*tx_config_change_begin)(struct bladerf *dev);
     /* Release the RF-configuration reservation acquired by
      * invalidate_rx_data after the legacy setter has fully returned. */
     void (*rx_reconfigure_complete)(struct bladerf *dev,

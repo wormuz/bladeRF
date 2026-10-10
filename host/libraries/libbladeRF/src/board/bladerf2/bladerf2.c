@@ -80,6 +80,9 @@ static int bladerf2_read_flash_vctcxo_trim(struct bladerf *dev, uint16_t *trim);
 static int bladerf2_set_pll_refclk_internal(struct bladerf *dev,
                                             bladerf_frequency frequency,
                                             bool rx_reconfiguration_reserved);
+static int bladerf2_tx_rf_config_change_begin(
+    struct bladerf *dev, struct bladerf2_board_data *board_data);
+static int bladerf2_tx_config_change_begin(struct bladerf *dev);
 
 
 /******************************************************************************/
@@ -1993,6 +1996,11 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
             rfic->get_filter(dev, BLADERF_CHANNEL_TX(0), NULL, &txfir));
     }
 
+    /* Sample-rate programming recalculates the shared AD9361 clock chains
+     * and can change TX datapath state. Revoke the TX certificate before the
+     * first RFIC write, even when this call was made for RX. */
+    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
+
     /* If the requested sample rate is below the native range, we must implement
      * a 4x decimation/interpolation filter on the RFIC. */
     if (new_low) {
@@ -2143,6 +2151,10 @@ static int bladerf2_set_bandwidth(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    /* AD9361 bandwidth updates can rerun shared filter/TIA/ADC setup. Keep
+     * TX muted until its RF state has been re-established as well. */
+    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
+
     return board_data->rfic->set_bandwidth(dev, ch, bandwidth, actual);
 }
 
@@ -2173,6 +2185,10 @@ static int bladerf2_select_band(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
+    }
 
     return board_data->rfic->select_band(dev, ch, frequency);
 }
@@ -2724,6 +2740,7 @@ static int bladerf2_set_rf_port(struct bladerf *dev,
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
+        CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
         CHECK_AD936X(ad9361_set_tx_rf_port_output(phy, port_id));
     } else {
         CHECK_AD936X(ad9361_set_rx_rf_port_input(phy, port_id));
@@ -4231,6 +4248,9 @@ static int bladerf2_device_reset(struct bladerf *dev)
 {
     CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
+    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
+
     return dev->backend->device_reset(dev);
 }
 
@@ -4304,6 +4324,15 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
         default:
             log_error("%s: invalid tuning mode (%d)\n", mode);
             return BLADERF_ERR_INVAL;
+    }
+
+    /* Changing RFIC ownership invalidates any prior TX completion state.
+     * Startup has no active TX certificate, so only fence a live TX path. */
+    if (board_data->rf_link_dir_on[1] ||
+        board_data->tx_rfic_state_valid_reported ||
+        board_data->tx_retune2_failure_watch_active ||
+        board_data->tx_retune2_pending_count != 0) {
+        CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
     }
 
     /* De-initialize RFIC if it's initialized by another tuning mode */
@@ -4384,7 +4413,6 @@ static int bladerf2_set_loopback(struct bladerf *dev, bladerf_loopback mode)
     bool firmware_loopback                 = false;
     int32_t bist_loopback                  = 0;
 
-
     IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
         if (BLADERF_LB_RFIC_BIST == mode) {
             log_error(
@@ -4408,6 +4436,8 @@ static int bladerf2_set_loopback(struct bladerf *dev, bladerf_loopback mode)
             log_error("%s: unknown loopback mode (%d)\n", __FUNCTION__, mode);
             return BLADERF_ERR_UNEXPECTED;
     }
+
+    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
 
     IF_COMMAND_MODE(dev, RFIC_COMMAND_HOST, {
         /* Set digital loopback state */
@@ -4682,6 +4712,8 @@ static int bladerf2_trim_dac_write(struct bladerf *dev, uint16_t trim)
         return 0;
     }
 
+    CHECK_STATUS(bladerf2_tx_config_change_begin(dev));
+
     return dev->backend->ad56x1_vctcxo_trim_dac_write(dev, trim);
 }
 
@@ -4727,7 +4759,26 @@ static int bladerf2_wishbone_master_write(struct bladerf *dev, uint32_t addr, ui
 {
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
-    return dev->backend->wishbone_master_write(dev, addr, data);
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+    if (status != 0) {
+        return status;
+    }
+
+    status = dev->backend->wishbone_master_write(dev, addr, data);
+    if (status == 0) {
+        /* Raw Wishbone access can write the TX gate itself. Reassert the
+         * fail-closed state after the untyped register write. */
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+    }
+    return status;
+}
+
+/* Board callback for legacy public controls whose implementation lives in
+ * the generic layer. The caller holds dev->lock. */
+static int bladerf2_tx_config_change_begin(struct bladerf *dev)
+{
+    return bladerf2_tx_rf_config_change_begin(dev, dev->board_data);
 }
 
 
@@ -4747,6 +4798,8 @@ static int bladerf2_config_gpio_write(struct bladerf *dev, uint32_t val)
 {
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
+    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
     return dev->backend->config_gpio_write(dev, val);
 }
 
@@ -4847,6 +4900,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.get_frequency, bladerf2_get_frequency),
     FIELD_INIT(.set_frequency, bladerf2_set_frequency),
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
+    FIELD_INIT(.tx_config_change_begin, bladerf2_tx_config_change_begin),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.tx_frequency_reconfigure_begin,
                bladerf2_tx_frequency_reconfigure_begin),
@@ -4977,10 +5031,17 @@ int bladerf_set_bias_tee(struct bladerf *dev, bladerf_channel ch, bool enable)
         uint32_t reg;
         uint32_t shift;
 
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
+            status = bladerf2_tx_rf_config_change_begin(
+                dev, dev->board_data);
+        }
+
         shift = BLADERF_CHANNEL_IS_TX(ch) ? RFFE_CONTROL_TX_BIAS_EN
                                           : RFFE_CONTROL_RX_BIAS_EN;
 
-        status = dev->backend->rffe_control_read(dev, &reg);
+        if (status == 0) {
+            status = dev->backend->rffe_control_read(dev, &reg);
+        }
         if (status == 0) {
             /* Clear register value */
             reg &= ~(1 << shift);
@@ -5175,8 +5236,8 @@ static int bladerf2_tx_rf_config_change_begin(
     board_data->tx_retune2_completion_faulted = true;
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    bladerf2_tx_retune_event(
-        dev, BLADERF_RF_EVT_TX_FREQUENCY_INVALID, 0, 0, pending_count, 0);
+    bladerf2_tx_stream_event(
+        dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0, pending_count, 0);
 
     if (queue_may_exist) {
         if (dev->backend->retune2 == NULL) {
@@ -5384,6 +5445,13 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
         }
 
         if (status == 0) {
+            /* RX FIR programming can recalculate shared RFIC datapath state;
+             * keep an active TX epoch fenced until it is retuned/revalidated. */
+            status = bladerf2_tx_rf_config_change_begin(
+                dev, board_data);
+        }
+
+        if (status == 0) {
             status = rfic->set_filter(dev, ch, rxfir, 0);
         }
     });
@@ -5441,6 +5509,11 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
                           __FUNCTION__, sr, sr_range.min);
                 status = BLADERF_ERR_INVAL;
             }
+        }
+
+        if (status == 0) {
+            status = bladerf2_tx_rf_config_change_begin(
+                dev, board_data);
         }
 
         if (status == 0) {
@@ -5670,7 +5743,13 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
     if (status != 0) {
         return status;
     }
-    status = bladerf2_set_pll_enable_hw(dev, enable);
+    WITH_MUTEX(&dev->lock, {
+        status = bladerf2_tx_rf_config_change_begin(
+            dev, dev->board_data);
+    });
+    if (status == 0) {
+        status = bladerf2_set_pll_enable_hw(dev, enable);
+    }
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
@@ -5879,7 +5958,11 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
     WITH_MUTEX(&dev->lock, {
         uint32_t gpio;
 
-        status = dev->backend->config_gpio_read(dev, &gpio);
+        status = bladerf2_tx_rf_config_change_begin(
+            dev, dev->board_data);
+        if (status == 0) {
+            status = dev->backend->config_gpio_read(dev, &gpio);
+        }
 
         // Set the clock select bit(s) accordingly
         if (status == 0) {

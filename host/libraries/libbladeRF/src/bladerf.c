@@ -841,6 +841,16 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
     return 0;
 }
 
+/* Board-specific TX RF paths can be changed by legacy controls that do not
+ * have a TX transition API. Caller holds dev->lock. */
+static int invalidate_tx_data_before_reconfigure(struct bladerf *dev)
+{
+    if (dev->board->tx_config_change_begin != NULL) {
+        return dev->board->tx_config_change_begin(dev);
+    }
+    return 0;
+}
+
 /* These AD9361 configuration calls can update RX state even when the caller
  * selected TX: sample-rate programming recalculates both clock chains, and TX
  * bandwidth programming reruns shared RX filter/TIA/ADC calibration. */
@@ -1304,6 +1314,14 @@ int bladerf_set_correction(struct bladerf *dev,
     }
     MUTEX_LOCK(&dev->lock);
 
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
+
     status = dev->board->set_correction(dev, ch, corr, value);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -1629,6 +1647,14 @@ int bladerf_load_fpga(struct bladerf *dev, const char *fpga_file)
         goto exit;
     }
 
+    MUTEX_LOCK(&dev->lock);
+    status = invalidate_tx_data_before_reconfigure(dev);
+    MUTEX_UNLOCK(&dev->lock);
+    if (status != 0) {
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        goto exit;
+    }
+
     status = dev->board->load_fpga(dev, buf, buf_size);
     rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
 
@@ -1950,6 +1976,14 @@ int bladerf_write_trigger(struct bladerf *dev,
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
 
     status = dev->board->write_trigger(dev, ch, trigger, val);
 
@@ -2336,6 +2370,13 @@ int bladerf_expansion_gpio_write(struct bladerf *dev, uint32_t val)
     }
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = xb100_gpio_write(dev, val);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2356,6 +2397,15 @@ int bladerf_expansion_gpio_masked_write(struct bladerf *dev,
         }
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (mask != 0) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+            return status;
+        }
+    }
 
     status = xb100_gpio_masked_write(dev, mask, val);
 
@@ -2387,6 +2437,13 @@ int bladerf_expansion_gpio_dir_write(struct bladerf *dev, uint32_t val)
     }
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = xb100_gpio_dir_write(dev, val);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2407,6 +2464,15 @@ int bladerf_expansion_gpio_dir_masked_write(struct bladerf *dev,
         }
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (mask != 0) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+            return status;
+        }
+    }
 
     status = xb100_gpio_dir_masked_write(dev, mask, val);
 
@@ -2430,6 +2496,14 @@ int bladerf_xb200_set_filterbank(struct bladerf *dev,
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
 
     status = xb200_set_filterbank(dev, ch, filter);
 
@@ -2463,6 +2537,14 @@ int bladerf_xb200_set_path(struct bladerf *dev,
     }
     MUTEX_LOCK(&dev->lock);
 
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
+
     status = xb200_set_path(dev, ch, path);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2495,6 +2577,13 @@ int bladerf_xb300_set_trx(struct bladerf *dev, bladerf_xb300_trx trx)
     }
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = xb300_set_trx(dev, trx);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2526,6 +2615,14 @@ int bladerf_xb300_set_amplifier_enable(struct bladerf *dev,
         }
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (amp != BLADERF_XB300_AMP_LNA) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
 
     status = xb300_set_amplifier_enable(dev, amp, enable);
 
@@ -2604,6 +2701,12 @@ int bladerf_enable_feature(struct bladerf *dev, bladerf_feature feature, bool en
     }
 
     MUTEX_LOCK(&dev->lock);
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
     dev->feature = enable ? feature : BLADERF_FEATURE_DEFAULT;
     MUTEX_UNLOCK(&dev->lock);
 
