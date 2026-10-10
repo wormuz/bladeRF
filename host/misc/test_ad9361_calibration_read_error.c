@@ -2570,11 +2570,26 @@ int main(void)
 	/* RX and TX RF-port setters must keep their cached selection aligned with
 	 * a confirmed register write. */
 	phy.pdata->rf_rx_input_sel = 0;
+	phy.pdata->rf_tx_output_sel = 0;
 	fail_write_reg = REG_INPUT_SELECT;
 	ret = ad9361_set_rx_rf_port_input(&phy, 1);
-	if (ret != -EIO || phy.pdata->rf_rx_input_sel != 0) {
+	rx_rf_port = UINT32_MAX;
+	tx_rf_port = UINT32_MAX;
+	if (ret != -EIO || phy.pdata->rf_rx_input_sel != 0 ||
+	    phy.rf_port_select_valid ||
+	    ad9361_get_rx_rf_port_input(&phy, &rx_rf_port) != -EIO ||
+	    ad9361_get_tx_rf_port_output(&phy, &tx_rf_port) != -EIO ||
+	    rx_rf_port != UINT32_MAX || tx_rf_port != UINT32_MAX) {
 		fprintf(stderr, "RX RF-port API hid error or committed cache\n");
 		return EXIT_FAILURE;
+	}
+	{
+		unsigned writes_before = write_count;
+		if (ad9361_rf_port_setup(&phy, false, 0, 2) != -EINVAL ||
+		    write_count != writes_before) {
+			fprintf(stderr, "RF-port helper truncated an invalid TX selector\n");
+			return EXIT_FAILURE;
+		}
 	}
 	phy_without_spi.pdata = &pdata;
 	if (ad9361_set_rx_rf_port_input(NULL, 0) != -EINVAL ||
@@ -2586,11 +2601,37 @@ int main(void)
 		fprintf(stderr, "RX RF-port API accepted invalid state/mode/output\n");
 		return EXIT_FAILURE;
 	}
+	fail_write_reg = -1;
+	ret = ad9361_set_rx_rf_port_input(&phy, 0);
+	rx_rf_port = UINT32_MAX;
+	tx_rf_port = UINT32_MAX;
+	if (ret != 0 || !phy.rf_port_select_valid ||
+	    ad9361_get_rx_rf_port_input(&phy, &rx_rf_port) != 0 ||
+	    ad9361_get_tx_rf_port_output(&phy, &tx_rf_port) != 0 ||
+	    rx_rf_port != 0 || tx_rf_port != 0) {
+		fprintf(stderr, "RF-port cache did not recover after full write\n");
+		return EXIT_FAILURE;
+	}
 	phy.pdata->rf_tx_output_sel = 0;
+	fail_write_reg = REG_INPUT_SELECT;
 	ret = ad9361_set_tx_rf_port_output(&phy, 1);
+	rx_rf_port = UINT32_MAX;
+	tx_rf_port = UINT32_MAX;
 	if (ret != -EIO || phy.pdata->rf_tx_output_sel != 0 ||
+	    phy.rf_port_select_valid ||
+	    ad9361_get_rx_rf_port_input(&phy, &rx_rf_port) != -EIO ||
+	    ad9361_get_tx_rf_port_output(&phy, &tx_rf_port) != -EIO ||
+	    rx_rf_port != UINT32_MAX || tx_rf_port != UINT32_MAX ||
 	    ad9361_set_tx_rf_port_output(&phy, 2) != -EINVAL) {
 		fprintf(stderr, "TX RF-port API hid error, committed cache, or accepted invalid mode\n");
+		return EXIT_FAILURE;
+	}
+	fail_write_reg = -1;
+	ret = ad9361_set_tx_rf_port_output(&phy, 0);
+	if (ret != 0 || !phy.rf_port_select_valid ||
+	    ad9361_get_tx_rf_port_output(&phy, &tx_rf_port) != 0 ||
+	    tx_rf_port != 0) {
+		fprintf(stderr, "TX RF-port cache did not recover after full write\n");
 		return EXIT_FAILURE;
 	}
 	phy_without_spi.pdata = &pdata;
