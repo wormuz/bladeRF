@@ -140,16 +140,16 @@ read reports a non-v2 protocol. Unknown status remains fail-closed. Added policy
 source cases for confirmed legacy, status-read-unknown, timeout, and success;
 unbuilt/unrun under the source-audit gate.
 
-## Follow-up: TX gain-mode changes must revoke TX validity
+## Follow-up: unsupported TX gain-mode request has no stream side effects
 
-The public `bladerf_set_gain_mode()` path invalidated RX when applicable but
-did not invoke the common TX configuration fence for TX0/TX1. A successful
-manual/AGC mode change could therefore leave an earlier TX validity state
-visible across a changed RFIC configuration. The generic API now calls
-`invalidate_tx_data_before_reconfigure()` under `dev->lock`, matching
-`bladerf_set_gain()`, `bladerf_set_gain_stage()`, and
-`bladerf_set_correction()`. No build/test was run under the source-audit gate;
-`git diff --check` is the only validation.
+The generic TX gain-mode path was initially treated as a missing TX fence.
+Source tracing showed that both bladeRF2 gain-mode callbacks return success
+without changing RFIC state for TX, and every board reports zero TX gain modes.
+Adding a fence would therefore have stopped/revoked a live TX stream for a
+no-op. The API now validates the channel and returns
+`BLADERF_ERR_UNSUPPORTED` for TX before RX/TX invalidation or board dispatch.
+This also avoids a misleading successful result. The earlier fence-only
+implementation was removed. Source-only; no build/test under the audit gate.
 
 ## Follow-up: TX gain-calibration policy must revoke TX validity
 

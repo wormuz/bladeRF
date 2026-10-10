@@ -757,20 +757,22 @@ int bladerf_set_gain_mode(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    /* No current bladeRF board exposes a TX gain-control mode. In
+     * particular, bladeRF2's RFIC callbacks historically treated this as a
+     * successful no-op. Reject it before invalidating RX/TX state so an
+     * unsupported request cannot disturb a live stream. */
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_GAIN_MODE);
     if (status != 0) {
         return status;
     }
     MUTEX_LOCK(&dev->lock);
-
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
-        status = invalidate_tx_data_before_reconfigure(dev);
-        if (status != 0) {
-            MUTEX_UNLOCK(&dev->lock);
-            return status;
-        }
-    }
 
     status = dev->board->set_gain_mode(dev, ch, mode);
 
