@@ -2534,9 +2534,12 @@ static int _bladerf_rx_transition_begin(
 {
     struct bladerf2_board_data *board_data;
     int status;
+    int rx_source_status = 0;
     uint32_t required_events_mask;
+    bladerf_rx_mux rx_mux = BLADERF_RX_MUX_INVALID;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
+    bool rx_source_unsupported = false;
     bool frequency_model_unknown = false;
     bool epochless_async_stream_active = false;
     bool sync_format_unsupported = false;
@@ -2583,20 +2586,33 @@ static int _bladerf_rx_transition_begin(
     }
 
     WITH_MUTEX(&dev->lock, {
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        frequency_model_unknown =
-            !bladerf2_rfic_frequency_model_valid(
-                board_data->rfic_reference_clock_known,
-                board_data->rfic_frequency_model_known);
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        if (!frequency_model_unknown &&
-            bladerf2_rfic_reference_clock_status(dev) != 0) {
-            frequency_model_unknown = true;
-            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-            board_data->rfic_reference_clock_known = false;
-            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+            rx_source_status = dev->board->get_rx_mux != NULL
+                ? dev->board->get_rx_mux(dev, &rx_mux)
+                : BLADERF_ERR_UNSUPPORTED;
+            if (rx_source_status == 0 &&
+                !bladerf2_rx_epoch_source_certifiable(true, rx_mux)) {
+                rx_source_unsupported = true;
+            }
         }
-        if (frequency_model_unknown) {
+        if (rx_source_status == 0 && !rx_source_unsupported) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            frequency_model_unknown =
+                !bladerf2_rfic_frequency_model_valid(
+                    board_data->rfic_reference_clock_known,
+                    board_data->rfic_frequency_model_known);
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (!frequency_model_unknown &&
+                bladerf2_rfic_reference_clock_status(dev) != 0) {
+                frequency_model_unknown = true;
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rfic_reference_clock_known = false;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
+        }
+        if (rx_source_status != 0 || rx_source_unsupported) {
+            /* Reported after leaving dev->lock; no RF or epoch state changed. */
+        } else if (frequency_model_unknown) {
             /* Divider readback is not a frequency certificate when the
              * reference source or AD9361 clock-tree model was modified. */
             transition_busy = true;
@@ -2707,6 +2723,12 @@ static int _bladerf_rx_transition_begin(
         }
     });
 
+    if (rx_source_status != 0) {
+        return rx_source_status;
+    }
+    if (rx_source_unsupported) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
     if (transition_busy) {
         return BLADERF_ERR_WOULD_BLOCK;
     }

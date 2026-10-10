@@ -40,6 +40,15 @@ static inline bool bladerf2_rx_channel_valid(bladerf_channel channel)
            channel == BLADERF_CHANNEL_RX(1);
 }
 
+/* An RF RX epoch certificate is meaningful only for the live baseband ADC
+ * source. Counter generators and digital loopback have independent sample
+ * provenance; the epoch gate cannot prove their source FIFO was drained. */
+static inline bool bladerf2_rx_epoch_source_certifiable(
+    bool source_known, bladerf_rx_mux source)
+{
+    return source_known && source == BLADERF_RX_MUX_BASEBAND;
+}
+
 struct bladerf2_rx_invalidation_policy {
     bool reserve_setter;
     bool abort_rx_epoch;

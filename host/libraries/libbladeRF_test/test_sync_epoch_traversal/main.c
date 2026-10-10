@@ -183,6 +183,16 @@ static const struct board_fns test_async_board;
 static void test_rf_transition_calibration_is_explicit(void)
 {
     uint32_t effective = 0;
+    assert(bladerf2_rx_epoch_source_certifiable(
+        true, BLADERF_RX_MUX_BASEBAND));
+    assert(!bladerf2_rx_epoch_source_certifiable(
+        true, BLADERF_RX_MUX_12BIT_COUNTER));
+    assert(!bladerf2_rx_epoch_source_certifiable(
+        true, BLADERF_RX_MUX_32BIT_COUNTER));
+    assert(!bladerf2_rx_epoch_source_certifiable(
+        true, BLADERF_RX_MUX_DIGITAL_LOOPBACK));
+    assert(!bladerf2_rx_epoch_source_certifiable(
+        false, BLADERF_RX_MUX_BASEBAND));
     assert(bladerf2_rf_transition_normalize_requirements(
         BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX |
         BLADERF_RF_REQUIRE_EPOCH_VALID, true, &effective));

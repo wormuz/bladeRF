@@ -5228,6 +5228,10 @@ struct bladerf_rx_transition_request {
  * Event-driven transitions require host RFIC ownership and return
  * ::BLADERF_ERR_UNSUPPORTED in FPGA/NIOS tuning mode without allocating a
  * transaction or changing RF state.
+ * Epoch-valid transitions also require the live baseband RX mux. Counter
+ * generator and digital-loopback muxes have independent sample provenance
+ * that this RF epoch gate cannot certify; those requests return
+ * ::BLADERF_ERR_UNSUPPORTED before changing RF or epoch state.
  *
  * @param       dev             Device handle
  * @param[in]   ch              RX channel
