@@ -588,9 +588,7 @@ static int wait_for_buffer(struct buffer_mgmt *b,
 
 /* Bound synchronous worker startup and buffer waits by the caller's remaining
  * timeout budget. Use CLOCK_MONOTONIC so wall-clock adjustments cannot extend
- * or prematurely expire those waits. TX's separate buffer-submit startup wait
- * still uses the configured stream timeout and is tracked as an open audit
- * item. */
+ * or prematurely expire those waits. */
 static int sync_timeout_remaining_ms(uint64_t call_start_ns,
                                      unsigned int timeout_ms,
                                      unsigned int *remaining_ms)
@@ -612,6 +610,29 @@ static int sync_timeout_remaining_ms(uint64_t call_start_ns,
     remaining_ns = (uint64_t)timeout_ms * 1000000ULL - elapsed_ns;
     *remaining_ms = (unsigned int)((remaining_ns + 999999ULL) / 1000000ULL);
     return 0;
+}
+
+/* TX submission is nonblocking once the stream is running, but
+ * async_submit_stream_buffer() can wait for the worker's start condition.
+ * Give that wait the caller's remaining budget. If the deadline has just
+ * expired, retain a 1 ms handoff window so advance_tx_buffer() can either
+ * transfer ownership or run its normal rollback path instead of stranding a
+ * full buffer in PARTIAL state. */
+static unsigned int sync_tx_submit_timeout_ms(struct bladerf_sync *sync,
+                                              uint64_t call_start_ns,
+                                              unsigned int timeout_ms)
+{
+    unsigned int remaining_ms;
+
+    if (timeout_ms == 0) {
+        return 0;
+    }
+
+    if (sync_timeout_remaining_ms(call_start_ns, timeout_ms,
+                                  &remaining_ms) != 0) {
+        return 1;
+    }
+    return remaining_ms;
 }
 
 int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms)
@@ -1288,8 +1309,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             case SYNC_STATE_START_WORKER: {
                 sync_worker_submit_request(s->worker, SYNC_WORKER_START);
 
-                unsigned int start_timeout_ms =
-                    SYNC_WORKER_START_TIMEOUT_MS;
+                unsigned int start_timeout_ms = timeout_ms == 0
+                    ? 0 : SYNC_WORKER_START_TIMEOUT_MS;
                 if (timeout_ms != 0) {
                     unsigned int remaining_ms;
                     status = sync_timeout_remaining_ms(
@@ -2245,7 +2266,8 @@ static unsigned int oldest_full_buffer(struct buffer_mgmt *b)
     return BUFFER_MGMT_INVALID_INDEX;
 }
 
-static int reclaim_tx_submission(struct bladerf_sync *s, struct buffer_mgmt *b)
+static int reclaim_tx_submission(struct bladerf_sync *s, struct buffer_mgmt *b,
+                                 unsigned int submit_timeout_ms)
 {
     const unsigned int idx = oldest_full_buffer(b);
     size_t len;
@@ -2270,8 +2292,7 @@ static int reclaim_tx_submission(struct bladerf_sync *s, struct buffer_mgmt *b)
 
     MUTEX_UNLOCK(&b->lock);
     status = async_submit_stream_buffer(s->worker->stream, b->buffers[idx],
-                                       &len, s->stream_config.timeout_ms,
-                                       true);
+                                       &len, submit_timeout_ms, true);
     MUTEX_LOCK(&b->lock);
 
     if (status == 0) {
@@ -2292,10 +2313,14 @@ static int reclaim_tx_submission(struct bladerf_sync *s, struct buffer_mgmt *b)
 }
 
 /* Assumes buffer lock is held */
-static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b)
+static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b,
+                             uint64_t call_start_ns,
+                             unsigned int timeout_ms)
 {
     int status = 0;
     const unsigned int idx = b->prod_i;
+    const unsigned int submit_timeout_ms =
+        sync_tx_submit_timeout_ms(s, call_start_ns, timeout_ms);
 
     if (b->submitter == SYNC_TX_SUBMITTER_FN) {
         /* Mark buffer in flight because we're going to send it out.
@@ -2335,8 +2360,7 @@ static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b)
         status = async_submit_stream_buffer(s->worker->stream,
                                             b->buffers[idx],
                                             &len,
-                                            s->stream_config.timeout_ms,
-                                            true);
+                                            submit_timeout_ms, true);
         MUTEX_LOCK(&b->lock);
 
         if (status == 0) {
@@ -2405,7 +2429,7 @@ static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b)
          */
         if (b->submitter == SYNC_TX_SUBMITTER_CALLBACK &&
             b->cons_i != BUFFER_MGMT_INVALID_INDEX) {
-            status = reclaim_tx_submission(s, b);
+            status = reclaim_tx_submission(s, b, submit_timeout_ms);
             if (status != 0) {
                 return status;
             }
@@ -2565,6 +2589,15 @@ int sync_tx(struct bladerf_sync *s,
     samples_per_buffer = s->stream_config.samples_per_buffer;
 
     while (status == 0 && ((samples_written < num_samples) || op.flush)) {
+        if (timeout_ms != 0) {
+            unsigned int remaining_ms;
+            status = sync_timeout_remaining_ms(call_start_ns, timeout_ms,
+                                               &remaining_ms);
+            if (status != 0) {
+                break;
+            }
+        }
+
         switch (s->state) {
             case SYNC_STATE_CHECK_WORKER: {
                 int stream_error;
@@ -2596,8 +2629,8 @@ int sync_tx(struct bladerf_sync *s,
             case SYNC_STATE_START_WORKER: {
                 sync_worker_submit_request(s->worker, SYNC_WORKER_START);
 
-                unsigned int start_timeout_ms =
-                    SYNC_WORKER_START_TIMEOUT_MS;
+                unsigned int start_timeout_ms = timeout_ms == 0
+                    ? 0 : SYNC_WORKER_START_TIMEOUT_MS;
                 if (timeout_ms != 0) {
                     unsigned int remaining_ms;
                     status = sync_timeout_remaining_ms(
@@ -2662,8 +2695,11 @@ int sync_tx(struct bladerf_sync *s,
                      * untouched, which ends the loop. */
                     while (status == 0 && tx_submission_parked(b)) {
                         const unsigned int before = b->cons_i;
-
-                        status = reclaim_tx_submission(s, b);
+                        const unsigned int submit_timeout_ms =
+                            sync_tx_submit_timeout_ms(
+                                s, call_start_ns, timeout_ms);
+                        status = reclaim_tx_submission(
+                            s, b, submit_timeout_ms);
                         if (b->cons_i == before) {
                             break;      /* nothing moved: transfers all busy */
                         }
@@ -2685,7 +2721,9 @@ int sync_tx(struct bladerf_sync *s,
                          * arrived and left the duty parked again. */
                         if (status == BLADERF_ERR_TIMEOUT &&
                             tx_submission_parked(b) &&
-                            reclaim_tx_submission(s, b) == 0 &&
+                            reclaim_tx_submission(s, b,
+                                sync_tx_submit_timeout_ms(
+                                    s, call_start_ns, timeout_ms)) == 0 &&
                             b->submitter == SYNC_TX_SUBMITTER_FN) {
                             status = 0;
                         }
@@ -2765,7 +2803,8 @@ int sync_tx(struct bladerf_sync *s,
                     assert(b->partial_off == samples_per_buffer);
 
                     /* Submit buffer and advance to the next one */
-                    status = advance_tx_buffer(s, b);
+                    status = advance_tx_buffer(s, b, call_start_ns,
+                                               timeout_ms);
                 }
 
                 MUTEX_UNLOCK(&b->lock);
@@ -2930,7 +2969,8 @@ int sync_tx(struct bladerf_sync *s,
                             assert(s->meta.msg_num == s->meta.msg_per_buf);
 
                             /* Submit buffer of samples for transmission */
-                            status = advance_tx_buffer(s, b);
+                            status = advance_tx_buffer(s, b, call_start_ns,
+                                                       timeout_ms);
 
                             s->meta.msg_num = 0;
                             s->state        = SYNC_STATE_WAIT_FOR_BUFFER;
@@ -2965,7 +3005,7 @@ int sync_tx(struct bladerf_sync *s,
 
                 samples_written = num_samples;
 
-                status = advance_tx_buffer(s, b);
+                status = advance_tx_buffer(s, b, call_start_ns, timeout_ms);
 
                 s->meta.msg_num = 0;
                 s->state        = SYNC_STATE_WAIT_FOR_BUFFER;
