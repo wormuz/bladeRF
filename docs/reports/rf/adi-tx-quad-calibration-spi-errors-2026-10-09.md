@@ -82,7 +82,11 @@ and LTE RF-content acceptance.
 
 The broader TX surface review found that `ad9361_tx_mute()` dereferenced the
 PHY on the unmute path without a null check and treated every nonzero state as
-mute, despite the public 0/1 contract. It now rejects a null PHY, missing SPI
-descriptor, and state values above 1 before any register access. Added cases
-to the SPI-injected regression harness; source-only, not built or run under the
-active audit gate.
+mute, despite the public 0/1 contract. Cleanup callers also attempted unmute
+after a failed initial attenuation read, which could replay an older shared
+cache into the RFIC. It now validates PHY/SPI/state, keeps its restore snapshot
+separate from the host mute cache, invalidates the snapshot before fresh reads,
+and refuses restore unless a fresh mute snapshot succeeded. The SPI-injected
+regression source covers invalid arguments and both attenuation-read failure
+positions followed by cleanup; source-only, not built or run under the active
+audit gate.

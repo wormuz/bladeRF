@@ -308,6 +308,7 @@ int main(void)
             ad9361_get_rx_quad_track_en_dis(&phy, NULL) != -EINVAL ||
             ad9361_txmon_enable(NULL, TX_1) != -EINVAL ||
             ad9361_txmon_enable(&phy_without_spi, TX_1) != -EINVAL ||
+            ad9361_tx_mute(&phy, 0) != -EINVAL ||
             ad9361_tx_mute(NULL, 0) != -EINVAL ||
             ad9361_tx_mute(NULL, 1) != -EINVAL ||
             ad9361_tx_mute(&phy_without_spi, 0) != -EINVAL ||
@@ -1186,12 +1187,45 @@ int main(void)
         }
         phy.tx1_atten_cached = 111;
         phy.tx2_atten_cached = 222;
+        phy.tx_mute_restore_atten[0] = 111;
+        phy.tx_mute_restore_atten[1] = 222;
+        phy.tx_mute_restore_valid = true;
         fail_read_reg = REG_TX1_ATTEN_1;
         ret = ad9361_tx_mute(&phy, 1);
         if (ret != -EIO || phy.tx1_atten_cached != 111 ||
-            phy.tx2_atten_cached != 222) {
+            phy.tx2_atten_cached != 222 || phy.tx_mute_restore_valid ||
+            phy.tx_mute_restore_atten[0] != 111 ||
+            phy.tx_mute_restore_atten[1] != 222) {
             fprintf(stderr, "TX mute hid attenuation read failure or changed cache\n");
             return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        {
+            unsigned writes_before = write_count;
+            ret = ad9361_tx_mute(&phy, 0);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "TX cleanup restored a stale attenuation snapshot\n");
+                return EXIT_FAILURE;
+            }
+        }
+        phy.tx_mute_restore_valid = true;
+        fail_read_reg = REG_TX2_ATTEN_1;
+        ret = ad9361_tx_mute(&phy, 1);
+        if (ret != -EIO || phy.tx_mute_restore_valid) {
+            fprintf(stderr,
+                    "TX mute retained stale cache after TX2 read failure\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        {
+            unsigned writes_before = write_count;
+            ret = ad9361_tx_mute(&phy, 0);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "TX2 read cleanup restored a stale attenuation snapshot\n");
+                return EXIT_FAILURE;
+            }
         }
         fail_read_reg = REG_AGC_CONFIG_1;
         ret = ad9361_set_rx_gain(&phy, 1, &(struct rf_rx_gain){ .gain_db = 10 });
