@@ -2780,6 +2780,13 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->nios_profile,
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt));
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        /* NIOS's request response only confirms queue insertion. Keep the
+         * deferred execution-failure counter under observation for TX for
+         * the remainder of this handle, even if the queue is later cleared:
+         * an execution error may already have occurred before cancellation. */
+        board_data->tx_retune2_failure_watch_active = true;
+    }
 
     /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
      * Exiting after every recall runs the AD9361 force-control/VCO
@@ -2830,8 +2837,8 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    return dev->backend->retune2(dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0,
-                                 0);
+    return dev->backend->retune2(
+        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
 }
 
 

@@ -815,6 +815,7 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool should_poll_tx = false;
+        bool tx_retune2_watch_active = false;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
         uint32_t transaction_id = 0;
@@ -857,6 +858,8 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rx_channel_enable_mask_valid;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             transaction_id = board_data->rf_transition_current_id;
+            tx_retune2_watch_active =
+                board_data->tx_retune2_failure_watch_active;
             tx_channel_state_generation =
                 board_data->tx_channel_state_generation;
             should_poll = board_data->state == STATE_INITIALIZED &&
@@ -891,7 +894,8 @@ static void *rx_fault_monitor_task(void *arg)
                 } else if (status == 0 && should_poll_tx) {
                     tx_loss_count_status = BLADERF_ERR_UNSUPPORTED;
                 }
-                if (status == 0 && should_poll_tx) {
+                if (status == 0 && should_poll_tx &&
+                    tx_retune2_watch_active) {
                     _rx_fault_monitor_stage(board_data,
                                             "NIOS TX retune failures");
                     tx_retune2_status = nios_retune2_failure_count_read(
@@ -973,6 +977,7 @@ static void *rx_fault_monitor_task(void *arg)
                     ~BLADERF2_AD9361_BBPLL_LOCK_BIT;
             } else if (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0) {
                 tx_retune2_failure_count++;
+                tx_retune2_watch_active = true;
             }
         }
         if (should_poll_tx) {
@@ -1000,7 +1005,8 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_channel_state_generation) {
                     if (tx_link_status_error != 0 ||
                         tx_loss_count_status != 0 || tx_rfic_status != 0 ||
-                        tx_retune2_status != 0 ||
+                        (tx_retune2_watch_active &&
+                         tx_retune2_status != 0) ||
                         !tx_rfic_status_observed) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
@@ -1046,7 +1052,8 @@ static void *rx_fault_monitor_task(void *arg)
                             report_tx_underrun = true;
                         }
                     }
-                    if (tx_link_status_error == 0 &&
+                    if (tx_retune2_watch_active &&
+                        tx_link_status_error == 0 &&
                         tx_retune2_status == 0) {
                         if (!board_data->tx_retune2_failure_count_valid) {
                             board_data->tx_retune2_failure_count_last =
