@@ -135,7 +135,9 @@ static int check_schedule_ready_lifecycle(void)
         pkt_retune2_completion_word(0) != 1 ||
         pkt_retune2_completion_word(1) != 0 ||
         pkt_retune2_completion_word(2) != 0 ||
-        pkt_retune2_completion_word(3) != 5) {
+        pkt_retune2_completion_word(3) != 5 ||
+        pkt_retune2_completion_word(4) != 0x23456789u ||
+        pkt_retune2_completion_word(5) != 1u) {
         fputs("RX completion record did not preserve sequence/profile\n",
               stderr);
         return 1;
@@ -159,7 +161,9 @@ static int check_schedule_ready_lifecycle(void)
         pkt_retune2_completion_word(0) != 1 ||
         pkt_retune2_completion_word(1) != 0 ||
         pkt_retune2_completion_word(2) != 0 ||
-        pkt_retune2_completion_word(3) != 7) {
+        pkt_retune2_completion_word(3) != 7 ||
+        pkt_retune2_completion_word(4) != 0x3456789au ||
+        pkt_retune2_completion_word(5) != 2u) {
         fputs("TX completion record did not preserve sequence/profile\n",
               stderr);
         return 1;

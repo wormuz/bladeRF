@@ -1036,6 +1036,7 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  bladerf_module module,
                                  uint32_t sequence,
                                  uint64_t *frequency_hz,
+                                 uint64_t *scheduled_timestamp,
                                  uint16_t *nios_profile)
 {
     uint8_t select_addr;
@@ -1044,9 +1045,12 @@ int nios_retune2_completion_read(struct bladerf *dev,
     uint32_t lo;
     uint32_t hi;
     uint32_t profile;
+    uint32_t timestamp_lo;
+    uint32_t timestamp_hi;
     int status;
 
-    if (frequency_hz == NULL || nios_profile == NULL) {
+    if (frequency_hz == NULL || scheduled_timestamp == NULL ||
+        nios_profile == NULL) {
         return BLADERF_ERR_INVAL;
     }
     if (module == BLADERF_MODULE_RX) {
@@ -1088,6 +1092,18 @@ int nios_retune2_completion_read(struct bladerf *dev,
     if (status == 0) {
         status = nios_8x32_read(dev,
                                 NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_LO,
+                                &timestamp_lo);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI,
+                                &timestamp_hi);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE,
                                 &last_sequence);
     }
@@ -1099,6 +1115,7 @@ int nios_retune2_completion_read(struct bladerf *dev,
     }
 
     *frequency_hz = ((uint64_t)hi << 32) | lo;
+    *scheduled_timestamp = ((uint64_t)timestamp_hi << 32) | timestamp_lo;
     *nios_profile = (uint16_t)profile;
     return 0;
 }

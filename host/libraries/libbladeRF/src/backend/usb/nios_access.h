@@ -326,6 +326,7 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  bladerf_module module,
                                  uint32_t sequence,
                                  uint64_t *frequency_hz,
+                                 uint64_t *scheduled_timestamp,
                                  uint16_t *nios_profile);
 
 /* Word indices within the latched dwell summary. Wide fields are split low

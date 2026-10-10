@@ -90,6 +90,7 @@ static volatile uint32_t tx_retune2_success_count;
 struct retune2_completion {
     volatile uint32_t sequence;
     uint64_t frequency_hz;
+    uint64_t scheduled_timestamp;
     uint16_t nios_profile;
 };
 
@@ -140,7 +141,7 @@ uint32_t pkt_retune2_completion_word(uint8_t addr)
     struct retune2_completion *record;
     uint32_t sequence = selected_completion_sequence;
 
-    if (addr > 3) {
+    if (addr > 5) {
         return 0;
     }
     record = selected_completion_module == BLADERF_MODULE_RX
@@ -158,6 +159,10 @@ uint32_t pkt_retune2_completion_word(uint8_t addr)
             return (uint32_t)(record->frequency_hz >> 32);
         case 3:
             return record->nios_profile;
+        case 4:
+            return (uint32_t)record->scheduled_timestamp;
+        case 5:
+            return (uint32_t)(record->scheduled_timestamp >> 32);
         default:
             return 0;
     }
@@ -487,6 +492,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                     : &tx_retune2_completions[(completion_sequence - 1u) &
                                               (RETUNE2_QUEUE_MAX - 1u)];
                 completion->frequency_hz = readback_frequency_hz;
+                completion->scheduled_timestamp = e->timestamp;
                 completion->nios_profile = e->nios_profile;
                 /* Publish the slot sequence last, then advance the public
                  * count. A reader verifies sequence before trusting fields. */

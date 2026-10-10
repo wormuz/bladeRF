@@ -418,7 +418,8 @@
 
 /* Read a durable scheduled-retune completion record. Write target 0x8f with
  * addr=direction (RX=0/TX=1), data=completion sequence, then read fields:
- * 0 sequence, 1 frequency low, 2 frequency high, 3 NIOS profile index.
+ * 0 sequence, 1 frequency low, 2 frequency high, 3 NIOS profile index,
+ * 4 scheduled timestamp low, 5 scheduled timestamp high.
  * The ring has RETUNE2_QUEUE_MAX entries; a sequence mismatch means the
  * requested record was overwritten and must be treated as a completion gap. */
 #define NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION 0x8f
@@ -428,6 +429,8 @@
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_LO 1u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_HI 2u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_PROFILE 3u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_LO 4u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI 5u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
