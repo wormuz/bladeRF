@@ -1895,10 +1895,26 @@ int bladerf_sync_config(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    if ((format == BLADERF_FORMAT_SC8_Q7 ||
-         format == BLADERF_FORMAT_SC8_Q7_META) &&
-        strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
-        log_error("bladeRF 2.0 required for 8bit format\n");
+    if (format == BLADERF_FORMAT_SC8_Q7 ||
+        format == BLADERF_FORMAT_SC8_Q7_META) {
+        if (strcmp(bladerf_get_board_name(dev), "bladerf2") != 0 ||
+            dev->board->get_capabilities == NULL ||
+            !have_cap(dev->board->get_capabilities(dev),
+                      BLADERF_CAP_FPGA_8BIT_SAMPLES)) {
+            log_error("8bit stream format is unsupported by this "
+                      "board/image\n");
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+    }
+
+    if (format == BLADERF_FORMAT_PACKET_META &&
+        (dev->board->get_capabilities == NULL ||
+         !have_cap(dev->board->get_capabilities(dev),
+                   BLADERF_CAP_FW_SHORT_PACKET) ||
+         !have_cap(dev->board->get_capabilities(dev),
+                   BLADERF_CAP_FPGA_PACKET_META))) {
+        log_error("packet metadata format is unsupported by this "
+                  "firmware/image\n");
         return BLADERF_ERR_UNSUPPORTED;
     }
 

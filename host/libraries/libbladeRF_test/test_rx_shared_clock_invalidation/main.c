@@ -349,6 +349,14 @@ int main(void)
     assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
                                (bladerf_format)-1,
                                8, 1024, 4, 1000) == BLADERF_ERR_INVAL);
+    assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
+                               BLADERF_FORMAT_SC8_Q7,
+                               8, 1024, 4, 1000) ==
+           BLADERF_ERR_UNSUPPORTED);
+    assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
+                               BLADERF_FORMAT_PACKET_META,
+                               8, 1024, 4, 1000) ==
+           BLADERF_ERR_UNSUPPORTED);
     assert(bladerf_set_tuning_mode(&dev, BLADERF_TUNING_MODE_FPGA) ==
            BLADERF_ERR_UNSUPPORTED);
     assert(bladerf_set_vctcxo_tamer_mode(
