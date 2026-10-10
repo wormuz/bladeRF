@@ -65,6 +65,7 @@ static unsigned int async_overrun_events;
 static unsigned int tx_transport_failure_notifications;
 static int tx_transport_failure_error;
 static int test_tx_backend_stream_status;
+static int test_tx_backend_stream_error_code;
 static int test_tx_submit_status;
 static unsigned int test_tx_submit_calls;
 static int16_t test_tx_submitted_markers[4];
@@ -81,6 +82,9 @@ static int test_tx_backend_stream(struct bladerf_stream *stream,
 {
     assert(stream != NULL);
     assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX);
+    if (test_tx_backend_stream_error_code != 0) {
+        stream->error_code = test_tx_backend_stream_error_code;
+    }
     return test_tx_backend_stream_status;
 }
 
@@ -170,6 +174,7 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     tx_transport_failure_notifications = 0;
     tx_transport_failure_error = 0;
     test_tx_backend_stream_status = 0;
+    test_tx_backend_stream_error_code = 0;
 
     assert(MUTEX_INIT(&stream.lock) == 0);
     assert(COND_INIT(&stream.stream_started) == 0);
@@ -181,17 +186,22 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(tx_transport_failure_notifications == 0);
 
     /* A backend-clean shutdown can still carry a stream-level failure. */
-    stream.error_code = BLADERF_ERR_IO;
+    test_tx_backend_stream_error_code = BLADERF_ERR_IO;
     assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_IO);
     assert(tx_transport_failure_notifications == 1);
     assert(tx_transport_failure_error == BLADERF_ERR_IO);
 
     /* A backend failure takes precedence and is the reported cause. */
     test_tx_backend_stream_status = BLADERF_ERR_MEM;
-    stream.error_code = BLADERF_ERR_IO;
     assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_MEM);
     assert(tx_transport_failure_notifications == 2);
     assert(tx_transport_failure_error == BLADERF_ERR_MEM);
+
+    /* Reusing the stream after a terminal error starts with a fresh result. */
+    test_tx_backend_stream_status = 0;
+    test_tx_backend_stream_error_code = 0;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) == 0);
+    assert(tx_transport_failure_notifications == 2);
 
     assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
     assert(COND_DESTROY(&stream.stream_started) == 0);
