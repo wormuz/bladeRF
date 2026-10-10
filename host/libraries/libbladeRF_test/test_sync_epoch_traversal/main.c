@@ -62,6 +62,29 @@ static uint8_t sync_withheld_epochs[8];
 static uint64_t sync_withheld_timestamps[8];
 static atomic_bool sync_withheld_observed;
 static unsigned int async_overrun_events;
+static unsigned int tx_transport_failure_notifications;
+static int tx_transport_failure_error;
+static int test_tx_backend_stream_status;
+
+static void note_tx_transport_failure(struct bladerf *dev, int error_code)
+{
+    assert(dev != NULL);
+    tx_transport_failure_notifications++;
+    tx_transport_failure_error = error_code;
+}
+
+static int test_tx_backend_stream(struct bladerf_stream *stream,
+                                  bladerf_channel_layout layout)
+{
+    assert(stream != NULL);
+    assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX);
+    return test_tx_backend_stream_status;
+}
+
+static const struct backend_fns test_tx_backend = {
+    .stream = test_tx_backend_stream,
+};
+static const struct board_fns test_async_board;
 
 static void test_rf_transition_calibration_is_explicit(void)
 {
@@ -114,6 +137,45 @@ static void test_rf_link_status_v2_epoch_policy(void)
         true, 8, 0, 8, 1u << 6));
     assert(!bladerf2_rf_link_previous_fault_snapshot_stable(
         true, 7, 0, 8, 0));
+}
+
+static void test_tx_async_shutdown_reports_only_real_errors(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+
+    dev.board = &test_async_board;
+    dev.backend = &test_tx_backend;
+    stream.dev = &dev;
+    tx_transport_failure_notifications = 0;
+    tx_transport_failure_error = 0;
+    test_tx_backend_stream_status = 0;
+
+    assert(MUTEX_INIT(&stream.lock) == 0);
+    assert(COND_INIT(&stream.stream_started) == 0);
+    assert(COND_INIT(&stream.can_submit_buffer) == 0);
+
+    /* Normal callback-driven shutdown has neither backend nor stream error. */
+    stream.error_code = 0;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) == 0);
+    assert(tx_transport_failure_notifications == 0);
+
+    /* A backend-clean shutdown can still carry a stream-level failure. */
+    stream.error_code = BLADERF_ERR_IO;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_IO);
+    assert(tx_transport_failure_notifications == 1);
+    assert(tx_transport_failure_error == BLADERF_ERR_IO);
+
+    /* A backend failure takes precedence and is the reported cause. */
+    test_tx_backend_stream_status = BLADERF_ERR_MEM;
+    stream.error_code = BLADERF_ERR_IO;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_MEM);
+    assert(tx_transport_failure_notifications == 2);
+    assert(tx_transport_failure_error == BLADERF_ERR_MEM);
+
+    assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
+    assert(COND_DESTROY(&stream.stream_started) == 0);
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
 }
 
 static void test_rf_event_cursor_resynchronizes_after_overrun(void)
@@ -467,6 +529,7 @@ static const struct board_fns test_async_board = {
     .rx_async_stream_overrun = note_async_overrun,
     .rx_data_withheld = note_async_withheld,
     .rx_async_buffer_valid = validate_async_rx_buffer,
+    .tx_async_transport_failure = note_tx_transport_failure,
 };
 
 static void fixture_init(struct fixture *f)
@@ -1992,6 +2055,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_tx_async_shutdown_reports_only_real_errors();
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();
