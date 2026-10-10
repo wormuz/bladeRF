@@ -293,7 +293,8 @@ begin
 
             underflow_led       =>  tx_underflow_event,
             underflow_count     =>  tx_underflow_count,
-            underflow_duration  =>  x"ffff"
+            underflow_duration  =>  x"ffff",
+            underflow_suppress  =>  retune_gate_muted
         );
 
     U_tx_retune_gate : entity work.tx_retune_gate

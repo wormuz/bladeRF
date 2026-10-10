@@ -68,6 +68,10 @@ entity fifo_reader is
         underflow_led       :   buffer  std_logic;
         underflow_count     :   buffer  unsigned(63 downto 0);
         underflow_duration  :   in      unsigned(15 downto 0);
+        -- A timestamped RF transition deliberately replaces TX IQ with
+        -- zeros. FIFO starvation during that acknowledged mute interval is
+        -- not an output underrun and must not poison the TX epoch.
+        underflow_suppress  :   in      std_logic := '0';
 
         -- Speed Latch & Monitor / link epoch (Stage 2)
         link_start_toggle          :   in      std_logic := '0';
@@ -1172,7 +1176,8 @@ begin
             underflow_detected <= '0';
         elsif( rising_edge( clock ) ) then
             underflow_detected <= '0';
-            if( enable = '1' and fifo_empty = '1' and
+            if( enable = '1' and underflow_suppress = '0' and
+                fifo_empty = '1' and
                 (meta_en = '0' or (meta_en = '1' and meta_current.meta_time_go = '1')) ) then
                 underflow_detected <= '1';
             end if;

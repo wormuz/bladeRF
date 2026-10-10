@@ -87,6 +87,7 @@ architecture sim of fifo_reader_tb is
     signal uf_led     : std_logic;
     signal uf_count   : unsigned(63 downto 0);
     signal uf_dur     : unsigned(15 downto 0) := x"ffff";
+    signal uf_suppress : std_logic := '0';
 
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
@@ -180,6 +181,7 @@ begin
             underflow_led         => uf_led,
             underflow_count       => uf_count,
             underflow_duration    => uf_dur,
+            underflow_suppress    => uf_suppress,
             link_start_toggle     => link_start_toggle
         );
 
@@ -196,6 +198,16 @@ begin
         -- exist in this bench.
         wait for 10*10 ns;
         enable <= '1';
+        meta_en <= '0';
+        fifo_empty <= '1';
+        uf_suppress <= '1';
+        wait for 100 ns;
+        assert uf_count = 0 and uf_led = '0'
+            report "intentional TX mute was counted as FIFO underflow"
+            severity failure;
+        fifo_empty <= '0';
+        uf_suppress <= '0';
+        meta_en <= '1';
         wait for 10 ns;
         link_start_toggle <= not link_start_toggle;
 
@@ -219,6 +231,13 @@ begin
                 severity failure;
             report "scheduled: gate held until the timestamp";
         end if;
+
+        meta_en <= '0';
+        fifo_empty <= '1';
+        wait for 30 ns;
+        assert uf_count = 1
+            report "real TX starvation after resume was not counted"
+            severity failure;
 
         done <= true;
         wait;
