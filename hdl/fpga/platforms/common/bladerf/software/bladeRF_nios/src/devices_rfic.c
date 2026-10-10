@@ -365,6 +365,10 @@ bool rfic_command_read_immed(bladerf_rfic_command cmd,
     struct rfic_command_fns const *f = _get_cmd_ptr(cmd);
     bool rv                          = false;
 
+    if (data == NULL) {
+        return false;
+    }
+
     // Canary
     *data = 0xDEADBEEF0B4DF00D;
 
