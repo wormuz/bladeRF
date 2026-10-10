@@ -266,6 +266,7 @@ static void test_public_sync_apis_reject_null_device(void)
 {
     int16_t sample[2] = {0, 0};
     unsigned int timeout = 0;
+    struct bladerf dev = {0};
 
     assert(bladerf_sync_config(NULL, BLADERF_RX_X1,
                                BLADERF_FORMAT_SC16_Q11_META,
@@ -275,6 +276,34 @@ static void test_public_sync_apis_reject_null_device(void)
     assert(bladerf_set_stream_timeout(NULL, BLADERF_TX, 100) ==
            BLADERF_ERR_INVAL);
     assert(bladerf_get_stream_timeout(NULL, BLADERF_TX, &timeout) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_gain(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_gain_mode(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_gain_range(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_gain_stage(&dev, BLADERF_CHANNEL_TX(0), "VGA", NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_set_gain_stage(&dev, BLADERF_CHANNEL_TX(0), NULL, 0) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_gain_stage_range(&dev, BLADERF_CHANNEL_RX(0), NULL,
+                                        NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_sample_rate(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_sample_rate_range(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_bandwidth(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_bandwidth_range(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_frequency(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_frequency_range(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_rf_port(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_quick_tune(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
            BLADERF_ERR_INVAL);
 }
 

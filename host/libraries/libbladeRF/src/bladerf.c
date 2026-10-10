@@ -742,6 +742,7 @@ int bladerf_get_gain(struct bladerf *dev, bladerf_channel ch, int *gain)
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(gain);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_gain(dev, ch, gain);
@@ -779,6 +780,7 @@ int bladerf_get_gain_mode(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(mode);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_gain_mode(dev, ch, mode);
@@ -806,6 +808,7 @@ int bladerf_get_gain_range(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(range);
     return dev->board->get_gain_range(dev, ch, range);
 }
 
@@ -816,6 +819,7 @@ int bladerf_set_gain_stage(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
+    CHECK_NULL(stage);
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_GAIN);
     if (status != 0) {
@@ -847,6 +851,8 @@ int bladerf_get_gain_stage(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(stage);
+    CHECK_NULL(gain);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_gain_stage(dev, ch, stage, gain);
@@ -861,6 +867,7 @@ int bladerf_get_gain_stage_range(struct bladerf *dev,
                                  struct bladerf_range const **range)
 {
     CHECK_NULL(dev);
+    CHECK_NULL(stage);
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -980,6 +987,7 @@ int bladerf_get_sample_rate(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(rate);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_sample_rate(dev, ch, rate);
@@ -997,6 +1005,7 @@ int bladerf_get_sample_rate_range(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(range);
     MUTEX_LOCK(&dev->lock);
     status = dev->board->get_sample_rate_range(dev, ch, range);
     MUTEX_UNLOCK(&dev->lock);
@@ -1121,6 +1130,7 @@ int bladerf_get_bandwidth(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(bandwidth);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_bandwidth(dev, ch, bandwidth);
@@ -1137,6 +1147,7 @@ int bladerf_get_bandwidth_range(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(range);
     return dev->board->get_bandwidth_range(dev, ch, range);
 }
 
@@ -1211,6 +1222,7 @@ int bladerf_get_frequency(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(frequency);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_frequency(dev, ch, frequency);
@@ -1227,6 +1239,7 @@ int bladerf_get_frequency_range(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(range);
     return dev->board->get_frequency_range(dev, ch, range);
 }
 
@@ -1281,6 +1294,7 @@ int bladerf_get_rf_port(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(port);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_rf_port(dev, ch, port);
@@ -1320,6 +1334,7 @@ int bladerf_get_quick_tune(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(quick_tune);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_quick_tune(dev, ch, quick_tune);
