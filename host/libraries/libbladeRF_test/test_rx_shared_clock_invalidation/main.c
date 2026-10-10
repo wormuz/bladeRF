@@ -291,6 +291,21 @@ int main(void)
     assert(bladerf_set_frequency(NULL, rx0, 915000000) ==
            BLADERF_ERR_INVAL);
 
+    /* Invalid stream/capability requests fail before RX invalidation or any
+     * board operation. */
+    assert(bladerf_sync_config(&dev, (bladerf_channel_layout)99,
+                               BLADERF_FORMAT_SC16_Q11,
+                               8, 1024, 4, 1000) == BLADERF_ERR_INVAL);
+    assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
+                               (bladerf_format)-1,
+                               8, 1024, 4, 1000) == BLADERF_ERR_INVAL);
+    assert(bladerf_set_tuning_mode(&dev, BLADERF_TUNING_MODE_FPGA) ==
+           BLADERF_ERR_UNSUPPORTED);
+    assert(bladerf_set_vctcxo_tamer_mode(
+               &dev, BLADERF_VCTCXO_TAMER_DISABLED) ==
+           BLADERF_ERR_UNSUPPORTED);
+    assert(state.invalidate_calls == 0);
+
     /* AD9361's TX samplerate API updates both clock chains. Fence RX before
      * calling the TX setter and release the RX reservation afterward. */
     assert(bladerf_set_sample_rate(&dev, tx0, 2000000, NULL) == 0);

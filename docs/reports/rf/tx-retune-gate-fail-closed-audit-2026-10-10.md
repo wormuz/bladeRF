@@ -203,6 +203,14 @@ then revoke the corresponding RX or TX validity before touching hardware.
 Raw trigger-register writes also preflight channel and signal before fencing.
 Source-only; no build/test under the active no-build audit gate.
 
+The generic controls audit found several deterministic unsupported requests
+that were checked only after RX invalidation: FPGA tuning without its FPGA
+capability, RFIC BIST loopback under FPGA tuning, VCTCXO taming without the
+advertised capability, and SC8 sync formats on non-bladeRF2 boards. These
+capability/mode checks now run before invalidation. `bladerf_sync_config()`
+also rejects unknown layout and format enums before touching stream state.
+Regression source was added; no build/test under the active source gate.
+
 The direct RX/TX FIR setters also accepted arbitrary enum values through to
 the host RFIC controller. An invalid value was rejected only after RX/TX
 invalidation, and the controller's defensive default unlocked a mutex that the

@@ -1830,9 +1830,39 @@ int bladerf_sync_config(struct bladerf *dev,
                         unsigned int stream_timeout)
 {
     int status;
+    CHECK_NULL(dev);
+
+    switch (layout) {
+        case BLADERF_RX_X1:
+        case BLADERF_RX_X2:
+        case BLADERF_TX_X1:
+        case BLADERF_TX_X2:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
+    switch (format) {
+        case BLADERF_FORMAT_SC16_Q11:
+        case BLADERF_FORMAT_SC16_Q11_PACKED:
+        case BLADERF_FORMAT_SC16_Q11_META:
+        case BLADERF_FORMAT_PACKET_META:
+        case BLADERF_FORMAT_SC8_Q7:
+        case BLADERF_FORMAT_SC8_Q7_META:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
     const bool is_rx =
         (layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
-    CHECK_NULL(dev);
+
+    if ((format == BLADERF_FORMAT_SC8_Q7 ||
+         format == BLADERF_FORMAT_SC8_Q7_META) &&
+        strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
+        log_error("bladeRF 2.0 required for 8bit format\n");
+        return BLADERF_ERR_UNSUPPORTED;
+    }
 
     if (is_rx) {
         status = invalidate_rx_data_before_reconfigure(
@@ -1844,17 +1874,6 @@ int bladerf_sync_config(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
-
-    if (format == BLADERF_FORMAT_SC8_Q7 || format == BLADERF_FORMAT_SC8_Q7_META) {
-        if (strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
-            log_error("bladeRF 2.0 required for 8bit format\n");
-            MUTEX_UNLOCK(&dev->lock);
-            if (is_rx) {
-                rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-            }
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-    }
 
     status =
         dev->board->sync_config(dev, layout, format, num_buffers, buffer_size,
@@ -2070,9 +2089,18 @@ int bladerf_set_tuning_mode(struct bladerf *dev, bladerf_tuning_mode mode)
 {
     int status;
 
+    CHECK_NULL(dev);
+
     if (mode != BLADERF_TUNING_MODE_HOST &&
         mode != BLADERF_TUNING_MODE_FPGA) {
         return BLADERF_ERR_INVAL;
+    }
+
+    if (mode == BLADERF_TUNING_MODE_FPGA &&
+        (dev->board->get_capabilities == NULL ||
+         !have_cap(dev->board->get_capabilities(dev),
+                   BLADERF_CAP_FPGA_TUNING))) {
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     status = invalidate_rx_data_before_reconfigure(
@@ -2139,6 +2167,16 @@ int bladerf_set_loopback(struct bladerf *dev, bladerf_loopback l)
     CHECK_NULL(dev);
     if (!bladerf_is_loopback_mode_supported(dev, l)) {
         return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (l == BLADERF_LB_RFIC_BIST) {
+        bladerf_tuning_mode tuning_mode;
+        status = bladerf_get_tuning_mode(dev, &tuning_mode);
+        if (status != 0) {
+            return status;
+        }
+        if (tuning_mode != BLADERF_TUNING_MODE_HOST) {
+            return BLADERF_ERR_UNSUPPORTED;
+        }
     }
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_LOOPBACK);
@@ -2214,6 +2252,17 @@ int bladerf_set_vctcxo_tamer_mode(struct bladerf *dev,
                                   bladerf_vctcxo_tamer_mode mode)
 {
     int status;
+    CHECK_NULL(dev);
+    if (mode != BLADERF_VCTCXO_TAMER_DISABLED &&
+        mode != BLADERF_VCTCXO_TAMER_1_PPS &&
+        mode != BLADERF_VCTCXO_TAMER_10_MHZ) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (dev->board->get_capabilities == NULL ||
+        !have_cap(dev->board->get_capabilities(dev),
+                  BLADERF_CAP_VCTCXO_TAMING_MODE)) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
     if (status != 0) {
