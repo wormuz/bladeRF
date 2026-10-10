@@ -1343,21 +1343,31 @@ static void *rx_fault_monitor_task(void *arg)
 #endif
                         uint32_t gate_state = gate_status &
                             NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
+                        bool gate_release_requested;
+                        uint64_t applied_frequency_hz;
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        gate_release_requested =
+                            board_data->tx_retune_gate_release_requested;
+                        applied_frequency_hz =
+                            board_data->tx_retune2_applied_frequency_hz;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         if (gate_read_status != 0 ||
                             gate_state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             /* A failed read leaves the physical output state
                              * unknown. Reissue ABORT and require the FPGA's
                              * muted ERROR acknowledgement before stopping. */
                             abort_tx_retune_gate = true;
                             bladerf2_tx_retune_event(
                                 dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                                board_data->tx_retune2_applied_frequency_hz,
+                                applied_frequency_hz,
                                 0, 0, gate_read_status != 0 ? gate_read_status :
                                     BLADERF_ERR_UNEXPECTED);
                         } else if (gate_state ==
                                    NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) {
-                            if (!board_data->tx_retune_gate_release_requested) {
+                            if (!gate_release_requested) {
                                 int release_status;
 #ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
                                 if (tx_gate_test != NULL &&
@@ -1376,7 +1386,11 @@ static void *rx_fault_monitor_task(void *arg)
                                         NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
                                 }
                                 if (release_status != 0) {
+                                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                                     board_data->tx_retune2_applied_waiting_rf_valid = false;
+                                    applied_frequency_hz =
+                                        board_data->tx_retune2_applied_frequency_hz;
+                                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                     /* COMPLETE has an ambiguous transport
                                      * outcome: it may have reached the FPGA.
                                      * Abort and verify mute before returning
@@ -1384,21 +1398,23 @@ static void *rx_fault_monitor_task(void *arg)
                                     abort_tx_retune_gate = true;
                                     bladerf2_tx_retune_event(
                                         dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                                        board_data->tx_retune2_applied_frequency_hz,
+                                        applied_frequency_hz,
                                         0, 0, release_status);
                                 } else {
+                                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                                     board_data->tx_retune_gate_release_requested = true;
+                                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 }
                             }
                         } else if (gate_state ==
                                        NIOS_PKT_8x32_TX_RETUNE_STATE_ACTIVE &&
-                                   board_data->tx_retune_gate_release_requested &&
+                                   gate_release_requested &&
                                    (gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_RESUME_EVENT) != 0) {
-                            const uint64_t applied_frequency_hz =
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            applied_frequency_hz =
                                 board_data->tx_retune2_applied_frequency_hz;
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
                             board_data->tx_retune_gate_release_requested = false;
-                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = false;
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             /* A successful RF configuration change closes

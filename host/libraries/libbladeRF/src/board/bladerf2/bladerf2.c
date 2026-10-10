@@ -2262,10 +2262,10 @@ static int bladerf2_tx_gate_abort_fail_closed(
         board_data->tx_gate_abort_failure_reported = false;
     }
     board_data->tx_gate_abort_pending = true;
+    board_data->tx_retune_gate_release_requested = false;
     transport_failure_generation =
         board_data->tx_async_transport_failure_generation;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    board_data->tx_retune_gate_release_requested = false;
 
     status = nios_tx_retune_gate_abort(dev);
     if (status != 0) {
@@ -2354,7 +2354,9 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                     target_hz, 0, 0, 0);
                 status = nios_tx_retune_gate_arm(dev, 0, true);
                 if (status == 0) {
+                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     board_data->tx_retune_gate_release_requested = false;
+                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 } else {
                     (void)bladerf2_tx_gate_abort_fail_closed(
                         dev, board_data, 0);
@@ -3126,7 +3128,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                 frequency, 0, pending_count, gate_status);
             return gate_status;
         }
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_retune_gate_release_requested = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
     int status = dev->backend->retune2(dev, ch, timestamp,
@@ -3263,7 +3267,9 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
                 status = gate_status;
             }
         }
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_retune_gate_release_requested = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_channel_state_generation++;
         if (pending_count != 0) {
             unsigned int i;
