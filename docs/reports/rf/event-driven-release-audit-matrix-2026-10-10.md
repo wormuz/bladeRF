@@ -198,7 +198,10 @@ handoff allowance at an already-expired boundary lets the normal ownership
 transfer/rollback path finish instead of stranding a full ring slot; timeout
 zero preserves an unbounded wait. Focused timeout, long-copy, timeout-zero,
 clock-adjustment, and partial TX buffer recovery regressions remain deferred
-under the source-audit gate.
+under the source-audit gate. The condition-variable helpers loop on predicates;
+confirm their repeated wake behavior cannot restart the relative timeout
+budget after a spurious or unrelated signal, and cover that case in the
+deferred tests.
 
 The timestamp seek boundary pass found an integer overflow in sync RX: a very
 large future timestamp multiplied by the RX_X2 lane factor before comparing
