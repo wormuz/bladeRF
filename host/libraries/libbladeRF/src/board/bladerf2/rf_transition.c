@@ -2141,6 +2141,10 @@ static void *rx_fault_monitor_task(void *arg)
                 rf_link_status &= ~RF_LINK_STATUS_VERSION_MASK;
             }
         }
+        if (test_mode != NULL &&
+            strcmp(test_mode, "RUNTIME_FPGA_RX_EPOCH_LOST") == 0) {
+            rf_link_status &= ~BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT;
+        }
         if (status != 0 ||
             (rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
                 RF_LINK_STATUS_VERSION_2) {
@@ -2149,6 +2153,16 @@ static void *rx_fault_monitor_task(void *arg)
                 dev, transaction_id, epoch_id, rf_link_status,
                 BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE,
                 monitor_error);
+            continue;
+        }
+        /* Versioned status is not enough: reset, a lost START acknowledgement,
+         * or an RX-link stop can invalidate the FPGA epoch without setting
+         * the sticky data-path fault bit. Revoke host admission immediately. */
+        if (!bladerf2_rf_link_rx_epoch_valid(rf_link_status)) {
+            _invalidate_faulted_rx_epoch(
+                dev, transaction_id, epoch_id, rf_link_status,
+                BLADERF_RF_INVALIDATE_FPGA_RX_FAULT,
+                BLADERF_ERR_UNEXPECTED);
             continue;
         }
         if (loss_count_status == 0) {

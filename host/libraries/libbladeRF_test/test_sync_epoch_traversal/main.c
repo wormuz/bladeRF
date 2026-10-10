@@ -355,6 +355,15 @@ static void test_rf_link_status_v2_epoch_policy(void)
         BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
         rx_active, 1u << 14));
     assert(bladerf2_rf_link_epoch_id(acknowledged, 0) == 8);
+    assert(bladerf2_rf_link_rx_epoch_valid(
+        acknowledged | BLADERF2_RF_LINK_STATUS_RX_EPOCH_VALID));
+    assert(!bladerf2_rf_link_rx_epoch_valid(acknowledged));
+    assert(!bladerf2_rf_link_rx_epoch_valid(
+        (acknowledged | BLADERF2_RF_LINK_STATUS_RX_EPOCH_VALID) &
+        ~BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT));
+    assert(!bladerf2_rf_link_rx_epoch_valid(
+        (acknowledged | BLADERF2_RF_LINK_STATUS_RX_EPOCH_VALID) &
+        ~BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE));
     assert(bladerf2_rf_link_epoch_id(0x10000000u | (9u << 20), 3) == 3);
     assert(!bladerf2_rf_link_previous_fault_snapshot_stable(
         false, 8, 0, 8, 0));

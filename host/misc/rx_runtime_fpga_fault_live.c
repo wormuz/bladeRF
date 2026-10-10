@@ -5,7 +5,8 @@
  * status without waiting for a libusb completion callback. Build with
  * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
  * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT, or use the
- * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION, or
+ * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION /
+ * RUNTIME_FPGA_RX_EPOCH_LOST, or
  * RUNTIME_RFIC_* and RUNTIME_RX_CHANNEL_* values to verify runtime
  * control-plane loss handling. */
 #include <libbladeRF.h>
@@ -130,6 +131,11 @@ int main(int argc, char **argv)
                       "RUNTIME_RX_CHANNEL_STATUS_READ_FAILURE") == 0) {
         expected_reason = BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE;
         expected_error = BLADERF_ERR_IO;
+    } else if (strcmp(fault_mode, "RUNTIME_FPGA_RX_EPOCH_LOST") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+        expected_status_mask = (1u << 16) | (1u << 11) | (1u << 8);
+        expected_status_value = (1u << 16) | (1u << 11);
+        expected_error = BLADERF_ERR_UNEXPECTED;
     } else if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
         fprintf(stderr, "unknown monitor injection mode: %s\n", fault_mode);
         return 2;
@@ -266,6 +272,7 @@ int main(int argc, char **argv)
             if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
                 events[i].flags == expected_reason &&
                 (expected_reason != BLADERF_RF_INVALIDATE_FPGA_RX_FAULT ||
+                 strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0 ||
                  (events[i].rfic_status & RX_FAULT_STATUS_BIT) != 0) &&
                 (events[i].rfic_status & expected_rfic_mask) ==
                     expected_rfic_value &&

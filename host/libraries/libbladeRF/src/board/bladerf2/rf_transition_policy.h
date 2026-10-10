@@ -75,10 +75,27 @@ bladerf2_rx_invalidation_policy(bladerf_channel channel,
 #define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)
 #define BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT (1u << 6)
 #define BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE   (1u << 16)
+#define BLADERF2_RF_LINK_STATUS_RX_EPOCH_VALID   (1u << 11)
 #define BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE   (1u << 0)
 #define BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT (1u << 8)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT (1u << 9)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID   (1u << 12)
+
+/* A certified host RX epoch remains admissible only while the FPGA reports
+ * both an actual RX START acknowledgement and an active RX data path. The
+ * current bit is qualified by epoch_valid in the FPGA status composition,
+ * but require the source bit too so the host contract remains explicit. */
+static inline bool bladerf2_rf_link_rx_epoch_valid(uint32_t status)
+{
+    const uint32_t required =
+        BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE |
+        BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT |
+        BLADERF2_RF_LINK_STATUS_RX_EPOCH_VALID;
+
+    return (status & BLADERF2_RF_LINK_STATUS_VERSION_MASK) ==
+               BLADERF2_RF_LINK_STATUS_VERSION_2 &&
+           (status & required) == required;
+}
 #define BLADERF2_AD9361_VCO_LOCK_BIT 0x02u
 #define BLADERF2_AD9361_BBPLL_LOCK_BIT 0x80u
 #define BLADERF2_AD9361_CALIBRATION_BUSY_MASK 0xffu
