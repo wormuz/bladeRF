@@ -372,13 +372,20 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     return true;
 }
 
-static inline void retune_isr(struct queue *q)
+static inline void retune_isr(struct queue *q, bladerf_module module)
 {
     struct queue_entry *e = peek_next_retune(q);
     if (e != NULL) {
         if (e->state == ENTRY_STATE_SCHEDULED) {
-            e->state = ENTRY_STATE_READY;
-        } else {
+            /* An IRQ can be left pending across a failed cancel and a later
+             * queue replacement. Only the sticky FPGA compare event tied to
+             * the currently armed schedule may release this entry. */
+            if (tamer_compare_fired(module)) {
+                e->state = ENTRY_STATE_READY;
+            } else {
+                INCREMENT_ERROR_COUNT();
+            }
+        } else if (e->state != ENTRY_STATE_READY) {
             INCREMENT_ERROR_COUNT();
         }
     }
@@ -389,7 +396,7 @@ static inline void retune_isr(struct queue *q)
 static void retune_rx(void *context)
 {
     /* Handle the ISR */
-    retune_isr(&rx_queue);
+    retune_isr(&rx_queue, BLADERF_MODULE_RX);
 
     /* Clear the interrupt */
     timer_tamer_clear_interrupt(BLADERF_MODULE_RX);
@@ -398,7 +405,7 @@ static void retune_rx(void *context)
 static void retune_tx(void *context)
 {
     /* Handle the ISR */
-    retune_isr(&tx_queue);
+    retune_isr(&tx_queue, BLADERF_MODULE_TX);
 
     /* Clear the interrupt */
     timer_tamer_clear_interrupt(BLADERF_MODULE_TX);

@@ -25,7 +25,8 @@ static bool fail_profile_recall;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_read;
-static bool compare_fired;
+static bool compare_fired_rx;
+static bool compare_fired_tx;
 static bool simulated_tamer_clock_stalled;
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
@@ -67,6 +68,11 @@ bool tamer_schedule(bladerf_module module, uint64_t timestamp)
     schedule_count++;
     scheduled_module = module;
     scheduled_timestamp = timestamp;
+    if (module == BLADERF_MODULE_RX) {
+        compare_fired_rx = false;
+    } else if (module == BLADERF_MODULE_TX) {
+        compare_fired_tx = false;
+    }
     return !fail_tamer_schedule;
 }
 
@@ -82,8 +88,8 @@ bool time_tamer_read(bladerf_module module, uint64_t *timestamp)
 
 bool tamer_compare_fired(bladerf_module module)
 {
-    (void)module;
-    return compare_fired;
+    return module == BLADERF_MODULE_RX ? compare_fired_rx :
+           module == BLADERF_MODULE_TX ? compare_fired_tx : false;
 }
 
 bool tamer_clock_stalled(bladerf_module module)
@@ -94,8 +100,22 @@ bool tamer_clock_stalled(bladerf_module module)
 
 bool tamer_cancel(bladerf_module module)
 {
-    (void)module;
+    if (module == BLADERF_MODULE_RX) {
+        compare_fired_rx = false;
+    } else if (module == BLADERF_MODULE_TX) {
+        compare_fired_tx = false;
+    }
     return true;
+}
+
+static void simulate_tamer_irq(struct queue *queue, bladerf_module module)
+{
+    if (module == BLADERF_MODULE_RX) {
+        compare_fired_rx = true;
+    } else {
+        compare_fired_tx = true;
+    }
+    retune_isr(queue, module);
 }
 
 static int check_immediate_upload_failure_preserves_profile(void)
@@ -191,7 +211,7 @@ static int check_schedule_ready_lifecycle(void)
     }
 
     /* Fire only RX's timer interrupt: TX remains scheduled and untouched. */
-    retune_isr(&rx_queue);
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
     pkt_retune2_work();
     if (rx_queue.count != 0 ||
         tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
@@ -217,7 +237,7 @@ static int check_schedule_ready_lifecycle(void)
     }
 
     /* TX remains scheduled until its own interrupt. */
-    retune_isr(&tx_queue);
+    simulate_tamer_irq(&tx_queue, BLADERF_MODULE_TX);
     pkt_retune2_work();
     if (tx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
@@ -250,7 +270,7 @@ static int check_schedule_ready_lifecycle(void)
         return 1;
     }
     pkt_retune2_work();
-    retune_isr(&tx_queue);
+    simulate_tamer_irq(&tx_queue, BLADERF_MODULE_TX);
     fail_spdt_select = true;
     pkt_retune2_work();
     fail_spdt_select = false;
@@ -276,7 +296,7 @@ static int check_lost_irq_recovers_from_fpga_event(void)
         return 1;
     }
 
-    compare_fired = false;
+    compare_fired_rx = false;
     pkt_retune2_work();
     pkt_retune2_work();
     if (rx_queue.count != 1 ||
@@ -286,13 +306,60 @@ static int check_lost_irq_recovers_from_fpga_event(void)
     }
 
     /* No ISR is delivered: only the FPGA event may release the queue. */
-    compare_fired = true;
+    compare_fired_rx = true;
     pkt_retune2_work();
-    compare_fired = false;
+    pkt_retune2_work();
+    compare_fired_rx = false;
     if (rx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
         fputs("FPGA comparator event did not recover the lost IRQ\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_stale_irq_cannot_release_rearmed_retune(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 6;
+    compare_fired_rx = false;
+    if (enqueue_retune(&rx_queue, &profile, 6, 100) != 1) {
+        fputs("failed to enqueue stale-IRQ case\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED) {
+        fputs("retune did not arm before stale-IRQ case\n", stderr);
+        return 1;
+    }
+
+    /* This represents an IRQ left pending by an earlier compare/cancel. The
+     * new arm cleared its own sticky event, so the old IRQ cannot mark it
+     * READY or activate the profile ahead of the new timestamp. */
+    retune_isr(&rx_queue, BLADERF_MODULE_RX);
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        recall_count != 0) {
+        fputs("stale IRQ released a retune without its compare event\n",
+              stderr);
+        return 1;
+    }
+
+    compare_fired_rx = true;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    compare_fired_rx = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        recall_count != 1) {
+        fputs("valid compare event did not release the rearmed retune\n",
+              stderr);
         return 1;
     }
     return 0;
@@ -370,7 +437,7 @@ static int check_deferred_failure_reporting(void)
         return 1;
     }
     pkt_retune2_work();
-    retune_isr(&rx_queue);
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
     fail_profile_recall = true;
     pkt_retune2_work();
     fail_profile_recall = false;
@@ -414,7 +481,7 @@ static int check_preload_retry_is_not_a_terminal_failure(void)
     /* The execution path retries the preload; a successful retry and recall
      * must leave the host-visible failure counter unchanged. */
     pkt_retune2_work();
-    retune_isr(&tx_queue);
+    simulate_tamer_irq(&tx_queue, BLADERF_MODULE_TX);
     pkt_retune2_work();
     if (pkt_retune2_failure_count(BLADERF_MODULE_TX) != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
@@ -597,6 +664,10 @@ int main(void)
         return 1;
     }
     if (check_lost_irq_recovers_from_fpga_event() != 0) {
+        return 1;
+    }
+
+    if (check_stale_irq_cannot_release_rearmed_retune() != 0) {
         return 1;
     }
     if (check_stopped_tamer_clock_fails_queued_retunes() != 0) {
