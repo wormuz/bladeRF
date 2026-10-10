@@ -108,6 +108,27 @@ int main(void)
         rf_link_entry, 0x20000000u | (8u << 20) | rf_link_tx_ack,
         rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
         rf_link_tx_ack, rf_link_tx_fault));
+    const uint32_t rf_link_rx_ack = 1u << 8;
+    const uint32_t rf_link_rx_fault = 1u << 14;
+    const uint32_t rf_link_both_ack = rf_link_version | (9u << 20) |
+                                     rf_link_tx_ack | rf_link_rx_ack;
+    assert(bladerf2_rf_link_epoch_ack_valid(
+        rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_both_ack, rf_link_version_mask, rf_link_version,
+        rf_link_epoch_count_mask, rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_fault | rf_link_rx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_version | (9u << 20) | rf_link_tx_ack,
+        rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_fault | rf_link_rx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_both_ack | rf_link_rx_fault, rf_link_version_mask,
+        rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_fault | rf_link_rx_fault));
 
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));

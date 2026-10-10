@@ -882,15 +882,17 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                                   bool *epoch_confirmed,
                                   bool *start_accepted)
 {
+    struct bladerf2_board_data *board_data = dev->board_data;
     bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
     uint32_t entry_status   = 0;
-    /* The START toggle is shared, but a direction whose enable is low
-     * ignores it, so "both directions applied" (bit 10) never comes true in
-     * a one-direction session. Wait on the bit of the direction just
-     * enabled: 8 for RX, 9 for TX. */
+    /* START is shared. Require the newly enabled direction and any already
+     * active opposite direction to consume this generation before either
+     * stream is reported valid. */
     uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch) ? (1u << 9) : (1u << 8);
     uint32_t const fault_bit = BLADERF_CHANNEL_IS_TX(ch)
         ? RF_LINK_STATUS_TX_FAULT : RF_LINK_STATUS_RX_FAULT;
+    uint32_t required_ack_mask = applied_bit;
+    uint32_t required_fault_mask = fault_bit;
     uint8_t entry_epoch_count = 0;
     bool strict_epoch = false;
     int status;
@@ -899,6 +901,15 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     NULL_CHECK(start_accepted);
     *epoch_confirmed = false;
     *start_accepted = false;
+
+    if (BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_link_dir_on[0]) {
+        required_ack_mask |= 1u << 8;
+        required_fault_mask |= RF_LINK_STATUS_RX_FAULT;
+    } else if (!BLADERF_CHANNEL_IS_TX(ch) &&
+               board_data->rf_link_dir_on[1]) {
+        required_ack_mask |= 1u << 9;
+        required_fault_mask |= RF_LINK_STATUS_TX_FAULT;
+    }
 
     /* What the link looked like on arrival, before this session touches it.
      * Printed unconditionally at verbose because the captures that fail do
@@ -1019,14 +1030,15 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
          * direction's acknowledgement before enabling the host stream. */
         const bool epoch_advanced =
             (uint8_t)(st >> 20) != entry_epoch_count;
-        if (epoch_advanced && (st & applied_bit) != 0 &&
-            (st & fault_bit) != 0) {
+        if (epoch_advanced &&
+            (st & required_ack_mask) == required_ack_mask &&
+            (st & required_fault_mask) != 0) {
             return BLADERF_ERR_FPGA_OP;
         }
         if (bladerf2_rf_link_epoch_ack_valid(
                 entry_status, st, RF_LINK_STATUS_VERSION_MASK,
-                RF_LINK_STATUS_VERSION_1, 0x0ff00000u, applied_bit,
-                fault_bit)) {
+                RF_LINK_STATUS_VERSION_1, 0x0ff00000u,
+                required_ack_mask, required_fault_mask)) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
                         "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
                         __FUNCTION__, attempt + 1, st,
@@ -1116,7 +1128,8 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
         board_data->rf_link_dir_on[direction] = true;
     }
     (void)bladerf2_update_channel_enable_masks(dev, board_data);
-    if (is_tx) {
+    if (is_tx || (stop_accepted_link_epoch &&
+                  board_data->rf_link_dir_on[1])) {
         board_data->tx_stream_faulted = true;
         board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
@@ -1215,6 +1228,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
         }
         status = announce_rf_link_epoch(dev, ch, &epoch_confirmed,
                                         &start_accepted);
+        if (start_accepted && board_data->rf_link_dir_on[1]) {
+            /* Discard an in-flight TX status sample captured before the
+             * shared generation boundary. */
+            board_data->tx_channel_state_generation++;
+        }
         if (status != 0) {
             return bladerf2_fail_module_enable(
                 dev, ch, status, start_accepted);
@@ -1235,18 +1253,18 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_stream_faulted = true;
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
-        } else if (BLADERF_CHANNEL_IS_TX(ch) && epoch_confirmed) {
+        } else if (board_data->rf_link_dir_on[1] && epoch_confirmed) {
             /* Enabling the paired TX lane starts another shared FPGA epoch.
              * It clears sticky link faults even though the cumulative loss
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
             board_data->tx_status_unavailable_reported = false;
-        } else if (BLADERF_CHANNEL_IS_TX(ch)) {
+        } else if (board_data->rf_link_dir_on[1]) {
             board_data->tx_stream_faulted = true;
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         }
-        if (BLADERF_CHANNEL_IS_TX(ch)) {
+        if (board_data->rf_link_dir_on[1]) {
             bladerf2_tx_stream_event(
                 dev, epoch_confirmed ? BLADERF_RF_EVT_TX_LINK_VALID :
                                        BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
