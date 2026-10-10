@@ -1764,7 +1764,33 @@ int bladerf_init_stream(struct bladerf_stream **stream,
 
 int bladerf_stream(struct bladerf_stream *stream, bladerf_channel_layout layout)
 {
-    return stream->dev->board->stream(stream, layout);
+    int status;
+    if (stream == NULL || stream->dev == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    switch (layout) {
+        case BLADERF_RX_X1:
+        case BLADERF_RX_X2:
+        case BLADERF_TX_X1:
+        case BLADERF_TX_X2:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
+    /* Async stream start configures shared FPGA sample-format controls too.
+     * Revoke RX validity for either direction before the board starts it. */
+    status = invalidate_rx_data_before_reconfigure(
+        stream->dev, BLADERF_CHANNEL_RX(0),
+        BLADERF_RF_INVALIDATE_STREAM_CONFIG);
+    if (status != 0) {
+        return status;
+    }
+
+    status = stream->dev->board->stream(stream, layout);
+    rx_reconfigure_complete(stream->dev, BLADERF_CHANNEL_RX(0));
+    return status;
 }
 
 int bladerf_submit_stream_buffer(struct bladerf_stream *stream,

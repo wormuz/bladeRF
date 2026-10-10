@@ -221,6 +221,12 @@ reconfiguration and exits before board mutation if either fence fails.
 Regression source covers both layouts and TX-fence failure; it remains
 unbuilt/unrun under the active gate.
 
+The same shared-format path is used by the asynchronous `bladerf_stream()`
+API, which had no RX invalidation at all. Generic stream start now revokes RX
+validity for either layout, while the bladeRF2 callback fences TX under the
+device lock immediately before applying format GPIOs. Regression source
+covers RX/TX start, malformed layout, and board-start failure; no build/test.
+
 The direct RX/TX FIR setters also accepted arbitrary enum values through to
 the host RFIC controller. An invalid value was rejected only after RX/TX
 invalidation, and the controller's defensive default unlocked a mutex that the

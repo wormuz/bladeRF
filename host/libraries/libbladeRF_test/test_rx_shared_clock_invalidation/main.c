@@ -4,6 +4,7 @@
 #include "host_config.h"
 #include "board/board.h"
 #include "backend/backend.h"
+#include "streaming/async.h"
 
 struct mock_state {
     int invalidate_status;
@@ -38,6 +39,9 @@ struct mock_state {
     int tx_fence_status;
     unsigned int sync_config_calls;
     bladerf_channel_layout sync_config_layout;
+    unsigned int stream_calls;
+    bladerf_channel_layout stream_layout;
+    int stream_status;
     unsigned int schedule_retune_calls;
     int schedule_retune_status;
     bladerf_channel scheduled_channel;
@@ -177,6 +181,15 @@ static int mock_sync_config(struct bladerf *dev,
     return 0;
 }
 
+static int mock_stream(struct bladerf_stream *stream,
+                       bladerf_channel_layout layout)
+{
+    struct mock_state *state = stream->dev->board_data;
+    state->stream_calls++;
+    state->stream_layout = layout;
+    return state->stream_status;
+}
+
 static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
                               bladerf_trigger_signal signal, uint8_t value)
 {
@@ -276,6 +289,7 @@ static const struct board_fns mock_board = {
     .write_trigger = mock_trigger_write,
     .tx_config_change_begin = mock_tx_config_change_begin,
     .sync_config = mock_sync_config,
+    .stream = mock_stream,
     .schedule_retune = mock_schedule_retune,
 };
 
@@ -291,6 +305,7 @@ static const struct backend_fns mock_backend = {
 int main(void)
 {
     struct bladerf dev;
+    struct bladerf_stream async_stream = {0};
     struct mock_state state = {0};
     struct fake_xb200_data xb200_data = {{
         BLADERF_XB200_50M, BLADERF_XB200_50M,
@@ -314,6 +329,7 @@ int main(void)
     dev.board_data = &state;
     dev.xb_data = &xb200_data;
     assert(MUTEX_INIT(&dev.lock) == 0);
+    async_stream.dev = &dev;
 
     /* The shared validity-fence entry point rejects a null device before
      * attempting to inspect its board callbacks. */
@@ -644,6 +660,26 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 36 && state.complete_calls == 25 &&
            state.tx_fence_calls == 7 && state.sync_config_calls == 2);
+
+    state.tx_fence_status = 0;
+    assert(bladerf_stream(&async_stream, BLADERF_RX_X1) == 0);
+    assert(state.invalidate_calls == 37 && state.complete_calls == 26 &&
+           state.stream_calls == 1 &&
+           state.stream_layout == BLADERF_RX_X1);
+    assert(bladerf_stream(&async_stream, BLADERF_TX_X1) == 0);
+    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+           state.stream_calls == 2 &&
+           state.stream_layout == BLADERF_TX_X1);
+    assert(bladerf_stream(&async_stream, (bladerf_channel_layout)99) ==
+           BLADERF_ERR_INVAL);
+    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+           state.stream_calls == 2);
+
+    state.stream_status = BLADERF_ERR_UNEXPECTED;
+    assert(bladerf_stream(&async_stream, BLADERF_TX_X1) ==
+           BLADERF_ERR_UNEXPECTED);
+    assert(state.invalidate_calls == 39 && state.complete_calls == 28 &&
+           state.stream_calls == 3);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

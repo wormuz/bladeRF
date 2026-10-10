@@ -4028,6 +4028,10 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             rv = 0;
         }
         if (rv == 0) {
+            /* Format GPIOs are shared with RX; fence TX before either
+             * direction changes its asynchronous stream format. */
+            CHECK_STATUS_LOCKED(
+                bladerf2_tx_config_change_begin(stream->dev));
             CHECK_STATUS_LOCKED(
                 perform_format_config(stream->dev, dir, stream->format));
             if (epochless_rx_format) {
