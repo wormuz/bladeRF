@@ -131,14 +131,12 @@ static int _rfic_host_initialize(struct bladerf *dev)
     {
         AD9361_InitParam init_params =
             *(AD9361_InitParam *)board_data->rfic_init_params;
+        int32_t init_status;
+        extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
 
-        /* The no_os_axi_io accessors (FPGA AXI ad9361 core over NIOS) have no
-         * context argument, so the handle travels through a file-static in
-         * platform_bladerf2 instead. */
-        {
-            extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
-            bladerf2_axi_io_set_dev(dev);
-        }
+        /* The no_os_axi_io accessors (FPGA AXI AD9361 core over NIOS) have no
+         * context argument, so bind this thread to the device for init. */
+        bladerf2_axi_io_set_dev(dev);
 
         init_params.spi_param.extra = dev;
         init_params.gpio_resetb.extra = dev;
@@ -146,7 +144,15 @@ static int _rfic_host_initialize(struct bladerf *dev)
         init_params.gpio_cal_sw1.extra = dev;
         init_params.gpio_cal_sw2.extra = dev;
 
-        CHECK_AD936X(ad9361_init(&phy, &init_params));
+        init_status = ad9361_init(&phy, &init_params);
+        /* no_os_axi_io has no context parameter. Clear its thread-local
+         * binding on both success and failure so later unrelated calls on
+         * this thread cannot retain a closed device handle. */
+        bladerf2_axi_io_set_dev(NULL);
+        if (init_status < 0) {
+            RETURN_ERROR_AD9361("ad9361_init(&phy, &init_params)",
+                                init_status);
+        }
     }
 
     if (NULL == phy || NULL == phy->pdata) {
