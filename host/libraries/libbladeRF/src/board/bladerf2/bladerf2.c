@@ -1277,10 +1277,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         } else if (board_data->rf_link_dir_on[1] && epoch_confirmed) {
-            /* Enabling the paired TX lane starts another shared FPGA epoch.
-             * It clears sticky link faults even though the cumulative loss
+            /* Any shared START with TX active establishes a new transport
+             * generation and clears sticky link faults. The cumulative loss
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
+            board_data->tx_stream_faulted = false;
+            board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (board_data->rf_link_dir_on[1]) {
             board_data->tx_stream_faulted = true;
