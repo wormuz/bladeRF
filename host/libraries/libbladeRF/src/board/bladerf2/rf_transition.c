@@ -2862,7 +2862,12 @@ int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
             *next_sequence = current_sequence;
             status = BLADERF_ERR_INVAL;
         } else if (retained != 0 && after_sequence < oldest_sequence - 1) {
+            /* The caller has already lost the intervening validity history.
+             * Resynchronize to the current tail so repeated polls do not
+             * report the same gap forever. The incomplete result tells the
+             * caller to revoke any state derived from earlier events. */
             complete = false;
+            *next_sequence = current_sequence;
         }
 
         for (uint32_t i = 0; complete && i < retained; ++i) {
