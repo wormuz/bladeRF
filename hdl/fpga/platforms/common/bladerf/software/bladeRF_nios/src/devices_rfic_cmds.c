@@ -162,6 +162,9 @@ static bool _rfic_deinitialize(struct rfic_state *state)
 
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
+    /* RFFE is already unavailable. If ADI teardown fails, do not keep
+     * advertising the previous ON/STANDBY state as usable. */
+    state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
     /* Deinitialize AD9361
      *
@@ -180,9 +183,6 @@ static bool _rfic_deinitialize(struct rfic_state *state)
      * would stall the Nios with no way back short of reloading the
      * bitstream. _clear_rffe_ctrl() above already dropped the control bits,
      * which is what "deinitialized" has to mean here. */
-
-    /* Update state */
-    state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
     DBG("*** RFIC Control Deinitialized ***\n");
 
@@ -204,6 +204,9 @@ static bool _rfic_initialize(struct rfic_state *state)
     size_t i;
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_ENTER;
+    /* Initialization can mutate clocks, ports, FIR and LO in stages. Until
+     * every stage completes, neither ON nor STANDBY is a valid status. */
+    state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
@@ -377,6 +380,9 @@ static bool _rfic_standby(struct rfic_state *state)
 
     /* Unset RFFE bits controlling RFIC */
     _clear_rffe_ctrl();
+    /* A failed mute snapshot/write must not leave status reporting ON after
+     * the RF enable path has already been cleared. */
+    state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
     /* Cache current txmute state and put it aside */
     FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
