@@ -33,6 +33,18 @@ eLNA/fast-energy delays that must saturate all corresponding fields. The
 existing test's write-count baseline was also corrected; its RX ADC no-write
 check now uses a separate read-count baseline.
 
+## Adjacent AUXADC range finding
+
+The same input-boundary sweep found that AuxADC decimation accepted any
+power-of-two value at or above 256 even though its decimation register has a
+3-bit exponent; values above 32768 wrapped to a different setting. The clock
+divider was also written without checking its 6-bit range, and the temperature
+interval multiplication could overflow before the 7-bit field mask. Setup now
+checks both decimations in 256–32768, the clock divider in 1–63, and computes
+the interval with 64-bit arithmetic before rejecting values above 127. These
+checks happen before the first SPI write. Regression source covers the maximum
+valid exponent and the invalid decimation, divider, and interval cases.
+
 ## Validation status
 
 Source review and `git diff --check` only. Per the active release instruction,

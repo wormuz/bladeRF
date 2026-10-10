@@ -2132,6 +2132,13 @@ int main(void)
     {
         struct refclk_scale factor = { .spi = &spi, .phy = &phy };
         struct tx_monitor_control txmon = {0};
+        struct auxadc_control auxadc = {
+            .temp_time_inteval_ms = 1000,
+            .temp_sensor_decimation = 32768,
+            .auxadc_clock_rate = 40000000,
+            .auxadc_decimation = 32768,
+            .periodic_temp_measuremnt = true,
+        };
         struct gain_control gain = {0};
         struct ad9361_phy_platform_data agc_pdata = {0};
         struct ad9361_rf_phy agc_phy = { .spi = &spi, .pdata = &agc_pdata };
@@ -2262,6 +2269,55 @@ int main(void)
                     fake_regs[REG_FAST_ENERGY_DETECT_COUNT]);
             return EXIT_FAILURE;
         }
+        register_map_enabled = true;
+        spi_status = 0;
+        fail_write_reg = -1;
+        writes_before = write_count;
+        ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
+        if (ret != 0 || write_count != writes_before + 6 ||
+            fake_regs[REG_TEMP_SENSOR_CONFIG] != 7 ||
+            fake_regs[REG_AUXADC_CONFIG] != 14 ||
+            fake_regs[REG_AUXADC_CLOCK_DIVIDER] != 24) {
+            fprintf(stderr,
+                    "AuxADC maximum valid fields were not programmed: "
+                    "ret=%" PRId32 " writes=%u/%u temp=%u aux=%u div=%u\n",
+                    ret, write_count, writes_before,
+                    fake_regs[REG_TEMP_SENSOR_CONFIG],
+                    fake_regs[REG_AUXADC_CONFIG],
+                    fake_regs[REG_AUXADC_CLOCK_DIVIDER]);
+            return EXIT_FAILURE;
+        }
+        auxadc.temp_sensor_decimation = 65536;
+        writes_before = write_count;
+        ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
+        if (ret != -EINVAL || write_count != writes_before) {
+            fprintf(stderr,
+                    "AuxADC accepted decimation beyond 3-bit range: "
+                    "ret=%" PRId32 " writes=%u/%u\n",
+                    ret, write_count, writes_before);
+            return EXIT_FAILURE;
+        }
+        auxadc.temp_sensor_decimation = 256;
+        auxadc.auxadc_clock_rate = 1000000;
+        ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
+        if (ret != -ERANGE || write_count != writes_before) {
+            fprintf(stderr,
+                    "AuxADC accepted divider beyond 6-bit range: "
+                    "ret=%" PRId32 " writes=%u/%u\n",
+                    ret, write_count, writes_before);
+            return EXIT_FAILURE;
+        }
+        auxadc.auxadc_clock_rate = 40000000;
+        auxadc.temp_time_inteval_ms = UINT32_MAX;
+        ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
+        if (ret != -ERANGE || write_count != writes_before) {
+            fprintf(stderr,
+                    "AuxADC interval overflow was not rejected: "
+                    "ret=%" PRId32 " writes=%u/%u\n",
+                    ret, write_count, writes_before);
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
         ret = ad9361_txmon_setup(&phy, &txmon);
         if (ret != -EINVAL) {
             fprintf(stderr, "TX monitor accepted zero duration: ret=%" PRId32 "\n", ret);
