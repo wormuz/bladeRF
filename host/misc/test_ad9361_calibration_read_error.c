@@ -97,6 +97,7 @@ static unsigned fake_write_counts[1024];
 static uint32_t fake_axi_regs[1024];
 static unsigned fake_axi_read_count;
 static unsigned fake_axi_write_count;
+static int32_t fake_axi_fail_write_offset = -1;
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
@@ -116,6 +117,8 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
         sizeof(fake_axi_regs) / sizeof(fake_axi_regs[0]))
         return -EINVAL;
     ++fake_axi_write_count;
+    if ((int32_t)offset == fake_axi_fail_write_offset)
+        return -EIO;
     fake_axi_regs[offset / sizeof(uint32_t)] = data;
     return 0;
 }
@@ -190,8 +193,11 @@ int main(void)
     struct no_os_spi_desc spi = {0};
     int32_t ret;
     struct axi_adc calibration_adc = { .num_channels = 2 };
+    struct axi_adc *initialized_adc = &calibration_adc;
+    struct axi_adc_init invalid_adc_init = {0};
     int32_t calib_integer = INT32_MIN;
     int32_t calib_fraction = INT32_MIN;
+    uint64_t sampling_frequency = UINT64_MAX;
     unsigned axi_accesses_before;
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
@@ -215,12 +221,36 @@ int main(void)
     axi_accesses_before = fake_axi_read_count + fake_axi_write_count;
     if (axi_adc_set_calib_scale(&calibration_adc, 2, 1, 0) != -EINVAL ||
         axi_adc_set_calib_bias(NULL, 0, 0, 0) != -EINVAL ||
+        axi_adc_set_pnsel(&calibration_adc, 0, (enum axi_adc_pn_sel)3) != -EINVAL ||
+        axi_adc_pn_mon(NULL, AXI_ADC_PN9, 0) != -EINVAL ||
+        axi_adc_get_sampling_freq(&calibration_adc, 2,
+                                  &sampling_frequency) != -EINVAL ||
+        sampling_frequency != UINT64_MAX ||
+        axi_adc_idelay_set(&calibration_adc, 32, 0) != -EINVAL ||
+        axi_adc_delay_set(&calibration_adc, 33, 0) != -EINVAL ||
+        axi_adc_read(NULL, 0, &fake_axi_regs[0]) != -EINVAL ||
+        axi_adc_update_active_channels(NULL, 1) != -EINVAL ||
+        axi_adc_init_begin(&initialized_adc, NULL) != -EINVAL ||
+        initialized_adc != NULL ||
+        axi_adc_init(&initialized_adc, NULL) != -EINVAL ||
+        initialized_adc != NULL ||
         axi_adc_get_calib_scale(&calibration_adc, 0, NULL,
                                 &calib_fraction) != -EINVAL ||
         axi_adc_get_calib_bias(&calibration_adc, 0, &calib_integer,
                                NULL) != -EINVAL ||
         axi_adc_set_calib_bias(&calibration_adc, 0, 3, 1) != -EINVAL ||
         fake_axi_read_count + fake_axi_write_count != axi_accesses_before)
+        return EXIT_FAILURE;
+    if (axi_adc_update_active_channels(&calibration_adc, 4) != -EINVAL ||
+        calibration_adc.mask_valid)
+        return EXIT_FAILURE;
+    fake_axi_fail_write_offset = AXI_ADC_REG_CHAN_CNTRL(1);
+    if (axi_adc_update_active_channels(&calibration_adc, 3) != -EIO ||
+        calibration_adc.mask_valid)
+        return EXIT_FAILURE;
+    fake_axi_fail_write_offset = -1;
+    if (axi_adc_update_active_channels(&calibration_adc, 3) != 0 ||
+        !calibration_adc.mask_valid || calibration_adc.mask != 3)
         return EXIT_FAILURE;
     fake_axi_regs[AXI_ADC_REG_CHAN_CNTRL_1(0) / sizeof(uint32_t)] =
         AXI_ADC_DCFILT_OFFSET(0xfffe);
