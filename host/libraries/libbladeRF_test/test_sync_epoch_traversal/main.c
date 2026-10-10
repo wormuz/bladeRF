@@ -89,6 +89,22 @@ static void test_sync_tx_x2_timestamp_units(void)
     assert(sync_samples_to_timestamp_delta(6, 1) == 6);
 }
 
+static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
+{
+    struct bladerf_sync sync = {0};
+    struct bladerf_metadata metadata = {0};
+    int16_t sample[2] = {0, 0};
+
+    sync.initialized = true;
+    sync.stream_config.layout = BLADERF_TX_X2;
+    sync.stream_config.format = BLADERF_FORMAT_SC16_Q11_META;
+    sync.meta.samples_per_ts = 2;
+    metadata.flags = BLADERF_META_FLAG_TX_BURST_START;
+
+    assert(sync_tx(&sync, sample, 1, &metadata, 0) == BLADERF_ERR_INVAL);
+    assert(!sync.meta.in_burst);
+}
+
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
     assert(dev != NULL);
@@ -2417,6 +2433,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_sync_tx_x2_timestamp_units();
+    test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
 
     {
         const int16_t packed_input[] = { -1, 0x123, 0x456, -0x234, 0x789, 0xabc };
