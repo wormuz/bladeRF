@@ -1898,7 +1898,7 @@ int bladerf_rx_capture_close(struct bladerf *dev, bladerf_channel ch)
     int status;
 
     if (dev == NULL || dev->board != &bladerf2_board_fns ||
-        dev->board_data == NULL || BLADERF_CHANNEL_IS_TX(ch)) {
+        dev->board_data == NULL || !bladerf2_rx_channel_valid(ch)) {
         return BLADERF_ERR_INVAL;
     }
     board_data = dev->board_data;
