@@ -247,6 +247,10 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
     }
 
     board_data->tx_stream_faulted_async = false;
+    /* Start a new deduplication window only after the monitor has observed
+     * a healthy RFIC and acknowledged TX link epoch. Configuration changes
+     * are not recovery evidence on their own. */
+    board_data->tx_rf_configuration_invalid_reported = false;
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_TX_STATUS_RECOVERED;
     event.epoch_id = (uint8_t)(link_status >> 20);
