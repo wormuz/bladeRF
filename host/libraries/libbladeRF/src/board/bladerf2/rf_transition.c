@@ -563,7 +563,8 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
              * publish channel provenance as an adjacent companion event. */
             invalidation_channel_flags =
                 bladerf2_rx_transition_channel_event_flags(
-                    board_data->rf_transition_current_channel, true);
+                    board_data->rf_transition_current_channel,
+                    board_data->rf_transition_current_channel_valid);
         } else {
             event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
             if (board_data->rf_transition_current_channel ==
@@ -2092,7 +2093,8 @@ void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags)
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         event.flags |= bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
         board_data->rx_async_data_withheld_active = true;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         event.transaction_id = 0;

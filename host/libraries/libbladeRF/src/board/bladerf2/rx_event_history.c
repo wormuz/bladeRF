@@ -431,7 +431,8 @@ void bladerf2_rx_format_unsupported(struct bladerf *dev,
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!should_report) {
@@ -463,7 +464,8 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
     if (active_requirement_context &&
         board_data->rf_transition_rx_x2_host_data_required) {
         event.transaction_id =
@@ -585,7 +587,8 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
     /* This cursor is the first sample expected after the last admitted async
      * META buffer. Publish it only while it still belongs to the certified
      * epoch; never borrow it for a synchronous timeout or an invalid epoch. */
@@ -922,7 +925,8 @@ void bladerf2_rx_async_timestamp_discontinuity(
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
     epoch_id = timestamp_valid
         ? expected_epoch_id : board_data->rf_transition_epoch_id;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -970,7 +974,8 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
         BLADERF_RF_STREAM_STATUS_ASYNC_USB |
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
-            board_data->rf_transition_epoch_contract_enabled);
+            board_data->rf_transition_epoch_contract_enabled &&
+                board_data->rf_transition_current_channel_valid);
     board_data->rx_async_data_withheld_active = true;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
@@ -1003,7 +1008,8 @@ void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
         : BLADERF_RF_STATE_RX_DATA_INVALID;
     source_flags |= bladerf2_rx_transition_channel_event_flags(
         board_data->rf_transition_current_channel,
-        board_data->rf_transition_epoch_contract_enabled);
+        board_data->rf_transition_epoch_contract_enabled &&
+            board_data->rf_transition_current_channel_valid);
     if (board_data->rf_transition_epoch_contract_enabled) {
         board_data->rx_async_data_withheld_active = true;
     }
