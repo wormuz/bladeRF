@@ -233,6 +233,13 @@ int main(void)
             .source = BB_REFCLK,
         };
         register_map_enabled = true;
+        ret = ad9361_clk_factor_round_rate(&clock, 40000000,
+                                           &(uint32_t){40000000});
+        if (ret != 40000000 || clock.mult != 2 || clock.div != 1) {
+            fprintf(stderr, "Clock-rate rounding changed confirmed cache\n");
+            return EXIT_FAILURE;
+        }
+
         fail_write_reg = REG_CLOCK_CTRL;
         ret = ad9361_clk_factor_set_rate(&clock, 40000000, 40000000);
         if (ret != -EIO || clock.mult != 2 || clock.div != 1) {
