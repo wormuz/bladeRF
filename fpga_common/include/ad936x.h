@@ -31,8 +31,8 @@
 
 #include <ad9361_api.h>
 
-/* Read the carrier encoded in a stored RX fastlock profile. The normal
- * get_rx_lo_freq path uses host clock state and can be stale after an FPGA
+/* Read the carrier encoded in a stored RX/TX fastlock profile. The normal
+ * get_*_lo_freq paths use host clock state and can be stale after an FPGA
  * Nios-owned recall. */
 int32_t ad9361_rx_fastlock_get_freq(struct ad9361_rf_phy *phy,
 				    uint32_t profile, uint64_t *freq_hz);

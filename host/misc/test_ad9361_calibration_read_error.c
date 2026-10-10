@@ -1330,6 +1330,7 @@ int main(void)
      * a low-byte LO value through assignment to uint8_t. */
     {
         uint64_t frequency = UINT64_C(0xfeedface);
+        unsigned reads_before = read_count;
 
         fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
         ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
@@ -1339,6 +1340,16 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+
+        reads_before = read_count;
+        ret = ad9361_tx_fastlock_get_freq(&phy, 8, &frequency);
+        if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
+            read_count != reads_before) {
+            fprintf(stderr, "TX fastlock getter accepted invalid profile: ret=%" PRId32
+                    " frequency=%" PRIu64 " reads=%u/%u\n", ret,
+                    frequency, read_count, reads_before);
+            return EXIT_FAILURE;
+        }
 
         fail_read_reg = REG_TX_FAST_LOCK_PROGRAM_READ;
         ret = ad9361_tx_fastlock_get_freq(&phy, 0, &frequency);
