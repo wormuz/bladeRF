@@ -5230,7 +5230,10 @@ static int bladerf2_tx_rf_config_change_begin(
     board_data->tx_channel_state_generation++;
     board_data->tx_rfic_state_valid_reported = false;
     board_data->tx_retune_recovery_pending = true;
-    board_data->tx_recovery_blocked = true;
+    /* A configuration change is recoverable through the normal TX retune
+     * protocol once the gate is confirmed muted. Reserve this hard block for
+     * a failed queue clear or mute acknowledgement below. */
+    board_data->tx_recovery_blocked = false;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_stream_faulted_async = true;
     board_data->tx_retune2_completion_faulted = true;
@@ -5267,6 +5270,10 @@ static int bladerf2_tx_rf_config_change_begin(
         if (status == 0) {
             status = abort_status;
         }
+    }
+
+    if (status != 0) {
+        board_data->tx_recovery_blocked = true;
     }
 
     if (status != 0 && !board_data->tx_status_unavailable_reported) {

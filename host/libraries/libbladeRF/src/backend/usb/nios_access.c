@@ -1431,10 +1431,10 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
                 break;
             }
             state = gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
-            if (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
-                status = BLADERF_ERR_UNEXPECTED;
-                break;
-            }
+            /* ABORT intentionally leaves the gate in sticky ERROR/mute.
+             * The FPGA accepts a fresh ARM from ERROR; wait for that ARM's
+             * synchronized state change instead of treating the expected
+             * pre-ARM state as a permanent failure. */
             if ((immediate && state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) ||
                 (!immediate &&
                  (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED ||

@@ -212,6 +212,57 @@ int main(void)
         goto cleanup;
     }
 
+    if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
+        bladerf_frequency current_frequency = 0;
+        bool retune_valid_seen = false;
+
+        /* The configuration fence must be recoverable through a normal TX
+         * retune after the FPGA acknowledged mute; it must not require a
+         * module disable/enable cycle. */
+        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       &current_frequency);
+        if (status == 0) {
+            status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                           current_frequency);
+        }
+        if (status != 0) goto cleanup;
+
+        deadline = monotonic_ms() + EVENT_WAIT_MS;
+        while (monotonic_ms() < deadline && !retune_valid_seen) {
+            uint64_t next = cursor;
+            status = bladerf_rf_events_get_since(
+                dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                &count, &next, &history_complete);
+            if (status != 0 || !history_complete) {
+                status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            cursor = next;
+            for (uint32_t i = 0; i < count; ++i) {
+                retune_valid_seen |= events[i].event_type ==
+                                     BLADERF_RF_EVT_TX_RETUNE_VALID;
+            }
+            if (!retune_valid_seen) {
+                const struct timespec pause = {.tv_sec = 0,
+                                               .tv_nsec = 1000000};
+                nanosleep(&pause, NULL);
+            }
+        }
+        if (!retune_valid_seen) {
+            fprintf(stderr, "TX did not recover through a new retune\n");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto cleanup;
+        }
+
+        status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                 TX_FEEDER_TIMEOUT_MS);
+        if (status != 0) {
+            fprintf(stderr, "TX remained blocked after valid retune: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+    }
+
     printf("TX RFIC fault path: PASS mode=%s link_fault=%u "
            "rfic_invalid=%u sync_tx=REJECTED\n",
            mode, link_fault_seen, rfics_invalid_seen);
