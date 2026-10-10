@@ -410,6 +410,46 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* An ambiguous failure while temporarily clearing RX2 inversion must
+     * still attempt the restore write before returning the primary error. */
+    {
+        struct no_os_clk rx_clock = { .rate = 30000000 };
+        struct no_os_clk tx_clock = { .rate = 30000000 };
+        struct refclk_scale clkrf = {
+            .spi = &spi, .phy = &phy, .source = CLKRF_CLK,
+            .parent_source = ADC_CLK,
+        };
+        struct refclk_scale clktf = {
+            .spi = &spi, .phy = &phy, .source = CLKTF_CLK,
+            .parent_source = DAC_CLK,
+        };
+
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        phy.clks[ADC_CLK] = &rx_clock;
+        phy.clks[DAC_CLK] = &tx_clock;
+        phy.ref_clk_scale[CLKRF_CLK] = &clkrf;
+        phy.ref_clk_scale[CLKTF_CLK] = &clktf;
+        pdata.rx1rx2_phase_inversion_en = true;
+        fail_write_once_reg = REG_PARALLEL_PORT_CONF_2;
+        ret = ad9361_tx_quad_calib(&phy, 10000000, 10000000, -1);
+        if (ret != -EIO || fail_write_once_reg != -1 ||
+            (fake_regs[REG_PARALLEL_PORT_CONF_2] & INVERT_RX2) == 0) {
+            fprintf(stderr,
+                    "TX quad calibration skipped phase-inversion restore: "
+                    "ret=%" PRId32 " reg=0x%02x\n", ret,
+                    fake_regs[REG_PARALLEL_PORT_CONF_2]);
+            return EXIT_FAILURE;
+        }
+        pdata.rx1rx2_phase_inversion_en = false;
+        phy.ref_clk_scale[CLKRF_CLK] = NULL;
+        phy.ref_clk_scale[CLKTF_CLK] = NULL;
+        phy.clks[ADC_CLK] = NULL;
+        phy.clks[DAC_CLK] = NULL;
+        register_map_enabled = false;
+        read_count = write_count = 0;
+    }
+
     fail_write_reg = -1;
 
     /* Fastlock profile cache must only advance after the complete profile
