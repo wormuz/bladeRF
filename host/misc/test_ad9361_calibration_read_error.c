@@ -1607,6 +1607,32 @@ int main(void)
                     "Partial TX1/TX2 attenuation update was not rolled back\n");
             return EXIT_FAILURE;
         }
+
+        /* Distinct saved channel levels are restored as one operation. An
+         * ambiguous TX2 failure must not leave TX1 unmuted. */
+        fake_regs[REG_TX1_ATTEN_1] = 0x01;
+        fake_regs[REG_TX1_ATTEN_1 + 1] = 0x67;
+        fake_regs[REG_TX2_ATTEN_1] = 0x01;
+        fake_regs[REG_TX2_ATTEN_1 + 1] = 0x67;
+        fake_regs[REG_TX2_DIG_ATTEN] = IMMEDIATELY_UPDATE_TPC_ATTEN;
+        phy.tx_mute_restore_atten[0] = 1000;
+        phy.tx_mute_restore_atten[1] = 2000;
+        phy.tx_mute_restore_valid = true;
+        fail_write_once_reg = REG_TX2_ATTEN_1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_tx_mute(&phy, 0);
+        if (ret != -EIO || !phy.tx_mute_restore_valid ||
+            fake_regs[REG_TX1_ATTEN_1] != 0x01 ||
+            fake_regs[REG_TX1_ATTEN_1 + 1] != 0x67 ||
+            fake_regs[REG_TX2_ATTEN_1] != 0x01 ||
+            fake_regs[REG_TX2_ATTEN_1 + 1] != 0x67 ||
+            !(fake_regs[REG_TX2_DIG_ATTEN] &
+              IMMEDIATELY_UPDATE_TPC_ATTEN)) {
+            fprintf(stderr,
+                    "Partial two-channel TX unmute was not rolled back\n");
+            return EXIT_FAILURE;
+        }
         fail_write_once_reg = -1;
         fail_write_once_reg_occurrence = 1;
         apply_failed_write_once = false;

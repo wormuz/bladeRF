@@ -6,7 +6,7 @@
 
 ## Change
 
-The setter now reads the prior attenuation for every selected channel before writing. On a programming error it replays each selected channel's old two-byte attenuation while immediate updates remain disabled, then restores the immediate-update control bit. Rollback failures are logged separately and the original SPI error remains the function result. Fault-injection source now models an ambiguous failure on the first TX2 attenuation byte after TX1 has changed and checks both channels and the update bit return to their prior values.
+The setter now reads the prior attenuation for every selected channel before writing. On a programming error it replays each selected channel's old two-byte attenuation while immediate updates remain disabled, then restores the immediate-update control bit. Rollback failures are logged separately and the original SPI error remains the function result. The distinct-level TX unmute path now programs TX1 and TX2 within one immediate-update window rather than unmuting one channel before attempting the other. Fault-injection source models ambiguous TX2 failures after TX1 programming and checks both channels and the update bit return to their prior values.
 
 ## RF relevance and limits
 
