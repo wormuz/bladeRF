@@ -96,7 +96,8 @@ static void rx_reconfigure_complete(struct bladerf *dev,
  *
  * @return 0 on success, value from \ref RETCODES list on failure
  */
-static int bladerf_set_oversample_register_config(struct bladerf *dev);
+static int bladerf_set_oversample_register_config_locked(
+    struct bladerf *dev);
 
 /******************************************************************************/
 /* Open / Close */
@@ -887,20 +888,20 @@ int bladerf_set_sample_rate(struct bladerf *dev,
     MUTEX_LOCK(&dev->lock);
     feature = dev->feature;
     status = dev->board->set_sample_rate(dev, ch, rate, actual);
-    MUTEX_UNLOCK(&dev->lock);
-
     /*****************************************************
       Sample rate assignments clear previous register
       values. We must reassign oversample register config
       for every set_samplerate().
     *******************************************************/
     if (status == 0 && (feature & BLADERF_FEATURE_OVERSAMPLE)) {
-        int oversample_status = bladerf_set_oversample_register_config(dev);
+        int oversample_status =
+            bladerf_set_oversample_register_config_locked(dev);
         if (oversample_status != 0) {
             log_error("Oversample register config failure\n");
             status = oversample_status;
         }
     }
+    MUTEX_UNLOCK(&dev->lock);
 
     rx_reconfigure_complete(dev, rx_clock_channel);
 
@@ -950,7 +951,6 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     MUTEX_LOCK(&dev->lock);
     feature = dev->feature;
     status = dev->board->set_rational_sample_rate(dev, ch, rate, actual);
-    MUTEX_UNLOCK(&dev->lock);
 
     /*****************************************************
       Register config for OVERSAMPLE operation
@@ -958,16 +958,18 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
       Sample rate assignments clear previous register
       values. We must reassign for every set_samplerate().
 
-      Note: bladerf_set_rfic_register is mutex locked. Must
-            be placed outside of a mutex lock like above.
+      The reserved register writes run under the same lock as the
+      clock-chain update so another RF configuration cannot interleave.
     *******************************************************/
     if (status == 0 && (feature & BLADERF_FEATURE_OVERSAMPLE)) {
-        int oversample_status = bladerf_set_oversample_register_config(dev);
+        int oversample_status =
+            bladerf_set_oversample_register_config_locked(dev);
         if (oversample_status != 0) {
             log_error("Oversample register config failure\n");
             status = oversample_status;
         }
     }
+    MUTEX_UNLOCK(&dev->lock);
 
     rx_reconfigure_complete(dev, rx_clock_channel);
 
@@ -2723,7 +2725,8 @@ int bladerf_get_feature(struct bladerf *dev, bladerf_feature* feature)
     return 0;
 }
 
-static int bladerf_set_oversample_register_config(struct bladerf *dev) {
+static int bladerf_set_oversample_register_config_locked(
+    struct bladerf *dev) {
     static const struct {
         uint16_t address;
         uint8_t value;
@@ -2758,22 +2761,18 @@ static int bladerf_set_oversample_register_config(struct bladerf *dev) {
         return BLADERF_ERR_UNSUPPORTED;
     }
 
-    /* The caller already owns the shared RF transition reservation. Apply
-     * this multi-register preset under one mutex/reservation instead of
-     * recursively calling the public setter (which correctly rejects a
-     * second reservation and would otherwise fail after sample-rate setup). */
-    MUTEX_LOCK(&dev->lock);
+    /* The caller already owns dev->lock and the shared RF transition
+     * reservation. Keep this multi-register preset atomic with the sample
+     * rate change instead of recursively calling public setters. */
     for (size_t i = 0; i < ARRAY_SIZE(registers); ++i) {
         status = dev->board->set_rfic_register_reserved(
             dev, registers[i].address, registers[i].value);
         if (status != 0) {
-            MUTEX_UNLOCK(&dev->lock);
             log_error("Oversample RFIC register write failed at 0x%03x: %s\n",
                       registers[i].address, bladerf_strerror(status));
             return status;
         }
     }
-    MUTEX_UNLOCK(&dev->lock);
 
     return 0;
 }
