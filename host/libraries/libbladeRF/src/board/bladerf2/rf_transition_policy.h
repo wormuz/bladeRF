@@ -54,10 +54,10 @@ struct bladerf2_rx_invalidation_policy {
     bool abort_rx_epoch;
 };
 
-/* TX startup without an RX direction must not issue an unrelated RX ABORT,
- * but it still owns the setter reservation until the shared link START ends.
- * Otherwise an RX setter can race into the gap between the no-RX check and
- * TX module enable. */
+/* TX reconfiguration without an RX direction must still revoke host RX
+ * admission, but must not issue an unrelated FPGA RX ABORT. It also owns the
+ * setter reservation until shared link START ends, preventing an RX setter
+ * from racing between the no-RX check and TX module enable. */
 static inline struct bladerf2_rx_invalidation_policy
 bladerf2_rx_invalidation_policy(bladerf_channel channel,
                                 bool rx_direction_active)

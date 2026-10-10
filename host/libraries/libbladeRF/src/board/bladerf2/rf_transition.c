@@ -2363,7 +2363,6 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     bool data_epoch_enabled;
-    bool no_active_rx_direction = false;
     struct bladerf2_rx_invalidation_policy invalidation_policy = {0};
     int status;
 
@@ -2389,17 +2388,12 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                 ch, board_data->rf_link_dir_on[0]);
             board_data->rf_transition_setter_active =
                 invalidation_policy.reserve_setter;
-            no_active_rx_direction = !invalidation_policy.abort_rx_epoch;
             status = 0;
         }
     });
     if (status != 0) {
         return status;
     }
-    if (no_active_rx_direction) {
-        return 0;
-    }
-
     /* Revoke async admission before any USB control transaction. The sync
      * parser has its own fence, but async RX does not necessarily have an
      * initialized sync stream; using sync_rx_epoch_filter_enabled() here
@@ -2445,7 +2439,8 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
         }
     });
 
-    if (status == 0 && data_epoch_enabled) {
+    if (status == 0 && data_epoch_enabled &&
+        invalidation_policy.abort_rx_epoch) {
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
         /* Hold the hardware fence open after host revocation so a live async
          * stream can verify that no stale IQ crosses this race window. */
