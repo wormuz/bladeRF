@@ -335,7 +335,10 @@ begin
                         ts_compare_loaded <= '0' ;
                         ts_compare_cleared <= '1' ;
                         fsm := WAIT_FOR_CLEAR_DEASSERT ;
-                    elsif( compare_time = timestamp ) then
+                    elsif( compare_time <= timestamp ) then
+                        -- The target may pass while the compare payload is
+                        -- crossing from the MM clock. Fire late rather than
+                        -- waiting for the 64-bit timestamp to wrap.
                         ts_time_trigger <= '1' ;
                         ts_compare_loaded <= '0' ;
                         fsm := WAIT_FOR_CLEAR ;

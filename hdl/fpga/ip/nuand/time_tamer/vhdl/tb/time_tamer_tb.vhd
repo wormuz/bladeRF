@@ -242,6 +242,17 @@ begin
             severity failure ;
         clear_intr( clock, addr, din, write ) ;
 
+        -- A one-tick lead can expire while the MM-to-ts-clock arm handshake
+        -- is in flight. It must still fire promptly instead of wrapping.
+        read_time( clock, addr, dout, read, readack, ts ) ;
+        write_time( clock, addr, din, write, ts + 1 ) ;
+        set_intr( clock, addr, din, write ) ;
+        wait until rising_edge(clock) and intr = '1' for 100 us;
+        assert intr = '1'
+            report "near-current compare did not fire"
+            severity failure ;
+        clear_intr( clock, addr, din, write ) ;
+
         nop( clock, 1000 ) ;
 
         -- Read the time back
