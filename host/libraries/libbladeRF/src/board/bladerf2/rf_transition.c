@@ -2805,6 +2805,7 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
                    first_event.event_type == BLADERF_RF_EVT_CONFIG_ACCEPTED &&
                    first_event.fpga_state == BLADERF_RF_STATE_CONFIG_PENDING &&
                    transition_terminal_event_found &&
+                   found <= capacity &&
                    !(board_data->rf_transition_pending &&
                      board_data->rf_transition_current_id == transaction_id);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
