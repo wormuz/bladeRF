@@ -176,6 +176,43 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* VCO-table selection is cache state: a failed partial RFPLL setup must
+     * not publish the selected table as if every SPI write had completed. */
+    {
+        bool selected_tdd_table = true;
+        register_map_enabled = true;
+        pdata.fdd = true;
+        pdata.fdd_independent_mode = false;
+        phy.current_tx_lo_freq = 900000000;
+        phy.current_rx_lo_freq = 1800000000;
+        phy.current_tx_use_tdd_table = true;
+        phy.current_rx_use_tdd_table = false;
+        fail_write_reg = REG_RX_VCO_OUTPUT;
+        ret = ad9361_rfpll_vco_init(&phy, false, 8500000000ULL, 40000000,
+                                    true, &selected_tdd_table);
+        if (ret != -EIO || !phy.current_rx_use_tdd_table ||
+            phy.current_tx_use_tdd_table || !selected_tdd_table) {
+            fprintf(stderr, "Failed RFPLL VCO setup published table cache\n");
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = -1;
+        ret = ad9361_rfpll_vco_init(&phy, false, 8500000000ULL, 40000000,
+                                    true, &selected_tdd_table);
+        if (ret != 0 || selected_tdd_table ||
+            !phy.current_rx_use_tdd_table ||
+            phy.current_tx_use_tdd_table) {
+            fprintf(stderr, "Successful RFPLL VCO setup changed cache early\n");
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
+        pdata.fdd = false;
+        phy.current_tx_lo_freq = 0;
+        phy.current_rx_lo_freq = 0;
+        read_count = 0;
+        write_count = 0;
+    }
+
     /* A nonexistent 1x1 TX channel must not become a successful no-op, and
      * invalid RX/TX lane reads must fail before touching SPI or outputs. */
     if (ad9361_set_tx_attenuation(&phy, 1, 10000) != -EINVAL ||
