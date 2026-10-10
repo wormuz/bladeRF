@@ -100,6 +100,7 @@ static int _rfic_host_initialize(struct bladerf *dev)
     bladerf_channel ch;
     size_t i;
     uint32_t config_gpio;
+    int status;
 
     log_debug("%s: initializating\n", __FUNCTION__);
 
@@ -145,6 +146,9 @@ static int _rfic_host_initialize(struct bladerf *dev)
     }
 
     if (NULL == phy || NULL == phy->pdata) {
+        if (NULL != phy) {
+            (void)ad9361_remove(phy);
+        }
         RETURN_ERROR_STATUS("ad9361_init struct initialization",
                             BLADERF_ERR_UNEXPECTED);
     }
@@ -159,36 +163,71 @@ static int _rfic_host_initialize(struct bladerf *dev)
     {
         FOR_EACH_CHANNEL(dir, 1, i, ch)
         {
-            CHECK_STATUS(rfic->set_frequency(dev, ch, RESET_FREQUENCY));
+            status = rfic->set_frequency(dev, ch, RESET_FREQUENCY);
+            if (status < 0) {
+                goto init_fail;
+            }
         }
     }
 
     /* Set up AD9361 FIR filters */
     /* TODO: permit specification of filter taps, for the truly brave */
-    CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_RX(0),
-                                  BLADERF_RFIC_RXFIR_DEFAULT, 0));
-    CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
-                                  BLADERF_RFIC_TXFIR_DEFAULT));
+    status = rfic->set_filter(dev, BLADERF_CHANNEL_RX(0),
+                              BLADERF_RFIC_RXFIR_DEFAULT, 0);
+    if (status < 0) {
+        goto init_fail;
+    }
+    status = rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
+                              BLADERF_RFIC_TXFIR_DEFAULT);
+    if (status < 0) {
+        goto init_fail;
+    }
 
     /* Leave the RF path disconnected until modules are explicitly enabled. */
-    CHECK_STATUS(_rfic_host_clear_rffe_control(dev));
+    status = _rfic_host_clear_rffe_control(dev);
+    if (status < 0) {
+        goto init_fail;
+    }
 
     /* Move AD9361 back to desired frequency */
-    CHECK_STATUS(rfic->set_frequency(dev, BLADERF_CHANNEL_RX(0),
-                                     phy->pdata->rx_synth_freq));
-    CHECK_STATUS(rfic->set_frequency(dev, BLADERF_CHANNEL_TX(0),
-                                     phy->pdata->tx_synth_freq));
+    status = rfic->set_frequency(dev, BLADERF_CHANNEL_RX(0),
+                                 phy->pdata->rx_synth_freq);
+    if (status < 0) {
+        goto init_fail;
+    }
+    status = rfic->set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                 phy->pdata->tx_synth_freq);
+    if (status < 0) {
+        goto init_fail;
+    }
 
     /* Mute TX channels */
     FOR_EACH_CHANNEL(BLADERF_TX, dev->board->get_channel_count(dev, BLADERF_TX),
                      i, ch)
     {
-        CHECK_STATUS(rfic->set_txmute(dev, ch, true));
+        status = rfic->set_txmute(dev, ch, true);
+        if (status < 0) {
+            goto init_fail;
+        }
     }
 
     log_debug("%s: initialization complete\n", __FUNCTION__);
 
     return 0;
+
+init_fail:
+    /* Initialization is transactional from the board's point of view. The
+     * RFIC may be partially programmed, so disconnect the RF path, remove
+     * the partial ADI context, and make a later INIT start from OFF. Keep the
+     * first failing operation's status for the caller. */
+    (void)_rfic_host_clear_rffe_control(dev);
+    if (NULL != board_data->phy) {
+        (void)ad9361_remove(board_data->phy);
+        board_data->phy = NULL;
+    }
+    board_data->rxfir_known = false;
+    board_data->txfir_known = false;
+    return status;
 }
 
 static int _rfic_host_deinitialize(struct bladerf *dev)
