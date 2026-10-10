@@ -2344,38 +2344,93 @@ int main(void)
     }
 
     {
-        struct no_os_clk refclk = { .rate = 40000000 };
-        struct no_os_clk bbpll_clk = { .rate = 1 };
-        struct refclk_scale bbpll = {
-            .spi = &spi,
-            .phy = &phy,
-            .source = BBPLL_CLK,
-            .parent_source = BB_REFCLK,
+        struct no_os_clk clock_nodes[NUM_AD9361_CLKS] = {0};
+        struct refclk_scale clock_scales[NUM_AD9361_CLKS] = {0};
+        static const enum ad9361_clocks parents[NUM_AD9361_CLKS] = {
+            [BB_REFCLK] = EXT_REF_CLK,
+            [RX_REFCLK] = BB_REFCLK,
+            [TX_REFCLK] = BB_REFCLK,
+            [BBPLL_CLK] = BB_REFCLK,
+            [ADC_CLK] = BBPLL_CLK,
+            [R2_CLK] = ADC_CLK,
+            [R1_CLK] = R2_CLK,
+            [CLKRF_CLK] = R1_CLK,
+            [RX_SAMPL_CLK] = CLKRF_CLK,
+            [DAC_CLK] = BBPLL_CLK,
+            [T2_CLK] = DAC_CLK,
+            [T1_CLK] = T2_CLK,
+            [CLKTF_CLK] = T1_CLK,
+            [TX_SAMPL_CLK] = CLKTF_CLK,
+            [RX_RFPLL_INT] = RX_REFCLK,
+            [TX_RFPLL_INT] = TX_REFCLK,
+            [RX_RFPLL_DUMMY] = RX_REFCLK,
+            [TX_RFPLL_DUMMY] = TX_REFCLK,
+            [RX_RFPLL] = RX_RFPLL_INT,
+            [TX_RFPLL] = TX_RFPLL_INT,
         };
+        struct refclk_scale *bbpll = &clock_scales[BBPLL_CLK];
+        unsigned int i;
 
-        phy.clk_refin = &refclk;
-        phy.clks[BB_REFCLK] = &refclk;
-        phy.clks[BBPLL_CLK] = &bbpll_clk;
-        phy.ref_clk_scale[BBPLL_CLK] = &bbpll;
+        for (i = 0; i < NUM_AD9361_CLKS; i++) {
+            clock_nodes[i].rate = 123;
+            phy.clks[i] = &clock_nodes[i];
+            clock_scales[i].spi = &spi;
+            clock_scales[i].phy = &phy;
+            clock_scales[i].source = i;
+            clock_scales[i].parent_source = parents[i];
+            phy.ref_clk_scale[i] = &clock_scales[i];
+        }
+        clock_nodes[BB_REFCLK].rate = 40000000;
+        clock_nodes[BBPLL_CLK].rate = 983040000;
+        clock_nodes[ADC_CLK].rate = 491520000;
+        phy.clk_refin = &clock_nodes[BB_REFCLK];
+        phy.bbpll_initialized = true;
+
         fail_write_reg = REG_CP_CURRENT;
-        ret = clk_set_rate(&phy, &bbpll, 983040000);
-        if (ret != -EIO) {
-            fprintf(stderr, "Clock framework hid BBPLL programming failure: ret=%" PRId32
-                    "\n", ret);
+        ret = clk_set_rate(&phy, bbpll, 960000000);
+        if (ret != -EIO || clock_nodes[BBPLL_CLK].rate != 0 ||
+            clock_nodes[ADC_CLK].rate != 0 ||
+            clock_nodes[BB_REFCLK].rate != 40000000 ||
+            phy.bbpll_initialized) {
+            fprintf(stderr,
+                    "Clock framework did not invalidate failed BBPLL subtree: "
+                    "ret=%" PRId32 " bbpll=%" PRIu32 " adc=%" PRIu32
+                    " ref=%" PRIu32 " initialized=%d\n",
+                    ret, clock_nodes[BBPLL_CLK].rate,
+                    clock_nodes[ADC_CLK].rate,
+                    clock_nodes[BB_REFCLK].rate, phy.bbpll_initialized);
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
 
         fake_regs[REG_CH_1_OVERFLOW] = BBPLL_LOCK;
         fail_read_reg = REG_INTEGER_BB_FREQ_WORD;
-        ret = clk_set_rate(&phy, &bbpll, 983040000);
-        if (ret != -EIO || bbpll_clk.rate != 1 || phy.bbpll_initialized) {
-            fprintf(stderr, "Clock framework hid BBPLL readback failure: ret=%" PRId32
-                    " cached_rate=%" PRIu32 " initialized=%d\n",
-                    ret, bbpll_clk.rate, phy.bbpll_initialized);
+        ret = clk_set_rate(&phy, bbpll, 983040000);
+        if (ret != -EIO || clock_nodes[BBPLL_CLK].rate != 0 ||
+            clock_nodes[ADC_CLK].rate != 0 || phy.bbpll_initialized) {
+            fprintf(stderr,
+                    "Clock framework hid BBPLL readback failure: ret=%" PRId32
+                    " bbpll=%" PRIu32 " adc=%" PRIu32 " initialized=%d\n",
+                    ret, clock_nodes[BBPLL_CLK].rate,
+                    clock_nodes[ADC_CLK].rate, phy.bbpll_initialized);
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+
+        {
+            unsigned int writes_before = write_count;
+            ret = clk_set_rate(&phy, bbpll, 983040000);
+            if (ret != 0 || write_count == writes_before ||
+                clock_nodes[BBPLL_CLK].rate == 0 ||
+                !phy.bbpll_initialized) {
+                fprintf(stderr,
+                        "BBPLL recovery request was skipped after readback "
+                        "failure: ret=%" PRId32 " writes=%u->%u rate=%" PRIu32
+                        " initialized=%d\n", ret, writes_before, write_count,
+                        clock_nodes[BBPLL_CLK].rate, phy.bbpll_initialized);
+                return EXIT_FAILURE;
+            }
+        }
     }
 
     {
