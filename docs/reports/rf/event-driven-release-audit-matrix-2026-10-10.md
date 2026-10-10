@@ -410,4 +410,7 @@ profile loading, immediately before compare arm. Regression sources cover
 ordinary and wrapped past/future cases, ambiguous half-range, wrapped queue
 order, and the scheduled TX gate staying closed before wrap. No executable
 checks were run because the complete source-audit gate remains open. FPGA
-synthesis/timing impact and exact-image NIOS behavior remain OPEN.
+synthesis/timing impact and exact-image NIOS behavior remain OPEN. The shared
+hardware-test timestamp wait helper and public sync TX metadata example now
+also use the modulo half-range completion condition instead of raw unsigned
+ordering.

@@ -64,7 +64,8 @@ int wait_for_timestamp(struct bladerf *dev,
 
     do {
         status = bladerf_get_timestamp(dev, dir, &curr_ts);
-        done   = (status != 0) || curr_ts >= timestamp;
+        done   = (status != 0) ||
+                 (curr_ts - timestamp) < (UINT64_C(1) << 63);
 
         if (!done) {
             if (slept_ms > timeout_ms) {

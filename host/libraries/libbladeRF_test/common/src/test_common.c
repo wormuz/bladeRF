@@ -66,7 +66,8 @@ int wait_for_timestamp(struct bladerf *dev, bladerf_module module,
 
     do {
         status = bladerf_get_timestamp(dev, module, &curr_ts);
-        done = (status != 0) || curr_ts >= timestamp;
+        done = (status != 0) ||
+               (curr_ts - timestamp) < (UINT64_C(1) << 63);
 
         //printf("Now = 0x%"PRIx64", done = %d\r\n", curr_ts , done);
 

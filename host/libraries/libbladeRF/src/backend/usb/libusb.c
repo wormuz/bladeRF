@@ -1297,8 +1297,9 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
      * not a fault.
      *
      * With SC16_Q11_META the FPGA pulls a block out of the FX3 only once its
-     * timestamp comes due (fifo_reader.vhd: timestamp >= meta_p_time). A
-     * burst scheduled into the future is therefore not consumed at all until
+     * timestamp comes due (fifo_reader.vhd: modulo timestamp delta is
+     * non-negative). A burst scheduled into the future is therefore not
+     * consumed at all until
      * its start time: the FX3 buffers fill, the endpoint stops accepting, and
      * the kernel retires the queued URBs with -ENOENT after their timeout.
      *
