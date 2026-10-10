@@ -171,6 +171,8 @@ int main(void)
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t rfpll_rate = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
+    uint32_t bandwidth = UINT32_MAX;
+    uint32_t sampling_rate = UINT32_MAX;
     uint32_t rx_rf_port = UINT32_MAX;
     uint32_t tx_rf_port = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
@@ -1711,6 +1713,20 @@ int main(void)
 	    ad9361_get_tx_rf_port_output(&phy, NULL) != -EINVAL ||
 	    tx_rf_port != UINT32_MAX) {
 		fprintf(stderr, "TX RF-port API accepted missing state/output\n");
+		return EXIT_FAILURE;
+	}
+	if (ad9361_set_rx_rf_bandwidth(NULL, 1000000) != -EINVAL ||
+	    ad9361_set_tx_rf_bandwidth(NULL, 1000000) != -EINVAL ||
+	    ad9361_get_rx_rf_bandwidth(NULL, &bandwidth) != -EINVAL ||
+	    ad9361_get_tx_rf_bandwidth(NULL, &bandwidth) != -EINVAL ||
+	    ad9361_get_rx_rf_bandwidth(&phy, NULL) != -EINVAL ||
+	    ad9361_get_tx_rf_bandwidth(&phy, NULL) != -EINVAL ||
+	    ad9361_set_rx_sampling_freq(NULL, 1000000) != -EINVAL ||
+	    ad9361_set_tx_sampling_freq(NULL, 1000000) != -EINVAL ||
+	    ad9361_get_rx_sampling_freq(NULL, &sampling_rate) != -EINVAL ||
+	    ad9361_get_tx_sampling_freq(NULL, &sampling_rate) != -EINVAL ||
+	    bandwidth != UINT32_MAX || sampling_rate != UINT32_MAX) {
+		fprintf(stderr, "RX/TX rate API accepted missing state/output\n");
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
