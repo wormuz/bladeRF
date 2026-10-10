@@ -1425,6 +1425,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_last = tx_loss_count_baseline;
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
+            board_data->tx_epoch_invalid_reported = false;
             board_data->tx_stream_faulted = false;
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
@@ -1438,6 +1439,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
              * generation and clears sticky link faults. The cumulative loss
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
+            board_data->tx_epoch_invalid_reported = false;
             board_data->tx_stream_faulted = false;
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
@@ -1570,6 +1572,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
                 dev, BLADERF_RF_EVT_TX_STREAM_STOPPED, 0, 0, 0);
             board_data->tx_fpga_loss_count_valid = false;
             board_data->tx_link_fault_reported = false;
+            board_data->tx_epoch_invalid_reported = false;
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         }

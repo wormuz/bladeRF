@@ -786,6 +786,7 @@ static void *rx_fault_monitor_task(void *arg)
         if (should_poll_tx) {
             bool report_status_unavailable = false;
             bool report_tx_fault = false;
+            bool report_tx_epoch_invalid = false;
             bool report_tx_underrun = false;
             bool counter_reset = false;
             bool report_tx_recovered = false;
@@ -813,6 +814,15 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_stream_faulted = true;
                         board_data->tx_recovery_blocked = true;
                         report_tx_fault = true;
+                    }
+                    if (tx_link_status_error == 0 &&
+                        !bladerf2_rf_link_tx_epoch_valid(
+                            rf_link_status, board_data->tx_link_epoch_id) &&
+                        !board_data->tx_epoch_invalid_reported) {
+                        board_data->tx_epoch_invalid_reported = true;
+                        board_data->tx_stream_faulted = true;
+                        board_data->tx_recovery_blocked = true;
+                        report_tx_epoch_invalid = true;
                     }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0) {
@@ -860,6 +870,11 @@ static void *rx_fault_monitor_task(void *arg)
                     if (report_tx_fault) {
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0,
+                            rf_link_status, BLADERF_ERR_FPGA_OP);
+                    }
+                    if (report_tx_epoch_invalid) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_EPOCH_INVALID, 0,
                             rf_link_status, BLADERF_ERR_FPGA_OP);
                     }
                     if (report_tx_underrun) {

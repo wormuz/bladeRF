@@ -12,6 +12,23 @@
 #define BLADERF2_RF_LINK_STATUS_VERSION_2    0x20000000u
 #define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)
 #define BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT (1u << 6)
+#define BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE   (1u << 0)
+#define BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT (1u << 9)
+#define BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID   (1u << 12)
+
+/* The TX transport certificate is tied to the FPGA generation that the host
+ * acknowledged. A readable status word with a stale/missing acknowledgement
+ * is a lost certificate, even when the sticky fault bit has not asserted. */
+static inline bool bladerf2_rf_link_tx_epoch_valid(uint32_t status,
+                                                   uint8_t expected_epoch)
+{
+    return (status & BLADERF2_RF_LINK_STATUS_VERSION_MASK) ==
+               BLADERF2_RF_LINK_STATUS_VERSION_2 &&
+           (status & BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT) != 0 &&
+           (status & BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID) != 0 &&
+           (status & BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE) != 0 &&
+           (uint8_t)(status >> 20) == expected_epoch;
+}
 
 /* Preserve the transition handle that scoped an RX epoch on invalid-data
  * notifications. The epoch is shared by both RX lanes, but its requested

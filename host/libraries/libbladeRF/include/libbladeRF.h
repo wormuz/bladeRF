@@ -4884,7 +4884,11 @@ typedef enum {
     BLADERF_RF_EVT_TX_COUNTER_RESET,
     /** TX status polling recovered and the cumulative counter proved no
      * underrun across the observation gap. TX transport validity is restored. */
-    BLADERF_RF_EVT_TX_STATUS_RECOVERED
+    BLADERF_RF_EVT_TX_STATUS_RECOVERED,
+    /** FPGA TX epoch acknowledgement was lost or changed without a host
+     * transition. `rfic_status` contains the observed RF-link status word;
+     * TX validity is revoked until a new epoch is acknowledged. */
+    BLADERF_RF_EVT_TX_EPOCH_INVALID
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

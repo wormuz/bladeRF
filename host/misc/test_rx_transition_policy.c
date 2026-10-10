@@ -132,6 +132,21 @@ int main(void)
     assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
     assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);
 
+    /* Runtime TX validity requires the acknowledged epoch to remain active.
+     * Readable status with an absent/stale epoch or stopped link fails closed. */
+    const uint32_t tx_epoch_ok = 0x20000000u | (9u << 20) |
+        BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE |
+        BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT |
+        BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID;
+    assert(bladerf2_rf_link_tx_epoch_valid(tx_epoch_ok, 9));
+    assert(!bladerf2_rf_link_tx_epoch_valid(tx_epoch_ok, 8));
+    assert(!bladerf2_rf_link_tx_epoch_valid(
+        tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT, 9));
+    assert(!bladerf2_rf_link_tx_epoch_valid(
+        tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID, 9));
+    assert(!bladerf2_rf_link_tx_epoch_valid(
+        tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE, 9));
+
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));
     assert(!bladerf2_rf_event_is_transition_terminal(
@@ -150,6 +165,8 @@ int main(void)
         BLADERF_RF_EVT_TX_COUNTER_RESET));
     assert(!bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_TX_STATUS_RECOVERED));
+    assert(!bladerf2_rf_event_is_transition_terminal(
+        BLADERF_RF_EVT_TX_EPOCH_INVALID));
 
     /* Empty requests are rejected; a control-only completion must still
      * identify at least one observed hardware condition. */
