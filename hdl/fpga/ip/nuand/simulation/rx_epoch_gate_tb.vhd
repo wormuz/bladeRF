@@ -93,6 +93,15 @@ begin
         arm <= '1';
         wait until falling_edge(clock);
         arm <= '0';
+        wait for 1 ns;
+        assert out_controls(0).enable = '1' and
+               out_samples(0).data_v = '1' and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(0).data_q = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16) and
+               out_samples(1).data_q = to_signed(0, 16)
+            report "ARM edge admitted one stale pre-transition RX sample"
+            severity failure;
         wait until falling_edge(clock);
         abort <= '1';
         wait until rising_edge(clock);

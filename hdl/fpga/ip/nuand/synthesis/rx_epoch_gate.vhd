@@ -151,6 +151,20 @@ begin
                             );
                         end loop;
                         state <= STATE_ERROR;
+                    elsif( epoch_arm = '1' ) then
+                        -- Fence on the ARM edge itself. The host has already
+                        -- revoked admission, but do not enqueue one more old-
+                        -- epoch ADC sample while the registered FSM enters
+                        -- PENDING. Preserve lane enables and sample-valid so
+                        -- transport liveness is unchanged.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
                     else
                         out_sample_controls <= in_sample_controls;
                         out_samples         <= in_samples;
