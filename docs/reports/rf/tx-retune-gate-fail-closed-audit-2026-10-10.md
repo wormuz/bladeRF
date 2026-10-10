@@ -73,7 +73,8 @@ FPGA abort, pending-retune, and frequency-model latches to be healthy, but did
 not require a confirmed current FPGA TX-link epoch. This allowed host buffers
 to be accepted before first TX enable or after the TX link had stopped. TX
 admission now additionally requires `tx_async_link_certified`, established
-only by an acknowledged new TX epoch or validated status recovery. Transport
+only by an acknowledged new TX epoch, validated status recovery, or a fully
+validated TX retune-gate resume. Transport
 fault, stream fault, shared RX/TX START, and confirmed TX stop revoke it. The
 shared START and stop paths publish `TX_EPOCH_INVALID` so wrappers observe the
 same fence. A policy regression source covers the uncertified case. Source-only;
