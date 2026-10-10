@@ -2,6 +2,7 @@
 #include <assert.h>
 #include <stdint.h>
 
+#include "channel_policy.h"
 #include "rf_transition_policy.h"
 
 int main(void)
@@ -25,6 +26,14 @@ int main(void)
     struct bladerf_rf_event invalidation_channel;
     uint64_t loss_count = 0;
     struct bladerf2_rx_invalidation_policy invalidation_policy;
+
+    assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(0)));
+    assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(1)));
+    assert(bladerf_public_channel_valid(BLADERF_CHANNEL_TX(0)));
+    assert(bladerf_public_channel_valid(BLADERF_CHANNEL_TX(1)));
+    assert(!bladerf_public_channel_valid(BLADERF_CHANNEL_RX(2)));
+    assert(!bladerf_public_channel_valid(BLADERF_CHANNEL_TX(2)));
+    assert(!bladerf_public_channel_valid(BLADERF_CHANNEL_INVALID));
 
     assert(bladerf2_clock_select_valid(CLOCK_SELECT_ONBOARD));
     assert(bladerf2_clock_select_valid(CLOCK_SELECT_EXTERNAL));

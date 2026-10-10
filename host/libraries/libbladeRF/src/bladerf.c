@@ -42,6 +42,7 @@
 #include "backend/backend.h"
 #include "backend/usb/usb.h"
 #include "board/board.h"
+#include "channel_policy.h"
 
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
@@ -51,10 +52,7 @@ static void rx_reconfigure_complete(struct bladerf *dev,
 
 static bool valid_public_channel(bladerf_channel ch)
 {
-    return ch == BLADERF_CHANNEL_RX(0) ||
-           ch == BLADERF_CHANNEL_RX(1) ||
-           ch == BLADERF_CHANNEL_TX(0) ||
-           ch == BLADERF_CHANNEL_TX(1);
+    return bladerf_public_channel_valid(ch);
 }
 #include "conversions.h"
 #include "driver/fx3_fw.h"
@@ -972,6 +970,12 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
     int status;
     bladerf_feature feature;
 
+    CHECK_NULL(dev);
+
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Validate the public rational representation before invalidating RX
      * state or forwarding it to a board implementation. Some implementations
      * divide by den while reducing/programming the requested rate. */
@@ -1021,6 +1025,13 @@ int bladerf_get_rational_sample_rate(struct bladerf *dev,
                                      struct bladerf_rational_rate *rate)
 {
     int status;
+    CHECK_NULL(dev);
+    if (rate == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_rational_sample_rate(dev, ch, rate);
