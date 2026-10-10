@@ -322,8 +322,14 @@ static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
 
     do {
         int status = nios_rx_epoch_status_read(dev, &value);
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+        _test_rx_transition_late_observation("EPOCH_FENCE_STATUS");
+#endif
         if (status != 0) {
             return status;
+        }
+        if (_deadline_expired(deadline_ns)) {
+            return BLADERF_ERR_TIMEOUT;
         }
 
         uint8_t state = (uint8_t)((value >>
@@ -404,8 +410,14 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
                            (uint64_t)timeout_ms * 1000000ULL;
     uint8_t state, current_epoch;
     int status = _read_rx_epoch_state(dev, status_word, &state, &current_epoch);
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+    _test_rx_transition_late_observation("EPOCH_PREPARE_STATUS");
+#endif
     if (status != 0) {
         return status;
+    }
+    if (_deadline_expired(deadline_ns)) {
+        return BLADERF_ERR_TIMEOUT;
     }
 
     if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE &&
@@ -414,12 +426,21 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
         if (status != 0) {
             return status;
         }
+        if (_deadline_expired(deadline_ns)) {
+            return BLADERF_ERR_TIMEOUT;
+        }
 
         do {
             status = _read_rx_epoch_state(dev, status_word, &state,
                                           &current_epoch);
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+            _test_rx_transition_late_observation("EPOCH_ABORT_STATUS");
+#endif
             if (status != 0) {
                 return status;
+            }
+            if (_deadline_expired(deadline_ns)) {
+                return BLADERF_ERR_TIMEOUT;
             }
             if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
                 break;
@@ -432,6 +453,9 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint32_t timeout_ms,
         }
     }
 
+    if (_deadline_expired(deadline_ns)) {
+        return BLADERF_ERR_TIMEOUT;
+    }
     *epoch_id = (uint8_t)(current_epoch + 1u);
     return 0;
 }
