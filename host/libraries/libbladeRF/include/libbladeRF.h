@@ -4717,6 +4717,7 @@ void CALL_CONV bladerf_version(struct bladerf_version *version);
                                        */
 #define BLADERF_ERR_NOT_INIT    (-19) /**< Device insufficiently initialized
                                        *   for operation */
+#define BLADERF_ERR_CALLBACK    (-20) /**< Application stream callback failed */
 // clang-format on
 
 /**

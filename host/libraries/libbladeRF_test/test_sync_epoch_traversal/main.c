@@ -185,6 +185,12 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(async_run_stream(&stream, BLADERF_TX_X1) == 0);
     assert(tx_transport_failure_notifications == 0);
 
+    /* A Python/application callback failure terminates TX but is not a USB
+     * transport fault and must not publish a transport event. */
+    test_tx_backend_stream_error_code = BLADERF_ERR_CALLBACK;
+    assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_CALLBACK);
+    assert(tx_transport_failure_notifications == 0);
+
     /* A backend-clean shutdown can still carry a stream-level failure. */
     test_tx_backend_stream_error_code = BLADERF_ERR_IO;
     assert(async_run_stream(&stream, BLADERF_TX_X1) == BLADERF_ERR_IO);

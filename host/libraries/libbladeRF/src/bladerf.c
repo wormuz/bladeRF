@@ -2477,6 +2477,8 @@ const char *bladerf_strerror(int error)
                    "non-blocking";
         case BLADERF_ERR_NOT_INIT:
             return "Insufficient initialization for the requested operation";
+        case BLADERF_ERR_CALLBACK:
+            return "Application stream callback failed";
         case 0:
             return "Success";
         default:
