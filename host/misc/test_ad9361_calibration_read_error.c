@@ -262,6 +262,11 @@ int main(void)
             ad9361_get_trx_path_clks(NULL, rx_clks, tx_clks) != -EINVAL ||
             ad9361_get_trx_path_clks(&phy, NULL, tx_clks) != -EINVAL ||
             ad9361_get_trx_path_clks(&phy, rx_clks, NULL) != -EINVAL ||
+            ad9361_set_trx_clock_chain(NULL, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_set_trx_clock_chain(&phy_without_pdata, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_set_trx_clock_chain(&phy_without_spi, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_set_trx_clock_chain(&phy, NULL, tx_clks) != -EINVAL ||
+            ad9361_set_trx_clock_chain(&phy, rx_clks, NULL) != -EINVAL ||
             ad9361_set_no_ch_mode(NULL, 1) != -EINVAL ||
             ad9361_set_no_ch_mode(&phy_without_pdata, 1) != -EINVAL ||
             ad9361_set_no_ch_mode(&phy_without_spi, 1) != -EINVAL ||
