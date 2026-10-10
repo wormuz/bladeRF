@@ -2302,13 +2302,15 @@ static int bladerf2_tx_frequency_reconfigure_begin(
 
     WITH_MUTEX(&dev->lock, {
         bool gate_abort_pending;
+        uint8_t pending_count;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         gate_abort_pending = board_data->tx_gate_abort_pending;
+        pending_count = board_data->tx_retune2_pending_count;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (board_data->rf_transition_setter_active ||
             board_data->tx_frequency_reconfigure_active ||
             board_data->tx_rf_config_operation_active ||
-            board_data->tx_retune2_pending_count != 0 ||
+            pending_count != 0 ||
             board_data->tx_recovery_blocked || gate_abort_pending) {
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
@@ -3046,19 +3048,6 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         if (board_data->tx_recovery_blocked || gate_abort_pending) {
             return BLADERF_ERR_WOULD_BLOCK;
         }
-        if (board_data->tx_retune2_pending_count >=
-            NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
-            return BLADERF_ERR_WOULD_BLOCK;
-        }
-        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
-            if (!board_data->tx_retune2_pending[i].valid) {
-                pending_slot = (uint8_t)i;
-                break;
-            }
-        }
-        if (pending_slot == UINT8_MAX) {
-            return BLADERF_ERR_WOULD_BLOCK;
-        }
         if (!board_data->tx_retune2_success_count_valid) {
             CHECK_STATUS(nios_retune2_success_count_read(
                 dev, BLADERF_MODULE_TX, &success_count));
@@ -3069,6 +3058,25 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
          * the FPGA gate. This closes the concurrent-send window while the
          * NIOS command and CDC acknowledgement are in flight. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        /* The monitor can retire queued requests while the NIOS counter
+         * read above is in flight. Revalidate and reserve atomically with
+         * the pending ledger. */
+        if (board_data->tx_gate_abort_pending ||
+            board_data->tx_retune2_pending_count >=
+                NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            if (!board_data->tx_retune2_pending[i].valid) {
+                pending_slot = (uint8_t)i;
+                break;
+            }
+        }
+        if (pending_slot == UINT8_MAX) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         board_data->tx_retune2_pending[pending_slot].timestamp = timestamp;
         board_data->tx_retune2_pending[pending_slot].requested_frequency_hz =
             frequency;
@@ -3081,10 +3089,11 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         board_data->tx_rfic_state_valid_reported = false;
         board_data->tx_retune_recovery_pending = true;
         board_data->tx_channel_state_generation++;
+        uint8_t pending_count = board_data->tx_retune2_pending_count;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_tx_retune_event(
             dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
-            board_data->tx_retune2_pending_count, 0);
+            pending_count, 0);
 
         /* Arm the FPGA baseband fence before the timestamped RFPLL request
          * can execute. One gate stays muted across all queued retunes and is
@@ -3098,14 +3107,14 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
+            pending_count = board_data->tx_retune2_pending_count;
             board_data->tx_retune2_completion_faulted = true;
             board_data->tx_retune2_applied_waiting_rf_valid = false;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_channel_state_generation++;
             bladerf2_tx_retune_event(
                 dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                frequency, 0, board_data->tx_retune2_pending_count,
-                gate_status);
+                frequency, 0, pending_count, gate_status);
             return gate_status;
         }
         board_data->tx_retune_gate_release_requested = false;
@@ -3122,6 +3131,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
+            uint8_t pending_count = board_data->tx_retune2_pending_count;
             board_data->tx_retune2_completion_faulted = true;
             board_data->tx_retune2_applied_waiting_rf_valid = false;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -3131,7 +3141,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             board_data->tx_retune2_failure_watch_active = true;
             bladerf2_tx_retune_event(
                 dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                frequency, 0, 0, status);
+                frequency, 0, pending_count, status);
         }
         return status;
     }
@@ -3178,7 +3188,6 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
          * the remainder of this handle, even if the queue is later cleared:
          * an execution error may already have occurred before cancellation. */
         board_data->tx_retune2_failure_watch_active = true;
-        const uint8_t pending_count = board_data->tx_retune2_pending_count;
     }
 
     /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
@@ -5300,12 +5309,13 @@ static int bladerf2_tx_rf_config_change_begin(
     const bool queue_may_exist =
         board_data->tx_retune2_failure_watch_active;
     const bool recovery_was_blocked = board_data->tx_recovery_blocked;
-    const uint8_t pending_count = board_data->tx_retune2_pending_count;
+    uint8_t pending_count;
     bool gate_abort_pending;
     int status = 0;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     gate_abort_pending = board_data->tx_gate_abort_pending;
+    pending_count = board_data->tx_retune2_pending_count;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (board_data->rf_transition_pending ||
         board_data->tx_frequency_reconfigure_active ||
