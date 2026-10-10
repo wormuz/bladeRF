@@ -998,6 +998,53 @@ int main(void)
             return EXIT_FAILURE;
         }
         fake_regs[REG_GAIN_RX1] = 0;
+#if HAVE_SPLIT_GAIN_TABLE
+		{
+			const uint32_t gain_regs[] = {
+				REG_RX1_MANUAL_LMT_FULL_GAIN,
+				REG_RX1_MANUAL_LMT_FULL_GAIN + 1,
+				REG_RX1_MANUAL_LMT_FULL_GAIN + 2
+			};
+			uint8_t old_gain_regs[3];
+
+			phy.pdata->split_gt = true;
+			phy.pdata->gain_ctrl.dig_gain_en = true;
+			fake_regs[REG_AGC_CONFIG_1] = 0; /* RX1 manual gain control */
+			fake_regs[gain_regs[0]] = 0x11;
+			fake_regs[gain_regs[1]] = 0x22;
+			fake_regs[gain_regs[2]] = 0x33;
+			for (size_t i = 0; i < 3; i++)
+				old_gain_regs[i] = fake_regs[gain_regs[i]];
+
+			rx_gain = (struct rf_rx_gain) {
+				.gain_db = 10,
+				.fgt_lmt_index = 0,
+				.lpf_gain = 1,
+				.digital_gain = 1
+			};
+			fail_write_once_reg = gain_regs[1];
+			fail_write_once_reg_occurrence = 1;
+			apply_failed_write_once = true;
+			ret = ad9361_set_rx_gain(&phy, 1, &rx_gain);
+			if (ret != -EIO) {
+				fprintf(stderr, "RX split gain hid a partial write failure\n");
+				return EXIT_FAILURE;
+			}
+			for (size_t i = 0; i < 3; i++) {
+				if (fake_regs[gain_regs[i]] != old_gain_regs[i]) {
+					fprintf(stderr,
+						"RX split gain register 0x%03" PRIx32
+						" was not restored\n", gain_regs[i]);
+					return EXIT_FAILURE;
+				}
+			}
+			fail_write_once_reg = -1;
+			fail_write_once_reg_occurrence = 1;
+			apply_failed_write_once = false;
+			phy.pdata->split_gt = false;
+			phy.pdata->gain_ctrl.dig_gain_en = false;
+		}
+#endif
         phy.pdata->split_gt = true;
         phy.current_table = TBL_200_1300_MHZ + RXGAIN_TBLS_END;
         fail_read_reg = REG_GAIN_TABLE_ADDRESS;
