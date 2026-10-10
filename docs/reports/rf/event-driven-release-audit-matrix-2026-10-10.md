@@ -424,3 +424,14 @@ RX1/RX2/RX_X2 admission, live-edge drain, TX drain, contiguous capture, and
 retune schedule scoring now share equivalent modulo ordering. Missing first
 META timestamp is tracked separately from the valid value zero. Source
 regressions were added; no harness or test was executed.
+
+### RX transition deadline clock failure
+
+Transition polling loops previously ignored `bladerf_monotonic_now_ns()`
+failure in direct deadline comparisons. Because the helper leaves its output
+at zero on failure, a future deadline could remain perpetually ahead and the
+transition could wait forever. All loops now use the checked deadline policy,
+which treats an unavailable clock as failure; the optional RFDC calibration
+path also rejects a failed clock read before deriving its ADI timeout. The
+policy regression source covers unavailable-clock failure. No build or test
+has run under the source-audit gate.

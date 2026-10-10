@@ -159,9 +159,10 @@ int main(void)
 
     /* A status read which returns at or after the deadline is not a timely
      * completion, even if its sampled hardware bit is already asserted. */
-    assert(!bladerf2_rf_transition_deadline_expired(99, 100));
-    assert(bladerf2_rf_transition_deadline_expired(100, 100));
-    assert(bladerf2_rf_transition_deadline_expired(101, 100));
+    assert(!bladerf2_rf_transition_deadline_expired(true, 99, 100));
+    assert(bladerf2_rf_transition_deadline_expired(true, 100, 100));
+    assert(bladerf2_rf_transition_deadline_expired(true, 101, 100));
+    assert(bladerf2_rf_transition_deadline_expired(false, 99, 100));
 
     /* RF-link startup accepts only a new, fault-free generation ACK for the
      * requested direction. A stale high direction bit cannot certify START. */

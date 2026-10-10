@@ -399,8 +399,10 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
 
 static bool _deadline_expired(uint64_t deadline_ns)
 {
+    uint64_t now_ns = 0;
+    const bool clock_valid = bladerf_monotonic_now_ns(&now_ns) == 0;
     return bladerf2_rf_transition_deadline_expired(
-        _monotonic_ns(), deadline_ns);
+        clock_valid, now_ns, deadline_ns);
 }
 
 static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
@@ -467,7 +469,7 @@ static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
         }
 
         usleep(POLL_INTERVAL_US);
-    } while (_monotonic_ns() < deadline_ns);
+    } while (!_deadline_expired(deadline_ns));
 
     return BLADERF_ERR_TIMEOUT;
 }
@@ -557,7 +559,7 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint64_t deadline_ns,
                 break;
             }
             usleep(POLL_INTERVAL_US);
-        } while (_monotonic_ns() < deadline_ns);
+        } while (!_deadline_expired(deadline_ns));
 
         if (state != NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
             return BLADERF_ERR_TIMEOUT;
@@ -3636,7 +3638,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
      * actually required it -- BLADERF_RF_REQUIRE_PLL_LOCKED unset means
      * the caller only wants SPI_DONE confirmation. */
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_PLL_LOCKED) {
-        while (_monotonic_ns() < deadline_ns) {
+        while (!_deadline_expired(deadline_ns)) {
             if (_rx_transition_close_requested(board_data)) {
                 return _fail_transition_for_close(dev, board_data, final_event);
             }
@@ -3687,6 +3689,10 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
         BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) {
         int adi_status;
         const uint64_t calibration_begin_ns = _monotonic_ns();
+        if (calibration_begin_ns == 0) {
+            return _fail_transition(dev, board_data,
+                                    BLADERF_ERR_UNEXPECTED, final_event);
+        }
         const uint64_t now_ns = calibration_begin_ns;
         const uint64_t remaining_us = now_ns < deadline_ns
             ? (deadline_ns - now_ns) / 1000ULL : 0;
@@ -3732,7 +3738,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
          * after calibration rather than carrying forward the pre-calibration
          * observation as if it proved the restored state. */
         pll_locked = false;
-        while (_monotonic_ns() < deadline_ns) {
+        while (!_deadline_expired(deadline_ns)) {
             if (_rx_transition_close_requested(board_data)) {
                 return _fail_transition_for_close(dev, board_data, final_event);
             }
@@ -3766,7 +3772,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
 
     if (board_data->rf_transition_required_events_mask & BLADERF_RF_REQUIRE_ENSM_RX) {
         uint8_t last_ensm_reg = 0xff;
-        while (_monotonic_ns() < deadline_ns) {
+        while (!_deadline_expired(deadline_ns)) {
             if (_rx_transition_close_requested(board_data)) {
                 return _fail_transition_for_close(dev, board_data, final_event);
             }
@@ -3816,7 +3822,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
         BLADERF_RF_REQUIRE_BBPLL_LOCKED) {
         uint8_t bbpll_status = 0;
         bool bbpll_locked = false;
-        while (_monotonic_ns() < deadline_ns) {
+        while (!_deadline_expired(deadline_ns)) {
             if (_rx_transition_close_requested(board_data)) {
                 return _fail_transition_for_close(dev, board_data, final_event);
             }
@@ -3913,7 +3919,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                                     final_event);
         }
 
-        while (_monotonic_ns() < deadline_ns) {
+        while (!_deadline_expired(deadline_ns)) {
             if (_rx_transition_close_requested(board_data)) {
                 return _fail_transition_for_close(dev, board_data, final_event);
             }
