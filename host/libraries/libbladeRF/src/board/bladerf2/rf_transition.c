@@ -1243,10 +1243,15 @@ static void *rx_fault_monitor_task(void *arg)
                     } else if (rx_retune2_failure_count !=
                                board_data->rx_retune2_failure_count_last) {
                         report_rx_retune_failure = true;
-                        rx_retune_event_error =
+                        report_rx_retune_status_unavailable =
                             rx_retune2_failure_count <
-                                board_data->rx_retune2_failure_count_last
-                            ? BLADERF_ERR_UNEXPECTED : BLADERF_ERR_FPGA_OP;
+                                board_data->rx_retune2_failure_count_last;
+                        if (report_rx_retune_status_unavailable) {
+                            report_rx_retune_failure = false;
+                            rx_retune_event_error = BLADERF_ERR_UNEXPECTED;
+                        } else {
+                            rx_retune_event_error = BLADERF_ERR_FPGA_OP;
+                        }
                         board_data->rx_retune2_failure_count_last =
                             rx_retune2_failure_count;
                     }
@@ -1257,7 +1262,7 @@ static void *rx_fault_monitor_task(void *arg)
                     event.host_monotonic_ns = _monotonic_ns();
                     event.event_type = report_rx_retune_failure
                         ? BLADERF_RF_EVT_RX_RETUNE_FAILED
-                        : BLADERF_RF_EVT_ERROR;
+                        : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
                     event.fpga_state = BLADERF_RF_STATE_ERROR;
                     event.flags = rx_retune2_failure_count;
                     event.error_code = rx_retune_event_error;

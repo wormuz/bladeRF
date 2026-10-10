@@ -4966,7 +4966,11 @@ typedef enum {
      * emitted RX_DATA_INVALIDATED; this diagnostic event does not itself
      * change the current epoch's validity. `flags` carries the cumulative
      * NIOS RX failure counter. */
-    BLADERF_RF_EVT_RX_RETUNE_FAILED
+    BLADERF_RF_EVT_RX_RETUNE_FAILED,
+    /** The host could not read the NIOS RX retune failure counter, or the
+     * counter reset while being monitored. This diagnostic does not itself
+     * change RX epoch validity; `error_code` contains the read/reset error. */
+    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
