@@ -33,10 +33,29 @@
 #include "ad936x_helpers.h"
 #include "bladerf2_common.h"
 
-static bool tx_mute_state[2] = { false };
+static bool *txmute_state_for_channel(struct ad9361_rf_phy *phy,
+                                      bladerf_channel ch)
+{
+    if (phy == NULL) {
+        return NULL;
+    }
+
+    switch (ch) {
+        case BLADERF_CHANNEL_TX(0):
+            return &phy->tx1_muted;
+        case BLADERF_CHANNEL_TX(1):
+            return &phy->tx2_muted;
+        default:
+            return NULL;
+    }
+}
 
 uint32_t txmute_get_cached(struct ad9361_rf_phy *phy, bladerf_channel ch)
 {
+    if (phy == NULL) {
+        return 0;
+    }
+
     switch (ch) {
         case BLADERF_CHANNEL_TX(0):
             return phy->tx1_atten_cached;
@@ -51,6 +70,10 @@ int txmute_set_cached(struct ad9361_rf_phy *phy,
                       bladerf_channel ch,
                       uint32_t atten)
 {
+    if (phy == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
     switch (ch) {
         case BLADERF_CHANNEL_TX(0):
             phy->tx1_atten_cached = atten;
@@ -65,21 +88,30 @@ int txmute_set_cached(struct ad9361_rf_phy *phy,
 
 int txmute_get(struct ad9361_rf_phy *phy, bladerf_channel ch, bool *state)
 {
-    int rfic_ch = (ch >> 1);
+    bool *muted = txmute_state_for_channel(phy, ch);
 
-    *state = tx_mute_state[rfic_ch];
+    if (muted == NULL || state == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    *state = *muted;
 
     return 0;
 }
 
 int txmute_set(struct ad9361_rf_phy *phy, bladerf_channel ch, bool state)
 {
-    int rfic_ch                = (ch >> 1);
+    bool *muted                = txmute_state_for_channel(phy, ch);
+    int rfic_ch                = ch >> 1;
     uint32_t const MUTED_ATTEN = 89750;
     uint32_t atten, cached;
     int status;
 
-    if (tx_mute_state[rfic_ch] == state) {
+    if (muted == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    if (*muted == state) {
         // short circuit if there's no change
         return 0;
     }
@@ -111,7 +143,7 @@ int txmute_set(struct ad9361_rf_phy *phy, bladerf_channel ch, bool state)
         return status;
     }
 
-    tx_mute_state[rfic_ch] = state;
+    *muted = state;
 
     return 0;
 }
