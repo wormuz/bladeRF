@@ -273,7 +273,10 @@ static inline void nios_pkt_retune_unpack(const uint8_t *buf,
  *                The scheduled tune request will failure if the retune queue
  *                is full.
  *
- *      flags[7:2]    Reserved. Set to 0.
+ *      flags[2]: 1 = Queue clear failed because the time-tamer did not
+ *                    acknowledge cancellation of its armed compare.
+ *
+ *      flags[7:3]    Reserved. Set to 0.
  */
 
 #define NIOS_PKT_RETUNERESP_IDX_MAGIC   0
@@ -284,6 +287,7 @@ static inline void nios_pkt_retune_unpack(const uint8_t *buf,
 
 #define NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID (1 << 0)
 #define NIOS_PKT_RETUNERESP_FLAG_SUCCESS       (1 << 1)
+#define NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED (1 << 2)
 
 static inline void nios_pkt_retune_resp_pack(uint8_t *buf,
                                              uint64_t duration,

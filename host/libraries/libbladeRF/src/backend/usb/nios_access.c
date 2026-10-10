@@ -1634,6 +1634,10 @@ int nios_retune(struct bladerf *dev, bladerf_channel ch,
         if (timestamp == BLADERF_RETUNE_NOW) {
             log_debug("FPGA tuning reported failure.\n");
             status = BLADERF_ERR_UNEXPECTED;
+        } else if ((resp_flags &
+                    NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED) != 0) {
+            log_error("FPGA time-tamer failed to acknowledge retune cancel.\n");
+            status = BLADERF_ERR_UNEXPECTED;
         } else {
             log_debug("The FPGA's retune queue is full. Try again after "
                       "a previous request has completed.\n");
