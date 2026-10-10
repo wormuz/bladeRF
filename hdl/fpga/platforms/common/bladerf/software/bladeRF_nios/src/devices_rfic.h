@@ -205,7 +205,7 @@ static inline bool _rfic_is_initialized(struct rfic_state *state)
     return BLADERF_RFIC_INIT_STATE_ON == state->init_state;
 }
 
-static inline bool _rfic_chan_is_system(uint8_t ch)
+static inline bool _rfic_chan_is_system(bladerf_channel ch)
 {
     return RFIC_SYSTEM_CHANNEL == ch;
 }
