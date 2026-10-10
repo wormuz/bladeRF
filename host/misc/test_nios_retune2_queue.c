@@ -75,8 +75,10 @@ static int check_schedule_ready_lifecycle(void)
     tx_profile.spdt = 0x03;
     tx_profile.state = FASTLOCK_STATE_BBP_RFFE;
 
-    if (enqueue_retune(&rx_queue, &rx_profile, UINT64_C(0x123456789)) != 1 ||
-        enqueue_retune(&tx_queue, &tx_profile, UINT64_C(0x23456789a)) != 1) {
+    if (enqueue_retune(&rx_queue, &rx_profile, 5,
+                       UINT64_C(0x123456789)) != 1 ||
+        enqueue_retune(&tx_queue, &tx_profile, 7,
+                       UINT64_C(0x23456789a)) != 1) {
         fputs("failed to enqueue RX/TX retunes\n", stderr);
         return 1;
     }
@@ -129,6 +131,15 @@ static int check_schedule_ready_lifecycle(void)
         fputs("RX READY transition activated the wrong queue/profile\n", stderr);
         return 1;
     }
+    if (!pkt_retune2_completion_select(BLADERF_MODULE_RX, 1) ||
+        pkt_retune2_completion_word(0) != 1 ||
+        pkt_retune2_completion_word(1) != 0 ||
+        pkt_retune2_completion_word(2) != 0 ||
+        pkt_retune2_completion_word(3) != 5) {
+        fputs("RX completion record did not preserve sequence/profile\n",
+              stderr);
+        return 1;
+    }
 
     /* TX becomes activatable only after its own ISR marks it READY. */
     retune_isr(&tx_queue);
@@ -142,6 +153,15 @@ static int check_schedule_ready_lifecycle(void)
         recalled_port != 0x22 || recalled_spdt != 0x03 ||
         port_count != 2 || spdt_count != 2) {
         fputs("TX READY transition did not activate its queued profile\n", stderr);
+        return 1;
+    }
+    if (!pkt_retune2_completion_select(BLADERF_MODULE_TX, 1) ||
+        pkt_retune2_completion_word(0) != 1 ||
+        pkt_retune2_completion_word(1) != 0 ||
+        pkt_retune2_completion_word(2) != 0 ||
+        pkt_retune2_completion_word(3) != 7) {
+        fputs("TX completion record did not preserve sequence/profile\n",
+              stderr);
         return 1;
     }
 
@@ -158,7 +178,8 @@ static int check_deferred_failure_reporting(void)
     tx_profile.profile_num = 3;
     rx_profile.profile_num = 4;
 
-    if (enqueue_retune(&tx_queue, &tx_profile, UINT64_C(0x3456789ab)) != 1) {
+    if (enqueue_retune(&tx_queue, &tx_profile, 3,
+                       UINT64_C(0x3456789ab)) != 1) {
         fputs("failed to enqueue TX profile-load failure case\n", stderr);
         return 1;
     }
@@ -168,12 +189,16 @@ static int check_deferred_failure_reporting(void)
     if (tx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
-        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1) {
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
+        !pkt_retune2_completion_select(BLADERF_MODULE_TX, 1) ||
+        pkt_retune2_completion_word(0) != 1 ||
+        pkt_retune2_completion_word(3) != 7) {
         fputs("deferred TX profile-load failure was not retained\n", stderr);
         return 1;
     }
 
-    if (enqueue_retune(&rx_queue, &rx_profile, UINT64_C(0x456789abc)) != 1) {
+    if (enqueue_retune(&rx_queue, &rx_profile, 4,
+                       UINT64_C(0x456789abc)) != 1) {
         fputs("failed to enqueue RX activation failure case\n", stderr);
         return 1;
     }
@@ -185,7 +210,10 @@ static int check_deferred_failure_reporting(void)
     if (rx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
-        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1) {
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        !pkt_retune2_completion_select(BLADERF_MODULE_RX, 1) ||
+        pkt_retune2_completion_word(0) != 1 ||
+        pkt_retune2_completion_word(3) != 5) {
         fputs("deferred RX activation failure was not retained\n", stderr);
         return 1;
     }
@@ -220,10 +248,10 @@ int main(void)
 
     profile.profile_num = 5;
     ordered_profile.profile_num = 6;
-    if (enqueue_retune(&ordered, &ordered_profile, 200) != 1 ||
-        enqueue_retune(&ordered, &ordered_profile, 200) !=
+    if (enqueue_retune(&ordered, &ordered_profile, 6, 200) != 1 ||
+        enqueue_retune(&ordered, &ordered_profile, 6, 200) !=
             QUEUE_INVALID_TIMESTAMP ||
-        enqueue_retune(&ordered, &ordered_profile, 199) !=
+        enqueue_retune(&ordered, &ordered_profile, 6, 199) !=
             QUEUE_INVALID_TIMESTAMP ||
         ordered.count != 1 ||
         ordered.entries[ordered.rem_idx].timestamp != 200) {

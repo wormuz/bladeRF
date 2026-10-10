@@ -130,6 +130,7 @@ bool rfic_command_write_immed(bladerf_rfic_command command,
  * @param[in]  module  The module
  */
 void rfic_invalidate_frequency(bladerf_module module);
+bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz);
 
 
 /******************************************************************************/

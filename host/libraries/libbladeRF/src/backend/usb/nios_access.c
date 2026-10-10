@@ -1032,6 +1032,77 @@ int nios_retune2_success_count_read(struct bladerf *dev,
                           addr, value);
 }
 
+int nios_retune2_completion_read(struct bladerf *dev,
+                                 bladerf_module module,
+                                 uint32_t sequence,
+                                 uint64_t *frequency_hz,
+                                 uint16_t *nios_profile)
+{
+    uint8_t select_addr;
+    uint32_t first_sequence;
+    uint32_t last_sequence;
+    uint32_t lo;
+    uint32_t hi;
+    uint32_t profile;
+    int status;
+
+    if (frequency_hz == NULL || nios_profile == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (module == BLADERF_MODULE_RX) {
+        select_addr = NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX;
+    } else if (module == BLADERF_MODULE_TX) {
+        select_addr = NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_TX;
+    } else {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = nios_8x32_write(dev,
+                             NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                             select_addr, sequence);
+    if (status != 0) {
+        return status;
+    }
+
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                            NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE,
+                            &first_sequence);
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_LO,
+                                &lo);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_HI,
+                                &hi);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_PROFILE,
+                                &profile);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE,
+                                &last_sequence);
+    }
+    if (status != 0) {
+        return status;
+    }
+    if (first_sequence != sequence || last_sequence != sequence) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    *frequency_hz = ((uint64_t)hi << 32) | lo;
+    *nios_profile = (uint16_t)profile;
+    return 0;
+}
+
 int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
 {
     int status;

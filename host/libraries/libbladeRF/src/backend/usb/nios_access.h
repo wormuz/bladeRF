@@ -322,6 +322,11 @@ int nios_retune2_failure_count_read(struct bladerf *dev,
 int nios_retune2_success_count_read(struct bladerf *dev,
                                     bladerf_module module,
                                     uint32_t *value);
+int nios_retune2_completion_read(struct bladerf *dev,
+                                 bladerf_module module,
+                                 uint32_t sequence,
+                                 uint64_t *frequency_hz,
+                                 uint16_t *nios_profile);
 
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */

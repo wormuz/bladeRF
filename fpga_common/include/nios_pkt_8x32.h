@@ -416,6 +416,20 @@
 #define NIOS_PKT_8x32_RETUNE2_SUCCESSES_RX_ADDR 0u
 #define NIOS_PKT_8x32_RETUNE2_SUCCESSES_TX_ADDR 1u
 
+/* Read a durable scheduled-retune completion record. Write target 0x8f with
+ * addr=direction (RX=0/TX=1), data=completion sequence, then read fields:
+ * 0 sequence, 1 frequency low, 2 frequency high, 3 NIOS profile index.
+ * The ring has RETUNE2_QUEUE_MAX entries; a sequence mismatch means the
+ * requested record was overwritten and must be treated as a completion gap. */
+#define NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION 0x8f
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX 0u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_TX 1u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE 0u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_LO 1u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_HI 2u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_PROFILE 3u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
+
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
@@ -499,6 +513,8 @@ static inline const char* target2str(uint8_t target_id) {
             return "Deferred Retune2 Execution Failure Counter";
         case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:
             return "Completed Retune2 Activation Counter";
+        case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
+            return "Retune2 Applied Completion Record";
 
         /* Reserved for user customizations */
         case NIOS_PKT_8x32_TARGET_USR1:

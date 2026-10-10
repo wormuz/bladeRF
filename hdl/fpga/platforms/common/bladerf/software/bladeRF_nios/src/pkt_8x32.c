@@ -115,6 +115,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                     break;
             }
             break;
+
+        case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
+            *data = pkt_retune2_completion_word(addr);
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
@@ -244,6 +248,20 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
         case NIOS_PKT_8x32_TARGET_FASTLOCK:
             return adi_fastlock_save((addr == 1), (data >> 16),
                                      (data & 0xff));
+#endif  // BOARD_BLADERF_MICRO
+
+#ifdef BOARD_BLADERF_MICRO
+        case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
+            if (addr == NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX) {
+                return pkt_retune2_completion_select(BLADERF_MODULE_RX,
+                                                     data);
+            } else if (addr ==
+                       NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_TX) {
+                return pkt_retune2_completion_select(BLADERF_MODULE_TX,
+                                                     data);
+            } else {
+                return false;
+            }
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO

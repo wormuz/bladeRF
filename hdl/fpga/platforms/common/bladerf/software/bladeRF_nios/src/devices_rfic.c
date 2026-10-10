@@ -27,6 +27,7 @@
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 
 #include "devices_rfic.h"
+#include "ad936x_helpers.h"
 
 
 /******************************************************************************/
@@ -43,6 +44,25 @@ static struct rfic_state state;
 void rfic_invalidate_frequency(bladerf_module module)
 {
     state.frequency_invalid[module] = true;
+}
+
+bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz)
+{
+    int32_t status;
+
+    if (frequency_hz == NULL || state.phy == NULL) {
+        return false;
+    }
+
+    if (module == BLADERF_MODULE_RX) {
+        status = ad9361_get_rx_lo_freq(state.phy, frequency_hz);
+    } else if (module == BLADERF_MODULE_TX) {
+        status = ad9361_get_tx_lo_freq(state.phy, frequency_hz);
+    } else {
+        return false;
+    }
+
+    return status == 0;
 }
 
 

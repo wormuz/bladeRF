@@ -25,6 +25,7 @@
 #define SM_PKT_RETUNE2_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "pkt_handler.h"
 #include "nios_pkt_retune2.h"
 
@@ -37,6 +38,8 @@ void pkt_retune2_work(void);
 /* Cumulative scheduled execution outcomes, one counter per RF direction. */
 uint32_t pkt_retune2_failure_count(bladerf_module module);
 uint32_t pkt_retune2_success_count(bladerf_module module);
+bool pkt_retune2_completion_select(bladerf_module module, uint32_t sequence);
+uint32_t pkt_retune2_completion_word(uint8_t addr);
 
 #define PKT_RETUNE2 { \
     .magic          = NIOS_PKT_RETUNE2_MAGIC, \

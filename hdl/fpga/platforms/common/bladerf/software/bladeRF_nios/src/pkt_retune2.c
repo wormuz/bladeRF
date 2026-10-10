@@ -23,14 +23,17 @@
  */
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "pkt_handler.h"
 #include "pkt_retune2.h"
 #include "nios_pkt_retune2.h"    /* Packet format definition */
+#include "nios_pkt_8x32.h"       /* Completion record protocol */
 #include "devices.h"
 #include "debug.h"
 
 #ifdef BLADERF_NIOS_LIBAD936X
 void rfic_invalidate_frequency(bladerf_module module);
+bool rfic_read_frequency_live(bladerf_module module, uint64_t *frequency_hz);
 #endif  // BLADERF_NIOS_LIBAD936X
 
 #ifdef BLADERF_NIOS_DEBUG
@@ -41,7 +44,7 @@ void rfic_invalidate_frequency(bladerf_module module);
 #endif
 
 /* The enqueue/dequeue routines require that this be a power of two */
-#define RETUNE2_QUEUE_MAX   16
+#define RETUNE2_QUEUE_MAX   NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH
 #define QUEUE_FULL          0xff
 #define QUEUE_EMPTY         0xfe
 #define QUEUE_INVALID_TIMESTAMP 0xfd
@@ -63,6 +66,7 @@ struct queue_entry {
      * upload slot and may be overwritten by a later scheduled request before
      * this timer fires. */
     fastlock_profile profile;
+    uint16_t nios_profile;
     uint64_t timestamp;
 };
 
@@ -83,6 +87,19 @@ static volatile uint32_t tx_retune2_failure_count;
 static volatile uint32_t rx_retune2_success_count;
 static volatile uint32_t tx_retune2_success_count;
 
+struct retune2_completion {
+    volatile uint32_t sequence;
+    uint64_t frequency_hz;
+    uint16_t nios_profile;
+};
+
+static struct retune2_completion
+    rx_retune2_completions[RETUNE2_QUEUE_MAX];
+static struct retune2_completion
+    tx_retune2_completions[RETUNE2_QUEUE_MAX];
+static volatile uint32_t selected_completion_sequence;
+static volatile bladerf_module selected_completion_module;
+
 uint32_t pkt_retune2_failure_count(bladerf_module module)
 {
     switch (module) {
@@ -102,6 +119,45 @@ uint32_t pkt_retune2_success_count(bladerf_module module)
             return rx_retune2_success_count;
         case BLADERF_MODULE_TX:
             return tx_retune2_success_count;
+        default:
+            return 0;
+    }
+}
+
+bool pkt_retune2_completion_select(bladerf_module module, uint32_t sequence)
+{
+    if (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX) {
+        return false;
+    }
+
+    selected_completion_module = module;
+    selected_completion_sequence = sequence;
+    return true;
+}
+
+uint32_t pkt_retune2_completion_word(uint8_t addr)
+{
+    struct retune2_completion *record;
+    uint32_t sequence = selected_completion_sequence;
+
+    if (addr > 3) {
+        return 0;
+    }
+    record = selected_completion_module == BLADERF_MODULE_RX
+        ? &rx_retune2_completions[(sequence - 1u) &
+                                  (RETUNE2_QUEUE_MAX - 1u)]
+        : &tx_retune2_completions[(sequence - 1u) &
+                                  (RETUNE2_QUEUE_MAX - 1u)];
+
+    switch (addr) {
+        case 0:
+            return record->sequence;
+        case 1:
+            return (uint32_t)record->frequency_hz;
+        case 2:
+            return (uint32_t)(record->frequency_hz >> 32);
+        case 3:
+            return record->nios_profile;
         default:
             return 0;
     }
@@ -128,6 +184,7 @@ static bool retune2_profile_indices_valid(uint16_t nios_profile,
  * not enqueue the requested item */
 static inline uint8_t enqueue_retune(struct queue *q,
                                      fastlock_profile *p,
+                                     uint16_t nios_profile,
                                      uint64_t timestamp)
 {
     uint8_t ret;
@@ -145,6 +202,7 @@ static inline uint8_t enqueue_retune(struct queue *q,
     }
 
     q->entries[q->ins_idx].profile = *p;
+    q->entries[q->ins_idx].nios_profile = nios_profile;
     /* The source cache's residency belongs to the shared upload slot, not
      * this snapshot. Re-establish RFFE residency for the copied settings. */
     q->entries[q->ins_idx].profile.state = FASTLOCK_STATE_BBP;
@@ -266,7 +324,8 @@ static inline void profile_load_scheduled(struct queue *q,
     }
 }
 
-static inline bool profile_activate(bladerf_module module, fastlock_profile *p)
+static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
+                                    uint64_t *readback_frequency_hz)
 {
     if (p == NULL) {
         return false;
@@ -289,6 +348,16 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p)
 
     /* Adjust the RF switches */
     adi_rfspdt_select(module, p);
+#ifdef BLADERF_NIOS_LIBAD936X
+    if (readback_frequency_hz != NULL &&
+        !rfic_read_frequency_live(module, readback_frequency_hz)) {
+        return false;
+    }
+#else
+    if (readback_frequency_hz != NULL) {
+        *readback_frequency_hz = 0;
+    }
+#endif
     return true;
 }
 
@@ -334,6 +403,10 @@ void pkt_retune2_init()
     tx_retune2_failure_count = 0;
     rx_retune2_success_count = 0;
     tx_retune2_success_count = 0;
+    memset(rx_retune2_completions, 0, sizeof(rx_retune2_completions));
+    memset(tx_retune2_completions, 0, sizeof(tx_retune2_completions));
+    selected_completion_sequence = 0;
+    selected_completion_module = BLADERF_MODULE_RX;
 
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
@@ -396,21 +469,40 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * Waiting for this entry to become ready */
             break;
 
-        case ENTRY_STATE_READY:
+        case ENTRY_STATE_READY: {
+            uint64_t readback_frequency_hz;
+            uint32_t completion_sequence;
+            struct retune2_completion *completion;
 
             /* Activate the fast lock profile for this retune */
-            if (!profile_activate(module, &e->profile)) {
+            if (!profile_activate(module, &e->profile,
+                                 &readback_frequency_hz)) {
                 record_retune2_failure(module);
-            } else if (module == BLADERF_MODULE_RX) {
-                rx_retune2_success_count++;
-            } else if (module == BLADERF_MODULE_TX) {
-                tx_retune2_success_count++;
+            } else if (module == BLADERF_MODULE_RX ||
+                       module == BLADERF_MODULE_TX) {
+                completion_sequence = pkt_retune2_success_count(module) + 1u;
+                completion = module == BLADERF_MODULE_RX
+                    ? &rx_retune2_completions[(completion_sequence - 1u) &
+                                              (RETUNE2_QUEUE_MAX - 1u)]
+                    : &tx_retune2_completions[(completion_sequence - 1u) &
+                                              (RETUNE2_QUEUE_MAX - 1u)];
+                completion->frequency_hz = readback_frequency_hz;
+                completion->nios_profile = e->nios_profile;
+                /* Publish the slot sequence last, then advance the public
+                 * count. A reader verifies sequence before trusting fields. */
+                completion->sequence = completion_sequence;
+                if (module == BLADERF_MODULE_RX) {
+                    rx_retune2_success_count = completion_sequence;
+                } else {
+                    tx_retune2_success_count = completion_sequence;
+                }
             }
 
             /* Drop the item from the queue */
             dequeue_retune(q, NULL);
 
             break;
+        }
 
         default:
             INCREMENT_ERROR_COUNT();
@@ -512,7 +604,7 @@ void pkt_retune2(struct pkt_buf *b)
                         }
 
                         /* Activate the fast lock profile for this retune */
-                        if (profile_activate(module, profile)) {
+                        if (profile_activate(module, profile, NULL)) {
                             flags |=
                                 NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
                             status = 0;
@@ -535,7 +627,8 @@ void pkt_retune2(struct pkt_buf *b)
                 switch (module) {
                     case BLADERF_MODULE_RX:
                         queue_size = enqueue_retune(
-                            &rx_queue, &requested_profile, timestamp);
+                            &rx_queue, &requested_profile, nios_profile,
+                            timestamp);
                         if (queue_size != QUEUE_FULL &&
                             queue_size != QUEUE_INVALID_TIMESTAMP) {
                             *profile = requested_profile;
@@ -545,7 +638,8 @@ void pkt_retune2(struct pkt_buf *b)
 
                     case BLADERF_MODULE_TX:
                         queue_size = enqueue_retune(
-                            &tx_queue, &requested_profile, timestamp);
+                            &tx_queue, &requested_profile, nios_profile,
+                            timestamp);
                         if (queue_size != QUEUE_FULL &&
                             queue_size != QUEUE_INVALID_TIMESTAMP) {
                             *profile = requested_profile;
