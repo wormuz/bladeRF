@@ -266,6 +266,7 @@ static void test_public_sync_apis_reject_null_device(void)
 {
     int16_t sample[2] = {0, 0};
     unsigned int timeout = 0;
+    bladerf_timestamp timestamp = 0;
     struct bladerf dev = {0};
 
     assert(bladerf_sync_config(NULL, BLADERF_RX_X1,
@@ -277,6 +278,17 @@ static void test_public_sync_apis_reject_null_device(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_get_stream_timeout(NULL, BLADERF_TX, &timeout) ==
            BLADERF_ERR_INVAL);
+    assert(bladerf_get_stream_timeout(&dev, BLADERF_TX, NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_set_stream_timeout(&dev, (bladerf_direction)2, 100) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_stream_timeout(&dev, (bladerf_direction)2, &timeout) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_timestamp(&dev, BLADERF_TX, NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_timestamp(&dev, (bladerf_direction)2, &timestamp) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_sync_rx(&dev, NULL, 1, NULL, 0) == BLADERF_ERR_INVAL);
     assert(bladerf_get_gain(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
            BLADERF_ERR_INVAL);
     assert(bladerf_get_gain_mode(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
