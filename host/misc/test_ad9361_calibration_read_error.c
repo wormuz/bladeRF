@@ -188,6 +188,36 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* A failed filter/calibration/tracking/ENSM step must leave the last
+     * fully accepted bandwidth in the software cache so a retry of the same
+     * request is not mistaken for a no-op. */
+    {
+        const uint32_t old_rx_bw = 18000000;
+        const uint32_t old_tx_bw = 16000000;
+        phy.current_rx_bw_Hz = old_rx_bw;
+        phy.current_tx_bw_Hz = old_tx_bw;
+        if (ad9361_commit_rf_bandwidth_cache_if_complete(
+                &phy, 20000000, 18000000, -EIO, 0, 0) != -EIO ||
+            phy.current_rx_bw_Hz != old_rx_bw ||
+            phy.current_tx_bw_Hz != old_tx_bw ||
+            ad9361_commit_rf_bandwidth_cache_if_complete(
+                &phy, 20000000, 18000000, 0, -EIO, 0) != -EIO ||
+            phy.current_rx_bw_Hz != old_rx_bw ||
+            phy.current_tx_bw_Hz != old_tx_bw ||
+            ad9361_commit_rf_bandwidth_cache_if_complete(
+                &phy, 20000000, 18000000, 0, 0, -EIO) != -EIO ||
+            phy.current_rx_bw_Hz != old_rx_bw ||
+            phy.current_tx_bw_Hz != old_tx_bw ||
+            ad9361_commit_rf_bandwidth_cache_if_complete(
+                &phy, 20000000, 18000000, 0, 0, 0) != 0 ||
+            phy.current_rx_bw_Hz != 20000000 ||
+            phy.current_tx_bw_Hz != 18000000) {
+            fprintf(stderr,
+                    "Bandwidth cache changed before full RF recovery success\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Public paired-path and diagnostic APIs must reject missing state or
      * output storage before touching SPI or publishing caller-visible data. */
     {
@@ -1645,6 +1675,27 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+
+        /* A later-register failure leaves the preceding tracking writes in
+         * hardware. Repeating the cached old value must replay the complete
+         * register set rather than treating it as a no-op. */
+        {
+            unsigned config2_writes = fake_write_counts[REG_CALIBRATION_CONFIG_2];
+            fail_write_reg = REG_CALIBRATION_CONFIG_1;
+            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 1);
+            if (ret != -EIO || phy.rfdc_track_en != 0) {
+                fprintf(stderr, "Partial tracking failure was not reported\n");
+                return EXIT_FAILURE;
+            }
+            fail_write_reg = -1;
+            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
+            if (ret != 0 ||
+                fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes + 2) {
+                fprintf(stderr,
+                        "Retry with cached tracking state did not reapply hardware\n");
+                return EXIT_FAILURE;
+            }
+        }
         if (ad9361_set_rx_rfdc_track_en_dis(&phy, 2) != -EINVAL ||
             ad9361_set_rx_bbdc_track_en_dis(&phy, 2) != -EINVAL ||
             ad9361_set_rx_quad_track_en_dis(&phy, 2) != -EINVAL) {
