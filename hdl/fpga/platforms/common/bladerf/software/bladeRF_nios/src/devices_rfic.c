@@ -303,6 +303,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             /* Drop the item from the queue */
             q->last_rv = e->rv;
             q->last_rv_valid = true;
+            q->last_rv_sequence++;
             rfic_dequeue(q, NULL);
             break;
         }

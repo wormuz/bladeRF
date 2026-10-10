@@ -26,13 +26,17 @@
 #define BLADERF2_RFIC_STATUS_POLICY_H_
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Queue length zero and a success bit are insufficient: the initial 0xFF
  * last-result sentinel has its success bit set, but no command has retired. */
 static inline bool bladerf2_rfic_status_result_accepted(
-    bool result_valid_supported, bool result_valid, bool success)
+    bool result_valid_supported, bool result_valid, bool success,
+    bool sequence_supported, uint32_t expected_sequence,
+    uint32_t observed_sequence)
 {
-    return success && (!result_valid_supported || result_valid);
+    return success && (!result_valid_supported || result_valid) &&
+           (!sequence_supported || expected_sequence == observed_sequence);
 }
 
 #endif

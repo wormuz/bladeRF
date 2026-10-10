@@ -497,6 +497,7 @@ struct bladerf_rfic_status_register {
     uint8_t init_stage;
     /* Distinguishes a retired command result from the queue-reset sentinel. */
     bool last_write_result_valid;
+    uint32_t last_write_sequence;
     /* Result of the last command the NIOS write queue retired. The firmware
      * reports it in WQSUCCESS; result_valid proves at least one command
      * retired since reset, so the 0xFF reset sentinel cannot look successful. */

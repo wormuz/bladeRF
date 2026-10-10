@@ -60,6 +60,7 @@ struct rfic_queue {
     uint8_t rem_idx; /* Removal index */
     uint8_t last_rv; /* Returned value from executing last command */
     bool last_rv_valid; /* At least one command retired since queue reset */
+    uint32_t last_rv_sequence; /* Monotonic retirement token */
 
     struct rfic_queue_entry entries[COMMAND_QUEUE_MAX];
 };

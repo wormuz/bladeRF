@@ -100,6 +100,9 @@ static int _rfic_fpga_get_status(
     rfic_status->last_write_result_valid =
         ((sreg >> BLADERF_RFIC_STATUS_WQRESULT_VALID_SHIFT) &
          BLADERF_RFIC_STATUS_WQRESULT_VALID_MASK);
+    rfic_status->last_write_sequence =
+        (uint32_t)((sreg >> BLADERF_RFIC_STATUS_WQSEQUENCE_SHIFT) &
+                   BLADERF_RFIC_STATUS_WQSEQUENCE_MASK);
     rfic_status->write_queue_length = ((sreg >> BLADERF_RFIC_STATUS_WQLEN_SHIFT) &
                                      BLADERF_RFIC_STATUS_WQLEN_MASK);
     rfic_status->init_stage = ((sreg >> BLADERF_RFIC_STATUS_STAGE_SHIFT) &
@@ -170,7 +173,9 @@ static int _rfic_fpga_get_status_wqlen(struct bladerf *dev)
 
 static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                    size_t tries,
-                                   unsigned int delay_us)
+                                   unsigned int delay_us,
+                                   bool sequence_supported,
+                                   uint32_t expected_sequence)
 {
     size_t const TRIES       = tries;
     unsigned int const DELAY = delay_us;
@@ -213,7 +218,9 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     if (!bladerf2_rfic_status_result_accepted(
             result_valid_supported,
             rfic_status.last_write_result_valid,
-            rfic_status.last_write_success)) {
+            rfic_status.last_write_success,
+            sequence_supported, expected_sequence,
+            rfic_status.last_write_sequence)) {
         if (result_valid_supported &&
             !rfic_status.last_write_result_valid) {
             log_warning("%s: NIOS RFIC queue drained without a retired "
@@ -221,6 +228,14 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                         __FUNCTION__, rfic_status.rfic_initialized,
                         rfic_status.init_stage,
                         _rfic_fpga_init_stage_name(rfic_status.init_stage));
+        } else if (sequence_supported &&
+                   rfic_status.last_write_sequence != expected_sequence) {
+            log_warning("%s: NIOS RFIC queue drained without the expected "
+                        "command result (expected_sequence=%u, "
+                        "observed_sequence=%u, queue_length=%u)\n",
+                        __FUNCTION__, expected_sequence,
+                        rfic_status.last_write_sequence,
+                        rfic_status.write_queue_length);
         } else {
             log_warning("%s: NIOS RFIC command failed "
                         "(initialized=%u, init_stage=%u:%s)\n",
@@ -234,10 +249,14 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     return 0;
 }
 
-static int _rfic_fpga_spinwait(struct bladerf *dev)
+static int _rfic_fpga_spinwait(struct bladerf *dev,
+                               bool sequence_supported,
+                               uint32_t expected_sequence)
 {
     return _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_TRIES,
-                                   RFIC_SPINWAIT_DELAY_US);
+                                   RFIC_SPINWAIT_DELAY_US,
+                                   sequence_supported,
+                                   expected_sequence);
 }
 
 
@@ -258,6 +277,23 @@ static int _rfic_cmd_write(struct bladerf *dev,
                            bladerf_rfic_command cmd,
                            uint64_t data)
 {
+    struct bladerf_rfic_status_register before;
+    const bool sequence_supported = have_cap_dev(
+        dev, BLADERF_CAP_RFIC_WQ_RESULT_VALID);
+    uint32_t expected_sequence = 0;
+
+    /* Bind completion to this queue insertion. A previous successful write
+     * must not certify a new command that was accepted by USB but never
+     * enqueued/retired by NIOS. Refuse to add another request behind a stale
+     * command whose completion is still pending. */
+    if (sequence_supported) {
+        CHECK_STATUS(_rfic_fpga_get_status(dev, &before));
+        if (before.write_queue_length != 0) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        expected_sequence = before.last_write_sequence + 1u;
+    }
+
     /* Perform the write command. */
     CHECK_STATUS(
         dev->backend->rfic_command_write(dev, RFIC_ADDRESS(cmd, ch), data));
@@ -267,10 +303,12 @@ static int _rfic_cmd_write(struct bladerf *dev,
      * above _rfic_fpga_spinwait_for. */
     if (BLADERF_RFIC_COMMAND_INIT == cmd) {
         return _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_INIT_TRIES,
-                                       RFIC_SPINWAIT_INIT_DELAY_US);
+                                       RFIC_SPINWAIT_INIT_DELAY_US,
+                                       sequence_supported,
+                                       expected_sequence);
     }
 
-    return _rfic_fpga_spinwait(dev);
+    return _rfic_fpga_spinwait(dev, sequence_supported, expected_sequence);
 }
 
 

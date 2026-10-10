@@ -16,11 +16,19 @@ handling could therefore make an unexecuted RFIC command appear successful.
 - NIOS queue state now tracks `last_rv_valid`, clears it on queue reset, and
   sets it only when a completed entry is retired.
 - RFIC status bit 16 publishes that validity independently from the result
-  bit; bits 63:17 remain reserved.
+  bit. A 32-bit retirement sequence is published in bits 63:32; bits 31:17
+  remain reserved.
 - libbladeRF rejects a drained queue unless the status says a command actually
   retired and its result succeeded.
-- Added a host-side status-policy regression source for the `0xFF` sentinel,
-  a successful retired command, and a failed retired command.
+- The sequence binds the completion to the command being awaited. Before
+  enqueueing on capable firmware, the host reads the idle queue's retirement
+  sequence and waits for exactly the next sequence value. It refuses to enqueue
+  behind a nonempty queue, preventing an older successful result from
+  certifying a command that was dropped or is still pending. Sequence wrap is
+  defined by unsigned 32-bit arithmetic.
+- Added host-side status-policy regression source for the `0xFF` sentinel,
+  exact successful retirement, failed retirement, stale prior success,
+  sequence wrap, and legacy firmware behavior.
 
 ## Compatibility follow-up
 
@@ -36,4 +44,7 @@ regression source covers both legacy and capability-enabled behavior.
 
 `git diff --check` passes. The regression runner, host/NIOS builds, and device
 qualification have not been run. This source change does not close the NIOS
-no-response hardware diagnosis or the complete RX+TX source audit.
+no-response hardware diagnosis or the complete RX+TX source audit. The TX
+retune gate, recovery, setters, and sync/async admission paths have existing
+source fixes and audits; their exact-image hardware qualification remains
+open.
