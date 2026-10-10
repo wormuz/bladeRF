@@ -5287,11 +5287,16 @@ static int bladerf2_tx_rf_config_change_begin(
         board_data->tx_retune2_failure_watch_active;
     const bool recovery_was_blocked = board_data->tx_recovery_blocked;
     const uint8_t pending_count = board_data->tx_retune2_pending_count;
+    bool gate_abort_pending;
     int status = 0;
 
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    gate_abort_pending = board_data->tx_gate_abort_pending;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (board_data->rf_transition_pending ||
         board_data->tx_frequency_reconfigure_active ||
-        board_data->tx_rf_config_operation_active) {
+        board_data->tx_rf_config_operation_active || recovery_was_blocked ||
+        gate_abort_pending) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 

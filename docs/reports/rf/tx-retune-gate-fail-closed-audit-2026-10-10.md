@@ -19,3 +19,7 @@ A failed ABORT acknowledgement also left a gap in the recovery contract: the mon
 ## Verification boundary
 
 `git diff --check` passes. The harness and test-only hooks have not been compiled or run. The full RX+TX source audit remains open; no-build gate remains in force until the source sweep is complete. FPGA/NIOS gate behavior and the physical TX mute boundary still require exact-image hardware qualification.
+
+## Follow-up: shared TX RF-configuration entry point
+
+A follow-up call-graph pass found that direct LO and scheduled-retune guards did not cover the shared `bladerf2_tx_rf_config_change_begin()` path used by bandwidth, gain, and other TX RF setters. After an unconfirmed mute, those setters could still enter configuration. The shared helper now rejects both `tx_recovery_blocked` and `tx_gate_abort_pending`; the abort-failure live scenario also checks that a TX bandwidth setter returns `BLADERF_ERR_WOULD_BLOCK`. This follow-up is source-only and not built or run.
