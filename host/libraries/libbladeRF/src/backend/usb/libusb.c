@@ -1431,7 +1431,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             next_buffer != BLADERF_STREAM_SHUTDOWN &&
             next_buffer != BLADERF_STREAM_NO_DATA &&
             !async_tx_buffer_valid(stream)) {
-            stream->error_code = BLADERF_ERR_FPGA_OP;
+            stream->error_code = BLADERF_ERR_WOULD_BLOCK;
             next_buffer = BLADERF_STREAM_SHUTDOWN;
         }
 
@@ -1724,7 +1724,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
             if (buffer != BLADERF_STREAM_SHUTDOWN &&
                 buffer != BLADERF_STREAM_NO_DATA &&
                 !async_tx_buffer_valid(stream)) {
-                stream->error_code = BLADERF_ERR_FPGA_OP;
+                stream->error_code = BLADERF_ERR_WOULD_BLOCK;
                 if (stream_data->num_avail == stream_data->num_transfers) {
                     mark_stream_done(stream);
                 } else {

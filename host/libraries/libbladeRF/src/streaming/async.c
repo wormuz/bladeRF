@@ -477,7 +477,7 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
 
     if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
         int tx_status = status == 0 ? stream->error_code : status;
-        if (tx_status != 0) {
+        if (tx_status != 0 && tx_status != BLADERF_ERR_WOULD_BLOCK) {
             async_notify_tx_transport_failure(stream, tx_status);
         }
     }

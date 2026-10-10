@@ -38,11 +38,13 @@ The RX invalidation path deliberately skips the hardware RX ABORT when TX starts
 
 ## Async TX admission revocation during USB-capacity wait
 
-The USB backend performs a final TX admission check after waiting for a free
-transfer. If RF configuration invalidated TX during that wait, it returned
-`BLADERF_ERR_FPGA_OP`; the generic async layer classified that backend error
-as a transport failure and emitted a second, misleading TX transport event.
-The backend now returns `BLADERF_ERR_WOULD_BLOCK` for this retryable RF-gate
-closure. Synchronous TX already retains the full buffer and defers submission
-on that result, while the board RF event carries the actual invalidation
-reason. Source-only; regression and hardware qualification remain pending.
+The USB backend performs final TX admission checks after waiting for a free
+transfer and after the application callback supplies a buffer, including the
+initial buffer set. If RF configuration invalidated TX at one of those points,
+it used to set/return `BLADERF_ERR_FPGA_OP`; the generic async stream teardown
+then classified that as a transport failure and emitted a second, misleading
+TX transport event. Those gate closures now use `BLADERF_ERR_WOULD_BLOCK`, and
+the async stream runner excludes that retryable admission result from transport
+fault publication. Synchronous TX retains and defers queued buffers on the same
+status, while the board RF event carries the actual invalidation reason.
+Source-only; regression and hardware qualification remain pending.
