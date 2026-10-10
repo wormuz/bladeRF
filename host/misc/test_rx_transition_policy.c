@@ -35,6 +35,11 @@ int main(void)
     assert(bladerf2_channel_valid(BLADERF_CHANNEL_TX(1)));
     assert(!bladerf2_channel_valid(BLADERF_CHANNEL_RX(2)));
     assert(!bladerf2_channel_valid(BLADERF_CHANNEL_INVALID));
+    assert(bladerf2_rx_channel_valid(BLADERF_CHANNEL_RX(0)));
+    assert(bladerf2_rx_channel_valid(BLADERF_CHANNEL_RX(1)));
+    assert(!bladerf2_rx_channel_valid(BLADERF_CHANNEL_TX(0)));
+    assert(!bladerf2_rx_channel_valid(BLADERF_CHANNEL_RX(2)));
+    assert(!bladerf2_rx_channel_valid(BLADERF_CHANNEL_INVALID));
 
     invalidation_policy = bladerf2_rx_invalidation_policy(
         BLADERF_CHANNEL_TX(0), false);

@@ -2162,7 +2162,7 @@ static int _bladerf_rx_transition_begin(
     if (dev == NULL || request == NULL || transaction_id == NULL) {
         return BLADERF_ERR_INVAL;
     }
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
+    if (!bladerf2_rx_channel_valid(ch)) {
         return BLADERF_ERR_INVAL;
     }
 

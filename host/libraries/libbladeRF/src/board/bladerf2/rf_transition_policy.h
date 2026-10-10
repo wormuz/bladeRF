@@ -22,6 +22,12 @@ static inline bool bladerf2_channel_valid(bladerf_channel channel)
            channel == BLADERF_CHANNEL_TX(1);
 }
 
+static inline bool bladerf2_rx_channel_valid(bladerf_channel channel)
+{
+    return channel == BLADERF_CHANNEL_RX(0) ||
+           channel == BLADERF_CHANNEL_RX(1);
+}
+
 struct bladerf2_rx_invalidation_policy {
     bool reserve_setter;
     bool abort_rx_epoch;
