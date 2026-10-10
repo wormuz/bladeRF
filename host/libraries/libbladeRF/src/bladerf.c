@@ -1558,6 +1558,11 @@ int bladerf_get_loss_event_count(struct bladerf *dev,
 {
     int status;
 
+    if (dev == NULL || count == NULL ||
+        (dir != BLADERF_RX && dir != BLADERF_TX)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (dev->board->get_loss_event_count == NULL) {
         return BLADERF_ERR_UNSUPPORTED;
     }

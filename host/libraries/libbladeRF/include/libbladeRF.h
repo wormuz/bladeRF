@@ -2762,18 +2762,19 @@ int CALL_CONV bladerf_get_timestamp(struct bladerf *dev,
  * 2026-09-19: 200 buffers at 61.44 MHz through a deliberately tight queue
  * returned zero errors to the caller while this counter reached 54807.
  *
- * ⛔ Cleared by bladerf_enable_module(true), not merely by device open:
- * enabling the module resets the sample-domain logic that owns the counter
- * (measured 2026-09-19). Monotonic within one enabled session and preserved
- * across a disable, so a difference taken ACROSS an enable boundary is
- * meaningless -- it reads as zero or goes backwards.
+ * The FPGA counter is shared by both lanes of its direction and resets with
+ * the sample-domain reset, not on every lane enable. Starting the first RF
+ * direction from an idle device may assert that shared reset; enabling or
+ * disabling a direction while the other direction remains active does not.
+ * Compare values only within one known sample-domain reset generation.
  *
  * @param       dev         Device handle
  * @param[in]   dir         Stream direction. ::BLADERF_RX counts episodes of
  *                          samples discarded on receive, ::BLADERF_TX counts
  *                          episodes of reads that found the FIFO empty (a
  *                          hole on the air).
- * @param[out]  count       Episode count since the module was enabled
+ * @param[out]  count       Episode count in the current sample-domain reset
+ *                          generation
  *
  * @return 0 on success, value from \ref RETCODES list on failure.
  *         Returns ::BLADERF_ERR_UNSUPPORTED on FPGA revisions that do not

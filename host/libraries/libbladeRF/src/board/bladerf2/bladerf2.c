@@ -3431,6 +3431,10 @@ static int bladerf2_get_loss_event_count(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(count);
 
+    if (dir != BLADERF_RX && dir != BLADERF_TX) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Halves 0/1 are RX, 2/3 are TX -- see NIOS_PKT_8x32_TARGET_LOSS_COUNTERS.
      * Both come from one capture register in the fabric, so the pair cannot
      * tear and the read order is free. */
