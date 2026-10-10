@@ -1662,6 +1662,61 @@ int main(void)
     }
     fail_read_reg = -1;
 
+    /* PINCTRL_FDD_INDEP must program FDD_EXTERNAL_CTRL_ENABLE from the
+     * requested mode, not the previous platform-data cache. */
+    {
+        bool old_fdd = pdata.fdd;
+        bool old_fdd_independent = pdata.fdd_independent_mode;
+        uint8_t old_state = fake_regs[REG_STATE];
+        uint8_t old_config_2 = fake_regs[REG_ENSM_CONFIG_2];
+        uint8_t old_agc_mode_0 = phy.agc_mode[0];
+        uint8_t old_agc_mode_1 = phy.agc_mode[1];
+        uint8_t old_curr_state = phy.curr_ensm_state;
+        int32_t old_state_after_write = state_after_ensm_write;
+
+        register_map_enabled = true;
+        fail_read_reg = -1;
+        fail_write_reg = -1;
+        pdata.fdd = true;
+        pdata.fdd_independent_mode = false;
+        phy.agc_mode[0] = 0;
+        phy.agc_mode[1] = 0;
+        phy.curr_ensm_state = ENSM_STATE_ALERT;
+        state_after_ensm_write = ENSM_STATE_FDD;
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        ret = ad9361_set_en_state_machine_mode(
+                  &phy, ENSM_MODE_PINCTRL_FDD_INDEP);
+        if (ret != 0 || !pdata.fdd_independent_mode ||
+            !(fake_regs[REG_ENSM_CONFIG_2] & FDD_EXTERNAL_CTRL_ENABLE)) {
+            fprintf(stderr,
+                    "ENSM independent FDD mode cache/register mismatch: ret=%" PRId32
+                    " cache=%u config2=0x%02x\n",
+                    ret, pdata.fdd_independent_mode,
+                    fake_regs[REG_ENSM_CONFIG_2]);
+            return EXIT_FAILURE;
+        }
+
+        ret = ad9361_set_en_state_machine_mode(&phy, ENSM_MODE_FDD);
+        if (ret != 0 || pdata.fdd_independent_mode ||
+            (fake_regs[REG_ENSM_CONFIG_2] & FDD_EXTERNAL_CTRL_ENABLE)) {
+            fprintf(stderr,
+                    "ENSM regular FDD mode cache/register mismatch: ret=%" PRId32
+                    " cache=%u config2=0x%02x\n",
+                    ret, pdata.fdd_independent_mode,
+                    fake_regs[REG_ENSM_CONFIG_2]);
+            return EXIT_FAILURE;
+        }
+
+        pdata.fdd = old_fdd;
+        pdata.fdd_independent_mode = old_fdd_independent;
+        fake_regs[REG_STATE] = old_state;
+        fake_regs[REG_ENSM_CONFIG_2] = old_config_2;
+        phy.agc_mode[0] = old_agc_mode_0;
+        phy.agc_mode[1] = old_agc_mode_1;
+        phy.curr_ensm_state = old_curr_state;
+        state_after_ensm_write = old_state_after_write;
+    }
+
     fail_write_reg = REG_CALIBRATION_CONFIG_2;
     ret = ad9361_tracking_control(&phy, true, true, true);
     if (ret != -EIO) {
