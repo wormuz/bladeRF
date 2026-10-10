@@ -91,6 +91,7 @@ static int32_t spi_status;
 static bool register_map_enabled;
 static int32_t fail_read_reg = -1;
 static int32_t fail_write_reg = -1;
+static int32_t fail_write_once_reg = -1;
 static int32_t state_after_ensm_write = -1;
 static uint8_t fake_regs[1024];
 
@@ -125,6 +126,10 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     reg = command & 0x3ff;
     if (command & AD_WRITE) {
         ++write_count;
+        if ((int32_t)reg == fail_write_once_reg) {
+            fail_write_once_reg = -1;
+            return -EIO;
+        }
         if ((int32_t)reg == fail_write_reg)
             return -EIO;
         if (register_map_enabled) {
@@ -148,6 +153,7 @@ int main(void)
     struct ad9361_rf_phy phy = {0};
     struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
+    int32_t ret;
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
@@ -215,8 +221,35 @@ int main(void)
         read_count = 0;
     }
 
+    /* If disabling tracking fails partway through a calibration setup,
+     * restore the configured tracking state before returning the primary
+     * SPI error. */
+    {
+        const uint8_t tracking_mask = ENABLE_BB_DC_OFFSET_TRACKING |
+                                     ENABLE_RF_OFFSET_TRACKING;
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        phy.bbdc_track_en = true;
+        phy.rfdc_track_en = true;
+        phy.quad_track_en = true;
+        spi_status = 0;
+        fail_write_once_reg = REG_CALIBRATION_CONFIG_3;
+        ret = ad9361_do_calib_run(&phy, RFDC_CAL, -1);
+        if (ret != -EIO || fail_write_once_reg != -1 ||
+            (fake_regs[REG_DC_OFFSET_CONFIG2] & tracking_mask) !=
+                tracking_mask) {
+            fprintf(stderr,
+                    "Calibration setup failure left tracking disabled: ret=%" PRId32
+                    " tracking=0x%02x\n", ret,
+                    fake_regs[REG_DC_OFFSET_CONFIG2]);
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
+        read_count = write_count = 0;
+    }
+
     spi_status = -EIO;
-    int32_t ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
+    ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
     if (ret != -EIO || read_count != 1 || delay_count != 0) {
         fprintf(stderr, "SPI read error not propagated: ret=%" PRId32
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
