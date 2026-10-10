@@ -375,7 +375,7 @@ begin
         if( reset = '1' ) then
             time_is_past <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( compare_payload < current_time_q ) then
+            if( compare_payload <= current_time_q ) then
                 time_is_past <= '1' ;
             else
                 time_is_past <= '0' ;

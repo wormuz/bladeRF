@@ -201,6 +201,15 @@ begin
         -- Clear the interrupt
         clear_intr( clock, addr, din, write ) ;
 
+        -- A compare equal to the captured current timestamp is already due.
+        -- Treat it as past instead of waiting for the 64-bit counter to wrap.
+        read_time( clock, addr, dout, read, readack, ts ) ;
+        write_time( clock, addr, din, write, ts ) ;
+        set_intr( clock, addr, din, write ) ;
+        wait until rising_edge(clock) and intr = '1';
+        report "equal compare: interrupt raised as already due";
+        clear_intr( clock, addr, din, write ) ;
+
         nop( clock, 1000 ) ;
 
         -- Read the time back
