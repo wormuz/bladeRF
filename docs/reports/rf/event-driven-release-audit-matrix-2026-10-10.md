@@ -63,6 +63,13 @@ changes, clock-source selection, and bias-tee writes have their own RX/TX
 reservation paths. This review slice did not confirm another missing-fence
 case. The exported API inventory and failure interleavings remain open.
 
+RX module enable/disable revokes the active RX certificate before channel-mask
+changes. TX enable while RX is live explicitly invalidates RX before the
+shared START; TX disable leaves an active RX link running. The reservation is
+released by the generic completion callback on both success and failure.
+Source review found no missing invalidation in this module lifecycle slice;
+RX1/RX2/RX_X2 restart races and hardware fault injection remain open.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
