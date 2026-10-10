@@ -439,7 +439,14 @@ static int _rfic_host_enable_module(struct bladerf *dev,
 
 #ifdef BLADERF_HOSTED_C_DEBUG
     /* Debug logging */
-    static uint64_t lastrun = 0; /* nsec value at last run */
+#if defined(_MSC_VER)
+    static __declspec(thread) uint64_t lastrun = 0;
+#else
+    static __thread uint64_t lastrun = 0;
+#endif
+    /* Keep this diagnostic per thread: two device handles can enable modules
+     * concurrently, and a process-wide function-static timestamp is a data
+     * race even though it is used only for logging. */
     uint64_t nsec           = wallclock_get_current_nsec();
 
     log_debug("%s: %s%d ch_en=%d ch_pend=%d dir_en=%d dir_pend=%d be_clr=%d "
