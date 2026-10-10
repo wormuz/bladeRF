@@ -100,7 +100,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                     break;
                 default:
                     *data = 0;
-                    break;
+                    return false;
             }
             break;
 
@@ -114,11 +114,15 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                     break;
                 default:
                     *data = 0;
-                    break;
+                    return false;
             }
             break;
 
         case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
+            if (addr > 5) {
+                *data = 0;
+                return false;
+            }
             *data = pkt_retune2_completion_word(addr);
             break;
 #endif  // BOARD_BLADERF_MICRO
@@ -136,9 +140,8 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * requests can straddle a low-word carry; the host uses high-low-high
          * reads and retries unless the two high words match.
          *
-         * Out-of-range addr reads 0 rather than aliasing onto another
-         * counter: a wrong number here would be indistinguishable from a
-         * real one. */
+         * Out-of-range addr returns an error rather than aliasing onto
+         * another counter or presenting a plausible zero. */
         case NIOS_PKT_8x32_TARGET_LOSS_COUNTERS:
             switch (addr) {
                 case 0:
@@ -155,7 +158,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                     break;
                 default:
                     *data = 0;
-                    break;
+                    return false;
             }
             break;
 
@@ -167,6 +170,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * protocol carries one word per packet. libbladeRF's
          * nios_dwell_summary_read does it. */
         case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
+            if (addr > 15) {
+                *data = 0;
+                return false;
+            }
             *data = dwell_word_read(addr);
             break;
 

@@ -369,3 +369,14 @@ legacy firmware now returns the protocol error magic for those cases and
 resets the affected config aggregation state. Simultaneous READ and WRITE
 flags are rejected. This is source-only; packet-level firmware regression and
 full release audit remain open.
+
+### NIOS 8x32 diagnostic subaddress status
+
+The xA4 8x32 handler previously returned packet success with data zero for
+out-of-range retune failure/success counters, completion-record fields,
+loss-counter halves, and dwell-record words. A caller typo or ABI mismatch
+could therefore be mistaken for a valid zero diagnostic. These cases now
+preserve zero data but return packet failure; valid address ranges remain
+unchanged. The existing generic packet regression compiles without the xA4
+board macro and cannot exercise these guarded branches, so add a board-path
+packet regression before the source-audit gate closes. No build or test run.
