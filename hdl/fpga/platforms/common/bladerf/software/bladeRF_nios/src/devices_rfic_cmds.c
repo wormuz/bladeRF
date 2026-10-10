@@ -31,6 +31,7 @@
 
 #include "ad936x_helpers.h"
 #include "devices_rfic.h"
+#include "rfic_calibration_policy.h"
 
 /* REG_CALIBRATION_CTRL mask bit for RF DC offset calibration
  * (ad9361.h RFDC_CAL == 1<<1, thirdparty/analogdevicesinc/no-OS/
@@ -165,6 +166,10 @@ static bool _rfic_deinitialize(struct rfic_state *state)
     /* RFFE is already unavailable. If ADI teardown fails, do not keep
      * advertising the previous ON/STANDBY state as usable. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    rfic_rfdc_calibration_history_reset(
+        &state->last_rfdc_calib_freq[BLADERF_RX]);
+    rfic_rfdc_calibration_history_reset(
+        &state->last_rfdc_calib_freq[BLADERF_TX]);
 
     /* Deinitialize AD9361
      *
@@ -207,6 +212,13 @@ static bool _rfic_initialize(struct rfic_state *state)
     /* Initialization can mutate clocks, ports, FIR and LO in stages. Until
      * every stage completes, neither ON nor STANDBY is a valid status. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    /* A new PHY has its own RFDC calibration baseline. Never reuse the
+     * previous instance's frequency when deciding whether a retune needs
+     * calibration. */
+    rfic_rfdc_calibration_history_reset(
+        &state->last_rfdc_calib_freq[BLADERF_RX]);
+    rfic_rfdc_calibration_history_reset(
+        &state->last_rfdc_calib_freq[BLADERF_TX]);
 
     /* Unset RFFE bits controlling RFIC */
     CHECK_TRUE(_clear_rffe_ctrl());
@@ -798,12 +810,10 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
          * calibrated neighborhood. */
         {
             bladerf_frequency last = state->last_rfdc_calib_freq[BLADERF_RX];
-            bladerf_frequency delta = (frequency > last)
-                                          ? (frequency - last)
-                                          : (last - frequency);
 
-            if (0 == last ||
-                delta >= BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ) {
+            if (rfic_rfdc_calibration_required(
+                    last, frequency,
+                    BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ)) {
                 CHECK_BOOL(ad9361_do_calib(state->phy,
                                           BLADERF_AD9361_RFDC_CAL_MASK, -1));
                 state->last_rfdc_calib_freq[BLADERF_RX] = frequency;
