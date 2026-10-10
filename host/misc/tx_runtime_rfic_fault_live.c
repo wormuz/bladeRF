@@ -9,6 +9,7 @@
  *   RUNTIME_TX_BBPLL_UNLOCKED
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
  *   RUNTIME_TX_RETUNE_FAILURE
+ *   RUNTIME_TX_RFIC_REGISTER_WRITE
  *
  * The test verifies durable event classification and that sync TX refuses
  * samples after the monitor revokes validity. */
@@ -86,7 +87,8 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_ENSM_NOT_TX") != 0 &&
         strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") != 0 &&
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
-        strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0) {
+        strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") != 0) {
         fprintf(stderr, "unsupported TX runtime injection mode: %s\n", mode);
         return 2;
     }
@@ -117,6 +119,20 @@ int main(void)
         goto cleanup;
     }
     feeder_started = true;
+
+    if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
+        uint8_t tx_clock_data_delay;
+        /* Rewrite the existing value while TX is live. The RFIC value stays
+         * unchanged; the public raw-register path must still revoke TX
+         * admission and acknowledge the FPGA mute before the SPI write. */
+        status = bladerf_get_rfic_register(dev, 0x007,
+                                           &tx_clock_data_delay);
+        if (status == 0) {
+            status = bladerf_set_rfic_register(dev, 0x007,
+                                               tx_clock_data_delay);
+        }
+        if (status != 0) goto cleanup;
+    }
 
     deadline = monotonic_ms() + EVENT_WAIT_MS;
     while (monotonic_ms() < deadline && !expected_event_seen) {
@@ -153,6 +169,10 @@ int main(void)
             } else if (strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") == 0 &&
                        event->event_type ==
                            BLADERF_RF_EVT_TX_RETUNE_FAILED) {
+                expected_event_seen = true;
+            } else if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 &&
+                       event->event_type ==
+                           BLADERF_RF_EVT_TX_FREQUENCY_INVALID) {
                 expected_event_seen = true;
             }
         }

@@ -2267,7 +2267,8 @@ static int bladerf2_tx_frequency_reconfigure_begin(
     int status = 0;
 
     WITH_MUTEX(&dev->lock, {
-        if (board_data->tx_retune2_pending_count != 0) {
+        if (board_data->rf_transition_setter_active ||
+            board_data->tx_retune2_pending_count != 0) {
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
             /* Invalidate any TX RFIC snapshot collected before this
@@ -2944,6 +2945,11 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     uint32_t success_count;
     uint8_t pending_slot = UINT8_MAX;
     unsigned int i;
+
+    if (BLADERF_CHANNEL_IS_TX(ch) &&
+        board_data->rf_transition_setter_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     /* An ordinary scheduled retune has no host completion event or
      * first-valid boundary. The public API has already revoked RX validity
@@ -5148,6 +5154,69 @@ int bladerf_get_dwell_summary(struct bladerf *dev,
     return 0;
 }
 
+/* Raw AD9361 or ADF400x writes can change TX frequency or clock state, so they
+ * must not bypass the TX certificate/gate used by frequency setters.
+ * Caller holds dev->lock to serialize this fence with all other RFIC changes. */
+static int bladerf2_tx_rf_config_change_begin(
+    struct bladerf *dev, struct bladerf2_board_data *board_data)
+{
+    const bool tx_active = board_data->rf_link_dir_on[1];
+    const bool queue_may_exist =
+        board_data->tx_retune2_failure_watch_active;
+    const uint8_t pending_count = board_data->tx_retune2_pending_count;
+    int status = 0;
+
+    board_data->tx_channel_state_generation++;
+    board_data->tx_rfic_state_valid_reported = false;
+    board_data->tx_retune_recovery_pending = true;
+    board_data->tx_recovery_blocked = true;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_stream_faulted_async = true;
+    board_data->tx_retune2_completion_faulted = true;
+    board_data->tx_retune2_applied_waiting_rf_valid = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    bladerf2_tx_retune_event(
+        dev, BLADERF_RF_EVT_TX_FREQUENCY_INVALID, 0, 0, pending_count, 0);
+
+    if (queue_may_exist) {
+        if (dev->backend->retune2 == NULL) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        } else {
+            status = dev->backend->retune2(
+                dev, BLADERF_CHANNEL_TX(0),
+                NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+        }
+        if (status == 0 && pending_count != 0) {
+            unsigned int i;
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_retune2_pending_count = 0;
+            for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                board_data->tx_retune2_pending[i].valid = false;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                0, 0, 0, BLADERF_ERR_WOULD_BLOCK);
+        }
+    }
+
+    if (tx_active || queue_may_exist || pending_count != 0) {
+        const int abort_status = bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, 0);
+        if (status == 0) {
+            status = abort_status;
+        }
+    }
+
+    if (status != 0 && !board_data->tx_status_unavailable_reported) {
+        board_data->tx_status_unavailable_reported = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0, status);
+    }
+
+    return status;
+}
+
 int bladerf_set_rfic_register(struct bladerf *dev,
                               uint16_t address,
                               uint8_t val)
@@ -5155,6 +5224,7 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
     if (status != 0) {
@@ -5162,34 +5232,38 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     }
 
     WITH_MUTEX(&dev->lock, {
-        uint64_t data = (((uint64_t)val) << 56);
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        if (status == 0) {
+            uint64_t data = (((uint64_t)val) << 56);
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
-        uint16_t reg_address = address;
+            uint16_t reg_address = address;
 #endif
 
-        address |= (AD936X_WRITE | AD936X_CNT(1));
+            address |= (AD936X_WRITE | AD936X_CNT(1));
 
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
-        /* Test-only fault for public/configuration register writes. The
-         * transition fault hook covers SPI writes made by RX retunes; this
-         * one verifies legacy multi-register configuration fails closed too. */
-        const char *fault_address =
-            getenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
-        if (fault_address != NULL && fault_address[0] != '\0') {
-            char *end = NULL;
-            unsigned long parsed = strtoul(fault_address, &end, 0);
-            if (end != fault_address && *end == '\0' && parsed ==
-                (unsigned long)reg_address) {
-                status = -EIO;
+            /* Test-only fault for public/configuration register writes. The
+             * transition fault hook covers SPI writes made by RX retunes; this
+             * one verifies legacy multi-register configuration fails closed too. */
+            const char *fault_address =
+                getenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
+            if (fault_address != NULL && fault_address[0] != '\0') {
+                char *end = NULL;
+                unsigned long parsed = strtoul(fault_address, &end, 0);
+                if (end != fault_address && *end == '\0' && parsed ==
+                    (unsigned long)reg_address) {
+                    status = -EIO;
+                } else {
+                    status = dev->backend->ad9361_spi_write(dev, address,
+                                                             data);
+                }
             } else {
                 status = dev->backend->ad9361_spi_write(dev, address, data);
             }
-        } else {
-            status = dev->backend->ad9361_spi_write(dev, address, data);
-        }
 #else
-        status = dev->backend->ad9361_spi_write(dev, address, data);
+            status = dev->backend->ad9361_spi_write(dev, address, data);
 #endif
+        }
     });
 
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
@@ -5664,6 +5738,15 @@ static int bladerf2_set_pll_refclk_internal(
         if (status != 0) {
             return status;
         }
+
+        WITH_MUTEX(&dev->lock, {
+            status = bladerf2_tx_rf_config_change_begin(
+                dev, dev->board_data);
+        });
+        if (status != 0) {
+            bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+            return status;
+        }
     }
 
     status = bladerf_pll_configure(dev, R, N);
@@ -5714,7 +5797,14 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
         return status;
     }
 
-    status = bladerf2_write_pll_register_hw(dev, address, val);
+    WITH_MUTEX(&dev->lock, {
+        status = bladerf2_tx_rf_config_change_begin(
+            dev, dev->board_data);
+        if (status == 0) {
+            address &= 0x03;
+            status = dev->backend->adf400x_write(dev, address, val);
+        }
+    });
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
