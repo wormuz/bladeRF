@@ -2135,7 +2135,8 @@ int main(void)
         struct no_os_clk agc_sample_clock = { .rate = 1000000 };
         uint32_t gain_update_counter = UINT32_MAX;
         uint32_t zero_rate = 0;
-        unsigned writes_before = read_count;
+        unsigned writes_before = write_count;
+        unsigned reads_before;
 
         agc_phy.clks[CLKRF_CLK] = &agc_rf_clock;
         agc_phy.clks[RX_SAMPL_CLK] = &agc_sample_clock;
@@ -2188,16 +2189,49 @@ int main(void)
                     ret, write_count, writes_before);
             return EXIT_FAILURE;
         }
+
+        /* The eLNA delay is an unconstrained 32-bit platform value. Invalid
+         * low RF clocks must fail before division, and extreme delays must
+         * saturate each 5-bit timing field instead of wrapping before clamp. */
+        agc_pdata.gain_ctrl.gain_update_interval_us = 100;
+        agc_rf_clock.rate = 499;
+        writes_before = write_count;
+        ret = ad9361_gc_update(&agc_phy);
+        if (ret != -EIO || write_count != writes_before) {
+            fprintf(stderr,
+                    "AGC update accepted low RF clock or wrote before reject: "
+                    "ret=%" PRId32 " writes=%u/%u\n",
+                    ret, write_count, writes_before);
+            return EXIT_FAILURE;
+        }
+        agc_rf_clock.rate = 30720000;
+        agc_pdata.elna_ctrl.settling_delay_ns = UINT32_MAX;
+        agc_pdata.gain_ctrl.f_agc_state_wait_time_ns = UINT32_MAX;
+        ret = ad9361_gc_update(&agc_phy);
+        if (ret != 0 || fake_regs[REG_AGC_ATTACK_DELAY] != 31 ||
+            fake_regs[REG_PEAK_WAIT_TIME] != 31 ||
+            fake_regs[REG_FAST_CONFIG_2_SETTLING_DELAY] != 31 ||
+            fake_regs[REG_FAST_ENERGY_DETECT_COUNT] != 31) {
+            fprintf(stderr,
+                    "AGC timing arithmetic failed to saturate safely: "
+                    "ret=%" PRId32 " attack=%u peak=%u settle=%u energy=%u\n",
+                    ret, fake_regs[REG_AGC_ATTACK_DELAY],
+                    fake_regs[REG_PEAK_WAIT_TIME],
+                    fake_regs[REG_FAST_CONFIG_2_SETTLING_DELAY],
+                    fake_regs[REG_FAST_ENERGY_DETECT_COUNT]);
+            return EXIT_FAILURE;
+        }
         ret = ad9361_txmon_setup(&phy, &txmon);
         if (ret != -EINVAL) {
             fprintf(stderr, "TX monitor accepted zero duration: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
         }
         phy.rxbbf_div = 0;
+        reads_before = read_count;
         ret = ad9361_rx_adc_setup(&phy, 983040000, 40000000);
-        if (ret != -EIO || read_count != writes_before) {
+        if (ret != -EIO || read_count != reads_before) {
             fprintf(stderr, "RX ADC setup accepted zero filter divider: ret=%" PRId32
-                    " reads=%u/%u\n", ret, read_count, writes_before);
+                    " reads=%u/%u\n", ret, read_count, reads_before);
             return EXIT_FAILURE;
         }
     }
