@@ -386,6 +386,16 @@ static inline bool bladerf2_rf_link_epoch_ack_valid(
            (observed_status & fault_bit) == 0;
 }
 
+/* If START was attempted, its response may have been lost after NIOS applied
+ * the toggle. Once rollback leaves both RF directions down, issue one STOP
+ * to retire either the accepted or ambiguous shared link epoch. */
+static inline bool bladerf2_rf_link_stop_required(
+    bool start_attempted, bool rx_direction_active,
+    bool tx_direction_active)
+{
+    return start_attempted && !rx_direction_active && !tx_direction_active;
+}
+
 /* Previous-epoch sticky flags and the direction ACK cross independently into
  * sys_clock. Do not let an ACK sampled on the first read outrun the sticky
  * snapshot's CDC path; require the same snapshot for the same generation on

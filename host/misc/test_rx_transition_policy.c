@@ -207,6 +207,10 @@ int main(void)
         rf_link_tx_fault | rf_link_rx_fault));
     assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
     assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);
+    assert(bladerf2_rf_link_stop_required(true, false, false));
+    assert(!bladerf2_rf_link_stop_required(false, false, false));
+    assert(!bladerf2_rf_link_stop_required(true, true, false));
+    assert(!bladerf2_rf_link_stop_required(true, false, true));
 
     /* Runtime TX validity and STATUS_RECOVERED require the acknowledged epoch
      * to remain active. Readable status with an absent/stale epoch or stopped

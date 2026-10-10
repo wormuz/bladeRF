@@ -98,3 +98,17 @@ state has not, and fails under the existing watchdog if the link never becomes
 active. Focused policy assertions cover missing TX active, missing RX active,
 and the fully active shared epoch. These source regressions have not been run;
 no build, simulation, synthesis, or hardware operation was performed.
+
+## Follow-up: retire an ambiguous START during module-enable rollback
+
+The module-enable rollback path tracked whether the RF-link START request was
+attempted and whether its response succeeded. It sent the matching STOP only
+when START had a successful response. A NIOS/USB response error can occur
+after firmware applied the toggle, leaving an active FPGA epoch behind even
+though RFIC rollback succeeded and the API returned failure.
+
+Rollback now issues one STOP whenever START was attempted and both RF
+directions are down after rollback, regardless of whether the START response
+arrived. If either direction remains active, STOP is withheld. Added policy
+assertions for ambiguous START, no START, and a still-active RX or TX direction.
+Source-only; regression has not been run and no build/device operation occurred.

@@ -907,7 +907,6 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                                   bool snapshot_active_tx,
                                   bool *epoch_confirmed,
                                   bool *start_attempted,
-                                  bool *start_accepted,
                                   uint32_t *acknowledged_status)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -937,11 +936,9 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
 
     NULL_CHECK(epoch_confirmed);
     NULL_CHECK(start_attempted);
-    NULL_CHECK(start_accepted);
     NULL_CHECK(acknowledged_status);
     *epoch_confirmed = false;
     *start_attempted = false;
-    *start_accepted = false;
     *acknowledged_status = 0;
 
     if (BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_link_dir_on[0]) {
@@ -1046,8 +1043,6 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                   __FUNCTION__, bladerf_strerror(status));
         return strict_epoch ? status : 0;
     }
-    *start_accepted = true;
-
     /* Wait for the fabric to say it consumed this epoch.
      *
      * Announcing and enabling are two separate USB transactions, and
@@ -1319,8 +1314,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
 static int bladerf2_fail_module_enable(struct bladerf *dev,
                                        bladerf_channel ch,
                                        int operation_status,
-                                       bool shared_epoch_may_have_started,
-                                       bool stop_accepted_link_epoch)
+                                       bool shared_epoch_may_have_started)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     const bool is_tx = BLADERF_CHANNEL_IS_TX(ch);
@@ -1352,8 +1346,9 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
         (void)bladerf2_tx_gate_abort_fail_closed(
             dev, board_data, 0);
     }
-    if (stop_accepted_link_epoch && !board_data->rf_link_dir_on[0] &&
-        !board_data->rf_link_dir_on[1]) {
+    if (bladerf2_rf_link_stop_required(
+            shared_epoch_may_have_started,
+            board_data->rf_link_dir_on[0], board_data->rf_link_dir_on[1])) {
         end_rf_link_epoch(dev);
     }
 
@@ -1422,7 +1417,6 @@ static int bladerf2_enable_module(struct bladerf *dev,
         int tx_baseline_status = 0;
         bool epoch_confirmed = false;
         bool start_attempted = false;
-        bool start_accepted = false;
         bool tx_link_valid_event_emitted = false;
         uint32_t link_ack_status = 0;
         uint64_t const tx_transport_failure_baseline =
@@ -1467,19 +1461,17 @@ static int bladerf2_enable_module(struct bladerf *dev,
 
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
-            return bladerf2_fail_module_enable(dev, ch, status, false, false);
+            return bladerf2_fail_module_enable(dev, ch, status, false);
         }
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
             if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false,
-                                                    false);
+                return bladerf2_fail_module_enable(dev, ch, status, false);
             }
         } else {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
             if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false,
-                                                    false);
+                return bladerf2_fail_module_enable(dev, ch, status, false);
             }
         }
         if (tx_direction_was_active) {
@@ -1489,7 +1481,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         }
         status = announce_rf_link_epoch(dev, ch, tx_direction_was_active,
                                         &epoch_confirmed,
-                                        &start_attempted, &start_accepted,
+                                        &start_attempted,
                                         &link_ack_status);
         if (epoch_confirmed && board_data->rf_link_dir_on[1]) {
             board_data->tx_link_epoch_id =
@@ -1499,7 +1491,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         }
         if (status != 0) {
             return bladerf2_fail_module_enable(
-                dev, ch, status, start_attempted, start_accepted);
+                dev, ch, status, start_attempted);
         }
         if (rx_first_enable) {
             board_data->rx_fpga_loss_count_last = rx_loss_count_baseline;
