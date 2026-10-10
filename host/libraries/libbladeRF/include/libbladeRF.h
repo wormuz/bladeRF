@@ -4888,7 +4888,10 @@ typedef enum {
     /** FPGA TX epoch acknowledgement was lost or changed without a host
      * transition. `rfic_status` contains the observed RF-link status word;
      * TX validity is revoked until a new epoch is acknowledged. */
-    BLADERF_RF_EVT_TX_EPOCH_INVALID
+    BLADERF_RF_EVT_TX_EPOCH_INVALID,
+    /** TX USB/host stream terminated with an error. TX transport validity is
+     * revoked; error_code contains the libbladeRF error. */
+    BLADERF_RF_EVT_TX_TRANSPORT_ERROR
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

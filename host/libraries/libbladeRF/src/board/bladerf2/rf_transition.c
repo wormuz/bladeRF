@@ -137,9 +137,8 @@ static void _rx_fault_monitor_stage(struct bladerf2_board_data *board_data,
     MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
 }
 
-/* Publish TX fault state to both device-locked control paths and asynchronous
- * callback admission. The RX epoch lock is safe to take from stream
- * callbacks; those callbacks must never wait for dev->lock. */
+/* Publish TX fault state to synchronous and asynchronous admission. The RX
+ * epoch lock is callback-safe; USB callbacks must never wait for dev->lock. */
 void bladerf2_tx_stream_set_faulted(
     struct bladerf2_board_data *board_data, bool faulted)
 {
@@ -148,9 +147,67 @@ void bladerf2_tx_stream_set_faulted(
     }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->tx_stream_faulted = faulted;
-    board_data->tx_stream_faulted_async = faulted;
+    if (faulted || !board_data->tx_async_transport_faulted) {
+        board_data->tx_stream_faulted_async = faulted;
+    }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+void bladerf2_tx_stream_new_epoch(struct bladerf2_board_data *board_data)
+{
+    if (board_data == NULL) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_async_transport_faulted = false;
+    board_data->tx_stream_faulted_async = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+void bladerf2_tx_stream_set_epoch_id(
+    struct bladerf2_board_data *board_data, uint8_t epoch_id)
+{
+    if (board_data == NULL) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_async_link_epoch_id = epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+/* USB callback paths cannot take dev->lock. Revoke TX admission under the
+ * callback-safe lock, then publish the durable RF event through the normal
+ * history path. A prior FPGA fault already supplied its invalidation event. */
+void bladerf2_tx_async_transport_failure(struct bladerf *dev,
+                                         int error_code)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    uint8_t epoch_id;
+    bool report;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    report = !board_data->tx_stream_faulted_async;
+    board_data->tx_async_transport_faulted = true;
+    board_data->tx_stream_faulted_async = true;
+    epoch_id = board_data->tx_async_link_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (report) {
+        event.host_monotonic_ns = _monotonic_ns();
+        event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
+        event.epoch_id = epoch_id;
+        event.fpga_state = BLADERF_RF_STATE_ERROR;
+        event.error_code = error_code;
+        bladerf2_rf_event_append(board_data, &event);
+    }
 }
 
 static bool _deadline_expired(uint64_t deadline_ns)

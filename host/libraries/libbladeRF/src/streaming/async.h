@@ -105,6 +105,9 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
 /* Returns false when native RF state revoked asynchronous TX validity. */
 bool async_tx_buffer_valid(struct bladerf_stream *stream);
+/* Record a terminal TX backend error in native RF history and revoke TX. */
+void async_notify_tx_transport_failure(struct bladerf_stream *stream,
+                                      int error_code);
 
 /* Set the transfer timeout. This acquires stream->lock. */
 int async_set_transfer_timeout(struct bladerf_stream *stream,

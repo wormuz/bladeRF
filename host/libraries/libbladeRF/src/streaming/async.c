@@ -220,6 +220,20 @@ bool async_tx_buffer_valid(struct bladerf_stream *stream)
     return stream->dev->board->tx_async_buffer_valid(stream->dev);
 }
 
+void async_notify_tx_transport_failure(struct bladerf_stream *stream,
+                                       int error_code)
+{
+    if (stream == NULL || stream->dev == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX ||
+        stream->dev->board == NULL ||
+        stream->dev->board->tx_async_transport_failure == NULL ||
+        error_code == 0) {
+        return;
+    }
+
+    stream->dev->board->tx_async_transport_failure(stream->dev, error_code);
+}
+
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.
  * Used when the sysfs entry cannot be read (non-Linux, restricted /sys). */
 #define USBFS_MEMORY_MB_DEFAULT 16
@@ -461,6 +475,11 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
 
     status = dev->backend->stream(stream, layout);
 
+    if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        async_notify_tx_transport_failure(
+            stream, status == 0 ? stream->error_code : status);
+    }
+
     /* Backend return value takes precedence over stream error status */
     return status == 0 ? stream->error_code : status;
 }
@@ -513,6 +532,10 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 
     status = stream->dev->backend->submit_stream_buffer(stream, buffer,
                                            length, timeout_ms, nonblock);
+    if (status != 0 && status != BLADERF_ERR_WOULD_BLOCK &&
+        status != BLADERF_ERR_TIMEOUT) {
+        async_notify_tx_transport_failure(stream, status);
+    }
 
 error:
     MUTEX_UNLOCK(&stream->lock);

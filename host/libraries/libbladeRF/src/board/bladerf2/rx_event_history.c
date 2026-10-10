@@ -251,7 +251,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
          event_type != BLADERF_RF_EVT_TX_STREAM_STOPPED &&
          event_type != BLADERF_RF_EVT_TX_COUNTER_RESET &&
          event_type != BLADERF_RF_EVT_TX_STATUS_RECOVERED &&
-         event_type != BLADERF_RF_EVT_TX_EPOCH_INVALID)) {
+         event_type != BLADERF_RF_EVT_TX_EPOCH_INVALID &&
+         event_type != BLADERF_RF_EVT_TX_TRANSPORT_ERROR)) {
         return;
     }
 

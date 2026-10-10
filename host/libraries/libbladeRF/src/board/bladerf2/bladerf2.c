@@ -1094,6 +1094,8 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
             /* Keep the observed generation on failure as well as success so
              * TX_STATUS_UNAVAILABLE identifies the epoch whose ACK was lost. */
             board_data->tx_link_epoch_id = (uint8_t)(st >> 20);
+            bladerf2_tx_stream_set_epoch_id(
+                board_data, board_data->tx_link_epoch_id);
         }
 
         if ((uint8_t)(st >> 20) != entry_epoch_count &&
@@ -1222,6 +1224,8 @@ static int bladerf2_tx_snapshot_before_shared_start(
     }
 
     board_data->tx_link_epoch_id = (uint8_t)(link_status >> 20);
+    bladerf2_tx_stream_set_epoch_id(
+        board_data, board_data->tx_link_epoch_id);
     if ((link_status & RF_LINK_STATUS_TX_FAULT) != 0 &&
         !board_data->tx_link_fault_reported) {
         board_data->tx_link_fault_reported = true;
@@ -1412,6 +1416,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
         if (epoch_confirmed && board_data->rf_link_dir_on[1]) {
             board_data->tx_link_epoch_id =
                 (uint8_t)(link_ack_status >> 20);
+            bladerf2_tx_stream_set_epoch_id(
+                board_data, board_data->tx_link_epoch_id);
         }
         if (status != 0) {
             return bladerf2_fail_module_enable(
@@ -1426,7 +1432,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            bladerf2_tx_stream_set_faulted(board_data, false);
+            bladerf2_tx_stream_new_epoch(board_data);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (tx_first_enable) {
@@ -1440,7 +1446,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            bladerf2_tx_stream_set_faulted(board_data, false);
+            bladerf2_tx_stream_new_epoch(board_data);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (board_data->rf_link_dir_on[1]) {
@@ -3592,13 +3598,12 @@ static int bladerf2_sync_tx(struct bladerf *dev,
         RETURN_INVAL("sync tx", "not initialized");
     }
 
-    /* A TX link fault or an unobserved underrun invalidates continuity of
-     * the submitted stream. Do not silently accept more IQ until the caller
-     * stops and starts TX again, which establishes a new acknowledged link
-     * epoch. The monitor and enable path update this state under dev->lock. */
-    WITH_MUTEX(&dev->lock, {
-        tx_stream_faulted = board_data->tx_stream_faulted;
-    });
+    /* A TX link fault, terminal USB error, or unobserved underrun invalidates
+     * the submitted stream. Do not silently accept more IQ until a confirmed
+     * new link epoch restores callback-safe TX admission state. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    tx_stream_faulted = board_data->tx_stream_faulted_async;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (tx_stream_faulted) {
         log_warning("%s: TX stream is invalid; stop and re-enable TX before "
                     "submitting more samples\n", __FUNCTION__);
@@ -4479,6 +4484,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
     FIELD_INIT(.tx_async_buffer_valid, bladerf2_tx_async_buffer_valid),
+    FIELD_INIT(.tx_async_transport_failure,
+               bladerf2_tx_async_transport_failure),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),
     FIELD_INIT(.set_rf_port, bladerf2_set_rf_port),

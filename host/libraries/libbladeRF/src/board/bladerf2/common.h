@@ -224,8 +224,9 @@ struct bladerf2_board_data {
     uint8_t tx_link_epoch_id;
     bool tx_link_fault_reported;
     bool tx_epoch_invalid_reported;
-    bool tx_stream_faulted;
     bool tx_stream_faulted_async;
+    bool tx_async_transport_faulted;
+    uint8_t tx_async_link_epoch_id;
     bool tx_recovery_blocked;
     bool tx_status_unavailable_reported;
 
@@ -372,6 +373,11 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
                               int32_t error_code);
 void bladerf2_tx_stream_set_faulted(
     struct bladerf2_board_data *board_data, bool faulted);
+void bladerf2_tx_stream_set_epoch_id(
+    struct bladerf2_board_data *board_data, uint8_t epoch_id);
+void bladerf2_tx_stream_new_epoch(struct bladerf2_board_data *board_data);
+void bladerf2_tx_async_transport_failure(struct bladerf *dev,
+                                         int error_code);
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status);
 void bladerf2_rf_event_append_locked(
