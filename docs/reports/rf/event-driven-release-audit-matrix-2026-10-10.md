@@ -70,6 +70,16 @@ released by the generic completion callback on both success and failure.
 Source review found no missing invalidation in this module lifecycle slice;
 RX1/RX2/RX_X2 restart races and hardware fault injection remain open.
 
+The NIOS scheduled-retune queue/response path was also traced end to end.
+USB transport timeout marks the peripheral channel desynchronized and does not
+replay the request. The enqueue response is treated as acceptance only;
+deferred execution failures are counted separately, successful completions
+publish sequence-tagged records, and host completion reads verify the sequence
+before and after the record fields before matching against a pending request.
+No additional fail-open was confirmed in this source slice. Queue overflow,
+ambiguous USB response, cancellation, counter wrap/reset, and the physical
+NIOS no-response incident remain test/hardware gates.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
