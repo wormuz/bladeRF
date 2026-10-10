@@ -8,6 +8,12 @@
 
 #include <libbladeRF.h>
 
+static inline bool bladerf2_clock_select_valid(bladerf_clock_select select)
+{
+    return select == CLOCK_SELECT_ONBOARD ||
+           select == CLOCK_SELECT_EXTERNAL;
+}
+
 struct bladerf2_rx_invalidation_policy {
     bool reserve_setter;
     bool abort_rx_epoch;

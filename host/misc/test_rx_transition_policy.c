@@ -26,6 +26,10 @@ int main(void)
     uint64_t loss_count = 0;
     struct bladerf2_rx_invalidation_policy invalidation_policy;
 
+    assert(bladerf2_clock_select_valid(CLOCK_SELECT_ONBOARD));
+    assert(bladerf2_clock_select_valid(CLOCK_SELECT_EXTERNAL));
+    assert(!bladerf2_clock_select_valid((bladerf_clock_select)2));
+
     invalidation_policy = bladerf2_rx_invalidation_policy(
         BLADERF_CHANNEL_TX(0), false);
     assert(invalidation_policy.reserve_setter);

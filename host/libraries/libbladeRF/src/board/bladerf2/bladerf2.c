@@ -6064,6 +6064,9 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (!bladerf2_clock_select_valid(sel)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
