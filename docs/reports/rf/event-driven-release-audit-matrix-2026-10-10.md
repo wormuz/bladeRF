@@ -107,6 +107,19 @@ requiring no `RX_EPOCH_VALID` event and no IQ delivery. bladeRF commits
 Regressions and hardware qualification remain unrun under the open source-audit
 gate.
 
+### NIOS scheduled-retune cancel/ISR source pass
+
+The retune2 queue is mutated by the NIOS main-loop packet/work handlers; the
+timer ISR only changes the head state from `SCHEDULED` to `READY`. Queue clear
+sets the count to zero before invalidating entries, so an ISR during clear sees
+an empty queue. The host queue is reset only after the timestamp-domain cancel
+acknowledgement toggles; an acknowledgement timeout returns an error and does
+not claim that cancellation succeeded. A successful ordinary RX scheduled
+retune still leaves RX validity revoked until a later explicit epoch
+transition; queue acceptance is not IQ-valid evidence. No new source defect
+confirmed in this slice. ISR/cancel race injection, comparator stopped-clock,
+and exact-image retune timing remain open.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
