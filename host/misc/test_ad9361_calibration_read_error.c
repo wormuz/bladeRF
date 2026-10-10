@@ -203,9 +203,17 @@ int main(void)
             ad9361_set_gain_ctrl_mode(&phy_without_spi, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy_without_pdata, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy, NULL) != -EINVAL ||
+            ad9361_ensm_set_state(NULL, ENSM_STATE_ALERT, false) != -EINVAL ||
+            ad9361_ensm_set_state(&phy_without_spi, ENSM_STATE_ALERT, false) != -EINVAL ||
+            ad9361_set_ensm_mode(NULL, true, false) != -EINVAL ||
+            ad9361_get_trx_clock_chain(NULL, NULL, NULL) != -EINVAL ||
+            ad9361_get_trx_clock_chain(&phy, NULL, NULL) != -EINVAL ||
+            ad9361_calculate_rf_clock_chain(NULL, 1000000, 0, NULL, NULL) != -EINVAL ||
+            ad9361_calculate_rf_clock_chain(&phy, 1000000, 0, NULL, NULL) != -EINVAL ||
+            ad9361_set_trx_clock_chain_freq(NULL, 1000000) != -EINVAL ||
             read_count != reads_before || write_count != writes_before) {
             fprintf(stderr,
-                    "Gain-control mode accepted incomplete state or touched SPI\n");
+                    "AD9361 API accepted incomplete state or touched SPI\n");
             return EXIT_FAILURE;
         }
     }
