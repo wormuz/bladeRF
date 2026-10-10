@@ -1966,7 +1966,13 @@ int main(void)
         uint64_t frequency = UINT64_C(0xfeedface);
         unsigned reads_before = read_count;
         struct no_os_spi_desc *saved_spi = phy.spi;
+        uint32_t saved_rx_profile_flags = phy.fastlock.entry[0][0].flags;
+        uint32_t saved_tx_profile_flags = phy.fastlock.entry[1][0].flags;
 
+        /* Force the getter through its SPI fallback rather than an already
+         * cached profile image. */
+        phy.fastlock.entry[0][0].flags = 0;
+        phy.fastlock.entry[1][0].flags = 0;
         phy.spi = NULL;
         ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
         if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
@@ -1983,6 +1989,8 @@ int main(void)
             return EXIT_FAILURE;
         }
         phy.spi = saved_spi;
+        phy.fastlock.entry[0][0].flags = saved_rx_profile_flags;
+        phy.fastlock.entry[1][0].flags = saved_tx_profile_flags;
 
         fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
         ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
