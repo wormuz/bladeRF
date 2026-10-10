@@ -65,6 +65,9 @@ static unsigned int async_overrun_events;
 static unsigned int tx_transport_failure_notifications;
 static int tx_transport_failure_error;
 static int test_tx_backend_stream_status;
+static int test_tx_submit_status;
+static unsigned int test_tx_submit_calls;
+static int16_t test_tx_submitted_markers[4];
 
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
@@ -81,8 +84,25 @@ static int test_tx_backend_stream(struct bladerf_stream *stream,
     return test_tx_backend_stream_status;
 }
 
+static int test_tx_backend_submit(struct bladerf_stream *stream, void *buffer,
+                                  size_t *length, unsigned int timeout_ms,
+                                  bool nonblock)
+{
+    (void)length;
+    (void)timeout_ms;
+    (void)nonblock;
+    assert(stream != NULL);
+    assert(buffer != NULL);
+    assert((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX);
+    assert(test_tx_submit_calls < ARRAY_SIZE(test_tx_submitted_markers));
+    test_tx_submitted_markers[test_tx_submit_calls++] =
+        ((int16_t *)buffer)[0];
+    return test_tx_submit_status;
+}
+
 static const struct backend_fns test_tx_backend = {
     .stream = test_tx_backend_stream,
+    .submit_stream_buffer = test_tx_backend_submit,
 };
 static const struct board_fns test_async_board;
 
@@ -176,6 +196,70 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
     assert(COND_DESTROY(&stream.stream_started) == 0);
     assert(MUTEX_DESTROY(&stream.lock) == 0);
+}
+
+static void test_sync_tx_does_not_replay_rejected_samples(void)
+{
+    struct bladerf_sync sync = {0};
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+    struct sync_worker worker = {0};
+    int16_t buffers[2][8] = {{0}};
+    void *buffer_ptrs[2] = {buffers[0], buffers[1]};
+    sync_buffer_status buffer_states[2] = {
+        SYNC_BUFFER_EMPTY, SYNC_BUFFER_EMPTY,
+    };
+    int16_t rejected_samples[8] = {111, 0, 111, 0, 111, 0, 111, 0};
+    int16_t accepted_samples[8] = {222, 0, 222, 0, 222, 0, 222, 0};
+
+    dev.backend = &test_tx_backend;
+    sync.dev = &dev;
+    sync.initialized = true;
+    sync.state = SYNC_STATE_BUFFER_READY;
+    sync.stream_config.format = BLADERF_FORMAT_SC16_Q11;
+    sync.stream_config.layout = BLADERF_TX_X1;
+    sync.stream_config.samples_per_buffer = 4;
+    sync.stream_config.bytes_per_sample = 4;
+    sync.buf_mgmt.buffers = buffer_ptrs;
+    sync.buf_mgmt.status = buffer_states;
+    sync.buf_mgmt.num_buffers = 2;
+    sync.buf_mgmt.submitter = SYNC_TX_SUBMITTER_FN;
+    sync.buf_mgmt.cons_i = BUFFER_MGMT_INVALID_INDEX;
+    sync.worker = &worker;
+    worker.stream = &stream;
+
+    stream.dev = &dev;
+    stream.layout = BLADERF_TX_X1;
+    stream.format = BLADERF_FORMAT_SC16_Q11;
+    stream.samples_per_buffer = 4;
+    stream.state = STREAM_RUNNING;
+    /* sync_tx only needs the worker when it must wait for an unavailable ring
+     * slot; this fixture starts with an empty buffer and submits immediately. */
+
+    assert(MUTEX_INIT(&sync.lock) == 0);
+    assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+    assert(MUTEX_INIT(&stream.lock) == 0);
+    assert(COND_INIT(&stream.stream_started) == 0);
+    assert(COND_INIT(&stream.can_submit_buffer) == 0);
+
+    test_tx_submit_calls = 0;
+    test_tx_submit_status = BLADERF_ERR_FPGA_OP;
+    assert(sync_tx(&sync, rejected_samples, 4, NULL, 0) ==
+           BLADERF_ERR_FPGA_OP);
+    assert(buffer_states[0] == SYNC_BUFFER_EMPTY);
+    assert(sync.state == SYNC_STATE_BUFFER_READY);
+
+    test_tx_submit_status = 0;
+    assert(sync_tx(&sync, accepted_samples, 4, NULL, 0) == 0);
+    assert(test_tx_submit_calls == 2);
+    assert(test_tx_submitted_markers[0] == 111);
+    assert(test_tx_submitted_markers[1] == 222);
+
+    assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
+    assert(COND_DESTROY(&stream.stream_started) == 0);
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
+    assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+    assert(MUTEX_DESTROY(&sync.lock) == 0);
 }
 
 static void test_public_sync_apis_reject_null_device(void)
@@ -2160,6 +2244,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_tx_async_shutdown_reports_only_real_errors();
+    test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();
     test_rf_link_status_v2_epoch_policy();

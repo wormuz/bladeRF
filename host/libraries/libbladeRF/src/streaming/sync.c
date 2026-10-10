@@ -2240,8 +2240,23 @@ static int advance_tx_buffer(struct bladerf_sync *s, struct buffer_mgmt *b)
              * status back up */
             status = 0;
         } else {
-            /* Unmark this as being in flight */
-            b->status[idx] = SYNC_BUFFER_FULL;
+            /* This buffer belongs to the sync_tx() call that is returning
+             * this error. It was not accepted by the backend, so retaining
+             * it as FULL would let a later call (after TX admission recovers)
+             * submit the failed call's samples as if they had been accepted.
+             * Reuse the same slot for the next caller instead. Already
+             * accepted/deferred buffers remain owned by their existing
+             * submission path. */
+            b->status[idx] = SYNC_BUFFER_EMPTY;
+            b->partial_off = 0;
+            if (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+                s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META ||
+                s->stream_config.format == BLADERF_FORMAT_PACKET_META) {
+                s->meta.state = SYNC_META_STATE_HEADER;
+                s->meta.curr_msg_off = 0;
+                s->meta.msg_num = 0;
+            }
+            s->state = SYNC_STATE_BUFFER_READY;
 
             log_debug("%s: Failed to submit buf[%u].\n", __FUNCTION__, idx);
             return status;
