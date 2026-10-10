@@ -6151,6 +6151,7 @@ static int bladerf2_set_pll_refclk_internal(
              * ADF400x lock detector only describes the onboard VCTCXO path. */
             MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
             dev->board_data->rfic_reference_clock_known = true;
+            dev->board_data->tx_reference_clock_invalid_reported = false;
             MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
         } else if (status == 0) {
             bool pll_enabled = false;
@@ -6160,6 +6161,7 @@ static int bladerf2_set_pll_refclk_internal(
                 if (status == 0) {
                     MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                     dev->board_data->rfic_reference_clock_known = true;
+                    dev->board_data->tx_reference_clock_invalid_reported = false;
                     MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
                 }
             }
@@ -6339,6 +6341,7 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                     (gpio_readback & (1u << CFG_GPIO_CLOCK_SELECT)) != 0) {
                     MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                     dev->board_data->rfic_reference_clock_known = true;
+                    dev->board_data->tx_reference_clock_invalid_reported = false;
                     MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
                 } else if (status == 0) {
                     status = BLADERF_ERR_UNEXPECTED;

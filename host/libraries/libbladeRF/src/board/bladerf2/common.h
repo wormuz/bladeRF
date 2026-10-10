@@ -260,6 +260,7 @@ struct bladerf2_board_data {
     bool tx_epoch_invalid_reported;
     bool tx_rfic_state_valid_reported;
     bool tx_rfic_state_invalid_reported;
+    bool tx_reference_clock_invalid_reported;
     bool tx_stream_faulted_async;
     bool tx_async_transport_faulted;
     uint64_t tx_async_transport_failure_generation;

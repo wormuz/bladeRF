@@ -116,6 +116,10 @@ int main(int argc, char **argv)
     } else if (strcmp(fault_mode, "RUNTIME_RFIC_BBPLL_UNLOCKED") == 0) {
         expected_reason = BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED;
         expected_rfic_mask = 0x80;
+    } else if (strcmp(fault_mode,
+                      "RUNTIME_REFERENCE_PLL_UNLOCKED") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_CLOCK;
+        expected_error = BLADERF_ERR_FPGA_OP;
     } else if (strcmp(fault_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
         expected_reason = BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED;
         expected_status_mask = 0x303;

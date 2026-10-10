@@ -7,6 +7,7 @@
  *   RUNTIME_TX_RFPLL_UNLOCKED
  *   RUNTIME_TX_ENSM_NOT_TX
  *   RUNTIME_TX_BBPLL_UNLOCKED
+ *   RUNTIME_REFERENCE_PLL_UNLOCKED
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
  *   RUNTIME_TX_RETUNE_FAILURE
  *   RUNTIME_TX_RFIC_REGISTER_WRITE
@@ -121,6 +122,7 @@ int main(void)
     }
     if (strcmp(mode, "RUNTIME_TX_RFIC_STATUS_READ_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_RFPLL_UNLOCKED") != 0 &&
+        strcmp(mode, "RUNTIME_REFERENCE_PLL_UNLOCKED") != 0 &&
         strcmp(mode, "RUNTIME_TX_ENSM_NOT_TX") != 0 &&
         strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") != 0 &&
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
@@ -509,6 +511,11 @@ int main(void)
                 expected_event_seen = true;
             } else if ((strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 ||
                         strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0) &&
+                       event->event_type ==
+                           BLADERF_RF_EVT_TX_CONFIGURATION_INVALID) {
+                expected_event_seen = true;
+            } else if (strcmp(mode,
+                              "RUNTIME_REFERENCE_PLL_UNLOCKED") == 0 &&
                        event->event_type ==
                            BLADERF_RF_EVT_TX_CONFIGURATION_INVALID) {
                 expected_event_seen = true;
