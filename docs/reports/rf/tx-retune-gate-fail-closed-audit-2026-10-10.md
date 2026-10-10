@@ -35,3 +35,14 @@ The live harness now has a normal-operation `RUNTIME_TX_GAIN_SETTER` scenario: e
 ## Shared TX-start/RX-setter reservation race
 
 The RX invalidation path deliberately skips the hardware RX ABORT when TX starts with no active RX direction. It also skipped `rf_transition_setter_active`, leaving a window before TX enable in which an RX setter could reserve and mutate the shared RF state; TX enable could then clear that setter's reservation on return. The no-RX case now still reserves the setter interval while skipping only the unnecessary RX ABORT. `test_rx_transition_policy.c` covers TX with no RX (reserve, no abort), TX with RX (reserve and abort), and RX invalidation (reserve and abort). Source-only; test not compiled/run.
+
+## Async TX admission revocation during USB-capacity wait
+
+The USB backend performs a final TX admission check after waiting for a free
+transfer. If RF configuration invalidated TX during that wait, it returned
+`BLADERF_ERR_FPGA_OP`; the generic async layer classified that backend error
+as a transport failure and emitted a second, misleading TX transport event.
+The backend now returns `BLADERF_ERR_WOULD_BLOCK` for this retryable RF-gate
+closure. Synchronous TX already retains the full buffer and defers submission
+on that result, while the board RF event carries the actual invalidation
+reason. Source-only; regression and hardware qualification remain pending.
