@@ -224,6 +224,7 @@ void vctcxo_tamer_write(uint8_t addr, uint8_t data)
 
 #define TAMER_STATUS_SNAPSHOT_INVALID (1u << 2)
 #define TAMER_STATUS_SCHEDULE_ACK     (1u << 3)
+#define TAMER_STATUS_COMPARE_FIRED    (1u << 4)
 #define TAMER_SCHEDULE_WAIT_ATTEMPTS  100000u
 
 bool tamer_schedule(bladerf_module m, uint64_t time)
@@ -268,6 +269,21 @@ bool tamer_schedule(bladerf_module m, uint64_t time)
      * remains in the already-invalid state. */
     (void)tamer_cancel(m);
     return false;
+}
+
+bool tamer_compare_fired(bladerf_module m)
+{
+    uint32_t base;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return false;
+    }
+
+    return (IORD_8DIRECT(base, 9) & TAMER_STATUS_COMPARE_FIRED) != 0;
 }
 
 bool tamer_cancel(bladerf_module m)

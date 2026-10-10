@@ -332,6 +332,12 @@ bool time_tamer_read(bladerf_module m, uint64_t *time)
     return true;
 }
 
+bool tamer_compare_fired(bladerf_module m)
+{
+    (void)m;
+    return false;
+}
+
 void time_tamer_reset(bladerf_module m)
 {
     switch (m) {

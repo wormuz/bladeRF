@@ -193,6 +193,17 @@ begin
         report "future compare: fired at timestamp " & to_hstring(ts) ;
         nop( clock, 1000 ) ;
 
+        -- Comparator completion is retained independently of IRQ clear so
+        -- Nios can recover if delivery of this interrupt is lost.
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(4) = '1'
+            report "time-tamer did not retain the compare-fired event"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+
         -- Clear the interrupt
         clear_intr( clock, addr, din, write ) ;
 
@@ -203,6 +214,14 @@ begin
         -- at command acceptance rather than at the later destination edge.
         write_time( clock, addr, din, write, x"0000_0000_0000_0500" ) ;
         set_intr( clock, addr, din, write ) ;
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(4) = '0'
+            report "new compare arm retained the previous fired event"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
         write_time( clock, addr, din, write, x"0000_0000_0000_0600" ) ;
         wait until rising_edge(clock) and intr = '1' ;
         read_time( clock, addr, dout, read, readack, ts ) ;

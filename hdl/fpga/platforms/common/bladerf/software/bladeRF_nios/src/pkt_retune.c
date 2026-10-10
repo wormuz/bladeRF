@@ -268,8 +268,11 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             break;
 
         case ENTRY_STATE_SCHEDULED:
-            /* Nothing to do.
-             * We're just waiting for this entry to become */
+            /* Recover from a lost IRQ only after the FPGA reports that its
+             * timestamp comparator actually fired. */
+            if (tamer_compare_fired(module)) {
+                e->state = ENTRY_STATE_READY;
+            }
             break;
 
         case ENTRY_STATE_READY:

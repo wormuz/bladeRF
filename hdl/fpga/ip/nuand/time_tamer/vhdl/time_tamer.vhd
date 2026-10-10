@@ -47,6 +47,7 @@ architecture arch of time_tamer is
     signal snap_ack  : std_logic ;
     signal snapshot_invalid : std_logic := '0';
     signal schedule_ack : std_logic := '0';
+    signal compare_fired : std_logic := '0';
     signal snapshot_wait_count : natural range 0 to SNAPSHOT_TIMEOUT_CYCLES := 0;
     signal snap_read_active : std_logic := '0';
 
@@ -112,7 +113,7 @@ begin
 
     ts_sync_out <= '0' ;
 
-    status <= (3 => schedule_ack, 2 => snapshot_invalid,
+    status <= (4 => compare_fired, 3 => schedule_ack, 2 => snapshot_invalid,
                1 => cancel_toggle, 0 => status_past, others =>'0') ;
 
     U_sync_ts_reset : entity work.synchronizer
@@ -242,6 +243,7 @@ begin
             snapshot_wait_count <= 0;
             snap_read_active <= '0';
             schedule_ack <= '0';
+            compare_fired <= '0';
         elsif( rising_edge(clock) ) then
             if( uaddr = 0 and read = '1' ) then
                 if snap_read_active = '0' then
@@ -278,11 +280,19 @@ begin
             if (uaddr = 8 and write = '1' and unsigned(din) = 0) or
                intr_set = '1' or intr_cancel = '1' then
                 schedule_ack <= '0';
+                compare_fired <= '0';
             elsif mm_compare_loaded = '1' or status_past = '1' or
                   mm_time_trigger = '1' then
                 -- Sticky until the next arm/cancel so a short compare cannot
                 -- disappear before the Nios caller observes acceptance.
                 schedule_ack <= '1';
+            end if;
+
+            -- Preserve comparator completion independently of the IRQ path.
+            -- Nios can recover a lost interrupt by polling this event, but
+            -- must never infer completion from elapsed time alone.
+            if mm_time_trigger = '1' or status_past = '1' then
+                compare_fired <= '1';
             end if;
         end if ;
     end process ;

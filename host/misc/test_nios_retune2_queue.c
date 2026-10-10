@@ -24,6 +24,7 @@ static bool fail_profile_recall;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_read;
+static bool compare_fired;
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
@@ -75,6 +76,12 @@ bool time_tamer_read(bladerf_module module, uint64_t *timestamp)
     }
     *timestamp = 0;
     return true;
+}
+
+bool tamer_compare_fired(bladerf_module module)
+{
+    (void)module;
+    return compare_fired;
 }
 
 bool tamer_cancel(bladerf_module module)
@@ -201,20 +208,20 @@ static int check_schedule_ready_lifecycle(void)
         return 1;
     }
 
-    /* TX becomes activatable only after its own ISR marks it READY. */
+    /* TX remains scheduled until its own interrupt. */
     retune_isr(&tx_queue);
     pkt_retune2_work();
     if (tx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
-        recall_count != 2 ||
-        recalled_module != BLADERF_MODULE_TX ||
+        recall_count != 2 || recalled_module != BLADERF_MODULE_TX ||
         recalled_profile == &tx_profile || recalled_profile_num != 2 ||
         recalled_port != 0x22 || recalled_spdt != 0x03 ||
         port_count != 2 || spdt_count != 2) {
         fputs("TX READY transition did not activate its queued profile\n", stderr);
         return 1;
     }
+
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX, 1) ||
         pkt_retune2_completion_word(0) != 1 ||
         pkt_retune2_completion_word(1) != 0 ||
@@ -247,6 +254,39 @@ static int check_schedule_ready_lifecycle(void)
         return 1;
     }
 
+    return 0;
+}
+
+static int check_lost_irq_recovers_from_fpga_event(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 3;
+    if (enqueue_retune(&rx_queue, &profile, 3, 100) != 1) {
+        fputs("failed to enqueue lost-IRQ recovery case\n", stderr);
+        return 1;
+    }
+
+    compare_fired = false;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
+        fputs("scheduled retune advanced without comparator event\n", stderr);
+        return 1;
+    }
+
+    /* No ISR is delivered: only the FPGA event may release the queue. */
+    compare_fired = true;
+    pkt_retune2_work();
+    compare_fired = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("FPGA comparator event did not recover the lost IRQ\n", stderr);
+        return 1;
+    }
     return 0;
 }
 
@@ -467,6 +507,9 @@ int main(void)
     }
 
     if (check_schedule_ready_lifecycle() != 0) {
+        return 1;
+    }
+    if (check_lost_irq_recovers_from_fpga_event() != 0) {
         return 1;
     }
     if (check_immediate_upload_failure_preserves_profile() != 0) {

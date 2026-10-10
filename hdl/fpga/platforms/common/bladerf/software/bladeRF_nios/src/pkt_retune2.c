@@ -480,9 +480,12 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         }
 
         case ENTRY_STATE_SCHEDULED:
-
-            /* Nothing to do.
-             * Waiting for this entry to become ready */
+            /* The IRQ is the fast path. Recover from a lost IRQ by polling
+             * the FPGA's sticky comparator event; time passing alone never
+             * authorizes activation. */
+            if (tamer_compare_fired(module)) {
+                e->state = ENTRY_STATE_READY;
+            }
             break;
 
         case ENTRY_STATE_READY: {

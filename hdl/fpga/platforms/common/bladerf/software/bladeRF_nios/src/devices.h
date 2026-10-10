@@ -470,6 +470,9 @@ INLINE void expansion_port_set_direction(uint32_t dir);
  */
 bool time_tamer_read(bladerf_module m, uint64_t *time);
 
+/** Return whether the FPGA comparator has fired for the current schedule. */
+bool tamer_compare_fired(bladerf_module m);
+
 /**
  * Reset one of the time tamer's timestamp counters to 0
  */
