@@ -178,6 +178,22 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(MUTEX_DESTROY(&stream.lock) == 0);
 }
 
+static void test_public_sync_apis_reject_null_device(void)
+{
+    int16_t sample[2] = {0, 0};
+    unsigned int timeout = 0;
+
+    assert(bladerf_sync_config(NULL, BLADERF_RX_X1,
+                               BLADERF_FORMAT_SC16_Q11_META,
+                               1, 1024, 1, 100) == BLADERF_ERR_INVAL);
+    assert(bladerf_sync_tx(NULL, sample, 1, NULL, 0) == BLADERF_ERR_INVAL);
+    assert(bladerf_sync_rx(NULL, sample, 1, NULL, 0) == BLADERF_ERR_INVAL);
+    assert(bladerf_set_stream_timeout(NULL, BLADERF_TX, 100) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_stream_timeout(NULL, BLADERF_TX, &timeout) ==
+           BLADERF_ERR_INVAL);
+}
+
 static void test_rf_event_cursor_resynchronizes_after_overrun(void)
 {
     struct bladerf dev = {0};
@@ -2093,6 +2109,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_tx_async_shutdown_reports_only_real_errors();
+    test_public_sync_apis_reject_null_device();
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();
