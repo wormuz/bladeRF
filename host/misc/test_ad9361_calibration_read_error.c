@@ -308,6 +308,10 @@ int main(void)
             ad9361_get_rx_quad_track_en_dis(&phy, NULL) != -EINVAL ||
             ad9361_txmon_enable(NULL, TX_1) != -EINVAL ||
             ad9361_txmon_enable(&phy_without_spi, TX_1) != -EINVAL ||
+            ad9361_tx_mute(NULL, 0) != -EINVAL ||
+            ad9361_tx_mute(NULL, 1) != -EINVAL ||
+            ad9361_tx_mute(&phy_without_spi, 0) != -EINVAL ||
+            ad9361_tx_mute(&phy, 2) != -EINVAL ||
             ad9361_set_tx_attenuation(&phy_without_spi, 0, 1000) != -EINVAL ||
             ad9361_set_tx_attenuation(&phy_without_pdata, 0, 1000) != -EINVAL ||
             ad9361_set_tx_rf_bandwidth(&phy_without_spi, 1000000) != -EINVAL ||

@@ -77,3 +77,12 @@ fail-open paths. A broader audit of every helper reachable from
 path is fail-closed. It does not explain the preserved NIOS mode-switch
 no-response incident or close exact release-image RX1/RX2/RX_X2 qualification
 and LTE RF-content acceptance.
+
+## TX mute API argument validation follow-up (2026-10-10)
+
+The broader TX surface review found that `ad9361_tx_mute()` dereferenced the
+PHY on the unmute path without a null check and treated every nonzero state as
+mute, despite the public 0/1 contract. It now rejects a null PHY, missing SPI
+descriptor, and state values above 1 before any register access. Added cases
+to the SPI-injected regression harness; source-only, not built or run under the
+active audit gate.
