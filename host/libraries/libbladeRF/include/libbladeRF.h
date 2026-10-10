@@ -2778,7 +2778,8 @@ int CALL_CONV bladerf_get_timestamp(struct bladerf *dev,
  *
  * @return 0 on success, value from \ref RETCODES list on failure.
  *         Returns ::BLADERF_ERR_UNSUPPORTED on FPGA revisions that do not
- *         instantiate the counters.
+ *         instantiate the counters. Returns ::BLADERF_ERR_WOULD_BLOCK if a
+ *         coherent 64-bit snapshot could not be obtained after bounded retries.
  */
 API_EXPORT
 int CALL_CONV bladerf_get_loss_event_count(struct bladerf *dev,

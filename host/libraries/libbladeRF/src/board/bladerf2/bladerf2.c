@@ -3659,8 +3659,10 @@ static int bladerf2_get_loss_event_count(struct bladerf *dev,
                                           uint64_t *count)
 {
     int status;
-    uint32_t lo = 0, hi = 0;
+    uint32_t lo = 0, hi_before = 0, hi_after = 0;
+    uint64_t snapshot = 0;
     uint8_t base;
+    unsigned int attempt;
 
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(count);
@@ -3669,23 +3671,33 @@ static int bladerf2_get_loss_event_count(struct bladerf *dev,
         return BLADERF_ERR_INVAL;
     }
 
-    /* Halves 0/1 are RX, 2/3 are TX -- see NIOS_PKT_8x32_TARGET_LOSS_COUNTERS.
-     * Both come from one capture register in the fabric, so the pair cannot
-     * tear and the read order is free. */
+    /* Halves 0/1 are RX, 2/3 are TX. FPGA exposes each 64-bit counter as two
+     * PIO words from one captured register, but the NIOS transactions can
+     * straddle a low-word carry. Use high-low-high to prove both halves came
+     * from the same 64-bit snapshot. */
     base = (dir == BLADERF_TX) ? 2 : 0;
-
-    status = nios_loss_counter_read(dev, base, &lo);
-    if (status != 0) {
-        return status;
+    for (attempt = 0; attempt < 4; ++attempt) {
+        status = nios_loss_counter_read(dev, base + 1, &hi_before);
+        if (status != 0) {
+            return status;
+        }
+        status = nios_loss_counter_read(dev, base, &lo);
+        if (status != 0) {
+            return status;
+        }
+        status = nios_loss_counter_read(dev, base + 1, &hi_after);
+        if (status != 0) {
+            return status;
+        }
+        snapshot = 0;
+        if (bladerf2_loss_counter_snapshot(
+                hi_before, lo, hi_after, &snapshot)) {
+            *count = snapshot;
+            return 0;
+        }
     }
 
-    status = nios_loss_counter_read(dev, base + 1, &hi);
-    if (status != 0) {
-        return status;
-    }
-
-    *count = ((uint64_t)hi << 32) | lo;
-    return 0;
+    return BLADERF_ERR_WOULD_BLOCK;
 }
 
 

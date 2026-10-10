@@ -23,6 +23,13 @@ int main(void)
         .error_code = BLADERF_ERR_UNEXPECTED,
     };
     struct bladerf_rf_event invalidation_channel;
+    uint64_t loss_count = 0;
+
+    assert(bladerf2_loss_counter_snapshot(7, 0x12345678, 7, &loss_count));
+    assert(loss_count == 0x0000000712345678ULL);
+    assert(!bladerf2_loss_counter_snapshot(
+        7, 0xffffffff, 8, &loss_count));
+    assert(loss_count == 0x0000000712345678ULL);
 
     assert(bladerf2_rx_transition_channel_event_flags(
                BLADERF_CHANNEL_RX(0), true) ==

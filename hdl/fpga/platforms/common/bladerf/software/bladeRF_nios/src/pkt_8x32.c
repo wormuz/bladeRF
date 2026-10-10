@@ -96,9 +96,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             *data = dwell_status_read();
             break;
 
-        /* Sample-loss counters, one 32-bit half per packet. Both halves of
-         * a counter come from one 64-bit capture register in the fabric, so
-         * they cannot tear against each other and read order is free.
+        /* Sample-loss counters, one 32-bit half per packet. Each PIO word
+         * comes from a 64-bit capture register in the fabric. Separate
+         * requests can straddle a low-word carry; the host uses high-low-high
+         * reads and retries unless the two high words match.
          *
          * Out-of-range addr reads 0 rather than aliasing onto another
          * counter: a wrong number here would be indistinguishable from a

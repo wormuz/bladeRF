@@ -21,6 +21,19 @@
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
 
+/* The two 32-bit PIOs are read in separate NIOS transactions. The high word
+ * must match around the low-word read before the host can join the snapshot. */
+static inline bool bladerf2_loss_counter_snapshot(
+    uint32_t high_before, uint32_t low, uint32_t high_after,
+    uint64_t *count)
+{
+    if (high_before != high_after || count == NULL) {
+        return false;
+    }
+    *count = ((uint64_t)high_after << 32) | low;
+    return true;
+}
+
 enum bladerf2_tx_rfic_observation {
     BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE = 0,
     BLADERF2_TX_RFIC_OBSERVATION_INVALID,

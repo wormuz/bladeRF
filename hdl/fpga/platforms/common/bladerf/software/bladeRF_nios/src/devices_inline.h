@@ -128,10 +128,10 @@ static inline uint32_t rx_fault_causes_read(void)
  * from USB queue state and never reads the fabric, so it cannot see a drop
  * the fabric absorbed by itself.
  *
- * The halves cannot tear against each other: both PIOs are driven from one
- * 64-bit capture register in the system domain, refreshed as a whole by a
- * handshake crossing from the sample domain. A half may be one snapshot
- * stale, never half of one value and half of another.
+ * Both PIOs are driven from one 64-bit capture register in the system domain,
+ * refreshed as a whole by a handshake crossing from the sample domain. Each
+ * half is coherent, but separate host requests can straddle a low-word carry;
+ * the host verifies the high word before and after reading the low word.
  *
  * Reads 0 on revisions without the PIOs, which is honest there: a revision
  * that does not instantiate the counter has not dropped anything it knows
