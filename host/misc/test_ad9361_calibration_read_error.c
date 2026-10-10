@@ -192,6 +192,7 @@ int main(void)
      * before it derives the SPI pointer or performs any register access. */
     {
         struct ad9361_rf_phy phy_without_pdata = { .spi = &spi };
+        struct ad9361_rf_phy gain_table_phy = {0};
         struct rf_gain_ctrl gain_ctrl = {
             .ant = 1,
             .mode = RF_GAIN_MGC,
@@ -202,7 +203,11 @@ int main(void)
         const unsigned writes_before = write_count;
 
         ad9361_clear_state(NULL);
-        if (ad9361_set_gain_ctrl_mode(NULL, &gain_ctrl) != -EINVAL ||
+        if (ad9361_init_gain_tables(NULL) != -EINVAL ||
+            ad9361_init_gain_tables(&gain_table_phy) != 0 ||
+            gain_table_phy.current_table != UINT32_MAX ||
+            gain_table_phy.gt_info != ad9361_adi_gt_info ||
+            ad9361_set_gain_ctrl_mode(NULL, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy_without_spi, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy_without_pdata, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy, NULL) != -EINVAL ||
