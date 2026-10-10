@@ -13,6 +13,7 @@
 #include "streaming/sync.h"
 #include "streaming/sync_worker.h"
 #include "streaming/async.h"
+#include "streaming/format.h"
 #include "streaming/metadata.h"
 #include "board/board.h"
 #include "board/bladerf2/common.h"
@@ -2375,6 +2376,22 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    {
+        const int16_t packed_input[] = { -1, 0x123, 0x456, -0x234, 0x789, 0xabc };
+        const uint8_t expected[] = {
+            0xff, 0x3f, 0x12,
+            0x56, 0xc4, 0xdc,
+            0x89, 0xc7, 0xab,
+        };
+        uint8_t guarded[sizeof(expected) + 2] = { 0xa5 };
+
+        guarded[sizeof(guarded) - 1] = 0x5a;
+        sc16q11_pack_samples(packed_input, guarded + 1, 3);
+        assert(guarded[0] == 0xa5);
+        assert(memcmp(guarded + 1, expected, sizeof(expected)) == 0);
+        assert(guarded[sizeof(guarded) - 1] == 0x5a);
+    }
+
     test_tx_async_shutdown_reports_only_real_errors();
     test_async_tx_submit_gate_closure_is_retryable();
     test_sync_tx_does_not_replay_rejected_samples();

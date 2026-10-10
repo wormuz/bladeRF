@@ -2627,18 +2627,17 @@ int sync_tx(struct bladerf_sync *s,
                                            samples_per_buffer - b->partial_off);
 
                 if (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_PACKED) {
-                    // Pack SC16Q11 samples to SC12Q11 directly into destination buffer
-                    size_t zz, jj;
+                    /* Pack each complex sample independently. The former
+                     * two-sample loop read four scalar components even when
+                     * only one complex sample remained, overrunning caller
+                     * input and the packed destination for odd-sized writes.
+                     * Byte stores also avoid unaligned uint16_t accesses at
+                     * odd sample offsets and signed-shift undefined behavior.
+                     */
                     uint8_t *packed_dest = buf_dest + samples2bytes(s, b->partial_off);
                     int16_t const *src_ptr = (int16_t const *)(samples_src + 2*sizeof(int16_t)*samples_written);
-                    for (zz = 0, jj = 0; zz < samples_to_copy * 2; zz += 4, jj += 3) {
-                        ((uint16_t*)packed_dest)[jj+0] = src_ptr[zz+0] & 0x0FFF;
-                        ((uint16_t*)packed_dest)[jj+0] |= (src_ptr[zz+1] << 12) & 0xF000;
-                        ((uint16_t*)packed_dest)[jj+1] = (src_ptr[zz+1] >> 4) & 0x00FF;
-                        ((uint16_t*)packed_dest)[jj+1] |= (src_ptr[zz+2] << 8) & 0xFF00;
-                        ((uint16_t*)packed_dest)[jj+2] = (src_ptr[zz+2] >> 8) & 0x000F;
-                        ((uint16_t*)packed_dest)[jj+2] |= (src_ptr[zz+3] << 4) & 0xFFF0;
-                    }
+                    sc16q11_pack_samples(src_ptr, packed_dest,
+                                         samples_to_copy);
                 } else {
                     memcpy(buf_dest + samples2bytes(s, b->partial_off),
                            samples_src + samples2bytes(s, samples_written),

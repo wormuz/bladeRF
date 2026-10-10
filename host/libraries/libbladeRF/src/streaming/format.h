@@ -22,6 +22,8 @@
 #ifndef STREAMING_FORMAT_H_
 #define STREAMING_FORMAT_H_
 
+#include <stdint.h>
+
 #include "rel_assert.h"
 
 /*
@@ -64,6 +66,27 @@ static inline size_t sc16q11_packed_to_bytes(size_t n_samples)
     const size_t sample_size = 3*sizeof(int8_t);
     assert(n_samples <= (SIZE_MAX / sample_size));
     return n_samples * sample_size;
+}
+
+/* Pack signed SC16 Q11 I/Q pairs into the little-endian 12-bit wire format.
+ * Process one complex sample per iteration so odd caller write sizes are
+ * safe, and use byte stores to avoid alignment and signed-shift assumptions.
+ */
+static inline void sc16q11_pack_samples(const int16_t *src, uint8_t *dst,
+                                        size_t n_samples)
+{
+    size_t i;
+
+    for (i = 0; i < n_samples; ++i) {
+        const uint16_t i_sample = (uint16_t)src[2 * i] & 0x0fff;
+        const uint16_t q_sample = (uint16_t)src[2 * i + 1] & 0x0fff;
+        uint8_t *packed_sample = dst + 3 * i;
+
+        packed_sample[0] = (uint8_t)i_sample;
+        packed_sample[1] =
+            (uint8_t)((i_sample >> 8) | ((q_sample & 0x0f) << 4));
+        packed_sample[2] = (uint8_t)(q_sample >> 4);
+    }
 }
 
 /*
