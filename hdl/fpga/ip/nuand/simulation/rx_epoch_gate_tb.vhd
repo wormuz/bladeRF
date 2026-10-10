@@ -106,6 +106,10 @@ begin
 
         wait until falling_edge(clock);
         arm <= '1';
+        wait for 1 ns;
+        assert discard_active = '1'
+            report "ARM did not assert the FIFO fence before its active edge"
+            severity failure;
         wait until rising_edge(clock);
         -- Observe what a clocked downstream FIFO samples at this edge,
         -- before the gate's nonblocking assignments replace it with zeros.

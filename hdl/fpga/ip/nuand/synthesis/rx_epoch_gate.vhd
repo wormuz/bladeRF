@@ -111,7 +111,6 @@ begin
             out_timestamp        <= (others => '0');
             out_epoch_id         <= (others => '0');
             out_state            <= STATE_ACTIVE;
-            out_discard_active   <= '0';
             epoch_start_event    <= '0';
             first_valid_timestamp <= (others => '0');
         elsif( rising_edge(clock) ) then
@@ -275,13 +274,19 @@ begin
 
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;
-            if( state = STATE_PENDING or state = STATE_WAIT_FIRST_SAMPLE or
-                state = STATE_ERROR ) then
-                out_discard_active <= '1';
-            else
-                out_discard_active <= '0';
-            end if;
         end if;
     end process;
+
+    -- The data fence takes effect on the ARM/ABORT edge itself. Make its
+    -- watchdog/status indication visible during that same cycle instead of
+    -- waiting for the registered FSM state to advance one clock later.
+    -- fifo_writer samples this signal on the edge, so a progress timeout
+    -- coincident with ARM cannot be misreported as a transport stall.
+    out_discard_active <= '0' when reset = '1' else
+        '1' when (state = STATE_PENDING or
+                  state = STATE_WAIT_FIRST_SAMPLE or
+                  state = STATE_ERROR or
+                  epoch_arm = '1' or epoch_abort = '1') else
+        '0';
 
 end architecture;
