@@ -1329,6 +1329,15 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_retune_counter_reset && !counter_reset &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
+                        WITH_MUTEX(&dev->lock, {
+                        bool release_still_valid;
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        release_still_valid =
+                            board_data->tx_retune2_applied_waiting_rf_valid &&
+                            board_data->tx_retune2_pending_count == 0 &&
+                            !board_data->tx_retune2_completion_faulted;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        if (release_still_valid) {
                         uint32_t gate_status = 0;
                         int gate_read_status = nios_tx_retune_gate_status_read(
                             dev, &gate_status);
@@ -1427,6 +1436,8 @@ static void *rx_fault_monitor_task(void *arg)
                                 dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
                                 applied_frequency_hz, applied_frequency_hz, 0, 0);
                         }
+                        }
+                        });
                     }
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     tx_pending_after_completions =
@@ -1574,7 +1585,9 @@ static void *rx_fault_monitor_task(void *arg)
                 } else
 #endif
                 {
-                    gate_status = nios_tx_retune_gate_abort(dev);
+                    WITH_MUTEX(&dev->lock, {
+                        gate_status = nios_tx_retune_gate_abort(dev);
+                    });
                 }
                 if (gate_status != 0) {
                     log_debug("Failed to abort TX retune gate after invalid RFIC/status: %s\n",
