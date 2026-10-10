@@ -368,6 +368,31 @@ static inline uint16_t metadata_get_packet_len(const uint8_t *header)
     return LE16_TO_HOST(ret);
 }
 
+/* Validate the payload length carried by an RX PACKET_META header against
+ * both the bytes received from USB and the allocated transfer buffer. The
+ * length field counts payload DWORDs and does not include this header. */
+static inline bool metadata_rx_packet_payload_length_valid(
+    const uint8_t *buffer, size_t received_bytes, size_t buffer_bytes)
+{
+    size_t payload_bytes;
+    uint16_t payload_dwords;
+
+    if (buffer == NULL || received_bytes < METADATA_HEADER_SIZE ||
+        received_bytes > buffer_bytes) {
+        return false;
+    }
+
+    payload_dwords = metadata_get_packet_len(buffer);
+    payload_bytes = (size_t)payload_dwords * sizeof(uint32_t);
+    return payload_bytes <= received_bytes - METADATA_HEADER_SIZE;
+}
+
+static inline bool metadata_rx_packet_fits_output(const uint8_t *header,
+                                                  size_t output_dwords)
+{
+    return header != NULL && metadata_get_packet_len(header) <= output_dwords;
+}
+
 static inline uint8_t metadata_get_packet_core(const uint8_t *header)
 {
     uint8_t ret;

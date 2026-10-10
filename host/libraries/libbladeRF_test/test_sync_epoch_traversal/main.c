@@ -119,6 +119,22 @@ static void test_async_packet_meta_tx_length_is_bounded(void)
                &stream, &metadata, &length_bytes) == BLADERF_ERR_CALLBACK);
 }
 
+static void test_rx_packet_meta_length_is_bounded_by_transfer(void)
+{
+    uint8_t packet[32] = {0};
+    metadata_set_packet(packet, 7, 0, 4, 0, 0);
+    assert(metadata_rx_packet_payload_length_valid(
+        packet, sizeof(packet), sizeof(packet)));
+    assert(metadata_rx_packet_fits_output(packet, 4));
+    assert(!metadata_rx_packet_fits_output(packet, 3));
+    assert(!metadata_rx_packet_payload_length_valid(
+        packet, sizeof(packet) - 1, sizeof(packet)));
+    assert(!metadata_rx_packet_payload_length_valid(
+        packet, METADATA_HEADER_SIZE - 1, sizeof(packet)));
+    assert(!metadata_rx_packet_payload_length_valid(
+        packet, sizeof(packet) + 1, sizeof(packet)));
+}
+
 static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
 {
     struct bladerf_sync sync = {0};
@@ -2597,6 +2613,7 @@ int main(void)
 {
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
+    test_rx_packet_meta_length_is_bounded_by_transfer();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
     test_close_wakes_and_drains_transition_waiter();

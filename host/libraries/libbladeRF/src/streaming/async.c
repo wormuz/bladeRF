@@ -37,8 +37,8 @@
 #include "helpers/version.h"
 
 /* Keep async RX discontinuities in the device-wide RF event history, just as
- * sync RX does. The backend invokes this only for a short RX transfer or a
- * USB overflow; it must not be called for TX or normal stream teardown. */
+ * sync RX does. RX transfer-size faults and malformed PACKET_META framing use
+ * this path; it must not be called for TX or normal stream teardown. */
 void async_notify_rx_overrun(struct bladerf_stream *stream)
 {
     struct bladerf *dev;
@@ -127,6 +127,11 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
         return BLADERF_STREAM_SHUTDOWN;
     }
 
+    const bool malformed_packet_meta =
+        stream->format == BLADERF_FORMAT_PACKET_META &&
+        !metadata_rx_packet_payload_length_valid(
+            samples, received_bytes, buffer_bytes);
+
     /* RX metadata is callback-scoped. Clear it on every transfer so a
      * withheld buffer cannot inherit the preceding buffer's epoch identity. */
     metadata->timestamp = 0;
@@ -138,10 +143,11 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     metadata->rx_clipping_flags = 0;
     memset(metadata->reserved, 0, sizeof(metadata->reserved));
 
-    if (received_bytes > buffer_bytes ||
+    if (received_bytes > buffer_bytes || malformed_packet_meta ||
         (stream->format != BLADERF_FORMAT_PACKET_META &&
          received_bytes != buffer_bytes)) {
         const uint32_t reason = received_bytes > buffer_bytes
+            || malformed_packet_meta
             ? BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR
             : BLADERF_RF_WITHHELD_SHORT_TRANSFER;
         /* Publish the native reason before sync-worker bookkeeping can wake

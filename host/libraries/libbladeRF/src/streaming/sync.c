@@ -1981,10 +1981,18 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                 user_meta->timestamp = metadata_get_timestamp(buf_src);
 
                 pkt_len_dwords = metadata_get_packet_len(buf_src);
-                if (pkt_len_dwords > 0) {
-                   samples_returned += num_samples;
-                   user_meta->actual_count = pkt_len_dwords;
-                   memcpy(samples_dest, buf_src + METADATA_HEADER_SIZE, samples2bytes(s, pkt_len_dwords));
+                if (!metadata_rx_packet_fits_output(buf_src, num_samples)) {
+                    /* PACKET_META lengths are supplied by the incoming
+                     * packet. Do not let a valid packet exceed the caller's
+                     * destination capacity. The worker has already checked
+                     * the declaration against the actual USB transfer. */
+                    status = BLADERF_ERR_MEM;
+                    user_meta->actual_count = 0;
+                } else if (pkt_len_dwords > 0) {
+                    samples_returned = pkt_len_dwords;
+                    user_meta->actual_count = pkt_len_dwords;
+                    memcpy(samples_dest, buf_src + METADATA_HEADER_SIZE,
+                           samples2bytes(s, pkt_len_dwords));
                 }
 
                 advance_rx_buffer(b);

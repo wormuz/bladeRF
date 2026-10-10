@@ -121,6 +121,17 @@ Scanner consumes the new event name while retaining compatibility with older
 wrappers. Added regression source only; tests remain deferred until the source
 audit gate closes.
 
+### RX PACKET_META length bounds
+
+The sync RX packet path trusted the payload DWORD count from the packet header
+when copying into the caller's buffer. A corrupt/short packet could make the
+parser read beyond received bytes, and a valid packet larger than `num_samples`
+could overrun the application destination. Async RX now rejects headers whose
+declared payload exceeds the actual transfer or allocated buffer; sync RX
+rejects packets exceeding caller capacity before copying. Added source
+regressions for truncated/oversized transfer lengths and output capacity. No
+test/build run under the open source-audit gate.
+
 ### NIOS scheduled-retune cancel/ISR source pass
 
 The retune2 queue is mutated by the NIOS main-loop packet/work handlers; the
