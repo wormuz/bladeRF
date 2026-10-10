@@ -1028,6 +1028,7 @@ int main(void)
         struct gain_control gain = {0};
         struct tx_monitor_control txmon = {0};
         struct elna_control elna = {0};
+        unsigned tx_atten_write_count;
 
         fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
         ret = ad9361_auxdac_setup(&phy, &auxdac);
@@ -1099,6 +1100,16 @@ int main(void)
         if (ret != -EIO) {
             fprintf(stderr, "TX attenuation hid immediate-update write failure: ret=%" PRId32
                     "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = -1;
+        tx_atten_write_count = write_count;
+        if (ad9361_set_tx_atten(&phy, 1000, false, false, false) != -EINVAL ||
+            ad9361_set_tx_atten(&phy, 1000, false, false, true) != -EINVAL ||
+            ad9361_set_tx_atten(NULL, 1000, true, false, true) != -EINVAL ||
+            write_count != tx_atten_write_count) {
+            fprintf(stderr, "TX attenuation accepted empty/missing target\n");
             return EXIT_FAILURE;
         }
 
