@@ -104,7 +104,9 @@ static bool _clear_rffe_ctrl(void)
 {
     uint32_t reg;
 
-    reg = rffe_csr_read();
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
     reg &= ~(1 << RFFE_CONTROL_TXNRX);
     reg &= ~(1 << RFFE_CONTROL_ENABLE);
     reg &= ~(RFFE_CONTROL_SPDT_MASK << RFFE_CONTROL_RX_SPDT_1);
@@ -128,7 +130,9 @@ static bool _reset_rfic(bool state)
 {
     uint32_t reg;
 
-    reg = rffe_csr_read();
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
 
     if (state) {
         reg &= ~(1 << RFFE_CONTROL_RESET_N);
@@ -246,7 +250,11 @@ static bool _rfic_initialize(struct rfic_state *state)
          * from enable_module), so raise it here and give the interface time
          * to come up before the driver touches the core. */
         {
-            uint32_t reg = rffe_csr_read();
+            uint32_t reg;
+
+            if (!rffe_csr_read_checked(&reg)) {
+                return false;
+            }
 
             reg |= (1 << RFFE_CONTROL_ENABLE);
             CHECK_TRUE(rffe_csr_write_checked(
@@ -538,7 +546,9 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
     size_t i;
 
     /* Read RFFE control register */
-    reg = rffe_csr_read();
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
 
 #if 0
     uint32_t reg_old = reg;
@@ -636,7 +646,12 @@ bool _rfic_cmd_rd_enable(struct rfic_state *state,
                          bladerf_channel channel,
                          uint32_t *enabled)
 {
-    *enabled = _rffe_ch_enabled(rffe_csr_read(), channel) ? 1 : 0;
+    uint32_t reg;
+
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
+    *enabled = _rffe_ch_enabled(reg, channel) ? 1 : 0;
 
     return true;
 }
@@ -746,7 +761,9 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
      * after the complete direction-specific operation below succeeds. */
     state->frequency_invalid[dir] = true;
 
-    reg = rffe_csr_read();
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
 
     /* We have to do this for all the channels sharing the same LO. */
     FOR_EACH_CHANNEL(dir, 2, i, other_ch)

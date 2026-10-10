@@ -60,7 +60,9 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             return false;
 
         case NIOS_PKT_8x32_TARGET_RFFE_CSR:
-            *data = rffe_csr_read();
+            if (!rffe_csr_read_checked(data)) {
+                return false;
+            }
             break;
 
 #ifdef BOARD_BLADERF_MICRO

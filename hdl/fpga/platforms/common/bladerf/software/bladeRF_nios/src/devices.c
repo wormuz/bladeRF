@@ -1043,7 +1043,9 @@ bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
         return false;
     }
 
-    rffe_gpio = rffe_csr_read();
+    if (!rffe_csr_read_checked(&rffe_gpio)) {
+        return false;
+    }
 
     if (BLADERF_CHANNEL_IS_TX(m)) {
         mask = tx_spdt_mask;

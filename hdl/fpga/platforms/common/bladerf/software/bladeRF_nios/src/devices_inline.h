@@ -75,6 +75,20 @@ static inline uint32_t rffe_csr_read(void)
     #endif
 }
 
+static inline bool rffe_csr_read_checked(uint32_t *value)
+{
+#ifdef GPIO_RFFE_0_BASE
+    if (value == 0) {
+        return false;
+    }
+    *value = rffe_csr_read();
+    return true;
+#else
+    (void)value;
+    return false;
+#endif
+}
+
 static inline void rffe_csr_write(uint32_t value)
 {
     #ifdef GPIO_RFFE_0_BASE
