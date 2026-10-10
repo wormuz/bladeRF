@@ -186,10 +186,11 @@ uint32_t control_reg_read(void)
     return ret;
 }
 
-void control_reg_write(uint32_t value)
+bool control_reg_write(uint32_t value)
 {
     DBG("%s: value=0x%08x\n", __FUNCTION__, value);
     ASSERT(value == 0x80402057);
+    return true;
 }
 
 uint16_t iqbal_get_gain(bladerf_module m)

@@ -88,8 +88,7 @@ struct bladerf;
     })
 
 #   define CONFIG_GPIO_WRITE(dev, data) ({ \
-        control_reg_write(data); \
-        0; /* "Return" 0 */ \
+        control_reg_write(data) ? 0 : -1; \
     })
 
 /* Stub out pthread type */

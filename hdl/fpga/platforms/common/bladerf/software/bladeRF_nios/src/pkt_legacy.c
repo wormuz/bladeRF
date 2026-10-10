@@ -304,8 +304,7 @@ static inline bool perform_config_write(enum config_param p,
 {
     switch (p) {
         case CONFIG_CONTROL_REG:
-            control_reg_write((uint32_t) payload);
-            return true;
+            return control_reg_write((uint32_t) payload);
 
         case CONFIG_IQ_CORR_RX_GAIN:
             iqbal_set_gain(BLADERF_MODULE_RX, (uint16_t) payload);

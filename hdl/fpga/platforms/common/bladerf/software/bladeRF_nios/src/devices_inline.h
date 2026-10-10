@@ -33,6 +33,7 @@
 #include "altera_avalon_spi.h"
 #include "altera_avalon_jtag_uart_regs.h"
 #include "altera_avalon_pio_regs.h"
+#include "nios_gpio_policy.h"
 #include "rffe_csr_policy.h"
 #include "nios_pkt_8x32.h"
 
@@ -45,7 +46,7 @@ static inline uint32_t control_reg_read(void)
     return IORD_ALTERA_AVALON_PIO_DATA(CONTROL_BASE);
 }
 
-static inline void control_reg_write(uint32_t value)
+static inline bool control_reg_write(uint32_t value)
 {
     const size_t CFG_GPIO_CLOCK_SELECT = 18; // Refer to bladerf2_common.h
     const uint32_t CLK_SEL_MASK = (1 << CFG_GPIO_CLOCK_SELECT);
@@ -64,6 +65,8 @@ static inline void control_reg_write(uint32_t value)
         DBG("__resp_delay__");
         usleep(5);
     }
+
+    return nios_gpio_outputs_match(value, control_reg_read());
 }
 
 static inline uint32_t rffe_csr_read(void)

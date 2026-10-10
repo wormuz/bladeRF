@@ -233,8 +233,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             return false;
 
         case NIOS_PKT_8x32_TARGET_CONTROL:
-            control_reg_write(data);
-            break;
+            return control_reg_write(data);
 
         case NIOS_PKT_8x32_TARGET_ADF4351:
             if (!adf4351_write(data)) {

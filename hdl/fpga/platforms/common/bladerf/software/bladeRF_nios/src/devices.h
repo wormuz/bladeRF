@@ -385,7 +385,7 @@ INLINE uint32_t control_reg_read(void);
  *
  * @param   value   Device configuration bit map
  */
-INLINE void control_reg_write(uint32_t value);
+INLINE bool control_reg_write(uint32_t value);
 
 /**
  * Get IQ balance gain value
