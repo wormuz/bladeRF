@@ -8,7 +8,8 @@ hosted on GitHub: https://github.com/Nuand/bladeRF
 v2.7.0 (unreleased)
 --------------------------------
  * Report deferred NIOS TX fastlock execution failures through native RF
-   event history and revoke sync/async TX admission until a new TX epoch.
+   event history, revoke TX configuration validity, and block sync/async TX
+   admission without misclassifying the transport link.
 
 v2.6.1 (2026-05-04)
 --------------------------------

@@ -4906,8 +4906,9 @@ typedef enum {
      * status in bits 7:0. */
     BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
     /** NIOS accepted a scheduled TX fastlock request but later failed while
-     * loading or activating its profile. TX certificates are revoked until
-     * a new acknowledged TX epoch. `flags` carries the cumulative NIOS
+     * loading or activating its profile. TX configuration/RFIC validity is
+     * revoked and new submissions are blocked; this does not claim the FPGA
+     * transport link itself failed. `flags` carries the cumulative NIOS
      * failure counter observed by the host. */
     BLADERF_RF_EVT_TX_RETUNE_FAILED
 } bladerf_rf_event_type;
