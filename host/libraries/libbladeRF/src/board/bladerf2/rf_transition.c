@@ -78,6 +78,7 @@ static void _test_rx_transition_late_observation(const char *stage)
  * sdrscanner/hs_sweep/rf_transaction_trace.py -- same register map
  * verified from the Python side against this same AD9361 driver. */
 #define REG_STATE_ADDR 0x017
+#define REG_CALIBRATION_CTRL_ADDR 0x016
 #define REG_RX_CP_VCO_LOCK_ADDR 0x247
 #define REG_TX_CP_VCO_LOCK_ADDR 0x287
 #define REG_BBPLL_LOCK_STATUS_ADDR 0x05e
@@ -887,6 +888,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t tx_pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
+        uint8_t tx_calibration_status = 0;
         uint32_t rffe_status = 0;
         uint8_t expected_rx_channel_mask = 0;
         bool expected_rx_channel_mask_valid = false;
@@ -1049,6 +1051,13 @@ static void *rx_fault_monitor_task(void *arg)
                         _rx_fault_monitor_stage(board_data, "TX BBPLL status");
                         tx_rfic_status = _read_rfic_reg(
                             dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
+                    }
+                    if (tx_rfic_status == 0) {
+                        _rx_fault_monitor_stage(board_data,
+                                                "TX calibration status");
+                        tx_rfic_status = _read_rfic_reg(
+                            dev, REG_CALIBRATION_CTRL_ADDR,
+                            &tx_calibration_status);
                         tx_rfic_status_observed = tx_rfic_status == 0;
                     }
                 }
@@ -1086,6 +1095,10 @@ static void *rx_fault_monitor_task(void *arg)
             } else if (strcmp(test_mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0) {
                 bbpll_status &= (uint8_t)
                     ~BLADERF2_AD9361_BBPLL_LOCK_BIT;
+            } else if (strcmp(test_mode,
+                              "RUNTIME_TX_CALIBRATION_ACTIVE") == 0) {
+                tx_calibration_status |=
+                    BLADERF2_AD9361_CALIBRATION_BUSY_MASK;
             } else if (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0) {
                 tx_retune2_failure_count++;
                 tx_retune2_watch_active = true;
@@ -1095,7 +1108,8 @@ static void *rx_fault_monitor_task(void *arg)
             const enum bladerf2_tx_rfic_observation tx_rfic_observation =
                 bladerf2_tx_rfic_observation(
                     tx_rfic_status_observed && tx_rfic_status == 0,
-                    tx_pll_status, ensm_status, bbpll_status);
+                    tx_pll_status, ensm_status, bbpll_status,
+                    tx_calibration_status);
             bool report_status_unavailable = false;
             bool report_tx_fault = false;
             bool report_tx_epoch_invalid = false;
@@ -1650,7 +1664,8 @@ static void *rx_fault_monitor_task(void *arg)
                     if (report_tx_rfic_invalid) {
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0,
-                            ((uint32_t)ensm_status << 16) |
+                            ((uint32_t)tx_calibration_status << 24) |
+                                ((uint32_t)ensm_status << 16) |
                                 ((uint32_t)tx_pll_status << 8) | bbpll_status,
                             BLADERF_ERR_FPGA_OP);
                     }
@@ -1663,7 +1678,8 @@ static void *rx_fault_monitor_task(void *arg)
                     if (report_tx_rfic_valid) {
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_RFIC_STATE_VALID, 0,
-                            ((uint32_t)ensm_status << 16) |
+                            ((uint32_t)tx_calibration_status << 24) |
+                                ((uint32_t)ensm_status << 16) |
                                 ((uint32_t)tx_pll_status << 8) | bbpll_status,
                             0);
                     }
@@ -2391,6 +2407,10 @@ static int _bladerf_rx_transition_begin(
     bool rx_x2_layout_unsupported = false;
     bool tuning_mode_unsupported = false;
     uint64_t stage_started_ns;
+    uint64_t calibration_deadline_ns;
+    uint8_t calibration_reg = 0;
+    bool calibration_pending_seen = false;
+    bool rfdc_pending_seen = false;
     uint64_t spi_first_write_ns = 0;
     uint64_t spi_last_write_ns = 0;
     uint32_t spi_write_count = 0;
@@ -2665,6 +2685,51 @@ static int _bladerf_rx_transition_begin(
                     BLADERF_RF_STATE_CONFIG_PENDING,
                     request->target_frequency_hz, 0,
                     epoch_status_word, 0, epoch_id);
+    }
+
+    /* Do not retune while a calibration from an earlier timed-out operation
+     * is still active. The FPGA fence is already closed, so waiting here
+     * cannot leak samples; a deadline remains a failure, never a validity
+     * signal. */
+    {
+        const uint32_t timeout_ms = request->timeout_ms
+            ? request->timeout_ms : 1000;
+        calibration_deadline_ns = _monotonic_ns() +
+            (uint64_t)timeout_ms * 1000000ULL;
+    }
+    for (;;) {
+        if (_deadline_expired(calibration_deadline_ns)) {
+            break;
+        }
+        status = _read_rfic_reg(dev, REG_CALIBRATION_CTRL_ADDR,
+                                &calibration_reg);
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR,
+                        request->target_frequency_hz, 0, 0, status, 0);
+            return _fail_transition(dev, board_data, status, NULL);
+        }
+        if ((calibration_reg &
+             BLADERF2_AD9361_CALIBRATION_BUSY_MASK) == 0) {
+            break;
+        }
+        calibration_pending_seen = true;
+        rfdc_pending_seen |= (calibration_reg & RFDC_CAL) != 0;
+        usleep(POLL_INTERVAL_US);
+    }
+    if ((calibration_reg &
+         BLADERF2_AD9361_CALIBRATION_BUSY_MASK) != 0 ||
+        _deadline_expired(calibration_deadline_ns)) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                    BLADERF_RF_STATE_ERROR,
+                    request->target_frequency_hz, 0, calibration_reg,
+                    BLADERF_ERR_TIMEOUT, 0);
+        return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT, NULL);
+    }
+    if (calibration_pending_seen && rfdc_pending_seen) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
+                    BLADERF_RF_STATE_CALIBRATING,
+                    request->target_frequency_hz, 0, calibration_reg, 0, 0);
     }
 
     _emit_event(dev, board_data, BLADERF_RF_EVT_CONFIG_ACCEPTED,
@@ -2954,8 +3019,11 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     struct bladerf2_board_data *board_data;
     uint64_t deadline_ns;
     uint8_t pll_reg, ensm_reg;
+    uint8_t calibration_reg = 0;
     bool pll_locked = false;
     bool ensm_rx    = false;
+    bool stale_calibration_observed = false;
+    bool stale_rfdc_calibration_observed = false;
     bool transition_busy = false;
     bool transaction_valid = false;
     bool first_host_data_required = false;
@@ -3005,6 +3073,54 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
     }
     pll_reg = 0;
     ensm_reg = 0;
+
+    /* A calibration can time out at the host while its AD9361 command is
+     * still running. A failed transaction keeps its FPGA epoch closed, but
+     * that alone does not stop a later request from reaching the RFIC.
+     * Confirm every calibration start bit is clear before this request can
+     * certify a new epoch. A deadline is failure detection only. */
+    for (;;) {
+        if (_deadline_expired(deadline_ns)) {
+            break;
+        }
+        status = _read_rfic_reg(dev, REG_CALIBRATION_CTRL_ADDR,
+                                &calibration_reg);
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, 0, status, 0);
+            return _fail_transition(dev, board_data, status, final_event);
+        }
+        _test_rx_transition_late_observation("LATE_RFDC_CAL_STATUS");
+        if (_deadline_expired(deadline_ns)) {
+            break;
+        }
+        if (_test_rx_transition_stall("RFDC_CAL")) {
+            calibration_reg |= RFDC_CAL;
+        }
+        if ((calibration_reg &
+             BLADERF2_AD9361_CALIBRATION_BUSY_MASK) == 0) {
+            break;
+        }
+        stale_calibration_observed = true;
+        if ((calibration_reg & RFDC_CAL) != 0) {
+            stale_rfdc_calibration_observed = true;
+        }
+        usleep(POLL_INTERVAL_US);
+    }
+    if ((calibration_reg &
+         BLADERF2_AD9361_CALIBRATION_BUSY_MASK) != 0 ||
+        _deadline_expired(deadline_ns)) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                    BLADERF_RF_STATE_ERROR, 0, 0, calibration_reg,
+                    BLADERF_ERR_TIMEOUT, expected_epoch_id);
+        return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
+                                final_event);
+    }
+    if (stale_calibration_observed && stale_rfdc_calibration_observed) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
+                    BLADERF_RF_STATE_CALIBRATING, 0, 0, calibration_reg,
+                    0, expected_epoch_id);
+    }
 
     /* Poll the real PLL lock bit (REG_RX_CP_OVERRANGE_VCO_LOCK, bit
      * VCO_LOCK_BIT) at the same cadence the AD9361 driver itself polls

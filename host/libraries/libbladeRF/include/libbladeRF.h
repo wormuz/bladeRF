@@ -4911,17 +4911,16 @@ typedef enum {
      * revoked; the monitor requests FPGA TX gate abort. `error_code` contains
      * the libbladeRF error. */
     BLADERF_RF_EVT_TX_TRANSPORT_ERROR,
-    /** AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL status were observed healthy
-     * in the acknowledged TX epoch. This does not validate RF power or
-     * waveform quality. */
+    /** AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL status were observed healthy,
+     * with all calibration start bits clear, in the acknowledged TX epoch.
+     * This does not validate RF power or waveform quality. */
     BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
-    /** AD9361 TX RFPLL, TX/FDD ENSM, or BBPLL status became invalid. TX RFIC
-     * and frequency validity are revoked until a new acknowledged TX stream
-     * epoch and a fresh confirmed retune. The FPGA TX gate is aborted and
-     * must acknowledge MUTED before the fault is considered contained.
-     * `rfic_status`
-     * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL
-     * status in bits 7:0. */
+    /** AD9361 TX RFPLL, TX/FDD ENSM, BBPLL, or calibration-idle status became
+     * invalid. TX RFIC and frequency validity are revoked until a new
+     * acknowledged TX stream epoch and a fresh confirmed retune. The FPGA TX
+     * gate is aborted and must acknowledge MUTED before the fault is
+     * considered contained. `rfic_status` packs calibration control in bits
+     * 31:24, ENSM in 23:16, TX RFPLL status in 15:8, and BBPLL status in 7:0. */
     BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
     /** NIOS accepted a scheduled TX fastlock request but later failed while
      * loading or activating its profile. Aggregate TX validity is revoked

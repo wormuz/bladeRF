@@ -7,6 +7,7 @@
  *   RUNTIME_TX_RFPLL_UNLOCKED
  *   RUNTIME_TX_ENSM_NOT_TX
  *   RUNTIME_TX_BBPLL_UNLOCKED
+ *   RUNTIME_TX_CALIBRATION_ACTIVE
  *   RUNTIME_REFERENCE_PLL_UNLOCKED
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
  *   RUNTIME_TX_RETUNE_FAILURE
@@ -111,6 +112,7 @@ int main(void)
     uint32_t count = 0;
     bool history_complete = false;
     bool expected_event_seen = false;
+    bool calibration_status_reported = false;
     bool link_fault_seen = false;
     bool rfics_invalid_seen = false;
     bool feeder_started = false;
@@ -125,6 +127,7 @@ int main(void)
         strcmp(mode, "RUNTIME_REFERENCE_PLL_UNLOCKED") != 0 &&
         strcmp(mode, "RUNTIME_TX_ENSM_NOT_TX") != 0 &&
         strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") != 0 &&
+        strcmp(mode, "RUNTIME_TX_CALIBRATION_ACTIVE") != 0 &&
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
         strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") != 0 &&
@@ -493,6 +496,10 @@ int main(void)
             } else if (event->event_type ==
                        BLADERF_RF_EVT_TX_RFIC_STATE_INVALID) {
                 rfics_invalid_seen = true;
+                if (strcmp(mode, "RUNTIME_TX_CALIBRATION_ACTIVE") == 0 &&
+                    (event->rfic_status >> 24) != 0) {
+                    calibration_status_reported = true;
+                }
             }
 
             if ((strcmp(mode, "RUNTIME_TX_RFIC_STATUS_READ_FAILURE") == 0 ||
@@ -501,7 +508,8 @@ int main(void)
                 expected_event_seen = true;
             } else if ((strcmp(mode, "RUNTIME_TX_RFPLL_UNLOCKED") == 0 ||
                         strcmp(mode, "RUNTIME_TX_ENSM_NOT_TX") == 0 ||
-                        strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0) &&
+                        strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0 ||
+                        strcmp(mode, "RUNTIME_TX_CALIBRATION_ACTIVE") == 0) &&
                        event->event_type ==
                            BLADERF_RF_EVT_TX_RFIC_STATE_INVALID) {
                 expected_event_seen = true;
@@ -530,6 +538,12 @@ int main(void)
 
     if (!expected_event_seen) {
         fprintf(stderr, "expected TX fault event not observed for %s\n", mode);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    if (strcmp(mode, "RUNTIME_TX_CALIBRATION_ACTIVE") == 0 &&
+        !calibration_status_reported) {
+        fprintf(stderr, "TX calibration status was omitted from RFIC event\n");
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }

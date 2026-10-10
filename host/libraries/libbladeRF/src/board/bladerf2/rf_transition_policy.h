@@ -66,6 +66,7 @@ bladerf2_rx_invalidation_policy(bladerf_channel channel,
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID   (1u << 12)
 #define BLADERF2_AD9361_VCO_LOCK_BIT 0x02u
 #define BLADERF2_AD9361_BBPLL_LOCK_BIT 0x80u
+#define BLADERF2_AD9361_CALIBRATION_BUSY_MASK 0xffu
 #define BLADERF2_AD9361_ENSM_STATE_MASK 0x0fu
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
@@ -111,7 +112,8 @@ enum bladerf2_tx_rfic_observation {
 static inline enum bladerf2_tx_rfic_observation
 bladerf2_tx_rfic_observation(bool status_read_succeeded,
                              uint8_t tx_pll_status,
-                             uint8_t ensm_status, uint8_t bbpll_status)
+                             uint8_t ensm_status, uint8_t bbpll_status,
+                             uint8_t calibration_status)
 {
     if (!status_read_succeeded) {
         return BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE;
@@ -119,6 +121,8 @@ bladerf2_tx_rfic_observation(bool status_read_succeeded,
     const uint8_t ensm = ensm_status & BLADERF2_AD9361_ENSM_STATE_MASK;
     return (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
            (bbpll_status & BLADERF2_AD9361_BBPLL_LOCK_BIT) != 0 &&
+           (calibration_status &
+            BLADERF2_AD9361_CALIBRATION_BUSY_MASK) == 0 &&
            (ensm == BLADERF2_AD9361_ENSM_STATE_TX ||
             ensm == BLADERF2_AD9361_ENSM_STATE_FDD)
         ? BLADERF2_TX_RFIC_OBSERVATION_VALID

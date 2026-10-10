@@ -210,7 +210,7 @@ static int assert_legacy_setter_blocked_during_transition(
 int main(int argc, char **argv)
 {
     static const char *const stages[] = {
-        "PLL", "ENSM", "BBPLL", "EPOCH",
+        "RFDC_CAL", "PLL", "ENSM", "BBPLL", "EPOCH",
         "LATE_PLL", "LATE_ENSM", "LATE_BBPLL", "LATE_COMPLETE",
         "LATE_EPOCH", "LATE_TIMESTAMP", "LATE_LINK_STATUS",
         "LATE_HOST_FENCE", "LATE_HOST_ACTIVATE",
@@ -297,7 +297,7 @@ int main(int argc, char **argv)
                 bladerf_strerror(status));
         return 1;
     }
-    printf("RX positive-timeout qualification: PASS (%s, RFPLL/ENSM/BBPLL/FPGA)\n",
+    printf("RX positive-timeout qualification: PASS (%s, RFDC/RFPLL/ENSM/BBPLL/FPGA)\n",
            config.name);
     return 0;
 }
