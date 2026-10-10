@@ -91,6 +91,19 @@ slice found no additional stale-IQ admission path. Clock/reset recovery,
 packet-straddling timestamp traces, RX1/RX2/RX_X2 simulation, and exact-image
 hardware qualification remain open.
 
+### RX link-status continuity finding
+
+The background RX monitor and transition admission now require protocol-v2
+`RX_EPOCH_CURRENT`, `RX_EPOCH_VALID`, and `RX_LINK_ACTIVE` in addition to a
+clear sticky RX fault. Before this guard, a reset or lost START acknowledgement
+could leave host admission certified, or permit transition certification,
+without a confirmed FPGA RX link epoch. The monitor revokes admission and
+publishes an FPGA RX invalidation; the transition fails before host admission.
+Source regressions cover each missing status bit, and the runtime harness has
+`RUNTIME_FPGA_RX_EPOCH_LOST`. bladeRF commits `75bb2d63` and `e3a7adbe`.
+Regressions and hardware qualification remain unrun under the open source-audit
+gate.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
