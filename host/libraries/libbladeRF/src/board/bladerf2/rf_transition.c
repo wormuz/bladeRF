@@ -1335,7 +1335,9 @@ static void *rx_fault_monitor_task(void *arg)
                         release_still_valid =
                             board_data->tx_retune2_applied_waiting_rf_valid &&
                             board_data->tx_retune2_pending_count == 0 &&
-                            !board_data->tx_retune2_completion_faulted;
+                            !board_data->tx_retune2_completion_faulted &&
+                            !board_data->tx_gate_abort_pending &&
+                            !board_data->tx_async_transport_faulted;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         if (release_still_valid) {
                         uint32_t gate_status = 0;
@@ -1419,22 +1421,32 @@ static void *rx_fault_monitor_task(void *arg)
                                        NIOS_PKT_8x32_TX_RETUNE_STATE_ACTIVE &&
                                    gate_release_requested &&
                                    (gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_RESUME_EVENT) != 0) {
+                            bool resume_is_valid;
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             applied_frequency_hz =
                                 board_data->tx_retune2_applied_frequency_hz;
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
                             board_data->tx_retune_gate_release_requested = false;
-                            board_data->tx_retune2_completion_faulted = false;
+                            resume_is_valid = !board_data->tx_gate_abort_pending &&
+                                !board_data->tx_async_transport_faulted;
+                            if (resume_is_valid) {
+                                board_data->tx_retune2_completion_faulted = false;
+                            }
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             /* A successful RF configuration change closes
                              * async TX admission while the RFIC and gate are
                              * being revalidated. Reopen it only after the
                              * gate's RESUME event; the helper keeps a
                              * concurrent transport fault sticky. */
-                            bladerf2_tx_stream_set_faulted(board_data, false);
-                            bladerf2_tx_retune_event(
-                                dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                applied_frequency_hz, applied_frequency_hz, 0, 0);
+                            if (resume_is_valid) {
+                                bladerf2_tx_stream_set_faulted(board_data, false);
+                                bladerf2_tx_retune_event(
+                                    dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
+                                    applied_frequency_hz,
+                                    applied_frequency_hz, 0, 0);
+                            } else {
+                                abort_tx_retune_gate = true;
+                            }
                         }
                         }
                         });
