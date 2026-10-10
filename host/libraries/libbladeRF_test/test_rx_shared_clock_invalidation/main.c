@@ -271,7 +271,7 @@ int main(void)
         .integer = 2000000, .num = 1, .den = 3,
     };
     struct bladerf_trigger trigger = {
-        .channel = BLADERF_CHANNEL_RX(1),
+        .channel = BLADERF_CHANNEL_RX(0),
         .role = BLADERF_TRIGGER_ROLE_SLAVE,
         .signal = BLADERF_TRIGGER_J51_1,
     };
@@ -490,14 +490,14 @@ int main(void)
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
     assert(state.invalidate_calls == 27 && state.complete_calls == 19 &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
-           state.invalidated_channel == rx2 &&
-           state.trigger_arm_channel == rx2 && state.trigger_arm_calls == 1);
-    assert(bladerf_write_trigger(&dev, rx2, BLADERF_TRIGGER_J51_1,
+           state.invalidated_channel == rx0 &&
+           state.trigger_arm_channel == rx0 && state.trigger_arm_calls == 1);
+    assert(bladerf_write_trigger(&dev, rx0, BLADERF_TRIGGER_J51_1,
                                  BLADERF_TRIGGER_REG_ARM) == 0);
     assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
-           state.invalidated_channel == rx2 &&
-           state.trigger_write_channel == rx2 &&
+           state.invalidated_channel == rx0 &&
+           state.trigger_write_channel == rx0 &&
            state.trigger_write_value == BLADERF_TRIGGER_REG_ARM);
 
     trigger.channel = tx0;
@@ -509,10 +509,10 @@ int main(void)
            state.tx_fence_calls == 2);
 
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
-    trigger.channel = rx2;
+    trigger.channel = rx0;
     assert(bladerf_trigger_arm(&dev, &trigger, false, 0, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(bladerf_write_trigger(&dev, rx2, BLADERF_TRIGGER_J51_1, 0) ==
+    assert(bladerf_write_trigger(&dev, rx0, BLADERF_TRIGGER_J51_1, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 30 && state.complete_calls == 20 &&
            state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
@@ -552,7 +552,7 @@ int main(void)
     assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
            state.schedule_retune_calls == 2);
 
-    trigger.channel = rx2;
+    trigger.channel = rx0;
     assert(bladerf_trigger_fire(&dev, &trigger) == 0);
     assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
            state.trigger_fire_calls == 1 && state.tx_fence_calls == 2);
