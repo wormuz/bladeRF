@@ -497,7 +497,10 @@ int main(void)
         }
         fail_write_reg = -1;
         ret = ad9361_fastlock_load(&phy, false, 8, profile_data);
-        if (ret != -EINVAL) {
+        if (ret != -EINVAL ||
+            ad9361_fastlock_load(NULL, false, 0, profile_data) != -EINVAL ||
+            ad9361_fastlock_store(NULL, true, 0) != -EINVAL ||
+            ad9361_fastlock_save(&phy, false, 0, NULL) != -EINVAL) {
             fprintf(stderr, "Fastlock loader accepted invalid profile: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
         }
@@ -508,6 +511,7 @@ int main(void)
     {
         struct ad9361_fastlock_entry *profile = &phy.fastlock.entry[0][0];
         unsigned writes_before;
+        uint8_t saved_profile[RX_FAST_LOCK_CONFIG_WORD_NUM];
 
         writes_before = write_count;
         if (ad9361_fastlock_recall(NULL, false, 0) != -EINVAL ||
@@ -525,6 +529,25 @@ int main(void)
 
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
+        memset(saved_profile, 0xa5, sizeof(saved_profile));
+        fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
+        ret = ad9361_fastlock_save(&phy, false, 0, saved_profile);
+        if (ret != -EIO || saved_profile[0] != 0xa5 ||
+            ad9361_fastlock_save(NULL, false, 0, saved_profile) != -EINVAL ||
+            ad9361_fastlock_save(&phy, false, 8, saved_profile) != -EINVAL) {
+            fprintf(stderr, "RX fastlock save hid SPI/argument error\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        memset(saved_profile, 0xa5, sizeof(saved_profile));
+        fail_read_reg = REG_TX_FAST_LOCK_PROGRAM_READ;
+        ret = ad9361_fastlock_save(&phy, true, 0, saved_profile);
+        if (ret != -EIO || saved_profile[0] != 0xa5) {
+            fprintf(stderr, "TX fastlock save hid SPI read failure\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+
         profile->flags = FASTLOOK_INIT;
         profile->alc_written = 0x10;
         profile->alc_orig = 0x10;
