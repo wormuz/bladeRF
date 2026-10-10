@@ -5257,7 +5257,8 @@ static int bladerf2_tx_rf_config_change_begin(
     const uint8_t pending_count = board_data->tx_retune2_pending_count;
     int status = 0;
 
-    if (board_data->tx_frequency_reconfigure_active ||
+    if (board_data->rf_transition_pending ||
+        board_data->tx_frequency_reconfigure_active ||
         board_data->tx_rf_config_operation_active) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
