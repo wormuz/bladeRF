@@ -329,7 +329,7 @@ struct board_fns {
                               uint32_t reason);
     /* Revoke TX RF validity before a legacy control changes the TX RF path. */
     int (*tx_config_change_begin)(struct bladerf *dev);
-    /* Unconditionally revoke TX admission before reset/FPGA/bootloader teardown.
+    /* Unconditionally revoke TX admission before reset/bootloader teardown.
      * Unlike a normal config fence, this must remain usable while TX recovery
      * is blocked so destructive recovery controls cannot deadlock. */
     int (*tx_device_shutdown_begin)(struct bladerf *dev);

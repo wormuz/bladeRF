@@ -206,10 +206,12 @@ Source-only; no build/test under the active no-build audit gate.
 The same sweep found reset and bootloader handoff only revoked RX validity.
 The first TX-fence implementation reused the ordinary configuration fence,
 which refuses work while TX recovery is blocked and could therefore prevent
-reset from serving as an escape path. Reset, FPGA reload, and bootloader
-handoff now use a dedicated shutdown invalidation: it revokes host admission,
+reset from serving as an escape path. Reset and bootloader handoff now use a
+dedicated shutdown invalidation: it revokes host admission,
 publishes TX configuration invalidation, attempts to mute an active TX gate,
 and permits teardown to proceed even if the gate response is unavailable.
 The board-level reset callback no longer re-enters the ordinary config fence
 after the generic wrapper has performed this shutdown invalidation.
+FPGA reload retains the ordinary recoverable TX config fence because its board
+callback can reject the reload while an RF direction is enabled.
 Source-only; no build/test under the active no-build audit gate.
