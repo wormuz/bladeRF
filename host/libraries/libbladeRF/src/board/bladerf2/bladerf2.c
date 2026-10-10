@@ -878,7 +878,11 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 #define RF_LINK_STATUS_RX_FAULT     (1u << 14)
 #define RF_LINK_STATUS_TX_FAULT     (1u << 15)
 
+static int bladerf2_tx_snapshot_before_shared_start(
+    struct bladerf *dev, struct bladerf2_board_data *board_data);
+
 static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
+                                  bool snapshot_active_tx,
                                   bool *epoch_confirmed,
                                   bool *start_attempted,
                                   bool *start_accepted,
@@ -982,6 +986,15 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                   "the RF link epoch mechanism\n",
                   __FUNCTION__, bladerf_strerror(status));
         return strict_epoch ? status : 0;
+    }
+
+    /* Keep the sticky-fault snapshot adjacent to START: SET_SPEED and speed
+     * lookup can take time during which the active TX path may fault. */
+    if (snapshot_active_tx) {
+        status = bladerf2_tx_snapshot_before_shared_start(dev, board_data);
+        if (status != 0) {
+            return status;
+        }
     }
 
     /* No FX3 RF-link restart here. Cycling the alternate setting (NULL then
@@ -1325,15 +1338,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
                                                     false);
             }
         }
-        if (tx_direction_was_active) {
-            status = bladerf2_tx_snapshot_before_shared_start(dev,
-                                                              board_data);
-            if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false,
-                                                    false);
-            }
-        }
-        status = announce_rf_link_epoch(dev, ch, &epoch_confirmed,
+        status = announce_rf_link_epoch(dev, ch, tx_direction_was_active,
+                                        &epoch_confirmed,
                                         &start_attempted, &start_accepted,
                                         &link_ack_status);
         if (start_attempted && board_data->rf_link_dir_on[1]) {
