@@ -5232,7 +5232,8 @@ struct bladerf_rx_transition_request {
  * @param       dev             Device handle
  * @param[in]   ch              RX channel
  * @param[in]   request         Transition requirements
- * @param[out]  transaction_id  Opaque handle for bladerf_rx_transition_wait
+ * @param[out]  transaction_id  Opaque handle for bladerf_rx_transition_wait;
+ *                              zero on failure
  *
  * @return 0 on success, value from \ref RETCODES list on failure
  */
@@ -5255,6 +5256,7 @@ int CALL_CONV bladerf_rx_transition_begin(
  *
  * @param[in] quick_tune  Profile previously obtained with
  *                        ::bladerf_get_quick_tune
+ * @param[out] transaction_id  Opaque handle for wait; zero on failure
  */
 API_EXPORT
 int CALL_CONV bladerf_rx_transition_begin_quick_tune(

@@ -2560,6 +2560,9 @@ static int _bladerf_rx_transition_begin(
     bool nios_trace_valid = false;
     bool nios_duration_valid = false;
 
+    if (transaction_id != NULL) {
+        *transaction_id = 0;
+    }
     if (dev == NULL || request == NULL || transaction_id == NULL) {
         return BLADERF_ERR_INVAL;
     }
