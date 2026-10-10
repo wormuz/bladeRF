@@ -3051,8 +3051,13 @@ struct bladerf_stream;
  * For both RX and TX, the stream callback receives:
  *  - dev:          Device structure
  *  - stream:       The associated stream
- *  - metadata:     For future support - do not attempt to read/write this
- *                  in the current library implementation.
+ *  - metadata:     For RX callbacks, initialized for each transfer. On
+ *                  bladeRF 2 RX sample-META transfers accepted under an
+ *                  epoch contract, timestamp, epoch ID, epoch-ID validity,
+ *                  and clipping flags describe the validated transfer;
+ *                  rejected/event-only callbacks carry zeroed metadata.
+ *                  Other RX formats currently provide zeroed metadata.
+ *                  TX callback metadata is not currently used.
  *  - user_data:    User data provided when initializing stream
  *
  * For TX callbacks:
@@ -3075,7 +3080,10 @@ struct bladerf_stream;
  *       the FPGA first-valid timestamp. Short transfers and rejected epoch
  *       buffers produce an event-only callback with `samples == NULL` and
  *       `num_samples == 0` when a continuous withholding interval begins; no
- *       IQ is exposed. Repeated rejected library-owned buffers are recycled
+ *       IQ is exposed. Accepted callback metadata identifies the validated
+ *       transfer's starting timestamp and epoch; it does not describe a
+ *       multi-message sample array as a single sample-level record. Repeated
+ *       rejected library-owned buffers are recycled
  *       internally until valid IQ resumes. Caller-supplied buffers continue
  *       to receive callback ownership decisions. RX PACKET_META and raw sample
  *       formats cannot prove epoch identity and are withheld after an epoch
