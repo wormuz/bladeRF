@@ -2139,6 +2139,11 @@ int main(void)
             .auxadc_decimation = 32768,
             .periodic_temp_measuremnt = true,
         };
+        struct rssi_control rssi = {
+            .rssi_delay = UINT32_MAX,
+            .rssi_wait = UINT32_MAX,
+            .rssi_duration = 512,
+        };
         struct gain_control gain = {0};
         struct ad9361_phy_platform_data agc_pdata = {0};
         struct ad9361_rf_phy agc_phy = { .spi = &spi, .pdata = &agc_pdata };
@@ -2272,6 +2277,16 @@ int main(void)
         register_map_enabled = true;
         spi_status = 0;
         fail_write_reg = -1;
+        ret = ad9361_rssi_setup(&agc_phy, &rssi, false);
+        if (ret != 0 || fake_regs[REG_RSSI_DELAY] != 255 ||
+            fake_regs[REG_RSSI_WAIT_TIME] != 255) {
+            fprintf(stderr,
+                    "RSSI delay arithmetic did not saturate: "
+                    "ret=%" PRId32 " delay=%u wait=%u\n",
+                    ret, fake_regs[REG_RSSI_DELAY],
+                    fake_regs[REG_RSSI_WAIT_TIME]);
+            return EXIT_FAILURE;
+        }
         writes_before = write_count;
         ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
         if (ret != 0 || write_count != writes_before + 6 ||

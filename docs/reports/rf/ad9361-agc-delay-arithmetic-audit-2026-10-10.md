@@ -45,6 +45,12 @@ the interval with 64-bit arithmetic before rejecting values above 127. These
 checks happen before the first SPI write. Regression source covers the maximum
 valid exponent and the invalid decimation, divider, and interval cases.
 
+The adjacent RSSI time-to-sample conversion had the same 32-bit multiplication
+overflow for user-provided delay and wait values. It now uses 64-bit rounded
+intermediates before applying the existing 8-bit hardware-field clamps, and
+rejects missing PHY/control/SPI/sample-clock state before dereferencing it.
+Regression source checks maximum delays saturate both fields.
+
 ## Validation status
 
 Source review and `git diff --check` only. Per the active release instruction,
