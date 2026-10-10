@@ -1016,6 +1016,7 @@ static void *rx_fault_monitor_task(void *arg)
         bool tx_fir_config_valid = false;
         bool tx_retune2_watch_active = false;
         bool rx_retune2_watch_active = false;
+        uint64_t rx_retune2_watch_generation = 0;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
         uint32_t transaction_id = 0;
@@ -1091,6 +1092,8 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->tx_retune2_failure_watch_active;
             rx_retune2_watch_active =
                 board_data->rx_retune2_failure_watch_active;
+            rx_retune2_watch_generation =
+                board_data->rx_retune2_failure_watch_generation;
             tx_channel_state_generation =
                 board_data->tx_channel_state_generation;
             should_poll = board_data->state == STATE_INITIALIZED &&
@@ -1280,46 +1283,53 @@ static void *rx_fault_monitor_task(void *arg)
             int32_t rx_retune_event_error = 0;
 
             WITH_MUTEX(&dev->lock, {
-                if (rx_retune2_status != 0) {
-                    if (!board_data->rx_retune2_status_unavailable_reported) {
-                        board_data->rx_retune2_status_unavailable_reported =
-                            true;
-                        report_rx_retune_status_unavailable = true;
-                        rx_retune_event_error = rx_retune2_status;
-                    }
-                } else {
-                    board_data->rx_retune2_status_unavailable_reported = false;
-                    if (!board_data->rx_retune2_failure_count_valid) {
-                        board_data->rx_retune2_failure_count_last =
-                            rx_retune2_failure_count;
-                        board_data->rx_retune2_failure_count_valid = true;
-                    } else if (rx_retune2_failure_count !=
-                               board_data->rx_retune2_failure_count_last) {
-                        report_rx_retune_failure = true;
-                        report_rx_retune_status_unavailable =
-                            rx_retune2_failure_count <
-                                board_data->rx_retune2_failure_count_last;
-                        if (report_rx_retune_status_unavailable) {
-                            report_rx_retune_failure = false;
-                            rx_retune_event_error = BLADERF_ERR_UNEXPECTED;
-                        } else {
-                            rx_retune_event_error = BLADERF_ERR_FPGA_OP;
+                if (bladerf2_rx_retune_watch_generation_current(
+                        board_data->rx_retune2_failure_watch_active,
+                        rx_retune2_watch_generation,
+                        board_data->rx_retune2_failure_watch_generation)) {
+                    if (rx_retune2_status != 0) {
+                        if (!board_data->rx_retune2_status_unavailable_reported) {
+                            board_data->rx_retune2_status_unavailable_reported =
+                                true;
+                            report_rx_retune_status_unavailable = true;
+                            rx_retune_event_error = rx_retune2_status;
                         }
-                        board_data->rx_retune2_failure_count_last =
-                            rx_retune2_failure_count;
+                    } else {
+                        board_data->rx_retune2_status_unavailable_reported =
+                            false;
+                        if (!board_data->rx_retune2_failure_count_valid) {
+                            board_data->rx_retune2_failure_count_last =
+                                rx_retune2_failure_count;
+                            board_data->rx_retune2_failure_count_valid = true;
+                        } else if (rx_retune2_failure_count !=
+                                   board_data->rx_retune2_failure_count_last) {
+                            report_rx_retune_failure = true;
+                            report_rx_retune_status_unavailable =
+                                rx_retune2_failure_count <
+                                board_data->rx_retune2_failure_count_last;
+                            if (report_rx_retune_status_unavailable) {
+                                report_rx_retune_failure = false;
+                                rx_retune_event_error =
+                                    BLADERF_ERR_UNEXPECTED;
+                            } else {
+                                rx_retune_event_error = BLADERF_ERR_FPGA_OP;
+                            }
+                            board_data->rx_retune2_failure_count_last =
+                                rx_retune2_failure_count;
+                        }
                     }
-                }
-                if (report_rx_retune_failure ||
-                    report_rx_retune_status_unavailable) {
-                    struct bladerf_rf_event event = {0};
-                    event.host_monotonic_ns = _monotonic_ns();
-                    event.event_type = report_rx_retune_failure
-                        ? BLADERF_RF_EVT_RX_RETUNE_FAILED
-                        : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
-                    event.fpga_state = BLADERF_RF_STATE_ERROR;
-                    event.flags = rx_retune2_failure_count;
-                    event.error_code = rx_retune_event_error;
-                    bladerf2_rf_event_append(board_data, &event);
+                    if (report_rx_retune_failure ||
+                        report_rx_retune_status_unavailable) {
+                        struct bladerf_rf_event event = {0};
+                        event.host_monotonic_ns = _monotonic_ns();
+                        event.event_type = report_rx_retune_failure
+                            ? BLADERF_RF_EVT_RX_RETUNE_FAILED
+                            : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+                        event.fpga_state = BLADERF_RF_STATE_ERROR;
+                        event.flags = rx_retune2_failure_count;
+                        event.error_code = rx_retune_event_error;
+                        bladerf2_rf_event_append(board_data, &event);
+                    }
                 }
             });
         }

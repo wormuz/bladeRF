@@ -3362,6 +3362,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
              * Keep watching because NIOS may still have accepted the queue
              * request and fail asynchronously. */
             board_data->rx_retune2_failure_watch_active = true;
+            board_data->rx_retune2_failure_watch_generation++;
         }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
@@ -3390,6 +3391,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             board_data->rx_retune2_failure_count_valid = true;
         }
         board_data->rx_retune2_failure_watch_active = true;
+        board_data->rx_retune2_failure_watch_generation++;
     }
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         if (timestamp == BLADERF_RETUNE_NOW) {
@@ -3495,6 +3497,8 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         const enum bladerf2_rx_retune_watch_event watch_event =
             bladerf2_rx_retune_watch_observation(
                 board_data->rx_retune2_failure_watch_active,
+                board_data->rx_retune2_failure_watch_generation,
+                board_data->rx_retune2_failure_watch_generation,
                 count_status == 0,
                 board_data->rx_retune2_failure_count_valid,
                 board_data->rx_retune2_failure_count_last,
@@ -3535,6 +3539,7 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
             bladerf2_rf_event_append(board_data, &event);
         }
         board_data->rx_retune2_failure_watch_active = false;
+        board_data->rx_retune2_failure_watch_generation++;
     }
     const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
     if (tx_queue_cleared) {

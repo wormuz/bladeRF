@@ -127,18 +127,28 @@ enum bladerf2_rx_retune_watch_event {
     BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE,
 };
 
+static inline bool bladerf2_rx_retune_watch_generation_current(
+    bool watch_active, uint64_t observed_generation,
+    uint64_t current_generation)
+{
+    return watch_active && observed_generation == current_generation;
+}
+
 /* A scheduled RX failure counter is meaningful only while a queue may still
  * execute. After a successful queue clear, report any observed delta once and
  * retire the watch. A decreasing counter means reset/wrap, so its delta is
  * unknowable and must not be reported as a confirmed retune failure. */
 static inline enum bladerf2_rx_retune_watch_event
 bladerf2_rx_retune_watch_observation(bool watch_active,
+                                    uint64_t observed_generation,
+                                    uint64_t current_generation,
                                     bool count_read_succeeded,
                                     bool baseline_valid,
                                     uint32_t baseline,
                                     uint32_t observed)
 {
-    if (!watch_active) {
+    if (!bladerf2_rx_retune_watch_generation_current(
+            watch_active, observed_generation, current_generation)) {
         return BLADERF2_RX_RETUNE_WATCH_NONE;
     }
     if (!count_read_succeeded) {
