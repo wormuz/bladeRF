@@ -5230,16 +5230,17 @@ static int bladerf2_tx_rf_config_change_begin(
     const bool tx_active = board_data->rf_link_dir_on[1];
     const bool queue_may_exist =
         board_data->tx_retune2_failure_watch_active;
+    const bool recovery_was_blocked = board_data->tx_recovery_blocked;
     const uint8_t pending_count = board_data->tx_retune2_pending_count;
     int status = 0;
 
     board_data->tx_channel_state_generation++;
     board_data->tx_rfic_state_valid_reported = false;
     board_data->tx_retune_recovery_pending = true;
-    /* A configuration change is recoverable through the normal TX retune
-     * protocol once the gate is confirmed muted. Reserve this hard block for
-     * a failed queue clear or mute acknowledgement below. */
-    board_data->tx_recovery_blocked = false;
+    /* A new configuration fence is recoverable through the normal TX retune
+     * protocol once the gate is confirmed muted. Preserve any hard block
+     * already raised by an earlier independent fault. */
+    board_data->tx_recovery_blocked = recovery_was_blocked;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_stream_faulted_async = true;
     board_data->tx_retune2_completion_faulted = true;
