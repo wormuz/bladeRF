@@ -166,10 +166,12 @@ static inline uint32_t bladerf2_rx_transition_channel_event_flags(
 
 /* Reasons that invalidate the shared RX epoch must report provenance from
  * the epoch that was certified, rather than the lane used internally by a
- * setter. RX FIR programming uses a dual-lane AD9361 configuration (rx=3). */
+ * setter. The RX LO is device-wide, and RX FIR programming uses a dual-lane
+ * AD9361 configuration (rx=3). */
 static inline bool bladerf2_rx_invalidation_reason_is_shared(uint32_t reason)
 {
-    const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_RFIC_REG |
+    const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_FREQUENCY |
+                                    BLADERF_RF_INVALIDATE_RFIC_REG |
                                     BLADERF_RF_INVALIDATE_RX_FIR |
                                     BLADERF_RF_INVALIDATE_TX_FIR |
                                     BLADERF_RF_INVALIDATE_CLOCK |

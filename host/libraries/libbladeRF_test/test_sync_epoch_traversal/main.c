@@ -1552,6 +1552,8 @@ static void test_shared_invalidation_uses_certified_rx_channel(void)
     const uint32_t rx2_flags = rx1_flags |
         BLADERF_RF_EVENT_F_TRANSITION_RX2;
     const uint32_t shared_reasons[] = {
+        BLADERF_RF_INVALIDATE_FREQUENCY,
+        BLADERF_RF_INVALIDATE_RX_FIR,
         BLADERF_RF_INVALIDATE_CLOCK,
         BLADERF_RF_INVALIDATE_RFIC_REG,
         BLADERF_RF_INVALIDATE_TX_FIR,

@@ -100,6 +100,8 @@ int main(void)
     assert(bladerf2_rx_invalidation_reason_is_shared(
         BLADERF_RF_INVALIDATE_RX_FIR));
     assert(bladerf2_rx_invalidation_reason_is_shared(
+        BLADERF_RF_INVALIDATE_FREQUENCY));
+    assert(bladerf2_rx_invalidation_reason_is_shared(
         BLADERF_RF_INVALIDATE_RFIC_REG));
     assert(!bladerf2_rx_invalidation_reason_is_shared(
         BLADERF_RF_INVALIDATE_GAIN));
