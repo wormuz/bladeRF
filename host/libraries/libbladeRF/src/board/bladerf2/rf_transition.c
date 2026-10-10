@@ -1271,11 +1271,24 @@ static void *rx_fault_monitor_task(void *arg)
                         uint32_t gate_status = 0;
                         int gate_read_status = nios_tx_retune_gate_status_read(
                             dev, &gate_status);
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+                        const char *tx_gate_test =
+                            getenv("BLADERF_TEST_TX_GATE_FAULT");
+                        if (tx_gate_test != NULL &&
+                            strcmp(tx_gate_test,
+                                   "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0) {
+                            gate_read_status = BLADERF_ERR_IO;
+                        }
+#endif
                         uint32_t gate_state = gate_status &
                             NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
                         if (gate_read_status != 0 ||
                             gate_state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            /* A failed read leaves the physical output state
+                             * unknown. Reissue ABORT and require the FPGA's
+                             * muted ERROR acknowledgement before stopping. */
+                            abort_tx_retune_gate = true;
                             bladerf2_tx_retune_event(
                                 dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                                 board_data->tx_retune2_applied_frequency_hz,
@@ -1284,10 +1297,30 @@ static void *rx_fault_monitor_task(void *arg)
                         } else if (gate_state ==
                                    NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) {
                             if (!board_data->tx_retune_gate_release_requested) {
-                                int release_status = nios_tx_retune_gate_cmd(
-                                    dev, NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
+                                int release_status;
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+                                if (tx_gate_test != NULL &&
+                                    strcmp(tx_gate_test,
+                                           "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0) {
+                                    release_status = BLADERF_ERR_IO;
+                                } else if (tx_gate_test != NULL &&
+                                    strcmp(tx_gate_test,
+                                           "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+                                    release_status = BLADERF_ERR_IO;
+                                } else
+#endif
+                                {
+                                    release_status = nios_tx_retune_gate_cmd(
+                                        dev,
+                                        NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
+                                }
                                 if (release_status != 0) {
                                     board_data->tx_retune2_applied_waiting_rf_valid = false;
+                                    /* COMPLETE has an ambiguous transport
+                                     * outcome: it may have reached the FPGA.
+                                     * Abort and verify mute before returning
+                                     * to the application. */
+                                    abort_tx_retune_gate = true;
                                     bladerf2_tx_retune_event(
                                         dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                                         board_data->tx_retune2_applied_frequency_hz,
@@ -1438,11 +1471,27 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->tx_retune_recovery_pending = true;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
-                gate_status = nios_tx_retune_gate_abort(dev);
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+                const char *tx_gate_fault =
+                    getenv("BLADERF_TEST_TX_GATE_FAULT");
+                if (tx_gate_fault != NULL &&
+                    strcmp(tx_gate_fault,
+                           "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+                    gate_status = BLADERF_ERR_IO;
+                } else
+#endif
+                {
+                    gate_status = nios_tx_retune_gate_abort(dev);
+                }
                 if (gate_status != 0) {
                     log_debug("Failed to abort TX retune gate after invalid RFIC/status: %s\n",
                               bladerf_strerror(gate_status));
                     bool report_abort_failure;
+                    WITH_MUTEX(&dev->lock, {
+                        board_data->tx_recovery_blocked = true;
+                        board_data->tx_status_unavailable_reported = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
+                    });
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     report_abort_failure =
                         !board_data->tx_gate_abort_failure_reported;

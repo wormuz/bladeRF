@@ -11,6 +11,9 @@
  *   RUNTIME_TX_RETUNE_FAILURE
  *   RUNTIME_TX_RFIC_REGISTER_WRITE
  *   RUNTIME_TX_QUEUE_CLEAR_FAILURE
+ *   RUNTIME_TX_GATE_STATUS_READ_FAILURE
+ *   RUNTIME_TX_GATE_RELEASE_FAILURE
+ *   RUNTIME_TX_GATE_ABORT_FAILURE
  *
  * The test verifies durable event classification and that sync TX refuses
  * samples after the monitor or a legacy RF configuration setter revokes
@@ -121,7 +124,10 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
         strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") != 0 &&
-        strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") != 0) {
+        strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") != 0) {
         fprintf(stderr, "unsupported TX runtime injection mode: %s\n", mode);
         return 2;
     }
@@ -142,7 +148,10 @@ int main(void)
 
     status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
     if (status != 0) goto cleanup;
-    if (strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0) {
+    if (strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
         status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
                                        915000000);
         if (status == 0) {
@@ -245,6 +254,100 @@ int main(void)
         }
 
         printf("TX queue-clear containment: PASS (fault rejected, retuned, resumed)\n");
+        status = 0;
+        goto cleanup;
+    }
+
+    if (strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+        bladerf_frequency frequency = 0;
+        bladerf_timestamp timestamp = 0;
+        struct bladerf_quick_tune quick_tune;
+
+        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       &frequency);
+        if (status == 0) {
+            status = bladerf_get_quick_tune(dev, BLADERF_CHANNEL_TX(0),
+                                            &quick_tune);
+        }
+        if (status == 0) {
+            status = bladerf_get_timestamp(dev, BLADERF_TX, &timestamp);
+        }
+        if (status == 0 && setenv("BLADERF_TEST_TX_GATE_FAULT", mode, 1) != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+        }
+        if (status == 0) {
+            status = bladerf_schedule_retune(
+                dev, BLADERF_CHANNEL_TX(0), timestamp + 100000,
+                frequency, &quick_tune);
+        }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                                    EVENT_WAIT_MS);
+        }
+        if (status != 0) {
+            fprintf(stderr, "TX gate fault was not contained: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+        if (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+                                    EVENT_WAIT_MS);
+            if (status != 0) {
+                fprintf(stderr, "failed mute acknowledgement was not reported\n");
+                goto cleanup;
+            }
+            status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                           frequency);
+            if (status != BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "TX retune was not blocked without mute ACK: %s\n",
+                        bladerf_strerror(status));
+                status = BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                     TX_FEEDER_TIMEOUT_MS);
+            if (status != BLADERF_ERR_FPGA_OP) {
+                fprintf(stderr, "TX samples were not rejected without mute ACK\n");
+                status = BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
+            printf("TX gate abort failure: PASS (status unavailable, retune blocked)\n");
+            status = 0;
+            goto cleanup;
+        }
+        status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                 TX_FEEDER_TIMEOUT_MS);
+        if (status != BLADERF_ERR_FPGA_OP) {
+            fprintf(stderr, "TX samples were not rejected after gate fault: %s\n",
+                    bladerf_strerror(status));
+            status = BLADERF_ERR_UNEXPECTED;
+            goto cleanup;
+        }
+        if (setenv("BLADERF_TEST_TX_GATE_FAULT", "", 1) != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+            goto cleanup;
+        }
+        status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), frequency);
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID,
+                                    EVENT_WAIT_MS);
+        }
+        if (status == 0) {
+            status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                     TX_FEEDER_TIMEOUT_MS);
+        }
+        if (status != 0) {
+            fprintf(stderr, "TX did not recover after gate fault: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+        printf("TX gate containment: PASS mode=%s (abort, retune, resume)\n",
+               mode);
         status = 0;
         goto cleanup;
     }
@@ -398,6 +501,7 @@ int main(void)
 
 cleanup:
     unsetenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    unsetenv("BLADERF_TEST_TX_GATE_FAULT");
     if (feeder_started) {
         atomic_store(&feeder.stop, true);
         (void)pthread_join(feeder_thread, NULL);

@@ -2297,10 +2297,15 @@ static int bladerf2_tx_frequency_reconfigure_begin(
     int status = 0;
 
     WITH_MUTEX(&dev->lock, {
+        bool gate_abort_pending;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        gate_abort_pending = board_data->tx_gate_abort_pending;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (board_data->rf_transition_setter_active ||
             board_data->tx_frequency_reconfigure_active ||
             board_data->tx_rf_config_operation_active ||
-            board_data->tx_retune2_pending_count != 0) {
+            board_data->tx_retune2_pending_count != 0 ||
+            board_data->tx_recovery_blocked || gate_abort_pending) {
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
             /* The public API releases dev->lock between begin, LO write,
@@ -3030,6 +3035,13 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
+        bool gate_abort_pending;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        gate_abort_pending = board_data->tx_gate_abort_pending;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (board_data->tx_recovery_blocked || gate_abort_pending) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         if (board_data->tx_retune2_pending_count >=
             NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
             return BLADERF_ERR_WOULD_BLOCK;
