@@ -1353,7 +1353,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
     int status;
 
     if (BLADERF_CHANNEL_IS_TX(ch) &&
-        board_data->tx_frequency_reconfigure_active) {
+        (board_data->tx_frequency_reconfigure_active ||
+         board_data->tx_rf_config_operation_active)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -2293,6 +2294,7 @@ static int bladerf2_tx_frequency_reconfigure_begin(
     WITH_MUTEX(&dev->lock, {
         if (board_data->rf_transition_setter_active ||
             board_data->tx_frequency_reconfigure_active ||
+            board_data->tx_rf_config_operation_active ||
             board_data->tx_retune2_pending_count != 0) {
             status = BLADERF_ERR_WOULD_BLOCK;
         } else {
@@ -2981,6 +2983,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     unsigned int i;
 
     if (board_data->tx_frequency_reconfigure_active ||
+        board_data->tx_rf_config_operation_active ||
         (BLADERF_CHANNEL_IS_TX(ch) &&
          board_data->rf_transition_setter_active)) {
         return BLADERF_ERR_WOULD_BLOCK;
@@ -5254,7 +5257,8 @@ static int bladerf2_tx_rf_config_change_begin(
     const uint8_t pending_count = board_data->tx_retune2_pending_count;
     int status = 0;
 
-    if (board_data->tx_frequency_reconfigure_active) {
+    if (board_data->tx_frequency_reconfigure_active ||
+        board_data->tx_rf_config_operation_active) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -5314,6 +5318,38 @@ static int bladerf2_tx_rf_config_change_begin(
     }
 
     return status;
+}
+
+/* The PLL and reference-clock setters perform several control transactions
+ * with dev->lock released between them. Keep a handle-level reservation over
+ * the whole operation so a direct/scheduled TX tune cannot start midway. */
+static int bladerf2_tx_rf_config_operation_begin(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->tx_frequency_reconfigure_active ||
+            board_data->tx_rf_config_operation_active) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+            if (status == 0) {
+                board_data->tx_rf_config_operation_active = true;
+            }
+        }
+    });
+
+    return status;
+}
+
+static void bladerf2_tx_rf_config_operation_complete(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->tx_rf_config_operation_active = false;
+    });
 }
 
 static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
@@ -5783,12 +5819,10 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
     if (status != 0) {
         return status;
     }
-    WITH_MUTEX(&dev->lock, {
-        status = bladerf2_tx_rf_config_change_begin(
-            dev, dev->board_data);
-    });
+    status = bladerf2_tx_rf_config_operation_begin(dev);
     if (status == 0) {
         status = bladerf2_set_pll_enable_hw(dev, enable);
+        bladerf2_tx_rf_config_operation_complete(dev);
     }
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
@@ -5841,6 +5875,7 @@ static int bladerf2_set_pll_refclk_internal(
 {
     uint16_t R, N;
     int status;
+    bool tx_config_reserved = false;
 
     // We assume the system clock frequency is
     // BLADERF_VCTCXO_FREQUENCY. If it isn't, do your
@@ -5858,17 +5893,18 @@ static int bladerf2_set_pll_refclk_internal(
             return status;
         }
 
-        WITH_MUTEX(&dev->lock, {
-            status = bladerf2_tx_rf_config_change_begin(
-                dev, dev->board_data);
-        });
+        status = bladerf2_tx_rf_config_operation_begin(dev);
         if (status != 0) {
             bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
             return status;
         }
+        tx_config_reserved = true;
     }
 
     status = bladerf_pll_configure(dev, R, N);
+    if (tx_config_reserved) {
+        bladerf2_tx_rf_config_operation_complete(dev);
+    }
     if (!rx_reconfiguration_reserved) {
         bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     }

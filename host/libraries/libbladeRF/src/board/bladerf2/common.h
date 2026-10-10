@@ -235,6 +235,8 @@ struct bladerf2_board_data {
     /* Serializes the unlocked gap between the public TX LO setter's begin,
      * RFIC write, and completion callbacks. */
     bool tx_frequency_reconfigure_active;
+    /* Holds compound PLL/reference-clock writes against concurrent retunes. */
+    bool tx_rf_config_operation_active;
     bool tx_gate_abort_pending;
     bool tx_gate_abort_failure_reported;
     uint64_t tx_retune2_applied_frequency_hz;
