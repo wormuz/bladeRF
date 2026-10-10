@@ -68,10 +68,6 @@ int main(void)
     assert(!bladerf2_rssi_channel_known(BLADERF_CHANNEL_RX(2)));
     assert(bladerf2_rssi_channel_supported(BLADERF_CHANNEL_RX(1)));
     assert(!bladerf2_rssi_channel_supported(BLADERF_CHANNEL_TX(0)));
-    assert(bladerf2_rssi_may_change_rx_path(BLADERF_CHANNEL_TX(0)));
-    assert(bladerf2_rssi_may_change_rx_path(BLADERF_CHANNEL_TX(1)));
-    assert(!bladerf2_rssi_may_change_rx_path(BLADERF_CHANNEL_RX(0)));
-    assert(!bladerf2_rssi_may_change_rx_path(BLADERF_CHANNEL_RX(1)));
     assert(bladerf2_rssi_multiplier_valid(1));
     assert(!bladerf2_rssi_multiplier_valid(0));
     assert(!bladerf2_rssi_multiplier_valid(-1));

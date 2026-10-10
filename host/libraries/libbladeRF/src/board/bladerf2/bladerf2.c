@@ -5829,7 +5829,6 @@ int bladerf_get_rfic_rssi(struct bladerf *dev,
                           int *pre_rssi,
                           int *sym_rssi)
 {
-    int status;
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(pre_rssi);
@@ -5845,27 +5844,9 @@ int bladerf_get_rfic_rssi(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;
 
-    /* TX RSSI enables the RFIC TX monitor. That monitor can be selected as
-     * the RX RF input, so fence a certified RX epoch before changing it. */
-    const bool rx_path_may_change = bladerf2_rssi_may_change_rx_path(ch);
-    if (rx_path_may_change) {
-        status = bladerf2_rx_data_invalidate(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
-        if (status != 0) {
-            return status;
-        }
-    }
-
     WITH_MUTEX(&dev->lock, {
-        status = rfic->get_rssi(dev, ch, pre_rssi, sym_rssi);
+        CHECK_STATUS_LOCKED(rfic->get_rssi(dev, ch, pre_rssi, sym_rssi));
     });
-
-    if (rx_path_may_change) {
-        bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
-    }
-    if (status != 0) {
-        RETURN_ERROR_STATUS("rfic->get_rssi", status);
-    }
 
     return 0;
 }

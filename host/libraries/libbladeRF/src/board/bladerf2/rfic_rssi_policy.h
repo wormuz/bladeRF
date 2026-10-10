@@ -28,13 +28,6 @@ static inline bool bladerf2_rssi_channel_supported(bladerf_channel ch)
     return ch == BLADERF_CHANNEL_RX(0) || ch == BLADERF_CHANNEL_RX(1);
 }
 
-/* TX RSSI reads enable the TX monitor path, which can also be selected as
- * the AD9361 RX input. Treat this diagnostic read as an RX RF-port change. */
-static inline bool bladerf2_rssi_may_change_rx_path(bladerf_channel ch)
-{
-    return BLADERF_CHANNEL_IS_TX(ch);
-}
-
 static inline bool bladerf2_rssi_multiplier_valid(int16_t multiplier)
 {
     return multiplier > 0;
