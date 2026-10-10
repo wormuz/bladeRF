@@ -1160,6 +1160,53 @@ int main(void)
             return EXIT_FAILURE;
         }
 
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
+        fail_write_once_reg = REG_TX2_DIG_ATTEN;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
+        if (ret != -EIO ||
+            !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 2) {
+            fprintf(stderr,
+                    "TX attenuation did not restore immediate update after disable error\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
+        fail_write_once_reg = REG_TX1_ATTEN_1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
+        if (ret != -EIO ||
+            !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 2) {
+            fprintf(stderr,
+                    "TX attenuation did not restore immediate update after data error\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
+        fail_write_once_reg = REG_TX2_DIG_ATTEN;
+        fail_write_once_reg_occurrence = 2;
+        apply_failed_write_once = true;
+        ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
+        if (ret != -EIO ||
+            !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 3) {
+            fprintf(stderr,
+                    "TX attenuation did not retry ambiguous immediate update\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = false;
+        register_map_enabled = false;
+
         /* A failed ambiguous FIR setup write must still restore the original
          * register and leave the caller's output structure untouched. */
         register_map_enabled = true;
