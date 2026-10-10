@@ -2129,8 +2129,19 @@ int main(void)
         struct refclk_scale factor = { .spi = &spi, .phy = &phy };
         struct tx_monitor_control txmon = {0};
         struct gain_control gain = {0};
+        struct ad9361_phy_platform_data agc_pdata = {0};
+        struct ad9361_rf_phy agc_phy = { .spi = &spi, .pdata = &agc_pdata };
+        struct no_os_clk agc_rf_clock = { .rate = 30720000 };
+        struct no_os_clk agc_sample_clock = { .rate = 1000000 };
+        uint32_t gain_update_counter = UINT32_MAX;
         uint32_t zero_rate = 0;
         unsigned writes_before = read_count;
+
+        agc_phy.clks[CLKRF_CLK] = &agc_rf_clock;
+        agc_phy.clks[RX_SAMPL_CLK] = &agc_sample_clock;
+        agc_pdata.gain_ctrl.dec_pow_measuremnt_duration = 16;
+        agc_pdata.gain_ctrl.f_agc_dec_pow_measuremnt_duration = 16;
+        agc_pdata.gain_ctrl.f_agc_power_measurement_duration_in_state5 = 16;
 
         ret = ad9361_clk_factor_round_rate(&factor, 1000000, &zero_rate);
         if (ret != -EINVAL) {
@@ -2150,6 +2161,31 @@ int main(void)
         ret = ad9361_gc_setup(&phy, &gain);
         if (ret != -EINVAL) {
             fprintf(stderr, "AGC setup accepted zero measurement duration: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        if (ad9361_gc_gain_update_counter(0, 30720000, 20,
+                                         &gain_update_counter) != -EINVAL ||
+            gain_update_counter != UINT32_MAX ||
+            ad9361_gc_gain_update_counter(1, 30720000, 20,
+                                         &gain_update_counter) != -EINVAL ||
+            gain_update_counter != UINT32_MAX ||
+            ad9361_gc_gain_update_counter(2, 30720000, 20,
+                                         &gain_update_counter) != 0 ||
+            gain_update_counter != 10 ||
+            ad9361_gc_gain_update_counter(UINT32_MAX, 30720000, 20,
+                                         &gain_update_counter) != 0 ||
+            gain_update_counter != 131071) {
+            fprintf(stderr,
+                    "AGC update counter underflow/overflow policy failed\n");
+            return EXIT_FAILURE;
+        }
+        writes_before = write_count;
+        ret = ad9361_gc_update(&agc_phy);
+        if (ret != -EINVAL || write_count != writes_before) {
+            fprintf(stderr,
+                    "AGC update accepted zero interval or wrote before reject: "
+                    "ret=%" PRId32 " writes=%u/%u\n",
+                    ret, write_count, writes_before);
             return EXIT_FAILURE;
         }
         ret = ad9361_txmon_setup(&phy, &txmon);
