@@ -11,6 +11,14 @@
 
 #define RFIC_SYSTEM_CHANNEL 0xF
 
+/* RFIC command addresses carry the command in bits 3:0 and the channel in
+ * bits 11:8. Reject reserved bits instead of silently masking them into a
+ * different command or channel. */
+static inline bool _rfic_address_fields_valid(uint16_t address)
+{
+    return (address & UINT16_C(0xF0F0)) == 0;
+}
+
 static inline bool _rfic_chan_is_system(bladerf_channel ch)
 {
     return RFIC_SYSTEM_CHANNEL == ch;

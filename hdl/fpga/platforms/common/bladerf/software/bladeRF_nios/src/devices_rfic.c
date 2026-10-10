@@ -323,6 +323,10 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
 bool rfic_command_write(uint16_t addr, uint64_t data)
 {
+    if (!_rfic_address_fields_valid(addr)) {
+        return false;
+    }
+
     uint8_t cmd                      = _rfic_unpack_cmd(addr);
     uint8_t const ch                 = _rfic_unpack_chan(addr);
     struct rfic_command_fns const *f = _get_cmd_ptr(cmd);
@@ -364,6 +368,13 @@ bool rfic_command_write_immed(bladerf_rfic_command cmd,
 
 bool rfic_command_read(uint16_t addr, uint64_t *data)
 {
+    if (!_rfic_address_fields_valid(addr)) {
+        if (data != NULL) {
+            *data = UINT64_C(0xDEADBEEF0B4DF00D);
+        }
+        return false;
+    }
+
     return rfic_command_read_immed(_rfic_unpack_cmd(addr),
                                    _rfic_unpack_chan(addr), data);
 }

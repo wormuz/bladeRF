@@ -28,6 +28,8 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
+#include "rfic_channel_validation.h"
+
 #include "pkt_handler.h"
 #include "devices.h"
 #include "fpga_version.h"
@@ -429,12 +431,20 @@ void command_uart_write_response(uint8_t *resp) {
 
 bool rfic_command_write(uint16_t addr, uint64_t data)
 {
+    if (!_rfic_address_fields_valid(addr)) {
+        return false;
+    }
+
     DBG("%s: addr=%02x data=%08" PRIx64 "\n", __FUNCTION__, addr, data);
     return true;
 }
 
 bool rfic_command_read(uint16_t addr, uint64_t *data)
 {
+    if (data == NULL || !_rfic_address_fields_valid(addr)) {
+        return false;
+    }
+
     DBG("%s: addr=%02x *data=%08" PRIx64 "\n", __FUNCTION__, addr, *data);
     return true;
 }
