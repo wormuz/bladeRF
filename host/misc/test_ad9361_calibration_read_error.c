@@ -196,6 +196,7 @@ int main(void)
             .ant = 1,
             .mode = RF_GAIN_MGC,
         };
+        uint8_t raw_byte = 0xa5;
         uint32_t raw_value = UINT32_C(0xdeadbeef);
         const unsigned reads_before = read_count;
         const unsigned writes_before = write_count;
@@ -226,6 +227,13 @@ int main(void)
             ad9361_set_dcxo_tune(NULL, 0, 0) != -EINVAL ||
             ad9361_get_temp(NULL) != -EINVAL ||
             ad9361_update_rf_bandwidth(NULL, 1000000, 1000000) != -EINVAL ||
+            ad9361_spi_readm(NULL, 0, &raw_byte, 1) != -EINVAL ||
+            ad9361_spi_readm(&spi, 0, NULL, 1) != -EINVAL ||
+            ad9361_spi_readm(&spi, 0, &raw_byte, 0) != -EINVAL ||
+            ad9361_spi_readm(&spi, 0, &raw_byte, 9) != -EINVAL ||
+            raw_byte != 0xa5 ||
+            ad9361_spi_read(NULL, 0) != -EINVAL ||
+            ad9361_spi_write(NULL, 0, 0) != -EINVAL ||
             ad9361_1rx1tx_channel_map(NULL, false, 0) != -EINVAL ||
             ad9361_mcs(NULL, 1) != -EINVAL ||
             ad9361_setup(NULL) != -EINVAL ||
