@@ -194,13 +194,20 @@ int main(void)
         uint32_t rx_clks[NUM_AD9361_CLKS] = {0};
         uint32_t tx_clks[NUM_AD9361_CLKS] = {0};
         uint32_t rate_governor = UINT32_MAX;
+        uint32_t ensm_mode = UINT32_MAX;
         int32_t temperature = INT32_MAX;
+        uint8_t tracking = UINT8_MAX;
+        struct ad9361_dig_tune_data dig_tune = {0};
         unsigned reads_before = read_count;
         unsigned writes_before = write_count;
 
+        phy.rate_governor = UINT32_MAX;
+
         if (ad9361_do_mcs(NULL, &phy) != -EINVAL ||
             ad9361_do_mcs(&phy, NULL) != -EINVAL ||
+            ad9361_do_mcs(&phy, &phy_without_spi) != -EINVAL ||
             ad9361_set_trx_path_clks(NULL, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_set_trx_path_clks(&phy_without_pdata, rx_clks, tx_clks) != -EINVAL ||
             ad9361_set_trx_path_clks(&phy, NULL, tx_clks) != -EINVAL ||
             ad9361_set_trx_path_clks(&phy, rx_clks, NULL) != -EINVAL ||
             ad9361_get_trx_path_clks(NULL, rx_clks, tx_clks) != -EINVAL ||
@@ -210,23 +217,99 @@ int main(void)
             ad9361_set_no_ch_mode(&phy_without_pdata, 1) != -EINVAL ||
             ad9361_set_no_ch_mode(&phy_without_spi, 1) != -EINVAL ||
             ad9361_set_trx_fir_en_dis(NULL, 1) != -EINVAL ||
+            ad9361_set_trx_fir_en_dis(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_set_trx_fir_en_dis(&phy_without_spi, 1) != -EINVAL ||
             ad9361_set_trx_rate_gov(NULL, 0) != -EINVAL ||
+            ad9361_set_trx_rate_gov(&phy, 2) != -EINVAL ||
             ad9361_get_trx_rate_gov(NULL, &rate_governor) != -EINVAL ||
             ad9361_get_trx_rate_gov(&phy, NULL) != -EINVAL ||
             ad9361_do_calib(NULL, RFDC_CAL, -1) != -EINVAL ||
+            ad9361_do_calib(&phy_without_pdata, RFDC_CAL, -1) != -EINVAL ||
+            ad9361_do_calib(&phy_without_spi, RFDC_CAL, -1) != -EINVAL ||
             ad9361_trx_load_enable_fir(NULL, rx_fir, tx_fir) != -EINVAL ||
+            ad9361_trx_load_enable_fir(&phy_without_spi, rx_fir, tx_fir) != -EINVAL ||
             ad9361_do_dcxo_tune_coarse(NULL, 1) != -EINVAL ||
             ad9361_do_dcxo_tune_coarse(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_do_dcxo_tune_coarse(&phy_without_spi, 1) != -EINVAL ||
             ad9361_do_dcxo_tune_fine(NULL, 1) != -EINVAL ||
             ad9361_do_dcxo_tune_fine(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_do_dcxo_tune_fine(&phy_without_spi, 1) != -EINVAL ||
             ad9361_get_temperature(NULL, &temperature) != -EINVAL ||
+            ad9361_get_temperature(&phy_without_spi, &temperature) != -EINVAL ||
             ad9361_get_temperature(&phy, NULL) != -EINVAL ||
+            ad9361_set_en_state_machine_mode(NULL, ENSM_MODE_RX) != -EINVAL ||
+            ad9361_set_en_state_machine_mode(&phy_without_spi, ENSM_MODE_RX) != -EINVAL ||
+            ad9361_get_en_state_machine_mode(NULL, &ensm_mode) != -EINVAL ||
+            ad9361_get_en_state_machine_mode(&phy_without_spi, &ensm_mode) != -EINVAL ||
+            ad9361_get_en_state_machine_mode(&phy_without_pdata, &ensm_mode) != -EINVAL ||
+            ad9361_get_en_state_machine_mode(&phy, NULL) != -EINVAL ||
+            ad9361_set_rx_rf_gain(&phy_without_spi, 0, 0) != -EINVAL ||
+            ad9361_set_rx_rf_gain(&phy_without_pdata, 0, 0) != -EINVAL ||
+            ad9361_set_rx_rf_bandwidth(&phy_without_spi, 1000000) != -EINVAL ||
+            ad9361_set_rx_rf_bandwidth(&phy_without_pdata, 1000000) != -EINVAL ||
+            ad9361_set_rx_sampling_freq(&phy_without_spi, 1000000) != -EINVAL ||
+            ad9361_set_rx_sampling_freq(&phy_without_pdata, 1000000) != -EINVAL ||
+            ad9361_set_rx_lo_freq(&phy_without_spi, 1000000000) != -EINVAL ||
+            ad9361_set_rx_lo_freq(&phy_without_pdata, 1000000000) != -EINVAL ||
+            ad9361_set_rx_lo_int_ext(&phy_without_spi, INT_LO) != -EINVAL ||
+            ad9361_set_rx_lo_int_ext(&phy_without_pdata, INT_LO) != -EINVAL ||
+            ad9361_set_rx_gain_control_mode(&phy_without_spi, 0,
+                                            RF_GAIN_MGC) != -EINVAL ||
+            ad9361_set_rx_gain_control_mode(&phy_without_pdata, 0,
+                                            RF_GAIN_MGC) != -EINVAL ||
+            ad9361_set_rx_fir_en_dis(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_rx_rfdc_track_en_dis(NULL, 1) != -EINVAL ||
+            ad9361_set_rx_rfdc_track_en_dis(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_rx_rfdc_track_en_dis(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_get_rx_rfdc_track_en_dis(NULL, &tracking) != -EINVAL ||
+            ad9361_get_rx_rfdc_track_en_dis(&phy, NULL) != -EINVAL ||
+            ad9361_set_rx_bbdc_track_en_dis(NULL, 1) != -EINVAL ||
+            ad9361_set_rx_bbdc_track_en_dis(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_rx_bbdc_track_en_dis(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_get_rx_bbdc_track_en_dis(NULL, &tracking) != -EINVAL ||
+            ad9361_get_rx_bbdc_track_en_dis(&phy, NULL) != -EINVAL ||
+            ad9361_set_rx_quad_track_en_dis(NULL, 1) != -EINVAL ||
+            ad9361_set_rx_quad_track_en_dis(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_rx_quad_track_en_dis(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_get_rx_quad_track_en_dis(NULL, &tracking) != -EINVAL ||
+            ad9361_get_rx_quad_track_en_dis(&phy, NULL) != -EINVAL ||
+            ad9361_txmon_enable(NULL, TX_1) != -EINVAL ||
+            ad9361_txmon_enable(&phy_without_spi, TX_1) != -EINVAL ||
+            ad9361_set_tx_attenuation(&phy_without_spi, 0, 1000) != -EINVAL ||
+            ad9361_set_tx_attenuation(&phy_without_pdata, 0, 1000) != -EINVAL ||
+            ad9361_set_tx_rf_bandwidth(&phy_without_spi, 1000000) != -EINVAL ||
+            ad9361_set_tx_rf_bandwidth(&phy_without_pdata, 1000000) != -EINVAL ||
+            ad9361_set_tx_sampling_freq(&phy_without_spi, 1000000) != -EINVAL ||
+            ad9361_set_tx_sampling_freq(&phy_without_pdata, 1000000) != -EINVAL ||
+            ad9361_set_tx_lo_freq(&phy_without_spi, 1000000000) != -EINVAL ||
+            ad9361_set_tx_lo_freq(&phy_without_pdata, 1000000000) != -EINVAL ||
+            ad9361_set_tx_lo_int_ext(&phy_without_spi, INT_LO) != -EINVAL ||
+            ad9361_set_tx_lo_int_ext(&phy_without_pdata, INT_LO) != -EINVAL ||
+            ad9361_set_tx_fir_en_dis(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_read_clock_data_delays(NULL) != -EINVAL ||
+            ad9361_read_clock_data_delays(&phy_without_spi) != -EINVAL ||
+            ad9361_write_clock_data_delays(NULL) != -EINVAL ||
+            ad9361_write_clock_data_delays(&phy_without_spi) != -EINVAL ||
+            ad9361_get_dig_tune_data(NULL, &dig_tune) != -EINVAL ||
+            ad9361_get_dig_tune_data(&phy_without_pdata, &dig_tune) != -EINVAL ||
+            ad9361_get_dig_tune_data(&phy, NULL) != -EINVAL ||
+            ad9361_write_bist_reg(NULL, 0) != -EINVAL ||
+            ad9361_write_bist_reg(&phy_without_spi, 0) != -EINVAL ||
+            ad9361_ensm_mode_disable_pinctrl(NULL) != -EINVAL ||
+            ad9361_ensm_mode_disable_pinctrl(&phy_without_spi) != -EINVAL ||
+            ad9361_ensm_mode_restore_pinctrl(NULL) != -EINVAL ||
+            ad9361_ensm_mode_restore_pinctrl(&phy_without_spi) != -EINVAL ||
+            ad9361_set_cal_sw(NULL, 0) != -EINVAL ||
+            ad9361_set_cal_sw(&phy_without_spi, 0) != -EINVAL ||
             read_count != reads_before || write_count != writes_before ||
-            rate_governor != UINT32_MAX || temperature != INT32_MAX) {
+            phy.rate_governor != UINT32_MAX ||
+            rate_governor != UINT32_MAX || temperature != INT32_MAX ||
+            ensm_mode != UINT32_MAX || tracking != UINT8_MAX) {
             fprintf(stderr,
                     "AD9361 paired-path API accepted missing state/output\n");
             return EXIT_FAILURE;
         }
+        phy.rate_governor = 0;
     }
 
     /* Both public LO paths must reject missing objects/output before any
