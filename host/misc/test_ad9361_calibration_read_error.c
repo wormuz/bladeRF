@@ -188,6 +188,28 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* The exported gain-control primitive must reject incomplete state
+     * before it derives the SPI pointer or performs any register access. */
+    {
+        struct ad9361_rf_phy phy_without_pdata = { .spi = &spi };
+        struct rf_gain_ctrl gain_ctrl = {
+            .ant = 1,
+            .mode = RF_GAIN_MGC,
+        };
+        const unsigned reads_before = read_count;
+        const unsigned writes_before = write_count;
+
+        if (ad9361_set_gain_ctrl_mode(NULL, &gain_ctrl) != -EINVAL ||
+            ad9361_set_gain_ctrl_mode(&phy_without_spi, &gain_ctrl) != -EINVAL ||
+            ad9361_set_gain_ctrl_mode(&phy_without_pdata, &gain_ctrl) != -EINVAL ||
+            ad9361_set_gain_ctrl_mode(&phy, NULL) != -EINVAL ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "Gain-control mode accepted incomplete state or touched SPI\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* A failed filter/calibration/tracking/ENSM step must leave the last
      * fully accepted bandwidth in the software cache so a retry of the same
      * request is not mistaken for a no-op. */
