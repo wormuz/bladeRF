@@ -263,8 +263,10 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     board_data = dev->board_data;
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = event_type;
-    event.epoch_id = bladerf2_rf_link_epoch_id(
-        link_status, board_data->tx_link_epoch_id);
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    const uint8_t current_epoch_id = board_data->tx_async_link_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = bladerf2_rf_link_epoch_id(link_status, current_epoch_id);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
     if (event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED) {
@@ -303,7 +305,9 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
     board_data = dev->board_data;
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = event_type;
-    event.epoch_id = board_data->tx_link_epoch_id;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = board_data->tx_async_link_epoch_id;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
     event.requested_rx_lo_hz = requested_frequency_hz;
