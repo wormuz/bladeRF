@@ -2562,6 +2562,8 @@ static int _bladerf_rx_transition_begin(
                        board_data->phy != NULL &&
                            board_data->phy->pdata != NULL,
                        board_data->phy != NULL &&
+                           board_data->phy->fir_config_valid,
+                       board_data->phy != NULL &&
                            board_data->phy->pdata != NULL &&
                            board_data->phy->pdata->rx2tx2,
                        board_data->phy != NULL

@@ -8,11 +8,12 @@
 
 int main(void)
 {
-    assert(bladerf2_rx_fir_configuration_valid(true, true, 3, 3));
-    assert(!bladerf2_rx_fir_configuration_valid(true, true, 1, 3));
-    assert(!bladerf2_rx_fir_configuration_valid(true, true, 3, 2));
-    assert(bladerf2_rx_fir_configuration_valid(true, false, 1, 1));
-    assert(!bladerf2_rx_fir_configuration_valid(false, true, 3, 3));
+    assert(bladerf2_rx_fir_configuration_valid(true, true, true, 3, 3));
+    assert(!bladerf2_rx_fir_configuration_valid(true, true, true, 1, 3));
+    assert(!bladerf2_rx_fir_configuration_valid(true, true, true, 3, 2));
+    assert(!bladerf2_rx_fir_configuration_valid(true, false, true, 3, 3));
+    assert(bladerf2_rx_fir_configuration_valid(true, true, false, 1, 1));
+    assert(!bladerf2_rx_fir_configuration_valid(false, true, true, 3, 3));
 
     uint32_t effective = UINT32_MAX;
     struct bladerf_rf_event events[4] = {0};
