@@ -482,6 +482,9 @@ INLINE void timer_tamer_clear_interrupt(bladerf_module m);
  */
 void tamer_schedule(bladerf_module m, uint64_t time);
 
+/** Cancel an armed timer compare and wait until the time-tamer acknowledges. */
+bool tamer_cancel(bladerf_module m);
+
 /**
  * Read the command UART request buffer
  */

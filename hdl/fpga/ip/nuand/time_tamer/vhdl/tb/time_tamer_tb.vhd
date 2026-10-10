@@ -99,6 +99,21 @@ architecture arch of time_tamer_tb is
         wait until rising_edge(clock) ;
     end procedure ;
 
+    procedure cancel_compare(
+        signal clock    :   in  std_logic ;
+        signal addr     :   out std_logic_vector(4 downto 0) ;
+        signal din      :   out std_logic_vector(7 downto 0) ;
+        signal write    :   out std_logic
+    ) is
+    begin
+        addr <= std_logic_vector(to_unsigned(8, addr'length)) ;
+        din <= std_logic_vector(to_unsigned(4, din'length)) ;
+        write <= '1' ;
+        wait until rising_edge(clock) ;
+        write <= '0' ;
+        wait until rising_edge(clock) ;
+    end procedure ;
+
 begin
 
     clock <= not clock after 1 ns ;
@@ -208,6 +223,23 @@ begin
         set_intr( clock, addr, din, write ) ;
         wait until rising_edge(clock) and intr = '1';
         report "equal compare: interrupt raised as already due";
+        clear_intr( clock, addr, din, write ) ;
+
+        -- Cancel a far-future compare, then arm a second one. The canceled
+        -- comparator must not consume the next arm or generate a stale IRQ.
+        write_time( clock, addr, din, write, x"0000_0000_0010_0000" ) ;
+        set_intr( clock, addr, din, write ) ;
+        cancel_compare( clock, addr, din, write ) ;
+        nop( clock, 1000 ) ;
+        assert intr = '0'
+            report "cancelled compare generated an interrupt"
+            severity failure ;
+        write_time( clock, addr, din, write, x"0000_0000_0000_0400" ) ;
+        set_intr( clock, addr, din, write ) ;
+        wait until rising_edge(clock) and intr = '1' for 100 us;
+        assert intr = '1'
+            report "time-tamer did not re-arm after compare cancellation"
+            severity failure ;
         clear_intr( clock, addr, din, write ) ;
 
         nop( clock, 1000 ) ;

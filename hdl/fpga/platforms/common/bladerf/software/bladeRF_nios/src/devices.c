@@ -241,6 +241,37 @@ void tamer_schedule(bladerf_module m, uint64_t time)
     return;
 }
 
+bool tamer_cancel(bladerf_module m)
+{
+    uint32_t base;
+    uint8_t before;
+    uint32_t i;
+
+    switch (m) {
+        case BLADERF_MODULE_RX:
+            base = RX_TAMER_BASE;
+            break;
+        case BLADERF_MODULE_TX:
+            base = TX_TAMER_BASE;
+            break;
+        default:
+            return false;
+    }
+
+    before = IORD_8DIRECT(base, 9) & (1 << 1);
+    IOWR_8DIRECT(base, 8, 4);
+
+    /* The FPGA crosses cancellation into the timestamp clock domain and
+     * acknowledges only after the compare FSM is back in its load state. */
+    for (i = 0; i < 1000000; i++) {
+        if ((IORD_8DIRECT(base, 9) & (1 << 1)) != before) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void bladerf_nios_init(struct pkt_buf *pkt,
                        struct vctcxo_tamer_pkt_buf *vctcxo_tamer_pkt)
 {

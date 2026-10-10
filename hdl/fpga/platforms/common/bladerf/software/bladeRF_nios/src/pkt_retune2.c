@@ -430,13 +430,23 @@ void pkt_retune2(struct pkt_buf *b)
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         switch (module) {
             case BLADERF_MODULE_RX:
-                reset_queue(&rx_queue);
-                status = 0;
+                if (tamer_cancel(module)) {
+                    reset_queue(&rx_queue);
+                    status = 0;
+                } else {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED;
+                    status = -1;
+                }
                 break;
 
             case BLADERF_MODULE_TX:
-                reset_queue(&tx_queue);
-                status = 0;
+                if (tamer_cancel(module)) {
+                    reset_queue(&tx_queue);
+                    status = 0;
+                } else {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED;
+                    status = -1;
+                }
                 break;
 
             default:

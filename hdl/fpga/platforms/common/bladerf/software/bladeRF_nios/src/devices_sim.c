@@ -364,6 +364,12 @@ void tamer_schedule(bladerf_module m, uint64_t time) {
     DBG("%s: module=%s, time=%"PRIu64"\n", __FUNCTION__, module2str(m), time);
 }
 
+bool tamer_cancel(bladerf_module m)
+{
+    DBG("%s: module=%s\n", __FUNCTION__, module2str(m));
+    return true;
+}
+
 int lms_set_precalculated_frequency(struct bladerf *dev, bladerf_module mod,
                                     struct lms_freq *f)
 {

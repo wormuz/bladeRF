@@ -1927,6 +1927,10 @@ int CALL_CONV bladerf_schedule_retune(struct bladerf *dev,
  * @param[in]   ch      Channel
  *
  * @return 0 on success, value from \ref RETCODES list on failure.
+ * @note On bladeRF 2, success confirms that the NIOS queue was cleared and
+ *       the FPGA time-tamer acknowledged cancellation of its armed compare.
+ *       If that acknowledgement times out, the queue is left intact and an
+ *       error is returned.
  */
 API_EXPORT
 int CALL_CONV bladerf_cancel_scheduled_retunes(struct bladerf *dev,

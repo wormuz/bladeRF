@@ -1693,6 +1693,10 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
             log_debug("FPGA tuning reported failure.\n");
             status = BLADERF_ERR_UNEXPECTED;
         } else if ((resp_flags &
+                    NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) != 0) {
+            log_error("FPGA time-tamer failed to acknowledge retune cancel.\n");
+            status = BLADERF_ERR_UNEXPECTED;
+        } else if ((resp_flags &
                     NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP) != 0) {
             log_debug("Scheduled retune timestamp is not strictly in the "
                       "future and after the last queued request.\n");

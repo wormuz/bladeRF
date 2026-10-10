@@ -58,6 +58,8 @@ architecture arch of time_tamer is
 
     signal intr_clear   :   std_logic ;
     signal intr_set     :   std_logic ;
+    signal intr_cancel  :   std_logic ;
+    signal cancel_toggle :  std_logic := '0' ;
 
     signal timestamp    :   unsigned(63 downto 0) ;
 
@@ -100,7 +102,7 @@ begin
 
     ts_sync_out <= '0' ;
 
-    status <= (0 => status_past, others =>'0') ;
+    status <= (1 => cancel_toggle, 0 => status_past, others =>'0') ;
 
     U_sync_ts_reset : entity work.synchronizer
       generic map (
@@ -259,6 +261,7 @@ begin
         if( rising_edge(clock) ) then
             intr_set <= '0' ;
             intr_clear <= '0' ;
+            intr_cancel <= '0' ;
             if( write = '1' ) then
                 case to_integer(uaddr) is
                     when 0 => hold_time( 7 downto  0) <= unsigned(din) ;
@@ -287,6 +290,10 @@ begin
                             when 3 =>
                                 -- Latch time next PPS
 
+                            when 4 =>
+                                -- Cancel any armed compare
+                                intr_cancel <= '1' ;
+
                             when others =>
                                 null ;
 
@@ -299,7 +306,8 @@ begin
     end process ;
 
     check_compare : process(ts_clock, ts_reset)
-        type fsm_t is (WAIT_FOR_LOAD, WAIT_FOR_COMPARE, WAIT_FOR_CLEAR) ;
+        type fsm_t is (WAIT_FOR_LOAD, WAIT_FOR_COMPARE, WAIT_FOR_CLEAR,
+                       WAIT_FOR_CLEAR_DEASSERT) ;
         variable fsm : fsm_t := WAIT_FOR_LOAD ;
     begin
         if( ts_reset = '1' ) then
@@ -311,7 +319,10 @@ begin
             case fsm is
 
                 when WAIT_FOR_LOAD =>
-                    if( ts_compare_load = '1' ) then
+                    if( ts_clear_compare = '1' ) then
+                        ts_compare_cleared <= '1' ;
+                        fsm := WAIT_FOR_CLEAR_DEASSERT ;
+                    elsif( ts_compare_load = '1' ) then
                         ts_compare_loaded <= '1' ;
                         compare_time <= compare_payload ;
                         ts_compare_cleared <= '0' ;
@@ -319,7 +330,12 @@ begin
                     end if ;
 
                 when WAIT_FOR_COMPARE =>
-                    if( compare_time = timestamp ) then
+                    if( ts_clear_compare = '1' ) then
+                        ts_time_trigger <= '0' ;
+                        ts_compare_loaded <= '0' ;
+                        ts_compare_cleared <= '1' ;
+                        fsm := WAIT_FOR_CLEAR_DEASSERT ;
+                    elsif( compare_time = timestamp ) then
                         ts_time_trigger <= '1' ;
                         ts_compare_loaded <= '0' ;
                         fsm := WAIT_FOR_CLEAR ;
@@ -329,6 +345,12 @@ begin
                     if( ts_clear_compare = '1' ) then
                         ts_time_trigger <= '0' ;
                         ts_compare_cleared <= '1' ;
+                        fsm := WAIT_FOR_CLEAR_DEASSERT ;
+                    end if ;
+
+                when WAIT_FOR_CLEAR_DEASSERT =>
+                    if( ts_clear_compare = '0' ) then
+                        ts_compare_cleared <= '0' ;
                         fsm := WAIT_FOR_LOAD ;
                     end if ;
 
@@ -384,7 +406,7 @@ begin
     end process ;
 
     interrupt : process(clock, reset)
-        type fsm_t is (WAIT_FOR_ARM, CHECK_CURRENT_TIME, CAPTURE_CURRENT_TIME, COMPARE_CURRENT_TIME, SET_COMPARE_TIME, PAST_TIME, WAIT_FOR_COMPARE, WAIT_FOR_INTR_CLEAR, WAIT_FOR_COMPARE_CLEAR) ;
+        type fsm_t is (WAIT_FOR_ARM, CHECK_CURRENT_TIME, CAPTURE_CURRENT_TIME, COMPARE_CURRENT_TIME, SET_COMPARE_TIME, PAST_TIME, WAIT_FOR_COMPARE, WAIT_FOR_INTR_CLEAR, WAIT_FOR_COMPARE_CLEAR, WAIT_FOR_COMPARE_ACK_LOW, CANCEL_WAIT_ACK_LOW, CANCEL_WAIT_ACK_HIGH, CANCEL_WAIT_ACK_LOW_2) ;
         variable fsm : fsm_t := WAIT_FOR_ARM ;
     begin
         if( reset = '1' ) then
@@ -394,6 +416,7 @@ begin
             mm_compare_load <= '0' ;
             current_req <= '0' ;
             status_past <= '0' ;
+            cancel_toggle <= '0' ;
         elsif( rising_edge(clock) ) then
             if( mm_ts_reset = '1' ) then
                 intr <= '0' ;
@@ -402,7 +425,16 @@ begin
                 mm_compare_load <= '0' ;
                 current_req <= '0' ;
                 status_past <= '0' ;
+                cancel_toggle <= '0' ;
             else
+                if( intr_cancel = '1' ) then
+                    intr <= '0' ;
+                    current_req <= '0' ;
+                    status_past <= '0' ;
+                    mm_compare_load <= '0' ;
+                    mm_clear_compare <= '0' ;
+                    fsm := CANCEL_WAIT_ACK_LOW ;
+                else
                 case fsm is
                     when WAIT_FOR_ARM =>
                         current_req <= '0' ;
@@ -484,7 +516,7 @@ begin
                         if( intr_clear = '1' ) then
                             intr <= '0' ;
                             if( status_past = '1' ) then
-                                fsm := WAIT_FOR_ARM ;
+                                fsm := WAIT_FOR_COMPARE_ACK_LOW ;
                             else
                                 fsm := WAIT_FOR_COMPARE_CLEAR ;
                             end if ;
@@ -493,11 +525,37 @@ begin
                     when WAIT_FOR_COMPARE_CLEAR =>
                         if( mm_compare_cleared = '1' ) then
                             mm_clear_compare <= '0' ;
+                            fsm := WAIT_FOR_COMPARE_ACK_LOW ;
+                        end if ;
+
+                    when WAIT_FOR_COMPARE_ACK_LOW =>
+                        mm_clear_compare <= '0' ;
+                        if( mm_compare_cleared = '0' ) then
+                            fsm := WAIT_FOR_ARM ;
+                        end if ;
+
+                    when CANCEL_WAIT_ACK_LOW =>
+                        mm_clear_compare <= '0' ;
+                        if( mm_compare_cleared = '0' ) then
+                            mm_clear_compare <= '1' ;
+                            fsm := CANCEL_WAIT_ACK_HIGH ;
+                        end if ;
+
+                    when CANCEL_WAIT_ACK_HIGH =>
+                        if( mm_compare_cleared = '1' ) then
+                            mm_clear_compare <= '0' ;
+                            fsm := CANCEL_WAIT_ACK_LOW_2 ;
+                        end if ;
+
+                    when CANCEL_WAIT_ACK_LOW_2 =>
+                        if( mm_compare_cleared = '0' ) then
+                            cancel_toggle <= not cancel_toggle ;
                             fsm := WAIT_FOR_ARM ;
                         end if ;
 
                     when others => null ;
                 end case ;
+                end if ;
             end if ;
         end if ;
     end process ;
