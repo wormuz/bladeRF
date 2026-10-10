@@ -2,6 +2,7 @@ library ieee ;
     use ieee.std_logic_1164.all ;
     use ieee.numeric_std.all ;
     use std.env.all;
+    use work.time_tamer_timestamp_p.all;
 
 entity time_tamer_tb is
 end entity ;
@@ -151,6 +152,27 @@ begin
     tb : process
         variable ts : unsigned(63 downto 0) := (others =>'0') ;
     begin
+        assert not timestamp_has_reached(
+            unsigned'(x"FFFFFFFFFFFFFFFE"), unsigned'(x"0000000000000002"))
+            report "future target across wrap was classified as reached"
+            severity failure;
+        assert timestamp_has_reached(
+            unsigned'(x"0000000000000002"), unsigned'(x"FFFFFFFFFFFFFFFE"))
+            report "target across wrap was not classified as reached"
+            severity failure;
+        assert timestamp_has_reached(
+            unsigned'(x"0000000000000200"), unsigned'(x"0000000000000100"))
+            report "ordinary past target was not classified as reached"
+            severity failure;
+        assert not timestamp_has_reached(
+            unsigned'(x"0000000000000100"), unsigned'(x"0000000000000200"))
+            report "ordinary future target was classified as reached"
+            severity failure;
+        assert not timestamp_has_reached(
+            unsigned'(x"8000000000000000"), unsigned'(x"0000000000000000"))
+            report "ambiguous half-range target was accepted"
+            severity failure;
+
         reset <= '1' ;
         nop( clock, 100 ) ;
 

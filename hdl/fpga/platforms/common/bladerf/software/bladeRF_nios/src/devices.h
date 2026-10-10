@@ -31,6 +31,16 @@
 #include "fpga_version.h"
 #include "pkt_handler.h"
 
+/* Compare free-running 64-bit FPGA timestamps using modulo ordering. The
+ * caller must schedule within the unambiguous forward half-range (< 2^63).
+ */
+static inline bool timestamp_is_strictly_after(uint64_t candidate,
+                                               uint64_t reference)
+{
+    const uint64_t delta = candidate - reference;
+    return delta != 0 && delta < (UINT64_C(1) << 63);
+}
+
 /* These storage sizes must match the embedded NIOS and PC simulation builds. */
 #define NUM_BBP_FASTLOCK_PROFILES 16
 #define NUM_RFFE_FASTLOCK_PROFILES 8

@@ -202,7 +202,8 @@ static inline uint8_t enqueue_retune(struct queue *q,
     if (q->count != 0) {
         const uint8_t last_idx =
             (q->ins_idx - 1) & (RETUNE2_QUEUE_MAX - 1);
-        if (timestamp <= q->entries[last_idx].timestamp) {
+        if (!timestamp_is_strictly_after(
+                timestamp, q->entries[last_idx].timestamp)) {
             return QUEUE_INVALID_TIMESTAMP;
         }
     }
@@ -463,7 +464,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * to pass. Never arm a timer in the past; report the deferred
              * request as failed instead of letting the tamer wrap around. */
             if (!time_tamer_read(module, &current_time) ||
-                e->timestamp <= current_time) {
+                !timestamp_is_strictly_after(e->timestamp, current_time)) {
                 record_retune2_failure(module);
                 dequeue_retune(q, NULL);
                 break;
@@ -653,7 +654,7 @@ void pkt_retune2(struct pkt_buf *b)
                         INCREMENT_ERROR_COUNT();
                         status = -1;
                 }
-            } else if (timestamp <= start_time) {
+            } else if (!timestamp_is_strictly_after(timestamp, start_time)) {
                 flags |= NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP;
                 status = -1;
             } else {

@@ -395,3 +395,19 @@ async admission and durably appends `RX_DATA_INVALIDATED` before the monitor
 attempts FPGA ABORT; abort failure and the stream-overrun notification are
 reported separately. This source slice found no monitor fail-open. Runtime
 fault injection and RX1/RX2 exact-image qualification remain open.
+# Timestamp wrap follow-on (source only)
+
+The timestamp audit expanded beyond host libbladeRF into the active FPGA TX
+FIFO and NIOS scheduled-retune path. `time_tamer.vhd` used raw unsigned
+ordering both when accepting an arm and when firing it; `fifo_reader.vhd` used
+unsigned high/low comparisons for scheduled TX release; NIOS retune2 used raw
+ordering for request validation, queue order, and post-profile-load expiry.
+These fail for targets crossing the 64-bit counter rollover. Source fixes now
+use modulo-2^64 ordering with the explicit `< 2^63` horizon: a shared VHDL
+helper for the time-tamer, split-half delta sign arithmetic in the TX FIFO,
+and `timestamp_is_strictly_after()` in NIOS. The NIOS check is repeated after
+profile loading, immediately before compare arm. Regression sources cover
+ordinary and wrapped past/future cases, ambiguous half-range, wrapped queue
+order, and the scheduled TX gate staying closed before wrap. No executable
+checks were run because the complete source-audit gate remains open. FPGA
+synthesis/timing impact and exact-image NIOS behavior remain OPEN.

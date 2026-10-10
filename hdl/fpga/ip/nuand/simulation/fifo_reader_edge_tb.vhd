@@ -36,6 +36,13 @@
 --     arithmetic overflow to do so
 --   * reset asserted while a scheduled burst is pending
 --
+-- Wrap regression pair: instantiate with TS_START=x"FFFFFFFFFFFFFFF0",
+-- HDR_TIME=x"0000000000000010", STOP_AFTER_CYCLES=8 and
+-- EXPECT_RELEASE=false to prove the gate stays closed before rollover; then
+-- use STOP_AFTER_CYCLES=64 and EXPECT_RELEASE=true to prove it opens only
+-- after the wrapped target. The signed-delta read counters classify samples
+-- against the same modulo half-range contract as the datapath.
+--
 -- Pass criteria are per-case and set by EXPECT_RELEASE: either the gate must
 -- open within the run, or it must stay shut for the whole run.
 
@@ -62,6 +69,9 @@ entity fifo_reader_edge_tb is
         CASE_ID        : natural := 0;
         -- Microseconds of run time after reset releases.
         RUN_US         : natural := 40;
+        -- Optional exact stop point, measured in clock cycles after reset.
+        -- Takes precedence over RUN_US and permits pre-wrap-only checks.
+        STOP_AFTER_CYCLES : natural := 0;
         -- Feed a second header once the first has been read, to exercise the
         -- queue transition rather than a single isolated transaction.
         HDR2_ENABLE    : boolean := false;
@@ -107,6 +117,8 @@ architecture sim of fifo_reader_edge_tb is
     signal uf_count   : unsigned(63 downto 0);
 
     signal reads      : natural := 0;
+    signal reads_before : natural := 0;
+    signal reads_after  : natural := 0;
     signal cycles     : natural := 0;
     signal done       : boolean := false;
     signal hdr_index  : natural range 0 to 1 := 0;
@@ -181,6 +193,12 @@ begin
             cycles <= cycles + 1;
             if fifo_read = '1' then
                 reads <= reads + 1;
+                if HDR_TIME = x"0000000000000000" or
+                   signed(timestamp - unsigned(HDR_TIME)) >= 0 then
+                    reads_after <= reads_after + 1;
+                else
+                    reads_before <= reads_before + 1;
+                end if;
             end if;
             if TRACE then
                 if m_read = '1' then
@@ -267,7 +285,13 @@ begin
             wait until rising_edge(clock);
         end if;
 
-        wait for RUN_US * 1 us;
+        if STOP_AFTER_CYCLES > 0 then
+            for i in 1 to STOP_AFTER_CYCLES loop
+                wait until rising_edge(clock);
+            end loop;
+        else
+            wait for RUN_US * 1 us;
+        end if;
 
         report "case " & integer'image(CASE_ID) &
                ": ts_start=" & to_hstring(TS_START) &
@@ -279,6 +303,12 @@ begin
             assert reads > 0
                 report "case " & integer'image(CASE_ID) & ": gate never opened, expected release"
                 severity failure;
+            if HDR_TIME /= x"0000000000000000" then
+                assert reads_before = 0
+                    report "case " & integer'image(CASE_ID) &
+                           ": gate opened before the modulo timestamp boundary"
+                    severity failure;
+            end if;
             report "case " & integer'image(CASE_ID) & ": released as expected";
         else
             assert reads = 0

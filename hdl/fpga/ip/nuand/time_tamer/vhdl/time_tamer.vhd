@@ -1,6 +1,7 @@
 library ieee ;
     use ieee.std_logic_1164.all ;
     use ieee.numeric_std.all ;
+    use work.time_tamer_timestamp_p.all;
 
 entity time_tamer is
   port (
@@ -396,7 +397,7 @@ begin
                         ts_compare_loaded <= '0' ;
                         ts_compare_cleared <= '1' ;
                         fsm := WAIT_FOR_CLEAR_DEASSERT ;
-                    elsif( compare_time <= timestamp ) then
+                    elsif( timestamp_has_reached(timestamp, compare_time) ) then
                         -- The target may pass while the compare payload is
                         -- crossing from the MM clock. Fire late rather than
                         -- waiting for the 64-bit timestamp to wrap.
@@ -461,7 +462,7 @@ begin
         if( reset = '1' ) then
             time_is_past <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( compare_payload <= current_time_q ) then
+            if( timestamp_has_reached(current_time_q, compare_payload) ) then
                 time_is_past <= '1' ;
             else
                 time_is_past <= '0' ;

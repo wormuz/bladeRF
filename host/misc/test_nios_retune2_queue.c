@@ -14,6 +14,7 @@ static unsigned port_count;
 static unsigned spdt_count;
 static bladerf_module scheduled_module;
 static uint64_t scheduled_timestamp;
+static uint64_t tamer_timestamp;
 static bladerf_module recalled_module;
 static fastlock_profile *recalled_profile;
 static uint8_t recalled_profile_num;
@@ -74,7 +75,7 @@ bool time_tamer_read(bladerf_module module, uint64_t *timestamp)
     if (timestamp == NULL || fail_tamer_read) {
         return false;
     }
-    *timestamp = 0;
+    *timestamp = tamer_timestamp;
     return true;
 }
 
@@ -422,6 +423,48 @@ static int check_tamer_read_and_arm_fail_closed(void)
     return 0;
 }
 
+static int check_timestamp_wrap_ordering(void)
+{
+    fastlock_profile profile = { 0 };
+    struct queue ordered = { 0 };
+
+    if (!timestamp_is_strictly_after(UINT64_C(2), UINT64_MAX - 3) ||
+        timestamp_is_strictly_after(UINT64_C(0x8000000000000000), 0) ||
+        timestamp_is_strictly_after(UINT64_MAX - 3, UINT64_C(2)) ||
+        timestamp_is_strictly_after(10, 10)) {
+        fputs("modulo timestamp ordering failed boundary checks\n", stderr);
+        return 1;
+    }
+
+    profile.profile_num = 3;
+    if (enqueue_retune(&ordered, &profile, 3, UINT64_MAX - 3) != 1 ||
+        enqueue_retune(&ordered, &profile, 3, UINT64_C(2)) != 2 ||
+        enqueue_retune(&ordered, &profile, 3, UINT64_MAX - 1) !=
+            QUEUE_INVALID_TIMESTAMP) {
+        fputs("retune queue rejected wrapped order or accepted stale order\n",
+              stderr);
+        return 1;
+    }
+
+    pkt_retune2_init();
+    tamer_timestamp = UINT64_MAX - 4;
+    if (enqueue_retune(&rx_queue, &profile, 3, UINT64_C(2)) != 1) {
+        fputs("failed to enqueue wrapped future retune\n", stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        schedule_count == 0 || scheduled_timestamp != UINT64_C(2) ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("wrapped future retune was not scheduled\n", stderr);
+        return 1;
+    }
+
+    tamer_timestamp = 0;
+    return 0;
+}
+
 static int check_profile_index_validation(void)
 {
     if (!retune2_profile_indices_valid(0, 0) ||
@@ -522,6 +565,9 @@ int main(void)
         return 1;
     }
     if (check_tamer_read_and_arm_fail_closed() != 0) {
+        return 1;
+    }
+    if (check_timestamp_wrap_ordering() != 0) {
         return 1;
     }
     if (check_profile_index_validation() != 0) {

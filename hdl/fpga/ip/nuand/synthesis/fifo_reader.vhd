@@ -105,7 +105,6 @@ architecture simple of fifo_reader is
 
     constant DMA_BUF_SIZE_SS    : natural   := GPIF_BUF_SIZE_SS;
     constant DMA_BUF_SIZE_HS    : natural   := GPIF_BUF_SIZE_HS;
-    constant MAX_TIMESTAMP      : unsigned(timestamp'high downto timestamp'low) := (others => '1');
 
     signal   dma_buf_size       : natural range DMA_BUF_SIZE_HS to DMA_BUF_SIZE_SS := DMA_BUF_SIZE_SS;
     signal   underflow_detected : std_logic := '0';
@@ -198,29 +197,13 @@ architecture simple of fifo_reader is
         meta_time_go    : std_logic;
         meta_fifo_empty : std_logic;
         meta_fifo_data  : std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
-        -- Halves of the 64-bit "timestamp >= meta_p_time" decision. A single
-        -- 64-bit compare took six logic levels and 9.529 ns against an 8.000 ns
-        -- period on the C8 part; splitting it into two 32-bit compares keeps
-        -- each carry chain short. These are registered one cycle ahead of the
-        -- comparison they feed, so they are computed against meta_p_time_r
-        -- (the value that becomes meta_p_time on the next clock).
-        due_hi_gt       : std_logic;
-        due_hi_eq       : std_logic;
-        due_lo_ge       : std_logic;
+        -- Sign of the modulo-2^64 timestamp delta, split at 32 bits so the
+        -- subtract carry chain stays short. Registered one cycle ahead using
+        -- timestamp+2 and the raw header. Scheduled targets must be within
+        -- the unambiguous forward half-range (< 2^63 ticks).
+        due_time        : std_logic;
         due_sentinel    : std_logic;
-        -- Pre-computed OR/AND fold of the four due_* bits above, registered
-        -- in the SAME cycle as they are (no added latency -- it folds
-        -- what was already a same-cycle combinational OR-cascade at the
-        -- META_LOAD/META_WAIT consumption sites into one bit computed once,
-        -- here, instead of at every consumer). Measured: on the sweep
-        -- revision this OR-cascade plus the packet_en/packet_ready AND-gate
-        -- downstream landed on the worst setup path in the LVDS pll_sclk
-        -- domain (-0.115/-0.152 ns, six logic levels) once sweep-specific
-        -- modules (dwell_summary, gain_sequencer) elsewhere in the same
-        -- domain used up the margin hosted has to spare. hosted itself
-        -- closes clean on this path; the fold does not change its behaviour
-        -- (due_combined is exactly the same truth table the two META_LOAD/
-        -- META_WAIT consumption sites already computed inline).
+        -- Time reached or TX_NOW sentinel, precomputed in the same cycle.
         due_combined    : std_logic;
     end record;
 
@@ -237,9 +220,7 @@ architecture simple of fifo_reader is
         meta_time_go    => '0',
         meta_fifo_empty => '1',
         meta_fifo_data  => (others => '0'),
-        due_hi_gt       => '0',
-        due_hi_eq       => '0',
-        due_lo_ge       => '0',
+        due_time        => '0',
         due_sentinel    => '0',
         due_combined    => '0'
     );
@@ -522,9 +503,9 @@ begin
         variable  packet_len    : integer;
         variable  ts_next       : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
-        variable  v_due_hi_gt   : std_logic;
-        variable  v_due_hi_eq   : std_logic;
-        variable  v_due_lo_ge   : std_logic;
+        variable  v_due_time    : std_logic;
+        variable  v_low_borrow : unsigned(0 downto 0);
+        variable  v_high_delta : unsigned(32 downto 0);
         variable  v_due_sentinel : std_logic;
     begin
 
@@ -553,8 +534,7 @@ begin
         meta_time := unsigned(meta_fifo_data(95 downto 32)) - 1;
         meta_future.meta_p_time_r <= meta_time;
 
-        -- Precompute "timestamp >= meta_p_time" one cycle early, split across
-        -- the 32-bit halves so neither carry chain spans 64 bits.
+        -- Precompute the modulo timestamp-due condition one cycle early.
         --
         -- timestamp is a free-running counter incremented by exactly 1 each
         -- clock (time_tamer.vhd), so the value it will hold when these
@@ -570,50 +550,37 @@ begin
         --
         -- The released condition is evaluated one cycle before it is used, so
         -- the timestamp in force when the registered result is consumed is
-        -- timestamp + 1. Substituting that into the original test:
-        --     (timestamp + 1) >= meta_p_time      where meta_p_time = header - 1
-        --  => (timestamp + 1) >= header - 1
-        --  => (timestamp + 2) >= header
-        -- Hence ts_next is timestamp + 2 here, not + 1. Using + 1 releases one
+        -- timestamp + 1. Substituting that into the original test gives the
+        -- modulo delta (timestamp + 2) - header. Hence ts_next is timestamp
+        -- + 2 here, not + 1. Using + 1 releases one
         -- cycle late: the bench reported 2000 reads instead of 2001, which is
         -- the same signature as the deliberate off-by-one negative control.
         ts_next := timestamp + 2;
-        -- Comparing the raw header keeps
-        -- the 64-bit borrow chain of the subtraction out of this comparison's
-        -- cone: on the worst seed the path was M10K memory output -> subtract
-        -- -> comparator in one cycle, cell-dominated (only 32% interconnect),
-        -- with 1.138 ns spent in the subtract's carry alone.
-        --
-        -- The subtraction itself stays where it is, feeding meta_p_time_r for
-        -- the META_LOAD test and the sentinel. It must keep reading the header
-        -- the FIFO presents now -- see the warning above it.
+        -- Compare the raw header using a low-half borrow and a 33-bit high-half
+        -- delta. The sign bit is the sign of the full modulo-2^64 delta,
+        -- without one 64-bit subtract/comparator carry chain. Keep reading the
+        -- header presented now; see the warning above the meta_time subtract.
         --
         -- Sentinel: a raw header of 0 means "transmit now". Under the old form
         -- 0 - 1 wrapped to all ones and META_WAIT matched MAX_TIMESTAMP; under
-        -- this form ts_next >= 0 is unconditionally true, which opens the gate
-        -- on the same cycle. Both encodings are still tested below.
+        -- this form the explicit sentinel opens the gate independently of the
+        -- modulo comparison. Both encodings remain covered by the testbench.
         cmp_tgt := unsigned(meta_fifo_data(95 downto 32));
 
-        if( ts_next(63 downto 32) > cmp_tgt(63 downto 32) ) then
-            v_due_hi_gt := '1';
+        if( ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
+            v_low_borrow := to_unsigned(1, v_low_borrow'length);
         else
-            v_due_hi_gt := '0';
+            v_low_borrow := to_unsigned(0, v_low_borrow'length);
         end if;
-        meta_future.due_hi_gt <= v_due_hi_gt;
-
-        if( ts_next(63 downto 32) = cmp_tgt(63 downto 32) ) then
-            v_due_hi_eq := '1';
+        v_high_delta := ('0' & ts_next(63 downto 32)) -
+                        ('0' & cmp_tgt(63 downto 32)) -
+                        resize(v_low_borrow, v_high_delta'length);
+        if( v_high_delta(31) = '0' ) then
+            v_due_time := '1';
         else
-            v_due_hi_eq := '0';
+            v_due_time := '0';
         end if;
-        meta_future.due_hi_eq <= v_due_hi_eq;
-
-        if( ts_next(31 downto 0) >= cmp_tgt(31 downto 0) ) then
-            v_due_lo_ge := '1';
-        else
-            v_due_lo_ge := '0';
-        end if;
-        meta_future.due_lo_ge <= v_due_lo_ge;
+        meta_future.due_time <= v_due_time;
 
         -- Sentinel test does not depend on the timestamp, so it stays off the
         -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
@@ -626,11 +593,8 @@ begin
         end if;
         meta_future.due_sentinel <= v_due_sentinel;
 
-        -- Pre-computed fold of the four due_* bits above -- same cycle,
-        -- same truth table the META_LOAD/META_WAIT consumption sites used
-        -- to compute inline. See the due_combined field comment.
-        meta_future.due_combined <=
-            v_due_hi_gt or (v_due_hi_eq and v_due_lo_ge) or v_due_sentinel;
+        -- Fold the modulo-time result with the explicit TX_NOW sentinel.
+        meta_future.due_combined <= v_due_time or v_due_sentinel;
 
         case meta_current.state is
 
@@ -680,10 +644,8 @@ begin
                    meta_future.dma_downcount <= dma_buf_size - 4;
                 end if;
 
-                -- (timestamp >= meta_p_time) rebuilt from the registered
-                -- halves: high half greater, or high half equal and low half
-                -- greater-or-equal. Identical truth value to the 64-bit
-                -- compare, computed a cycle earlier against timestamp + 1.
+                -- Consume the registered modulo-time decision and NOW
+                -- sentinel, computed a cycle earlier against timestamp + 2.
                 if( meta_current.due_combined = '1'
                         and ( packet_en = '0' or ( packet_en = '1' and packet_ready = '1' ) ) ) then
                     meta_future.meta_time_go <= '1';
