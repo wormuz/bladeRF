@@ -1748,6 +1748,20 @@ int main(void)
 		fprintf(stderr, "RX/TX LO/FIR APIs accepted missing state/output\n");
 		return EXIT_FAILURE;
 	}
+	{
+		unsigned int writes_before = write_count;
+		if (ad9361_synth_lo_powerdown(NULL, LO_ON, LO_DONTCARE) != -EINVAL ||
+		    ad9361_synth_lo_powerdown(&phy, (enum synth_pd_ctrl)99,
+					      LO_DONTCARE) != -EINVAL ||
+		    ad9361_rx_lo_powerdown(NULL, 0) != -EINVAL ||
+		    ad9361_tx_lo_powerdown(NULL, 0) != -EINVAL ||
+		    ad9361_rx_lo_powerdown(&phy, 2) != -EINVAL ||
+		    ad9361_tx_lo_powerdown(&phy, 2) != -EINVAL ||
+		    write_count != writes_before) {
+			fprintf(stderr, "LO power control accepted invalid state/option\n");
+			return EXIT_FAILURE;
+		}
+	}
 	fail_write_reg = -1;
 
     /* Public sampling-rate setters must not hide clock-chain failures behind
