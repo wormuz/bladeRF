@@ -250,6 +250,20 @@ static inline bool bladerf2_rf_link_epoch_ack_valid(
            (observed_status & fault_bit) == 0;
 }
 
+/* Previous-epoch sticky flags and the direction ACK cross independently into
+ * sys_clock. Do not let an ACK sampled on the first read outrun the sticky
+ * snapshot's CDC path; require the same snapshot for the same generation on
+ * consecutive status observations before publishing the new link as valid. */
+static inline bool bladerf2_rf_link_previous_fault_snapshot_stable(
+    bool previous_observation_valid, uint8_t previous_epoch_id,
+    uint32_t previous_fault_flags, uint8_t current_epoch_id,
+    uint32_t current_fault_flags)
+{
+    return previous_observation_valid &&
+           previous_epoch_id == current_epoch_id &&
+           previous_fault_flags == current_fault_flags;
+}
+
 static inline uint8_t bladerf2_rf_link_epoch_id(uint32_t link_status,
                                                 uint8_t fallback_epoch_id)
 {

@@ -106,6 +106,14 @@ static void test_rf_link_status_v2_epoch_policy(void)
         1u << 14));
     assert(bladerf2_rf_link_epoch_id(acknowledged, 0) == 8);
     assert(bladerf2_rf_link_epoch_id(0x10000000u | (9u << 20), 3) == 3);
+    assert(!bladerf2_rf_link_previous_fault_snapshot_stable(
+        false, 8, 0, 8, 0));
+    assert(bladerf2_rf_link_previous_fault_snapshot_stable(
+        true, 8, 1u << 6, 8, 1u << 6));
+    assert(!bladerf2_rf_link_previous_fault_snapshot_stable(
+        true, 8, 0, 8, 1u << 6));
+    assert(!bladerf2_rf_link_previous_fault_snapshot_stable(
+        true, 7, 0, 8, 0));
 }
 
 static void test_rf_event_cursor_resynchronizes_after_overrun(void)

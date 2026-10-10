@@ -907,6 +907,9 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     uint8_t entry_epoch_count = 0;
     bool strict_epoch = false;
     bool previous_rx_fault_reported = false;
+    bool previous_snapshot_observation_valid = false;
+    uint8_t previous_snapshot_epoch = 0;
+    uint32_t previous_snapshot_flags = 0;
     int status;
 
     NULL_CHECK(epoch_confirmed);
@@ -1040,6 +1043,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
      */
     for (unsigned attempt = 0; attempt < 16; attempt++) {
         uint32_t st = 0;
+        bool previous_snapshot_stable = false;
 
         status = nios_rf_link_status_read(dev, &st);
         if (status != 0) {
@@ -1051,6 +1055,20 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
         if ((st & RF_LINK_STATUS_VERSION_MASK) !=
             RF_LINK_STATUS_VERSION_2) {
             return BLADERF_ERR_UNSUPPORTED;
+        }
+        const uint8_t observed_epoch_count = (uint8_t)(st >> 20);
+        const uint32_t observed_previous_fault_flags = st &
+            (RF_LINK_STATUS_RX_PREVIOUS_FAULT |
+             RF_LINK_STATUS_TX_PREVIOUS_FAULT);
+        if (observed_epoch_count != entry_epoch_count) {
+            previous_snapshot_stable =
+                bladerf2_rf_link_previous_fault_snapshot_stable(
+                    previous_snapshot_observation_valid,
+                    previous_snapshot_epoch, previous_snapshot_flags,
+                    observed_epoch_count, observed_previous_fault_flags);
+            previous_snapshot_observation_valid = true;
+            previous_snapshot_epoch = observed_epoch_count;
+            previous_snapshot_flags = observed_previous_fault_flags;
         }
         if (snapshot_active_tx &&
             (uint8_t)(st >> 20) != entry_epoch_count &&
@@ -1104,7 +1122,8 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
         if (bladerf2_rf_link_epoch_ack_valid(
                 entry_status, st, RF_LINK_STATUS_VERSION_MASK,
                 RF_LINK_STATUS_VERSION_2, 0x0ff00000u,
-                required_ack_mask, required_fault_mask)) {
+                required_ack_mask, required_fault_mask) &&
+            previous_snapshot_stable) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
                         "(rx_abort=%u rx_fault=%u rx_prev_fault=%u "
                         "tx_prev_fault=%u epoch_count=%u)\n",
