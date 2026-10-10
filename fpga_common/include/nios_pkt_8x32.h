@@ -410,6 +410,12 @@
 #define NIOS_PKT_8x32_RETUNE2_FAILURES_RX_ADDR 0u
 #define NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR 1u
 
+/* Cumulative scheduled NIOS fastlock activations completed successfully.
+ * addr 0 is RX, addr 1 is TX. */
+#define NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES 0x8e
+#define NIOS_PKT_8x32_RETUNE2_SUCCESSES_RX_ADDR 0u
+#define NIOS_PKT_8x32_RETUNE2_SUCCESSES_TX_ADDR 1u
+
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
@@ -491,6 +497,8 @@ static inline const char* target2str(uint8_t target_id) {
             return "RX Epoch Gate First-Valid Timestamp, High Word";
         case NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES:
             return "Deferred Retune2 Execution Failure Counter";
+        case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:
+            return "Completed Retune2 Activation Counter";
 
         /* Reserved for user customizations */
         case NIOS_PKT_8x32_TARGET_USR1:

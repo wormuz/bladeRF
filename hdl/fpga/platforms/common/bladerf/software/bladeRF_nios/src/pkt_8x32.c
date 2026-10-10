@@ -101,6 +101,20 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                     break;
             }
             break;
+
+        case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:
+            switch (addr) {
+                case NIOS_PKT_8x32_RETUNE2_SUCCESSES_RX_ADDR:
+                    *data = pkt_retune2_success_count(BLADERF_MODULE_RX);
+                    break;
+                case NIOS_PKT_8x32_RETUNE2_SUCCESSES_TX_ADDR:
+                    *data = pkt_retune2_success_count(BLADERF_MODULE_TX);
+                    break;
+                default:
+                    *data = 0;
+                    break;
+            }
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO

@@ -80,6 +80,8 @@ static struct queue {
  * scheduled transition. */
 static volatile uint32_t rx_retune2_failure_count;
 static volatile uint32_t tx_retune2_failure_count;
+static volatile uint32_t rx_retune2_success_count;
+static volatile uint32_t tx_retune2_success_count;
 
 uint32_t pkt_retune2_failure_count(bladerf_module module)
 {
@@ -88,6 +90,18 @@ uint32_t pkt_retune2_failure_count(bladerf_module module)
             return rx_retune2_failure_count;
         case BLADERF_MODULE_TX:
             return tx_retune2_failure_count;
+        default:
+            return 0;
+    }
+}
+
+uint32_t pkt_retune2_success_count(bladerf_module module)
+{
+    switch (module) {
+        case BLADERF_MODULE_RX:
+            return rx_retune2_success_count;
+        case BLADERF_MODULE_TX:
+            return tx_retune2_success_count;
         default:
             return 0;
     }
@@ -318,6 +332,8 @@ void pkt_retune2_init()
     reset_queue(&tx_queue);
     rx_retune2_failure_count = 0;
     tx_retune2_failure_count = 0;
+    rx_retune2_success_count = 0;
+    tx_retune2_success_count = 0;
 
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
@@ -385,6 +401,10 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             /* Activate the fast lock profile for this retune */
             if (!profile_activate(module, &e->profile)) {
                 record_retune2_failure(module);
+            } else if (module == BLADERF_MODULE_RX) {
+                rx_retune2_success_count++;
+            } else if (module == BLADERF_MODULE_TX) {
+                tx_retune2_success_count++;
             }
 
             /* Drop the item from the queue */

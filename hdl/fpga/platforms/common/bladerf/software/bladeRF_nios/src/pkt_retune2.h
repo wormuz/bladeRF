@@ -34,8 +34,9 @@ void pkt_retune2(struct pkt_buf *b);
 
 void pkt_retune2_work(void);
 
-/* Cumulative deferred execution failures, one counter per RF direction. */
+/* Cumulative scheduled execution outcomes, one counter per RF direction. */
 uint32_t pkt_retune2_failure_count(bladerf_module module);
+uint32_t pkt_retune2_success_count(bladerf_module module);
 
 #define PKT_RETUNE2 { \
     .magic          = NIOS_PKT_RETUNE2_MAGIC, \

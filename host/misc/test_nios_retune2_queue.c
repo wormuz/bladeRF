@@ -120,6 +120,8 @@ static int check_schedule_ready_lifecycle(void)
     pkt_retune2_work();
     if (rx_queue.count != 0 ||
         tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 0 ||
         recall_count != 1 || recalled_module != BLADERF_MODULE_RX ||
         recalled_profile == &rx_profile || recalled_profile_num != 1 ||
         recalled_port != 0x11 || recalled_spdt != 0x02 ||
@@ -131,7 +133,10 @@ static int check_schedule_ready_lifecycle(void)
     /* TX becomes activatable only after its own ISR marks it READY. */
     retune_isr(&tx_queue);
     pkt_retune2_work();
-    if (tx_queue.count != 0 || recall_count != 2 ||
+    if (tx_queue.count != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
+        recall_count != 2 ||
         recalled_module != BLADERF_MODULE_TX ||
         recalled_profile == &tx_profile || recalled_profile_num != 2 ||
         recalled_port != 0x22 || recalled_spdt != 0x03 ||
@@ -162,7 +167,8 @@ static int check_deferred_failure_reporting(void)
     fail_profile_load = false;
     if (tx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
-        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1) {
         fputs("deferred TX profile-load failure was not retained\n", stderr);
         return 1;
     }
@@ -178,7 +184,8 @@ static int check_deferred_failure_reporting(void)
     fail_profile_recall = false;
     if (rx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
-        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1) {
         fputs("deferred RX activation failure was not retained\n", stderr);
         return 1;
     }
