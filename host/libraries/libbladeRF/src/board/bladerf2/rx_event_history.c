@@ -515,7 +515,6 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
         bladerf2_rx_transition_fail_first_host_data_locked(
             board_data, BLADERF_ERR_UNSUPPORTED);
     }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
@@ -523,6 +522,7 @@ void bladerf2_rx_layout_unsupported(struct bladerf *dev,
     event.flags = (uint32_t)layout | transition_channel_flags;
     event.error_code = BLADERF_ERR_UNSUPPORTED;
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 /* Recover transaction provenance for a delayed META buffer after the current
@@ -977,9 +977,9 @@ void bladerf2_rx_async_timestamp_discontinuity(
                 board_data->rf_transition_current_channel_valid);
     epoch_id = timestamp_valid
         ? expected_epoch_id : board_data->rf_transition_epoch_id;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     if (!should_report) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return;
     }
 
@@ -1002,6 +1002,7 @@ void bladerf2_rx_async_timestamp_discontinuity(
                   transition_channel_flags;
     event.error_code = 0;
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
@@ -1015,7 +1016,8 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
     board_data = dev->board_data;
 
     /* The libusb callback cannot wait for dev->lock: a setter may own it while
-     * blocked on this same USB event loop. Only snapshot lock-safe identity. */
+     * blocked on this same USB event loop. Keep the lock-safe identity and its
+     * durable event ordered against a new epoch's first-valid event. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->rf_transition_certified_epoch_id;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN |
@@ -1025,12 +1027,12 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
             board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_current_channel_valid);
     board_data->rx_async_data_withheld_active = true;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
@@ -1046,7 +1048,8 @@ void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
 
     /* Called from the sync RX worker while its ring lock may be held. Never
      * acquire dev->lock here: configuration setters can own it while waiting
-     * for USB progress. Snapshot only the lock-protected epoch identity. */
+     * for USB progress. Keep the lock-safe identity and event ordered against
+     * a new epoch's first-valid event. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->rf_transition_epoch_certified
         ? board_data->rf_transition_certified_epoch_id
@@ -1061,11 +1064,11 @@ void bladerf2_rx_worker_stream_overrun(struct bladerf *dev,
     if (board_data->rf_transition_epoch_contract_enabled) {
         board_data->rx_async_data_withheld_active = true;
     }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
     event.flags = BLADERF_RF_STREAM_STATUS_OVERRUN | source_flags;
     event.error_code = 0;
     bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
