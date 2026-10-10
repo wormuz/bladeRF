@@ -14,6 +14,14 @@ static inline bool bladerf2_clock_select_valid(bladerf_clock_select select)
            select == CLOCK_SELECT_EXTERNAL;
 }
 
+static inline bool bladerf2_channel_valid(bladerf_channel channel)
+{
+    return channel == BLADERF_CHANNEL_RX(0) ||
+           channel == BLADERF_CHANNEL_RX(1) ||
+           channel == BLADERF_CHANNEL_TX(0) ||
+           channel == BLADERF_CHANNEL_TX(1);
+}
+
 struct bladerf2_rx_invalidation_policy {
     bool reserve_setter;
     bool abort_rx_epoch;

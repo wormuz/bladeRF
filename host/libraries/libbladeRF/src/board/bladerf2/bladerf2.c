@@ -5052,6 +5052,9 @@ int bladerf_get_bias_tee(struct bladerf *dev, bladerf_channel ch, bool *enable)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     NULL_CHECK(enable);
 
     WITH_MUTEX(&dev->lock, {
@@ -5075,6 +5078,9 @@ int bladerf_set_bias_tee(struct bladerf *dev, bladerf_channel ch, bool enable)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     bool owns_reservation = false;
     int status = 0;
