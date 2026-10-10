@@ -1906,6 +1906,15 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
     } else if (status != 0) {
         return BLADERF_ERR_UNEXPECTED;
     } else {
+        /* The availability wait above may block while a board-level TX
+         * configuration change revokes admission. Recheck after that wait,
+         * immediately before handing the buffer to USB, rather than relying
+         * only on async_submit_stream_buffer()'s pre-wait snapshot. */
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+            !async_tx_buffer_valid(stream)) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+
         status = submit_transfer(stream, buffer, *length);
         if (status != 0 &&
             (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
