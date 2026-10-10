@@ -544,12 +544,13 @@ static inline uint32_t tx_retune_gate_ctrl_current(void)
 
 static inline void tx_retune_gate_arm(uint64_t timestamp, bool immediate)
 {
+    uint32_t word;
 #ifdef TX_RETUNE_GATE_TARGET_LO_BASE
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE,
                                 (uint32_t)timestamp);
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE,
                                 (uint32_t)(timestamp >> 32));
-    uint32_t word = tx_retune_gate_ctrl_current();
+    word = tx_retune_gate_ctrl_current();
     word &= ~TX_RETUNE_CTRL_IMMEDIATE;
     if (immediate) {
         word |= TX_RETUNE_CTRL_IMMEDIATE;

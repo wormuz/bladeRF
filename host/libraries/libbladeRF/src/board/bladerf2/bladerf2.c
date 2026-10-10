@@ -2902,33 +2902,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             board_data->tx_retune2_success_count_last = success_count;
             board_data->tx_retune2_success_count_valid = true;
         }
-        /* Arm the FPGA baseband fence before the timestamped RFPLL request
-         * can execute. One gate stays muted across all queued retunes and is
-         * released only after the queue and RFIC state are both confirmed. */
-        int gate_status = nios_tx_retune_gate_arm(
-            dev, timestamp == BLADERF_RETUNE_NOW ? 0 : timestamp,
-            timestamp == BLADERF_RETUNE_NOW);
-        if (gate_status != 0) {
-            (void)nios_tx_retune_gate_cmd(
-                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
-            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-            board_data->tx_retune2_completion_faulted = true;
-            board_data->tx_retune2_applied_waiting_rf_valid = false;
-            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            board_data->tx_channel_state_generation++;
-            bladerf2_tx_retune_event(
-                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                frequency, 0, board_data->tx_retune2_pending_count,
-                gate_status);
-            return gate_status;
-        }
-        board_data->tx_retune_gate_release_requested = false;
-    }
-
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
-        /* Fence TX admission before the NIOS queue write can become visible
-         * to the timer domain. The reservation is rolled back if submission
-         * itself fails. */
+        /* Revoke host TX admission and publish invalidity before touching
+         * the FPGA gate. This closes the concurrent-send window while the
+         * NIOS command and CDC acknowledgement are in flight. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_retune2_pending[pending_slot].timestamp = timestamp;
         board_data->tx_retune2_pending[pending_slot].requested_frequency_hz =
@@ -2941,6 +2917,33 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         board_data->tx_retune2_applied_waiting_rf_valid = false;
         board_data->tx_channel_state_generation++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        bladerf2_tx_retune_event(
+            dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
+            board_data->tx_retune2_pending_count, 0);
+
+        /* Arm the FPGA baseband fence before the timestamped RFPLL request
+         * can execute. One gate stays muted across all queued retunes and is
+         * released only after the queue and RFIC state are both confirmed. */
+        int gate_status = nios_tx_retune_gate_arm(
+            dev, timestamp == BLADERF_RETUNE_NOW ? 0 : timestamp,
+            timestamp == BLADERF_RETUNE_NOW);
+        if (gate_status != 0) {
+            (void)nios_tx_retune_gate_cmd(
+                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_retune2_pending[pending_slot].valid = false;
+            board_data->tx_retune2_pending_count--;
+            board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_applied_waiting_rf_valid = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_channel_state_generation++;
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                frequency, 0, board_data->tx_retune2_pending_count,
+                gate_status);
+            return gate_status;
+        }
+        board_data->tx_retune_gate_release_requested = false;
     }
 
     int status = dev->backend->retune2(dev, ch, timestamp,
@@ -2974,9 +2977,6 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             uint8_t pending_count;
 
             board_data->tx_retune2_failure_watch_active = true;
-            bladerf2_tx_retune_event(
-                dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
-                board_data->tx_retune2_pending_count, 0);
             readback_status = board_data->rfic->get_frequency(
                 dev, ch, &readback_frequency);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
@@ -3010,9 +3010,6 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
          * an execution error may already have occurred before cancellation. */
         board_data->tx_retune2_failure_watch_active = true;
         const uint8_t pending_count = board_data->tx_retune2_pending_count;
-        bladerf2_tx_retune_event(
-            dev, BLADERF_RF_EVT_TX_RETUNE_PENDING, frequency, 0,
-            pending_count, 0);
     }
 
     /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
