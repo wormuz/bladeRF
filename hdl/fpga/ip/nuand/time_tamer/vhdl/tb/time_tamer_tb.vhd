@@ -309,6 +309,22 @@ begin
 
         nop( clock, 1000 ) ;
 
+        -- A compare request must not report arm success while its timestamp
+        -- domain is stopped. The Nios watchdog consumes this bit as failure.
+        ts_clock_enable <= '0';
+        write_time( clock, addr, din, write,
+                    x"0000_0000_0010_0000" ) ;
+        set_intr( clock, addr, din, write ) ;
+        nop( clock, 100 ) ;
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(3) = '0'
+            report "time-tamer falsely acknowledged arm with stopped clock"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+
         report "time_tamer_tb: PASS" severity note;
         stop;
         wait;
