@@ -362,6 +362,9 @@ struct board_fns {
                                   bladerf_format format,
                                   const void *buffer, size_t length,
                                   struct bladerf_metadata *metadata);
+    /* Return false after native TX validity has been revoked so async TX
+     * callbacks cannot continue re-queuing caller buffers. */
+    bool (*tx_async_buffer_valid)(struct bladerf *dev);
     int (*get_frequency_range)(struct bladerf *dev,
                                bladerf_channel ch,
                                const struct bladerf_range **range);

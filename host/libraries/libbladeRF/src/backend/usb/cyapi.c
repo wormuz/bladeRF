@@ -678,6 +678,14 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                                      stream->samples_per_buffer,
                                      stream->user_data);
 
+            if (next_buffer != BLADERF_STREAM_SHUTDOWN &&
+                next_buffer != BLADERF_STREAM_NO_DATA &&
+                !async_tx_buffer_valid(stream)) {
+                status = BLADERF_ERR_FPGA_OP;
+                done = true;
+                break;
+            }
+
             if (next_buffer == BLADERF_STREAM_SHUTDOWN) {
                 done = true;
                 break;
@@ -742,6 +750,15 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             status = BLADERF_ERR_IO;
             log_debug("Failed to finish transfer %u, buf=%p.\n",
                       (unsigned int)i, &data->transfers[i].buffer);
+        }
+
+        if (success && (layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+            next_buffer != BLADERF_STREAM_SHUTDOWN &&
+            next_buffer != BLADERF_STREAM_NO_DATA &&
+            !async_tx_buffer_valid(stream)) {
+            next_buffer = BLADERF_STREAM_SHUTDOWN;
+            status = BLADERF_ERR_FPGA_OP;
+            done = true;
         }
 
         data->transfers[i].buffer = NULL;

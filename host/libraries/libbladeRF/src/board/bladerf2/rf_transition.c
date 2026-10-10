@@ -137,6 +137,22 @@ static void _rx_fault_monitor_stage(struct bladerf2_board_data *board_data,
     MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
 }
 
+/* Publish TX fault state to both device-locked control paths and asynchronous
+ * callback admission. The RX epoch lock is safe to take from stream
+ * callbacks; those callbacks must never wait for dev->lock. */
+void bladerf2_tx_stream_set_faulted(
+    struct bladerf2_board_data *board_data, bool faulted)
+{
+    if (board_data == NULL) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_stream_faulted = faulted;
+    board_data->tx_stream_faulted_async = faulted;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
 static bool _deadline_expired(uint64_t deadline_ns)
 {
     return bladerf2_rf_transition_deadline_expired(
@@ -803,7 +819,7 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_loss_count_status != 0) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
-                            board_data->tx_stream_faulted = true;
+                            bladerf2_tx_stream_set_faulted(board_data, true);
                             report_status_unavailable = true;
                         }
                     }
@@ -811,7 +827,7 @@ static void *rx_fault_monitor_task(void *arg)
                         (rf_link_status & RF_LINK_STATUS_TX_FAULT) != 0 &&
                         !board_data->tx_link_fault_reported) {
                         board_data->tx_link_fault_reported = true;
-                        board_data->tx_stream_faulted = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
                         board_data->tx_recovery_blocked = true;
                         report_tx_fault = true;
                     }
@@ -820,7 +836,7 @@ static void *rx_fault_monitor_task(void *arg)
                             rf_link_status, board_data->tx_link_epoch_id) &&
                         !board_data->tx_epoch_invalid_reported) {
                         board_data->tx_epoch_invalid_reported = true;
-                        board_data->tx_stream_faulted = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
                         board_data->tx_recovery_blocked = true;
                         report_tx_epoch_invalid = true;
                     }
@@ -834,13 +850,13 @@ static void *rx_fault_monitor_task(void *arg)
                         } else if (tx_loss_count <
                                    board_data->tx_fpga_loss_count_last) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
-                            board_data->tx_stream_faulted = true;
+                            bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
                             counter_reset = true;
                         } else if (tx_loss_count >
                                    board_data->tx_fpga_loss_count_last) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
-                            board_data->tx_stream_faulted = true;
+                            bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
                             report_tx_underrun = true;
                         }
@@ -854,7 +870,7 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_fault && !report_tx_underrun &&
                         !counter_reset) {
                         board_data->tx_status_unavailable_reported = false;
-                        board_data->tx_stream_faulted = false;
+                        bladerf2_tx_stream_set_faulted(board_data, false);
                         report_tx_recovered = true;
                     }
 

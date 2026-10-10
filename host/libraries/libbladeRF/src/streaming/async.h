@@ -103,6 +103,9 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                               void *samples,
                               size_t received_bytes);
 
+/* Returns false when native RF state revoked asynchronous TX validity. */
+bool async_tx_buffer_valid(struct bladerf_stream *stream);
+
 /* Set the transfer timeout. This acquires stream->lock. */
 int async_set_transfer_timeout(struct bladerf_stream *stream,
                                unsigned int transfer_timeout_ms);

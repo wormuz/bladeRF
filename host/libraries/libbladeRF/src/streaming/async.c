@@ -208,6 +208,18 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
         ? rejected_replacement : samples;
 }
 
+bool async_tx_buffer_valid(struct bladerf_stream *stream)
+{
+    if (stream == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX ||
+        stream->dev == NULL || stream->dev->board == NULL ||
+        stream->dev->board->tx_async_buffer_valid == NULL) {
+        return true;
+    }
+
+    return stream->dev->board->tx_async_buffer_valid(stream->dev);
+}
+
 /* Kernel default for /sys/module/usbcore/parameters/usbfs_memory_mb.
  * Used when the sysfs entry cannot be read (non-Linux, restricted /sys). */
 #define USBFS_MEMORY_MB_DEFAULT 16
@@ -462,6 +474,12 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 
     MUTEX_LOCK(&stream->lock);
 
+    if (buffer != BLADERF_STREAM_SHUTDOWN &&
+        !async_tx_buffer_valid(stream)) {
+        status = BLADERF_ERR_FPGA_OP;
+        goto error;
+    }
+
     if (buffer != BLADERF_STREAM_SHUTDOWN) {
         while (stream->state != STREAM_RUNNING) {
             log_debug("Buffer submitted while stream's not running. "
@@ -485,6 +503,12 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
                 goto error;
             }
         }
+    }
+
+    if (buffer != BLADERF_STREAM_SHUTDOWN &&
+        !async_tx_buffer_valid(stream)) {
+        status = BLADERF_ERR_FPGA_OP;
+        goto error;
     }
 
     status = stream->dev->backend->submit_stream_buffer(stream, buffer,

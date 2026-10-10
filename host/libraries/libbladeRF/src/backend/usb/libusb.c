@@ -1427,6 +1427,14 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 bytes_to_samples(stream->format, transfer->actual_length), stream->user_data);
         }
 
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+            next_buffer != BLADERF_STREAM_SHUTDOWN &&
+            next_buffer != BLADERF_STREAM_NO_DATA &&
+            !async_tx_buffer_valid(stream)) {
+            stream->error_code = BLADERF_ERR_FPGA_OP;
+            next_buffer = BLADERF_STREAM_SHUTDOWN;
+        }
+
         if (next_buffer == BLADERF_STREAM_SHUTDOWN) {
             stream->state = STREAM_SHUTTING_DOWN;
         } else if (next_buffer != BLADERF_STREAM_NO_DATA) {
@@ -1712,6 +1720,18 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                                 NULL,
                                 stream->samples_per_buffer,
                                 stream->user_data);
+
+            if (buffer != BLADERF_STREAM_SHUTDOWN &&
+                buffer != BLADERF_STREAM_NO_DATA &&
+                !async_tx_buffer_valid(stream)) {
+                stream->error_code = BLADERF_ERR_FPGA_OP;
+                if (stream_data->num_avail == stream_data->num_transfers) {
+                    mark_stream_done(stream);
+                } else {
+                    stream->state = STREAM_SHUTTING_DOWN;
+                }
+                break;
+            }
 
             if (buffer == BLADERF_STREAM_SHUTDOWN) {
                 /* If we have transfers in flight and the user prematurely

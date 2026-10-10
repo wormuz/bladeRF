@@ -1084,7 +1084,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
              * that just ended, so a fault in the snapshot/START window is
              * still delivered before the new TX_LINK_VALID event. */
             board_data->tx_link_fault_reported = true;
-            board_data->tx_stream_faulted = true;
+            bladerf2_tx_stream_set_faulted(board_data, true);
             board_data->tx_recovery_blocked = true;
             bladerf2_tx_stream_event(
                 dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, previous_status,
@@ -1213,7 +1213,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
         (link_status & RF_LINK_STATUS_VERSION_MASK) !=
             RF_LINK_STATUS_VERSION_2) {
         int error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
@@ -1225,7 +1225,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
     if ((link_status & RF_LINK_STATUS_TX_FAULT) != 0 &&
         !board_data->tx_link_fault_reported) {
         board_data->tx_link_fault_reported = true;
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, link_status,
@@ -1245,7 +1245,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
         }
         if (!board_data->tx_status_unavailable_reported) {
             board_data->tx_status_unavailable_reported = true;
-            board_data->tx_stream_faulted = true;
+            bladerf2_tx_stream_set_faulted(board_data, true);
             bladerf2_tx_stream_event(
                 dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
                 error);
@@ -1255,14 +1255,14 @@ static int bladerf2_tx_snapshot_before_shared_start(
 
     if (loss_count > board_data->tx_fpga_loss_count_last) {
         board_data->tx_fpga_loss_count_last = loss_count;
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_UNDERRUN, loss_count, 0,
             BLADERF_ERR_FPGA_OP);
     } else if (loss_count < board_data->tx_fpga_loss_count_last) {
         board_data->tx_fpga_loss_count_last = loss_count;
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_COUNTER_RESET, loss_count, link_status,
@@ -1295,7 +1295,7 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
                   board_data->rf_link_dir_on[1])) {
         const bool report_status_unavailable =
             !board_data->tx_status_unavailable_reported;
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = shared_epoch_may_have_started ||
                                           rollback_status != 0 ||
                                           mask_status != 0;
@@ -1426,12 +1426,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            board_data->tx_stream_faulted = false;
+            bladerf2_tx_stream_set_faulted(board_data, false);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (tx_first_enable) {
             board_data->tx_fpga_loss_count_valid = false;
-            board_data->tx_stream_faulted = true;
+            bladerf2_tx_stream_set_faulted(board_data, true);
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         } else if (board_data->rf_link_dir_on[1] && epoch_confirmed) {
@@ -1440,11 +1440,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            board_data->tx_stream_faulted = false;
+            bladerf2_tx_stream_set_faulted(board_data, false);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (board_data->rf_link_dir_on[1]) {
-            board_data->tx_stream_faulted = true;
+            bladerf2_tx_stream_set_faulted(board_data, true);
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         }
@@ -1509,21 +1509,21 @@ static int bladerf2_enable_module(struct bladerf *dev,
 
             if (report_link_fault) {
                 board_data->tx_link_fault_reported = true;
-                board_data->tx_stream_faulted = true;
+                bladerf2_tx_stream_set_faulted(board_data, true);
             }
             if (report_status_unavailable) {
                 board_data->tx_status_unavailable_reported = true;
-                board_data->tx_stream_faulted = true;
+                bladerf2_tx_stream_set_faulted(board_data, true);
             }
             if (tx_loss_status == 0 && board_data->tx_fpga_loss_count_valid) {
                 if (tx_loss_count > board_data->tx_fpga_loss_count_last) {
                     board_data->tx_fpga_loss_count_last = tx_loss_count;
-                    board_data->tx_stream_faulted = true;
+                    bladerf2_tx_stream_set_faulted(board_data, true);
                     report_underrun = true;
                 } else if (tx_loss_count <
                            board_data->tx_fpga_loss_count_last) {
                     board_data->tx_fpga_loss_count_last = tx_loss_count;
-                    board_data->tx_stream_faulted = true;
+                    bladerf2_tx_stream_set_faulted(board_data, true);
                     report_counter_reset = true;
                 }
             }
@@ -1580,14 +1580,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
         /* The RFIC may still be transmitting after an ambiguous disable.
          * Report that uncertainty at the API boundary and keep the monitor
          * armed through rf_link_dir_on so a later hardware fault is visible. */
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
             disable_status);
     } else if (BLADERF_CHANNEL_IS_TX(ch) && mask_status != 0) {
-        board_data->tx_stream_faulted = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
@@ -2464,6 +2464,22 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     }
     return false;
+}
+
+static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    bool valid;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return false;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    valid = !board_data->tx_stream_faulted_async;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return valid;
 }
 
 
@@ -4462,6 +4478,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_data_withheld, bladerf2_rx_data_withheld),
     FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
+    FIELD_INIT(.tx_async_buffer_valid, bladerf2_tx_async_buffer_valid),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),
     FIELD_INIT(.select_band, bladerf2_select_band),
     FIELD_INIT(.set_rf_port, bladerf2_set_rf_port),
