@@ -2754,15 +2754,26 @@ static int bladerf_set_oversample_register_config(struct bladerf *dev) {
         return BLADERF_ERR_UNSUPPORTED;
     }
 
+    if (dev->board->set_rfic_register_reserved == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    /* The caller already owns the shared RF transition reservation. Apply
+     * this multi-register preset under one mutex/reservation instead of
+     * recursively calling the public setter (which correctly rejects a
+     * second reservation and would otherwise fail after sample-rate setup). */
+    MUTEX_LOCK(&dev->lock);
     for (size_t i = 0; i < ARRAY_SIZE(registers); ++i) {
-        status = bladerf_set_rfic_register(dev, registers[i].address,
-                                           registers[i].value);
+        status = dev->board->set_rfic_register_reserved(
+            dev, registers[i].address, registers[i].value);
         if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
             log_error("Oversample RFIC register write failed at 0x%03x: %s\n",
                       registers[i].address, bladerf_strerror(status));
             return status;
         }
     }
+    MUTEX_UNLOCK(&dev->lock);
 
     return 0;
 }

@@ -313,6 +313,10 @@ struct board_fns {
     int (*set_frequency)(struct bladerf *dev,
                          bladerf_channel ch,
                          bladerf_frequency frequency);
+    /* Low-level RFIC register write for a caller that already owns the RF
+     * configuration reservation and device mutex. */
+    int (*set_rfic_register_reserved)(struct bladerf *dev,
+                                      uint16_t address, uint8_t value);
     /* Revoke certified RX data before legacy RF reconfiguration and report
      * the exact public BLADERF_RF_INVALIDATE_* reason to observers. */
     int (*invalidate_rx_data)(struct bladerf *dev, bladerf_channel ch,

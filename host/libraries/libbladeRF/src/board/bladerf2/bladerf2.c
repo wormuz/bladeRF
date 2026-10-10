@@ -83,6 +83,9 @@ static int bladerf2_set_pll_refclk_internal(struct bladerf *dev,
 static int bladerf2_tx_rf_config_change_begin(
     struct bladerf *dev, struct bladerf2_board_data *board_data);
 static int bladerf2_tx_config_change_begin(struct bladerf *dev);
+static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
+                                               uint16_t address,
+                                               uint8_t val);
 
 
 /******************************************************************************/
@@ -4905,6 +4908,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.get_bandwidth_range, bladerf2_get_bandwidth_range),
     FIELD_INIT(.get_frequency, bladerf2_get_frequency),
     FIELD_INIT(.set_frequency, bladerf2_set_frequency),
+    FIELD_INIT(.set_rfic_register_reserved,
+               bladerf2_set_rfic_register_reserved),
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.tx_config_change_begin, bladerf2_tx_config_change_begin),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
@@ -5292,6 +5297,37 @@ static int bladerf2_tx_rf_config_change_begin(
     return status;
 }
 
+static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
+                                               uint16_t address,
+                                               uint8_t val)
+{
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+    uint16_t reg_address = address;
+#endif
+
+    address |= (AD936X_WRITE | AD936X_CNT(1));
+
+#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
+    /* Test-only fault for public/configuration register writes. The
+     * transition fault hook covers SPI writes made by RX retunes; this one
+     * verifies legacy multi-register configuration fails closed too. */
+    const char *fault_address =
+        getenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
+    if (fault_address != NULL && fault_address[0] != '\0') {
+        char *end = NULL;
+        unsigned long parsed = strtoul(fault_address, &end, 0);
+        if (end != fault_address && *end == '\0' && parsed ==
+            (unsigned long)reg_address) {
+            return errno_ad9361_to_bladerf(-EIO);
+        }
+    }
+#endif
+
+    int status = dev->backend->ad9361_spi_write(
+        dev, address, (((uint64_t)val) << 56));
+    return status < 0 ? errno_ad9361_to_bladerf(status) : status;
+}
+
 int bladerf_set_rfic_register(struct bladerf *dev,
                               uint16_t address,
                               uint8_t val)
@@ -5309,41 +5345,12 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         status = bladerf2_tx_rf_config_change_begin(dev, board_data);
         if (status == 0) {
-            uint64_t data = (((uint64_t)val) << 56);
-#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
-            uint16_t reg_address = address;
-#endif
-
-            address |= (AD936X_WRITE | AD936X_CNT(1));
-
-#ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
-            /* Test-only fault for public/configuration register writes. The
-             * transition fault hook covers SPI writes made by RX retunes; this
-             * one verifies legacy multi-register configuration fails closed too. */
-            const char *fault_address =
-                getenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
-            if (fault_address != NULL && fault_address[0] != '\0') {
-                char *end = NULL;
-                unsigned long parsed = strtoul(fault_address, &end, 0);
-                if (end != fault_address && *end == '\0' && parsed ==
-                    (unsigned long)reg_address) {
-                    status = -EIO;
-                } else {
-                    status = dev->backend->ad9361_spi_write(dev, address,
-                                                             data);
-                }
-            } else {
-                status = dev->backend->ad9361_spi_write(dev, address, data);
-            }
-#else
-            status = dev->backend->ad9361_spi_write(dev, address, data);
-#endif
+            status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });
 
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     if (status < 0) {
-        status = errno_ad9361_to_bladerf(status);
         log_error("%s: AD9361 register write failed: %s\n", __FUNCTION__,
                   bladerf_strerror(status));
     }
