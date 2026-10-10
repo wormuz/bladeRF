@@ -185,6 +185,13 @@ int main(void)
     invalid_clock_factor.phy = &phy;
     if (ad9361_clk_factor_recalc_rate_checked(
             &invalid_clock_factor, 40000000, &rfpll_rate) != -EINVAL ||
+        ad9361_bbpll_recalc_rate_checked(
+            &invalid_clock_factor, 40000000, &rfpll_rate) != -EINVAL ||
+        ad9361_bbpll_set_rate(
+            &invalid_clock_factor, 1000000000, 40000000) != -EINVAL ||
+        ad9361_bbpll_recalc_rate_checked(NULL, 40000000,
+                                          &rfpll_rate) != -EINVAL ||
+        ad9361_bbpll_set_rate(NULL, 1000000000, 40000000) != -EINVAL ||
         ad9361_rfpll_int_recalc_rate_checked(NULL, 1, &rfpll_rate) != -EINVAL ||
         ad9361_rfpll_int_round_rate(NULL, 1000000000, NULL) != -EINVAL ||
         ad9361_rfpll_recalc_rate_checked(NULL, &rfpll_rate) != -EINVAL ||
