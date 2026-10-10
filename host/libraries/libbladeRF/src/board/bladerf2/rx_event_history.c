@@ -949,7 +949,6 @@ void bladerf2_rx_async_timestamp_discontinuity(
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
-    bool timestamp_valid;
     bool should_report = false;
     uint32_t transition_channel_flags = 0;
 
@@ -967,16 +966,16 @@ void bladerf2_rx_async_timestamp_discontinuity(
         board_data->rx_async_data_withheld_active = true;
         should_report = true;
     }
-    timestamp_valid = board_data->rf_transition_epoch_contract_enabled &&
-        board_data->rf_transition_epoch_certified &&
-        board_data->rf_transition_certified_epoch_id == expected_epoch_id;
     transition_channel_flags =
         bladerf2_rx_transition_channel_event_flags(
             board_data->rf_transition_current_channel,
             board_data->rf_transition_epoch_contract_enabled &&
                 board_data->rf_transition_current_channel_valid);
-    epoch_id = timestamp_valid
-        ? expected_epoch_id : board_data->rf_transition_epoch_id;
+    /* The callback supplies the epoch and timestamp of the packet it
+     * inspected. A newer certificate may already be active by the time this
+     * diagnostic is published; labeling it with that newer epoch would let a
+     * delayed old-packet error revoke the wrong capture. */
+    epoch_id = expected_epoch_id;
 
     if (!should_report) {
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -984,15 +983,15 @@ void bladerf2_rx_async_timestamp_discontinuity(
     }
 
     event.host_monotonic_ns = monotonic_ns();
-    event.fpga_timestamp = timestamp_valid
-        ? first_unvalidated_timestamp : 0;
+    event.fpga_timestamp = first_unvalidated_timestamp;
     event.epoch_id = epoch_id;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_WITHHELD;
     event.flags = BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY |
-        (timestamp_valid ? BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID : 0) |
+        BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
         transition_channel_flags;
     event.error_code = BLADERF_ERR_UNEXPECTED;
+    rx_withheld_event_apply_source_provenance(board_data, &event);
     bladerf2_rf_event_append(board_data, &event);
 
     event.host_monotonic_ns = monotonic_ns();

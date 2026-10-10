@@ -1904,6 +1904,60 @@ static void test_withheld_event_epoch_provenance_across_timestamp_wrap(void)
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
+static void test_timestamp_discontinuity_keeps_source_epoch(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+    struct bladerf_rf_event old_epoch = {
+        .transaction_id = 101,
+        .epoch_id = 9,
+        .fpga_timestamp = 100,
+        .event_type = BLADERF_RF_EVT_RX_EPOCH_VALID,
+        .requested_rx_lo_hz = 1835000000ULL,
+        .readback_rx_lo_hz = 1835000000ULL,
+    };
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_certified_epoch_id = 10;
+    board_data.rf_transition_epoch_id = 10;
+    board_data.rf_transition_current_channel = BLADERF_CHANNEL_RX(1);
+    board_data.rf_transition_current_channel_valid = true;
+    bladerf2_rf_event_append(&board_data, &old_epoch);
+
+    /* A delayed buffer from epoch 9 is diagnosed after epoch 10 has already
+     * become current. Both events must retain the source transaction. */
+    bladerf2_rx_async_timestamp_discontinuity(&dev, 9, 350);
+
+    assert(board_data.rf_transition_event_count == 3);
+    uint32_t withheld_slot =
+        (board_data.rf_transition_event_head +
+         BLADERF2_RF_EVENT_HISTORY_SIZE - 2) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    uint32_t overrun_slot =
+        (board_data.rf_transition_event_head +
+         BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    const struct bladerf_rf_event *withheld =
+        &board_data.rf_transition_events[withheld_slot];
+    const struct bladerf_rf_event *overrun =
+        &board_data.rf_transition_events[overrun_slot];
+
+    assert(withheld->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(withheld->epoch_id == 9 && withheld->fpga_timestamp == 350);
+    assert(withheld->transaction_id == 101);
+    assert(withheld->flags & BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
+    assert(overrun->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
+    assert(overrun->epoch_id == 9 && overrun->transaction_id == 101);
+    assert(overrun->fpga_timestamp == 350);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
 static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
@@ -2860,6 +2914,7 @@ int main(void)
     test_async_data_withheld_event();
     test_host_data_event_uses_epoch_snapshot();
     test_withheld_event_epoch_provenance_across_timestamp_wrap();
+    test_timestamp_discontinuity_keeps_source_epoch();
     test_late_first_host_data_cannot_be_certified();
     test_sync_admission_policy_checks_deadline_before_copy();
     test_invalidation_companion_append_is_atomic_at_ring_wrap();
