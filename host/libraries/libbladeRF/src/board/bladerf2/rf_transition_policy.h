@@ -245,6 +245,13 @@ static inline bool bladerf2_rf_link_epoch_ack_valid(
            (observed_status & fault_bit) == 0;
 }
 
+static inline uint8_t bladerf2_rf_link_epoch_id(uint32_t link_status,
+                                                uint8_t fallback_epoch_id)
+{
+    return (link_status & 0xf0000000u) == 0x10000000u
+        ? (uint8_t)(link_status >> 20) : fallback_epoch_id;
+}
+
 static inline bool bladerf2_rx_first_host_data_admissible(
     bool required, bool already_reported, uint64_t deadline_ns,
     uint64_t now_ns)

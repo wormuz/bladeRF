@@ -129,6 +129,8 @@ int main(void)
         rf_link_version, rf_link_epoch_count_mask,
         rf_link_tx_ack | rf_link_rx_ack,
         rf_link_tx_fault | rf_link_rx_fault));
+    assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
+    assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);
 
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));

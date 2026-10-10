@@ -257,6 +257,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     board_data = dev->board_data;
     event.host_monotonic_ns = monotonic_ns();
     event.event_type = event_type;
+    event.epoch_id = bladerf2_rf_link_epoch_id(
+        link_status, board_data->tx_link_epoch_id);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
     if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||

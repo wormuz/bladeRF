@@ -5072,17 +5072,17 @@ typedef enum {
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)
 
 /**
- * Immutable RF transaction event (ADR-0207 §4).
+ * Immutable RF transition or runtime event.
  *
- * Each observed transition condition appends one event to the transaction's
- * history. Timestamps are host monotonic nanoseconds taken at the observation
+ * Each observed condition appends one event to the device RF-event history.
+ * Timestamps are host monotonic nanoseconds taken at the observation
  * boundary; SPI events use the host time around their backend request/response.
  */
 struct bladerf_rf_event {
     uint64_t host_monotonic_ns;   /**< CLOCK_MONOTONIC ns when observed */
     uint64_t fpga_timestamp;      /**< FPGA RX sample counter, if available */
-    uint32_t transaction_id;      /**< Owning transaction */
-    uint32_t epoch_id;            /**< RX data epoch, if applicable */
+    uint32_t transaction_id;      /**< Owning RX transaction, or zero */
+    uint32_t epoch_id;            /**< RX data epoch or TX RF-link generation */
     uint64_t requested_rx_lo_hz;
     uint64_t readback_rx_lo_hz;
     uint32_t rfic_status;         /**< Raw RFIC/device status snapshot */

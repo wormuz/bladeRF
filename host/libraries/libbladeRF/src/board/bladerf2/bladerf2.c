@@ -880,7 +880,8 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 
 static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                                   bool *epoch_confirmed,
-                                  bool *start_accepted)
+                                  bool *start_accepted,
+                                  uint32_t *acknowledged_status)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     bladerf_dev_speed speed = BLADERF_DEVICE_SPEED_UNKNOWN;
@@ -899,8 +900,10 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
 
     NULL_CHECK(epoch_confirmed);
     NULL_CHECK(start_accepted);
+    NULL_CHECK(acknowledged_status);
     *epoch_confirmed = false;
     *start_accepted = false;
+    *acknowledged_status = 0;
 
     if (BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_link_dir_on[0]) {
         required_ack_mask |= 1u << 8;
@@ -1024,6 +1027,11 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
             RF_LINK_STATUS_VERSION_1) {
             return BLADERF_ERR_UNSUPPORTED;
         }
+        if (board_data->rf_link_dir_on[1]) {
+            /* Keep the observed generation on failure as well as success so
+             * TX_STATUS_UNAVAILABLE identifies the epoch whose ACK was lost. */
+            board_data->tx_link_epoch_id = (uint8_t)(st >> 20);
+        }
 
         /* A direction bit left high by the preceding stream is not an ACK
          * for this START. Require both a new fabric generation and the
@@ -1044,6 +1052,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                         __FUNCTION__, attempt + 1, st,
                         (st >> 19) & 1, (st >> 14) & 1, (st >> 20) & 0xff);
             *epoch_confirmed = true;
+            *acknowledged_status = st;
             return 0;
         }
 
@@ -1183,6 +1192,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         int tx_baseline_status = 0;
         bool epoch_confirmed = false;
         bool start_accepted = false;
+        uint32_t link_ack_status = 0;
 
         /* The FPGA loss counters reset with the shared sample-domain reset,
          * not on every lane enable. If the other direction is already live,
@@ -1227,11 +1237,15 @@ static int bladerf2_enable_module(struct bladerf *dev,
             }
         }
         status = announce_rf_link_epoch(dev, ch, &epoch_confirmed,
-                                        &start_accepted);
+                                        &start_accepted, &link_ack_status);
         if (start_accepted && board_data->rf_link_dir_on[1]) {
             /* Discard an in-flight TX status sample captured before the
              * shared generation boundary. */
             board_data->tx_channel_state_generation++;
+        }
+        if (epoch_confirmed && board_data->rf_link_dir_on[1]) {
+            board_data->tx_link_epoch_id =
+                (uint8_t)(link_ack_status >> 20);
         }
         if (status != 0) {
             return bladerf2_fail_module_enable(
@@ -1268,7 +1282,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
             bladerf2_tx_stream_event(
                 dev, epoch_confirmed ? BLADERF_RF_EVT_TX_LINK_VALID :
                                        BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
-                0, 0, epoch_confirmed ? 0 : BLADERF_ERR_UNSUPPORTED);
+                0, link_ack_status,
+                epoch_confirmed ? 0 : BLADERF_ERR_UNSUPPORTED);
         }
         return 0;
     }
