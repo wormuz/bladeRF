@@ -1205,8 +1205,17 @@ int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
 
 int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
 {
+    uint32_t snapshot[BLADERF_DWELL_WORD_COUNT];
     int status;
     unsigned attempt;
+
+    if (dev == NULL || words == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    memset(words, 0, sizeof(snapshot));
+    if (gen != NULL) {
+        *gen = 0;
+    }
 
     for (attempt = 0; attempt < 4; attempt++) {
         uint32_t before, after;
@@ -1220,7 +1229,7 @@ int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
 
         for (i = 0; i < BLADERF_DWELL_WORD_COUNT; i++) {
             status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_DWELL_READOUT,
-                                    i, &words[i]);
+                                    i, &snapshot[i]);
             if (status != 0) {
                 return status;
             }
@@ -1236,6 +1245,7 @@ int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
          * the words were being read, so they describe one measurement. A
          * differing one is not an error -- it is the mechanism working. */
         if (before == after) {
+            memcpy(words, snapshot, sizeof(snapshot));
             if (gen != NULL) {
                 *gen = before;
             }
@@ -1255,6 +1265,11 @@ int nios_dwell_summary_read(struct bladerf *dev, uint32_t *words, uint32_t *gen)
 int nios_pretrig_read(struct bladerf *dev, uint16_t index, uint32_t *value)
 {
     int status;
+
+    if (dev == NULL || value == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *value = 0;
 
     /* Paged: the packet's address field is 8 bits and the ring is 4096
      * deep. Write the page base, then read the offset within it. Two
@@ -1277,6 +1292,15 @@ int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
     size_t i;
     uint16_t base = 0xffff;   /* impossible, forces the first write */
 
+    if (dev == NULL || (count != 0 && buf == NULL) ||
+        count > BLADERF_PRETRIG_DEPTH) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (count == 0) {
+        return 0;
+    }
+    memset(buf, 0, count * sizeof(*buf));
+
     for (i = 0; i < count; i++) {
         uint16_t index = (uint16_t)((start + i) & (BLADERF_PRETRIG_DEPTH - 1));
         uint16_t page  = index & ~0xffu;
@@ -1289,6 +1313,7 @@ int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
             status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
                                      0, page);
             if (status != 0) {
+                memset(buf, 0, count * sizeof(*buf));
                 return status;
             }
             base = page;
@@ -1297,6 +1322,7 @@ int nios_pretrig_read_block(struct bladerf *dev, uint16_t start,
         status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_PRETRIG_READ,
                                 (uint8_t)(index & 0xff), &buf[i]);
         if (status != 0) {
+            memset(buf, 0, count * sizeof(*buf));
             return status;
         }
     }

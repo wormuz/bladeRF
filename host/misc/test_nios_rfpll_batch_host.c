@@ -7,6 +7,7 @@
 #include "backend/usb/usb.h"
 #include "backend/usb/nios_access.h"
 #include "nios_pkt_16x64.h"
+#include "nios_pkt_8x32.h"
 #include "nios_pkt_formats.h"
 
 enum response_mode {
@@ -29,15 +30,19 @@ static enum response_mode response_mode;
 static uint8_t request[NIOS_PKT_LEN];
 static unsigned int out_count;
 static unsigned int in_count;
+static unsigned int timeout_on_in_count;
 
 static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
                               uint32_t length, uint32_t timeout_ms)
 {
     uint8_t *bytes = buffer;
     uint8_t target;
+    uint8_t target8, addr8;
     bool write;
+    bool write8;
     uint16_t count;
     uint64_t data;
+    uint32_t data8;
     (void)driver;
     (void)timeout_ms;
 
@@ -55,11 +60,19 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         return BLADERF_ERR_UNEXPECTED;
     }
 
-    nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
     in_count++;
-    if (response_mode == RESPONSE_8X32_READ_TIMEOUT) {
+    if (timeout_on_in_count != 0 && in_count == timeout_on_in_count) {
         return BLADERF_ERR_TIMEOUT;
     }
+    if (request[0] == NIOS_PKT_8x32_MAGIC) {
+        nios_pkt_8x32_unpack(request, &target8, &write8, &addr8, &data8);
+        if (response_mode == RESPONSE_8X32_READ_TIMEOUT) {
+            return BLADERF_ERR_TIMEOUT;
+        }
+        nios_pkt_8x32_resp_pack(bytes, target8, write8, addr8, 0, true);
+        return 0;
+    }
+    nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
     if (target == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT && !write &&
         response_mode == RESPONSE_SNAPSHOT_TIMEOUT) {
         return BLADERF_ERR_TIMEOUT;
@@ -287,6 +300,41 @@ static int expect_epoch_snapshot_timeout_clears_outputs(void)
     return 0;
 }
 
+static int expect_partial_dwell_summary_timeout_is_atomic(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint32_t words[BLADERF_DWELL_WORD_COUNT];
+    uint32_t generation = UINT32_MAX;
+    unsigned int i;
+    int status;
+
+    for (i = 0; i < BLADERF_DWELL_WORD_COUNT; i++) {
+        words[i] = UINT32_MAX;
+    }
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_SUCCESS;
+    timeout_on_in_count = in_count + 5;
+    status = nios_dwell_summary_read(&dev, words, &generation);
+    timeout_on_in_count = 0;
+    if (status != BLADERF_ERR_TIMEOUT || generation != 0) {
+        fprintf(stderr, "partial dwell timeout published generation: "
+                        "status=%d generation=%u\n", status, generation);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    for (i = 0; i < BLADERF_DWELL_WORD_COUNT; i++) {
+        if (words[i] != 0) {
+            fprintf(stderr, "partial dwell timeout published word %u: %u\n",
+                    i, words[i]);
+            MUTEX_DESTROY(&usb.peripheral_lock);
+            return 1;
+        }
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -304,7 +352,8 @@ int main(void)
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
-        out_count != 13 || in_count != 13) {
+        expect_partial_dwell_summary_timeout_is_atomic() ||
+        out_count != 18 || in_count != 18) {
         return 1;
     }
 
