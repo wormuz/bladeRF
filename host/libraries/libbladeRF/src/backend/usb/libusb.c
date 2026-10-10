@@ -1746,6 +1746,15 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
 
     MUTEX_LOCK(&stream->lock);
 
+    if (stream->state != STREAM_RUNNING) {
+        /* Shutdown can win after async_run_stream() publishes RUNNING but
+         * before this backend enters its event loop. Do not reset done_flag
+         * or submit the initial transfer set after that shutdown. */
+        mark_stream_done(stream);
+        MUTEX_UNLOCK(&stream->lock);
+        return 0;
+    }
+
     /* done_flag belongs to one invocation of this event loop. A previous
      * stream run sets it when all transfers have drained; sync RX can restart
      * the same backend stream after reporting that terminal error. If the old
