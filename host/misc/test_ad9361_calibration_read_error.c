@@ -624,12 +624,19 @@ int main(void)
     fail_read_reg = REG_QUAD_CAL_STATUS_TX1;
     {
         uint8_t status = 0xff;
+        /* In 2x2 mode, the 1x1 fallback setting must not select TX2 as
+         * the first status register and silently skip TX1 convergence. */
+        pdata.rx2tx2 = true;
+        pdata.rx1tx1_mode_use_tx_num = 2;
         ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, &status);
         if (ret != -EIO) {
-            fprintf(stderr, "TX quad calibration hid status read failure: ret=%" PRId32
+            fprintf(stderr,
+                    "2x2 TX quad calibration skipped TX1 status: ret=%" PRId32
                     "\n", ret);
             return EXIT_FAILURE;
         }
+        pdata.rx2tx2 = false;
+        pdata.rx1tx1_mode_use_tx_num = 1;
     }
     fail_read_reg = -1;
 
