@@ -4787,7 +4787,7 @@ static int bladerf2_get_loopback(struct bladerf *dev, bladerf_loopback *mode)
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
-    int32_t ad9361_loopback;
+    int32_t ad9361_loopback = 0;
     bool fw_loopback;
 
     /* Read firwmare loopback */
@@ -4800,8 +4800,7 @@ static int bladerf2_get_loopback(struct bladerf *dev, bladerf_loopback *mode)
 
     IF_COMMAND_MODE(dev, RFIC_COMMAND_HOST, {
         /* Read AD9361 bist loopback */
-        /* Note: this returns void */
-        ad9361_get_bist_loopback(phy, &ad9361_loopback);
+        CHECK_AD936X(ad9361_get_bist_loopback(phy, &ad9361_loopback));
 
         if (ad9361_loopback == 1) {
             *mode = BLADERF_LB_RFIC_BIST;
