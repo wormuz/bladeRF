@@ -5272,8 +5272,8 @@ int CALL_CONV bladerf_rx_transition_get_events(
     bool *history_complete);
 
 /** Read all device RF events newer than an event-ring cursor. This includes
- * transaction events, unscoped RX validity/discontinuity notifications, and
- * TX link/underrun notifications.
+ * transaction events, unscoped RX validity/discontinuity notifications, TX
+ * link/underrun notifications, and TX RFIC-state observations.
  *
  * The cursor is the sequence returned in `next_sequence`, not a transaction
  * ID. If `history_complete` is false, one or more events after
