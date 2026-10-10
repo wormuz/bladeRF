@@ -3567,9 +3567,23 @@ static int bladerf2_sync_tx(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    bool tx_stream_faulted;
 
     if (!board_data->sync[BLADERF_TX].initialized) {
         RETURN_INVAL("sync tx", "not initialized");
+    }
+
+    /* A TX link fault or an unobserved underrun invalidates continuity of
+     * the submitted stream. Do not silently accept more IQ until the caller
+     * stops and starts TX again, which establishes a new acknowledged link
+     * epoch. The monitor and enable path update this state under dev->lock. */
+    WITH_MUTEX(&dev->lock, {
+        tx_stream_faulted = board_data->tx_stream_faulted;
+    });
+    if (tx_stream_faulted) {
+        log_warning("%s: TX stream is invalid; stop and re-enable TX before "
+                    "submitting more samples\n", __FUNCTION__);
+        return BLADERF_ERR_FPGA_OP;
     }
 
     return sync_tx(&board_data->sync[BLADERF_TX], samples, num_samples,
