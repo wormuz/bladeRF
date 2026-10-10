@@ -10,6 +10,7 @@ int main(void)
 {
     assert(bladerf2_rx_fir_configuration_valid(true, true));
     assert(!bladerf2_rx_fir_configuration_valid(true, false));
+    assert(!bladerf2_rx_fir_configuration_valid(false, true));
     assert(!bladerf2_rx_fir_configuration_valid(false, false));
 
     uint32_t effective = UINT32_MAX;
