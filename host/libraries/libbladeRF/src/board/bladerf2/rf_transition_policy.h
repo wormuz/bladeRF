@@ -8,6 +8,12 @@
 
 #include <libbladeRF.h>
 
+static inline bool bladerf2_rfic_frequency_model_valid(
+    bool reference_clock_known, bool rfic_clock_tree_known)
+{
+    return reference_clock_known && rfic_clock_tree_known;
+}
+
 static inline bool bladerf2_clock_select_valid(bladerf_clock_select select)
 {
     return select == CLOCK_SELECT_ONBOARD ||

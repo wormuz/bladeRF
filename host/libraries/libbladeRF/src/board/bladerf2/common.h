@@ -155,6 +155,15 @@ struct bladerf2_board_data {
     /* RFIC configuration parameters */
     void *rfic_init_params;
 
+    /* AD9361 LO readback is calculated from synthesizer divider registers
+     * and the configured reference clock. Raw ADF400x/clock-source changes
+     * make that rate unknown until set_pll_refclk re-establishes it. Raw
+     * AD9361 writes can also invalidate the cached divider model; that state
+     * is restored only by a full RFIC reinitialization. Guarded by
+     * rx_async_epoch_lock. */
+    bool rfic_reference_clock_known;
+    bool rfic_frequency_model_known;
+
     /* Bitmask of capabilities determined by version numbers */
     uint64_t capabilities;
 

@@ -27,6 +27,11 @@ int main(void)
     uint64_t loss_count = 0;
     struct bladerf2_rx_invalidation_policy invalidation_policy;
 
+    assert(bladerf2_rfic_frequency_model_valid(true, true));
+    assert(!bladerf2_rfic_frequency_model_valid(false, true));
+    assert(!bladerf2_rfic_frequency_model_valid(true, false));
+    assert(!bladerf2_rfic_frequency_model_valid(false, false));
+
     assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(0)));
     assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(1)));
     assert(bladerf_public_channel_valid(BLADERF_CHANNEL_TX(0)));

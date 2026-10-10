@@ -1449,7 +1449,10 @@ static void *rx_fault_monitor_task(void *arg)
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
                             board_data->tx_retune_gate_release_requested = false;
                             resume_is_valid = !board_data->tx_gate_abort_pending &&
-                                !board_data->tx_async_transport_faulted;
+                                !board_data->tx_async_transport_faulted &&
+                                bladerf2_rfic_frequency_model_valid(
+                                    board_data->rfic_reference_clock_known,
+                                    board_data->rfic_frequency_model_known);
                             if (resume_is_valid) {
                                 board_data->tx_retune2_completion_faulted = false;
                             }
@@ -1476,6 +1479,10 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_retune2_pending_count;
                     bool tx_completion_faulted =
                         board_data->tx_retune2_completion_faulted;
+                    bool frequency_model_known =
+                        bladerf2_rfic_frequency_model_valid(
+                            board_data->rfic_reference_clock_known,
+                            board_data->rfic_frequency_model_known);
                     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0 &&
@@ -1483,6 +1490,7 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_retune2_success_status == 0 &&
                         tx_pending_after_completions == 0 &&
                         !tx_completion_faulted &&
+                        frequency_model_known &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
                         bladerf2_rf_link_tx_epoch_valid(
@@ -1545,6 +1553,7 @@ static void *rx_fault_monitor_task(void *arg)
                         !board_data->tx_rfic_state_invalid_reported &&
                         !board_data->tx_rfic_state_valid_reported &&
                         !tx_completion_faulted &&
+                        frequency_model_known &&
                         !board_data->tx_recovery_blocked &&
                         !report_tx_fault && !report_tx_epoch_invalid &&
                         !report_tx_underrun && !counter_reset) {
@@ -2283,6 +2292,7 @@ static int _bladerf_rx_transition_begin(
     uint32_t required_events_mask;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
+    bool frequency_model_unknown = false;
     bool epochless_async_stream_active = false;
     bool sync_format_unsupported = false;
     bool rx_x2_layout_unsupported = false;
@@ -2316,7 +2326,17 @@ static int _bladerf_rx_transition_begin(
     }
 
     WITH_MUTEX(&dev->lock, {
-        if (board_data->rf_transition_pending ||
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        frequency_model_unknown =
+            !bladerf2_rfic_frequency_model_valid(
+                board_data->rfic_reference_clock_known,
+                board_data->rfic_frequency_model_known);
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (frequency_model_unknown) {
+            /* Divider readback is not a frequency certificate when the
+             * reference source or AD9361 clock-tree model was modified. */
+            transition_busy = true;
+        } else if (board_data->rf_transition_pending ||
             board_data->rf_transition_setter_active ||
             board_data->tx_frequency_reconfigure_active ||
             board_data->tx_rf_config_operation_active) {

@@ -250,6 +250,10 @@ static int _bladerf2_initialize(struct bladerf *dev)
 
     CHECK_STATUS(bladerf2_rx_fault_monitor_start(dev));
 
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rfic_frequency_model_known = true;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
     log_debug("%s: complete\n", __FUNCTION__);
 
     return 0;
@@ -1355,6 +1359,17 @@ static int bladerf2_enable_module(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     int status;
 
+    if (enable) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        bool frequency_model_known = bladerf2_rfic_frequency_model_valid(
+            board_data->rfic_reference_clock_known,
+            board_data->rfic_frequency_model_known);
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!frequency_model_known) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+    }
+
     if (BLADERF_CHANNEL_IS_TX(ch) &&
         (board_data->tx_frequency_reconfigure_active ||
          board_data->tx_rf_config_operation_active)) {
@@ -2220,6 +2235,15 @@ static int bladerf2_get_frequency(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bool model_known = bladerf2_rfic_frequency_model_valid(
+        board_data->rfic_reference_clock_known,
+        board_data->rfic_frequency_model_known);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (!model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     return board_data->rfic->get_frequency(dev, ch, frequency);
 }
 
@@ -2230,6 +2254,15 @@ static int bladerf2_set_frequency(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bool model_known = bladerf2_rfic_frequency_model_valid(
+        board_data->rfic_reference_clock_known,
+        board_data->rfic_frequency_model_known);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (!model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     return board_data->rfic->set_frequency(dev, ch, frequency);
 }
@@ -2747,7 +2780,10 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     valid = !board_data->tx_stream_faulted_async &&
             board_data->tx_retune2_pending_count == 0 &&
-            !board_data->tx_retune2_completion_faulted;
+            !board_data->tx_retune2_completion_faulted &&
+            bladerf2_rfic_frequency_model_valid(
+                board_data->rfic_reference_clock_known,
+                board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return valid;
 }
@@ -2899,6 +2935,16 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
     NULL_CHECK(quick_tune);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bool model_known = bladerf2_rfic_frequency_model_valid(
+        board_data->rfic_reference_clock_known,
+        board_data->rfic_frequency_model_known);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (!model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     struct controller_fns const *rfic      = board_data->rfic;
     struct band_port_map const *pm         = NULL;
 
@@ -3014,6 +3060,14 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     }
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    bool frequency_model_known = bladerf2_rfic_frequency_model_valid(
+        board_data->rfic_reference_clock_known,
+        board_data->rfic_frequency_model_known);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (!frequency_model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     uint32_t success_count;
     uint8_t pending_slot = UINT8_MAX;
     unsigned int i;
@@ -4076,7 +4130,10 @@ static int bladerf2_sync_tx(struct bladerf *dev,
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     tx_stream_faulted = board_data->tx_stream_faulted_async ||
         board_data->tx_retune2_pending_count != 0 ||
-        board_data->tx_retune2_completion_faulted;
+        board_data->tx_retune2_completion_faulted ||
+        !bladerf2_rfic_frequency_model_valid(
+            board_data->rfic_reference_clock_known,
+            board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (tx_stream_faulted) {
         log_warning("%s: TX stream is invalid; stop and re-enable TX before "
@@ -4377,6 +4434,7 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
 
     bladerf_tuning_mode mode_other;
     bladerf_rfic_init_state init_state;
+    int status;
 
     log_debug("%s: New tuning mode: %s\n", __FUNCTION__, tuningmode2str(mode));
 
@@ -4420,6 +4478,12 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
             return BLADERF_ERR_INVAL;
     }
 
+    if (board_data->tuning_mode != mode) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rfic_frequency_model_known = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+
     /* Changing RFIC ownership invalidates any prior TX completion state.
      * Startup has no active TX certificate, so only fence a live TX path. */
     uint8_t pending_count;
@@ -4455,12 +4519,24 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
         case BLADERF_RFIC_INIT_STATE_OFF:
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Initializing",
                       tuningmode2str(mode));
-            return rfic_new->initialize(dev);
+            status = rfic_new->initialize(dev);
+            if (status == 0 && mode == BLADERF_TUNING_MODE_HOST) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rfic_frequency_model_known = true;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
+            return status;
 
         case BLADERF_RFIC_INIT_STATE_STANDBY:
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Restoring",
                       tuningmode2str(mode));
-            return rfic_new->initialize(dev);
+            status = rfic_new->initialize(dev);
+            if (status == 0 && mode == BLADERF_TUNING_MODE_HOST) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rfic_frequency_model_known = true;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
+            return status;
 
         case BLADERF_RFIC_INIT_STATE_ON:
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Maintaining",
@@ -4812,6 +4888,10 @@ static int bladerf2_trim_dac_write(struct bladerf *dev, uint16_t trim)
 
     CHECK_STATUS(bladerf2_tx_config_change_begin(dev));
 
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rfic_reference_clock_known = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
     return dev->backend->ad56x1_vctcxo_trim_dac_write(dev, trim);
 }
 
@@ -4908,6 +4988,9 @@ static int bladerf2_config_gpio_write(struct bladerf *dev, uint32_t val)
 
     struct bladerf2_board_data *board_data = dev->board_data;
     CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rfic_reference_clock_known = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return dev->backend->config_gpio_write(dev, val);
 }
 
@@ -5505,6 +5588,14 @@ int bladerf_set_rfic_register(struct bladerf *dev,
                        address <= REG_TX_FAST_LOCK_PROGRAM_CTRL) {
                 ad9361_fastlock_invalidate_cache(board_data->phy, true);
             }
+            /* The raw register API can modify RFPLL/clock-divider state
+             * without updating ADI's cached clock tree. Do not certify any
+             * later LO readback until host-mode RFIC initialization rebuilds
+             * that model. */
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rfic_frequency_model_known = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            board_data->rfic_reset_on_close = true;
             status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });
@@ -5928,6 +6019,9 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
     }
     status = bladerf2_tx_rf_config_operation_begin(dev);
     if (status == 0) {
+        MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+        dev->board_data->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
         status = bladerf2_set_pll_enable_hw(dev, enable);
         bladerf2_tx_rf_config_operation_complete(dev);
     }
@@ -6012,7 +6106,20 @@ static int bladerf2_set_pll_refclk_internal(
         tx_config_reserved = true;
     }
 
+    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+    dev->board_data->rfic_reference_clock_known = false;
+    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+
     status = bladerf_pll_configure(dev, R, N);
+    if (status == 0) {
+        bool pll_enabled = false;
+        status = bladerf_get_pll_enable(dev, &pll_enabled);
+        if (status == 0 && pll_enabled) {
+            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+            dev->board_data->rfic_reference_clock_known = true;
+            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+        }
+    }
     if (tx_config_reserved) {
         bladerf2_tx_rf_config_operation_complete(dev);
     }
@@ -6067,6 +6174,12 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
         status = bladerf2_tx_rf_config_change_begin(
             dev, dev->board_data);
         if (status == 0) {
+            /* Arbitrary ADF400x latch writes can change the VCTCXO control
+             * ratio. Divider-based AD9361 LO readback is no longer in hertz
+             * until the caller re-establishes a known reference frequency. */
+            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+            dev->board_data->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             address &= 0x03;
             status = dev->backend->adf400x_write(dev, address, val);
         }
@@ -6167,7 +6280,11 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                     break;
             }
 
-            // Write back the config GPIO
+            // A failed GPIO write can still be ambiguous at the USB boundary.
+            // Invalidate the reference model before issuing it.
+            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+            dev->board_data->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             status = dev->backend->config_gpio_write(dev, gpio);
         }
     });
