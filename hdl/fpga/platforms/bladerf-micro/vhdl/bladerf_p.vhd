@@ -143,6 +143,10 @@ package bladerf_p is
         rx_epoch_status_export          :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rx_epoch_ts_lo_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rx_epoch_ts_hi_export           :   in  std_logic_vector(31 downto 0) := (others => 'X');
+        tx_retune_gate_ctrl_export      :   out std_logic_vector(31 downto 0);
+        tx_retune_gate_target_lo_export :   out std_logic_vector(31 downto 0);
+        tx_retune_gate_target_hi_export :   out std_logic_vector(31 downto 0);
+        tx_retune_gate_status_export    :   in  std_logic_vector(31 downto 0) := (others => 'X');
         rx_fault_causes_export          :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_in_port                 :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                :   out std_logic_vector(31 downto 0);

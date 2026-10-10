@@ -204,6 +204,14 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
             *data = rx_epoch_ts_hi_read();
             break;
+
+        case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
+            if (addr != NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS) {
+                *data = 0;
+                return false;
+            }
+            *data = tx_retune_gate_status_read();
+            break;
 #endif  // BOARD_BLADERF_MICRO
 
         default:
@@ -334,6 +342,43 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * backing PIO or effect. */
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
             (void)data;
+            break;
+
+        case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
+            switch (addr) {
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO:
+#ifdef TX_RETUNE_GATE_TARGET_LO_BASE
+                    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE, data);
+#else
+                    return false;
+#endif
+                    break;
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI:
+#ifdef TX_RETUNE_GATE_TARGET_HI_BASE
+                    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE, data);
+#else
+                    return false;
+#endif
+                    break;
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_ARM:
+#if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && defined(TX_RETUNE_GATE_TARGET_HI_BASE)
+                    tx_retune_gate_arm(
+                        ((uint64_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) << 32) |
+                        IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE),
+                        (data & 1u) != 0);
+#else
+                    return false;
+#endif
+                    break;
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE:
+                    tx_retune_gate_complete();
+                    break;
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT:
+                    tx_retune_gate_abort();
+                    break;
+                default:
+                    return false;
+            }
             break;
 #endif  // BOARD_BLADERF_MICRO
 

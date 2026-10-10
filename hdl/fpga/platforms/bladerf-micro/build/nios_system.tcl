@@ -489,6 +489,28 @@ set_instance_parameter_value rx_epoch_ts_hi {simDoTestBenchWiring} {0}
 set_instance_parameter_value rx_epoch_ts_hi {simDrivenValue} {0.0}
 set_instance_parameter_value rx_epoch_ts_hi {width} {32}
 
+# TX retune gate control and state. The target timestamp and command word are
+# bundled into one TX-clock CDC handshake in bladerf_core; NIOS writes both
+# timestamp halves before toggling ARM. Status is read back only after the TX
+# clock domain has consumed the command and changed gate state.
+foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi tx_retune_gate_status} {
+    add_instance $pio altera_avalon_pio
+    set_instance_parameter_value $pio {bitClearingEdgeCapReg} {0}
+    set_instance_parameter_value $pio {bitModifyingOutReg} {0}
+    set_instance_parameter_value $pio {captureEdge} {0}
+    set_instance_parameter_value $pio {edgeType} {RISING}
+    set_instance_parameter_value $pio {generateIRQ} {0}
+    set_instance_parameter_value $pio {irqType} {LEVEL}
+    set_instance_parameter_value $pio {resetValue} {0.0}
+    set_instance_parameter_value $pio {simDoTestBenchWiring} {0}
+    set_instance_parameter_value $pio {simDrivenValue} {0.0}
+    set_instance_parameter_value $pio {width} {32}
+}
+foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi} {
+    set_instance_parameter_value $pio {direction} {Output}
+}
+set_instance_parameter_value tx_retune_gate_status {direction} {Input}
+
 # Pre-trigger ring drain. Two PIOs, because a memory needs an address and a
 # datum and a PIO carries one word.
 #
@@ -749,6 +771,10 @@ set_interface_property rx_epoch_ctrl EXPORT_OF rx_epoch_ctrl.external_connection
 set_interface_property rx_epoch_status EXPORT_OF rx_epoch_status.external_connection
 set_interface_property rx_epoch_ts_lo EXPORT_OF rx_epoch_ts_lo.external_connection
 set_interface_property rx_epoch_ts_hi EXPORT_OF rx_epoch_ts_hi.external_connection
+set_interface_property tx_retune_gate_ctrl EXPORT_OF tx_retune_gate_ctrl.external_connection
+set_interface_property tx_retune_gate_target_lo EXPORT_OF tx_retune_gate_target_lo.external_connection
+set_interface_property tx_retune_gate_target_hi EXPORT_OF tx_retune_gate_target_hi.external_connection
+set_interface_property tx_retune_gate_status EXPORT_OF tx_retune_gate_status.external_connection
 set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
 set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
 set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
@@ -925,6 +951,18 @@ add_connection nios2.data_master rx_epoch_ts_hi.s1
 set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 baseAddress {0x9720}
 set_connection_parameter_value nios2.data_master/rx_epoch_ts_hi.s1 defaultConnection {0}
+
+foreach {pio base} {
+    tx_retune_gate_ctrl 0x9780
+    tx_retune_gate_target_lo 0x97a0
+    tx_retune_gate_target_hi 0x97c0
+    tx_retune_gate_status 0x97e0
+} {
+    add_connection nios2.data_master $pio.s1
+    set_connection_parameter_value nios2.data_master/$pio.s1 arbitrationPriority {1}
+    set_connection_parameter_value nios2.data_master/$pio.s1 baseAddress $base
+    set_connection_parameter_value nios2.data_master/$pio.s1 defaultConnection {0}
+}
 add_connection nios2.data_master rf_link_cfg.s1
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 baseAddress {0x9540}
@@ -1028,6 +1066,9 @@ add_connection system_clock.clk rx_epoch_ctrl.clk
 add_connection system_clock.clk rx_epoch_status.clk
 add_connection system_clock.clk rx_epoch_ts_lo.clk
 add_connection system_clock.clk rx_epoch_ts_hi.clk
+foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi tx_retune_gate_status} {
+    add_connection system_clock.clk $pio.clk
+}
 add_connection system_clock.clk rfic_axi_timeout_status.clk
 add_connection system_clock.clk rfic_axi_timeout_clear.clk
 add_connection system_clock.clk rf_link_cfg.clk
@@ -1081,6 +1122,9 @@ add_connection system_clock.clk_reset rx_epoch_ctrl.reset
 add_connection system_clock.clk_reset rx_epoch_status.reset
 add_connection system_clock.clk_reset rx_epoch_ts_lo.reset
 add_connection system_clock.clk_reset rx_epoch_ts_hi.reset
+foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi tx_retune_gate_status} {
+    add_connection system_clock.clk_reset $pio.reset
+}
 add_connection system_clock.clk_reset rfic_axi_timeout_status.reset
 add_connection system_clock.clk_reset rfic_axi_timeout_clear.reset
 add_connection system_clock.clk_reset rf_link_cfg.reset

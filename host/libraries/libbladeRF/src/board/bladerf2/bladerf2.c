@@ -2212,6 +2212,10 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                 }
             }
             if (status == 0) {
+                status = nios_tx_retune_gate_arm(dev, 0, true);
+            }
+            if (status == 0) {
+                board_data->tx_retune_gate_release_requested = false;
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->tx_retune2_completion_faulted = true;
                 board_data->tx_retune2_applied_waiting_rf_valid = false;
@@ -2254,12 +2258,16 @@ static void bladerf2_tx_frequency_reconfigure_complete(
         pending_count = board_data->tx_retune2_pending_count;
         board_data->tx_retune2_completion_faulted = true;
         board_data->tx_retune2_applied_waiting_rf_valid =
-            readback_status == 0 && readback_hz == target_hz &&
+            tune_status == 0 && readback_status == 0 && readback_hz == target_hz &&
             pending_count == 0;
         board_data->tx_retune2_applied_frequency_hz = readback_hz;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
-        if (readback_status == 0 && readback_hz == target_hz) {
+        if (tune_status != 0) {
+            (void)nios_tx_retune_gate_cmd(
+                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+        }
+        if (tune_status == 0 && readback_status == 0 && readback_hz == target_hz) {
             bladerf2_tx_retune_event(
                 dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED, target_hz,
                 readback_hz, pending_count, tune_status);
@@ -2894,6 +2902,27 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             board_data->tx_retune2_success_count_last = success_count;
             board_data->tx_retune2_success_count_valid = true;
         }
+        /* Arm the FPGA baseband fence before the timestamped RFPLL request
+         * can execute. One gate stays muted across all queued retunes and is
+         * released only after the queue and RFIC state are both confirmed. */
+        int gate_status = nios_tx_retune_gate_arm(
+            dev, timestamp == BLADERF_RETUNE_NOW ? 0 : timestamp,
+            timestamp == BLADERF_RETUNE_NOW);
+        if (gate_status != 0) {
+            (void)nios_tx_retune_gate_cmd(
+                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_applied_waiting_rf_valid = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            board_data->tx_channel_state_generation++;
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                frequency, 0, board_data->tx_retune2_pending_count,
+                gate_status);
+            return gate_status;
+        }
+        board_data->tx_retune_gate_release_requested = false;
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
@@ -2920,6 +2949,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->port, quick_tune->spdt);
     if (status != 0) {
         if (BLADERF_CHANNEL_IS_TX(ch)) {
+            (void)nios_tx_retune_gate_cmd(
+                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
@@ -3035,11 +3066,19 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
 
     int status = dev->backend->retune2(
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
-    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch)) {
+    const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
+    if (tx_queue_cleared) {
+        if (board_data->tx_retune2_pending_count != 0) {
+            int gate_status = nios_tx_retune_gate_cmd(
+                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            if (gate_status != 0) {
+                status = gate_status;
+            }
+        }
+        board_data->tx_retune_gate_release_requested = false;
         board_data->tx_channel_state_generation++;
     }
-    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch) &&
-        board_data->tx_retune2_pending_count != 0) {
+    if (tx_queue_cleared && board_data->tx_retune2_pending_count != 0) {
         unsigned int i;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_retune2_pending_count = 0;

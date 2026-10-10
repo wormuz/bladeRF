@@ -19,6 +19,7 @@ proc compile_nuand { root platform } {
     vcom -work nuand -2008 [file join $root ./synthesis/reset_synchronizer.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/handshake.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/rx_epoch_controller.vhd]
+    vcom -work nuand -2008 [file join $root ./synthesis/tx_retune_gate_controller.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/tb/handshake_tb.vhd]
 
     vcom -work nuand -2008 [file join $root ./synthesis/signal_processing_p.vhd]
@@ -76,4 +77,5 @@ proc compile_nuand_tb { root platform } {
     vcom -work nuand -2008 [file join $root ./simulation/fifo_writer_epoch_fence_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/sticky_epoch_snapshot_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/tx_retune_gate_tb.vhd]
+    vcom -work nuand -2008 [file join $root ./synthesis/tb/tx_retune_gate_controller_tb.vhd]
 }

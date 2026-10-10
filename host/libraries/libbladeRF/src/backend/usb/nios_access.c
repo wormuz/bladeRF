@@ -1368,6 +1368,65 @@ int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value)
     return status;
 }
 
+int nios_tx_retune_gate_cmd(struct bladerf *dev, uint8_t cmd)
+{
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                           cmd, 0);
+}
+
+int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
+                            bool immediate)
+{
+    int status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+        NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO, (uint32_t)timestamp);
+    if (status == 0) {
+        status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI,
+            (uint32_t)(timestamp >> 32));
+    }
+    if (status == 0) {
+        status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, immediate ? 1u : 0u);
+    }
+    if (status == 0) {
+        const uint64_t deadline_ns = monotonic_ns() + 1000000000ULL;
+        bool acknowledged = false;
+        while (monotonic_ns() < deadline_ns) {
+            uint32_t gate_status = 0;
+            uint32_t state;
+            status = nios_tx_retune_gate_status_read(dev, &gate_status);
+            if (status != 0) {
+                break;
+            }
+            state = gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
+            if (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
+                status = BLADERF_ERR_UNEXPECTED;
+                break;
+            }
+            if ((immediate && state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) ||
+                (!immediate &&
+                 (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED ||
+                  state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED))) {
+                acknowledged = true;
+                break;
+            }
+        }
+        if (status == 0 && !acknowledged) {
+            status = BLADERF_ERR_TIMEOUT;
+        }
+    }
+    return status;
+}
+
+int nios_tx_retune_gate_status_read(struct bladerf *dev, uint32_t *value)
+{
+    if (value == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+        NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, value);
+}
+
 int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile)
 {

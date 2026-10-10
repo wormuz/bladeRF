@@ -107,6 +107,10 @@ entity nios_system is
         tx_trigger_ctl_in_port          : in  std_logic_vector(7 downto 0)  := (others => 'X'); -- in_port
         tx_trigger_ctl_out_port         : out std_logic_vector(7 downto 0);                     -- out_port
         xb_gpio_in_port                 : in  std_logic_vector(31 downto 0) := (others => 'X'); -- in_port
+        tx_retune_gate_ctrl_export      : out std_logic_vector(31 downto 0);
+        tx_retune_gate_target_lo_export : out std_logic_vector(31 downto 0);
+        tx_retune_gate_target_hi_export : out std_logic_vector(31 downto 0);
+        tx_retune_gate_status_export    : in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                : out std_logic_vector(31 downto 0);                    -- out_port
         xb_gpio_dir_export              : out std_logic_vector(31 downto 0);                    -- export
         arbiter_request                 : in  std_logic_vector(1 downto 0)  := (others => 'X'); -- request
@@ -136,6 +140,9 @@ begin
     dac_SS_n <= (others =>'1') ;
 
     gpio_out_port <= x"0001_0157" after 1 us ;
+    tx_retune_gate_ctrl_export <= (others => '0');
+    tx_retune_gate_target_lo_export <= (others => '0');
+    tx_retune_gate_target_hi_export <= (others => '0');
 
     oc_i2c_scl_pad_o <= '0' ;
     oc_i2c_scl_padoen_o <= '1' ;

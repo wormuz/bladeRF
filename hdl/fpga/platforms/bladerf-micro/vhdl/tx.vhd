@@ -54,6 +54,7 @@ entity tx is
         retune_gate_target   : in unsigned(63 downto 0) := (others => '0');
         retune_gate_complete : in std_logic := '0';
         retune_gate_abort    : in std_logic := '0';
+        retune_gate_status   : out std_logic_vector(31 downto 0) := (others => '0');
 
         -- Link status (host register RF_LINK_STATUS)
         link_start_toggle          : in    std_logic := '0';
@@ -133,6 +134,8 @@ architecture arch of tx is
     signal retune_gate_resume_event        : std_logic;
     signal retune_gate_mute_timestamp      : unsigned(63 downto 0);
     signal retune_gate_muted_sample_count  : unsigned(63 downto 0);
+    signal retune_gate_mute_seen           : std_logic := '0';
+    signal retune_gate_resume_seen         : std_logic := '0';
 
 begin
 
@@ -314,6 +317,30 @@ begin
             mute_start_timestamp => retune_gate_mute_timestamp,
             muted_sample_count  => retune_gate_muted_sample_count
         );
+
+    process(tx_clock, tx_reset)
+    begin
+        if tx_reset = '1' then
+            retune_gate_mute_seen <= '0';
+            retune_gate_resume_seen <= '0';
+        elsif rising_edge(tx_clock) then
+            if retune_gate_arm = '1' then
+                retune_gate_mute_seen <= '0';
+                retune_gate_resume_seen <= '0';
+            else
+                if retune_gate_mute_event = '1' then
+                    retune_gate_mute_seen <= '1';
+                end if;
+                if retune_gate_resume_event = '1' then
+                    retune_gate_resume_seen <= '1';
+                end if;
+            end if;
+        end if;
+    end process;
+
+    retune_gate_status <= (31 downto 5 => '0') & retune_gate_resume_seen &
+                          retune_gate_mute_seen & retune_gate_muted &
+                          std_logic_vector(retune_gate_state);
 
     txtrig : entity work.trigger(async)
         generic map (

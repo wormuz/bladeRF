@@ -653,7 +653,8 @@ begin
 
             -- RFFE Interface
             dac_controls         => dac_controls,
-            dac_streams          => open
+            dac_streams          => open,
+            retune_gate_status   => open
         );
 
     dac_streams(0) <= tonegen_streams(0);

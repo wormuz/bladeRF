@@ -292,6 +292,22 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_ts_lo_sys          : std_logic_vector(31 downto 0);
     signal rx_epoch_ts_hi_sys          : std_logic_vector(31 downto 0);
 
+    -- TX LO retune fence command/status. Target timestamp and command toggles
+    -- cross together into tx_clock; status returns only after gate consumption.
+    signal tx_retune_gate_ctrl_sys        : std_logic_vector(31 downto 0);
+    signal tx_retune_gate_target_lo_sys  : std_logic_vector(31 downto 0);
+    signal tx_retune_gate_target_hi_sys  : std_logic_vector(31 downto 0);
+    signal tx_retune_gate_arm_tx         : std_logic := '0';
+    signal tx_retune_gate_immediate_tx   : std_logic := '0';
+    signal tx_retune_gate_target_tx      : unsigned(63 downto 0) := (others => '0');
+    signal tx_retune_gate_complete_tx    : std_logic := '0';
+    signal tx_retune_gate_abort_tx       : std_logic := '0';
+    signal tx_retune_gate_status_tx      : std_logic_vector(31 downto 0);
+    signal tx_retune_gate_status_req_sys : std_logic := '0';
+    signal tx_retune_gate_status_ack_sys : std_logic;
+    signal tx_retune_gate_status_wire_sys : std_logic_vector(31 downto 0);
+    signal tx_retune_gate_status_sys     : std_logic_vector(31 downto 0) := (others => '0');
+
     -- Transfer sticky RX writer causes plus first-stall context as one
     -- coherent snapshot. Independent synchronizers could combine fields
     -- from different timeout boundaries.
@@ -834,6 +850,10 @@ begin
             rx_epoch_status_export           => rx_epoch_status_sys,
             rx_epoch_ts_lo_export            => rx_epoch_ts_lo_sys,
             rx_epoch_ts_hi_export            => rx_epoch_ts_hi_sys,
+            tx_retune_gate_ctrl_export       => tx_retune_gate_ctrl_sys,
+            tx_retune_gate_target_lo_export  => tx_retune_gate_target_lo_sys,
+            tx_retune_gate_target_hi_export  => tx_retune_gate_target_hi_sys,
+            tx_retune_gate_status_export     => tx_retune_gate_status_sys,
             rx_fault_causes_export           => rx_fault_causes_sys,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
@@ -1263,6 +1283,61 @@ begin
             complete_seen => rx_epoch_complete_seen_rx
         );
 
+    U_tx_retune_gate_controller : entity work.tx_retune_gate_controller
+        port map (
+            source_clock      => sys_clock,
+            source_reset      => sys_reset,
+            source_control    => tx_retune_gate_ctrl_sys,
+            source_target_lo  => tx_retune_gate_target_lo_sys,
+            source_target_hi  => tx_retune_gate_target_hi_sys,
+            tx_clock          => tx_clock,
+            tx_reset          => tx_reset,
+            arm               => tx_retune_gate_arm_tx,
+            arm_immediate     => tx_retune_gate_immediate_tx,
+            target_timestamp  => tx_retune_gate_target_tx,
+            complete          => tx_retune_gate_complete_tx,
+            abort             => tx_retune_gate_abort_tx
+        );
+
+    -- Return one coherent gate status word to NIOS. The continuous handshake
+    -- refreshes state; the source-side fields are sampled together.
+    U_tx_retune_gate_status_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => tx_reset,
+            source_clock => tx_clock,
+            source_data  => tx_retune_gate_status_tx,
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => tx_retune_gate_status_wire_sys,
+            dest_req     => tx_retune_gate_status_req_sys,
+            dest_ack     => tx_retune_gate_status_ack_sys
+        );
+
+    drive_handshake_tx_retune_gate_status : process(sys_clock, sys_reset)
+    begin
+        if sys_reset = '1' then
+            tx_retune_gate_status_req_sys <= '0';
+        elsif rising_edge(sys_clock) then
+            if tx_retune_gate_status_ack_sys = '0' then
+                tx_retune_gate_status_req_sys <= '1';
+            else
+                tx_retune_gate_status_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    capture_tx_retune_gate_status : process(sys_clock, sys_reset)
+    begin
+        if sys_reset = '1' then
+            tx_retune_gate_status_sys <= (others => '0');
+        elsif rising_edge(sys_clock) then
+            if tx_retune_gate_status_ack_sys = '1' then
+                tx_retune_gate_status_sys <= tx_retune_gate_status_wire_sys;
+            end if;
+        end if;
+    end process;
+
     -- ADR-0207 §6: transfer status and first-valid timestamp as ONE bundled
     -- RX->system snapshot. Separate handshakes allowed ACTIVE_NEW status to
     -- reach NIOS before the corresponding timestamp, so the host's nominal
@@ -1626,6 +1701,12 @@ begin
             tx_underflow_led     => tx_underflow_led,
             tx_underflow_count   => tx_underflow_count,
             tx_timestamp         => tx_timestamp,
+            retune_gate_arm      => tx_retune_gate_arm_tx,
+            retune_gate_arm_immediate => tx_retune_gate_immediate_tx,
+            retune_gate_target   => tx_retune_gate_target_tx,
+            retune_gate_complete => tx_retune_gate_complete_tx,
+            retune_gate_abort    => tx_retune_gate_abort_tx,
+            retune_gate_status   => tx_retune_gate_status_tx,
 
             -- Link status
             link_start_toggle          => link_start_toggle_tx,

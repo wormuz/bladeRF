@@ -526,6 +526,67 @@ static inline uint64_t rx_epoch_status_snapshot_read(void)
     return ((uint64_t)rx_epoch_status_read() << 32) | rx_epoch_ts_lo_read();
 }
 
+/* TX timestamped retune gate. Command toggles and both timestamp halves are
+ * sampled together by the FPGA mailbox; write target first, then ARM. */
+#define TX_RETUNE_CTRL_ARM_TOGGLE      (1u << 0)
+#define TX_RETUNE_CTRL_COMPLETE_TOGGLE (1u << 1)
+#define TX_RETUNE_CTRL_ABORT_TOGGLE    (1u << 2)
+#define TX_RETUNE_CTRL_IMMEDIATE       (1u << 3)
+
+static inline uint32_t tx_retune_gate_ctrl_current(void)
+{
+#ifdef TX_RETUNE_GATE_CTRL_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE);
+#else
+    return 0;
+#endif
+}
+
+static inline void tx_retune_gate_arm(uint64_t timestamp, bool immediate)
+{
+#ifdef TX_RETUNE_GATE_TARGET_LO_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE,
+                                (uint32_t)timestamp);
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE,
+                                (uint32_t)(timestamp >> 32));
+    uint32_t word = tx_retune_gate_ctrl_current();
+    word &= ~TX_RETUNE_CTRL_IMMEDIATE;
+    if (immediate) {
+        word |= TX_RETUNE_CTRL_IMMEDIATE;
+    }
+    word ^= TX_RETUNE_CTRL_ARM_TOGGLE;
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE, word);
+#else
+    (void)timestamp;
+    (void)immediate;
+#endif
+}
+
+static inline void tx_retune_gate_complete(void)
+{
+#ifdef TX_RETUNE_GATE_CTRL_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE,
+        tx_retune_gate_ctrl_current() ^ TX_RETUNE_CTRL_COMPLETE_TOGGLE);
+#endif
+}
+
+static inline void tx_retune_gate_abort(void)
+{
+#ifdef TX_RETUNE_GATE_CTRL_BASE
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE,
+        tx_retune_gate_ctrl_current() ^ TX_RETUNE_CTRL_ABORT_TOGGLE);
+#endif
+}
+
+static inline uint32_t tx_retune_gate_status_read(void)
+{
+#ifdef TX_RETUNE_GATE_STATUS_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_STATUS_BASE);
+#else
+    return 0;
+#endif
+}
+
 /* Call only after the FX3 RF link start has actually succeeded. This asserts
  * that it did; it is not evidence about FX3 on its own. */
 static inline void rf_link_cfg_start(void)

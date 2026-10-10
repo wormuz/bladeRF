@@ -578,7 +578,8 @@ begin
 
             -- RFFE Interface
             dac_controls         => dac_controls,
-            dac_streams          => dac_streams
+            dac_streams          => dac_streams,
+            retune_gate_status   => open
         );
 
     dac_assignment_proc : process( all )

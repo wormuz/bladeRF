@@ -385,6 +385,22 @@
  * coherent word. Bits 0..5 are sticky causes; bits 6..30 are GPIF-timeout
  * context. Bit 31 is reserved for the host-side snapshot-valid marker. */
 #define NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES  0x8c
+#define NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE   0x90
+
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO 0u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI 1u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_ARM       2u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE  3u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT     4u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS    5u
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK 0x3u
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_MUTED (1u << 2)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_MUTE_EVENT (1u << 3)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_RESUME_EVENT (1u << 4)
+#define NIOS_PKT_8x32_TX_RETUNE_STATE_ACTIVE 0u
+#define NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED 1u
+#define NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED 2u
+#define NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR 3u
 #define NIOS_PKT_8x32_RX_FAULT_SPEED_MISMATCH    (1u << 0)
 #define NIOS_PKT_8x32_RX_FAULT_START_NO_PROGRESS (1u << 1)
 #define NIOS_PKT_8x32_RX_FAULT_GPIF_TIMEOUT      (1u << 2)
@@ -512,6 +528,8 @@ static inline const char* target2str(uint8_t target_id) {
             return "RX Epoch Gate First-Valid Timestamp, Low Word";
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
             return "RX Epoch Gate First-Valid Timestamp, High Word";
+        case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
+            return "Timestamped TX Retune Gate";
         case NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES:
             return "Deferred Retune2 Execution Failure Counter";
         case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:

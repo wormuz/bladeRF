@@ -1225,15 +1225,49 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_retune2_pending_count == 0 &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
-                        const uint64_t applied_frequency_hz =
-                            board_data->tx_retune2_applied_frequency_hz;
-                        board_data->tx_retune2_applied_waiting_rf_valid = false;
-                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                        board_data->tx_retune2_completion_faulted = false;
-                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-                        bladerf2_tx_retune_event(
-                            dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
-                            applied_frequency_hz, applied_frequency_hz, 0, 0);
+                        uint32_t gate_status = 0;
+                        int gate_read_status = nios_tx_retune_gate_status_read(
+                            dev, &gate_status);
+                        uint32_t gate_state = gate_status &
+                            NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
+                        if (gate_read_status != 0 ||
+                            gate_state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
+                            board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            bladerf2_tx_retune_event(
+                                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                                board_data->tx_retune2_applied_frequency_hz,
+                                0, 0, gate_read_status != 0 ? gate_read_status :
+                                    BLADERF_ERR_UNEXPECTED);
+                        } else if (gate_state ==
+                                   NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) {
+                            if (!board_data->tx_retune_gate_release_requested) {
+                                int release_status = nios_tx_retune_gate_cmd(
+                                    dev, NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
+                                if (release_status != 0) {
+                                    board_data->tx_retune2_applied_waiting_rf_valid = false;
+                                    bladerf2_tx_retune_event(
+                                        dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                                        board_data->tx_retune2_applied_frequency_hz,
+                                        0, 0, release_status);
+                                } else {
+                                    board_data->tx_retune_gate_release_requested = true;
+                                }
+                            }
+                        } else if (gate_state ==
+                                       NIOS_PKT_8x32_TX_RETUNE_STATE_ACTIVE &&
+                                   board_data->tx_retune_gate_release_requested &&
+                                   (gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_RESUME_EVENT) != 0) {
+                            const uint64_t applied_frequency_hz =
+                                board_data->tx_retune2_applied_frequency_hz;
+                            board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            board_data->tx_retune_gate_release_requested = false;
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            board_data->tx_retune2_completion_faulted = false;
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            bladerf2_tx_retune_event(
+                                dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
+                                applied_frequency_hz, applied_frequency_hz, 0, 0);
+                        }
                     }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0 &&
