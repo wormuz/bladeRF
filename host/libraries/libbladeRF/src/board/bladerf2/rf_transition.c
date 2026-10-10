@@ -993,6 +993,7 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool should_poll_tx = false;
+        bool should_poll_tx_retune = false;
         bool should_poll_rx_retune = false;
         bool tx_fir_config_valid = false;
         bool tx_retune2_watch_active = false;
@@ -1070,12 +1071,19 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active &&
                 !board_data->tx_frequency_reconfigure_active &&
                 !board_data->tx_rf_config_operation_active;
+            should_poll_tx_retune = board_data->state == STATE_INITIALIZED &&
+                tx_retune2_watch_active &&
+                !board_data->rf_transition_pending &&
+                !board_data->rf_transition_setter_active &&
+                !board_data->tx_frequency_reconfigure_active &&
+                !board_data->tx_rf_config_operation_active;
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
                 rx_retune2_watch_active &&
                 !board_data->rf_transition_setter_active;
             tx_fir_config_valid = board_data->phy != NULL &&
                 board_data->phy->fir_config_valid;
-            if (should_poll || should_poll_tx || should_poll_rx_retune) {
+            if (should_poll || should_poll_tx || should_poll_tx_retune ||
+                should_poll_rx_retune) {
                 if (should_poll || should_poll_tx) {
                     _rx_fault_monitor_stage(board_data, "RFFE status");
                     rx_channel_status = dev->backend->rffe_control_read(
@@ -1109,6 +1117,9 @@ static void *rx_fault_monitor_task(void *arg)
                 if (status != 0 && should_poll_rx_retune) {
                     rx_retune2_status = status;
                 }
+                if (status != 0 && should_poll_tx_retune) {
+                    tx_retune2_status = status;
+                }
                 if (status == 0 && should_poll &&
                     dev->board->get_loss_event_count != NULL) {
                     _rx_fault_monitor_stage(board_data, "NIOS loss count");
@@ -1125,7 +1136,7 @@ static void *rx_fault_monitor_task(void *arg)
                 } else if (status == 0 && should_poll_tx) {
                     tx_loss_count_status = BLADERF_ERR_UNSUPPORTED;
                 }
-                if (status == 0 && should_poll_tx &&
+                if (status == 0 && (should_poll_tx || should_poll_tx_retune) &&
                     tx_retune2_watch_active) {
                     _rx_fault_monitor_stage(board_data,
                                             "NIOS TX retune failures");
@@ -1207,7 +1218,8 @@ static void *rx_fault_monitor_task(void *arg)
 
         _rx_fault_monitor_stage(board_data, "idle");
 
-        if (!should_poll && !should_poll_tx && !should_poll_rx_retune) {
+        if (!should_poll && !should_poll_tx && !should_poll_tx_retune &&
+            !should_poll_rx_retune) {
             continue;
         }
         const char *test_mode = _runtime_rx_monitor_test_mode();
@@ -1299,10 +1311,14 @@ static void *rx_fault_monitor_task(void *arg)
                               "RUNTIME_TX_CALIBRATION_ACTIVE") == 0) {
                 tx_calibration_status |=
                     BLADERF2_AD9361_CALIBRATION_BUSY_MASK;
-            } else if (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0) {
-                tx_retune2_failure_count++;
-                tx_retune2_watch_active = true;
             }
+        }
+        if (should_poll_tx_retune && test_mode != NULL &&
+            (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0 ||
+             (!should_poll_tx && strcmp(
+                 test_mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0))) {
+            tx_retune2_failure_count++;
+            tx_retune2_watch_active = true;
         }
         if (should_poll_tx) {
             const enum bladerf2_tx_rfic_observation tx_rfic_observation =
@@ -1974,6 +1990,74 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 }
+            }
+        }
+
+        /* Scheduled TX retunes can execute while TX is disabled. Keep their
+         * deferred-failure counter under observation independently of the
+         * active-link RFIC monitor, which must not probe an inactive path. */
+        if (should_poll_tx_retune && !should_poll_tx) {
+            bool report_failure = false;
+            bool report_counter_reset = false;
+            bool report_unavailable = false;
+            WITH_MUTEX(&dev->lock, {
+                report_unavailable =
+                    (tx_retune2_status != 0 ||
+                     tx_retune2_success_status != 0) &&
+                    !board_data->tx_status_unavailable_reported;
+                if (report_unavailable) {
+                    board_data->tx_status_unavailable_reported = true;
+                    board_data->tx_retune2_completion_faulted = true;
+                    board_data->tx_retune_recovery_pending = true;
+                } else if (tx_retune2_status == 0 &&
+                           tx_retune2_success_status == 0) {
+                    if (!board_data->tx_retune2_failure_count_valid) {
+                        board_data->tx_retune2_failure_count_last =
+                            tx_retune2_failure_count;
+                        board_data->tx_retune2_failure_count_valid = true;
+                        report_failure = tx_retune2_failure_count != 0;
+                    } else if (tx_retune2_failure_count !=
+                               board_data->tx_retune2_failure_count_last) {
+                        report_failure = tx_retune2_failure_count >
+                            board_data->tx_retune2_failure_count_last;
+                        report_counter_reset = tx_retune2_failure_count <
+                            board_data->tx_retune2_failure_count_last;
+                        board_data->tx_retune2_failure_count_last =
+                            tx_retune2_failure_count;
+                    }
+                    if (report_failure || report_counter_reset) {
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->tx_retune2_completion_faulted = true;
+                        board_data->tx_retune2_pending_count = 0;
+                        board_data->tx_retune2_applied_waiting_rf_valid = false;
+                        for (unsigned int i = 0; i <
+                             NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                            board_data->tx_retune2_pending[i].valid = false;
+                        }
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        board_data->tx_retune_recovery_pending = true;
+                    }
+                }
+            });
+            if (report_unavailable) {
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+                    (uint32_t)(tx_retune2_status != 0
+                        ? tx_retune2_status : tx_retune2_success_status),
+                    tx_retune2_status != 0
+                        ? tx_retune2_status : tx_retune2_success_status);
+            }
+            if (report_failure) {
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                    tx_retune2_failure_count, 0,
+                    BLADERF_ERR_FPGA_OP);
+            }
+            if (report_counter_reset) {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    tx_retune2_failure_count, 0, 0,
+                    BLADERF_ERR_UNEXPECTED);
             }
         }
 

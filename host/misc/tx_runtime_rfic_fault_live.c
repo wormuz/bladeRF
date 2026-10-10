@@ -11,6 +11,7 @@
  *   RUNTIME_REFERENCE_PLL_UNLOCKED
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
  *   RUNTIME_TX_RETUNE_FAILURE
+ *   RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED
  *   RUNTIME_TX_RFIC_REGISTER_WRITE
  *   RUNTIME_TX_GAIN_SETTER
  *   RUNTIME_TX_QUEUE_CLEAR_FAILURE
@@ -130,6 +131,7 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_CALIBRATION_ACTIVE") != 0 &&
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
         strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") != 0 &&
         strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") != 0 &&
         strcmp(mode, "RUNTIME_TX_GAIN_SETTER") != 0 &&
         strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") != 0 &&
@@ -159,6 +161,7 @@ int main(void)
     if (status != 0) goto cleanup;
     if (strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0 ||
+        strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0 ||
@@ -176,6 +179,43 @@ int main(void)
             goto cleanup;
         }
     }
+    if (strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0) {
+        bladerf_frequency frequency = 0;
+        bladerf_timestamp timestamp = 0;
+        struct bladerf_quick_tune quick_tune;
+
+        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       &frequency);
+        if (status == 0) {
+            status = bladerf_get_quick_tune(dev, BLADERF_CHANNEL_TX(0),
+                                            &quick_tune);
+        }
+        if (status == 0) {
+            status = bladerf_get_timestamp(dev, BLADERF_TX, &timestamp);
+        }
+        if (status == 0) {
+            status = bladerf_schedule_retune(
+                dev, BLADERF_CHANNEL_TX(0), timestamp + 100000,
+                frequency, &quick_tune);
+        }
+        if (status == 0) {
+            status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), false);
+        }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                                    EVENT_WAIT_MS);
+        }
+        if (status != 0) {
+            fprintf(stderr,
+                    "disabled-TX retune failure was not reported: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+        printf("TX retune failure while disabled: PASS (failure event delivered)\n");
+        goto cleanup;
+    }
+
     feeder.dev = dev;
     atomic_init(&feeder.stop, false);
     atomic_init(&feeder.terminal_status, 0);
