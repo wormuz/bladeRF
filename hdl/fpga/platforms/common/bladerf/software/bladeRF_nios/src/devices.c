@@ -751,6 +751,7 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
     uint16_t addr;
     uint64_t data;
     uint32_t i;
+    uint8_t profile_data[16];
     fastlock_profile *fastlocks;
 
     if (is_tx) {
@@ -779,8 +780,13 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
         if (!adi_spi_read_checked(addr, &data)) {
             return false;
         }
-        fastlocks[nios_profile].profile_data[i] = data >> 56;
+        profile_data[i] = data >> 56;
     }
+
+    /* Publish the profile only after the complete SPI read succeeded. A
+     * partial read must not corrupt a previously usable cached profile. */
+    memcpy(fastlocks[nios_profile].profile_data, profile_data,
+           sizeof(profile_data));
 
     /* Kick out any other profile stored in the Nios that was in this slot */
     for (i = 0; i < NUM_BBP_FASTLOCK_PROFILES; i++) {
