@@ -13,13 +13,15 @@ static bladerf_module scheduled_module;
 static uint64_t scheduled_timestamp;
 static bladerf_module recalled_module;
 static fastlock_profile *recalled_profile;
+static bool fail_profile_load;
+static bool fail_profile_recall;
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
     (void)module;
     (void)profile;
     load_count++;
-    return true;
+    return !fail_profile_load;
 }
 
 bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
@@ -27,7 +29,7 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
     recall_count++;
     recalled_module = module;
     recalled_profile = profile;
-    return true;
+    return !fail_profile_recall;
 }
 
 bool adi_rfport_select(fastlock_profile *profile)
@@ -108,6 +110,49 @@ static int check_schedule_ready_lifecycle(void)
     return 0;
 }
 
+static int check_deferred_failure_reporting(void)
+{
+    fastlock_profile tx_profile = { 0 };
+    fastlock_profile rx_profile = { 0 };
+
+    reset_queue(&rx_queue);
+    reset_queue(&tx_queue);
+    tx_profile.profile_num = 3;
+    rx_profile.profile_num = 4;
+
+    if (enqueue_retune(&tx_queue, &tx_profile, UINT64_C(0x3456789ab)) != 1) {
+        fputs("failed to enqueue TX profile-load failure case\n", stderr);
+        return 1;
+    }
+    fail_profile_load = true;
+    pkt_retune2_work();
+    fail_profile_load = false;
+    if (tx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("deferred TX profile-load failure was not retained\n", stderr);
+        return 1;
+    }
+
+    if (enqueue_retune(&rx_queue, &rx_profile, UINT64_C(0x456789abc)) != 1) {
+        fputs("failed to enqueue RX activation failure case\n", stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    retune_isr(&rx_queue);
+    fail_profile_recall = true;
+    pkt_retune2_work();
+    fail_profile_recall = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
+        fputs("deferred RX activation failure was not retained\n", stderr);
+        return 1;
+    }
+
+    return 0;
+}
+
 int main(void)
 {
     fastlock_profile profile = { 0 };
@@ -140,6 +185,9 @@ int main(void)
     }
 
     if (check_schedule_ready_lifecycle() != 0) {
+        return 1;
+    }
+    if (check_deferred_failure_reporting() != 0) {
         return 1;
     }
 

@@ -990,6 +990,27 @@ int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value)
     return status;
 }
 
+int nios_retune2_failure_count_read(struct bladerf *dev,
+                                    bladerf_module module,
+                                    uint32_t *value)
+{
+    uint8_t addr;
+
+    if (value == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (module == BLADERF_MODULE_RX) {
+        addr = NIOS_PKT_8x32_RETUNE2_FAILURES_RX_ADDR;
+    } else if (module == BLADERF_MODULE_TX) {
+        addr = NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR;
+    } else {
+        return BLADERF_ERR_INVAL;
+    }
+
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES,
+                          addr, value);
+}
+
 int nios_dwell_status_read(struct bladerf *dev, uint32_t *value)
 {
     int status;

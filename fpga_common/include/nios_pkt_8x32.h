@@ -403,6 +403,13 @@
 #define NIOS_PKT_8x32_RX_CTX_META_FIFO_USEDW_MASK    0x7ff00000u /* exact entries */
 #define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK           0x7fffffffu
 
+/* Cumulative deferred NIOS fastlock execution failures. addr 0 is RX, addr 1
+ * is TX. Unlike the request ACK, these counters change only after a queued
+ * retune's profile load or activation actually fails. */
+#define NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES 0x8d
+#define NIOS_PKT_8x32_RETUNE2_FAILURES_RX_ADDR 0u
+#define NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR 1u
+
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
@@ -482,6 +489,8 @@ static inline const char* target2str(uint8_t target_id) {
             return "RX Epoch Gate First-Valid Timestamp, Low Word";
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
             return "RX Epoch Gate First-Valid Timestamp, High Word";
+        case NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES:
+            return "Deferred Retune2 Execution Failure Counter";
 
         /* Reserved for user customizations */
         case NIOS_PKT_8x32_TARGET_USR1:

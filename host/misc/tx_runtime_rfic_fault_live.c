@@ -8,6 +8,7 @@
  *   RUNTIME_TX_ENSM_NOT_TX
  *   RUNTIME_TX_BBPLL_UNLOCKED
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
+ *   RUNTIME_TX_RETUNE_FAILURE
  *
  * The test verifies durable event classification and that sync TX refuses
  * samples after the monitor revokes validity. */
@@ -84,7 +85,8 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_RFPLL_UNLOCKED") != 0 &&
         strcmp(mode, "RUNTIME_TX_ENSM_NOT_TX") != 0 &&
         strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") != 0 &&
-        strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0) {
+        strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
+        strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0) {
         fprintf(stderr, "unsupported TX runtime injection mode: %s\n", mode);
         return 2;
     }
@@ -147,6 +149,10 @@ int main(void)
                         strcmp(mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0) &&
                        event->event_type ==
                            BLADERF_RF_EVT_TX_RFIC_STATE_INVALID) {
+                expected_event_seen = true;
+            } else if (strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") == 0 &&
+                       event->event_type ==
+                           BLADERF_RF_EVT_TX_RETUNE_FAILED) {
                 expected_event_seen = true;
             }
         }

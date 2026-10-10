@@ -834,9 +834,11 @@ static void *rx_fault_monitor_task(void *arg)
         int rx_channel_status = 0;
         uint64_t rx_loss_count = 0;
         uint64_t tx_loss_count = 0;
+        uint32_t tx_retune2_failure_count = 0;
         int status = 0;
         int loss_count_status = 0;
         int tx_loss_count_status = 0;
+        int tx_retune2_status = 0;
         int rfic_status = 0;
         int tx_rfic_status = 0;
         int rx_fault_causes_status = 0;
@@ -888,6 +890,13 @@ static void *rx_fault_monitor_task(void *arg)
                         dev, BLADERF_TX, &tx_loss_count);
                 } else if (status == 0 && should_poll_tx) {
                     tx_loss_count_status = BLADERF_ERR_UNSUPPORTED;
+                }
+                if (status == 0 && should_poll_tx) {
+                    _rx_fault_monitor_stage(board_data,
+                                            "NIOS TX retune failures");
+                    tx_retune2_status = nios_retune2_failure_count_read(
+                        dev, BLADERF_MODULE_TX,
+                        &tx_retune2_failure_count);
                 }
                 if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
@@ -962,6 +971,8 @@ static void *rx_fault_monitor_task(void *arg)
             } else if (strcmp(test_mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0) {
                 bbpll_status &= (uint8_t)
                     ~BLADERF2_AD9361_BBPLL_LOCK_BIT;
+            } else if (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0) {
+                tx_retune2_failure_count++;
             }
         }
         if (should_poll_tx) {
@@ -975,6 +986,8 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_underrun = false;
             bool report_tx_rfic_valid = false;
             bool report_tx_rfic_invalid = false;
+            bool report_tx_retune_failure = false;
+            bool report_tx_retune_counter_reset = false;
             bool counter_reset = false;
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
@@ -987,6 +1000,7 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_channel_state_generation) {
                     if (tx_link_status_error != 0 ||
                         tx_loss_count_status != 0 || tx_rfic_status != 0 ||
+                        tx_retune2_status != 0 ||
                         !tx_rfic_status_observed) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
@@ -1033,7 +1047,38 @@ static void *rx_fault_monitor_task(void *arg)
                         }
                     }
                     if (tx_link_status_error == 0 &&
+                        tx_retune2_status == 0) {
+                        if (!board_data->tx_retune2_failure_count_valid) {
+                            board_data->tx_retune2_failure_count_last =
+                                tx_retune2_failure_count;
+                            board_data->tx_retune2_failure_count_valid = true;
+                            report_tx_retune_failure =
+                                tx_retune2_failure_count != 0;
+                        } else if (tx_retune2_failure_count !=
+                                   board_data->tx_retune2_failure_count_last) {
+                            report_tx_retune_failure =
+                                tx_retune2_failure_count >
+                                board_data->tx_retune2_failure_count_last;
+                            report_tx_retune_counter_reset =
+                                tx_retune2_failure_count <
+                                board_data->tx_retune2_failure_count_last;
+                            board_data->tx_retune2_failure_count_last =
+                                tx_retune2_failure_count;
+                        }
+                        if (report_tx_retune_failure ||
+                            report_tx_retune_counter_reset) {
+                            bladerf2_tx_stream_set_faulted(board_data, true);
+                            board_data->tx_recovery_blocked = true;
+                        }
+                        if (report_tx_retune_counter_reset &&
+                            !board_data->tx_status_unavailable_reported) {
+                            board_data->tx_status_unavailable_reported = true;
+                            report_status_unavailable = true;
+                        }
+                    }
+                    if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0 &&
+                        tx_retune2_status == 0 &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
                         board_data->tx_status_unavailable_reported &&
@@ -1041,6 +1086,7 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_fpga_loss_count_valid &&
                         tx_counter_baseline_was_valid &&
                         !report_tx_fault && !report_tx_underrun &&
+                        !report_tx_retune_failure &&
                         !counter_reset) {
                         board_data->tx_status_unavailable_reported = false;
                         (void)bladerf2_tx_status_recovery_event(
@@ -1057,8 +1103,12 @@ static void *rx_fault_monitor_task(void *arg)
                                 ? tx_link_status_error :
                                 (tx_loss_count_status != 0
                                     ? tx_loss_count_status :
-                                    (tx_rfic_status != 0 ? tx_rfic_status :
-                                     BLADERF_ERR_WOULD_BLOCK));
+                                     (tx_rfic_status != 0 ? tx_rfic_status :
+                                     (tx_retune2_status != 0 ?
+                                      tx_retune2_status :
+                                      (report_tx_retune_counter_reset ?
+                                       BLADERF_ERR_UNEXPECTED :
+                                       BLADERF_ERR_WOULD_BLOCK))));
                     }
                     if (tx_link_status_error == 0 &&
                         tx_rfic_observation ==
@@ -1070,7 +1120,8 @@ static void *rx_fault_monitor_task(void *arg)
                         report_tx_rfic_invalid = true;
                     }
                     if (tx_link_status_error == 0 &&
-                        tx_loss_count_status == 0 && tx_rfic_status == 0 &&
+                        tx_loss_count_status == 0 &&
+                        tx_retune2_status == 0 && tx_rfic_status == 0 &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
                         bladerf2_rf_link_tx_epoch_valid(
@@ -1093,6 +1144,12 @@ static void *rx_fault_monitor_task(void *arg)
                             dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0,
                             ((uint32_t)ensm_status << 16) |
                                 ((uint32_t)tx_pll_status << 8) | bbpll_status,
+                            BLADERF_ERR_FPGA_OP);
+                    }
+                    if (report_tx_retune_failure) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                            tx_retune2_failure_count, rf_link_status,
                             BLADERF_ERR_FPGA_OP);
                     }
                     if (report_tx_rfic_valid) {

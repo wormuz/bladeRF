@@ -70,6 +70,35 @@ static struct queue {
     struct queue_entry entries[RETUNE2_QUEUE_MAX];
 } rx_queue, tx_queue;
 
+/* Deferred failures happen after the host has already received the queue
+ * acceptance response. Keep per-direction monotonic counters so host
+ * monitoring can report an execution failure instead of silently losing the
+ * scheduled transition. */
+static volatile uint32_t rx_retune2_failure_count;
+static volatile uint32_t tx_retune2_failure_count;
+
+uint32_t pkt_retune2_failure_count(bladerf_module module)
+{
+    switch (module) {
+        case BLADERF_MODULE_RX:
+            return rx_retune2_failure_count;
+        case BLADERF_MODULE_TX:
+            return tx_retune2_failure_count;
+        default:
+            return 0;
+    }
+}
+
+static void record_retune2_failure(bladerf_module module)
+{
+    if (module == BLADERF_MODULE_RX) {
+        rx_retune2_failure_count++;
+    } else if (module == BLADERF_MODULE_TX) {
+        tx_retune2_failure_count++;
+    }
+    INCREMENT_ERROR_COUNT();
+}
+
 /* Returns queue size after enqueue operation, or QUEUE_FULL if we could
  * not enqueue the requested item */
 static inline uint8_t enqueue_retune(struct queue *q,
@@ -265,6 +294,8 @@ void pkt_retune2_init()
 {
     reset_queue(&rx_queue);
     reset_queue(&tx_queue);
+    rx_retune2_failure_count = 0;
+    tx_retune2_failure_count = 0;
 
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
@@ -301,7 +332,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
             /* Load the fast lock profile into the RFFE */
             if (!profile_load(module, e->profile)) {
-                INCREMENT_ERROR_COUNT();
+                record_retune2_failure(module);
                 dequeue_retune(q, NULL);
                 break;
             }
@@ -322,7 +353,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
             /* Activate the fast lock profile for this retune */
             if (!profile_activate(module, e->profile)) {
-                INCREMENT_ERROR_COUNT();
+                record_retune2_failure(module);
             }
 
             /* Drop the item from the queue */

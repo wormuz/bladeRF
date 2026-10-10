@@ -221,6 +221,8 @@ struct bladerf2_board_data {
     bool rx_fpga_loss_count_valid;
     uint64_t tx_fpga_loss_count_last;
     bool tx_fpga_loss_count_valid;
+    uint32_t tx_retune2_failure_count_last;
+    bool tx_retune2_failure_count_valid;
     uint8_t tx_link_epoch_id;
     bool tx_link_fault_reported;
     bool tx_epoch_invalid_reported;

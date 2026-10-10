@@ -51,7 +51,7 @@
  *
  *  https://github.com/Nuand/bladeRF/blob/master/doc/development/versioning.md
  */
-#define LIBBLADERF_API_VERSION (0x02060100)
+#define LIBBLADERF_API_VERSION (0x02070000)
 
 #ifdef __cplusplus
 extern "C" {
@@ -4904,7 +4904,12 @@ typedef enum {
      * validity is revoked until a new acknowledged TX epoch. `rfic_status`
      * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL
      * status in bits 7:0. */
-    BLADERF_RF_EVT_TX_RFIC_STATE_INVALID
+    BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
+    /** NIOS accepted a scheduled TX fastlock request but later failed while
+     * loading or activating its profile. TX certificates are revoked until
+     * a new acknowledged TX epoch. `flags` carries the cumulative NIOS
+     * failure counter observed by the host. */
+    BLADERF_RF_EVT_TX_RETUNE_FAILED
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

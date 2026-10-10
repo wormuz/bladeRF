@@ -314,6 +314,11 @@ int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
  */
 int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value);
 
+/** Read the cumulative deferred NIOS retune2 execution-failure counter. */
+int nios_retune2_failure_count_read(struct bladerf *dev,
+                                    bladerf_module module,
+                                    uint32_t *value);
+
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
 #define BLADERF_DWELL_WORD_ENERGY_LO    0

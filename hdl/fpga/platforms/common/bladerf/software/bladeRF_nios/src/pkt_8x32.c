@@ -26,6 +26,7 @@
 #include "pkt_handler.h"
 #include "nios_pkt_8x32.h"
 #include "pkt_8x32.h"
+#include "pkt_retune2.h"
 #include "devices.h"
 #include "debug.h"
 
@@ -85,6 +86,20 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
 
         case NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES:
             *data = rx_fault_causes_read();
+            break;
+
+        case NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES:
+            switch (addr) {
+                case NIOS_PKT_8x32_RETUNE2_FAILURES_RX_ADDR:
+                    *data = pkt_retune2_failure_count(BLADERF_MODULE_RX);
+                    break;
+                case NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR:
+                    *data = pkt_retune2_failure_count(BLADERF_MODULE_TX);
+                    break;
+                default:
+                    *data = 0;
+                    break;
+            }
             break;
 #endif  // BOARD_BLADERF_MICRO
 

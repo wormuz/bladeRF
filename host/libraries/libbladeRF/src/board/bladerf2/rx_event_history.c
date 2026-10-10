@@ -254,7 +254,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
          event_type != BLADERF_RF_EVT_TX_EPOCH_INVALID &&
          event_type != BLADERF_RF_EVT_TX_TRANSPORT_ERROR &&
          event_type != BLADERF_RF_EVT_TX_RFIC_STATE_VALID &&
-         event_type != BLADERF_RF_EVT_TX_RFIC_STATE_INVALID)) {
+         event_type != BLADERF_RF_EVT_TX_RFIC_STATE_INVALID &&
+         event_type != BLADERF_RF_EVT_TX_RETUNE_FAILED)) {
         return;
     }
 
@@ -265,7 +266,10 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
         link_status, board_data->tx_link_epoch_id);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
-    if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||
+    if (event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED) {
+        event.flags = (uint32_t)loss_count;
+        event.rfic_status = link_status;
+    } else if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||
         event_type == BLADERF_RF_EVT_TX_COUNTER_RESET) {
         event.flags |= (uint32_t)loss_count;
         event.rfic_status = (uint32_t)(loss_count >> 32);
