@@ -5734,7 +5734,7 @@ static int bladerf_pll_calculate_ratio(bladerf_frequency ref_freq,
 
     size_t const Rmax = 16383;
     double const tol  = 0.00001;
-    double target     = (double)clock_freq / (double)ref_freq;
+    double target;
     uint16_t R_try, N_try;
 
     struct bladerf_range const clock_frequency_range = {
@@ -5751,6 +5751,8 @@ static int bladerf_pll_calculate_ratio(bladerf_frequency ref_freq,
     if (!is_within_range(&clock_frequency_range, clock_freq)) {
         return BLADERF_ERR_RANGE;
     }
+
+    target = (double)clock_freq / (double)ref_freq;
 
     for (R_try = 1; R_try < Rmax; ++R_try) {
         double ratio, delta;
