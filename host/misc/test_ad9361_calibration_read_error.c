@@ -191,6 +191,23 @@ int main(void)
      * output storage before touching SPI or publishing caller-visible data. */
     {
         struct ad9361_rf_phy phy_without_pdata = { .spi = &spi };
+        struct ad9361_phy_platform_data mode_pdata = {0};
+        struct no_os_clk mode_ref_clock = {0};
+        struct ad9361_rf_phy phy_missing_mode_clocks = {
+            .spi = &spi,
+            .pdata = &mode_pdata,
+            .clk_refin = &mode_ref_clock,
+            .adc_conv = (void *)1,
+        };
+        struct ad9361_rf_phy phy_missing_mode_refclk = {
+            .spi = &spi,
+            .pdata = &mode_pdata,
+        };
+        struct ad9361_rf_phy phy_missing_mode_adc = {
+            .spi = &spi,
+            .pdata = &mode_pdata,
+            .clk_refin = &mode_ref_clock,
+        };
         uint32_t rx_clks[NUM_AD9361_CLKS] = {0};
         uint32_t tx_clks[NUM_AD9361_CLKS] = {0};
         uint32_t rate_governor = UINT32_MAX;
@@ -201,6 +218,7 @@ int main(void)
         unsigned reads_before = read_count;
         unsigned writes_before = write_count;
 
+        mode_ref_clock.rate = 38400000;
         phy.rate_governor = UINT32_MAX;
 
         if (ad9361_do_mcs(NULL, &phy) != -EINVAL ||
@@ -216,6 +234,11 @@ int main(void)
             ad9361_set_no_ch_mode(NULL, 1) != -EINVAL ||
             ad9361_set_no_ch_mode(&phy_without_pdata, 1) != -EINVAL ||
             ad9361_set_no_ch_mode(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_no_ch_mode(&phy_missing_mode_refclk, 2) != -EINVAL ||
+            ad9361_set_no_ch_mode(&phy_missing_mode_adc, 2) != -EINVAL ||
+            ad9361_set_no_ch_mode(&phy_missing_mode_clocks, 2) != -EINVAL ||
+            mode_pdata.rx2tx2 != 0 || read_count != reads_before ||
+            write_count != writes_before ||
             ad9361_set_trx_fir_en_dis(NULL, 1) != -EINVAL ||
             ad9361_set_trx_fir_en_dis(&phy_without_pdata, 1) != -EINVAL ||
             ad9361_set_trx_fir_en_dis(&phy_without_spi, 1) != -EINVAL ||
