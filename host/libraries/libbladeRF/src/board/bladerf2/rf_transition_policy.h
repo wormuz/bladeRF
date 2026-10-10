@@ -553,4 +553,19 @@ static inline bool bladerf2_tx_admission_allowed(
            frequency_model_valid;
 }
 
+/* The only retryable startup state is a positively acknowledged TX transport
+ * epoch whose RFIC observation has not arrived yet. Any other missing
+ * admission condition is a fault/configuration state and must fail closed. */
+static inline bool bladerf2_tx_rfic_certificate_pending(
+    bool link_certified, bool rfic_state_certified,
+    bool stream_faulted, bool transport_faulted,
+    bool gate_abort_pending, unsigned int pending_retunes,
+    bool retune_completion_faulted, bool frequency_model_valid)
+{
+    return link_certified && !rfic_state_certified &&
+           !stream_faulted && !transport_faulted && !gate_abort_pending &&
+           pending_retunes == 0 && !retune_completion_faulted &&
+           frequency_model_valid;
+}
+
 #endif

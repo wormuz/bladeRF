@@ -156,6 +156,7 @@ void bladerf2_tx_stream_set_faulted(
     if (faulted) {
         board_data->tx_async_rfic_state_certified = false;
     }
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -224,6 +225,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     if (board_data->rx_fault_monitor_sync_initialized) {
         COND_SIGNAL(&board_data->rx_fault_monitor_cond);
     }
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
     if (report) {
         event.host_monotonic_ns = _monotonic_ns();
         event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
@@ -265,8 +267,92 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
     event.epoch_id = (uint8_t)(link_status >> 20);
     event.fpga_state = BLADERF_RF_STATE_IDLE;
     bladerf2_rf_event_append(board_data, &event);
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return true;
+}
+
+int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
+                                         uint32_t timeout_ms)
+{
+    struct bladerf2_board_data *board_data;
+    uint64_t now_ns;
+    uint64_t deadline_ns;
+
+    if (dev == NULL || dev->board_data == NULL || timeout_ms == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    board_data = dev->board_data;
+    if (!board_data->rx_async_epoch_cond_initialized) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    now_ns = _monotonic_ns();
+    if (now_ns == 0 ||
+        (uint64_t)timeout_ms > (UINT64_MAX - now_ns) / 1000000ULL) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    deadline_ns = now_ns + (uint64_t)timeout_ms * 1000000ULL;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    for (;;) {
+        const bool frequency_model_valid =
+            bladerf2_rfic_frequency_model_valid(
+                board_data->rfic_reference_clock_known,
+                board_data->rfic_frequency_model_known);
+        const bool admitted = bladerf2_tx_admission_allowed(
+            board_data->tx_async_link_certified,
+            board_data->tx_async_rfic_state_certified,
+            board_data->tx_stream_faulted_async,
+            board_data->tx_async_transport_faulted,
+            board_data->tx_gate_abort_pending,
+            board_data->tx_retune2_pending_count,
+            board_data->tx_retune2_completion_faulted,
+            frequency_model_valid);
+        if (admitted) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return 0;
+        }
+
+        if (!bladerf2_tx_rfic_certificate_pending(
+                board_data->tx_async_link_certified,
+                board_data->tx_async_rfic_state_certified,
+                board_data->tx_stream_faulted_async,
+                board_data->tx_async_transport_faulted,
+                board_data->tx_gate_abort_pending,
+                board_data->tx_retune2_pending_count,
+                board_data->tx_retune2_completion_faulted,
+                frequency_model_valid)) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+
+        now_ns = _monotonic_ns();
+        if (now_ns == 0) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (now_ns >= deadline_ns) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_TIMEOUT;
+        }
+
+        uint64_t remaining_ms =
+            (deadline_ns - now_ns + 999999ULL) / 1000000ULL;
+        if (remaining_ms == 0) {
+            remaining_ms = 1;
+        } else if (remaining_ms > UINT32_MAX) {
+            remaining_ms = UINT32_MAX;
+        }
+        const int wait_status = COND_TIMED_WAIT(
+            &board_data->rx_async_epoch_cond,
+            &board_data->rx_async_epoch_lock, (uint32_t)remaining_ms);
+        if (wait_status != THREAD_SUCCESS &&
+            wait_status != THREAD_TIMEOUT) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_UNEXPECTED;
+        }
+    }
 }
 
 bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,

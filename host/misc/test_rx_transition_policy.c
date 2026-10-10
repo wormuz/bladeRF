@@ -517,5 +517,21 @@ int main(void)
      * monitor certifies the AD9361 TX RFPLL, ENSM, and BBPLL state. */
     assert(!bladerf2_tx_admission_allowed(
         true, false, false, false, false, 0, false, true));
+    assert(bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, false, 0, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        false, false, false, false, false, 0, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, true, false, false, 0, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, false, true, false, 0, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, true, 0, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, false, 1, false, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, false, 0, true, true));
+    assert(!bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, false, 0, false, false));
     return 0;
 }

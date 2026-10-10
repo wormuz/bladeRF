@@ -265,6 +265,21 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     event.event_type = event_type;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     const uint8_t current_epoch_id = board_data->tx_async_link_epoch_id;
+    event.epoch_id = bladerf2_rf_link_epoch_id(link_status, current_epoch_id);
+    event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
+                                         BLADERF_RF_STATE_ERROR;
+    if (event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED) {
+        event.flags = (uint32_t)loss_count;
+        event.rfic_status = link_status;
+    } else if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||
+        event_type == BLADERF_RF_EVT_TX_COUNTER_RESET) {
+        event.flags |= (uint32_t)loss_count;
+        event.rfic_status = (uint32_t)(loss_count >> 32);
+    } else {
+        event.rfic_status = link_status;
+    }
+    event.error_code = error_code;
+
     switch (event_type) {
         case BLADERF_RF_EVT_TX_LINK_VALID:
         case BLADERF_RF_EVT_TX_UNDERRUN:
@@ -286,22 +301,17 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
         default:
             break;
     }
+    /* Make the certificate event durable before waiters can observe the
+     * positive RFIC state and submit TX samples. The shared lock order is
+     * admission lock -> event-history lock, matching RX certification. */
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    bladerf2_rf_event_append_locked(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+    /* TX stream workers can be waiting for the first RFIC certificate after
+     * a successful link START. Wake them on both certification and
+     * revocation so they either submit on positive evidence or fail closed. */
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    event.epoch_id = bladerf2_rf_link_epoch_id(link_status, current_epoch_id);
-    event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
-                                         BLADERF_RF_STATE_ERROR;
-    if (event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED) {
-        event.flags = (uint32_t)loss_count;
-        event.rfic_status = link_status;
-    } else if (event_type == BLADERF_RF_EVT_TX_UNDERRUN ||
-        event_type == BLADERF_RF_EVT_TX_COUNTER_RESET) {
-        event.flags |= (uint32_t)loss_count;
-        event.rfic_status = (uint32_t)(loss_count >> 32);
-    } else {
-        event.rfic_status = link_status;
-    }
-    event.error_code = error_code;
-    bladerf2_rf_event_append(board_data, &event);
 }
 
 void bladerf2_tx_retune_event(struct bladerf *dev,

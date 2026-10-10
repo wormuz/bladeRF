@@ -62,6 +62,8 @@
 #include "streaming/metadata.h"
 #include "streaming/sync.h"
 
+#define BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS 1000
+
 #include "conversions.h"
 #include "devinfo.h"
 #include "helpers/file.h"
@@ -2863,28 +2865,16 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
 
 static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
 {
-    struct bladerf2_board_data *board_data;
-    bool valid;
-
     if (dev == NULL || dev->board_data == NULL) {
         return false;
     }
 
-    board_data = dev->board_data;
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    valid = bladerf2_tx_admission_allowed(
-        board_data->tx_async_link_certified,
-        board_data->tx_async_rfic_state_certified,
-        board_data->tx_stream_faulted_async,
-        board_data->tx_async_transport_faulted,
-        board_data->tx_gate_abort_pending,
-        board_data->tx_retune2_pending_count,
-        board_data->tx_retune2_completion_faulted,
-        bladerf2_rfic_frequency_model_valid(
-            board_data->rfic_reference_clock_known,
-            board_data->rfic_frequency_model_known));
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    return valid;
+    /* The FPGA START ACK precedes the monitor's RFIC PLL/ENSM/BBPLL
+     * observation. Do not terminate an async stream in that narrow initial
+     * state; wait for the positive status event. Faulted/revoked states are
+     * rejected immediately, and timeout remains a failure-only watchdog. */
+    return bladerf2_tx_wait_for_rfic_certificate(
+        dev, BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS) == 0;
 }
 
 

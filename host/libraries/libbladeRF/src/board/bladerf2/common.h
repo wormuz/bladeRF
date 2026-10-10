@@ -434,6 +434,8 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
                                          int error_code);
 bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
                                        uint32_t link_status);
+int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
+                                         uint32_t timeout_ms);
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status);
 void bladerf2_rf_event_append_locked(
