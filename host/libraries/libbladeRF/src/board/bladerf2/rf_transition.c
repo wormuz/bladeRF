@@ -691,15 +691,19 @@ static void _emit_event_with_timestamp_for_transaction(struct bladerf *dev,
         event.requested_rx_lo_hz = requested_hz;
         event.readback_rx_lo_hz = readback_hz;
 
-        board_data->rf_transition_last_event = event;
+        if (inherit_transaction_context) {
+            board_data->rf_transition_last_event = event;
+        }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        if (type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
+        if (inherit_transaction_context &&
+            type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
             board_data->rf_transition_epoch_certified = false;
             board_data->rf_transition_first_host_data_reported = false;
             memset(&board_data->rf_transition_first_host_data_event, 0,
                    sizeof(board_data->rf_transition_first_host_data_event));
             board_data->rx_async_have_expected_timestamp = false;
-        } else if (state != BLADERF_RF_STATE_RX_DATA_VALID) {
+        } else if (inherit_transaction_context &&
+                   state != BLADERF_RF_STATE_RX_DATA_VALID) {
             board_data->rf_transition_epoch_certified = false;
             board_data->rf_transition_first_host_data_reported = false;
         }
@@ -716,7 +720,9 @@ static void _emit_event_with_timestamp_for_transaction(struct bladerf *dev,
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
         COND_SIGNAL(&board_data->rx_async_epoch_cond);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        board_data->rf_transition_state = state;
+        if (inherit_transaction_context) {
+            board_data->rf_transition_state = state;
+        }
     });
 }
 
