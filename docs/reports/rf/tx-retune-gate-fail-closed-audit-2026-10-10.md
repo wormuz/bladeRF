@@ -155,6 +155,15 @@ gain-mode enum before invalidation, and both bladeRF2 RFIC callbacks now return
 `BLADERF_ERR_UNSUPPORTED` for TX. Source-only; no build/test under the audit
 gate.
 
+## Follow-up: validate gain-stage and correction inputs before fencing
+
+The generic gain-stage setter could revoke RX/TX validity before the board
+rejected an unknown stage name, and correction setters did the same for an
+unknown correction enum. They now validate the public channel first, resolve
+the gain-stage name through the board's read-only range query, and validate
+correction enum membership before invalidation. Numeric gain remains clamped
+by the board implementation. Source-only; no build/test under the audit gate.
+
 ## Follow-up: reject invalid generic RF control enums before stream fencing
 
 Generic setters for tuning mode, loopback, RX mux, and feature selection could

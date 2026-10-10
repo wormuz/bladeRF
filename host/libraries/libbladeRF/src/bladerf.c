@@ -68,6 +68,19 @@ static bool valid_gain_mode(bladerf_gain_mode mode)
             return false;
     }
 }
+
+static bool valid_correction(bladerf_correction corr)
+{
+    switch (corr) {
+        case BLADERF_CORR_DCOFF_I:
+        case BLADERF_CORR_DCOFF_Q:
+        case BLADERF_CORR_PHASE:
+        case BLADERF_CORR_GAIN:
+            return true;
+        default:
+            return false;
+    }
+}
 #include "conversions.h"
 #include "driver/fx3_fw.h"
 #include "device_calibration.h"
@@ -844,8 +857,16 @@ int bladerf_set_gain_stage(struct bladerf *dev,
                            bladerf_gain gain)
 {
     int status;
+    struct bladerf_range const *range = NULL;
     CHECK_NULL(dev);
     CHECK_NULL(stage);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    status = dev->board->get_gain_stage_range(dev, ch, stage, &range);
+    if (status != 0) {
+        return status;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_GAIN);
     if (status != 0) {
@@ -1487,6 +1508,13 @@ int bladerf_set_correction(struct bladerf *dev,
                            bladerf_correction_value value)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!valid_correction(corr)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_CORRECTION);
     if (status != 0) {
