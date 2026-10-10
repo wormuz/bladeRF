@@ -1338,15 +1338,15 @@ static int bladerf2_enable_module(struct bladerf *dev,
                                                     false);
             }
         }
+        if (tx_direction_was_active) {
+            /* Fence monitor samples captured before the shared-epoch
+             * transaction, including a transaction that aborts pre-START. */
+            board_data->tx_channel_state_generation++;
+        }
         status = announce_rf_link_epoch(dev, ch, tx_direction_was_active,
                                         &epoch_confirmed,
                                         &start_attempted, &start_accepted,
                                         &link_ack_status);
-        if (start_attempted && board_data->rf_link_dir_on[1]) {
-            /* Discard an in-flight TX status sample captured before the
-             * shared generation boundary. */
-            board_data->tx_channel_state_generation++;
-        }
         if (epoch_confirmed && board_data->rf_link_dir_on[1]) {
             board_data->tx_link_epoch_id =
                 (uint8_t)(link_ack_status >> 20);
