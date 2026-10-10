@@ -224,6 +224,7 @@ struct bladerf2_board_data {
     uint8_t tx_link_epoch_id;
     bool tx_link_fault_reported;
     bool tx_epoch_invalid_reported;
+    bool tx_rfic_state_valid_reported;
     bool tx_rfic_state_invalid_reported;
     bool tx_stream_faulted_async;
     bool tx_async_transport_faulted;

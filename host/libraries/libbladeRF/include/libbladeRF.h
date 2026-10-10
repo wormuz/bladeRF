@@ -4892,6 +4892,10 @@ typedef enum {
     /** TX USB/host stream terminated with an error. TX transport validity is
      * revoked; error_code contains the libbladeRF error. */
     BLADERF_RF_EVT_TX_TRANSPORT_ERROR,
+    /** AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL status were observed healthy
+     * in the acknowledged TX epoch. This does not validate RF power or
+     * waveform quality. */
+    BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
     /** AD9361 TX RFPLL, TX/FDD ENSM, or BBPLL status became invalid. TX RFIC
      * validity is revoked until a new acknowledged TX epoch. `rfic_status`
      * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL

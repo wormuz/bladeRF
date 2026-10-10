@@ -947,6 +947,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_fault = false;
             bool report_tx_epoch_invalid = false;
             bool report_tx_underrun = false;
+            bool report_tx_rfic_valid = false;
             bool report_tx_rfic_invalid = false;
             bool counter_reset = false;
             bool tx_counter_baseline_was_valid = false;
@@ -1008,7 +1009,7 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_loss_count_status == 0 &&
                         tx_rfic_status == 0 &&
                         bladerf2_tx_rfic_state_valid(
-                            tx_rfic_status == 0, tx_pll_status, ensm_status,
+                            true, tx_pll_status, ensm_status,
                             bbpll_status) &&
                         board_data->tx_status_unavailable_reported &&
                         !board_data->tx_recovery_blocked &&
@@ -1059,6 +1060,20 @@ static void *rx_fault_monitor_task(void *arg)
                         bladerf2_tx_stream_set_faulted(board_data, true);
                         report_tx_rfic_invalid = true;
                     }
+                    if (tx_link_status_error == 0 &&
+                        tx_loss_count_status == 0 && tx_rfic_status == 0 &&
+                        bladerf2_rf_link_tx_epoch_valid(
+                            rf_link_status, board_data->tx_link_epoch_id) &&
+                        bladerf2_tx_rfic_state_valid(
+                            true, tx_pll_status, ensm_status, bbpll_status) &&
+                        !board_data->tx_rfic_state_invalid_reported &&
+                        !board_data->tx_rfic_state_valid_reported &&
+                        !board_data->tx_recovery_blocked &&
+                        !report_tx_fault && !report_tx_epoch_invalid &&
+                        !report_tx_underrun && !counter_reset) {
+                        board_data->tx_rfic_state_valid_reported = true;
+                        report_tx_rfic_valid = true;
+                    }
                     if (report_tx_fault) {
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0,
@@ -1070,6 +1085,13 @@ static void *rx_fault_monitor_task(void *arg)
                             ((uint32_t)ensm_status << 16) |
                                 ((uint32_t)tx_pll_status << 8) | bbpll_status,
                             BLADERF_ERR_FPGA_OP);
+                    }
+                    if (report_tx_rfic_valid) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_RFIC_STATE_VALID, 0,
+                            ((uint32_t)ensm_status << 16) |
+                                ((uint32_t)tx_pll_status << 8) | bbpll_status,
+                            0);
                     }
                     if (report_tx_epoch_invalid) {
                         bladerf2_tx_stream_event(
