@@ -665,6 +665,15 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         timeout_ms = stream->transfer_timeout;
     }
 
+    MUTEX_LOCK(&stream->lock);
+    if (stream->state != STREAM_RUNNING) {
+        /* Shutdown may win the short interval between async_run_stream()
+         * publishing RUNNING and this backend acquiring its endpoint. */
+        stream->state = STREAM_DONE;
+        MUTEX_UNLOCK(&stream->lock);
+        return 0;
+    }
+
     switch (layout & BLADERF_DIRECTION_MASK) {
         case BLADERF_RX:
             data->ep = get_ep(cyapi->dev, SAMPLE_EP_IN);
@@ -674,10 +683,8 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             data->ep = get_ep(cyapi->dev, SAMPLE_EP_OUT);
             break;
     }
-
     if (data->ep == NULL) {
         log_debug("Failed to get EP handle.\n");
-        MUTEX_LOCK(&stream->lock);
         notify_rx_terminal_failure_once(stream, data, BLADERF_ERR_IO);
         stream->error_code = BLADERF_ERR_UNEXPECTED;
         stream->state = STREAM_DONE;
@@ -688,6 +695,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
     data->ep->XferMode = XMODE_DIRECT;
     data->ep->Abort();
     data->ep->Reset();
+    MUTEX_UNLOCK(&stream->lock);
 
     log_verbose("Starting stream...\n");
     status = 0;
@@ -696,7 +704,8 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 
     MUTEX_LOCK(&stream->lock);
 
-    for (unsigned int i = 0; i < data->num_transfers && status == 0; i++) {
+    for (unsigned int i = 0; i < data->num_transfers && status == 0 &&
+         stream->state == STREAM_RUNNING; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
             meta.actual_count = 0;
             next_buffer = stream->cb(stream->dev, stream, &meta, NULL,
@@ -742,6 +751,9 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         } else {
             status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
         }
+    }
+    if (stream->state != STREAM_RUNNING) {
+        done = true;
     }
 
     MUTEX_UNLOCK(&stream->lock);
