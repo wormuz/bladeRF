@@ -155,6 +155,15 @@ gain-mode enum before invalidation, and both bladeRF2 RFIC callbacks now return
 `BLADERF_ERR_UNSUPPORTED` for TX. Source-only; no build/test under the audit
 gate.
 
+## Follow-up: reject invalid generic RF control enums before stream fencing
+
+Generic setters for tuning mode, loopback, RX mux, and feature selection could
+revoke RX/TX validity before a board callback rejected an invalid enum. They
+now validate enum membership first; loopback support is checked against the
+board's advertised mode list. Unsupported-but-valid board/mode combinations
+still reach the board callback after the normal fence. Source-only; no
+build/test under the audit gate.
+
 ## Follow-up: TX gain-calibration policy must revoke TX validity
 
 `bladerf_enable_gain_calibration()` can update the TX gain target through

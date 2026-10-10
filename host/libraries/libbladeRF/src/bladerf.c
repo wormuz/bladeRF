@@ -1952,6 +1952,11 @@ int bladerf_set_tuning_mode(struct bladerf *dev, bladerf_tuning_mode mode)
 {
     int status;
 
+    if (mode != BLADERF_TUNING_MODE_HOST &&
+        mode != BLADERF_TUNING_MODE_FPGA) {
+        return BLADERF_ERR_INVAL;
+    }
+
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_TUNING_MODE);
     if (status != 0) {
@@ -2013,6 +2018,10 @@ bool bladerf_is_loopback_mode_supported(struct bladerf *dev,
 int bladerf_set_loopback(struct bladerf *dev, bladerf_loopback l)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!bladerf_is_loopback_mode_supported(dev, l)) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_LOOPBACK);
     if (status != 0) {
@@ -2045,6 +2054,15 @@ int bladerf_get_loopback(struct bladerf *dev, bladerf_loopback *l)
 int bladerf_set_rx_mux(struct bladerf *dev, bladerf_rx_mux mux)
 {
     int status;
+    switch (mux) {
+        case BLADERF_RX_MUX_BASEBAND:
+        case BLADERF_RX_MUX_12BIT_COUNTER:
+        case BLADERF_RX_MUX_32BIT_COUNTER:
+        case BLADERF_RX_MUX_DIGITAL_LOOPBACK:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RX_MUX);
     if (status != 0) {
@@ -2909,6 +2927,10 @@ int bladerf_enable_feature(struct bladerf *dev, bladerf_feature feature, bool en
     log_verbose("%s feature %s\n", enable ? "Enabling" : "Disabling", feature2str(feature));
     int status;
     CHECK_NULL(dev);
+    if (feature != BLADERF_FEATURE_DEFAULT &&
+        feature != BLADERF_FEATURE_OVERSAMPLE) {
+        return BLADERF_ERR_INVAL;
+    }
 
     const char *board_name = bladerf_get_board_name(dev);
 
