@@ -1238,7 +1238,7 @@ bool ina219_write(uint8_t addr, uint16_t data)
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, addr);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_CMD_STATUS | OC_I2C_WR);
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR);
     if (!i2c_complete_transfer(1)) {
         goto i2c_fail;
     }
