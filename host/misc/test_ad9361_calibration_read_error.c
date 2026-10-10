@@ -939,6 +939,7 @@ int main(void)
         fail_write_once_reg = REG_CALIBRATION_CONFIG_3;
         ret = ad9361_do_calib_run(&phy, RFDC_CAL, -1);
         if (ret != -EIO || fail_write_once_reg != -1 ||
+            !phy.tracking_config_valid ||
             (fake_regs[REG_DC_OFFSET_CONFIG2] & tracking_mask) !=
                 tracking_mask) {
             fprintf(stderr,
@@ -2237,6 +2238,37 @@ int main(void)
                 fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes + 3) {
                 fprintf(stderr,
                         "Tracking failure rollback or no-op replay did not run\n");
+                return EXIT_FAILURE;
+            }
+
+            /* If the rollback also fails, getters must not report the old
+             * cached bits as a confirmed hardware state. A complete later
+             * write must recover the cache and make getters available again. */
+            fail_write_reg = REG_CALIBRATION_CONFIG_1;
+            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 1);
+            if (ret != -EIO || phy.tracking_config_valid) {
+                fprintf(stderr,
+                        "Tracking rollback failure retained a valid cache\n");
+                return EXIT_FAILURE;
+            }
+            {
+                uint8_t rfdc = UINT8_MAX;
+                uint8_t bbdc = UINT8_MAX;
+                uint8_t quad = UINT8_MAX;
+                if (ad9361_get_rx_rfdc_track_en_dis(&phy, &rfdc) != -EIO ||
+                    ad9361_get_rx_bbdc_track_en_dis(&phy, &bbdc) != -EIO ||
+                    ad9361_get_rx_quad_track_en_dis(&phy, &quad) != -EIO ||
+                    rfdc != UINT8_MAX || bbdc != UINT8_MAX ||
+                    quad != UINT8_MAX) {
+                    fprintf(stderr,
+                            "Unknown tracking state was reported as valid\n");
+                    return EXIT_FAILURE;
+                }
+            }
+            fail_write_reg = -1;
+            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
+            if (ret != 0 || !phy.tracking_config_valid) {
+                fprintf(stderr, "Tracking configuration did not recover\n");
                 return EXIT_FAILURE;
             }
         }
