@@ -80,6 +80,17 @@ No additional fail-open was confirmed in this source slice. Queue overflow,
 ambiguous USB response, cancellation, counter wrap/reset, and the physical
 NIOS no-response incident remain test/hardware gates.
 
+The integrated RX gate/controller/FIFO boundary was re-read in RTL. ARM,
+COMPLETE, and ABORT are decoded from one bundled control word; gate outputs
+register IQ and timestamp in the same sample-domain stage; RX_X2 first-valid
+requires valid samples on every enabled lane; only then is the new epoch's
+first timestamp latched and the sample admitted. ABORT wins over ARM/COMPLETE
+and fenced states preserve transport using zero-IQ keepalives. Sample-META
+legacy layout remains separate when epoch tagging is disabled. This source
+slice found no additional stale-IQ admission path. Clock/reset recovery,
+packet-straddling timestamp traces, RX1/RX2/RX_X2 simulation, and exact-image
+hardware qualification remain open.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
