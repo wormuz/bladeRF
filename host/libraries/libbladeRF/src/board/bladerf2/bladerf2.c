@@ -2369,10 +2369,13 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 board_data->tx_retune_recovery_pending = true;
                 board_data->tx_rfic_state_valid_reported = false;
+                uint8_t pending_count;
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                pending_count = board_data->tx_retune2_pending_count;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 bladerf2_tx_retune_event(
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                    target_hz, 0, board_data->tx_retune2_pending_count,
-                    status);
+                    target_hz, 0, pending_count, status);
                 /* Queue-clear failure leaves NIOS retunes unaccounted for.
                  * Revoke TX at the FPGA boundary and require a mute ACK
                  * before returning the failed direct tune. */
@@ -3042,17 +3045,23 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         bool gate_abort_pending;
+        bool success_count_valid;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         gate_abort_pending = board_data->tx_gate_abort_pending;
+        success_count_valid = board_data->tx_retune2_success_count_valid;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (board_data->tx_recovery_blocked || gate_abort_pending) {
             return BLADERF_ERR_WOULD_BLOCK;
         }
-        if (!board_data->tx_retune2_success_count_valid) {
+        if (!success_count_valid) {
             CHECK_STATUS(nios_retune2_success_count_read(
                 dev, BLADERF_MODULE_TX, &success_count));
-            board_data->tx_retune2_success_count_last = success_count;
-            board_data->tx_retune2_success_count_valid = true;
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (!board_data->tx_retune2_success_count_valid) {
+                board_data->tx_retune2_success_count_last = success_count;
+                board_data->tx_retune2_success_count_valid = true;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         }
         /* Revoke host TX admission and publish invalidity before touching
          * the FPGA gate. This closes the concurrent-send window while the
@@ -3243,7 +3252,11 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
     const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
     if (tx_queue_cleared) {
-        if (board_data->tx_retune2_pending_count != 0) {
+        uint8_t pending_count;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        pending_count = board_data->tx_retune2_pending_count;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (pending_count != 0) {
             int gate_status = bladerf2_tx_gate_abort_fail_closed(
                 dev, board_data, 0);
             if (gate_status != 0) {
@@ -3252,20 +3265,25 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         }
         board_data->tx_retune_gate_release_requested = false;
         board_data->tx_channel_state_generation++;
-    }
-    if (tx_queue_cleared && board_data->tx_retune2_pending_count != 0) {
-        unsigned int i;
-        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->tx_retune2_pending_count = 0;
-        board_data->tx_retune2_completion_faulted = true;
-            board_data->tx_retune2_applied_waiting_rf_valid = false;
-        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
-            board_data->tx_retune2_pending[i].valid = false;
+        if (pending_count != 0) {
+            unsigned int i;
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            pending_count = board_data->tx_retune2_pending_count;
+            if (pending_count != 0) {
+                board_data->tx_retune2_pending_count = 0;
+                board_data->tx_retune2_completion_faulted = true;
+                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                    board_data->tx_retune2_pending[i].valid = false;
+                }
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (pending_count != 0) {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    0, 0, 0, BLADERF_ERR_WOULD_BLOCK);
+            }
         }
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        bladerf2_tx_retune_event(
-            dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST, 0, 0,
-            0, BLADERF_ERR_WOULD_BLOCK);
     }
     return status;
 }
@@ -4398,10 +4416,14 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
 
     /* Changing RFIC ownership invalidates any prior TX completion state.
      * Startup has no active TX certificate, so only fence a live TX path. */
+    uint8_t pending_count;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    pending_count = board_data->tx_retune2_pending_count;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (board_data->rf_link_dir_on[1] ||
         board_data->tx_rfic_state_valid_reported ||
         board_data->tx_retune2_failure_watch_active ||
-        board_data->tx_retune2_pending_count != 0) {
+        pending_count != 0) {
         CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
     }
 
@@ -4840,9 +4862,13 @@ static int bladerf2_wishbone_master_write(struct bladerf *dev, uint32_t addr, ui
         /* Reassert mute after an untyped FPGA-bus write. The stock image has
          * no Wishbone target, but a compatible image may expose TX controls
          * on this path. */
+        uint8_t pending_count;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        pending_count = board_data->tx_retune2_pending_count;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (board_data->rf_link_dir_on[1] ||
             board_data->tx_retune2_failure_watch_active ||
-            board_data->tx_retune2_pending_count != 0) {
+            pending_count != 0) {
             status = bladerf2_tx_gate_abort_fail_closed(
                 dev, board_data, 0);
         }
