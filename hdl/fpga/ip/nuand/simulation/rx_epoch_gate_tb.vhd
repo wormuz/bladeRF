@@ -521,8 +521,10 @@ begin
         wait for 1 ns;
         assert out_samples(0).data_i = to_signed(0, 16) and
                out_samples(1).data_i = to_signed(0, 16) and
+               out_samples(0).data_v = '1' and
+               out_samples(1).data_v = '1' and
                discard_active = '1'
-            report "RX_X2 partial sample tuple was forwarded"
+            report "RX_X2 lane-valid mask was not normalized to a zero tuple"
             severity failure;
         wait until rising_edge(clock);
         wait for 1 ns;

@@ -105,6 +105,7 @@ begin
         variable enabled_lane_count : natural;
         variable valid_enabled_lane_count : natural;
         variable partial_enabled_valid : boolean;
+        variable keepalive_data_valid : std_logic;
     begin
         if( reset = '1' ) then
             state               <= STATE_ACTIVE;
@@ -129,6 +130,7 @@ begin
             all_enabled_valid := '1';
             enabled_lane_count := 0;
             valid_enabled_lane_count := 0;
+            keepalive_data_valid := '0';
             for i in in_sample_controls'range loop
                 if( in_sample_controls(i).enable = '1' ) then
                     any_enabled := '1';
@@ -138,6 +140,7 @@ begin
                     else
                         valid_enabled_lane_count :=
                             valid_enabled_lane_count + 1;
+                        keepalive_data_valid := '1';
                     end if;
                 end if;
             end loop;
@@ -158,7 +161,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                         state <= STATE_ERROR;
@@ -173,7 +177,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                     elsif( partial_enabled_valid ) then
@@ -187,7 +192,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                         state <= STATE_ERROR;
@@ -211,7 +217,8 @@ begin
                         out_samples(i) <= (
                             data_i => (others => '0'),
                             data_q => (others => '0'),
-                            data_v => in_samples(i).data_v
+                            data_v => in_sample_controls(i).enable and
+                                      keepalive_data_valid
                         );
                     end loop;
 
@@ -244,7 +251,8 @@ begin
                         out_samples(i) <= (
                             data_i => (others => '0'),
                             data_q => (others => '0'),
-                            data_v => in_samples(i).data_v
+                            data_v => in_sample_controls(i).enable and
+                                      keepalive_data_valid
                         );
                     end loop;
 
@@ -278,7 +286,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                         state <= STATE_ERROR;
@@ -291,7 +300,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                         active_epoch_id <= epoch_id_in;
@@ -304,7 +314,8 @@ begin
                             out_samples(i) <= (
                                 data_i => (others => '0'),
                                 data_q => (others => '0'),
-                                data_v => in_samples(i).data_v
+                                data_v => in_sample_controls(i).enable and
+                                          keepalive_data_valid
                             );
                         end loop;
                         state <= STATE_ERROR;
@@ -325,7 +336,8 @@ begin
                         out_samples(i) <= (
                             data_i => (others => '0'),
                             data_q => (others => '0'),
-                            data_v => in_samples(i).data_v
+                            data_v => in_sample_controls(i).enable and
+                                      keepalive_data_valid
                         );
                     end loop;
                     if( epoch_abort = '1' ) then
