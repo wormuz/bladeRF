@@ -185,6 +185,7 @@ int main(void)
     struct refclk_scale invalid_clock_factor = {0};
     phy.spi = &spi;
     phy.pdata = &pdata;
+    phy_without_spi.pdata = &pdata;
 
     /* Both public LO paths must reject missing objects/output before any
      * dereference or clock/RFIC operation. */
@@ -196,6 +197,12 @@ int main(void)
         ad9361_get_tx_lo_freq(NULL, &lo_frequency) != -EINVAL ||
         lo_frequency != UINT64_MAX) {
         fprintf(stderr, "AD9361 LO APIs accepted missing arguments\n");
+        return EXIT_FAILURE;
+    }
+    if (ad9361_get_rx_lo_freq(&phy_without_spi, &lo_frequency) != -EINVAL ||
+        ad9361_get_tx_lo_freq(&phy_without_spi, &lo_frequency) != -EINVAL ||
+        lo_frequency != UINT64_MAX) {
+        fprintf(stderr, "AD9361 LO getters accepted missing PLL state\n");
         return EXIT_FAILURE;
     }
 
