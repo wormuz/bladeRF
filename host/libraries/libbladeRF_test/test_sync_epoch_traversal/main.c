@@ -108,6 +108,40 @@ static void test_rf_link_status_v2_epoch_policy(void)
     assert(bladerf2_rf_link_epoch_id(0x10000000u | (9u << 20), 3) == 3);
 }
 
+static void test_rf_event_cursor_resynchronizes_after_overrun(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data board_data = {0};
+    uint32_t event_count = 0;
+    uint64_t next_sequence = 0;
+    bool history_complete = true;
+
+    dev.board = &bladerf2_board_fns;
+    dev.board_data = &board_data;
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    board_data.rf_transition_event_count = BLADERF2_RF_EVENT_HISTORY_SIZE;
+    board_data.rf_transition_event_sequence = 73;
+    board_data.rf_transition_event_head = 0;
+    for (uint32_t i = 0; i < BLADERF2_RF_EVENT_HISTORY_SIZE; ++i) {
+        board_data.rf_transition_event_sequences[i] = 10 + i;
+    }
+
+    assert(bladerf_rf_events_get_since(
+               &dev, 2, NULL, 0, &event_count, &next_sequence,
+               &history_complete) == BLADERF_ERR_MEM);
+    assert(event_count == 0);
+    assert(next_sequence == 73);
+    assert(!history_complete);
+
+    assert(bladerf_rf_events_get_since(
+               &dev, next_sequence, NULL, 0, &event_count, &next_sequence,
+               &history_complete) == 0);
+    assert(event_count == 0);
+    assert(next_sequence == 73);
+    assert(history_complete);
+    assert(MUTEX_DESTROY(&board_data.rf_transition_event_lock) == 0);
+}
+
 static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
 {
     struct bladerf dev = {0};
@@ -1951,6 +1985,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_rf_link_status_v2_epoch_policy();
+    test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();
     test_rf_transition_calibration_is_explicit();
     test_rx_epoch_admission_event_preserves_channel();
