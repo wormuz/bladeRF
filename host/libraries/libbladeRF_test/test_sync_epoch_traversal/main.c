@@ -1840,6 +1840,7 @@ static void test_async_timestamp_continuity(void)
 {
     uint8_t *buffer = calloc(1, 2 * MSG_BYTES);
     uint64_t next_timestamp = 0;
+    const uint64_t wrap_boundary = UINT64_MAX - 20;
     assert(buffer != NULL);
 
     write_msg(buffer, 5000, 7, 10);
@@ -1869,6 +1870,21 @@ static void test_async_timestamp_continuity(void)
                buffer, 2 * MSG_BYTES, MSG_BYTES, 7, 9000, false, 0,
                MSG_SAMPLES / 2, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
     assert(next_timestamp == 9000 + MSG_SAMPLES);
+
+    /* Timestamp ordering and cursor advancement are modulo 2^64. A
+     * contiguous transfer crossing wrap remains inside the certified epoch. */
+    write_msg(buffer, wrap_boundary, 7, 90);
+    write_msg(buffer + MSG_BYTES, wrap_boundary + MSG_SAMPLES, 7, 100);
+    assert(metadata_rx_buffer_epoch_contiguous(
+               buffer, 2 * MSG_BYTES, MSG_BYTES, 7, wrap_boundary, false, 0,
+               MSG_SAMPLES, &next_timestamp) == METADATA_RX_BUFFER_CONTIGUOUS);
+    assert(next_timestamp == wrap_boundary + 2 * MSG_SAMPLES);
+    assert(metadata_timestamp_at_or_after(wrap_boundary + MSG_SAMPLES,
+                                          wrap_boundary));
+    assert(!metadata_timestamp_at_or_after(wrap_boundary - 1,
+                                           wrap_boundary));
+    assert(!metadata_timestamp_at_or_after(
+        wrap_boundary + (UINT64_C(1) << 63), wrap_boundary));
     free(buffer);
 }
 
@@ -2945,6 +2961,18 @@ int main(void)
     assert(sync_withheld_timestamp_valid[0]);
     assert(sync_withheld_timestamps[0] == 900);
     assert(sync_withheld_epochs[0] == 7);
+    fixture_destroy(&f);
+
+    /* Skip a pre-boundary prefix when the 64-bit FPGA timestamp wraps between
+     * the message start and the first-valid timestamp. */
+    fixture_init(&f);
+    write_msg(f.buffers[0], UINT64_MAX - 49, 7, 701);
+    write_msg(f.buffers[0] + MSG_BYTES, 25 + MSG_SAMPLES, 7, 702);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 25, 7) == 0);
+    receive(&f, out, 10, &meta);
+    assert(meta.timestamp == 25);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
+    assert_marker(out, 10, 701, 75);
     fixture_destroy(&f);
 
     /* A retune invalidates the remainder of a message that the parser had

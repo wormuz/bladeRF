@@ -1621,8 +1621,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         s->meta.msg_admission_withheld_reason = 0;
 
                         if (!s->meta.rx_epoch_boundary_enabled ||
-                            s->meta.msg_timestamp >=
-                                s->meta.rx_epoch_min_timestamp) {
+                            metadata_timestamp_at_or_after(
+                                s->meta.msg_timestamp,
+                                s->meta.rx_epoch_min_timestamp)) {
                             user_meta->status |= s->meta.msg_flags &
                                (BLADERF_META_FLAG_RX_HW_UNDERFLOW |
                                   BLADERF_META_FLAG_RX_HW_MINIEXP1 |
@@ -1832,8 +1833,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         }
 
                         if (s->meta.rx_epoch_boundary_enabled &&
-                            s->meta.curr_timestamp <
-                                s->meta.rx_epoch_min_timestamp) {
+                            !metadata_timestamp_at_or_after(
+                                s->meta.curr_timestamp,
+                                s->meta.rx_epoch_min_timestamp)) {
                             uint64_t timestamps_to_skip =
                                 s->meta.rx_epoch_min_timestamp -
                                 s->meta.curr_timestamp;

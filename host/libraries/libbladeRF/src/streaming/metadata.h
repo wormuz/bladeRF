@@ -21,6 +21,7 @@
 
 #include <stddef.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <libbladeRF.h>
 
 /*
@@ -183,6 +184,16 @@ static inline bool metadata_rx_epoch_matches(const uint8_t *header,
 
 static inline uint64_t metadata_get_timestamp(const uint8_t *header);
 
+/* FPGA timestamps are modulo-2^64 counters. Compare their forward distance
+ * inside the unambiguous half-range so a valid timestamp after wrap remains
+ * newer than its first-valid boundary. Epoch spans are required to stay
+ * below 2^63 ticks; the exactly-half-range case is therefore rejected. */
+static inline bool metadata_timestamp_at_or_after(uint64_t timestamp,
+                                                  uint64_t boundary)
+{
+    return (timestamp - boundary) < (UINT64_C(1) << 63);
+}
+
 /* Validate every sample-META message in an async RX transfer against the
  * certified epoch and first-valid timestamp. Reject partial message buffers
  * and missing tags rather than guessing where valid IQ begins. */
@@ -200,7 +211,8 @@ static inline bool metadata_rx_buffer_matches_epoch(
     for (offset = 0; offset < length; offset += message_size) {
         const uint8_t *header = buffer + offset;
         if (!metadata_rx_epoch_matches(header, expected_epoch_id) ||
-            metadata_get_timestamp(header) < minimum_timestamp) {
+            !metadata_timestamp_at_or_after(
+                metadata_get_timestamp(header), minimum_timestamp)) {
             return false;
         }
     }
@@ -329,8 +341,11 @@ static inline enum metadata_rx_epoch_disposition metadata_rx_epoch_disposition(
      * boundary falsely classified a packet that starts exactly at the
      * boundary as a withheld timestamp prefix. */
     if (boundary_enabled &&
-        (message_timestamp < minimum_timestamp ||
-         (have_timestamp && expected_timestamp < minimum_timestamp))) {
+        (!metadata_timestamp_at_or_after(message_timestamp,
+                                         minimum_timestamp) ||
+         (have_timestamp &&
+          !metadata_timestamp_at_or_after(expected_timestamp,
+                                          minimum_timestamp)))) {
         return METADATA_RX_EPOCH_SKIP_TIMESTAMP_PREFIX;
     }
 
