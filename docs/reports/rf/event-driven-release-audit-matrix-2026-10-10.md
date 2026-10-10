@@ -378,10 +378,13 @@ loss-counter halves, and dwell-record words. A caller typo or ABI mismatch
 could therefore be mistaken for a valid zero diagnostic. These cases now
 preserve zero data but return packet failure; valid address ranges remain
 unchanged. A shared bounds helper and regression source now cover the last
-valid and first invalid subaddress for each diagnostic family. The generic packet runner
-compiles without the xA4 board macro, so it does not exercise the guarded
-packet response branch; add a board-path packet regression before the
-source-audit gate closes. No build or test run.
+valid and first invalid subaddress for each diagnostic family. The generic
+packet runner compiles without the xA4 board macro, so a dedicated harness now
+compiles the
+production `pkt_8x32.c` with `BOARD_BLADERF_MICRO` and checks packet success
+and data for valid endpoints plus packet failure for the first invalid
+subaddress. It is wired into the persistent runner but remains unexecuted
+under the source-audit gate.
 
 A direct source review of `rx_fault_monitor_task()` confirmed its certified-RX
 failure handling order: channel-mask read failure/change, FPGA status transport

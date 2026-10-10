@@ -24,6 +24,20 @@ test_bin=$(mktemp)
 trap 'rm -f "$test_bin"' EXIT
 cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     -DBLADERF_NIOS_PC_SIMULATION -DBOARD_BLADERF_MICRO \
+    -include "$repo_root/host/misc/nios_pkt_8x32_xa4_test_api.h" \
+    -ffunction-sections -fdata-sections \
+    -I"$repo_root/fpga_common/include" \
+    -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
+    -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \
+    "$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c" \
+    "$repo_root/host/misc/test_nios_8x32_xa4_diagnostic_packet.c" \
+    -Wl,--gc-sections -o "$test_bin"
+"$test_bin"
+
+test_bin=$(mktemp)
+trap 'rm -f "$test_bin"' EXIT
+cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
+    -DBLADERF_NIOS_PC_SIMULATION -DBOARD_BLADERF_MICRO \
     -ffunction-sections -fdata-sections \
     -I"$repo_root/fpga_common/include" \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
