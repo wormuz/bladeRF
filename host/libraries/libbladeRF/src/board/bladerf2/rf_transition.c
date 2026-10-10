@@ -1367,6 +1367,12 @@ static void *rx_fault_monitor_task(void *arg)
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = false;
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            /* A successful RF configuration change closes
+                             * async TX admission while the RFIC and gate are
+                             * being revalidated. Reopen it only after the
+                             * gate's RESUME event; the helper keeps a
+                             * concurrent transport fault sticky. */
+                            bladerf2_tx_stream_set_faulted(board_data, false);
                             bladerf2_tx_retune_event(
                                 dev, BLADERF_RF_EVT_TX_RETUNE_VALID,
                                 applied_frequency_hz, applied_frequency_hz, 0, 0);
