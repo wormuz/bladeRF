@@ -79,9 +79,10 @@ static void _test_rx_transition_late_observation(const char *stage)
  * verified from the Python side against this same AD9361 driver. */
 #define REG_STATE_ADDR 0x017
 #define REG_RX_CP_VCO_LOCK_ADDR 0x247
+#define REG_TX_CP_VCO_LOCK_ADDR 0x287
 #define REG_BBPLL_LOCK_STATUS_ADDR 0x05e
-#define VCO_LOCK_BIT 0x02
-#define BBPLL_LOCK_BIT 0x80
+#define VCO_LOCK_BIT BLADERF2_AD9361_VCO_LOCK_BIT
+#define BBPLL_LOCK_BIT BLADERF2_AD9361_BBPLL_LOCK_BIT
 #define RF_LINK_STATUS_TX_FAULT (1u << 15)
 #define ENSM_STATE_MASK 0x0F
 #define ENSM_STATE_RX 0x8
@@ -823,6 +824,7 @@ static void *rx_fault_monitor_task(void *arg)
         bool rx_fault_causes_valid = false;
         bool rx_fault_causes_read_attempted = false;
         uint8_t pll_status = 0;
+        uint8_t tx_pll_status = 0;
         uint8_t ensm_status = 0;
         uint8_t bbpll_status = 0;
         uint32_t rffe_status = 0;
@@ -835,6 +837,7 @@ static void *rx_fault_monitor_task(void *arg)
         int loss_count_status = 0;
         int tx_loss_count_status = 0;
         int rfic_status = 0;
+        int tx_rfic_status = 0;
         int rx_fault_causes_status = 0;
 
         /* NIOS bulk control and AD9361 SPI requests share serialization with
@@ -913,6 +916,24 @@ static void *rx_fault_monitor_task(void *arg)
                         (rx_fault_causes &
                          NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK) != 0;
                 }
+                if (status == 0 && should_poll_tx &&
+                    (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
+                        RF_LINK_STATUS_VERSION_2 &&
+                    (rf_link_status & RF_LINK_STATUS_TX_FAULT) == 0) {
+                    _rx_fault_monitor_stage(board_data, "TX RFIC PLL status");
+                    tx_rfic_status = _read_rfic_reg(
+                        dev, REG_TX_CP_VCO_LOCK_ADDR, &tx_pll_status);
+                    if (tx_rfic_status == 0) {
+                        _rx_fault_monitor_stage(board_data, "TX ENSM status");
+                        tx_rfic_status = _read_rfic_reg(
+                            dev, REG_STATE_ADDR, &ensm_status);
+                    }
+                    if (tx_rfic_status == 0) {
+                        _rx_fault_monitor_stage(board_data, "TX BBPLL status");
+                        tx_rfic_status = _read_rfic_reg(
+                            dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
+                    }
+                }
             }
         });
 
@@ -926,6 +947,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_fault = false;
             bool report_tx_epoch_invalid = false;
             bool report_tx_underrun = false;
+            bool report_tx_rfic_invalid = false;
             bool counter_reset = false;
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
@@ -937,7 +959,7 @@ static void *rx_fault_monitor_task(void *arg)
                     board_data->tx_channel_state_generation ==
                         tx_channel_state_generation) {
                     if (tx_link_status_error != 0 ||
-                        tx_loss_count_status != 0) {
+                        tx_loss_count_status != 0 || tx_rfic_status != 0) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
                             bladerf2_tx_stream_set_faulted(board_data, true);
@@ -984,6 +1006,10 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0 &&
+                        tx_rfic_status == 0 &&
+                        bladerf2_tx_rfic_state_valid(
+                            tx_rfic_status == 0, tx_pll_status, ensm_status,
+                            bbpll_status) &&
                         board_data->tx_status_unavailable_reported &&
                         !board_data->tx_recovery_blocked &&
                         board_data->tx_fpga_loss_count_valid &&
@@ -1002,12 +1028,48 @@ static void *rx_fault_monitor_task(void *arg)
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
                             rf_link_status, tx_link_status_error != 0
-                                ? tx_link_status_error : tx_loss_count_status);
+                                ? tx_link_status_error :
+                                (tx_loss_count_status != 0
+                                    ? tx_loss_count_status : tx_rfic_status));
+                    }
+                    if (tx_link_status_error == 0 && tx_rfic_status == 0 &&
+                        (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) == 0 &&
+                        !board_data->tx_rfic_state_invalid_reported) {
+                        board_data->tx_rfic_state_invalid_reported = true;
+                        board_data->tx_recovery_blocked = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
+                        report_tx_rfic_invalid = true;
+                    }
+                    if (tx_link_status_error == 0 && tx_rfic_status == 0 &&
+                        ((ensm_status & ENSM_STATE_MASK) !=
+                             BLADERF2_AD9361_ENSM_STATE_TX &&
+                         (ensm_status & ENSM_STATE_MASK) !=
+                             BLADERF2_AD9361_ENSM_STATE_FDD) &&
+                        !board_data->tx_rfic_state_invalid_reported) {
+                        board_data->tx_rfic_state_invalid_reported = true;
+                        board_data->tx_recovery_blocked = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
+                        report_tx_rfic_invalid = true;
+                    }
+                    if (tx_link_status_error == 0 && tx_rfic_status == 0 &&
+                        (bbpll_status & BLADERF2_AD9361_BBPLL_LOCK_BIT) == 0 &&
+                        !board_data->tx_rfic_state_invalid_reported) {
+                        board_data->tx_rfic_state_invalid_reported = true;
+                        board_data->tx_recovery_blocked = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
+                        report_tx_rfic_invalid = true;
                     }
                     if (report_tx_fault) {
                         bladerf2_tx_stream_event(
                             dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0,
                             rf_link_status, BLADERF_ERR_FPGA_OP);
+                    }
+                    if (report_tx_rfic_invalid) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0,
+                            ((uint32_t)ensm_status << 16) |
+                                ((uint32_t)tx_pll_status << 8) | bbpll_status,
+                            BLADERF_ERR_FPGA_OP);
                     }
                     if (report_tx_epoch_invalid) {
                         bladerf2_tx_stream_event(

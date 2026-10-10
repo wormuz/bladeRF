@@ -146,6 +146,27 @@ int main(void)
         tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID, 9));
     assert(!bladerf2_rf_link_tx_epoch_valid(
         tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE, 9));
+    assert(bladerf2_tx_rfic_state_valid(
+        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_TX,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT));
+    assert(bladerf2_tx_rfic_state_valid(
+        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_FDD,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT));
+    assert(!bladerf2_tx_rfic_state_valid(
+        false, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_TX,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT));
+    assert(!bladerf2_tx_rfic_state_valid(
+        true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT));
+    assert(!bladerf2_tx_rfic_state_valid(
+        true, BLADERF2_AD9361_VCO_LOCK_BIT, 0x08,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT));
+    assert(!bladerf2_tx_rfic_state_valid(
+        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_TX, 0));
 
     /* A TX error arriving during a shared START must not be overwritten by
      * the subsequently observed link acknowledgement. */

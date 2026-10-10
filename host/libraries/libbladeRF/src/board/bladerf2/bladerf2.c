@@ -1435,6 +1435,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
+            board_data->tx_rfic_state_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
             board_data->tx_recovery_blocked = false;
@@ -1450,6 +1451,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
+            board_data->tx_rfic_state_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
             board_data->tx_recovery_blocked = false;

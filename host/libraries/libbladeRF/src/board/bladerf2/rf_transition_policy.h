@@ -15,6 +15,24 @@
 #define BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE   (1u << 0)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT (1u << 9)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID   (1u << 12)
+#define BLADERF2_AD9361_VCO_LOCK_BIT 0x02u
+#define BLADERF2_AD9361_BBPLL_LOCK_BIT 0x80u
+#define BLADERF2_AD9361_ENSM_STATE_MASK 0x0fu
+#define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
+#define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
+
+/* A TX FPGA link ACK does not prove the analog RFIC path is operational. */
+static inline bool bladerf2_tx_rfic_state_valid(
+    bool status_read_succeeded, uint8_t tx_pll_status,
+    uint8_t ensm_status, uint8_t bbpll_status)
+{
+    const uint8_t ensm = ensm_status & BLADERF2_AD9361_ENSM_STATE_MASK;
+    return status_read_succeeded &&
+           (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
+           (bbpll_status & BLADERF2_AD9361_BBPLL_LOCK_BIT) != 0 &&
+           (ensm == BLADERF2_AD9361_ENSM_STATE_TX ||
+            ensm == BLADERF2_AD9361_ENSM_STATE_FDD);
+}
 
 /* The TX transport certificate is tied to the FPGA generation that the host
  * acknowledged. A readable status word with a stale/missing acknowledgement
