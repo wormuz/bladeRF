@@ -451,7 +451,8 @@ int main(void)
     assert(state.invalidate_calls == 7 && state.config_gpio_write_calls == 1);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_CONFIG_GPIO &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
-    assert(state.config_gpio_value == 0x12345678 && state.complete_calls == 7);
+    assert(state.config_gpio_value == 0x12345678 && state.complete_calls == 7 &&
+           state.tx_fence_calls == 7);
 
     /* Arbitrary Wishbone writes can touch the FPGA RX admission or metadata
      * path, so they use a distinct fail-closed reason. */
@@ -460,7 +461,8 @@ int main(void)
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_WISHBONE &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(state.wishbone_address == 0x100 &&
-           state.wishbone_value == 0xa5a55a5a && state.complete_calls == 8);
+           state.wishbone_value == 0xa5a55a5a && state.complete_calls == 8 &&
+           state.tx_fence_calls == 8);
 
     /* OVERSAMPLE changes the sample-rate and stream-format interpretation.
      * Fence before changing the public feature policy, including disable. */
@@ -493,12 +495,23 @@ int main(void)
     assert(dev.feature == BLADERF_FEATURE_DEFAULT && state.invalidate_calls == 15);
     assert(state.complete_calls == 10);
 
+    /* A failed TX fence must prevent raw shared-register writes from reaching
+     * the board while releasing the RX reservation. */
+    state.invalidate_status = 0;
+    state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
+    assert(bladerf_config_gpio_write(&dev, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(bladerf_wishbone_master_write(&dev, 0, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.config_gpio_write_calls == 1 && state.wishbone_write_calls == 1);
+    assert(state.invalidate_calls == 17 && state.complete_calls == 12);
+    state.tx_fence_status = 0;
+
     /* XB-200 RX filter changes alter the RF path. Fence the common RX epoch
      * first and publish the dedicated reason before touching the expansion. */
     state.invalidate_status = 0;
     assert(bladerf_xb200_set_filterbank(
                &dev, rx0, BLADERF_XB200_144M) == 0);
-    assert(state.invalidate_calls == 16 && state.complete_calls == 11);
+    assert(state.invalidate_calls == 18 && state.complete_calls == 13);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(state.expansion_gpio_write_calls == 1);

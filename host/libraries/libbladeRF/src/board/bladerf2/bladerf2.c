@@ -5132,12 +5132,7 @@ static int bladerf2_wishbone_master_write(struct bladerf *dev, uint32_t addr, ui
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    int status = bladerf2_tx_rf_config_change_begin(dev, board_data);
-    if (status != 0) {
-        return status;
-    }
-
-    status = dev->backend->wishbone_master_write(dev, addr, data);
+    int status = dev->backend->wishbone_master_write(dev, addr, data);
     if (status == 0) {
         /* Reassert mute after an untyped FPGA-bus write. The stock image has
          * no Wishbone target, but a compatible image may expose TX controls
@@ -5216,7 +5211,6 @@ static int bladerf2_config_gpio_write(struct bladerf *dev, uint32_t val)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rfic_reference_clock_known = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);

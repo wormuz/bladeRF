@@ -2538,6 +2538,13 @@ int bladerf_wishbone_master_write(struct bladerf *dev, uint32_t addr, uint32_t d
     }
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = dev->board->wishbone_master_write(dev, addr, data);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2569,6 +2576,13 @@ int bladerf_config_gpio_write(struct bladerf *dev, uint32_t val)
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
 
     status = dev->board->config_gpio_write(dev, val);
 

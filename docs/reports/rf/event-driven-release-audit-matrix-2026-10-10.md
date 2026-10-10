@@ -42,6 +42,16 @@ as evidence that IQ is valid.
 | P1 | RF content, DC/IQ correction, spurs/shielding | Active correction path and no-OS tracking state reviewed; no confirmed new xA4 correction defect in reviewed slices. | Finish writer/startup/register inventory. Then compare repeatable conducted IQ captures/FFT with identical settings; do not change correction or spur masks without RF evidence. |
 | P1 | Host/package/build provenance | Python release linker rejects RPATH/RUNPATH; local build script is designed to force sibling wrapper/library. | Verify build script inputs, generated Cython source policy, extension/library hashes, installed module path, ABI/version, and release archive manifest. |
 
+### Newly confirmed native public-path finding
+
+Arbitrary public Wishbone and config-GPIO writes revoked RX validity but left
+the TX RF certificate active, despite the writes being able to alter FPGA
+admission, clock, or RF controls. The generic mutators now acquire the TX
+configuration fence before invoking board writes; the xA4 board callbacks no
+longer acquire it a second time. The focused regression source checks the
+single-fence ordering and fail-closed behavior. This source change is not yet
+committed and the test remains unrun under the source-audit gate.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
