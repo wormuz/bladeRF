@@ -2831,12 +2831,15 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
 
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    valid = !board_data->tx_stream_faulted_async &&
-            board_data->tx_retune2_pending_count == 0 &&
-            !board_data->tx_retune2_completion_faulted &&
-            bladerf2_rfic_frequency_model_valid(
-                board_data->rfic_reference_clock_known,
-                board_data->rfic_frequency_model_known);
+    valid = bladerf2_tx_admission_allowed(
+        board_data->tx_stream_faulted_async,
+        board_data->tx_async_transport_faulted,
+        board_data->tx_gate_abort_pending,
+        board_data->tx_retune2_pending_count,
+        board_data->tx_retune2_completion_faulted,
+        bladerf2_rfic_frequency_model_valid(
+            board_data->rfic_reference_clock_known,
+            board_data->rfic_frequency_model_known));
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     return valid;
 }
@@ -4183,7 +4186,7 @@ static int bladerf2_sync_tx(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    bool tx_stream_faulted;
+    bool tx_admission_allowed;
 
     if (!board_data->sync[BLADERF_TX].initialized) {
         RETURN_INVAL("sync tx", "not initialized");
@@ -4193,14 +4196,17 @@ static int bladerf2_sync_tx(struct bladerf *dev,
      * the submitted stream. Do not silently accept more IQ until a confirmed
      * new link epoch restores callback-safe TX admission state. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    tx_stream_faulted = board_data->tx_stream_faulted_async ||
-        board_data->tx_retune2_pending_count != 0 ||
-        board_data->tx_retune2_completion_faulted ||
-        !bladerf2_rfic_frequency_model_valid(
+    tx_admission_allowed = bladerf2_tx_admission_allowed(
+        board_data->tx_stream_faulted_async,
+        board_data->tx_async_transport_faulted,
+        board_data->tx_gate_abort_pending,
+        board_data->tx_retune2_pending_count,
+        board_data->tx_retune2_completion_faulted,
+        bladerf2_rfic_frequency_model_valid(
             board_data->rfic_reference_clock_known,
-            board_data->rfic_frequency_model_known);
+            board_data->rfic_frequency_model_known));
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    if (tx_stream_faulted) {
+    if (!tx_admission_allowed) {
         log_warning("%s: TX stream is invalid; stop and re-enable TX before "
                     "submitting more samples\n", __FUNCTION__);
         return BLADERF_ERR_FPGA_OP;

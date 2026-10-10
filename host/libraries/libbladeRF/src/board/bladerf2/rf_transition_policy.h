@@ -476,4 +476,18 @@ static inline bool bladerf2_rx_x1_consumer_blocks_x2_transition(
            (active_async_rx_x1 != 0 || sync_rx_x1_configured);
 }
 
+/* TX samples stay fenced until both the stream and hardware gate are
+ * recoverable. Keep the direct abort-pending and transport-fault latches in
+ * the admission rule instead of relying on callers to mirror them into the
+ * aggregate stream-fault bit. */
+static inline bool bladerf2_tx_admission_allowed(
+    bool stream_faulted, bool transport_faulted, bool gate_abort_pending,
+    unsigned int pending_retunes, bool retune_completion_faulted,
+    bool frequency_model_valid)
+{
+    return !stream_faulted && !transport_faulted && !gate_abort_pending &&
+           pending_retunes == 0 && !retune_completion_faulted &&
+           frequency_model_valid;
+}
+
 #endif
