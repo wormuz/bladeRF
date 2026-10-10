@@ -12,9 +12,13 @@ error and TX could publish that stale value again as a transport failure.
 ## Change
 
 Clear `error_code` under the stream lock at the beginning of every run. The
-sync epoch traversal source regression now runs a TX stream with a stream
-error, follows it with a backend failure, then verifies a clean third run
-returns success and does not publish another transport error.
+libusb backend also resets per-run completion, timeout-deduplication, and RX
+terminal-notification latches when it restarts. Without resetting the RX
+terminal latch, a second run could suppress its own terminal invalid-data
+notification after an earlier run had already reported one. The sync epoch
+traversal source regression now runs a TX stream with a stream error, follows
+it with a backend failure, then verifies a clean third run returns success and
+does not publish another transport error.
 
 ## Verification boundary
 

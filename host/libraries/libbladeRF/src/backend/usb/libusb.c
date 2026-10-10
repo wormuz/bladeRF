@@ -1710,6 +1710,9 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
      * never reaped and shutdown can wait forever with transfers marked
      * CANCEL_PENDING. Reset before submitting this run's first transfer. */
     stream_data->done_flag = 0;
+    stream_data->num_complete = 0;
+    stream_data->timeout_reported = false;
+    stream_data->rx_terminal_failure_reported = false;
 
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {
