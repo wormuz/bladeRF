@@ -845,6 +845,29 @@ int main(void)
             fprintf(stderr, "Successful RFPLL VCO setup changed cache early\n");
             return EXIT_FAILURE;
         }
+
+        {
+            struct refclk_scale rxpll = {
+                .spi = &spi,
+                .phy = &phy,
+                .source = RX_RFPLL_INT,
+                .parent_source = RX_REFCLK,
+            };
+
+            phy.current_rx_lo_freq = 1800000000;
+            fail_write_reg = REG_RX_VCO_OUTPUT;
+            ret = ad9361_rfpll_int_set_rate(
+                &rxpll, ad9361_to_clk(1900000000), 40000000);
+            if (ret != -EIO || phy.current_rx_lo_freq != 0) {
+                fprintf(stderr,
+                        "Failed RX RFPLL programming retained old LO cache: "
+                        "ret=%" PRId32 " cached=%" PRIu64 "\n",
+                        ret, phy.current_rx_lo_freq);
+                return EXIT_FAILURE;
+            }
+            fail_write_reg = -1;
+        }
+
         register_map_enabled = false;
         pdata.fdd = false;
         phy.current_tx_lo_freq = 0;
