@@ -6,6 +6,7 @@
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_adc_core/axi_adc_core.c"
 
 static int32_t fake_clock_chain_status;
 static unsigned fake_bandwidth_update_count;
@@ -93,6 +94,31 @@ static bool apply_failed_write_once;
 static int32_t state_after_ensm_write = -1;
 static uint8_t fake_regs[1024];
 static unsigned fake_write_counts[1024];
+static uint32_t fake_axi_regs[1024];
+static unsigned fake_axi_read_count;
+static unsigned fake_axi_write_count;
+
+int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
+{
+    (void)base;
+    if (!data || offset / sizeof(uint32_t) >=
+        sizeof(fake_axi_regs) / sizeof(fake_axi_regs[0]))
+        return -EINVAL;
+    ++fake_axi_read_count;
+    *data = fake_axi_regs[offset / sizeof(uint32_t)];
+    return 0;
+}
+
+int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
+{
+    (void)base;
+    if (offset / sizeof(uint32_t) >=
+        sizeof(fake_axi_regs) / sizeof(fake_axi_regs[0]))
+        return -EINVAL;
+    ++fake_axi_write_count;
+    fake_axi_regs[offset / sizeof(uint32_t)] = data;
+    return 0;
+}
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
@@ -163,6 +189,10 @@ int main(void)
     struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
     int32_t ret;
+    struct axi_adc calibration_adc = { .num_channels = 2 };
+    int32_t calib_integer = INT32_MIN;
+    int32_t calib_fraction = INT32_MIN;
+    unsigned axi_accesses_before;
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t rfpll_rate = UINT32_MAX;
@@ -178,6 +208,26 @@ int main(void)
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
     AD9361_RXFIRConfig rx_fir = {0};
     AD9361_TXFIRConfig tx_fir = {0};
+
+    /* AXI calibration helpers must reject invalid channels and pointers
+     * before touching register space; bias is integer-only and initializes
+     * both output components on read. */
+    axi_accesses_before = fake_axi_read_count + fake_axi_write_count;
+    if (axi_adc_set_calib_scale(&calibration_adc, 2, 1, 0) != -EINVAL ||
+        axi_adc_set_calib_bias(NULL, 0, 0, 0) != -EINVAL ||
+        axi_adc_get_calib_scale(&calibration_adc, 0, NULL,
+                                &calib_fraction) != -EINVAL ||
+        axi_adc_get_calib_bias(&calibration_adc, 0, &calib_integer,
+                               NULL) != -EINVAL ||
+        axi_adc_set_calib_bias(&calibration_adc, 0, 3, 1) != -EINVAL ||
+        fake_axi_read_count + fake_axi_write_count != axi_accesses_before)
+        return EXIT_FAILURE;
+    fake_axi_regs[AXI_ADC_REG_CHAN_CNTRL_1(0) / sizeof(uint32_t)] =
+        AXI_ADC_DCFILT_OFFSET(0xfffe);
+    if (axi_adc_get_calib_bias(&calibration_adc, 0, &calib_integer,
+                               &calib_fraction) != 0 ||
+        calib_integer != 0xfffe || calib_fraction != 0)
+        return EXIT_FAILURE;
     struct refclk_scale invalid_rfpll_clock = {0};
     struct refclk_scale invalid_clock_factor = {0};
     phy.spi = &spi;
