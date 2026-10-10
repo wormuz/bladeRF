@@ -194,7 +194,12 @@ int bladerf_open_with_devinfo(struct bladerf **opened_device,
         return BLADERF_ERR_NODEV;
     }
 
-    MUTEX_INIT(&dev->lock);
+    status = MUTEX_INIT(&dev->lock);
+    if (status != THREAD_SUCCESS) {
+        dev->backend->close(dev);
+        free(dev);
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     /* Open board */
     status = dev->board->open(dev, devinfo);

@@ -350,7 +350,12 @@ static int usb_open(struct bladerf *dev, struct bladerf_devinfo *info)
     }
 
     usb->peripheral_desynchronized = false;
-    MUTEX_INIT(&usb->peripheral_lock);
+    status = MUTEX_INIT(&usb->peripheral_lock);
+    if (status != THREAD_SUCCESS) {
+        usb->fn->close(usb->driver);
+        free(usb);
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     /* Default to legacy-mode access until we determine the FPGA is
      * capable of handling newer request formats */

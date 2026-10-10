@@ -299,7 +299,11 @@ int sync_init(struct bladerf_sync *sync,
     /* Deinitialize sync handle if it's initialized */
     sync_deinit(sync);
 
-    MUTEX_INIT(&sync->lock);
+    status = MUTEX_INIT(&sync->lock);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        return status;
+    }
     sync->lock_initialized = true;
 
     switch (layout & BLADERF_DIRECTION_MASK) {
@@ -344,7 +348,11 @@ int sync_init(struct bladerf_sync *sync,
     log_verbose("%s: Samples per msg: %u\n",
                 __FUNCTION__, sync->meta.samples_per_msg);
 
-    MUTEX_INIT(&sync->buf_mgmt.lock);
+    status = MUTEX_INIT(&sync->buf_mgmt.lock);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto error;
+    }
     sync->buf_lock_initialized = true;
     status = COND_INIT(&sync->buf_mgmt.buf_ready);
     if (status != THREAD_SUCCESS) {
@@ -440,7 +448,11 @@ int sync_init(struct bladerf_sync *sync,
         goto error;
     }
 
-    MUTEX_INIT(&sync->rx_epoch_generation_lock);
+    status = MUTEX_INIT(&sync->rx_epoch_generation_lock);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto error;
+    }
     sync->rx_epoch_lock_initialized = true;
     sync->rx_epoch_generation = 0;
     sync->rx_epoch_certified_generation = 0;

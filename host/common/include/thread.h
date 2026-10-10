@@ -58,20 +58,35 @@
 #define THREAD pthread_t
 #define MUTEX pthread_mutex_t
 #define COND pthread_cond_t
+static inline int bladerf_thread_mutex_init(MUTEX *mutex)
+{
 #ifdef ENABLE_LOCK_CHECKS
-#   define MUTEX_INIT(m) do { \
-        int status; \
-        pthread_mutexattr_t mutex_attr; \
-        status = pthread_mutexattr_init(&mutex_attr); \
-        assert(status == 0 && "Mutex attr init failure"); \
-        status = pthread_mutexattr_settype(&mutex_attr, \
-                                           PTHREAD_MUTEX_ERRORCHECK); \
-        assert(status == 0 && "Mutex attr setype failure"); \
-        status = pthread_mutex_init(m, &mutex_attr); \
-        assert(status == 0 && "Mutex init failure"); \
-        (void)status; \
-    } while (0)
+    pthread_mutexattr_t mutex_attr;
+    int status = pthread_mutexattr_init(&mutex_attr);
+    if (status != 0) {
+        return status;
+    }
+    status = pthread_mutexattr_settype(&mutex_attr,
+                                       PTHREAD_MUTEX_ERRORCHECK);
+    if (status == 0) {
+        status = pthread_mutex_init(mutex, &mutex_attr);
+    }
+    const int attr_status = pthread_mutexattr_destroy(&mutex_attr);
+    if (status != 0) {
+        return status;
+    }
+    if (attr_status != 0) {
+        pthread_mutex_destroy(mutex);
+        return attr_status;
+    }
+    return 0;
+#else
+    return pthread_mutex_init(mutex, NULL);
+#endif
+}
+#define MUTEX_INIT(m) bladerf_thread_mutex_init(m)
 
+#ifdef ENABLE_LOCK_CHECKS
 #   define MUTEX_LOCK(m) do { \
         int status = pthread_mutex_lock(m); \
         assert(status == 0 && "Mutex lock failure");\
@@ -91,7 +106,6 @@
     } while (0)
 #else /* ENABLE_LOCK_CHECKS */
 
-#define MUTEX_INIT(m) pthread_mutex_init(m, NULL)
 #define MUTEX_LOCK(m) pthread_mutex_lock(m)
 #define MUTEX_UNLOCK(m) pthread_mutex_unlock(m)
 #define MUTEX_DESTROY(m) pthread_mutex_destroy(m)
@@ -139,14 +153,17 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
 #define MUTEX CRITICAL_SECTION   // For mutexes
 #define COND CONDITION_VARIABLE  // For condition variables
 
-#ifdef ENABLE_LOCK_CHECKS
-#   define MUTEX_INIT(m) do { \
-        int status; \
-        status = mtx_init(m, mtx_plain | mtx_recursive); \
-        assert(status == thrd_success && "Mutex init failure"); \
-        (void)status; \
-    } while (0)
+static inline int bladerf_thread_mutex_init(MUTEX *mutex)
+{
+    if (InitializeCriticalSectionAndSpinCount(mutex, 0)) {
+        return 0;
+    }
+    const DWORD error = GetLastError();
+    return error != ERROR_SUCCESS ? (int)error : ERROR_NOT_ENOUGH_MEMORY;
+}
+#define MUTEX_INIT(m) bladerf_thread_mutex_init(m)
 
+#ifdef ENABLE_LOCK_CHECKS
 #   define MUTEX_LOCK(m) do { \
         int status = mtx_lock(m); \
         assert(status == thrd_success && "Mutex lock failure");\
@@ -164,7 +181,6 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
     } while (0)
 #else /* ENABLE_LOCK_CHECKS */
 
-#define MUTEX_INIT(m) InitializeCriticalSection(m)
 #define MUTEX_LOCK(m) EnterCriticalSection(m)
 #define MUTEX_UNLOCK(m) LeaveCriticalSection(m)
 #define MUTEX_DESTROY(m) DeleteCriticalSection(m)

@@ -2279,9 +2279,12 @@ int bladerf2_rx_fault_monitor_start(struct bladerf *dev)
         log_debug("rx_fault_monitor_start: already running; keeping existing thread\n");
         return 0;
     }
-    MUTEX_INIT(&board_data->rx_fault_monitor_lock);
+    status = MUTEX_INIT(&board_data->rx_fault_monitor_lock);
+    if (status != THREAD_SUCCESS) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
     status = COND_INIT(&board_data->rx_fault_monitor_cond);
-    if (status != 0) {
+    if (status != THREAD_SUCCESS) {
         MUTEX_DESTROY(&board_data->rx_fault_monitor_lock);
         return BLADERF_ERR_UNEXPECTED;
     }

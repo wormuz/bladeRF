@@ -132,6 +132,17 @@ rejects packets exceeding caller capacity before copying. Added source
 regressions for truncated/oversized transfer lengths and output capacity. No
 test/build run under the open source-audit gate.
 
+### Mutex initialization failure propagation
+
+The complete libbladeRF `MUTEX_INIT` call-site inventory contained ignored
+results in device open, USB backend open, bladeRF2 board open, RX fault-monitor
+startup, sync/async stream setup, and sync-worker setup. Those paths could mark
+failed mutexes initialized and then lock or destroy invalid objects during
+normal work/cleanup. `MUTEX_INIT` now returns a status on POSIX and Windows;
+each caller checks it and unwinds only successfully initialized resources.
+This slice has source review and diff checks only; runtime fault injection and
+all builds remain deferred.
+
 ### NIOS scheduled-retune cancel/ISR source pass
 
 The retune2 queue is mutated by the NIOS main-loop packet/work handlers; the

@@ -439,7 +439,11 @@ int async_init_stream(struct bladerf_stream **stream,
     }
 
     memset(lstream, 0, sizeof(*lstream));
-    MUTEX_INIT(&lstream->lock);
+    status = MUTEX_INIT(&lstream->lock);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
     mutex_initialized = true;
 
     if (COND_INIT(&lstream->can_submit_buffer) != THREAD_SUCCESS) {

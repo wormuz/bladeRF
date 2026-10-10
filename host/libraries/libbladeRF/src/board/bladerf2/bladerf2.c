@@ -319,7 +319,12 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         RETURN_ERROR_STATUS("calloc board_data", BLADERF_ERR_MEM);
     }
     dev->board_data = board_data;
-    MUTEX_INIT(&board_data->rx_async_epoch_lock);
+    status = MUTEX_INIT(&board_data->rx_async_epoch_lock);
+    if (status != THREAD_SUCCESS) {
+        free(board_data);
+        dev->board_data = NULL;
+        return BLADERF_ERR_UNEXPECTED;
+    }
     board_data->rx_async_epoch_lock_initialized = true;
     status = COND_INIT(&board_data->rx_async_epoch_cond);
     if (status != THREAD_SUCCESS) {
@@ -330,7 +335,16 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         return BLADERF_ERR_UNEXPECTED;
     }
     board_data->rx_async_epoch_cond_initialized = true;
-    MUTEX_INIT(&board_data->rf_transition_event_lock);
+    status = MUTEX_INIT(&board_data->rf_transition_event_lock);
+    if (status != THREAD_SUCCESS) {
+        COND_DESTROY(&board_data->rx_async_epoch_cond);
+        board_data->rx_async_epoch_cond_initialized = false;
+        MUTEX_DESTROY(&board_data->rx_async_epoch_lock);
+        board_data->rx_async_epoch_lock_initialized = false;
+        free(board_data);
+        dev->board_data = NULL;
+        return BLADERF_ERR_UNEXPECTED;
+    }
     board_data->rf_transition_event_lock_initialized = true;
     board_data->phy = NULL;
     board_data->rfic_init_params = (void *)&bladerf2_rfic_init_params;

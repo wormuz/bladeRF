@@ -657,9 +657,21 @@ int sync_worker_init(struct bladerf_sync *s)
             sync_worker_rx_buffer_rejected;
     }
 
-    MUTEX_INIT(&s->worker->state_lock);
+    status = MUTEX_INIT(&s->worker->state_lock);
+    if (status != THREAD_SUCCESS) {
+        log_debug("%s worker: mutex_init(state_lock) failed: %d\n",
+                  worker2str(s), status);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto worker_init_out;
+    }
     state_lock_initialized = true;
-    MUTEX_INIT(&s->worker->request_lock);
+    status = MUTEX_INIT(&s->worker->request_lock);
+    if (status != THREAD_SUCCESS) {
+        log_debug("%s worker: mutex_init(request_lock) failed: %d\n",
+                  worker2str(s), status);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto worker_init_out;
+    }
     request_lock_initialized = true;
 
     status = COND_INIT(&s->worker->state_changed);
