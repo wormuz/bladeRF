@@ -327,6 +327,28 @@ int main(void)
                 tx_valid_seen |= events[i].event_type ==
                                  BLADERF_RF_EVT_TX_RETUNE_VALID;
             }
+            cursor = next;
+            deadline = monotonic_ms() + 250u;
+            while (!tx_valid_seen && monotonic_ms() < deadline) {
+                next = cursor;
+                status = bladerf_rf_events_get_since(
+                    dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                    &count, &next, &history_complete);
+                if (status != 0 || !history_complete) {
+                    status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+                    goto cleanup;
+                }
+                for (uint32_t i = 0; i < count; ++i) {
+                    tx_valid_seen |= events[i].event_type ==
+                                     BLADERF_RF_EVT_TX_RETUNE_VALID;
+                }
+                cursor = next;
+                if (!tx_valid_seen) {
+                    const struct timespec pause = {.tv_sec = 0,
+                                                   .tv_nsec = 1000000};
+                    nanosleep(&pause, NULL);
+                }
+            }
             if (tx_valid_seen) {
                 fprintf(stderr,
                         "TX-valid was published after transport failure\n");
