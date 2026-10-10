@@ -4885,7 +4885,8 @@ typedef enum {
     BLADERF_RF_EVT_TX_LINK_FAULT,
     /** TX link status, loss counter, or RFIC status could not be read while
      * TX was active. Link, aggregate, RFIC-state, and frequency certificates
-     * are revoked; frequency validity requires a later confirmed retune. */
+     * are revoked; recovery requires a new acknowledged TX stream epoch and
+     * a confirmed retune. */
     BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
     /** TX module was disabled; no active transmission is certified. */
     BLADERF_RF_EVT_TX_STREAM_STOPPED,
@@ -4908,7 +4909,8 @@ typedef enum {
      * waveform quality. */
     BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
     /** AD9361 TX RFPLL, TX/FDD ENSM, or BBPLL status became invalid. TX RFIC
-     * and frequency validity are revoked until a fresh confirmed retune.
+     * and frequency validity are revoked until a new acknowledged TX stream
+     * epoch and a fresh confirmed retune.
      * `rfic_status`
      * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL
      * status in bits 7:0. */
