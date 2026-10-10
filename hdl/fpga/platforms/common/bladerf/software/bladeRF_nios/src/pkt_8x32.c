@@ -245,8 +245,13 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
                 *data = 0;
                 return false;
             }
+#ifdef TX_RETUNE_GATE_STATUS_BASE
             *data = tx_retune_gate_status_read();
             break;
+#else
+            *data = 0;
+            return false;
+#endif
 #endif  // BOARD_BLADERF_MICRO
 
         default:
@@ -327,6 +332,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             break;
 
         case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
+#ifdef RF_LINK_CFG_BASE
             switch (addr) {
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:
                     rf_link_cfg_set_speed(data != 0);
@@ -348,6 +354,11 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     return false;
             }
             break;
+#else
+            (void)addr;
+            (void)data;
+            return false;
+#endif
 
         /* RX data-plane epoch gate control. addr carries the command, same
          * reasoning as RF_LINK_CFG above: bits 0..2 of the underlying word
@@ -411,11 +422,19 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 #endif
                     break;
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE:
+#ifdef TX_RETUNE_GATE_CTRL_BASE
                     tx_retune_gate_complete();
                     break;
+#else
+                    return false;
+#endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT:
+#ifdef TX_RETUNE_GATE_CTRL_BASE
                     tx_retune_gate_abort();
                     break;
+#else
+                    return false;
+#endif
                 default:
                     return false;
             }
