@@ -294,6 +294,13 @@ int bladerf_jump_to_bootloader(struct bladerf *dev)
 
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = dev->backend->jump_to_bootloader(dev);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2038,6 +2045,13 @@ int bladerf_device_reset(struct bladerf *dev)
     }
 
     MUTEX_LOCK(&dev->lock);
+
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
 
     status = dev->board->device_reset(dev);
 

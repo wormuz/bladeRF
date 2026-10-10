@@ -202,3 +202,9 @@ remained visible. Trigger arm/fire now preflight channel, signal, and role;
 then revoke the corresponding RX or TX validity before touching hardware.
 Raw trigger-register writes also preflight channel and signal before fencing.
 Source-only; no build/test under the active no-build audit gate.
+
+The same sweep found reset and bootloader handoff only revoked RX validity.
+Both operations now invoke the TX configuration fence under the device lock
+before issuing the destructive control request, and release the RX
+reservation if TX fencing fails. Source-only; no build/test under the active
+no-build audit gate.
