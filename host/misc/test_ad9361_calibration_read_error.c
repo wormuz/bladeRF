@@ -1536,6 +1536,30 @@ int main(void)
                     "TX attenuation did not retry ambiguous immediate update\n");
             return EXIT_FAILURE;
         }
+
+        /* A partial two-channel update must restore both attenuation words,
+         * including a failed SPI byte that may already have reached the RFIC. */
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_TX1_ATTEN_1] = 0x01;
+        fake_regs[REG_TX1_ATTEN_1 + 1] = 0x23;
+        fake_regs[REG_TX2_ATTEN_1] = 0x04;
+        fake_regs[REG_TX2_ATTEN_1 + 1] = 0x56;
+        fake_regs[REG_TX2_DIG_ATTEN] = IMMEDIATELY_UPDATE_TPC_ATTEN;
+        fail_write_once_reg = REG_TX2_ATTEN_1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_set_tx_atten(&phy, 2000, true, true, true);
+        if (ret != -EIO ||
+            fake_regs[REG_TX1_ATTEN_1] != 0x01 ||
+            fake_regs[REG_TX1_ATTEN_1 + 1] != 0x23 ||
+            fake_regs[REG_TX2_ATTEN_1] != 0x04 ||
+            fake_regs[REG_TX2_ATTEN_1 + 1] != 0x56 ||
+            !(fake_regs[REG_TX2_DIG_ATTEN] &
+              IMMEDIATELY_UPDATE_TPC_ATTEN)) {
+            fprintf(stderr,
+                    "Partial TX1/TX2 attenuation update was not rolled back\n");
+            return EXIT_FAILURE;
+        }
         fail_write_once_reg = -1;
         fail_write_once_reg_occurrence = 1;
         apply_failed_write_once = false;
