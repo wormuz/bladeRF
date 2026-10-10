@@ -1028,6 +1028,8 @@ int main(void)
         struct gain_control gain = {0};
         struct tx_monitor_control txmon = {0};
         struct elna_control elna = {0};
+        AD9361_RXFIRConfig rx_fir = {0};
+        AD9361_TXFIRConfig tx_fir = {0};
         unsigned tx_atten_write_count;
 
         fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
@@ -1112,6 +1114,37 @@ int main(void)
             fprintf(stderr, "TX attenuation accepted empty/missing target\n");
             return EXIT_FAILURE;
         }
+
+        /* A failed ambiguous FIR setup write must still restore the original
+         * register and leave the caller's output structure untouched. */
+        register_map_enabled = true;
+        fake_regs[REG_RX_FILTER_CONFIG] = FIR_SELECT(2) | FIR_NUM_TAPS(3);
+        rx_fir.rx_coef[0] = 0x55aa;
+        fail_write_once_reg = REG_RX_FILTER_CONFIG;
+        ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
+        if (ret != -EIO ||
+            fake_regs[REG_RX_FILTER_CONFIG] !=
+                (FIR_SELECT(2) | FIR_NUM_TAPS(3)) ||
+            rx_fir.rx_coef[0] != 0x55aa) {
+            fprintf(stderr,
+                    "RX FIR getter failed to restore ambiguous setup write\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_regs[REG_TX_FILTER_CONF] = FIR_SELECT(2) | FIR_NUM_TAPS(3);
+        tx_fir.tx_coef[0] = 0x55aa;
+        fail_write_once_reg = REG_TX_FILTER_CONF;
+        ret = ad9361_get_tx_fir_config(&phy, 0, &tx_fir);
+        if (ret != -EIO ||
+            fake_regs[REG_TX_FILTER_CONF] !=
+                (FIR_SELECT(2) | FIR_NUM_TAPS(3)) ||
+            tx_fir.tx_coef[0] != 0x55aa) {
+            fprintf(stderr,
+                    "TX FIR getter failed to restore ambiguous setup write\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        register_map_enabled = false;
 
         fail_write_reg = REG_RX_FAST_LOCK_SETUP_INIT_DELAY;
         ret = ad9361_fastlock_prepare(&phy, false, 0, true);
