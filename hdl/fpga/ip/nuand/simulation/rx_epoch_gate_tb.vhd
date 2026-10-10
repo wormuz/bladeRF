@@ -458,6 +458,7 @@ begin
         wait until falling_edge(clock);
         arm <= '0';
         complete <= '1';
+        samples_in(1).data_v <= '0';
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         complete <= '0';
