@@ -2464,6 +2464,32 @@ int main(void)
         register_map_enabled = false;
     }
 
+    /* A failed FIR/clock transition invalidates the optimization cache. A
+     * retry with the pre-failure bypass value must rerun validation instead
+     * of returning through the old no-op path. */
+    {
+        unsigned bandwidth_updates = fake_bandwidth_update_count;
+        phy.bypass_rx_fir = true;
+        phy.bypass_tx_fir = true;
+        phy.rx_fir_dec = 1;
+        phy.filt_valid = false;
+        phy.fir_config_valid = true;
+        fake_clock_chain_status = -EIO;
+        ret = ad9361_set_rx_fir_en_dis(&phy, 0);
+        if (ret != -EIO || !phy.bypass_rx_fir || phy.fir_config_valid) {
+            fprintf(stderr, "Failed FIR transition retained a valid cache\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_clock_chain_status = 0;
+        ret = ad9361_set_rx_fir_en_dis(&phy, 0);
+        if (ret != 0 || phy.bypass_rx_fir || !phy.fir_config_valid ||
+            fake_bandwidth_update_count != bandwidth_updates + 1) {
+            fprintf(stderr, "FIR retry with cached bypass state was skipped\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
     return EXIT_SUCCESS;
 }
