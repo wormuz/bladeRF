@@ -396,6 +396,18 @@ static inline bool bladerf2_rf_link_stop_required(
     return start_attempted && !rx_direction_active && !tx_direction_active;
 }
 
+/* FPGA_OP is the expected response from legacy gateware with no RF-link
+ * command support. Every other STOP failure, and every failure on protocol
+ * v2, must be returned to the module-disable caller. */
+static inline bool bladerf2_rf_link_stop_failure_actionable(
+    bool epoch_protocol_supported, int stop_status,
+    int legacy_unsupported_status)
+{
+    return stop_status != 0 &&
+           (epoch_protocol_supported ||
+            stop_status != legacy_unsupported_status);
+}
+
 /* Previous-epoch sticky flags and the direction ACK cross independently into
  * sys_clock. Do not let an ACK sampled on the first read outrun the sticky
  * snapshot's CDC path; require the same snapshot for the same generation on

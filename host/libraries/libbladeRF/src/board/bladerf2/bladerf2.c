@@ -1178,7 +1178,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
  * session starts from a link that is down rather than one still standing
  * from a process that has already exited. Best effort -- a gateware that
  * predates the command refuses it, which is the same as not calling it. */
-static void end_rf_link_epoch(struct bladerf *dev)
+static int end_rf_link_epoch(struct bladerf *dev)
 {
     int status = nios_rf_link_cfg_cmd(dev, NIOS_PKT_8x32_RF_LINK_CMD_STOP, 0);
 
@@ -1186,6 +1186,7 @@ static void end_rf_link_epoch(struct bladerf *dev)
         log_debug("%s: link stop not accepted (%s)\n", __FUNCTION__,
                   bladerf_strerror(status));
     }
+    return status;
 }
 
 static int bladerf2_update_channel_enable_masks(
@@ -1349,7 +1350,7 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
     if (bladerf2_rf_link_stop_required(
             shared_epoch_may_have_started,
             board_data->rf_link_dir_on[0], board_data->rf_link_dir_on[1])) {
-        end_rf_link_epoch(dev);
+        (void)end_rf_link_epoch(dev);
     }
 
     return operation_status;
@@ -1562,9 +1563,11 @@ static int bladerf2_enable_module(struct bladerf *dev,
      *
      * So the host ends what the host began, rather than relying on a reset
      * that is not ours to schedule. */
+    uint32_t st = 0;
+    int link_status = nios_rf_link_status_read(dev, &st);
+    const bool rf_link_epoch_supported = link_status == 0 &&
+        (st & RF_LINK_STATUS_VERSION_MASK) == RF_LINK_STATUS_VERSION_2;
     {
-        uint32_t st = 0;
-        int link_status = nios_rf_link_status_read(dev, &st);
 
         /* State of the link as the stream ends, with the epoch still
          * standing -- a STOP or new START clears its sticky fault vector. */
@@ -1698,7 +1701,27 @@ static int bladerf2_enable_module(struct bladerf *dev,
     if (disable_status == 0 && mask_status == 0 &&
         !board_data->rf_link_dir_on[0] &&
         !board_data->rf_link_dir_on[1]) {
-        end_rf_link_epoch(dev);
+        int stop_status = end_rf_link_epoch(dev);
+        /* Old gateware rejects RF-link STOP with FPGA_OP; that is the
+         * documented legacy fallback. On v2, or for any transport/NIOS error,
+         * do not report module disable as successful without STOP completion. */
+        const bool stop_failure_is_actionable =
+            bladerf2_rf_link_stop_failure_actionable(
+                rf_link_epoch_supported, stop_status,
+                BLADERF_ERR_FPGA_OP);
+        if (stop_failure_is_actionable) {
+            if (status == 0) {
+                status = stop_status;
+            }
+            if (BLADERF_CHANNEL_IS_TX(ch)) {
+                bladerf2_tx_stream_set_faulted(board_data, true);
+                board_data->tx_recovery_blocked = true;
+                board_data->tx_status_unavailable_reported = true;
+                bladerf2_tx_stream_event(
+                    dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, st,
+                    stop_status);
+            }
+        }
     }
 
     return status;

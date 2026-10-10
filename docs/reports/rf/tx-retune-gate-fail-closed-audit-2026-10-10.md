@@ -112,3 +112,20 @@ directions are down after rollback, regardless of whether the START response
 arrived. If either direction remains active, STOP is withheld. Added policy
 assertions for ambiguous START, no START, and a still-active RX or TX direction.
 Source-only; regression has not been run and no build/device operation occurred.
+
+## Follow-up: disable must expose FPGA link-stop failure
+
+The disable path called `end_rf_link_epoch()` as a best-effort void helper.
+Even when NIOS failed to acknowledge STOP, RX/TX disable returned success; TX
+had already emitted `TX_STREAM_STOPPED` without a subsequent status-unavailable
+event. The helper now returns the NIOS status. Protocol-v2 STOP failures are
+returned from module disable, and TX publishes `TX_STATUS_UNAVAILABLE` and
+remains recovery-blocked. The documented legacy `BLADERF_ERR_FPGA_OP` response
+is still treated as unsupported-gateware compatibility; other NIOS/transport
+errors are actionable.
+
+The same source pass caught `st` being scoped inside the status-snapshot block
+but referenced after that block when publishing `TX_EPOCH_INVALID`. Moved it
+to the enclosing disable scope. Policy regression source distinguishes v2 STOP
+failure from the legacy unsupported response. No build/test was run under the
+source-audit gate; `git diff --check` is the only validation.
