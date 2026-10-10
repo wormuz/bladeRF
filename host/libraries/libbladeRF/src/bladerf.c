@@ -3118,7 +3118,7 @@ int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, boo
     }
     int status;
     bool previous_enabled;
-    bool gain_applied;
+    bool gain_applied = false;
     bladerf_gain gain_target;
 
     MUTEX_LOCK(&dev->lock);
@@ -3141,14 +3141,22 @@ int bladerf_enable_gain_calibration(struct bladerf *dev, bladerf_channel ch, boo
          * mutate device configuration or leave the setter reservation held. */
         status = 0;
     } else {
-        previous_enabled = dev->gain_tbls[ch].enabled;
-        gain_target = dev->gain_tbls[ch].gain_target;
-        dev->gain_tbls[ch].enabled = en;
-        status = set_gain_locked(dev, ch, gain_target, false, &gain_applied);
-        if (status != 0 && !gain_applied) {
-            /* A failed gain write must not publish a calibration policy that
-             * the hardware never received. RX remains fenced until recovery. */
-            dev->gain_tbls[ch].enabled = previous_enabled;
+        status = 0;
+        if (BLADERF_CHANNEL_IS_TX(ch)) {
+            status = invalidate_tx_data_before_reconfigure(dev);
+        }
+        if (status == 0) {
+            previous_enabled = dev->gain_tbls[ch].enabled;
+            gain_target = dev->gain_tbls[ch].gain_target;
+            dev->gain_tbls[ch].enabled = en;
+            status = set_gain_locked(dev, ch, gain_target, false,
+                                     &gain_applied);
+            if (status != 0 && !gain_applied) {
+                /* A failed gain write must not publish a calibration policy
+                 * that the hardware never received. RX/TX stays fenced until
+                 * the failed operation has been recovered. */
+                dev->gain_tbls[ch].enabled = previous_enabled;
+            }
         }
     }
     MUTEX_UNLOCK(&dev->lock);

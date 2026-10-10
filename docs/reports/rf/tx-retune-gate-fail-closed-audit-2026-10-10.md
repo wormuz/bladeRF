@@ -150,3 +150,13 @@ visible across a changed RFIC configuration. The generic API now calls
 `bladerf_set_gain()`, `bladerf_set_gain_stage()`, and
 `bladerf_set_correction()`. No build/test was run under the source-audit gate;
 `git diff --check` is the only validation.
+
+## Follow-up: TX gain-calibration policy must revoke TX validity
+
+`bladerf_enable_gain_calibration()` can update the TX gain target through
+`set_gain_locked()` when a calibration table is loaded. Its prior implementation
+fenced RX only, allowing a live TX certificate to survive the attenuation
+change. The setter now invokes the common TX fence before changing the policy
+or physical gain. `gain_applied` is initialized false so a fence failure exits
+without reading an indeterminate result flag or changing the policy. No
+build/test was run under the source-audit gate.
