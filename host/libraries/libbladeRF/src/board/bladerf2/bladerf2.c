@@ -6115,9 +6115,42 @@ static int bladerf2_set_pll_refclk_internal(
         bool pll_enabled = false;
         status = bladerf_get_pll_enable(dev, &pll_enabled);
         if (status == 0 && pll_enabled) {
-            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-            dev->board_data->rfic_reference_clock_known = true;
-            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            const uint64_t timeout_ns = 500000000ULL;
+            uint64_t deadline_ns = 0;
+            struct timespec now_ts;
+
+            if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+                status = BLADERF_ERR_UNEXPECTED;
+            } else {
+                deadline_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                              (uint64_t)now_ts.tv_nsec + timeout_ns;
+                for (;;) {
+                    bool locked = false;
+                    status = bladerf_get_pll_lock_state(dev, &locked);
+                    if (status != 0 || locked) {
+                        break;
+                    }
+
+                    if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+                        status = BLADERF_ERR_UNEXPECTED;
+                        break;
+                    }
+                    const uint64_t now_ns =
+                        (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                        (uint64_t)now_ts.tv_nsec;
+                    if (now_ns >= deadline_ns) {
+                        status = BLADERF_ERR_TIMEOUT;
+                        break;
+                    }
+                    usleep(1000);
+                }
+            }
+
+            if (status == 0) {
+                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                dev->board_data->rfic_reference_clock_known = true;
+                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            }
         }
     }
     if (tx_config_reserved) {
