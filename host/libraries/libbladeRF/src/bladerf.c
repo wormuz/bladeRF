@@ -3063,8 +3063,8 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
     }
 
     /* Loading replaces the table and the subsequent gain reset applies that
-     * table to RFIC state. Reserve/fence RX before publishing either change,
-     * then keep the reservation through the gain write. */
+     * table to RFIC state. Fence the affected RX/TX data before publishing
+     * either change, then keep the reservation through the gain write. */
     MUTEX_UNLOCK(&dev->lock);
     lock_held = false;
     status = invalidate_rx_data_before_reconfigure(
@@ -3076,6 +3076,12 @@ int bladerf_load_gain_calibration(struct bladerf *dev, bladerf_channel ch, const
 
     MUTEX_LOCK(&dev->lock);
     lock_held = true;
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            goto error;
+        }
+    }
     status = load_gain_calibration(dev, ch, full_path_bin);
     if (status != 0) {
         log_error("Failed to load calibration\n");

@@ -160,3 +160,12 @@ change. The setter now invokes the common TX fence before changing the policy
 or physical gain. `gain_applied` is initialized false so a fence failure exits
 without reading an indeterminate result flag or changing the policy. No
 build/test was run under the source-audit gate.
+
+## Follow-up: loading TX calibration must fence before table replacement
+
+`bladerf_load_gain_calibration()` invalidated RX and reserved that transition
+before replacing a calibration table and applying the resulting TX gain. For a
+TX channel it lacked the corresponding TX fence. It now calls the shared TX
+configuration invalidation under `dev->lock` after RX invalidation and before
+table loading, so a fence failure exits without publishing the new table.
+No build/test was run under the source-audit gate.
