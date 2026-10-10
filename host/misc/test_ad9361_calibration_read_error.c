@@ -177,7 +177,10 @@ int main(void)
     uint32_t tx_rf_port = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
     uint8_t rx_gc_mode = UINT8_MAX;
+    uint8_t tracking_flag = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
+    AD9361_RXFIRConfig rx_fir = {0};
+    AD9361_TXFIRConfig tx_fir = {0};
     struct refclk_scale invalid_rfpll_clock = {0};
     struct refclk_scale invalid_clock_factor = {0};
     phy.spi = &spi;
@@ -1727,6 +1730,22 @@ int main(void)
 	    ad9361_get_tx_sampling_freq(NULL, &sampling_rate) != -EINVAL ||
 	    bandwidth != UINT32_MAX || sampling_rate != UINT32_MAX) {
 		fprintf(stderr, "RX/TX rate API accepted missing state/output\n");
+		return EXIT_FAILURE;
+	}
+	if (ad9361_set_rx_lo_int_ext(NULL, INT_LO) != -EINVAL ||
+	    ad9361_set_tx_lo_int_ext(NULL, INT_LO) != -EINVAL ||
+	    ad9361_set_rx_fir_config(NULL, rx_fir) != -EINVAL ||
+	    ad9361_set_tx_fir_config(NULL, tx_fir) != -EINVAL ||
+	    ad9361_set_rx_fir_en_dis(NULL, 1) != -EINVAL ||
+	    ad9361_set_tx_fir_en_dis(NULL, 1) != -EINVAL ||
+	    ad9361_get_rx_fir_en_dis(NULL, &tracking_flag) != -EINVAL ||
+	    ad9361_get_tx_fir_en_dis(NULL, &tracking_flag) != -EINVAL ||
+	    ad9361_get_rx_lo_power(NULL, &tracking_flag) != -EINVAL ||
+	    ad9361_get_tx_lo_power(NULL, &tracking_flag) != -EINVAL ||
+	    ad9361_set_tx_auto_cal_en_dis(NULL, 1) != -EINVAL ||
+	    ad9361_get_tx_auto_cal_en_dis(NULL, &tracking_flag) != -EINVAL ||
+	    tracking_flag != UINT8_MAX) {
+		fprintf(stderr, "RX/TX LO/FIR APIs accepted missing state/output\n");
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
