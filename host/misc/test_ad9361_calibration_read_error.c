@@ -187,6 +187,48 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* Public paired-path and diagnostic APIs must reject missing state or
+     * output storage before touching SPI or publishing caller-visible data. */
+    {
+        struct ad9361_rf_phy phy_without_pdata = { .spi = &spi };
+        uint32_t rx_clks[NUM_AD9361_CLKS] = {0};
+        uint32_t tx_clks[NUM_AD9361_CLKS] = {0};
+        uint32_t rate_governor = UINT32_MAX;
+        int32_t temperature = INT32_MAX;
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+
+        if (ad9361_do_mcs(NULL, &phy) != -EINVAL ||
+            ad9361_do_mcs(&phy, NULL) != -EINVAL ||
+            ad9361_set_trx_path_clks(NULL, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_set_trx_path_clks(&phy, NULL, tx_clks) != -EINVAL ||
+            ad9361_set_trx_path_clks(&phy, rx_clks, NULL) != -EINVAL ||
+            ad9361_get_trx_path_clks(NULL, rx_clks, tx_clks) != -EINVAL ||
+            ad9361_get_trx_path_clks(&phy, NULL, tx_clks) != -EINVAL ||
+            ad9361_get_trx_path_clks(&phy, rx_clks, NULL) != -EINVAL ||
+            ad9361_set_no_ch_mode(NULL, 1) != -EINVAL ||
+            ad9361_set_no_ch_mode(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_set_no_ch_mode(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_set_trx_fir_en_dis(NULL, 1) != -EINVAL ||
+            ad9361_set_trx_rate_gov(NULL, 0) != -EINVAL ||
+            ad9361_get_trx_rate_gov(NULL, &rate_governor) != -EINVAL ||
+            ad9361_get_trx_rate_gov(&phy, NULL) != -EINVAL ||
+            ad9361_do_calib(NULL, RFDC_CAL, -1) != -EINVAL ||
+            ad9361_trx_load_enable_fir(NULL, rx_fir, tx_fir) != -EINVAL ||
+            ad9361_do_dcxo_tune_coarse(NULL, 1) != -EINVAL ||
+            ad9361_do_dcxo_tune_coarse(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_do_dcxo_tune_fine(NULL, 1) != -EINVAL ||
+            ad9361_do_dcxo_tune_fine(&phy_without_pdata, 1) != -EINVAL ||
+            ad9361_get_temperature(NULL, &temperature) != -EINVAL ||
+            ad9361_get_temperature(&phy, NULL) != -EINVAL ||
+            read_count != reads_before || write_count != writes_before ||
+            rate_governor != UINT32_MAX || temperature != INT32_MAX) {
+            fprintf(stderr,
+                    "AD9361 paired-path API accepted missing state/output\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Both public LO paths must reject missing objects/output before any
      * dereference or clock/RFIC operation. */
     if (ad9361_set_rx_lo_freq(NULL, 1) != -EINVAL ||
