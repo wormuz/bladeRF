@@ -698,6 +698,11 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
     uint32_t reg;
     size_t i;
 
+    /* A failed port, LO, or calibration step must not leave the cached RFIC
+     * frequency readable as a successful transition. Publish validity only
+     * after the complete direction-specific operation below succeeds. */
+    state->frequency_invalid[dir] = true;
+
     reg = rffe_csr_read();
 
     /* We have to do this for all the channels sharing the same LO. */
@@ -721,10 +726,8 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
 
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_set_tx_lo_freq(state->phy, frequency));
-        state->frequency_invalid[BLADERF_TX] = false;
     } else {
         CHECK_BOOL(ad9361_set_rx_lo_freq(state->phy, frequency));
-        state->frequency_invalid[BLADERF_RX] = false;
 
         /* Rerun RF DC offset calibration when this tune moved far
          * enough from the last point it was calibrated at (see
@@ -749,6 +752,7 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
 
     }
 
+    state->frequency_invalid[dir] = false;
     return true;
 }
 
