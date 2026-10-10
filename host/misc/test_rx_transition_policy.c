@@ -51,6 +51,12 @@ int main(void)
     assert(bladerf2_clock_select_valid(CLOCK_SELECT_ONBOARD));
     assert(bladerf2_clock_select_valid(CLOCK_SELECT_EXTERNAL));
     assert(!bladerf2_clock_select_valid((bladerf_clock_select)2));
+    assert(bladerf2_reference_clock_requires_pll_lock(
+        CLOCK_SELECT_ONBOARD, true));
+    assert(!bladerf2_reference_clock_requires_pll_lock(
+        CLOCK_SELECT_ONBOARD, false));
+    assert(!bladerf2_reference_clock_requires_pll_lock(
+        CLOCK_SELECT_EXTERNAL, true));
     assert(bladerf2_channel_valid(BLADERF_CHANNEL_RX(0)));
     assert(bladerf2_channel_valid(BLADERF_CHANNEL_RX(1)));
     assert(bladerf2_channel_valid(BLADERF_CHANNEL_TX(0)));

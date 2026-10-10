@@ -6566,6 +6566,7 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
 
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    bool wait_for_pll_lock = false;
     if (status != 0) {
         return status;
     }
@@ -6615,7 +6616,8 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                     if (selected_external !=
                         (sel == CLOCK_SELECT_EXTERNAL)) {
                         status = BLADERF_ERR_UNEXPECTED;
-                    } else if (selected_external || !pll_enabled) {
+                    } else if (!bladerf2_reference_clock_requires_pll_lock(
+                                   sel, pll_enabled)) {
                         /* External CLKIN is specified at 38.4 MHz; with the
                          * onboard source, the free-running VCTCXO remains a
                          * nominal reference when its disciplining PLL is off. */
@@ -6623,11 +6625,24 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                         dev->board_data->rfic_reference_clock_known = true;
                         dev->board_data->tx_rf_configuration_invalid_reported = false;
                         MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                    } else {
+                        wait_for_pll_lock = true;
                     }
                 }
             }
         }
     });
+
+    /* Poll outside dev->lock: the lock-state accessor acquires that mutex. */
+    if (status == 0 && wait_for_pll_lock) {
+        status = bladerf2_wait_for_pll_lock(dev);
+        if (status == 0) {
+            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+            dev->board_data->rfic_reference_clock_known = true;
+            dev->board_data->tx_rf_configuration_invalid_reported = false;
+            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+        }
+    }
 
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;

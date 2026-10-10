@@ -20,6 +20,12 @@ static inline bool bladerf2_clock_select_valid(bladerf_clock_select select)
            select == CLOCK_SELECT_EXTERNAL;
 }
 
+static inline bool bladerf2_reference_clock_requires_pll_lock(
+    bladerf_clock_select select, bool pll_enabled)
+{
+    return select == CLOCK_SELECT_ONBOARD && pll_enabled;
+}
+
 static inline bool bladerf2_channel_valid(bladerf_channel channel)
 {
     return channel == BLADERF_CHANNEL_RX(0) ||
