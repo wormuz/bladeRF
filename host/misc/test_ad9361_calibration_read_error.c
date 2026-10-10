@@ -283,6 +283,8 @@ int main(void)
             ad9361_get_trx_rate_gov(NULL, &rate_governor) != -EINVAL ||
             ad9361_get_trx_rate_gov(&phy, NULL) != -EINVAL ||
             ad9361_do_calib(NULL, RFDC_CAL, -1) != -EINVAL ||
+            ad9361_do_calib(&phy, RFDC_CAL, -1) != -EINVAL ||
+            ad9361_do_calib(&phy, UINT32_MAX, -1) != -EINVAL ||
             ad9361_do_calib_timeout(NULL, RFDC_CAL, -1, 1000) != -EINVAL ||
             ad9361_do_calib_timeout(&phy_without_spi, RFDC_CAL, -1, 1000) != -EINVAL ||
             ad9361_do_calib_timeout(&phy, RFDC_CAL, -1, 0) != -EINVAL ||
