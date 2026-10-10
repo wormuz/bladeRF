@@ -880,6 +880,7 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 
 static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                                   bool *epoch_confirmed,
+                                  bool *start_attempted,
                                   bool *start_accepted,
                                   uint32_t *acknowledged_status)
 {
@@ -899,9 +900,11 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     int status;
 
     NULL_CHECK(epoch_confirmed);
+    NULL_CHECK(start_attempted);
     NULL_CHECK(start_accepted);
     NULL_CHECK(acknowledged_status);
     *epoch_confirmed = false;
+    *start_attempted = false;
     *start_accepted = false;
     *acknowledged_status = 0;
 
@@ -986,6 +989,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
      * START: the epoch counter kept running across it in every cycle, so
      * the fabric was never reset and FX3 never re-entered NuandRFLinkStart
      * (which pulses SYS_RST, fx3_firmware/src/rf.c). The step did nothing. */
+    *start_attempted = true;
     status = nios_rf_link_cfg_cmd(
         dev, NIOS_PKT_8x32_RF_LINK_CMD_START, 0);
     if (status != 0) {
@@ -1123,6 +1127,7 @@ static int bladerf2_update_channel_enable_masks(
 static int bladerf2_fail_module_enable(struct bladerf *dev,
                                        bladerf_channel ch,
                                        int operation_status,
+                                       bool shared_epoch_may_have_started,
                                        bool stop_accepted_link_epoch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -1137,7 +1142,7 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
         board_data->rf_link_dir_on[direction] = true;
     }
     (void)bladerf2_update_channel_enable_masks(dev, board_data);
-    if (is_tx || (stop_accepted_link_epoch &&
+    if (is_tx || (shared_epoch_may_have_started &&
                   board_data->rf_link_dir_on[1])) {
         board_data->tx_stream_faulted = true;
         board_data->tx_recovery_blocked = true;
@@ -1191,6 +1196,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         int rx_baseline_status = 0;
         int tx_baseline_status = 0;
         bool epoch_confirmed = false;
+        bool start_attempted = false;
         bool start_accepted = false;
         uint32_t link_ack_status = 0;
 
@@ -1223,22 +1229,25 @@ static int bladerf2_enable_module(struct bladerf *dev,
 
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
-            return bladerf2_fail_module_enable(dev, ch, status, false);
+            return bladerf2_fail_module_enable(dev, ch, status, false, false);
         }
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
             if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false);
+                return bladerf2_fail_module_enable(dev, ch, status, false,
+                                                    false);
             }
         } else {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
             if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false);
+                return bladerf2_fail_module_enable(dev, ch, status, false,
+                                                    false);
             }
         }
         status = announce_rf_link_epoch(dev, ch, &epoch_confirmed,
-                                        &start_accepted, &link_ack_status);
-        if (start_accepted && board_data->rf_link_dir_on[1]) {
+                                        &start_attempted, &start_accepted,
+                                        &link_ack_status);
+        if (start_attempted && board_data->rf_link_dir_on[1]) {
             /* Discard an in-flight TX status sample captured before the
              * shared generation boundary. */
             board_data->tx_channel_state_generation++;
@@ -1249,7 +1258,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
         }
         if (status != 0) {
             return bladerf2_fail_module_enable(
-                dev, ch, status, start_accepted);
+                dev, ch, status, start_attempted, start_accepted);
         }
         if (rx_first_enable) {
             board_data->rx_fpga_loss_count_last = rx_loss_count_baseline;
