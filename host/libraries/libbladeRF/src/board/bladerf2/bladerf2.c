@@ -5789,6 +5789,11 @@ int bladerf_set_rfic_register(struct bladerf *dev,
             board_data->rfic_frequency_model_known = false;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             board_data->rfic_reset_on_close = true;
+            /* Raw register writes can target FIR configuration/enable
+             * registers; the cached enum is no longer authoritative even
+             * when the SPI operation reports an error after taking effect. */
+            board_data->rxfir_known = false;
+            board_data->txfir_known = false;
             status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });

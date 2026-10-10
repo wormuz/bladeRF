@@ -209,6 +209,8 @@ struct bladerf2_board_data {
     /* RFIC FIR Filter status */
     bladerf_rfic_rxfir rxfir;
     bladerf_rfic_txfir txfir;
+    bool rxfir_known;
+    bool txfir_known;
 
     /* If true, RFIC control will be fully de-initialized on close, instead of
      * just put into a standby state. */

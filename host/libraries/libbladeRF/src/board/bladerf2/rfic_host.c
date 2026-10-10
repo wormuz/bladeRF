@@ -30,6 +30,7 @@
 #include "helpers/wallclock.h"
 #include "iterators.h"
 #include "log.h"
+#include "rfic_fir_policy.h"
 
 // #define BLADERF_HOSTED_C_DEBUG
 
@@ -101,6 +102,11 @@ static int _rfic_host_initialize(struct bladerf *dev)
     uint32_t config_gpio;
 
     log_debug("%s: initializating\n", __FUNCTION__);
+
+    /* Reinitialization may replace RFIC state before both filters are
+     * reapplied. Do not preserve an enum cache from a prior owner/session. */
+    board_data->rxfir_known = false;
+    board_data->txfir_known = false;
 
     /* Keep the RF path disconnected until AD9361 init is complete. */
     CHECK_STATUS(_rfic_host_clear_rffe_control(dev));
@@ -944,6 +950,17 @@ static int _rfic_host_get_filter(struct bladerf *dev,
 {
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    if (rxfir != NULL && !board_data->rxfir_known) {
+        log_error("%s: RX FIR configuration is unknown after an incomplete update\n",
+                  __FUNCTION__);
+        return bladerf2_rfic_fir_cache_status(board_data->rxfir_known);
+    }
+    if (txfir != NULL && !board_data->txfir_known) {
+        log_error("%s: TX FIR configuration is unknown after an incomplete update\n",
+                  __FUNCTION__);
+        return bladerf2_rfic_fir_cache_status(board_data->txfir_known);
+    }
+
     if (NULL != rxfir) {
         *rxfir = board_data->rxfir;
     }
@@ -966,6 +983,10 @@ static int _rfic_host_set_filter(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         AD9361_TXFIRConfig *fir_config = NULL;
         uint8_t enable;
+
+        /* Either register programming step may partially change hardware.
+         * Keep the cached enum unavailable until both complete. */
+        board_data->txfir_known = false;
 
         if (BLADERF_RFIC_TXFIR_CUSTOM == txfir) {
             log_warning("custom FIR not implemented, assuming default\n");
@@ -999,9 +1020,14 @@ static int _rfic_host_set_filter(struct bladerf *dev,
         CHECK_AD936X(ad9361_set_tx_fir_en_dis(phy, enable));
 
         board_data->txfir = txfir;
+        board_data->txfir_known = true;
     } else {
         AD9361_RXFIRConfig *fir_config = NULL;
         uint8_t enable;
+
+        /* Either register programming step may partially change hardware.
+         * Keep the cached enum unavailable until both complete. */
+        board_data->rxfir_known = false;
 
         if (BLADERF_RFIC_RXFIR_CUSTOM == rxfir) {
             log_warning("custom FIR not implemented, assuming default\n");
@@ -1035,6 +1061,7 @@ static int _rfic_host_set_filter(struct bladerf *dev,
         CHECK_AD936X(ad9361_set_rx_fir_en_dis(phy, enable));
 
         board_data->rxfir = rxfir;
+        board_data->rxfir_known = true;
     }
 
     return 0;
