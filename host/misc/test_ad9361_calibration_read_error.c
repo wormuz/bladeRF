@@ -1751,22 +1751,51 @@ int main(void)
         fail_write_reg = -1;
 
         /* A later-register failure leaves the preceding tracking writes in
-         * hardware. Repeating the cached old value must replay the complete
-         * register set rather than treating it as a no-op. */
+         * hardware unless the setter actively restores the old complete
+         * tracking register set. */
         {
-            unsigned config2_writes = fake_write_counts[REG_CALIBRATION_CONFIG_2];
-            fail_write_reg = REG_CALIBRATION_CONFIG_1;
+            const uint16_t tracking_regs[] = {
+                REG_CALIBRATION_CONFIG_2,
+                REG_CALIBRATION_CONFIG_3,
+                REG_DC_OFFSET_CONFIG2,
+                REG_RX_QUAD_GAIN2,
+                REG_CALIBRATION_CONFIG_1
+            };
+            uint8_t old_tracking_regs[sizeof(tracking_regs) /
+                                      sizeof(tracking_regs[0])];
+            unsigned config2_writes;
+            size_t i;
+
+            ret = ad9361_tracking_control(&phy, false, false, false);
+            if (ret != 0) {
+                fprintf(stderr, "Unable to establish baseline tracking image\n");
+                return EXIT_FAILURE;
+            }
+            config2_writes = fake_write_counts[REG_CALIBRATION_CONFIG_2];
+            for (i = 0; i < sizeof(tracking_regs) /
+                            sizeof(tracking_regs[0]); i++)
+                old_tracking_regs[i] = fake_regs[tracking_regs[i]];
+
+            fail_write_once_reg = REG_CALIBRATION_CONFIG_1;
             ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 1);
             if (ret != -EIO || phy.rfdc_track_en != 0) {
                 fprintf(stderr, "Partial tracking failure was not reported\n");
                 return EXIT_FAILURE;
             }
-            fail_write_reg = -1;
+            for (i = 0; i < sizeof(tracking_regs) /
+                            sizeof(tracking_regs[0]); i++) {
+                if (fake_regs[tracking_regs[i]] != old_tracking_regs[i]) {
+                    fprintf(stderr,
+                            "Tracking register %u was not restored after failure\n",
+                            tracking_regs[i]);
+                    return EXIT_FAILURE;
+                }
+            }
             ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
             if (ret != 0 ||
-                fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes + 2) {
+                fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes + 3) {
                 fprintf(stderr,
-                        "Retry with cached tracking state did not reapply hardware\n");
+                        "Tracking failure rollback or no-op replay did not run\n");
                 return EXIT_FAILURE;
             }
         }
