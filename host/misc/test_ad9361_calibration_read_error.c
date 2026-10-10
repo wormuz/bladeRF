@@ -920,16 +920,60 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
-        fail_write_reg = REG_RX_FAST_LOCK_SETUP;
+        fail_write_reg = -1;
         phy.fastlock.current_profile[0] = 7;
         fake_regs[REG_RX_FAST_LOCK_SETUP] = RX_FAST_LOCK_MODE_ENABLE;
+        fail_write_once_reg = REG_RX_FAST_LOCK_SETUP;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
         ret = ad9361_fastlock_exit_foreign(&phy, false);
-        if (ret != -EIO || phy.fastlock.current_profile[0] != 7) {
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 0xffu ||
+            (fake_regs[REG_RX_FAST_LOCK_SETUP] & RX_FAST_LOCK_MODE_ENABLE) != 0) {
             fprintf(stderr, "Fastlock exit hid setup write failure: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
         }
-        fail_write_reg = -1;
-        phy.fastlock.current_profile[0] = 0;
+        ret = ad9361_fastlock_prepare(&phy, false, 0, true);
+        if (ret != -EIO) {
+            fprintf(stderr, "RX fastlock prepare accepted unknown cleanup state\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_fastlock_exit_foreign(&phy, false);
+        if (ret != 0 || phy.fastlock.current_profile[0] != 0 ||
+            (fake_regs[REG_RX_FORCE_ALC] & FORCE_ALC_ENABLE) != 0) {
+            fprintf(stderr,
+                    "RX fastlock exit failed to finish cleanup after ambiguous mode clear\n");
+            return EXIT_FAILURE;
+        }
+
+        phy.fastlock.current_profile[1] = 8;
+        fake_regs[REG_TX_FAST_LOCK_SETUP] = RX_FAST_LOCK_MODE_ENABLE;
+        fail_write_once_reg = REG_TX_FAST_LOCK_SETUP;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_fastlock_exit_foreign(&phy, true);
+        if (ret != -EIO || phy.fastlock.current_profile[1] != 0xffu ||
+            (fake_regs[REG_TX_FAST_LOCK_SETUP] & RX_FAST_LOCK_MODE_ENABLE) != 0) {
+            fprintf(stderr,
+                    "TX fastlock exit lost partial-cleanup state: ret=%" PRId32 "\n",
+                    ret);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_fastlock_prepare(&phy, true, 0, true);
+        if (ret != -EIO) {
+            fprintf(stderr, "TX fastlock prepare accepted unknown cleanup state\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_fastlock_exit_foreign(&phy, true);
+        if (ret != 0 || phy.fastlock.current_profile[1] != 0 ||
+            (fake_regs[REG_TX_FORCE_ALC] & FORCE_ALC_ENABLE) != 0) {
+            fprintf(stderr,
+                    "TX fastlock exit failed to finish cleanup after ambiguous mode clear\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = false;
+
         fail_read_reg = REG_RX_INTEGER_BYTE_0;
         fail_write_reg = -1;
         ret = ad9361_fastlock_store(&phy, false, 0);
