@@ -184,11 +184,15 @@ static failure_count test_rx_bc_gain_phase_independence(
     const char *ports[16];
     const char *original_port = NULL;
     const char *bc_port = NULL;
+    const char *original_rx1_port = NULL;
     unsigned int i;
     int port_count, status;
     int16_t original_gain = 0, original_phase = 0;
-    int16_t gain_readback, phase_readback;
+    int16_t original_i = 0, original_q = 0;
+    int16_t gain_readback, phase_readback, i_readback, q_readback;
+    int16_t original_rx1_i = 0, rx1_i_readback;
     bool have_original_corrections = false;
+    bool have_rx1_i_snapshot = false;
     failure_count failures = 0;
 
     port_count = bladerf_get_rf_ports(dev, ch, NULL, 0);
@@ -225,6 +229,28 @@ static failure_count test_rx_bc_gain_phase_independence(
         status = bladerf_get_correction(dev, ch, BLADERF_CORR_PHASE,
                                         &original_phase);
     }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_I,
+                                        &original_i);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_Q,
+                                        &original_q);
+    }
+    if (status == 0 && ch == BLADERF_CHANNEL_RX(1)) {
+        status = bladerf_get_rf_port(dev, BLADERF_CHANNEL_RX(0),
+                                     &original_rx1_port);
+        if (status == 0) {
+            status = bladerf_set_rf_port(dev, BLADERF_CHANNEL_RX(0),
+                                         bc_port);
+        }
+        if (status == 0) {
+            status = bladerf_get_correction(dev, BLADERF_CHANNEL_RX(0),
+                                            BLADERF_CORR_DCOFF_I,
+                                            &original_rx1_i);
+        }
+        have_rx1_i_snapshot = status == 0;
+    }
     if (status != 0) {
         PR_ERROR("Unable to prepare B/C correction independence check: %s\n",
                  bladerf_strerror(status));
@@ -255,12 +281,62 @@ static failure_count test_rx_bc_gain_phase_independence(
         failures++;
     }
 
+    /* RX I and Q offsets share packed AD9361 bytes. In particular, RX2 Q's
+     * upper bits share RX2_INPUT_*_OFFSETS with the RX2 I low bits. */
+    /* 1552 encodes low two bits 10, so RX2 Q writes expose any overwrite of
+     * the I bits packed beside Q in the shared AD9361 register. */
+    status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_I, 1552);
+    if (status == 0) {
+        status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_Q, 512);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_I,
+                                        &i_readback);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_Q,
+                                        &q_readback);
+    }
+    if (status == 0 && have_rx1_i_snapshot) {
+        status = bladerf_get_correction(dev, BLADERF_CHANNEL_RX(0),
+                                        BLADERF_CORR_DCOFF_I,
+                                        &rx1_i_readback);
+    }
+    if (status != 0 || i_readback != 1552 || q_readback != 512) {
+        PR_ERROR("RX%u B/C I/Q offsets aliased or failed "
+                 "(status=%s I=%d Q=%d)\n",
+                 ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                 bladerf_strerror(status),
+                 status == 0 ? i_readback : 0,
+                 status == 0 ? q_readback : 0);
+        failures++;
+    }
+    if (status == 0 && have_rx1_i_snapshot &&
+        rx1_i_readback != original_rx1_i) {
+        PR_ERROR("RX2 B/C Q offset changed RX1 B/C I offset "
+                 "(%d -> %d)\n", original_rx1_i, rx1_i_readback);
+        failures++;
+    }
+
     if (have_original_corrections) {
         int restore_status = bladerf_set_correction(
             dev, ch, BLADERF_CORR_GAIN, original_gain);
         if (restore_status == 0) {
             restore_status = bladerf_set_correction(
                 dev, ch, BLADERF_CORR_PHASE, original_phase);
+        }
+        if (restore_status == 0) {
+            restore_status = bladerf_set_correction(
+                dev, ch, BLADERF_CORR_DCOFF_I, original_i);
+        }
+        if (restore_status == 0) {
+            restore_status = bladerf_set_correction(
+                dev, ch, BLADERF_CORR_DCOFF_Q, original_q);
+        }
+        if (restore_status == 0 && have_rx1_i_snapshot) {
+            restore_status = bladerf_set_correction(
+                dev, BLADERF_CHANNEL_RX(0), BLADERF_CORR_DCOFF_I,
+                original_rx1_i);
         }
         if (restore_status != 0) {
             PR_ERROR("Failed to restore RX correction values: %s\n",
@@ -270,6 +346,15 @@ static failure_count test_rx_bc_gain_phase_independence(
     }
 
 restore_port:
+    if (original_rx1_port != NULL) {
+        int restore_status = bladerf_set_rf_port(
+            dev, BLADERF_CHANNEL_RX(0), original_rx1_port);
+        if (restore_status != 0) {
+            PR_ERROR("Failed to restore RX1 RF port: %s\n",
+                     bladerf_strerror(restore_status));
+            failures++;
+        }
+    }
     if (original_port != NULL) {
         int restore_status = bladerf_set_rf_port(dev, ch, original_port);
         if (restore_status != 0) {

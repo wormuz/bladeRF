@@ -3706,13 +3706,14 @@ static int bladerf2_get_correction(struct bladerf *dev,
             }
         } else {
             if (!is_q) {
-                /*    top: | 9 8 7 6 5 4 3 2 | */
-                /* bottom: | x x x x x x 1 0 | */
-                data = (data_top << 2) | (data_bot & 0x3);
+                /* RX2 I LSBs occupy [7:6], beside RX2 Q in [5:0]. */
+                data = (data_top << 2) | ((data_bot >> 6) & 0x3);
             } else {
                 /*    top: | x x 9 8 7 6 5 4 | */
                 /* bottom: | 3 2 1 0 x x x x | */
-                data = (data_top << 4) | (data_bot >> 4);
+                /* RX2 Q shares the top register with RX2 I. Keep only its
+                 * six Q MSBs and ignore the RX2 I bits in [7:6]. */
+                data = ((data_top & 0x3f) << 4) | (data_bot >> 4);
             }
         }
 
@@ -3843,15 +3844,16 @@ static int bladerf2_set_correction(struct bladerf *dev,
             }
         } else {
             if (!is_q) {
-                /*    top: | 9 8 7 6 5 4 3 2 | */
-                /* bottom: | x x x x x x 1 0 | */
+                /* Preserve RX2 Q MSBs in [5:0]. */
                 data_top = (data >> 2) & 0xff;
-                data_bot = (data_bot & 0xfc) | (data & 0x03);
+                data_bot = (data_bot & 0x3f) | ((data & 0x03) << 6);
             } else {
                 /*    top: | x x 9 8 7 6 5 4 | */
                 /* bottom: | 3 2 1 0 x x x x | */
-                data_top = (data & 0xc0) | ((data >> 4) & 0x3f);
-                data_bot = (data & 0x0f) | ((data & 0x0f) << 4);
+                /* Preserve RX2 I's two LSBs sharing this register. */
+                data_top = (data_top & 0xc0) | ((data >> 4) & 0x3f);
+                /* Preserve RX1 I MSBs in the shared lower nibble. */
+                data_bot = (data_bot & 0x0f) | ((data & 0x0f) << 4);
             }
         }
 
