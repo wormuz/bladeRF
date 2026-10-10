@@ -323,7 +323,8 @@ struct bladerf2_board_data {
     bool test_fpga_load_failure_injected;
 #endif
     bool rx_format_unsupported_reported;
-    bool rx_async_data_withheld_reported;
+    /* Distinct withholding causes each get one event per active interval. */
+    uint32_t rx_async_data_withheld_reported_reasons;
     /* Set while the current epoch has an unannounced/active invalid data
      * interval. Cleared only after a host-validated packet is published. */
     bool rx_async_data_withheld_active;

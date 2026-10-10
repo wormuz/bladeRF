@@ -578,8 +578,9 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
          * epoch gate itself is disabled. Record each occurrence. */
         should_report = true;
     } else if (board_data->rf_transition_epoch_contract_enabled &&
-               !board_data->rx_async_data_withheld_reported) {
-        board_data->rx_async_data_withheld_reported = true;
+               (board_data->rx_async_data_withheld_reported_reasons &
+                reason) != reason) {
+        board_data->rx_async_data_withheld_reported_reasons |= reason;
         should_report = true;
     }
     epoch_id = explicit_source ? event_epoch_id :
@@ -712,7 +713,7 @@ void bladerf2_rx_data_rearm_notifications_locked(
     struct bladerf2_board_data *board_data)
 {
     board_data->rx_format_unsupported_reported = false;
-    board_data->rx_async_data_withheld_reported = false;
+    board_data->rx_async_data_withheld_reported_reasons = 0;
     board_data->rx_async_timestamp_discontinuity_reported = false;
 }
 
@@ -750,7 +751,8 @@ void bladerf2_rx_data_note_first_packet_at_locked(
             board_data->rx_channel_enable_mask)) {
         bladerf2_rx_transition_fail_first_host_data_locked(
             board_data, BLADERF_ERR_UNSUPPORTED);
-        if (!board_data->rx_async_data_withheld_active) {
+        if ((board_data->rx_async_data_withheld_reported_reasons &
+             BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION) == 0) {
             event.host_monotonic_ns = monotonic_ns();
             event.fpga_timestamp = metadata->timestamp;
             event.transaction_id = epoch_event->transaction_id;
@@ -769,6 +771,8 @@ void bladerf2_rx_data_note_first_packet_at_locked(
             MUTEX_LOCK(&board_data->rf_transition_event_lock);
             bladerf2_rf_event_append_locked(board_data, &event);
             MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+            board_data->rx_async_data_withheld_reported_reasons |=
+                BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION;
             board_data->rx_async_data_withheld_active = true;
         }
         return;

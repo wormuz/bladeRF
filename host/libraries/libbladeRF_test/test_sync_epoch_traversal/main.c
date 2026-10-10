@@ -940,7 +940,7 @@ static void test_async_data_withheld_event(void)
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 1);
+    assert(board_data->rf_transition_event_count == 2);
     const struct bladerf_rf_event *event =
         &board_data->rf_transition_events[0];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
@@ -951,6 +951,21 @@ static void test_async_data_withheld_event(void)
               BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
            BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     assert(event->fpga_state == BLADERF_RF_STATE_RX_DATA_INVALID);
+    event = &board_data->rf_transition_events[1];
+    assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert((event->flags &
+            ~(BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+           BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+
+    /* Repeats of either cause remain coalesced within the same active
+     * withholding interval. */
+    bladerf2_rx_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    bladerf2_rx_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
+    assert(board_data->rf_transition_event_count == 2);
 
     /* Model the rearm performed after a certified packet. A later fault in
      * this same epoch must produce a fresh notification. */
@@ -959,21 +974,21 @@ static void test_async_data_withheld_event(void)
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH);
-    assert(board_data->rf_transition_event_count == 2);
+    assert(board_data->rf_transition_event_count == 3);
 
     /* Explicit invalidation also rearms notification coalescing. */
     bladerf2_rx_data_withheld_reset(&dev);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
-    assert(board_data->rf_transition_event_count == 3);
+    assert(board_data->rf_transition_event_count == 4);
 
     board_data->rf_transition_epoch_contract_enabled = false;
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 4);
-    event = &board_data->rf_transition_events[3];
+    assert(board_data->rf_transition_event_count == 5);
+    event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert((event->flags &
             ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
@@ -981,8 +996,8 @@ static void test_async_data_withheld_event(void)
            BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     bladerf2_rx_data_withheld(
         &dev, BLADERF_RF_WITHHELD_USB_OVERFLOW);
-    assert(board_data->rf_transition_event_count == 5);
-    event = &board_data->rf_transition_events[4];
+    assert(board_data->rf_transition_event_count == 6);
+    event = &board_data->rf_transition_events[5];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert((event->flags &
             ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
@@ -991,8 +1006,8 @@ static void test_async_data_withheld_event(void)
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_async_stream_overrun(&dev);
     MUTEX_UNLOCK(&dev.lock);
-    assert(board_data->rf_transition_event_count == 6);
-    event = &board_data->rf_transition_events[5];
+    assert(board_data->rf_transition_event_count == 7);
+    event = &board_data->rf_transition_events[6];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
     assert((event->flags &
             ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
@@ -1111,6 +1126,9 @@ static void test_host_data_event_uses_epoch_snapshot(void)
     board_data.rx_channel_enable_mask = 0x1;
     board_data.rf_transition_first_host_data_required = true;
     board_data.rf_transition_first_host_data_reported = false;
+    /* An earlier independent loss reason must not hide this layout cause. */
+    bladerf2_rx_data_withheld(
+        &dev, BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
     metadata.timestamp = 1004;
     MUTEX_LOCK(&board_data.rx_async_epoch_lock);
     bladerf2_rx_data_note_first_packet_locked(&board_data, &metadata,
