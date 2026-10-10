@@ -2001,41 +2001,54 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_counter_reset = false;
             bool report_unavailable = false;
             WITH_MUTEX(&dev->lock, {
-                report_unavailable =
-                    (tx_retune2_status != 0 ||
-                     tx_retune2_success_status != 0) &&
-                    !board_data->tx_status_unavailable_reported;
-                if (report_unavailable) {
-                    board_data->tx_status_unavailable_reported = true;
-                    board_data->tx_retune2_completion_faulted = true;
-                    board_data->tx_retune_recovery_pending = true;
-                } else if (tx_retune2_status == 0 &&
-                           tx_retune2_success_status == 0) {
-                    if (!board_data->tx_retune2_failure_count_valid) {
-                        board_data->tx_retune2_failure_count_last =
-                            tx_retune2_failure_count;
-                        board_data->tx_retune2_failure_count_valid = true;
-                        report_failure = tx_retune2_failure_count != 0;
-                    } else if (tx_retune2_failure_count !=
-                               board_data->tx_retune2_failure_count_last) {
-                        report_failure = tx_retune2_failure_count >
-                            board_data->tx_retune2_failure_count_last;
-                        report_counter_reset = tx_retune2_failure_count <
-                            board_data->tx_retune2_failure_count_last;
-                        board_data->tx_retune2_failure_count_last =
-                            tx_retune2_failure_count;
-                    }
-                    if (report_failure || report_counter_reset) {
+                /* TX may have been enabled after the polling decision. Leave
+                 * the counter baseline untouched so the active-link pass can
+                 * process the same observation and abort the FPGA gate. */
+                if (!board_data->rf_link_dir_on[1]) {
+                    report_unavailable =
+                        (tx_retune2_status != 0 ||
+                         tx_retune2_success_status != 0) &&
+                        !board_data->tx_status_unavailable_reported;
+                    if (report_unavailable) {
+                        board_data->tx_status_unavailable_reported = true;
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         board_data->tx_retune2_completion_faulted = true;
-                        board_data->tx_retune2_pending_count = 0;
                         board_data->tx_retune2_applied_waiting_rf_valid = false;
+                        board_data->tx_retune2_pending_count = 0;
                         for (unsigned int i = 0; i <
                              NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
                             board_data->tx_retune2_pending[i].valid = false;
                         }
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         board_data->tx_retune_recovery_pending = true;
+                    } else if (tx_retune2_status == 0 &&
+                               tx_retune2_success_status == 0) {
+                        if (!board_data->tx_retune2_failure_count_valid) {
+                            board_data->tx_retune2_failure_count_last =
+                                tx_retune2_failure_count;
+                            board_data->tx_retune2_failure_count_valid = true;
+                            report_failure = tx_retune2_failure_count != 0;
+                        } else if (tx_retune2_failure_count !=
+                                   board_data->tx_retune2_failure_count_last) {
+                            report_failure = tx_retune2_failure_count >
+                                board_data->tx_retune2_failure_count_last;
+                            report_counter_reset = tx_retune2_failure_count <
+                                board_data->tx_retune2_failure_count_last;
+                            board_data->tx_retune2_failure_count_last =
+                                tx_retune2_failure_count;
+                        }
+                        if (report_failure || report_counter_reset) {
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            board_data->tx_retune2_completion_faulted = true;
+                            board_data->tx_retune2_pending_count = 0;
+                            board_data->tx_retune2_applied_waiting_rf_valid = false;
+                            for (unsigned int i = 0; i <
+                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                board_data->tx_retune2_pending[i].valid = false;
+                            }
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            board_data->tx_retune_recovery_pending = true;
+                        }
                     }
                 }
             });
