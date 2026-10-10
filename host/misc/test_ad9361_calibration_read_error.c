@@ -1352,6 +1352,36 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_write_counts[REG_SDM_CTRL_1] = 0;
+        fail_write_once_reg = REG_SDM_CTRL_1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = true;
+        ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
+        if (ret != -EIO || fake_regs[REG_SDM_CTRL_1] != BBPLL_RESET_BAR ||
+            fake_write_counts[REG_SDM_CTRL_1] != 2) {
+            fprintf(stderr,
+                    "BBPLL failed calibration-start write skipped cleanup\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_write_counts[REG_SDM_CTRL_1] = 0;
+        fail_write_once_reg = REG_SDM_CTRL_1;
+        fail_write_once_reg_occurrence = 2;
+        apply_failed_write_once = true;
+        ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
+        if (ret != -EIO || fake_regs[REG_SDM_CTRL_1] != BBPLL_RESET_BAR ||
+            fake_write_counts[REG_SDM_CTRL_1] != 3) {
+            fprintf(stderr,
+                    "BBPLL failed calibration-clear write skipped cleanup\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = false;
+        register_map_enabled = false;
     }
 
     {
