@@ -1624,6 +1624,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = false;
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
+            board_data->tx_rfic_state_valid_reported = false;
+            board_data->tx_rfic_state_invalid_reported = false;
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         }
