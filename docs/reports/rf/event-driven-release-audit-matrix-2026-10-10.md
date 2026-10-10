@@ -380,3 +380,13 @@ preserve zero data but return packet failure; valid address ranges remain
 unchanged. The existing generic packet regression compiles without the xA4
 board macro and cannot exercise these guarded branches, so add a board-path
 packet regression before the source-audit gate closes. No build or test run.
+
+A direct source review of `rx_fault_monitor_task()` confirmed its certified-RX
+failure handling order: channel-mask read failure/change, FPGA status transport
+failure or loss of current/valid/active bits, loss-counter read/reset, RFIC
+status read failure, PLL unlock, ENSM departure, BBPLL unlock, and sticky RX
+fault each enter the epoch-scoped invalidation path. That path revokes sync and
+async admission and durably appends `RX_DATA_INVALIDATED` before the monitor
+attempts FPGA ABORT; abort failure and the stream-overrun notification are
+reported separately. This source slice found no monitor fail-open. Runtime
+fault injection and RX1/RX2 exact-image qualification remain open.
