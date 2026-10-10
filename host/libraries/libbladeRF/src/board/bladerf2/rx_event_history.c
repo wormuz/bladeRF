@@ -340,14 +340,20 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
     if (event_type != BLADERF_RF_EVT_TX_RETUNE_VALID) {
         board_data->tx_async_rfic_state_certified = false;
     }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
     event.requested_rx_lo_hz = requested_frequency_hz;
     event.readback_rx_lo_hz = readback_frequency_hz;
     event.flags = flags;
     event.error_code = error_code;
-    bladerf2_rf_event_append(board_data, &event);
+    /* Keep TX validity and its durable event ordered as one state change.
+     * Otherwise a concurrent positive event can be recorded before this
+     * stale invalidation and leave event consumers with the wrong final
+     * state. */
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    bladerf2_rf_event_append_locked(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
@@ -364,13 +370,17 @@ void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
 
     board_data = dev->board_data;
     event.host_monotonic_ns = monotonic_ns();
-    event.epoch_id = board_data->rf_transition_epoch_id;
     event.rfic_status = link_status;
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
     event.flags = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
     event.error_code = BLADERF_ERR_FPGA_OP;
 
+    /* Snapshot and publish under the same epoch lock as transition events.
+     * A START status can arrive while host state is advancing to a new RX
+     * epoch; do not let the fault's identity drift between those operations. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = board_data->rf_transition_epoch_id;
     MUTEX_LOCK(&board_data->rf_transition_event_lock);
     first = (board_data->rf_transition_event_head +
              BLADERF2_RF_EVENT_HISTORY_SIZE -
@@ -391,6 +401,7 @@ void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
         bladerf2_rf_event_append_locked(board_data, &event);
     }
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rf_event_append_rx_invalidation_locked(

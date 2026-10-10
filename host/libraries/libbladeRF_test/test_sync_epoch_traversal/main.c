@@ -699,6 +699,7 @@ static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
 
     dev.board_data = &board_data;
     board_data.rf_transition_epoch_id = 23;
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
     assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
     board_data.rf_transition_event_lock_initialized = true;
 
@@ -738,8 +739,10 @@ static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
            1840000000ULL);
     assert(board_data.rf_transition_events[3].readback_rx_lo_hz ==
            1840000000ULL);
+    assert(!board_data.tx_async_rfic_state_certified);
 
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;
