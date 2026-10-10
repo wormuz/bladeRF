@@ -143,13 +143,17 @@ unbuilt/unrun under the source-audit gate.
 ## Follow-up: unsupported TX gain-mode request has no stream side effects
 
 The generic TX gain-mode path was initially treated as a missing TX fence.
-Source tracing showed that both bladeRF2 gain-mode callbacks return success
-without changing RFIC state for TX, and every board reports zero TX gain modes.
+Source tracing showed that both bladeRF2 gain-mode callbacks had returned
+success without changing RFIC state for TX, and every board reports zero TX
+gain modes.
 Adding a fence would therefore have stopped/revoked a live TX stream for a
 no-op. The API now validates the channel and returns
 `BLADERF_ERR_UNSUPPORTED` for TX before RX/TX invalidation or board dispatch.
 This also avoids a misleading successful result. The earlier fence-only
-implementation was removed. Source-only; no build/test under the audit gate.
+implementation was removed. A follow-up API-boundary pass validates the
+gain-mode enum before invalidation, and both bladeRF2 RFIC callbacks now return
+`BLADERF_ERR_UNSUPPORTED` for TX. Source-only; no build/test under the audit
+gate.
 
 ## Follow-up: TX gain-calibration policy must revoke TX validity
 

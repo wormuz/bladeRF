@@ -676,9 +676,9 @@ static int _rfic_host_set_gain_mode(struct bladerf *dev,
     bool ok;
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
-        log_warning("%s: automatic gain control not valid for TX channels\n",
-                    __FUNCTION__);
-        return 0;
+        log_debug("%s: gain-control modes are unsupported on TX channels\n",
+                  __FUNCTION__);
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     /* Channel conversion */

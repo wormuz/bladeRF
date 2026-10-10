@@ -662,9 +662,9 @@ static int _rfic_fpga_set_gain_mode(struct bladerf *dev,
                                     bladerf_gain_mode mode)
 {
     if (BLADERF_CHANNEL_IS_TX(ch)) {
-        log_warning("%s: automatic gain control not valid for TX channels\n",
-                    __FUNCTION__);
-        return 0;
+        log_debug("%s: gain-control modes are unsupported on TX channels\n",
+                  __FUNCTION__);
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     return _rfic_cmd_write(dev, ch, BLADERF_RFIC_COMMAND_GAINMODE, mode);

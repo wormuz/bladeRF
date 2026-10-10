@@ -54,6 +54,20 @@ static bool valid_public_channel(bladerf_channel ch)
 {
     return bladerf_public_channel_valid(ch);
 }
+
+static bool valid_gain_mode(bladerf_gain_mode mode)
+{
+    switch (mode) {
+        case BLADERF_GAIN_DEFAULT:
+        case BLADERF_GAIN_MGC:
+        case BLADERF_GAIN_FASTATTACK_AGC:
+        case BLADERF_GAIN_SLOWATTACK_AGC:
+        case BLADERF_GAIN_HYBRID_AGC:
+            return true;
+        default:
+            return false;
+    }
+}
 #include "conversions.h"
 #include "driver/fx3_fw.h"
 #include "device_calibration.h"
@@ -760,10 +774,12 @@ int bladerf_set_gain_mode(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
-    /* No current bladeRF board exposes a TX gain-control mode. In
-     * particular, bladeRF2's RFIC callbacks historically treated this as a
-     * successful no-op. Reject it before invalidating RX/TX state so an
-     * unsupported request cannot disturb a live stream. */
+    if (!valid_gain_mode(mode)) {
+        return BLADERF_ERR_INVAL;
+    }
+    /* No current bladeRF board exposes a TX gain-control mode. Reject it
+     * before invalidating RX/TX state so an unsupported request cannot
+     * disturb a live stream. */
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         return BLADERF_ERR_UNSUPPORTED;
     }
