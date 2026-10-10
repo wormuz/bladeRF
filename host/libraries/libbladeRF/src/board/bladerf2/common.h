@@ -378,6 +378,8 @@ void bladerf2_tx_stream_set_epoch_id(
 void bladerf2_tx_stream_new_epoch(struct bladerf2_board_data *board_data);
 void bladerf2_tx_async_transport_failure(struct bladerf *dev,
                                          int error_code);
+bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
+                                       uint32_t link_status);
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status);
 void bladerf2_rf_event_append_locked(

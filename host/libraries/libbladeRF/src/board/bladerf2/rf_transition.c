@@ -198,8 +198,6 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
     epoch_id = board_data->tx_async_link_epoch_id;
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
     if (report) {
         event.host_monotonic_ns = _monotonic_ns();
         event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
@@ -208,6 +206,34 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
         event.error_code = error_code;
         bladerf2_rf_event_append(board_data, &event);
     }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
+                                       uint32_t link_status)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return false;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->tx_async_transport_faulted) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return false;
+    }
+
+    board_data->tx_stream_faulted_async = false;
+    event.host_monotonic_ns = _monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_TX_STATUS_RECOVERED;
+    event.epoch_id = (uint8_t)(link_status >> 20);
+    event.fpga_state = BLADERF_RF_STATE_IDLE;
+    bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return true;
 }
 
 static bool _deadline_expired(uint64_t deadline_ns)
@@ -862,7 +888,6 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_epoch_invalid = false;
             bool report_tx_underrun = false;
             bool counter_reset = false;
-            bool report_tx_recovered = false;
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
                 ((rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
@@ -927,8 +952,8 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_fault && !report_tx_underrun &&
                         !counter_reset) {
                         board_data->tx_status_unavailable_reported = false;
-                        bladerf2_tx_stream_set_faulted(board_data, false);
-                        report_tx_recovered = true;
+                        (void)bladerf2_tx_status_recovery_event(
+                            dev, rf_link_status);
                     }
 
                 /* Keep the software TX validity state and its durable event
@@ -960,11 +985,6 @@ static void *rx_fault_monitor_task(void *arg)
                             dev, BLADERF_RF_EVT_TX_COUNTER_RESET,
                             tx_loss_count, rf_link_status,
                             BLADERF_ERR_UNEXPECTED);
-                    }
-                    if (report_tx_recovered) {
-                        bladerf2_tx_stream_event(
-                            dev, BLADERF_RF_EVT_TX_STATUS_RECOVERED, 0,
-                            rf_link_status, 0);
                     }
                 }
             });
