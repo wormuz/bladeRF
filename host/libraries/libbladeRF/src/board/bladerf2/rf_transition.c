@@ -2350,13 +2350,18 @@ int bladerf2_rx_transition_call_enter(
         return BLADERF_ERR_INVAL;
     }
     *board_data_out = NULL;
+    /* Preserve the public API's early rejection contract for unsupported
+     * boards: test/mocked handles may not have an initialized device mutex. */
+    if (dev->board != &bladerf2_board_fns) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
 
     /* dev->lock serializes entry with the close path's teardown. Count the
      * operation before releasing it; pre-close waits for this count before
      * generic close can acquire dev->lock and free board_data. */
     MUTEX_LOCK(&dev->lock);
-    if (dev->board != &bladerf2_board_fns || dev->board_data == NULL) {
-        status = BLADERF_ERR_UNSUPPORTED;
+    if (dev->board_data == NULL) {
+        status = BLADERF_ERR_INVAL;
     } else {
         board_data = dev->board_data;
         if (!board_data->rx_async_epoch_lock_initialized ||
