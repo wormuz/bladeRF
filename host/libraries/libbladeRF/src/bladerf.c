@@ -1857,17 +1857,32 @@ int bladerf_stream(struct bladerf_stream *stream, bladerf_channel_layout layout)
         return BLADERF_ERR_UNSUPPORTED;
     }
 
+    MUTEX_LOCK(&stream->lock);
+    if (stream->deinit_requested) {
+        MUTEX_UNLOCK(&stream->lock);
+        return BLADERF_ERR_ABORTED;
+    }
+    stream->active_stream_calls++;
+    MUTEX_UNLOCK(&stream->lock);
+
     /* Async stream start configures shared FPGA sample-format controls too.
      * Revoke RX validity for either direction before the board starts it. */
     status = invalidate_rx_data_before_reconfigure(
         stream->dev, BLADERF_CHANNEL_RX(0),
         BLADERF_RF_INVALIDATE_STREAM_CONFIG);
     if (status != 0) {
-        return status;
+        goto stream_call_done;
     }
 
     status = stream->dev->board->stream(stream, layout);
     rx_reconfigure_complete(stream->dev, BLADERF_CHANNEL_RX(0));
+
+stream_call_done:
+    MUTEX_LOCK(&stream->lock);
+    if (stream->active_stream_calls > 0) {
+        stream->active_stream_calls--;
+    }
+    MUTEX_UNLOCK(&stream->lock);
     return status;
 }
 

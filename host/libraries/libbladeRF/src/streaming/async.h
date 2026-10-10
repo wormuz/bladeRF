@@ -60,6 +60,8 @@ struct bladerf_stream {
     int error_code;
     bladerf_stream_state state;
     bool shutdown_requested;
+    bool deinit_requested;
+    unsigned int active_stream_calls;
     /* Protected by lock; coalesces event-only callbacks while continuous RX
      * data is withheld. */
     bool rx_withheld_notice_active;

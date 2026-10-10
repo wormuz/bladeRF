@@ -3256,10 +3256,14 @@ int CALL_CONV bladerf_submit_stream_buffer_nb(struct bladerf_stream *stream,
 
 
 /**
- * Deinitialize and deallocate stream resources.
+ * Stop an active stream, drain its backend transfers and callbacks, then
+ * deinitialize and deallocate stream resources. This call may wait for an
+ * in-flight TX transfer to finish or time out before releasing its buffer.
  *
- * @pre  Stream is no longer being used (via bladerf_submit_stream_buffer() or
- *       bladerf_stream() calls.)
+ * @pre  No other thread may submit buffers to this stream while it is being
+ *       deinitialized. A running bladerf_stream() loop is stopped by this
+ *       call and allowed to return through its board cleanup path; do not
+ *       call deinit from inside the stream callback.
  *
  * @post Stream is deallocated and may no longer be used.
  *

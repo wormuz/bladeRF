@@ -576,6 +576,10 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
     struct bladerf *dev = stream->dev;
 
     MUTEX_LOCK(&stream->lock);
+    if (stream->deinit_requested) {
+        MUTEX_UNLOCK(&stream->lock);
+        return BLADERF_ERR_ABORTED;
+    }
     stream->layout = layout;
     /* error_code belongs to this run. Sync workers may restart the same
      * backend stream after a terminal transfer error; carry no stale result
@@ -674,6 +678,7 @@ error:
 
 void async_deinit_stream(struct bladerf_stream *stream)
 {
+    int status;
     size_t i;
     unsigned int wait_seconds = 0;
     bladerf_stream_state state;
@@ -684,10 +689,24 @@ void async_deinit_stream(struct bladerf_stream *stream)
         return;
     }
 
+    MUTEX_LOCK(&stream->lock);
+    stream->deinit_requested = true;
+    MUTEX_UNLOCK(&stream->lock);
+
+    /* Public async streams may still be running when their owner deinitializes
+     * them. Request backend cancellation here as well as from sync-worker
+     * teardown, then wait until callbacks and transfer storage are drained. */
+    status = async_request_stream_shutdown(stream);
+    if (status != 0) {
+        log_warning("Failed to request async stream shutdown: %s\n",
+                    bladerf_strerror(status));
+    }
+
     do {
         MUTEX_LOCK(&stream->lock);
         state = stream->state;
-        terminal = state == STREAM_DONE || state == STREAM_IDLE;
+        terminal = (state == STREAM_DONE || state == STREAM_IDLE) &&
+                   stream->active_stream_calls == 0;
         MUTEX_UNLOCK(&stream->lock);
 
         if (terminal) {
