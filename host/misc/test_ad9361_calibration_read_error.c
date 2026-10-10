@@ -156,10 +156,12 @@ int main(void)
     int32_t ret;
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
+    uint32_t rfpll_rate = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
     uint8_t rx_gc_mode = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
+    struct refclk_scale invalid_rfpll_clock = {0};
     phy.spi = &spi;
     phy.pdata = &pdata;
 
@@ -174,6 +176,71 @@ int main(void)
         lo_frequency != UINT64_MAX) {
         fprintf(stderr, "AD9361 LO APIs accepted missing arguments\n");
         return EXIT_FAILURE;
+    }
+
+    invalid_rfpll_clock.phy = &phy;
+    invalid_rfpll_clock.spi = &spi;
+    invalid_rfpll_clock.source = NUM_AD9361_CLKS;
+    if (ad9361_rfpll_int_recalc_rate_checked(NULL, 1, &rfpll_rate) != -EINVAL ||
+        ad9361_rfpll_int_round_rate(NULL, 1000000000, NULL) != -EINVAL ||
+        ad9361_rfpll_recalc_rate_checked(NULL, &rfpll_rate) != -EINVAL ||
+        ad9361_rfpll_round_rate(NULL, 1000000000) != -EINVAL ||
+        ad9361_rfpll_set_rate(NULL, 1000000000) != -EINVAL ||
+        ad9361_clk_mux_set_parent(NULL, 0) != -EINVAL ||
+        ad9361_rfpll_dummy_recalc_rate(NULL) != 0 ||
+        ad9361_rfpll_dummy_set_rate(NULL, 1000000000) != -EINVAL ||
+        ad9361_rfpll_set_rate(&invalid_rfpll_clock, 1000000000) != -EINVAL ||
+        ad9361_rfpll_round_rate(&invalid_rfpll_clock, 1000000000) != -EINVAL ||
+        ad9361_clk_mux_set_parent(&invalid_rfpll_clock, 2) != -EINVAL ||
+        ad9361_rfpll_int_recalc_rate_checked(
+            &invalid_rfpll_clock, 1, &rfpll_rate) != -EINVAL ||
+        ad9361_rfpll_int_round_rate(
+            &invalid_rfpll_clock, 1000000000, NULL) != -EINVAL ||
+        rfpll_rate != UINT32_MAX || read_count != 0 || write_count != 0) {
+        fprintf(stderr, "RFPLL APIs accepted invalid context or changed output\n");
+        return EXIT_FAILURE;
+    }
+    invalid_rfpll_clock.source = TX_RFPLL_INT;
+    phy.fastlock.current_profile[1] = 9;
+    if (ad9361_rfpll_int_recalc_rate_checked(
+            &invalid_rfpll_clock, 40000000, &rfpll_rate) != -EINVAL ||
+        rfpll_rate != UINT32_MAX || read_count != 0 || write_count != 0) {
+        fprintf(stderr, "Out-of-range TX fastlock profile reached SPI\n");
+        return EXIT_FAILURE;
+    }
+    phy.fastlock.current_profile[1] = 0;
+
+    /* Clock scaler candidates become cache only after validation/programming
+     * succeeds; failed SPI writes and invalid divider choices keep the last
+     * confirmed multiplier/divider pair. */
+    {
+        struct refclk_scale clock = {
+            .spi = &spi,
+            .phy = &phy,
+            .mult = 2,
+            .div = 1,
+            .source = BB_REFCLK,
+        };
+        register_map_enabled = true;
+        fail_write_reg = REG_CLOCK_CTRL;
+        ret = ad9361_clk_factor_set_rate(&clock, 40000000, 40000000);
+        if (ret != -EIO || clock.mult != 2 || clock.div != 1) {
+            fprintf(stderr, "Failed clock-scaler write changed its cache\n");
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = -1;
+        clock.source = RX_SAMPL_CLK;
+        clock.mult = 7;
+        clock.div = 8;
+        ret = ad9361_clk_factor_round_rate(&clock, 40, &(uint32_t){100});
+        if (ret != -EINVAL || clock.mult != 7 || clock.div != 8) {
+            fprintf(stderr, "Invalid clock-scaler candidate changed its cache\n");
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
+        read_count = 0;
+        write_count = 0;
     }
 
     /* VCO-table selection is cache state: a failed partial RFPLL setup must
