@@ -411,6 +411,82 @@ begin
             report "ERROR state did not retain zero-IQ RX2 keepalives"
             severity failure;
 
+        -- A newer request may supersede a transition in any pre-active
+        -- state. Re-arm while PENDING, then re-arm on the same edge as the
+        -- first valid ADC sample while WAIT_FIRST_SAMPLE. Neither edge may
+        -- certify the superseded epoch or leak its IQ.
+        wait until falling_edge(clock);
+        abort <= '0';
+        epoch_id_in <= x"2E";
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        epoch_id_in <= x"2F";
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0001" and epoch_id = x"2E" and
+               out_samples(1).data_i = to_signed(0, 16)
+            report "PENDING did not retain its original epoch while re-arming"
+            severity failure;
+        wait until falling_edge(clock);
+        arm <= '0';
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        complete <= '0';
+        samples_in(1).data_v <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0010"
+            report "re-armed PENDING transition did not wait for first sample"
+            severity failure;
+        wait until falling_edge(clock);
+        epoch_id_in <= x"30";
+        arm <= '1';
+        samples_in(1).data_v <= '1';
+        samples_in(1).data_i <= to_signed(9876, 16);
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0001" and epoch_id = x"2F" and
+               start_event = '0' and out_samples(1).data_i = to_signed(0, 16)
+            report "WAIT_FIRST_SAMPLE admitted IQ on a superseding ARM edge"
+            severity failure;
+
+        -- Complete the replacement request and immediately supersede it
+        -- during ACTIVE_NEW, before its one-cycle certificate retires.
+        wait until falling_edge(clock);
+        arm <= '0';
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        complete <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0010" and start_event = '0'
+            report "replacement completion did not await a fresh ADC sample"
+            severity failure;
+        wait until falling_edge(clock);
+        samples_in(0).data_v <= '1';
+        samples_in(1).data_v <= '1';
+        timestamp <= to_unsigned(500, 64);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert start_event = '1' and state = "0010"
+            report "replacement epoch did not capture its first valid sample"
+            severity failure;
+        wait until falling_edge(clock);
+        epoch_id_in <= x"31";
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0001" and epoch_id = x"30" and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16)
+            report "ACTIVE_NEW ignored a superseding ARM or exposed IQ"
+            severity failure;
+
         report "rx_epoch_gate_tb: PASS" severity note;
         stop;
         wait;

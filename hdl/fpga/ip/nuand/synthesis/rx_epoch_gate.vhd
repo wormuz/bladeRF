@@ -193,6 +193,11 @@ begin
                         -- host reports failure. Never reopen samples under
                         -- the aborted epoch (or pretend the old LO returned).
                         state <= STATE_ERROR;
+                    elsif( epoch_arm = '1' ) then
+                        -- A newer request supersedes a transition that has
+                        -- not completed. Keep the fence closed and bind all
+                        -- subsequent completion events to the new epoch ID.
+                        active_epoch_id <= epoch_id_in;
                     elsif( epoch_complete = '1' ) then
                         -- Completion only arms the new epoch.  The RX
                         -- sample-valid pulse is asynchronous to this
@@ -218,6 +223,12 @@ begin
 
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
+                    elsif( epoch_arm = '1' ) then
+                        -- Re-arm wins over a coincident ADC-valid edge. The
+                        -- sample remains suppressed above and cannot certify
+                        -- the superseded request.
+                        active_epoch_id <= epoch_id_in;
+                        state <= STATE_PENDING;
                     elsif( all_enabled_valid = '1' ) then
                         out_sample_controls  <= in_sample_controls;
                         out_samples          <= in_samples;
@@ -244,6 +255,20 @@ begin
                             );
                         end loop;
                         state <= STATE_ERROR;
+                    elsif( epoch_arm = '1' ) then
+                        -- A request may arrive before the one-cycle
+                        -- ACTIVE_NEW certificate has retired. Fence on this
+                        -- edge and replace the candidate epoch atomically.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
+                        active_epoch_id <= epoch_id_in;
+                        state <= STATE_PENDING;
                     else
                         out_sample_controls <= in_sample_controls;
                         out_samples         <= in_samples;
