@@ -4029,6 +4029,18 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                                     final_event);
         }
         rf_link_status = _rx_link_status_for_transition_test(rf_link_status);
+        if (!bladerf2_rf_link_rx_epoch_valid(rf_link_status)) {
+            log_error("%s: FPGA RX epoch not current at host certification: "
+                      "transaction=%u link_status=0x%08x epoch=%u\n",
+                      __FUNCTION__, transaction_id, rf_link_status,
+                      expected_epoch_id);
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0,
+                        rf_link_status, BLADERF_ERR_UNEXPECTED,
+                        expected_epoch_id);
+            return _fail_transition(dev, board_data,
+                                    BLADERF_ERR_UNEXPECTED, final_event);
+        }
         if ((rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
             uint32_t rx_fault_causes = 0;
             int rx_fault_causes_status = nios_rx_fault_causes_read(
