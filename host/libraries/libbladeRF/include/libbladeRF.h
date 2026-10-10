@@ -5035,7 +5035,8 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_DEVICE_RESET (1U << 15)
 #define BLADERF_RF_INVALIDATE_FPGA_RELOAD (1U << 16)
 #define BLADERF_RF_INVALIDATE_BOOTLOADER (1U << 17)
-/** Sticky FPGA RX data-link fault observed during a certified epoch. */
+/** FPGA RX validity was lost during a certified epoch, including a sticky
+ * data-link fault or loss of the current/valid/active epoch status. */
 #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT (1U << 18)
 /** `rfic_status` marker for an RX fault event with a coherent FPGA cause
  * snapshot in its low bits. Bits 6..10 carry RX writer boundary flags;
