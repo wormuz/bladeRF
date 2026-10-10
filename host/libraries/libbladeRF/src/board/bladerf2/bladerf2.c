@@ -2693,6 +2693,10 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         /* Create a fast lock profile in the RFIC */
         CHECK_STATUS(
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
+        /* Once AD9361 fastlock state has been touched, make sure close
+         * performs the existing RFIC recovery even if the later NIOS upload
+         * fails. */
+        board_data->rfic_reset_on_close = true;
 
         /* Save a copy of the TX fast lock profile to the Nios */
         CHECK_STATUS(dev->backend->rffe_fastlock_save(
@@ -2718,6 +2722,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         /* Create a fast lock profile in the RFIC */
         CHECK_STATUS(
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
+        /* Mark recovery before the NIOS upload, which can still fail. */
+        board_data->rfic_reset_on_close = true;
 
         /* Save a copy of the RX fast lock profile to the Nios */
         CHECK_STATUS(dev->backend->rffe_fastlock_save(
@@ -2736,11 +2742,6 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         /* Set the RX SPDTs */
         quick_tune->spdt = (pm->spdt << 2) | (pm->spdt);
     }
-
-    /* Workaround: the RFIC can end up in a bad state after fastlock use, and
-     * needs to be reset and re-initialized. This is likely due to our direct
-     * SPI writes causing state incongruence. */
-    board_data->rfic_reset_on_close = true;
 
     return 0;
 }
