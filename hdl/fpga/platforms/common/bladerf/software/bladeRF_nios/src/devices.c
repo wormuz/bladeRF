@@ -25,6 +25,7 @@
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
 #include "devices.h"
+#include "nios_axi_address_policy.h"
 #include "debug.h"
 #include "devices_inline.h"
 #include "fpga_version.h"
@@ -738,19 +739,23 @@ done:
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-bool adi_axi_read(uint16_t addr, uint32_t *data)
+bool adi_axi_read(uint32_t addr, uint32_t *data)
 {
 #if defined(AXI_AD9361_0_BASE) && \
     defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
     defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
     uint32_t clear_toggle;
 
+    if (!data || !nios_axi_address_valid(addr)) {
+        return false;
+    }
+
     /* AXI RRESP is also discarded by the NIOS Avalon bridge. Clear the
      * sticky adapter timeout before the read, then report it independently
      * of the 0xDEADDEAD timeout data sentinel. */
     clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
     IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
-    *data = IORD_32DIRECT(AXI_AD9361_0_BASE, addr);
+    *data = IORD_32DIRECT(AXI_AD9361_0_BASE, (uint16_t)addr);
     return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
 #else
     (void)addr;
@@ -761,18 +766,22 @@ bool adi_axi_read(uint16_t addr, uint32_t *data)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-bool adi_axi_write(uint16_t addr, uint32_t data)
+bool adi_axi_write(uint32_t addr, uint32_t data)
 {
 #if defined(AXI_AD9361_0_BASE) && \
     defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
     defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
     uint32_t clear_toggle;
 
+    if (!nios_axi_address_valid(addr)) {
+        return false;
+    }
+
     /* NIOS's Avalon master drops AXI BRESP. Clear the sticky up_axi timeout
      * before this access, then inspect the sideband after the write response. */
     clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
     IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
-    IOWR_32DIRECT(AXI_AD9361_0_BASE, addr, data);
+    IOWR_32DIRECT(AXI_AD9361_0_BASE, (uint16_t)addr, data);
     return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
 #else
     (void)addr;

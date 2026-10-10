@@ -31,11 +31,20 @@ void bladerf2_axi_io_set_dev(struct bladerf *dev)
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
-    if (NULL == axi_io_dev || NULL == data) {
+    uint64_t address = (uint64_t)base + offset;
+
+    if (NULL == data) {
+        return -EINVAL;
+    }
+    if (NULL == axi_io_dev) {
         return -ENODEV;
     }
+    if (address > UINT32_MAX) {
+        return -ERANGE;
+    }
 
-    if (axi_io_dev->backend->adi_axi_read(axi_io_dev, base + offset, data) < 0) {
+    if (axi_io_dev->backend->adi_axi_read(
+            axi_io_dev, (uint32_t)address, data) < 0) {
         return -EIO;
     }
 
@@ -44,11 +53,17 @@ int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 
 int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
 {
+    uint64_t address = (uint64_t)base + offset;
+
     if (NULL == axi_io_dev) {
         return -ENODEV;
     }
+    if (address > UINT32_MAX) {
+        return -ERANGE;
+    }
 
-    if (axi_io_dev->backend->adi_axi_write(axi_io_dev, base + offset, data) < 0) {
+    if (axi_io_dev->backend->adi_axi_write(
+            axi_io_dev, (uint32_t)address, data) < 0) {
         return -EIO;
     }
 

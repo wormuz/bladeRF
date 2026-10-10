@@ -182,7 +182,7 @@ void lms6_write(uint8_t addr, uint8_t data);
 /**
  * Read from AD9361 SPI register(s)
  *
- * @param   addr    Address to read from
+ * @param   addr    Register address to read
  *
  * @param value Receives the register data on success
  * @return  true only if the SPI transaction completed successfully
@@ -192,7 +192,7 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value);
 /**
  * Write to AD9361 SPI register(s)
  *
- * @param   addr    Register address to write to
+ * @param   addr    Register address to write
  * @param   data    Data to write
  */
 bool adi_spi_write(uint16_t addr, uint64_t data);
@@ -210,19 +210,22 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
 /**
  * Read from ADI AXI space
  *
- * @param   addr    Address to read from
+ * @param   addr    Wire address; values wider than the adapter's 16-bit
+ *                  offset are rejected rather than truncated
  *
- * @return  Register data
+ * @return  true when the read succeeded; false for invalid address or
+ *          hardware access failure
  */
-bool adi_axi_read(uint16_t addr, uint32_t *data);
+bool adi_axi_read(uint32_t addr, uint32_t *data);
 
 /**
  * Write to ADI AXI space
  *
- * @param   addr    Register address to write to
+ * @param   addr    Wire address; values wider than the adapter's 16-bit
+ *                  offset are rejected rather than truncated
  * @param   data    Data to write
  */
-bool adi_axi_write(uint16_t addr, uint32_t data);
+bool adi_axi_write(uint32_t addr, uint32_t data);
 
 /**
  * Read from Wishbone Master space

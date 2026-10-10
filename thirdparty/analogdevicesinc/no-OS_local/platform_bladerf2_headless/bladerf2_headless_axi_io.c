@@ -18,14 +18,25 @@
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
+    uint64_t address = (uint64_t)base + offset;
+
     if (NULL == data) {
         return -EINVAL;
     }
+    if (address > UINT16_MAX) {
+        return -ERANGE;
+    }
 
-    return adi_axi_read((uint16_t)(base + offset), data) ? 0 : -EIO;
+    return adi_axi_read((uint32_t)address, data) ? 0 : -EIO;
 }
 
 int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
 {
-    return adi_axi_write((uint16_t)(base + offset), data) ? 0 : -EIO;
+    uint64_t address = (uint64_t)base + offset;
+
+    if (address > UINT16_MAX) {
+        return -ERANGE;
+    }
+
+    return adi_axi_write((uint32_t)address, data) ? 0 : -EIO;
 }
