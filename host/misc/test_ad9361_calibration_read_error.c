@@ -162,6 +162,7 @@ int main(void)
     uint8_t rx_gc_mode = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
     struct refclk_scale invalid_rfpll_clock = {0};
+    struct refclk_scale invalid_clock_factor = {0};
     phy.spi = &spi;
     phy.pdata = &pdata;
 
@@ -181,7 +182,10 @@ int main(void)
     invalid_rfpll_clock.phy = &phy;
     invalid_rfpll_clock.spi = &spi;
     invalid_rfpll_clock.source = NUM_AD9361_CLKS;
-    if (ad9361_rfpll_int_recalc_rate_checked(NULL, 1, &rfpll_rate) != -EINVAL ||
+    invalid_clock_factor.phy = &phy;
+    if (ad9361_clk_factor_recalc_rate_checked(
+            &invalid_clock_factor, 40000000, &rfpll_rate) != -EINVAL ||
+        ad9361_rfpll_int_recalc_rate_checked(NULL, 1, &rfpll_rate) != -EINVAL ||
         ad9361_rfpll_int_round_rate(NULL, 1000000000, NULL) != -EINVAL ||
         ad9361_rfpll_recalc_rate_checked(NULL, &rfpll_rate) != -EINVAL ||
         ad9361_rfpll_round_rate(NULL, 1000000000) != -EINVAL ||
