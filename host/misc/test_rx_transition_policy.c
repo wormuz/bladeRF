@@ -4,6 +4,7 @@
 
 #include "channel_policy.h"
 #include "rf_transition_policy.h"
+#include "../libraries/libbladeRF/src/board/bladerf2/rfic_rssi_policy.h"
 
 int main(void)
 {
@@ -49,6 +50,14 @@ int main(void)
     assert(bladerf2_channel_valid(BLADERF_CHANNEL_TX(1)));
     assert(!bladerf2_channel_valid(BLADERF_CHANNEL_RX(2)));
     assert(!bladerf2_channel_valid(BLADERF_CHANNEL_INVALID));
+    assert(bladerf2_rssi_channel_known(BLADERF_CHANNEL_RX(0)));
+    assert(bladerf2_rssi_channel_known(BLADERF_CHANNEL_TX(1)));
+    assert(!bladerf2_rssi_channel_known(BLADERF_CHANNEL_RX(2)));
+    assert(bladerf2_rssi_channel_supported(BLADERF_CHANNEL_RX(1)));
+    assert(!bladerf2_rssi_channel_supported(BLADERF_CHANNEL_TX(0)));
+    assert(bladerf2_rssi_multiplier_valid(1));
+    assert(!bladerf2_rssi_multiplier_valid(0));
+    assert(!bladerf2_rssi_multiplier_valid(-1));
     assert(bladerf2_rx_channel_valid(BLADERF_CHANNEL_RX(0)));
     assert(bladerf2_rx_channel_valid(BLADERF_CHANNEL_RX(1)));
     assert(!bladerf2_rx_channel_valid(BLADERF_CHANNEL_TX(0)));

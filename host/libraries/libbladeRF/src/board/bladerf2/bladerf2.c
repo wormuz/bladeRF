@@ -73,6 +73,7 @@
 #include "bladerf2_common.h"
 #include "common.h"
 #include "rf_transition_policy.h"
+#include "rfic_rssi_policy.h"
 
 
 /******************************************************************************/
@@ -5728,6 +5729,13 @@ int bladerf_get_rfic_rssi(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(pre_rssi);
     NULL_CHECK(sym_rssi);
+
+    if (!bladerf2_rssi_channel_known(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!bladerf2_rssi_channel_supported(ch)) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;

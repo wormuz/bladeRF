@@ -28,6 +28,7 @@
 #include "iterators.h"
 #include "log.h"
 #include "rfic_status_policy.h"
+#include "rfic_rssi_policy.h"
 
 // #define BLADERF_HEADLESS_C_DEBUG
 
@@ -752,6 +753,10 @@ static int _rfic_fpga_get_rssi(struct bladerf *dev,
                     BLADERF_RFIC_RSSI_PRE_MASK);
     sym  = (int16_t)((readval >> BLADERF_RFIC_RSSI_SYM_SHIFT) &
                     BLADERF_RFIC_RSSI_SYM_MASK);
+
+    if (!bladerf2_rssi_multiplier_valid(mult)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     *pre_rssi = __round_int(pre / (float)mult);
     *sym_rssi = __round_int(sym / (float)mult);
