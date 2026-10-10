@@ -8,6 +8,10 @@
 
 int main(void)
 {
+    assert(bladerf2_rx_fir_configuration_valid(true, true));
+    assert(!bladerf2_rx_fir_configuration_valid(true, false));
+    assert(!bladerf2_rx_fir_configuration_valid(false, false));
+
     uint32_t effective = UINT32_MAX;
     struct bladerf_rf_event events[4] = {0};
     struct bladerf_rf_event final_event = {0};
@@ -251,39 +255,44 @@ int main(void)
     assert(!bladerf2_rf_link_tx_epoch_valid(
         tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE, 9));
     assert(bladerf2_tx_rfic_observation(
-        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_VALID);
     assert(bladerf2_tx_rfic_observation(
-        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_FDD,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_VALID);
     assert(bladerf2_tx_rfic_observation(
-        false, BLADERF2_AD9361_VCO_LOCK_BIT,
+        false, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE);
     /* An FPGA TX fault prevents the monitor from reading these registers;
      * their zero-initialized storage is unavailable evidence, not proof of
      * RFPLL/ENSM/BBPLL invalidity. */
-    assert(bladerf2_tx_rfic_observation(false, 0, 0, 0, 0) ==
+    assert(bladerf2_tx_rfic_observation(false, true, 0, 0, 0, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE);
     assert(bladerf2_tx_rfic_observation(
-        true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
+        true, false, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_INVALID);
     assert(bladerf2_tx_rfic_observation(
-        true, BLADERF2_AD9361_VCO_LOCK_BIT, 0x08,
+        true, true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_INVALID);
     assert(bladerf2_tx_rfic_observation(
-        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT, 0x08,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
+           BLADERF2_TX_RFIC_OBSERVATION_INVALID);
+    assert(bladerf2_tx_rfic_observation(
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX, 0, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_INVALID);
     assert(bladerf2_tx_rfic_observation(
-        true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT,
         BLADERF2_AD9361_CALIBRATION_BUSY_MASK) ==

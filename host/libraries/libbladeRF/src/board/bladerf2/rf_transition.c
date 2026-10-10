@@ -960,6 +960,7 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool should_poll_tx = false;
+        bool tx_fir_config_valid = false;
         bool tx_retune2_watch_active = false;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
@@ -1030,6 +1031,8 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active &&
                 !board_data->tx_frequency_reconfigure_active &&
                 !board_data->tx_rf_config_operation_active;
+            tx_fir_config_valid = board_data->phy != NULL &&
+                board_data->phy->fir_config_valid;
             if (should_poll || should_poll_tx) {
                 if (should_poll || should_poll_tx) {
                     _rx_fault_monitor_stage(board_data, "RFFE status");
@@ -1194,6 +1197,7 @@ static void *rx_fault_monitor_task(void *arg)
             const enum bladerf2_tx_rfic_observation tx_rfic_observation =
                 bladerf2_tx_rfic_observation(
                     tx_rfic_status_observed && tx_rfic_status == 0,
+                    tx_fir_config_valid,
                     tx_pll_status, ensm_status, bbpll_status,
                     tx_calibration_status);
             bool report_status_unavailable = false;
@@ -2492,6 +2496,7 @@ static int _bladerf_rx_transition_begin(
     bool sync_format_unsupported = false;
     bool rx_x2_layout_unsupported = false;
     bool tuning_mode_unsupported = false;
+    bool rfic_fir_configuration_invalid = false;
     uint64_t stage_started_ns;
     uint64_t calibration_deadline_ns;
     uint8_t calibration_reg = 0;
@@ -2553,6 +2558,13 @@ static int _bladerf_rx_transition_begin(
              * PHY. NIOS mode has a separate RFIC owner and event path; fail
              * before allocating a transaction or invalidating the RX epoch. */
             tuning_mode_unsupported = true;
+        } else if (!bladerf2_rx_fir_configuration_valid(
+                       board_data->phy != NULL,
+                       board_data->phy != NULL &&
+                           board_data->phy->fir_config_valid)) {
+            /* Failed FIR programming can leave coefficient RAM partial;
+             * RFPLL and ENSM status alone cannot certify that datapath. */
+            rfic_fir_configuration_invalid = true;
         } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
                        (required_events_mask &
                         BLADERF_RF_REQUIRE_EPOCH_VALID) != 0,
@@ -2637,6 +2649,9 @@ static int _bladerf_rx_transition_begin(
     }
     if (tuning_mode_unsupported) {
         return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (rfic_fir_configuration_invalid) {
+        return BLADERF_ERR_WOULD_BLOCK;
     }
     if (epochless_async_stream_active) {
         return BLADERF_ERR_UNSUPPORTED;

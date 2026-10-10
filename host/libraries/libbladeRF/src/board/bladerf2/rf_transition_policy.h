@@ -108,15 +108,25 @@ enum bladerf2_tx_rfic_observation {
     BLADERF2_TX_RFIC_OBSERVATION_VALID,
 };
 
+static inline bool bladerf2_rx_fir_configuration_valid(
+    bool host_phy_available, bool fir_config_valid)
+{
+    return host_phy_available && fir_config_valid;
+}
+
 /* A TX FPGA link ACK does not prove the analog RFIC path is operational. */
 static inline enum bladerf2_tx_rfic_observation
 bladerf2_tx_rfic_observation(bool status_read_succeeded,
+                             bool fir_config_valid,
                              uint8_t tx_pll_status,
                              uint8_t ensm_status, uint8_t bbpll_status,
                              uint8_t calibration_status)
 {
     if (!status_read_succeeded) {
         return BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE;
+    }
+    if (!fir_config_valid) {
+        return BLADERF2_TX_RFIC_OBSERVATION_INVALID;
     }
     const uint8_t ensm = ensm_status & BLADERF2_AD9361_ENSM_STATE_MASK;
     return (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
