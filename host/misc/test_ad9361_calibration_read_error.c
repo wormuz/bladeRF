@@ -95,10 +95,12 @@ static bool apply_failed_write_once;
 static int32_t state_after_ensm_write = -1;
 static uint8_t fake_regs[1024];
 static unsigned fake_write_counts[1024];
-static uint32_t fake_axi_regs[1024];
+static uint32_t fake_axi_regs[0x5000 / sizeof(uint32_t)];
 static unsigned fake_axi_read_count;
 static unsigned fake_axi_write_count;
 static int32_t fake_axi_fail_write_offset = -1;
+static int32_t fake_axi_fail_write_once_offset = -1;
+static bool fake_axi_apply_failed_write_once;
 static int32_t fake_axi_fail_read_offset = -1;
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
@@ -121,6 +123,13 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
         sizeof(fake_axi_regs) / sizeof(fake_axi_regs[0]))
         return -EINVAL;
     ++fake_axi_write_count;
+    if ((int32_t)offset == fake_axi_fail_write_once_offset) {
+        fake_axi_fail_write_once_offset = -1;
+        if (fake_axi_apply_failed_write_once)
+            fake_axi_regs[offset / sizeof(uint32_t)] = data;
+        fake_axi_apply_failed_write_once = false;
+        return -EIO;
+    }
     if ((int32_t)offset == fake_axi_fail_write_offset)
         return -EIO;
     fake_axi_regs[offset / sizeof(uint32_t)] = data;
@@ -202,6 +211,14 @@ int main(void)
     struct axi_adc_init invalid_adc_init = {0};
     struct axi_dac tx_dac = { .num_channels = 2, .clock_hz = 30000000 };
     struct axi_dac *initialized_dac = &tx_dac;
+    struct axiadc_chip_info loopback_chip = { .num_channels = 2 };
+    struct axiadc_converter loopback_conv = { .chip_info = &loopback_chip };
+    struct axi_adc loopback_adc = {0};
+    struct ad9361_rf_phy loopback_phy = {
+        .adc_conv = &loopback_conv,
+        .rx_adc = &loopback_adc,
+        .bist_loopback_valid = true,
+    };
     int32_t calib_integer = INT32_MIN;
     int32_t calib_fraction = INT32_MIN;
     uint64_t sampling_frequency = UINT64_MAX;
@@ -1059,6 +1076,32 @@ int main(void)
     }
 
     fail_write_reg = -1;
+
+    /* HDL loopback is a multi-lane update. If a write reports failure after
+     * reaching hardware, every attempted lane must be rolled back. */
+    fake_axi_regs[0x4000 / sizeof(uint32_t)] = UINT32_C(8) << 16;
+    fake_axi_regs[0x4418 / sizeof(uint32_t)] = 0x11;
+    fake_axi_regs[0x4458 / sizeof(uint32_t)] = 0x22;
+    fake_axi_fail_write_once_offset = 0x4458;
+    fake_axi_apply_failed_write_once = true;
+    ret = ad9361_hdl_loopback(&loopback_phy, true);
+    if (ret != -EIO || fake_axi_regs[0x4418 / sizeof(uint32_t)] != 0x11 ||
+        fake_axi_regs[0x4458 / sizeof(uint32_t)] != 0x22 ||
+        loopback_conv.scratch_reg[0] != 0 ||
+        loopback_conv.scratch_reg[1] != 0 ||
+        !loopback_phy.bist_loopback_valid) {
+        fprintf(stderr, "HDL loopback failed to roll back partial lane update\n");
+        return EXIT_FAILURE;
+    }
+    fake_axi_fail_write_offset = 0x4458;
+    ret = ad9361_hdl_loopback(&loopback_phy, true);
+    fake_axi_fail_write_offset = -1;
+    if (ret != -EIO ||
+        fake_axi_regs[0x4418 / sizeof(uint32_t)] != 0x11 ||
+        loopback_phy.bist_loopback_valid) {
+        fprintf(stderr, "HDL loopback did not invalidate state after rollback failure\n");
+        return EXIT_FAILURE;
+    }
 
     /* Fastlock profile cache must only advance after the complete profile
      * write, and failures must still attempt to stop the programming clock. */
@@ -2379,6 +2422,7 @@ int main(void)
     }
 
     phy.bist_loopback_mode = 2;
+    phy.bist_loopback_valid = true;
     fail_read_reg = REG_OBSERVE_CONFIG;
     ret = ad9361_bist_loopback(&phy, 0);
     if (ret != -EIO || phy.bist_loopback_mode != 2) {
@@ -2393,11 +2437,22 @@ int main(void)
     }
     fail_write_reg = REG_OBSERVE_CONFIG;
     ret = ad9361_bist_loopback(&phy, 0);
-    if (ret != -EIO || phy.bist_loopback_mode != 2) {
+    if (ret != -EIO || phy.bist_loopback_mode != 2 ||
+        phy.bist_loopback_valid) {
         fprintf(stderr, "BIST loopback hid config write failure or changed cache\n");
         return EXIT_FAILURE;
     }
     fail_write_reg = -1;
+    {
+        int32_t mode_sentinel = 99;
+        ad9361_get_bist_loopback(&phy, &mode_sentinel);
+        if (mode_sentinel != 99) {
+            fprintf(stderr, "BIST getter exposed an unconfirmed loopback mode\n");
+            return EXIT_FAILURE;
+        }
+    }
+    /* Reinitialize the cached state for following independent API checks. */
+    phy.bist_loopback_valid = true;
 
     phy.bist_tone_mode = BIST_INJ_TX;
     phy.bist_tone_freq_Hz = 7;
