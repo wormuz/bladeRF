@@ -240,6 +240,29 @@ static int check_profile_index_validation(void)
     return 0;
 }
 
+static int check_completion_ring_overwrite_is_visible(void)
+{
+    const uint32_t requested_sequence = 1;
+    const uint32_t overwritten_sequence =
+        requested_sequence + NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+
+    /* Model a full ring lap after the reader fell behind. The host compares
+     * this word to its requested sequence and must reject the stale record. */
+    tx_retune2_completions[(requested_sequence - 1u) &
+        (NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH - 1u)].sequence =
+            overwritten_sequence;
+    if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
+                                       requested_sequence) ||
+        pkt_retune2_completion_word(
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE) !=
+                overwritten_sequence) {
+        fputs("completion ring overwrite was not externally visible\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     fastlock_profile profile = { 0 };
@@ -295,7 +318,10 @@ int main(void)
     if (check_profile_index_validation() != 0) {
         return 1;
     }
+    if (check_completion_ring_overwrite_is_visible() != 0) {
+        return 1;
+    }
 
-    puts("NIOS retune2 queue dequeue/wrap/empty and schedule/ready lifecycle: PASS");
+    puts("NIOS retune2 queue lifecycle and completion-ring overwrite: PASS");
     return 0;
 }
