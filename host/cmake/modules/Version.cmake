@@ -65,15 +65,26 @@ if(GIT_FOUND)
         set(GIT_INFO "-unknown")
     else()
         execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+            OUTPUT_VARIABLE GIT_TOPLEVEL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE GIT_TOPLEVEL_RESULT
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        )
+        if(NOT GIT_TOPLEVEL_RESULT EQUAL 0 OR "${GIT_TOPLEVEL}" STREQUAL "")
+            message(FATAL_ERROR "Unable to locate git worktree root")
+        endif()
+
+        execute_process(
             COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD --
             OUTPUT_VARIABLE GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            WORKING_DIRECTORY ${GIT_TOPLEVEL}
         )
 
         execute_process(
             COMMAND ${GIT_EXECUTABLE} diff-index --quiet HEAD --
             RESULT_VARIABLE GIT_DIRTY
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            WORKING_DIRECTORY ${GIT_TOPLEVEL}
         )
 
         if(GIT_DIRTY)
@@ -86,7 +97,7 @@ if(GIT_FOUND)
                 COMMAND ${GIT_EXECUTABLE} diff --binary HEAD --
                 OUTPUT_VARIABLE GIT_DIFF
                 RESULT_VARIABLE GIT_DIFF_RESULT
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                WORKING_DIRECTORY ${GIT_TOPLEVEL}
             )
             if(NOT GIT_DIFF_RESULT EQUAL 0)
                 message(FATAL_ERROR
