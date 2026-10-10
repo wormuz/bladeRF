@@ -308,10 +308,10 @@ begin
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
             complete             => retune_gate_complete,
-            -- Mute at the FPGA boundary as soon as FIFO starvation is
-            -- detected. The host monitor still publishes the durable event,
-            -- but it must not be on the safety-critical path to the DAC.
-            abort                => retune_gate_abort or tx_underflow_event,
+            -- FIFO starvation feeds the gate directly; the host monitor
+            -- publishes the durable event but is not on the mute path.
+            abort                => retune_gate_abort,
+            underflow            => tx_underflow_event,
             in_samples           => dac_streams_raw,
             out_samples          => dac_streams,
             state                => retune_gate_state,

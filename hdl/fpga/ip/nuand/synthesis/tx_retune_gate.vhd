@@ -26,6 +26,7 @@ entity tx_retune_gate is
         target_timestamp    : in  unsigned(63 downto 0) := (others => '0');
         complete            : in  std_logic := '0';
         abort               : in  std_logic := '0';
+        underflow           : in  std_logic := '0';
 
         in_samples          : in  sample_streams_t(0 to NUM_STREAMS-1);
         out_samples         : out sample_streams_t(0 to NUM_STREAMS-1);
@@ -49,14 +50,19 @@ architecture rtl of tx_retune_gate is
     signal target_i : unsigned(63 downto 0) := (others => '0');
     signal immediate_i : std_logic := '0';
     signal muted_i : std_logic := '0';
+    signal abort_i : std_logic;
     signal mute_start_timestamp_i : unsigned(63 downto 0) := (others => '0');
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
 begin
+    -- FIFO underflow is a local data-plane fault. Mute in this gate rather
+    -- than waiting for the host's periodic fault monitor.
+    abort_i <= abort or underflow;
+
     -- Timestamp subtraction is wrap-safe for targets less than 2^63 ticks
     -- away, matching the NIOS scheduled-retune future-time constraint.
     due : process(all)
     begin
-        if abort = '1' or
+        if abort_i = '1' or
            (arm = '1' and (arm_immediate = '1' or
                            signed(timestamp - target_timestamp) >= 0)) or
            state_i = STATE_MUTED or state_i = STATE_ERROR or
@@ -116,7 +122,7 @@ begin
             resume_event <= '0';
             due_now := signed(timestamp - target_i) >= 0;
 
-            if abort = '1' then
+            if abort_i = '1' then
                 state_i <= STATE_ERROR;
                 if state_i /= STATE_MUTED and state_i /= STATE_ERROR then
                     mute_start_timestamp_i <= timestamp;
