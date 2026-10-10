@@ -6297,6 +6297,7 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
 
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
+    bool wait_for_pll_lock = false;
     if (status != 0) {
         return status;
     }
@@ -6311,6 +6312,19 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
             status = bladerf_get_clock_select(dev, &clock_select);
             if (status == 0 &&
                 (!enable || clock_select == CLOCK_SELECT_EXTERNAL)) {
+                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                dev->board_data->rfic_reference_clock_known = true;
+                dev->board_data->tx_rf_configuration_invalid_reported = false;
+                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            } else if (status == 0 &&
+                       bladerf2_reference_clock_requires_pll_lock(
+                           clock_select, enable)) {
+                wait_for_pll_lock = true;
+            }
+        }
+        if (status == 0 && wait_for_pll_lock) {
+            status = bladerf2_wait_for_pll_lock(dev);
+            if (status == 0) {
                 MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
                 dev->board_data->rfic_reference_clock_known = true;
                 dev->board_data->tx_rf_configuration_invalid_reported = false;
