@@ -2676,6 +2676,10 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_UNSUPPORTED;
     }
     if (rfic_fir_configuration_invalid) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                    BLADERF_RF_STATE_ERROR,
+                    request->target_frequency_hz, 0, 0,
+                    BLADERF_ERR_WOULD_BLOCK, 0);
         return BLADERF_ERR_WOULD_BLOCK;
     }
     if (epochless_async_stream_active) {
