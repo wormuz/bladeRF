@@ -1920,13 +1920,20 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
 
                         } else {
                             const uint64_t time_delta = target_timestamp - s->meta.curr_timestamp;
-                            uint64_t samples_left = time_delta * s->meta.samples_per_ts;
                             uint64_t left_in_buffer =
                                 (uint64_t) s->meta.samples_per_msg *
                                     (s->meta.msg_per_buf - s->meta.msg_num);
 
                             /* Account for current position in buffer */
                             left_in_buffer -= s->meta.curr_msg_off;
+                            assert(left_in_buffer <= UINT_MAX);
+                            /* A distant timestamp can make delta * 2 wrap in
+                             * RX_X2. Clamp the seek to this buffer before
+                             * converting timestamps to interleaved samples. */
+                            const unsigned int samples_left =
+                                sync_timestamp_delta_to_samples(
+                                    time_delta, s->meta.samples_per_ts,
+                                    (unsigned int)left_in_buffer);
 
                             if (samples_left >= left_in_buffer) {
                                 /* Discard the remainder of this buffer */

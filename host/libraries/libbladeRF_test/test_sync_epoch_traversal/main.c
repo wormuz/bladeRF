@@ -86,6 +86,7 @@ static void test_sync_tx_x2_timestamp_units(void)
     assert(sync_timestamp_delta_to_samples(3, 2, 10) == 6);
     assert(sync_timestamp_delta_to_samples(3, 1, 10) == 3);
     assert(sync_timestamp_delta_to_samples(UINT64_MAX, 2, 10) == 10);
+    assert(sync_timestamp_delta_to_samples(UINT64_MAX, 2, 11) == 11);
     assert(sync_samples_to_timestamp_delta(6, 2) == 3);
     assert(sync_samples_to_timestamp_delta(6, 1) == 6);
 }
