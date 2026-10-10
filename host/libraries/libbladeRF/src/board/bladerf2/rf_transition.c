@@ -1003,6 +1003,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_rfic_invalid = false;
             bool report_tx_retune_failure = false;
             bool report_tx_retune_counter_reset = false;
+            bool abort_tx_retune_gate = false;
             bool counter_reset = false;
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
@@ -1022,6 +1023,8 @@ static void *rx_fault_monitor_task(void *arg)
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
                             bladerf2_tx_stream_set_faulted(board_data, true);
+                            board_data->tx_recovery_blocked = true;
+                            abort_tx_retune_gate = true;
                             report_status_unavailable = true;
                         }
                     }
@@ -1223,6 +1226,17 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (board_data->tx_retune2_applied_waiting_rf_valid &&
                         board_data->tx_retune2_pending_count == 0 &&
+                        tx_link_status_error == 0 &&
+                        tx_loss_count_status == 0 &&
+                        tx_retune2_status == 0 &&
+                        tx_retune2_success_status == 0 &&
+                        tx_counter_baseline_was_valid &&
+                        bladerf2_rf_link_tx_epoch_valid(
+                            rf_link_status, board_data->tx_link_epoch_id) &&
+                        !board_data->tx_recovery_blocked &&
+                        !report_tx_fault && !report_tx_epoch_invalid &&
+                        !report_tx_underrun && !report_tx_retune_failure &&
+                        !report_tx_retune_counter_reset && !counter_reset &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
                         uint32_t gate_status = 0;
@@ -1277,16 +1291,19 @@ static void *rx_fault_monitor_task(void *arg)
                         !board_data->tx_retune2_completion_faulted &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID &&
-                        board_data->tx_status_unavailable_reported &&
+                        (board_data->tx_status_unavailable_reported ||
+                         board_data->tx_retune_recovery_pending) &&
                         !board_data->tx_recovery_blocked &&
                         board_data->tx_fpga_loss_count_valid &&
                         tx_counter_baseline_was_valid &&
                         !report_tx_fault && !report_tx_underrun &&
                         !report_tx_retune_failure &&
                         !counter_reset) {
-                        board_data->tx_status_unavailable_reported = false;
-                        (void)bladerf2_tx_status_recovery_event(
-                            dev, rf_link_status);
+                        if (bladerf2_tx_status_recovery_event(
+                                dev, rf_link_status)) {
+                            board_data->tx_status_unavailable_reported = false;
+                            board_data->tx_retune_recovery_pending = false;
+                        }
                     }
 
                 /* Keep the software TX validity state and its durable event
@@ -1315,6 +1332,7 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_rfic_state_invalid_reported = true;
                         board_data->tx_recovery_blocked = true;
                         bladerf2_tx_stream_set_faulted(board_data, true);
+                        abort_tx_retune_gate = true;
                         report_tx_rfic_invalid = true;
                     }
                     if (tx_link_status_error == 0 &&
@@ -1326,6 +1344,7 @@ static void *rx_fault_monitor_task(void *arg)
                             rf_link_status, board_data->tx_link_epoch_id) &&
                         !board_data->tx_rfic_state_invalid_reported &&
                         !board_data->tx_rfic_state_valid_reported &&
+                        !board_data->tx_retune2_completion_faulted &&
                         !board_data->tx_recovery_blocked &&
                         !report_tx_fault && !report_tx_epoch_invalid &&
                         !report_tx_underrun && !counter_reset) {
@@ -1375,6 +1394,23 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                 }
             });
+
+            if (abort_tx_retune_gate) {
+                int gate_status;
+
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->tx_retune2_completion_faulted = true;
+                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                board_data->tx_retune_recovery_pending = true;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+                gate_status = nios_tx_retune_gate_cmd(
+                    dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+                if (gate_status != 0) {
+                    log_debug("Failed to abort TX retune gate after invalid RFIC/status: %s\n",
+                              bladerf_strerror(gate_status));
+                }
+            }
         }
 
         if (!should_poll) {

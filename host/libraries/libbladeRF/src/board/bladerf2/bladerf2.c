@@ -2212,22 +2212,32 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                 }
             }
             if (status == 0) {
-                status = nios_tx_retune_gate_arm(dev, 0, true);
-            }
-            if (status == 0) {
-                board_data->tx_retune_gate_release_requested = false;
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->tx_retune2_completion_faulted = true;
                 board_data->tx_retune2_applied_waiting_rf_valid = false;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                board_data->tx_rfic_state_valid_reported = false;
+                board_data->tx_retune_recovery_pending = true;
                 bladerf2_tx_retune_event(
                     dev, BLADERF_RF_EVT_TX_FREQUENCY_INVALID,
                     target_hz, 0, 0, 0);
+                status = nios_tx_retune_gate_arm(dev, 0, true);
+                if (status == 0) {
+                    board_data->tx_retune_gate_release_requested = false;
+                } else {
+                    (void)nios_tx_retune_gate_cmd(
+                        dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+                    bladerf2_tx_retune_event(
+                        dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                        target_hz, 0, 0, status);
+                }
             } else {
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->tx_retune2_completion_faulted = true;
                 board_data->tx_retune2_applied_waiting_rf_valid = false;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                board_data->tx_retune_recovery_pending = true;
+                board_data->tx_rfic_state_valid_reported = false;
                 bladerf2_tx_retune_event(
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                     target_hz, 0, board_data->tx_retune2_pending_count,
@@ -2915,6 +2925,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         board_data->tx_retune2_pending_count++;
         board_data->tx_retune2_completion_faulted = true;
         board_data->tx_retune2_applied_waiting_rf_valid = false;
+        board_data->tx_rfic_state_valid_reported = false;
+        board_data->tx_retune_recovery_pending = true;
         board_data->tx_channel_state_generation++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_tx_retune_event(

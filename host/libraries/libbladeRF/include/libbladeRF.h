@@ -4884,17 +4884,17 @@ typedef enum {
      * RF-link status word. TX link validity is revoked. */
     BLADERF_RF_EVT_TX_LINK_FAULT,
     /** TX link status, loss counter, or RFIC status could not be read while
-     * TX was active. TX link and RFIC-state validity are unknown and must be
-     * treated as revoked. */
+     * TX was active. Link, aggregate, RFIC-state, and frequency certificates
+     * are revoked; frequency validity requires a later confirmed retune. */
     BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
     /** TX module was disabled; no active transmission is certified. */
     BLADERF_RF_EVT_TX_STREAM_STOPPED,
     /** TX underflow counter decreased while a stream was active, indicating
      * a counter reset/generation boundary. TX link validity is revoked. */
     BLADERF_RF_EVT_TX_COUNTER_RESET,
-    /** TX status polling recovered: FPGA link status and cumulative counter
-     * are readable and unchanged, and AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL
-     * are healthy. TX transport and RFIC-state certificates are restored. */
+    /** TX status monitoring has revalidated the FPGA link epoch and unchanged
+     * cumulative counter, and AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL are
+     * healthy. TX transport and RFIC-state certificates are restored. */
     BLADERF_RF_EVT_TX_STATUS_RECOVERED,
     /** FPGA TX epoch acknowledgement was lost or changed without a host
      * transition. `rfic_status` contains the observed RF-link status word;
@@ -4908,32 +4908,36 @@ typedef enum {
      * waveform quality. */
     BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
     /** AD9361 TX RFPLL, TX/FDD ENSM, or BBPLL status became invalid. TX RFIC
-     * validity is revoked until a new acknowledged TX epoch. `rfic_status`
+     * and frequency validity are revoked until a fresh confirmed retune.
+     * `rfic_status`
      * packs ENSM in bits 23:16, TX RFPLL status in bits 15:8, and BBPLL
      * status in bits 7:0. */
     BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
     /** NIOS accepted a scheduled TX fastlock request but later failed while
      * loading or activating its profile. Aggregate TX validity is revoked
      * and new submissions are blocked; this event does not change the
-     * separately observed transport-link or RFIC lock/state certificates.
-     * `flags` carries the cumulative NIOS failure counter observed by the
-     * host. */
+     * transport-link certificate stays separate, while the RFIC and
+     * frequency certificates are revoked because the requested RF state is
+     * unknown. `flags` carries the cumulative NIOS failure counter observed
+     * by the host. */
     BLADERF_RF_EVT_TX_RETUNE_FAILED,
     /** A scheduled TX retune was accepted and is awaiting NIOS completion.
-     * TX frequency validity is revoked until a TX_RETUNE_VALID event. */
+     * TX RFIC-state and frequency certificates are revoked until fresh
+     * post-retune observations arrive. */
     BLADERF_RF_EVT_TX_RETUNE_PENDING,
     /** NIOS completed a scheduled TX fastlock activation and its live AD9361
-     * LO readback matched the host request. PLL/RF validity may still be
-     * pending. */
+     * LO readback matched the host request. TX RFIC-state validity remains
+     * revoked until post-retune lock/state checks pass. */
     BLADERF_RF_EVT_TX_RETUNE_APPLIED,
     /** One or more TX completion records could not be matched or read. TX
      * frequency validity is unknown and remains revoked. */
     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
     /** The final completed TX retune has a matching LO readback and the
-     * monitor has confirmed the TX PLL/ENSM/BBPLL state. */
+     * monitor has confirmed the TX PLL/ENSM/BBPLL state. A new
+     * TX_RFIC_STATE_VALID event separately publishes that RFIC certificate. */
     BLADERF_RF_EVT_TX_RETUNE_VALID,
-    /** An ordinary host TX LO write has begun. Frequency validity is
-     * revoked until the readback and RFIC monitor confirm the new state. */
+    /** An ordinary host TX LO write has begun. RFIC-state and frequency
+     * certificates are revoked until fresh post-retune observations arrive. */
     BLADERF_RF_EVT_TX_FREQUENCY_INVALID
 } bladerf_rf_event_type;
 
