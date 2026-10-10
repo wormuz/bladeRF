@@ -495,10 +495,11 @@ struct bladerf_rfic_status_register {
      * when INIT retires but fails; it cannot be read if NIOS stops servicing
      * control requests entirely. */
     uint8_t init_stage;
+    /* Distinguishes a retired command result from the queue-reset sentinel. */
+    bool last_write_result_valid;
     /* Result of the last command the NIOS write queue retired. The firmware
-     * has always reported it (devices_rfic_cmds.c:290-301, WQSUCCESS bit);
-     * the host used to discard it, so a queued command that drained and
-     * failed looked exactly like one that succeeded. */
+     * reports it in WQSUCCESS; result_valid proves at least one command
+     * retired since reset, so the 0xFF reset sentinel cannot look successful. */
     bool last_write_success;
 };
 

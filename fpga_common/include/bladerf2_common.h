@@ -299,7 +299,9 @@ typedef enum {
  *  +===============+===================================================+
  *  |      Bit(s)   |         Value                                     |
  *  +===============+===================================================+
- *  |      63:16    | Reserved. Set to 0.                               |
+ *  |      63:17    | Reserved. Set to 0.                               |
+ *  +---------------+---------------------------------------------------+
+ *  |       16      | 1 if a write-queue command has retired since reset |
  *  +---------------+---------------------------------------------------+
  *  |      15:8     | count of items in write queue                     |
  *  +---------------+---------------------------------------------------+
@@ -321,6 +323,8 @@ typedef enum {
 #define BLADERF_RFIC_STATUS_STAGE_MASK       0x3f
 #define BLADERF_RFIC_STATUS_WQLEN_SHIFT      8
 #define BLADERF_RFIC_STATUS_WQLEN_MASK       0xff
+#define BLADERF_RFIC_STATUS_WQRESULT_VALID_SHIFT 16
+#define BLADERF_RFIC_STATUS_WQRESULT_VALID_MASK  0x1
 
 /* Progress markers written by _rfic_initialize into the stage field above.
  * The value left behind is the last stage entered, so a stuck or failed

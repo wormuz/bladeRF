@@ -84,6 +84,7 @@ void rfic_queue_reset(struct rfic_queue *q)
     }
 
     q->last_rv = 0xFF;
+    q->last_rv_valid = false;
     q->rem_idx = 0;
     q->ins_idx = 0;
 }

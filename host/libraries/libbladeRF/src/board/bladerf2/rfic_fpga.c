@@ -26,6 +26,7 @@
 #include "conversions.h"
 #include "iterators.h"
 #include "log.h"
+#include "rfic_status_policy.h"
 
 // #define BLADERF_HEADLESS_C_DEBUG
 
@@ -95,6 +96,9 @@ static int _rfic_fpga_get_status(
     rfic_status->last_write_success =
         ((sreg >> BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT) &
          BLADERF_RFIC_STATUS_WQSUCCESS_MASK);
+    rfic_status->last_write_result_valid =
+        ((sreg >> BLADERF_RFIC_STATUS_WQRESULT_VALID_SHIFT) &
+         BLADERF_RFIC_STATUS_WQRESULT_VALID_MASK);
     rfic_status->write_queue_length = ((sreg >> BLADERF_RFIC_STATUS_WQLEN_SHIFT) &
                                      BLADERF_RFIC_STATUS_WQLEN_MASK);
     rfic_status->init_stage = ((sreg >> BLADERF_RFIC_STATUS_STAGE_SHIFT) &
@@ -201,15 +205,24 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
         return status;
     }
 
-    /* Note the firmware masks last_rv down to one bit, so the reset sentinel
-     * 0xFF ("no command has run yet") is indistinguishable from success, and
-     * 0xFE ("no write handler") from failure. Only the failure direction is
-     * actionable here. */
-    if (!rfic_status.last_write_success) {
-        log_warning("%s: NIOS RFIC command failed (initialized=%u, init_stage=%u:%s)\n",
-                    __FUNCTION__, rfic_status.rfic_initialized,
-                    rfic_status.init_stage,
-                    _rfic_fpga_init_stage_name(rfic_status.init_stage));
+    /* The separate validity bit distinguishes a retired command result from
+     * the 0xFF queue-reset sentinel (whose low bit is one). */
+    if (!bladerf2_rfic_status_result_accepted(
+            rfic_status.last_write_result_valid,
+            rfic_status.last_write_success)) {
+        if (!rfic_status.last_write_result_valid) {
+            log_warning("%s: NIOS RFIC queue drained without a retired "
+                        "command (initialized=%u, init_stage=%u:%s)\n",
+                        __FUNCTION__, rfic_status.rfic_initialized,
+                        rfic_status.init_stage,
+                        _rfic_fpga_init_stage_name(rfic_status.init_stage));
+        } else {
+            log_warning("%s: NIOS RFIC command failed "
+                        "(initialized=%u, init_stage=%u:%s)\n",
+                        __FUNCTION__, rfic_status.rfic_initialized,
+                        rfic_status.init_stage,
+                        _rfic_fpga_init_stage_name(rfic_status.init_stage));
+        }
         return BLADERF_ERR_UNEXPECTED;
     }
 

@@ -302,6 +302,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
         case ENTRY_STATE_COMPLETE: {
             /* Drop the item from the queue */
             q->last_rv = e->rv;
+            q->last_rv_valid = true;
             rfic_dequeue(q, NULL);
             break;
         }

@@ -25,6 +25,8 @@
 #ifndef BLADERF_NIOS_DEVICES_RFIC_QUEUE_H_
 #define BLADERF_NIOS_DEVICES_RFIC_QUEUE_H_
 
+#include <stdbool.h>
+
 #define COMMAND_QUEUE_MAX 16
 #define COMMAND_QUEUE_FULL 0xff
 #define COMMAND_QUEUE_EMPTY 0xfe
@@ -57,6 +59,7 @@ struct rfic_queue {
     uint8_t ins_idx; /* Insertion index */
     uint8_t rem_idx; /* Removal index */
     uint8_t last_rv; /* Returned value from executing last command */
+    bool last_rv_valid; /* At least one command retired since queue reset */
 
     struct rfic_queue_entry entries[COMMAND_QUEUE_MAX];
 };

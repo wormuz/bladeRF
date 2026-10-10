@@ -437,6 +437,10 @@ bool _rfic_cmd_rd_status(struct rfic_state *state,
               ((state->write_queue.last_rv & BLADERF_RFIC_STATUS_WQSUCCESS_MASK)
                << BLADERF_RFIC_STATUS_WQSUCCESS_SHIFT) |
 
+              ((state->write_queue.last_rv_valid &
+                BLADERF_RFIC_STATUS_WQRESULT_VALID_MASK)
+               << BLADERF_RFIC_STATUS_WQRESULT_VALID_SHIFT) |
+
               ((state->init_stage & BLADERF_RFIC_STATUS_STAGE_MASK)
                << BLADERF_RFIC_STATUS_STAGE_SHIFT);
 
