@@ -153,16 +153,18 @@ void bladerf2_tx_stream_set_faulted(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-void bladerf2_tx_stream_new_epoch(struct bladerf2_board_data *board_data)
+uint64_t bladerf2_tx_transport_failure_generation(
+    struct bladerf2_board_data *board_data)
 {
     if (board_data == NULL) {
-        return;
+        return 0;
     }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->tx_async_transport_faulted = false;
-    board_data->tx_stream_faulted_async = false;
+    const uint64_t generation =
+        board_data->tx_async_transport_failure_generation;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return generation;
 }
 
 void bladerf2_tx_stream_set_epoch_id(
@@ -197,6 +199,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     report = !board_data->tx_stream_faulted_async;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
+    board_data->tx_async_transport_failure_generation++;
     epoch_id = board_data->tx_async_link_epoch_id;
     if (report) {
         event.host_monotonic_ns = _monotonic_ns();
@@ -230,6 +233,42 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
     event.host_monotonic_ns = _monotonic_ns();
     event.event_type = BLADERF_RF_EVT_TX_STATUS_RECOVERED;
     event.epoch_id = (uint8_t)(link_status >> 20);
+    event.fpga_state = BLADERF_RF_STATE_IDLE;
+    bladerf2_rf_event_append(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return true;
+}
+
+bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
+                                  uint32_t link_status,
+                                  uint64_t failure_generation_baseline)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return false;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_async_link_epoch_id = (uint8_t)(link_status >> 20);
+    if (!bladerf2_tx_epoch_generation_unchanged(
+            board_data->tx_async_transport_failure_generation,
+            failure_generation_baseline)) {
+        /* A USB failure arrived while START was in flight. Its invalidation
+         * event is already in history and must remain newer than any positive
+         * claim for the generation being started. */
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return false;
+    }
+
+    board_data->tx_async_transport_faulted = false;
+    board_data->tx_stream_faulted_async = false;
+    event.host_monotonic_ns = _monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_TX_LINK_VALID;
+    event.epoch_id = (uint8_t)(link_status >> 20);
+    event.rfic_status = link_status;
     event.fpga_state = BLADERF_RF_STATE_IDLE;
     bladerf2_rf_event_append(board_data, &event);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);

@@ -147,6 +147,11 @@ int main(void)
     assert(!bladerf2_rf_link_tx_epoch_valid(
         tx_epoch_ok & ~BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE, 9));
 
+    /* A TX error arriving during a shared START must not be overwritten by
+     * the subsequently observed link acknowledgement. */
+    assert(bladerf2_tx_epoch_generation_unchanged(12, 12));
+    assert(!bladerf2_tx_epoch_generation_unchanged(13, 12));
+
     assert(bladerf2_rf_event_is_transition_terminal(
         BLADERF_RF_EVT_RX_EPOCH_VALID));
     assert(!bladerf2_rf_event_is_transition_terminal(

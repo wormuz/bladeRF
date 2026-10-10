@@ -30,6 +30,14 @@ static inline bool bladerf2_rf_link_tx_epoch_valid(uint32_t status,
            (uint8_t)(status >> 20) == expected_epoch;
 }
 
+/* A confirmed START may clear faults that predate the transaction, but a
+ * transport failure observed after its baseline must remain the newest state. */
+static inline bool bladerf2_tx_epoch_generation_unchanged(
+    uint64_t failure_generation, uint64_t transaction_baseline)
+{
+    return failure_generation == transaction_baseline;
+}
+
 /* Preserve the transition handle that scoped an RX epoch on invalid-data
  * notifications. The epoch is shared by both RX lanes, but its requested
  * control channel is useful provenance for RX1/RX2 consumers. */

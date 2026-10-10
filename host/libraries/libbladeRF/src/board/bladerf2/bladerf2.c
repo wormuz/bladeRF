@@ -1358,7 +1358,10 @@ static int bladerf2_enable_module(struct bladerf *dev,
         bool epoch_confirmed = false;
         bool start_attempted = false;
         bool start_accepted = false;
+        bool tx_link_valid_event_emitted = false;
         uint32_t link_ack_status = 0;
+        uint64_t const tx_transport_failure_baseline =
+            bladerf2_tx_transport_failure_generation(board_data);
 
         /* The FPGA loss counters reset with the shared sample-domain reset,
          * not on every lane enable. If the other direction is already live,
@@ -1432,7 +1435,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_fpga_loss_count_valid = true;
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            bladerf2_tx_stream_new_epoch(board_data);
+            tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
+                dev, link_ack_status, tx_transport_failure_baseline);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (tx_first_enable) {
@@ -1446,7 +1450,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
              * counter remains in the same sample-domain reset generation. */
             board_data->tx_link_fault_reported = false;
             board_data->tx_epoch_invalid_reported = false;
-            bladerf2_tx_stream_new_epoch(board_data);
+            tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
+                dev, link_ack_status, tx_transport_failure_baseline);
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         } else if (board_data->rf_link_dir_on[1]) {
@@ -1454,12 +1459,15 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_recovery_blocked = true;
             board_data->tx_status_unavailable_reported = true;
         }
-        if (board_data->rf_link_dir_on[1]) {
+        if (board_data->rf_link_dir_on[1] && !epoch_confirmed) {
             bladerf2_tx_stream_event(
-                dev, epoch_confirmed ? BLADERF_RF_EVT_TX_LINK_VALID :
-                                       BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
-                0, link_ack_status,
-                epoch_confirmed ? 0 : BLADERF_ERR_UNSUPPORTED);
+                dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+                link_ack_status, BLADERF_ERR_UNSUPPORTED);
+        } else if (board_data->rf_link_dir_on[1] &&
+                   epoch_confirmed && !tx_link_valid_event_emitted) {
+            log_warning("%s: TX transport failed during shared START; "
+                        "keeping link invalid until a later acknowledged "
+                        "epoch\n", __FUNCTION__);
         }
         return 0;
     }
