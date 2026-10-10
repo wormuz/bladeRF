@@ -176,6 +176,7 @@ int main(void)
     uint32_t rx_rf_port = UINT32_MAX;
     uint32_t tx_rf_port = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
+        struct rf_rx_gain current_rx_gain = {0};
     uint8_t rx_gc_mode = UINT8_MAX;
     uint8_t tracking_flag = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
@@ -257,6 +258,14 @@ int main(void)
             ad9361_do_dcxo_tune_fine(NULL, 1) != -EINVAL ||
             ad9361_do_dcxo_tune_fine(&phy_without_pdata, 1) != -EINVAL ||
             ad9361_do_dcxo_tune_fine(&phy_without_spi, 1) != -EINVAL ||
+            ad9361_get_rx_gain(NULL, 1, &current_rx_gain) != -EINVAL ||
+            ad9361_get_rx_gain(&phy_without_spi, 1,
+                               &current_rx_gain) != -EINVAL ||
+            ad9361_get_rx_gain(&phy, 1, NULL) != -EINVAL ||
+            ad9361_set_rx_gain(NULL, 1, &current_rx_gain) != -EINVAL ||
+            ad9361_set_rx_gain(&phy_without_spi, 1,
+                               &current_rx_gain) != -EINVAL ||
+            ad9361_set_rx_gain(&phy, 1, NULL) != -EINVAL ||
             ad9361_get_temperature(NULL, &temperature) != -EINVAL ||
             ad9361_get_temperature(&phy_without_spi, &temperature) != -EINVAL ||
             ad9361_get_temperature(&phy, NULL) != -EINVAL ||
@@ -268,6 +277,7 @@ int main(void)
             ad9361_get_en_state_machine_mode(&phy, NULL) != -EINVAL ||
             ad9361_set_rx_rf_gain(&phy_without_spi, 0, 0) != -EINVAL ||
             ad9361_set_rx_rf_gain(&phy_without_pdata, 0, 0) != -EINVAL ||
+            ad9361_get_rx_rf_gain(&phy_without_spi, 0, &rx_gain) != -EINVAL ||
             ad9361_set_rx_rf_bandwidth(&phy_without_spi, 1000000) != -EINVAL ||
             ad9361_set_rx_rf_bandwidth(&phy_without_pdata, 1000000) != -EINVAL ||
             ad9361_set_rx_sampling_freq(&phy_without_spi, 1000000) != -EINVAL ||
