@@ -191,6 +191,30 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* In 1x1 mode with physical TX2 selected, logical channel zero must
+     * report the same packed RSSI field as 2x2 channel one. */
+    {
+        uint32_t rssi_1x1, rssi_2x2;
+        register_map_enabled = true;
+        pdata.rx1tx1_mode_use_tx_num = 2;
+        fake_regs[REG_TX_RSSI_LSB] = TX_RSSI_2;
+        fake_regs[REG_TX_RSSI_LSB + 1] = 5;
+        fake_regs[REG_TX_RSSI_LSB + 2] = 1;
+        if (ad9361_get_tx_rssi(&phy, 0, &rssi_1x1) != 0) {
+            fprintf(stderr, "1x1 TX2 RSSI read failed\n");
+            return EXIT_FAILURE;
+        }
+        pdata.rx2tx2 = true;
+        if (ad9361_get_tx_rssi(&phy, 1, &rssi_2x2) != 0 ||
+            rssi_1x1 != rssi_2x2) {
+            fprintf(stderr, "1x1 TX2 RSSI mapped to wrong physical lane\n");
+            return EXIT_FAILURE;
+        }
+        pdata.rx2tx2 = false;
+        register_map_enabled = false;
+        read_count = 0;
+    }
+
     spi_status = -EIO;
     int32_t ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
     if (ret != -EIO || read_count != 1 || delay_count != 0) {
