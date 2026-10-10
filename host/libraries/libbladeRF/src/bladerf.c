@@ -1327,12 +1327,25 @@ int bladerf_select_band(struct bladerf *dev,
                         bladerf_frequency frequency)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, ch);
+            return status;
+        }
+    }
 
     status = dev->board->select_band(dev, ch, frequency);
 
@@ -1360,6 +1373,15 @@ int bladerf_set_rf_port(struct bladerf *dev,
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            rx_reconfigure_complete(dev, ch);
+            return status;
+        }
+    }
 
     status = dev->board->set_rf_port(dev, ch, port);
 
@@ -2292,6 +2314,13 @@ int bladerf_set_loopback(struct bladerf *dev, bladerf_loopback l)
     }
     MUTEX_LOCK(&dev->lock);
 
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
+
     status = dev->board->set_loopback(dev, l);
 
     MUTEX_UNLOCK(&dev->lock);
@@ -2437,12 +2466,20 @@ int bladerf_trim_dac_read(struct bladerf *dev, uint16_t *trim)
 int bladerf_trim_dac_write(struct bladerf *dev, uint16_t trim)
 {
     int status;
+    CHECK_NULL(dev);
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
     if (status != 0) {
         return status;
     }
     MUTEX_LOCK(&dev->lock);
+
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+        return status;
+    }
 
     status = dev->board->trim_dac_write(dev, trim);
 

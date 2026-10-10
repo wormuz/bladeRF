@@ -48,9 +48,13 @@ Arbitrary public Wishbone and config-GPIO writes revoked RX validity but left
 the TX RF certificate active, despite the writes being able to alter FPGA
 admission, clock, or RF controls. The generic mutators now acquire the TX
 configuration fence before invoking board writes; the xA4 board callbacks no
-longer acquire it a second time. The focused regression source checks the
-single-fence ordering and fail-closed behavior. This source change is not yet
-committed and the test remains unrun under the source-audit gate.
+longer acquire it a second time. The same ownership correction was applied to
+sample-rate, bandwidth, band/port, loopback, and trim-DAC setters after tracing
+the previous generic fix into xA4 callbacks and finding duplicate TX
+invalidation events on the real path. The focused regression source checks the
+single-fence ordering for raw writes and fail-closed behavior. These source
+changes are not yet committed and the test remains unrun under the source-audit
+gate.
 
 ## Release qualification gates
 

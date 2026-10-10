@@ -15,6 +15,8 @@ struct mock_state {
     unsigned int sample_rate_calls;
     unsigned int rational_rate_calls;
     unsigned int bandwidth_calls;
+    unsigned int select_band_calls;
+    unsigned int set_rf_port_calls;
     unsigned int config_gpio_write_calls;
     unsigned int wishbone_write_calls;
     unsigned int complete_calls;
@@ -22,6 +24,8 @@ struct mock_state {
     bladerf_channel sample_rate_channel;
     bladerf_channel rational_rate_channel;
     bladerf_channel bandwidth_channel;
+    bladerf_channel select_band_channel;
+    bladerf_channel set_rf_port_channel;
     bladerf_channel completed_channel;
     uint32_t invalidate_reason;
     uint32_t config_gpio_value;
@@ -116,6 +120,26 @@ static int mock_set_bandwidth(struct bladerf *dev, bladerf_channel ch,
         *actual = bandwidth;
     }
     return state->bandwidth_status;
+}
+
+static int mock_select_band(struct bladerf *dev, bladerf_channel ch,
+                            bladerf_frequency frequency)
+{
+    struct mock_state *state = dev->board_data;
+    (void)frequency;
+    state->select_band_calls++;
+    state->select_band_channel = ch;
+    return 0;
+}
+
+static int mock_set_rf_port(struct bladerf *dev, bladerf_channel ch,
+                            const char *port)
+{
+    struct mock_state *state = dev->board_data;
+    (void)port;
+    state->set_rf_port_calls++;
+    state->set_rf_port_channel = ch;
+    return 0;
 }
 
 static int mock_config_gpio_write(struct bladerf *dev, uint32_t value)
@@ -308,6 +332,8 @@ static const struct board_fns mock_board = {
     .set_sample_rate = mock_set_sample_rate,
     .set_rational_sample_rate = mock_set_rational_sample_rate,
     .set_bandwidth = mock_set_bandwidth,
+    .select_band = mock_select_band,
+    .set_rf_port = mock_set_rf_port,
     .config_gpio_write = mock_config_gpio_write,
     .wishbone_master_write = mock_wishbone_write,
     .trigger_arm = mock_trigger_arm,
@@ -464,17 +490,27 @@ int main(void)
            state.wishbone_value == 0xa5a55a5a && state.complete_calls == 8 &&
            state.tx_fence_calls == 8);
 
+    /* TX-only RF band and port changes must use the same public-layer fence
+     * exactly once; their board callbacks do not own TX admission policy. */
+    assert(bladerf_select_band(&dev, tx0, 2450000000) == 0);
+    assert(bladerf_set_rf_port(&dev, tx0, "A") == 0);
+    assert(state.select_band_calls == 1 &&
+           state.select_band_channel == tx0 && state.set_rf_port_calls == 1 &&
+           state.set_rf_port_channel == tx0 && state.tx_fence_calls == 10);
+
     /* OVERSAMPLE changes the sample-rate and stream-format interpretation.
      * Fence before changing the public feature policy, including disable. */
     assert(bladerf_enable_feature(&dev, BLADERF_FEATURE_OVERSAMPLE, true) == 0);
     assert(dev.feature == BLADERF_FEATURE_OVERSAMPLE &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_FEATURE &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
-    assert(state.invalidate_calls == 9 && state.complete_calls == 9);
+    assert(state.invalidate_calls == 9 && state.complete_calls == 9 &&
+           state.tx_fence_calls == 11);
     assert(bladerf_enable_feature(&dev, BLADERF_FEATURE_DEFAULT, false) == 0);
     assert(dev.feature == BLADERF_FEATURE_DEFAULT &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_FEATURE);
-    assert(state.invalidate_calls == 10 && state.complete_calls == 10);
+    assert(state.invalidate_calls == 10 && state.complete_calls == 10 &&
+           state.tx_fence_calls == 12);
 
     /* Failed RX fencing blocks both shared TX configuration paths before the
      * board setter runs. */

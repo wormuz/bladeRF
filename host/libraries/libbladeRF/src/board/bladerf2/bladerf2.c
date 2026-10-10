@@ -2089,11 +2089,6 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
             rfic->get_filter(dev, BLADERF_CHANNEL_TX(0), NULL, &txfir));
     }
 
-    /* Sample-rate programming recalculates the shared AD9361 clock chains
-     * and can change TX datapath state. Revoke the TX certificate before the
-     * first RFIC write, even when this call was made for RX. */
-    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
-
     /* If the requested sample rate is below the native range, we must implement
      * a 4x decimation/interpolation filter on the RFIC. */
     if (new_low) {
@@ -2244,10 +2239,6 @@ static int bladerf2_set_bandwidth(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
-    /* AD9361 bandwidth updates can rerun shared filter/TIA/ADC setup. Keep
-     * TX muted until its RF state has been re-established as well. */
-    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
-
     return board_data->rfic->set_bandwidth(dev, ch, bandwidth, actual);
 }
 
@@ -2278,10 +2269,6 @@ static int bladerf2_select_band(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
-        CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
-    }
 
     return board_data->rfic->select_band(dev, ch, frequency);
 }
@@ -2931,7 +2918,6 @@ static int bladerf2_set_rf_port(struct bladerf *dev,
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
-        CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
         CHECK_AD936X(ad9361_set_tx_rf_port_output(phy, port_id));
     } else {
         CHECK_AD936X(ad9361_set_rx_rf_port_input(phy, port_id));
@@ -4806,8 +4792,6 @@ static int bladerf2_set_loopback(struct bladerf *dev, bladerf_loopback mode)
             return BLADERF_ERR_UNEXPECTED;
     }
 
-    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
-
     IF_COMMAND_MODE(dev, RFIC_COMMAND_HOST, {
         /* Set digital loopback state */
         CHECK_AD936X(ad9361_bist_loopback(phy, bist_loopback));
@@ -5079,8 +5063,6 @@ static int bladerf2_trim_dac_write(struct bladerf *dev, uint16_t trim)
         board_data->trimdac_last_value = trim_value;
         return 0;
     }
-
-    CHECK_STATUS(bladerf2_tx_config_change_begin(dev));
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rfic_reference_clock_known = false;
