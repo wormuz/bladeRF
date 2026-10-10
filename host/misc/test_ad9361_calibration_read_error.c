@@ -1094,6 +1094,63 @@ int main(void)
         fail_read_reg = -1;
     }
 
+    /* A failed fastlock-profile read must remain an SPI error, never become
+     * a low-byte LO value through assignment to uint8_t. */
+    {
+        uint64_t frequency = UINT64_C(0xfeedface);
+
+        fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
+        ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
+        if (ret != -EIO || frequency != UINT64_C(0xfeedface)) {
+            fprintf(stderr, "RX fastlock getter hid profile SPI error: ret=%" PRId32
+                    " frequency=%" PRIu64 "\n", ret, frequency);
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+    }
+
+    /* Malformed clocks/durations are rejected before arithmetic or writes. */
+    {
+        struct refclk_scale factor = { .spi = &spi, .phy = &phy };
+        struct tx_monitor_control txmon = {0};
+        struct gain_control gain = {0};
+        uint32_t zero_rate = 0;
+        unsigned writes_before = read_count;
+
+        ret = ad9361_clk_factor_round_rate(&factor, 1000000, &zero_rate);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "Clock factor accepted zero parent rate: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_bbpll_round_rate(&factor, 983040000, &zero_rate);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "BBPLL accepted zero parent rate: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_set_ref_clk_cycles(&phy, 0);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "Reference-cycle setup accepted zero clock: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_gc_setup(&phy, &gain);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "AGC setup accepted zero measurement duration: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_txmon_setup(&phy, &txmon);
+        if (ret != -EINVAL) {
+            fprintf(stderr, "TX monitor accepted zero duration: ret=%" PRId32 "\n", ret);
+            return EXIT_FAILURE;
+        }
+        phy.rxbbf_div = 0;
+        ret = ad9361_rx_adc_setup(&phy, 983040000, 40000000);
+        if (ret != -EIO || read_count != writes_before) {
+            fprintf(stderr, "RX ADC setup accepted zero filter divider: ret=%" PRId32
+                    " reads=%u/%u\n", ret, read_count, writes_before);
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Initial clock registration must fail and free a partial tree if its
      * first register read fails. */
     {
