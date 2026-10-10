@@ -4866,7 +4866,8 @@ typedef enum {
     BLADERF_RF_EVT_RX_ADC_CLIPPING,
     /** TX RF-link generation was acknowledged by the FPGA. This certifies
      * the host/FPGA transport link only; it does not certify analog TX power
-     * or RFIC signal quality. */
+     * or RFIC signal quality. A new generation invalidates any RFIC-state
+     * certificate from the preceding TX generation until it is rechecked. */
     BLADERF_RF_EVT_TX_LINK_VALID,
     /** FPGA TX sample FIFO underflow count advanced. `flags` contains the
      * low 32 bits and `rfic_status` the high 32 bits of the cumulative
@@ -4875,16 +4876,18 @@ typedef enum {
     /** FPGA sticky TX link fault was observed. `rfic_status` contains the
      * RF-link status word. TX link validity is revoked. */
     BLADERF_RF_EVT_TX_LINK_FAULT,
-    /** TX link status or loss counter could not be read while TX was active.
-     * TX link validity is unknown and must be treated as revoked. */
+    /** TX link status, loss counter, or RFIC status could not be read while
+     * TX was active. TX link and RFIC-state validity are unknown and must be
+     * treated as revoked. */
     BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
     /** TX module was disabled; no active transmission is certified. */
     BLADERF_RF_EVT_TX_STREAM_STOPPED,
     /** TX underflow counter decreased while a stream was active, indicating
      * a counter reset/generation boundary. TX link validity is revoked. */
     BLADERF_RF_EVT_TX_COUNTER_RESET,
-    /** TX status polling recovered and the cumulative counter proved no
-     * underrun across the observation gap. TX transport validity is restored. */
+    /** TX status polling recovered: FPGA link status and cumulative counter
+     * are readable and unchanged, and AD9361 TX RFPLL, TX/FDD ENSM, and BBPLL
+     * are healthy. TX transport and RFIC-state certificates are restored. */
     BLADERF_RF_EVT_TX_STATUS_RECOVERED,
     /** FPGA TX epoch acknowledgement was lost or changed without a host
      * transition. `rfic_status` contains the observed RF-link status word;
