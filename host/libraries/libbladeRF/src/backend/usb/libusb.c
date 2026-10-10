@@ -1713,6 +1713,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
     stream_data->num_complete = 0;
     stream_data->timeout_reported = false;
     stream_data->rx_terminal_failure_reported = false;
+    stream_data->cancel_deadline_ns = 0;
 
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {

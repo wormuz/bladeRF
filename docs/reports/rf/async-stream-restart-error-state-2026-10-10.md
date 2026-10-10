@@ -13,12 +13,14 @@ error and TX could publish that stale value again as a transport failure.
 
 Clear `error_code` under the stream lock at the beginning of every run. The
 libusb backend also resets per-run completion, timeout-deduplication, and RX
-terminal-notification latches when it restarts. Without resetting the RX
-terminal latch, a second run could suppress its own terminal invalid-data
-notification after an earlier run had already reported one. The sync epoch
-traversal source regression now runs a TX stream with a stream error, follows
-it with a backend failure, then verifies a clean third run returns success and
-does not publish another transport error.
+terminal-notification latches when it restarts. It also clears the TX cancel
+deadline: reusing an expired deadline can cancel a new run's in-flight OUT
+transfers immediately, in the middle of an FX3 DMA buffer. Without resetting
+the RX terminal latch, a second run could suppress its own terminal
+invalid-data notification after an earlier run had already reported one. The
+sync epoch traversal source regression now runs a TX stream with a stream
+error, follows it with a backend failure, then verifies a clean third run
+returns success and does not publish another transport error.
 
 ## Verification boundary
 
