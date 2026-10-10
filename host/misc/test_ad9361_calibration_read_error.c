@@ -92,8 +92,11 @@ static bool register_map_enabled;
 static int32_t fail_read_reg = -1;
 static int32_t fail_write_reg = -1;
 static int32_t fail_write_once_reg = -1;
+static unsigned fail_write_once_reg_occurrence = 1;
+static bool apply_failed_write_once;
 static int32_t state_after_ensm_write = -1;
 static uint8_t fake_regs[1024];
+static unsigned fake_write_counts[1024];
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void no_os_free(void *ptr) { free(ptr); }
@@ -126,9 +129,18 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     reg = command & 0x3ff;
     if (command & AD_WRITE) {
         ++write_count;
+        ++fake_write_counts[reg];
         if ((int32_t)reg == fail_write_once_reg) {
-            fail_write_once_reg = -1;
-            return -EIO;
+            if (fail_write_once_reg_occurrence > 1) {
+                --fail_write_once_reg_occurrence;
+            } else {
+                fail_write_once_reg = -1;
+                fail_write_once_reg_occurrence = 1;
+                if (apply_failed_write_once && register_map_enabled)
+                    fake_regs[reg] = data[2];
+                apply_failed_write_once = false;
+                return -EIO;
+            }
         }
         if ((int32_t)reg == fail_write_reg)
             return -EIO;
@@ -1700,6 +1712,44 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+    }
+
+    /* Error-table programming must stop its indirect-table clock even when
+     * the final stop write reached hardware but the SPI response failed. */
+    {
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_write_counts[REG_CONFIG] = 0;
+        fail_write_once_reg = REG_CONFIG;
+        fail_write_once_reg_occurrence = 7;
+        apply_failed_write_once = true;
+        ret = ad9361_rssi_program_lna_gain(&phy);
+        if (ret != -EIO || fake_regs[REG_CONFIG] != 0 ||
+            fake_write_counts[REG_CONFIG] != 8) {
+            fprintf(stderr,
+                    "RSSI LNA table skipped clock-stop retry: ret=%" PRId32
+                    " reg=0x%02x writes=%u\n", ret,
+                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG]);
+            return EXIT_FAILURE;
+        }
+
+        fake_write_counts[REG_CONFIG] = 0;
+        fail_write_once_reg = REG_CONFIG;
+        fail_write_once_reg_occurrence = 23;
+        apply_failed_write_once = true;
+        ret = ad9361_rssi_write_err_tbl(&phy);
+        if (ret != -EIO || fake_regs[REG_CONFIG] != 0 ||
+            fake_write_counts[REG_CONFIG] != 24) {
+            fprintf(stderr,
+                    "RSSI error table skipped clock-stop retry: ret=%" PRId32
+                    " reg=0x%02x writes=%u\n", ret,
+                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG]);
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = false;
+        register_map_enabled = false;
     }
 
     puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
