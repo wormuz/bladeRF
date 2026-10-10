@@ -208,7 +208,8 @@ that were checked only after RX invalidation: FPGA tuning without its FPGA
 capability, RFIC BIST loopback under FPGA tuning, VCTCXO taming without the
 advertised capability, and SC8 sync formats on non-bladeRF2 boards. These
 capability/mode checks now run before invalidation. `bladerf_sync_config()`
-also rejects unknown layout and format enums before touching stream state.
+also rejects unknown layout/format enums and X2 layouts on a one-channel board
+before touching stream state.
 Regression source was added; no build/test under the active source gate.
 
 The direct RX/TX FIR setters also accepted arbitrary enum values through to

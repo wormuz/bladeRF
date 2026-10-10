@@ -1854,6 +1854,13 @@ int bladerf_sync_config(struct bladerf *dev,
             return BLADERF_ERR_INVAL;
     }
 
+    if ((layout == BLADERF_RX_X2 || layout == BLADERF_TX_X2) &&
+        dev->board->get_channel_count != NULL &&
+        dev->board->get_channel_count(
+            dev, layout == BLADERF_RX_X2 ? BLADERF_RX : BLADERF_TX) < 2) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
     const bool is_rx =
         (layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
 

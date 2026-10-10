@@ -232,8 +232,17 @@ static int mock_lms_write(struct bladerf *dev, uint8_t address, uint8_t value)
     return 0;
 }
 
+static size_t mock_get_channel_count(struct bladerf *dev,
+                                     bladerf_direction dir)
+{
+    (void)dev;
+    (void)dir;
+    return 1;
+}
+
 static const struct board_fns mock_board = {
     .name = "bladerf2",
+    .get_channel_count = mock_get_channel_count,
     .invalidate_rx_data = mock_invalidate_rx,
     .rx_reconfigure_complete = mock_reconfigure_complete,
     .set_sample_rate = mock_set_sample_rate,
@@ -296,6 +305,9 @@ int main(void)
     assert(bladerf_sync_config(&dev, (bladerf_channel_layout)99,
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) == BLADERF_ERR_INVAL);
+    assert(bladerf_sync_config(&dev, BLADERF_RX_X2,
+                               BLADERF_FORMAT_SC16_Q11,
+                               8, 1024, 4, 1000) == BLADERF_ERR_UNSUPPORTED);
     assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
                                (bladerf_format)-1,
                                8, 1024, 4, 1000) == BLADERF_ERR_INVAL);
