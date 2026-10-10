@@ -1071,7 +1071,7 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->tx_frequency_reconfigure_active &&
                 !board_data->tx_rf_config_operation_active;
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
-                board_data->rf_link_dir_on[0] && rx_retune2_watch_active &&
+                rx_retune2_watch_active &&
                 !board_data->rf_transition_setter_active;
             tx_fir_config_valid = board_data->phy != NULL &&
                 board_data->phy->fir_config_valid;
@@ -1080,29 +1080,29 @@ static void *rx_fault_monitor_task(void *arg)
                     _rx_fault_monitor_stage(board_data, "RFFE status");
                     rx_channel_status = dev->backend->rffe_control_read(
                         dev, &rffe_status);
-                }
-                uint32_t config_gpio = 0;
-                reference_clock_status = dev->backend->config_gpio_read(
-                    dev, &config_gpio);
-                if (!reference_clock_known) {
-                    reference_clock_status = BLADERF_ERR_WOULD_BLOCK;
-                }
-                if (reference_clock_status == 0 &&
-                    (config_gpio & (1u << CFG_GPIO_CLOCK_SELECT)) == 0) {
-                    if ((config_gpio & (1u << CFG_GPIO_PLL_EN)) != 0) {
-                        if (rx_channel_status != 0) {
-                            reference_clock_status = rx_channel_status;
-                        } else if ((rffe_status &
-                                    (1u << RFFE_CONTROL_ADF_MUXOUT)) == 0) {
-                            reference_clock_status = BLADERF_ERR_FPGA_OP;
+                    uint32_t config_gpio = 0;
+                    reference_clock_status = dev->backend->config_gpio_read(
+                        dev, &config_gpio);
+                    if (!reference_clock_known) {
+                        reference_clock_status = BLADERF_ERR_WOULD_BLOCK;
+                    }
+                    if (reference_clock_status == 0 &&
+                        (config_gpio & (1u << CFG_GPIO_CLOCK_SELECT)) == 0) {
+                        if ((config_gpio & (1u << CFG_GPIO_PLL_EN)) != 0) {
+                            if (rx_channel_status != 0) {
+                                reference_clock_status = rx_channel_status;
+                            } else if ((rffe_status &
+                                        (1u << RFFE_CONTROL_ADF_MUXOUT)) == 0) {
+                                reference_clock_status = BLADERF_ERR_FPGA_OP;
+                            }
                         }
                     }
-                }
-                reference_clock_fault = reference_clock_status != 0;
-                if (reference_clock_fault) {
-                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                    board_data->rfic_reference_clock_known = false;
-                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    reference_clock_fault = reference_clock_status != 0;
+                    if (reference_clock_fault) {
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->rfic_reference_clock_known = false;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    }
                 }
                 _rx_fault_monitor_stage(board_data, "NIOS link status");
                 status = nios_rf_link_status_read(dev, &rf_link_status);
