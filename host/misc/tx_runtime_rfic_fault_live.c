@@ -12,7 +12,8 @@
  *   RUNTIME_TX_RFIC_REGISTER_WRITE
  *
  * The test verifies durable event classification and that sync TX refuses
- * samples after the monitor revokes validity. */
+ * samples after the monitor or a legacy RF configuration setter revokes
+ * validity. */
 #include <libbladeRF.h>
 
 #include <pthread.h>
@@ -172,7 +173,7 @@ int main(void)
                 expected_event_seen = true;
             } else if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 &&
                        event->event_type ==
-                           BLADERF_RF_EVT_TX_FREQUENCY_INVALID) {
+                           BLADERF_RF_EVT_TX_RFIC_STATE_INVALID) {
                 expected_event_seen = true;
             }
         }
