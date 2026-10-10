@@ -625,7 +625,7 @@ static int _fail_transition(struct bladerf *dev,
     return status;
 }
 
-static void _emit_event_with_timestamp(struct bladerf *dev,
+static void _emit_event_with_timestamp_for_transaction(struct bladerf *dev,
                         struct bladerf2_board_data *board_data,
                         bladerf_rf_event_type type,
                         bladerf_rf_state state,
@@ -636,7 +636,9 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
                         uint32_t epoch_id,
                         uint64_t host_monotonic_ns,
                         uint64_t fpga_timestamp,
-                        uint32_t flags)
+                        uint32_t flags,
+                        uint32_t transaction_id,
+                        bool inherit_transaction_context)
 {
     struct bladerf_rf_event event = {0};
     uint32_t invalidation_channel_flags = 0;
@@ -660,26 +662,30 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         event.host_monotonic_ns = host_monotonic_ns != 0 ?
                                   host_monotonic_ns : _monotonic_ns();
-        event.transaction_id = board_data->rf_transition_current_id;
-        if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED) {
-            /* Invalidation reason bits share the flags word with legacy
-             * channel metadata. Keep the reason byte-for-byte intact and
-             * publish channel provenance as an adjacent companion event. */
-            invalidation_channel_flags =
-                bladerf2_rx_transition_channel_event_flags(
-                    board_data->rf_transition_current_channel,
-                    board_data->rf_transition_current_channel_valid);
-        } else {
-            event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
-            if (board_data->rf_transition_current_channel ==
-                BLADERF_CHANNEL_RX(1)) {
-                event.flags |= BLADERF_RF_EVENT_F_TRANSITION_RX2;
+        event.transaction_id = inherit_transaction_context ?
+                               board_data->rf_transition_current_id :
+                               transaction_id;
+        if (inherit_transaction_context) {
+            if (type == BLADERF_RF_EVT_RX_DATA_INVALIDATED) {
+                /* Invalidation reason bits share the flags word with legacy
+                 * channel metadata. Keep the reason byte-for-byte intact and
+                 * publish channel provenance as an adjacent companion event. */
+                invalidation_channel_flags =
+                    bladerf2_rx_transition_channel_event_flags(
+                        board_data->rf_transition_current_channel,
+                        board_data->rf_transition_current_channel_valid);
+            } else {
+                event.flags |= BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
+                if (board_data->rf_transition_current_channel ==
+                    BLADERF_CHANNEL_RX(1)) {
+                    event.flags |= BLADERF_RF_EVENT_F_TRANSITION_RX2;
+                }
             }
         }
-        if (requested_hz == 0) {
+        if (inherit_transaction_context && requested_hz == 0) {
             requested_hz = board_data->rf_transition_requested_frequency_hz;
         }
-        if (readback_hz == 0) {
+        if (inherit_transaction_context && readback_hz == 0) {
             readback_hz = board_data->rf_transition_readback_frequency_hz;
         }
         event.requested_rx_lo_hz = requested_hz;
@@ -712,6 +718,25 @@ static void _emit_event_with_timestamp(struct bladerf *dev,
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->rf_transition_state = state;
     });
+}
+
+static void _emit_event_with_timestamp(struct bladerf *dev,
+                        struct bladerf2_board_data *board_data,
+                        bladerf_rf_event_type type,
+                        bladerf_rf_state state,
+                        uint64_t requested_hz,
+                        uint64_t readback_hz,
+                        uint32_t rfic_status,
+                        int32_t error_code,
+                        uint32_t epoch_id,
+                        uint64_t host_monotonic_ns,
+                        uint64_t fpga_timestamp,
+                        uint32_t flags)
+{
+    _emit_event_with_timestamp_for_transaction(
+        dev, board_data, type, state, requested_hz, readback_hz, rfic_status,
+        error_code, epoch_id, host_monotonic_ns, fpga_timestamp, flags,
+        0, true);
 }
 
 struct rx_epoch_admission_context {
@@ -2676,10 +2701,10 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_UNSUPPORTED;
     }
     if (rfic_fir_configuration_invalid) {
-        _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
-                    BLADERF_RF_STATE_ERROR,
-                    request->target_frequency_hz, 0, 0,
-                    BLADERF_ERR_WOULD_BLOCK, 0);
+        _emit_event_with_timestamp_for_transaction(
+            dev, board_data, BLADERF_RF_EVT_ERROR, BLADERF_RF_STATE_ERROR,
+            request->target_frequency_hz, 0, 0, BLADERF_ERR_WOULD_BLOCK,
+            0, 0, 0, 0, 0, false);
         return BLADERF_ERR_WOULD_BLOCK;
     }
     if (epochless_async_stream_active) {
