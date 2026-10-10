@@ -26,6 +26,10 @@
 #include <inttypes.h>
 #include <time.h>
 
+#if !BLADERF_OS_WINDOWS
+#include <unistd.h>
+#endif
+
 #include "log.h"
 #include "conversions.h"
 
