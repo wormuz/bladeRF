@@ -2147,6 +2147,8 @@ int main(void)
         agc_pdata.gain_ctrl.dec_pow_measuremnt_duration = 16;
         agc_pdata.gain_ctrl.f_agc_dec_pow_measuremnt_duration = 16;
         agc_pdata.gain_ctrl.f_agc_power_measurement_duration_in_state5 = 16;
+        agc_pdata.gain_ctrl.lmt_overload_high_thresh = 16;
+        agc_pdata.gain_ctrl.lmt_overload_low_thresh = 16;
 
         ret = ad9361_clk_factor_round_rate(&factor, 1000000, &zero_rate);
         if (ret != -EINVAL) {
@@ -2179,6 +2181,20 @@ int main(void)
                     agc_phy.agc_mode[0], agc_phy.agc_mode[1]);
             return EXIT_FAILURE;
         }
+        agc_pdata.gain_ctrl.gain_update_interval_us = 100;
+        agc_pdata.gain_ctrl.lmt_overload_low_thresh = 15;
+        writes_before = write_count;
+        ret = ad9361_gc_setup(&agc_phy, &agc_pdata.gain_ctrl);
+        if (ret != -EINVAL || write_count != writes_before ||
+            agc_phy.agc_mode[0] != 0 || agc_phy.agc_mode[1] != 0) {
+            fprintf(stderr,
+                    "AGC setup accepted invalid LMT threshold: "
+                    "ret=%" PRId32 " writes=%u/%u modes=%u/%u\n",
+                    ret, write_count, writes_before,
+                    agc_phy.agc_mode[0], agc_phy.agc_mode[1]);
+            return EXIT_FAILURE;
+        }
+        agc_pdata.gain_ctrl.lmt_overload_low_thresh = 16;
         if (ad9361_gc_gain_update_counter(0, 30720000, 20,
                                          &gain_update_counter) != -EINVAL ||
             gain_update_counter != UINT32_MAX ||

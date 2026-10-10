@@ -21,14 +21,17 @@ register write. `ad9361_gc_setup()` now runs the same timing preflight using
 the requested modes before mutating cached modes or programming any of its
 registers, so invalid clock/interval inputs cannot leave a partial setup. The
 internal update/setup entry points also reject missing state before
-dereferencing SPI, platform-data, or clock objects.
+dereferencing SPI, platform-data, or clock objects. Setup validates the
+documented 16–800 mV LMT overload threshold range before programming; values
+below 16 previously underflowed during `(threshold / 16) - 1` and clamped to
+the maximum register code.
 
 Regression source in `host/misc/test_ad9361_calibration_read_error.c` covers
-invalid AGC setup timing, missing state, and a 499 Hz clock with no SPI writes
-or cached-mode mutation, plus `UINT32_MAX` eLNA/fast-energy delays that must
-saturate all corresponding fields. The existing test's write-count baseline
-was also corrected; its RX ADC no-write check now uses a separate read-count
-baseline.
+invalid AGC setup timing, missing state, out-of-range LMT thresholds, and a
+499 Hz clock with no SPI writes or cached-mode mutation, plus `UINT32_MAX`
+eLNA/fast-energy delays that must saturate all corresponding fields. The
+existing test's write-count baseline was also corrected; its RX ADC no-write
+check now uses a separate read-count baseline.
 
 ## Validation status
 
