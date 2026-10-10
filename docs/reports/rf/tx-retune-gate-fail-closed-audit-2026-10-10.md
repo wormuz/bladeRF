@@ -139,3 +139,14 @@ status target explicitly returns `BLADERF_ERR_FPGA_OP` or a successful status
 read reports a non-v2 protocol. Unknown status remains fail-closed. Added policy
 source cases for confirmed legacy, status-read-unknown, timeout, and success;
 unbuilt/unrun under the source-audit gate.
+
+## Follow-up: TX gain-mode changes must revoke TX validity
+
+The public `bladerf_set_gain_mode()` path invalidated RX when applicable but
+did not invoke the common TX configuration fence for TX0/TX1. A successful
+manual/AGC mode change could therefore leave an earlier TX validity state
+visible across a changed RFIC configuration. The generic API now calls
+`invalidate_tx_data_before_reconfigure()` under `dev->lock`, matching
+`bladerf_set_gain()`, `bladerf_set_gain_stage()`, and
+`bladerf_set_correction()`. No build/test was run under the source-audit gate;
+`git diff --check` is the only validation.

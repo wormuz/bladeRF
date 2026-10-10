@@ -764,6 +764,14 @@ int bladerf_set_gain_mode(struct bladerf *dev,
     }
     MUTEX_LOCK(&dev->lock);
 
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            MUTEX_UNLOCK(&dev->lock);
+            return status;
+        }
+    }
+
     status = dev->board->set_gain_mode(dev, ch, mode);
 
     MUTEX_UNLOCK(&dev->lock);
