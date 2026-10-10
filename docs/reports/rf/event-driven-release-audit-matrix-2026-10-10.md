@@ -107,6 +107,20 @@ requiring no `RX_EPOCH_VALID` event and no IQ delivery. bladeRF commits
 Regressions and hardware qualification remain unrun under the open source-audit
 gate.
 
+### Event-ring page capacity versus actual history overrun
+
+The native cursor API distinguishes a bounded-ring overrun (`status == 0`,
+`history_complete == false`) from a caller buffer that is too small
+(`BLADERF_ERR_MEM`, partial page, cursor advanced only through copied events).
+The Python wrapper previously labeled both cases `rf_event_history_lost`,
+which falsely claimed that retained events had been overwritten. It now emits
+`rf_event_history_incomplete` with `incomplete_reason` set to
+`history_overrun`, `page_capacity`, or `invalid_cursor`; all remain fail-closed
+for RX/TX validity, and the next poll continues from the returned cursor.
+Scanner consumes the new event name while retaining compatibility with older
+wrappers. Added regression source only; tests remain deferred until the source
+audit gate closes.
+
 ### NIOS scheduled-retune cancel/ISR source pass
 
 The retune2 queue is mutated by the NIOS main-loop packet/work handlers; the
