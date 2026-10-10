@@ -2423,6 +2423,14 @@ int main(void)
         fprintf(stderr, "BIST PRBS hid write failure or changed cache\n");
         return EXIT_FAILURE;
     }
+    {
+        enum ad9361_bist_mode mode_sentinel = (enum ad9361_bist_mode)99;
+        if (ad9361_get_bist_prbs(&phy, &mode_sentinel) != -EIO ||
+            mode_sentinel != (enum ad9361_bist_mode)99) {
+            fprintf(stderr, "BIST PRBS getter exposed unknown cached state\n");
+            return EXIT_FAILURE;
+        }
+    }
     fail_write_reg = -1;
     ret = ad9361_bist_prbs(&phy, (enum ad9361_bist_mode)99);
     if (ret != -EINVAL || phy.bist_prbs_mode != BIST_INJ_TX ||
@@ -2460,8 +2468,8 @@ int main(void)
     fail_write_reg = -1;
     {
         int32_t mode_sentinel = 99;
-        ad9361_get_bist_loopback(&phy, &mode_sentinel);
-        if (mode_sentinel != 99) {
+        if (ad9361_get_bist_loopback(&phy, &mode_sentinel) != -EIO ||
+            mode_sentinel != 99) {
             fprintf(stderr, "BIST getter exposed an unconfirmed loopback mode\n");
             return EXIT_FAILURE;
         }
@@ -2487,13 +2495,12 @@ int main(void)
     fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
     ret = ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0);
     if (ret != -EIO || phy.bist_tone_mode != BIST_INJ_TX ||
-        phy.bist_config != 0x1234) {
+        phy.bist_config != 0x1234 || phy.bist_config_valid) {
         fprintf(stderr, "BIST hid mask write failure or changed cache: ret=%" PRId32
                 " mode=%d config=0x%" PRIx32 "\n",
                 ret, phy.bist_tone_mode, phy.bist_config);
         return EXIT_FAILURE;
     }
-
     fail_write_reg = REG_BIST_CONFIG;
     ret = ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0);
     if (ret != -EIO || phy.bist_tone_mode != BIST_INJ_TX ||
@@ -2502,6 +2509,21 @@ int main(void)
                 " mode=%d config=0x%" PRIx32 "\n",
                 ret, phy.bist_tone_mode, phy.bist_config);
         return EXIT_FAILURE;
+    }
+    {
+        enum ad9361_bist_mode mode_sentinel = (enum ad9361_bist_mode)99;
+        uint32_t frequency_sentinel = UINT32_MAX;
+        uint32_t level_sentinel = UINT32_MAX;
+        uint32_t mask_sentinel = UINT32_MAX;
+        if (ad9361_get_bist_tone(&phy, &mode_sentinel,
+                                 &frequency_sentinel, &level_sentinel,
+                                 &mask_sentinel) != -EIO ||
+            mode_sentinel != (enum ad9361_bist_mode)99 ||
+            frequency_sentinel != UINT32_MAX ||
+            level_sentinel != UINT32_MAX || mask_sentinel != UINT32_MAX) {
+            fprintf(stderr, "BIST tone getter exposed unknown cached state\n");
+            return EXIT_FAILURE;
+        }
     }
     fail_write_reg = -1;
 	phy.bist_config = 0x1234;
