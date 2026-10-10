@@ -5261,9 +5261,11 @@ int CALL_CONV bladerf_rx_transition_get_events(
  * The cursor is the sequence returned in `next_sequence`, not a transaction
  * ID. If `history_complete` is false, one or more events after
  * `after_sequence` were overwritten before this call, or the cursor was
- * beyond the current event tail. A future cursor is rejected with
- * BLADERF_ERR_INVAL and `next_sequence` is reset to the current tail so the
- * caller can resynchronize instead of silently skipping future events. If
+ * beyond the current event tail. For an overwritten history, `next_sequence`
+ * advances to the current tail so the caller can revoke state derived from
+ * the missing interval and resume with new events. A future cursor is rejected
+ * with BLADERF_ERR_INVAL and `next_sequence` is reset to the current tail so
+ * the caller can resynchronize instead of silently skipping future events. If
  * the caller's buffer is too small, BLADERF_ERR_MEM is returned and
  * next_sequence advances only through the events copied to the caller.
  */
