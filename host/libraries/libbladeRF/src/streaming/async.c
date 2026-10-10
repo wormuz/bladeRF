@@ -476,8 +476,10 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
     status = dev->backend->stream(stream, layout);
 
     if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
-        async_notify_tx_transport_failure(
-            stream, status == 0 ? stream->error_code : status);
+        int tx_status = status == 0 ? stream->error_code : status;
+        if (tx_status != 0) {
+            async_notify_tx_transport_failure(stream, tx_status);
+        }
     }
 
     /* Backend return value takes precedence over stream error status */
