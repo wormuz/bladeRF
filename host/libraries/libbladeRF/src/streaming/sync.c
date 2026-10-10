@@ -116,6 +116,11 @@ static inline size_t samples2bytes(struct bladerf_sync *s, size_t n) {
     return s->stream_config.bytes_per_sample * n;
 }
 
+static inline bool sample_count_fits_host_buffer(size_t num_samples)
+{
+    return num_samples <= SIZE_MAX / (2 * sizeof(int16_t));
+}
+
 static inline unsigned int msg_per_buf(size_t msg_size, size_t buf_size,
                                        size_t bytes_per_sample)
 {
@@ -1066,8 +1071,10 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     uint64_t rx_epoch_generation = 0;
     uint64_t first_sync_admission_ns = 0;
 
-    if (s == NULL || samples == NULL) {
-        log_debug("NULL pointer passed to %s\n", __FUNCTION__);
+    if (s == NULL || samples == NULL ||
+        !sample_count_fits_host_buffer(num_samples)) {
+        log_debug("Invalid sample buffer or size passed to %s\n",
+                  __FUNCTION__);
         return BLADERF_ERR_INVAL;
     } else if (!s->initialized) {
         return BLADERF_ERR_INVAL;
@@ -1497,18 +1504,11 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                            samples_per_buffer - b->partial_off);
 
                 if (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_PACKED) {
-                    // Unpack SC12Q11 samples to SC16Q11 directly into destination buffer
-                    size_t zz, jj;
                     uint8_t *meta_sample_ptr = buf_src + samples2bytes(s, b->partial_off);
-                    int16_t *dest_ptr = (int16_t*)(samples_dest + (4*samples_returned));
-                    for (zz = 0, jj = 0; zz < 2*samples_to_copy; zz+=4, jj+=3) {
-                        dest_ptr[zz+0] = (int16_t)((((uint16_t*)(meta_sample_ptr))[jj+0] & 0x0FFF) << 4) >> 4;
-                        dest_ptr[zz+1] = (int16_t)((((uint16_t*)(meta_sample_ptr))[jj+1] & 0x00FF) << 8) >> 4
-                            | ((((uint16_t*)(meta_sample_ptr))[jj+0] & 0xF000) >> 12);
-                        dest_ptr[zz+2] = (int16_t)((((uint16_t*)(meta_sample_ptr))[jj+2] & 0x000F) << 12) >> 4
-                            | ((((uint16_t*)(meta_sample_ptr))[jj+1] & 0xFF00)) >> 8;
-                        dest_ptr[zz+3] = (int16_t)((((uint16_t*)(meta_sample_ptr))[jj+2] & 0xFFF0)) >> 4;
-                    }
+                    int16_t *dest_ptr = (int16_t *)(samples_dest +
+                        2 * sizeof(int16_t) * samples_returned);
+                    sc16q11_unpack_samples(meta_sample_ptr, dest_ptr,
+                                           samples_to_copy);
                 } else {
                     memcpy(samples_dest + samples2bytes(s, samples_returned),
                         buf_src + samples2bytes(s, b->partial_off),
@@ -2462,7 +2462,8 @@ int sync_tx(struct bladerf_sync *s,
 
     log_verbose("%s: called for %u samples.\n", __FUNCTION__, num_samples);
 
-    if (s == NULL || samples == NULL || !s->initialized) {
+    if (s == NULL || samples == NULL || !s->initialized ||
+        !sample_count_fits_host_buffer(num_samples)) {
         return BLADERF_ERR_INVAL;
     }
 

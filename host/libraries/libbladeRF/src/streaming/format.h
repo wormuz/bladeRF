@@ -89,6 +89,28 @@ static inline void sc16q11_pack_samples(const int16_t *src, uint8_t *dst,
     }
 }
 
+/* Expand little-endian packed 12-bit I/Q samples with explicit sign
+ * extension. Byte reads allow the stream parser to start at any packed
+ * sample offset, including odd sample indices. */
+static inline void sc16q11_unpack_samples(const uint8_t *src, int16_t *dst,
+                                          size_t n_samples)
+{
+    size_t i;
+
+    for (i = 0; i < n_samples; ++i) {
+        const uint8_t *packed_sample = src + 3 * i;
+        const uint16_t i_raw = (uint16_t)packed_sample[0] |
+            ((uint16_t)(packed_sample[1] & 0x0f) << 8);
+        const uint16_t q_raw = (uint16_t)(packed_sample[1] >> 4) |
+            ((uint16_t)packed_sample[2] << 4);
+        const int16_t i_sample = (int16_t)((i_raw ^ 0x0800) - 0x0800);
+        const int16_t q_sample = (int16_t)((q_raw ^ 0x0800) - 0x0800);
+
+        dst[2 * i] = i_sample;
+        dst[2 * i + 1] = q_sample;
+    }
+}
+
 /*
  * Convert bytes to SC16Q11 samples
  */

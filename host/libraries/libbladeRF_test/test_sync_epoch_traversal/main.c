@@ -2383,13 +2383,32 @@ int main(void)
             0x56, 0xc4, 0xdc,
             0x89, 0xc7, 0xab,
         };
+        const int16_t unpacked_expected[] = {
+            -1, 0x123, 0x456, -0x234, 0x789, -0x544,
+        };
         uint8_t guarded[sizeof(expected) + 2] = { 0xa5 };
+        int16_t unpacked_guarded[sizeof(unpacked_expected) /
+                                 sizeof(unpacked_expected[0]) + 2] = { 0x5a5a };
+        int16_t odd_offset_guarded[4] = { 0x1357, 0, 0, 0x2468 };
 
         guarded[sizeof(guarded) - 1] = 0x5a;
+        unpacked_guarded[(sizeof(unpacked_guarded) /
+                           sizeof(unpacked_guarded[0])) - 1] = 0x2525;
         sc16q11_pack_samples(packed_input, guarded + 1, 3);
         assert(guarded[0] == 0xa5);
         assert(memcmp(guarded + 1, expected, sizeof(expected)) == 0);
         assert(guarded[sizeof(guarded) - 1] == 0x5a);
+        sc16q11_unpack_samples(guarded + 1, unpacked_guarded + 1, 3);
+        assert(unpacked_guarded[0] == 0x5a5a);
+        assert(memcmp(unpacked_guarded + 1, unpacked_expected,
+                      sizeof(unpacked_expected)) == 0);
+        assert(unpacked_guarded[(sizeof(unpacked_guarded) /
+                                 sizeof(unpacked_guarded[0])) - 1] == 0x2525);
+        sc16q11_unpack_samples(guarded + 1 + 3, odd_offset_guarded + 1, 1);
+        assert(odd_offset_guarded[0] == 0x1357);
+        assert(odd_offset_guarded[1] == 0x456);
+        assert(odd_offset_guarded[2] == -0x234);
+        assert(odd_offset_guarded[3] == 0x2468);
     }
 
     test_tx_async_shutdown_reports_only_real_errors();
