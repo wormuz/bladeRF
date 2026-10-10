@@ -319,7 +319,10 @@ static int _rfic_host_enable_module(struct bladerf *dev,
 
         /* Set/unset TX mute */
         if (BLADERF_CHANNEL_IS_TX(ch)) {
-            txmute_set(phy, ch, !enable);
+            /* A failed mute/unmute must stop channel setup. In particular,
+             * don't publish the RFFE enable bit or start the FPGA stream if
+             * the RFIC did not confirm the requested TX mute state. */
+            CHECK_AD936X(txmute_set(phy, ch, !enable));
         }
     }
 
