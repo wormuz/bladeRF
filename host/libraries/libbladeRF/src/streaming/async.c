@@ -571,6 +571,8 @@ int async_get_transfer_timeout(struct bladerf_stream *stream,
 int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layout)
 {
     int status;
+    int stream_error;
+    bool shutdown_requested;
     struct bladerf *dev = stream->dev;
 
     MUTEX_LOCK(&stream->lock);
@@ -587,8 +589,21 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
 
     status = dev->backend->stream(stream, layout);
 
+    MUTEX_LOCK(&stream->lock);
+    shutdown_requested = stream->shutdown_requested;
+    stream_error = stream->error_code;
+    MUTEX_UNLOCK(&stream->lock);
+
+    /* Backend cancellation can make its blocking event call return an
+     * interruption/timeout even though every transfer drained as requested.
+     * Treat that as a clean stop only when no independent stream error was
+     * recorded. */
+    if (shutdown_requested && stream_error == 0) {
+        status = 0;
+    }
+
     if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
-        int tx_status = status == 0 ? stream->error_code : status;
+        int tx_status = status == 0 ? stream_error : status;
         if (tx_status != 0 && tx_status != BLADERF_ERR_WOULD_BLOCK &&
             tx_status != BLADERF_ERR_CALLBACK) {
             async_notify_tx_transport_failure(stream, tx_status);
