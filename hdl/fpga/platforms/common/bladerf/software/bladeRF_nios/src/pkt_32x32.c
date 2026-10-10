@@ -60,8 +60,7 @@ static inline bool perform_write(uint8_t id, uint32_t addr, uint32_t data)
             return adi_axi_write(addr, data);
 
         case NIOS_PKT_32x32_TARGET_WB_MSTR:
-            wishbone_master_write(addr, data);
-            break;
+            return wishbone_master_write(addr, data);
 #endif  // BOARD_BLADERF_MICRO
 
         /* Add user customizations here
@@ -97,8 +96,7 @@ static inline bool perform_read(uint8_t id, uint32_t addr, uint32_t *data)
             return adi_axi_read(addr, data);
 
         case NIOS_PKT_32x32_TARGET_WB_MSTR:
-            *data = wishbone_master_read(addr);
-            break;
+            return wishbone_master_read(addr, data);
 #endif  // BOARD_BLADERF_MICRO
 
         /* Add user customizations here

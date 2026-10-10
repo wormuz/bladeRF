@@ -29,7 +29,8 @@ library altera_mf ;
 entity wishbone_master is
   generic (
     ADDR_BITS   : integer  := 32 ;
-    DATA_BITS   : integer  := 32
+    DATA_BITS   : integer  := 32 ;
+    WB_ACK_TIMEOUT_CYCLES : positive := 1000000
   ) ;
 
   port (
@@ -58,7 +59,10 @@ entity wishbone_master is
     wb_sel_o    :   out std_logic ;
     wb_stb_o    :   out std_logic ;
     wb_ack_i    :   in  std_logic ;
-    wb_cyc_o    :   out std_logic
+    wb_cyc_o    :   out std_logic ;
+
+    wb_timeout_status : out std_logic;
+    wb_timeout_clear_toggle : in std_logic
   ) ;
 end entity ;
 
@@ -71,7 +75,7 @@ architecture arch of wishbone_master is
 
     signal wb2av_wfull   : std_logic ;
     signal av_empty      : std_logic ;
-    signal av_bus        : std_logic_vector(DATA_BITS-1 downto 0) ;
+    signal av_bus        : std_logic_vector(DATA_BITS downto 0) ;
 
 
 
@@ -113,7 +117,7 @@ architecture arch of wishbone_master is
 
 
 
-    type wb_fsm_t is (INIT, WAIT_FOR_REQ) ;
+    type wb_fsm_t is (INIT, WAIT_FOR_REQ, FAULT) ;
 
     type wb_state_t is record
         state           : wb_fsm_t;
@@ -131,6 +135,13 @@ architecture arch of wishbone_master is
 
     signal wb_current : wb_state_t ;
     signal wb_future  : wb_state_t ;
+
+    signal wb_timeout_count : natural range 0 to WB_ACK_TIMEOUT_CYCLES := 0;
+    signal wb_timeout_pulse : std_logic;
+    signal wb_fault_response : std_logic;
+    signal wb2av_data : std_logic_vector(DATA_BITS downto 0);
+    signal av_timeout_status : std_logic := '0';
+    signal wb_timeout_clear_toggle_d : std_logic := '0';
 
 begin
 
@@ -174,7 +185,7 @@ begin
                   av_future.req_r   <= '1';
                   av_future.state   <= INIT;
                   av_future.waitreq <= '0';
-                  av_future.dout    <= av_bus;
+                  av_future.dout    <= av_bus(DATA_BITS-1 downto 0);
                   if (av_current.we = '0' ) then
                      av_future.readack <= '1';
                   end if;
@@ -194,6 +205,53 @@ begin
         end if;
     end process;
 
+    wb_timeout_pulse <= '1'
+        when wb_current.state = WAIT_FOR_REQ and wb_ack_i = '0' and
+             wb_timeout_count = WB_ACK_TIMEOUT_CYCLES - 1
+        else '0';
+
+    wb_fault_response <= '1'
+        when wb_current.state = FAULT and wb_empty = '0' and
+             wb2av_wfull = '0'
+        else '0';
+
+    wb_timeout_counter_proc : process(wb_clk_i, wb_rst_i)
+    begin
+        if (wb_rst_i = '1') then
+            wb_timeout_count <= 0;
+        elsif rising_edge(wb_clk_i) then
+            if wb_current.state /= WAIT_FOR_REQ or wb_ack_i = '1' or
+               wb_timeout_pulse = '1' then
+                wb_timeout_count <= 0;
+            else
+                wb_timeout_count <= wb_timeout_count + 1;
+            end if;
+        end if;
+    end process;
+
+    -- Carry timeout with the response through the existing asynchronous FIFO.
+    wb2av_data <= '1' & (DATA_BITS-1 downto 0 => '0')
+        when wb_timeout_pulse = '1' or wb_fault_response = '1'
+        else '0' & wb_dat_i;
+
+    wb_timeout_status_proc : process(clock, reset)
+    begin
+        if reset = '1' then
+            av_timeout_status <= '0';
+            wb_timeout_clear_toggle_d <= '0';
+        elsif rising_edge(clock) then
+            wb_timeout_clear_toggle_d <= wb_timeout_clear_toggle;
+            if wb_timeout_clear_toggle /= wb_timeout_clear_toggle_d then
+                av_timeout_status <= '0';
+            end if;
+            if av_empty = '0' and av_bus(DATA_BITS) = '1' then
+                av_timeout_status <= '1';
+            end if;
+        end if;
+    end process;
+
+    wb_timeout_status <= av_timeout_status;
+
     wb_comb_proc : process( all )
     begin
         wb_future <= wb_current;
@@ -207,11 +265,15 @@ begin
                   wb_future.state <= WAIT_FOR_REQ;
                end if;
             when WAIT_FOR_REQ =>
-               if (wb_ack_i = '1') then
+               if wb_timeout_pulse = '1' then
+                  wb_future.state <= FAULT;
+               elsif wb_ack_i = '1' then
                   wb_future.state <= INIT;
                else
                   wb_future.sel <= '1';
                end if;
+            when FAULT =>
+               wb_future.state <= FAULT;
             when others =>
                wb_future <= WB_NULL_STATE;
         end case;
@@ -248,7 +310,13 @@ begin
         wrusedw         => open,
 
         rdclk           => wb_clk_i,
-        rdreq           => not wb_empty,
+        -- Hold the show-ahead head entry stable throughout WAIT_FOR_REQ.
+        -- Pop it only when its ACK/timeout response is committed; in FAULT,
+        -- drain queued requests as their synthetic failure responses enter
+        -- the return FIFO.
+        rdreq           => ((wb_current.state = WAIT_FOR_REQ and
+                             (wb_ack_i = '1' or wb_timeout_pulse = '1')) or
+                            wb_fault_response) and not wb_empty,
         q               => wb_bus,
 
         rdfull          => open,
@@ -260,13 +328,15 @@ begin
     wb_adr_o <= wb_bus(ADDR_BITS+DATA_BITS-1 downto DATA_BITS);
     wb_dat_o <= wb_bus(DATA_BITS-1 downto 0);
     wb_we_o  <= wb_bus(wb_bus'high);
-    wb_cyc_o <= not wb_empty;
+    -- Keep the Wishbone cycle active until ACK or timeout, even after the
+    -- request has left the asynchronous FIFO.
+    wb_cyc_o <= wb_current.sel;
     wb_sel_o <= wb_current.sel;
     wb_stb_o <= '1';
 
     U_wb2av: dcfifo
       generic map (
-        lpm_width       =>  32,
+        lpm_width       =>  DATA_BITS + 1,
         lpm_widthu      =>  4,
         lpm_numwords    =>  16,
         lpm_showahead   =>  "ON",
@@ -282,8 +352,10 @@ begin
         aclr            => reset,
 
         wrclk           => wb_clk_i,
-        wrreq           => wb_ack_i and not wb2av_wfull,
-        data            => wb_dat_i,
+        wrreq           => ((wb_current.state = WAIT_FOR_REQ and wb_ack_i) or
+                            wb_timeout_pulse or wb_fault_response) and
+                           not wb2av_wfull,
+        data            => wb2av_data,
 
         wrfull          => wb2av_wfull,
         wrempty         => open,

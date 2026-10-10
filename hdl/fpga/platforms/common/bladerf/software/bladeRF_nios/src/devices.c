@@ -816,21 +816,43 @@ bool adi_axi_write(uint32_t addr, uint32_t data)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-uint32_t wishbone_master_read(uint32_t addr)
+bool wishbone_master_read(uint32_t addr, uint32_t *data)
 {
-    uint32_t data = 0;
-#ifdef WISHBONE_MASTER_0_BASE  // Temporary hack for bladeRF1 compat
-    data = IORD_32DIRECT(WISHBONE_MASTER_0_BASE, addr);
+#if defined(WISHBONE_MASTER_0_BASE) && \
+    defined(WB_TIMEOUT_STATUS_BASE) && defined(WB_TIMEOUT_CLEAR_BASE)
+    uint32_t clear_toggle;
+
+    if (data == NULL) {
+        return false;
+    }
+
+    clear_toggle = IORD_32DIRECT(WB_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
+    IOWR_32DIRECT(WB_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
+    *data = IORD_32DIRECT(WISHBONE_MASTER_0_BASE, addr);
+    return (IORD_32DIRECT(WB_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+#else
+    (void)addr;
+    (void)data;
+    return false;
 #endif
-    return data;
 }
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-void wishbone_master_write(uint32_t addr, uint32_t data)
+bool wishbone_master_write(uint32_t addr, uint32_t data)
 {
-#ifdef WISHBONE_MASTER_0_BASE  // Temporary hack for bladeRF1 compat
+#if defined(WISHBONE_MASTER_0_BASE) && \
+    defined(WB_TIMEOUT_STATUS_BASE) && defined(WB_TIMEOUT_CLEAR_BASE)
+    uint32_t clear_toggle;
+
+    clear_toggle = IORD_32DIRECT(WB_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
+    IOWR_32DIRECT(WB_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
     IOWR_32DIRECT(WISHBONE_MASTER_0_BASE, addr, data);
+    return (IORD_32DIRECT(WB_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+#else
+    (void)addr;
+    (void)data;
+    return false;
 #endif
 }
 #endif  // BOARD_BLADERF_MICRO

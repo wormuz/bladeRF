@@ -197,6 +197,17 @@ propagated into both packet formats and the no-OS compatibility callbacks;
 the existing peripheral packet regression source now injects LMS read and
 write failures. bladeRF1 legacy path only; no hardware/runtime claim.
 
+The Wishbone extension bridge also had an unbounded external-ACK wait: a
+missing ACK kept the Avalon access pending and could stop NIOS before it sent
+the packet response. Added a Wishbone-clock watchdog, timeout-tagged response,
+system-clock sticky status/clear, and NIOS status propagation. After timeout
+the bridge locks out external Wishbone requests until reset and fails queued
+requests, preventing a late ACK from validating a later transaction. Added a
+testbench case for no ACK and post-timeout lockout, plus NIOS packet read/write
+failure regression source. The xA4 top-level's built-in termination target
+still ACKs immediately; its no-response incident is not attributed to this
+path. HDL simulation and exact-image qualification remain deferred.
+
 ### NIOS no-OS AXI timeout and init compile-path pass
 
 The NIOS no-OS adapter forwards AXI ADC/DAC reads and writes through

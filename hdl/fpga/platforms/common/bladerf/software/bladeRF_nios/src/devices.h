@@ -234,17 +234,19 @@ bool adi_axi_write(uint32_t addr, uint32_t data);
  *
  * @param   addr    Address to read from
  *
- * @return  Register data
+ * @param[out] data Register data on success
+ * @return  true if the transaction completed without a Wishbone timeout
  */
-uint32_t wishbone_master_read(uint32_t addr);
+bool wishbone_master_read(uint32_t addr, uint32_t *data);
 
 /**
  * Write to Wishbone Master space
  *
  * @param   addr    Register address to write to
  * @param   data    Data to write
+ * @return  true if the transaction completed without a Wishbone timeout
  */
-void wishbone_master_write(uint32_t addr, uint32_t data);
+bool wishbone_master_write(uint32_t addr, uint32_t data);
 
 /**
  * Save AD9361 fast lock profile data to Nios memory.

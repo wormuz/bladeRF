@@ -1651,18 +1651,18 @@ begin
     -- Inert termination for the Wishbone extension conduit.
     --
     -- This image attaches no Wishbone target, but the bridge stays mapped at
-    -- 0x10000000 on IRQ 10, so the Nios can still address it. It must not be
-    -- left unacknowledged: wishbone_master.vhd leaves WAIT_FOR_REQ only on
-    -- wb_ack_i = '1' (line 209), so a permanently low ack makes any access to
-    -- that region wait forever and stalls the Avalon data master with it. That
-    -- is exactly what the previous "wbm_wb_ack_i <= '0'" here would have done.
+    -- 0x10000000 on IRQ 10, so the Nios can still address it. Keep the
+    -- immediate compatibility acknowledgement: it makes writes no-ops and
+    -- reads return zero. The bridge now also has a bounded ACK watchdog for
+    -- external images that leave a target unresponsive; that path returns a
+    -- sticky timeout status instead of stalling the Avalon data master.
     --
     -- So acknowledge immediately instead: writes are discarded, reads return
-    -- zero, and a stray access completes rather than hanging the CPU. The
-    -- bridge exposes no wb_err_i (ports at lines 59-61 are stb/ack/cyc only),
-    -- so a bus error is not available as a cleaner answer. wb_stb_o is tied
-    -- high inside the bridge and wb_cyc_o follows its request FIFO, so the
-    -- request predicate is cyc and stb.
+    -- zero, and a stray access completes without relying on the watchdog. The
+    -- bridge exposes no wb_err_i, so an unacknowledged target is reported
+    -- through its separate timeout status. wb_stb_o is tied high inside the
+    -- bridge and wb_cyc_o follows its request FIFO, so the request predicate
+    -- is cyc and stb.
     --
     -- This is compatibility, not support: an out-of-tree Wishbone peripheral
     -- still will not work against this image, it just fails predictably.

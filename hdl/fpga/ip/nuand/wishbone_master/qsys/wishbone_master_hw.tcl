@@ -64,6 +64,14 @@ set_parameter_property DATA_BITS UNITS None
 set_parameter_property DATA_BITS ALLOWED_RANGES -2147483648:2147483647
 set_parameter_property DATA_BITS DESCRIPTION ""
 set_parameter_property DATA_BITS HDL_PARAMETER true
+
+add_parameter WB_ACK_TIMEOUT_CYCLES INTEGER 1000000 ""
+set_parameter_property WB_ACK_TIMEOUT_CYCLES DEFAULT_VALUE 1000000
+set_parameter_property WB_ACK_TIMEOUT_CYCLES DISPLAY_NAME "Wishbone ACK timeout cycles"
+set_parameter_property WB_ACK_TIMEOUT_CYCLES TYPE INTEGER
+set_parameter_property WB_ACK_TIMEOUT_CYCLES UNITS None
+set_parameter_property WB_ACK_TIMEOUT_CYCLES ALLOWED_RANGES 1:2147483647
+set_parameter_property WB_ACK_TIMEOUT_CYCLES HDL_PARAMETER true
 # 
 # display items
 # 
@@ -145,6 +153,16 @@ add_interface_port conduit_end wb_sel_o wb_sel_o Output 1
 add_interface_port conduit_end wb_stb_o wb_stb_o Output 1
 add_interface_port conduit_end wb_ack_i wb_ack_i Input 1
 add_interface_port conduit_end wb_cyc_o wb_cyc_o Output 1
+
+add_interface timeout_status conduit end
+set_interface_property timeout_status associatedClock clock_sink
+set_interface_property timeout_status associatedReset reset
+add_interface_port timeout_status wb_timeout_status export Output 1
+
+add_interface timeout_clear conduit end
+set_interface_property timeout_clear associatedClock clock_sink
+set_interface_property timeout_clear associatedReset reset
+add_interface_port timeout_clear wb_timeout_clear_toggle export Input 1
 
 
 # 

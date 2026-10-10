@@ -129,6 +129,9 @@ architecture arch of wishbone_master_tb is
     signal wb_stb_o    : std_logic ;
     signal wb_ack_i    : std_logic ;
     signal wb_cyc_o    : std_logic ;
+    signal wb_ack_enable : std_logic := '1';
+    signal wb_timeout_status : std_logic;
+    signal wb_timeout_clear_toggle : std_logic := '0';
 begin
 
     wb_rst_i <= reset;
@@ -147,7 +150,11 @@ begin
         variable idx : integer := 0;
     begin
         if(rising_edge(wb_clk_i)) then
-            wb_ack_i <= wb_cyc_o;
+            if wb_ack_enable = '1' then
+                wb_ack_i <= wb_cyc_o;
+            else
+                wb_ack_i <= '0';
+            end if;
             if (wb_cyc_o = '1' and wb_we_o = '0' ) then
                 idx := idx + 1;
                 wb_dat_i <= wb_dat_o(wb_dat_o'high-1 downto 0) & '0';
@@ -159,6 +166,9 @@ begin
     clock <= not clock after 1 ns ;
 
     U_wishbone_master : entity work.wishbone_master
+      generic map (
+        WB_ACK_TIMEOUT_CYCLES => 16
+      )
       port map (
         clock           =>  clock,
         reset           =>  reset,
@@ -182,7 +192,9 @@ begin
         wb_sel_o        =>  wb_sel_o,
         wb_stb_o        =>  wb_stb_o,
         wb_ack_i        =>  wb_ack_i,
-        wb_cyc_o        =>  wb_cyc_o
+        wb_cyc_o        =>  wb_cyc_o,
+        wb_timeout_status => wb_timeout_status,
+        wb_timeout_clear_toggle => wb_timeout_clear_toggle
 
       ) ;
 
@@ -223,6 +235,24 @@ begin
         write_csr( clock, addr, din, write, 8, x"00000001" ) ;
         nop( clock, 1000 ) ;
         write_csr( clock, addr, din, write, 0, x"00000002" ) ;
+
+        -- An unresponsive Wishbone target must complete the Avalon read and
+        -- report the fault instead of holding NIOS in waitrequest.
+        wb_ack_enable <= '0';
+        read_csr( clock, addr, dout, read, readack, 1004, ts ) ;
+        assert wb_timeout_status = '1'
+            report "missing Wishbone ACK did not set timeout status"
+            severity failure;
+        wb_timeout_clear_toggle <= not wb_timeout_clear_toggle;
+        nop(clock, 4);
+        assert wb_timeout_status = '0'
+            report "Wishbone timeout status did not clear"
+            severity failure;
+        read_csr( clock, addr, dout, read, readack, 1008, ts ) ;
+        assert wb_timeout_status = '1' and wb_cyc_o = '0'
+            report "faulted Wishbone bridge retried or reported success"
+            severity failure;
+        wb_ack_enable <= '1';
 
         nop( clock, 1000) ;
         -- Read the time back

@@ -107,6 +107,23 @@ bool adi_spi_write(uint16_t addr, uint64_t data)
     return true;
 }
 
+bool wishbone_master_read(uint32_t addr, uint32_t *data)
+{
+    (void)addr;
+    if (data == NULL) {
+        return false;
+    }
+    *data = 0;
+    return true;
+}
+
+bool wishbone_master_write(uint32_t addr, uint32_t data)
+{
+    (void)addr;
+    (void)data;
+    return true;
+}
+
 bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
                          uint8_t *result)
 {
