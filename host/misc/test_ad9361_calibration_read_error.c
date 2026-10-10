@@ -2474,6 +2474,16 @@ int main(void)
     phy.bist_tone_level_dB = 12;
     phy.bist_tone_mask = 3;
     phy.bist_config = 0x1234;
+    {
+        unsigned writes_before = write_count;
+        if (ad9361_bist_tone(&phy, BIST_DISABLE, 0, 24, 0) != -EINVAL ||
+            ad9361_bist_tone(&phy, BIST_DISABLE, 0, 5, 0) != -EINVAL ||
+            ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0x10) != -EINVAL ||
+            write_count != writes_before) {
+            fprintf(stderr, "BIST tone accepted aliased level/mask arguments\n");
+            return EXIT_FAILURE;
+        }
+    }
     fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
     ret = ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0);
     if (ret != -EIO || phy.bist_tone_mode != BIST_INJ_TX ||
