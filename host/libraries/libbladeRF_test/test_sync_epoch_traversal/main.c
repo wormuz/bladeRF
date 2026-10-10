@@ -732,6 +732,7 @@ static bool validate_async_rx_buffer(struct bladerf *dev,
         metadata->timestamp = 0x123456789ULL;
         metadata->rx_epoch_id = 23;
         metadata->rx_epoch_id_valid = 1;
+        metadata->rx_clipping_flags = 0x03;
     }
     return valid;
 }
@@ -752,6 +753,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
         assert(metadata->timestamp == 0);
         assert(metadata->actual_count == 0);
         assert(metadata->rx_epoch_id_valid == 0);
+        assert(metadata->rx_clipping_flags == 0);
         assert(user_data != NULL);
         async_rx_event_wakeups++;
         async_fault_callback_order = ++async_fault_order;
@@ -762,6 +764,7 @@ static void *count_async_rx_callback(struct bladerf *dev,
             assert(metadata->timestamp == 0x123456789ULL);
             assert(metadata->rx_epoch_id == 23);
             assert(metadata->actual_count == num_samples);
+            assert(metadata->rx_clipping_flags == 0x03);
         }
         async_rx_callbacks++;
     }
