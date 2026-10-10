@@ -190,6 +190,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     struct bladerf_rf_event event = {0};
     uint8_t epoch_id;
     bool report;
+    bool new_gate_abort;
 
     if (dev == NULL || dev->board_data == NULL) {
         return;
@@ -198,10 +199,13 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     report = !board_data->tx_stream_faulted_async;
+    new_gate_abort = !board_data->tx_gate_abort_pending;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
     board_data->tx_gate_abort_pending = true;
-    board_data->tx_gate_abort_failure_reported = false;
+    if (new_gate_abort) {
+        board_data->tx_gate_abort_failure_reported = false;
+    }
     board_data->tx_async_transport_failure_generation++;
     epoch_id = board_data->tx_async_link_epoch_id;
     /* Keep callback wakeup lifetime ordered with monitor teardown through
