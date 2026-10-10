@@ -198,10 +198,18 @@ handoff allowance at an already-expired boundary lets the normal ownership
 transfer/rollback path finish instead of stranding a full ring slot; timeout
 zero preserves an unbounded wait. Focused timeout, long-copy, timeout-zero,
 clock-adjustment, and partial TX buffer recovery regressions remain deferred
-under the source-audit gate. The condition-variable helpers loop on predicates;
-confirm their repeated wake behavior cannot restart the relative timeout
-budget after a spurious or unrelated signal, and cover that case in the
-deferred tests.
+under the source-audit gate. Source review found a cross-platform failure in
+the timeout implementation: the Windows `clock_gettime` shim rejected
+`CLOCK_MONOTONIC`, and the old macOS shim returned calendar time for every
+clock ID. The shims now provide monotonic time, POSIX condition variables use
+monotonic-clock deadlines (macOS uses its relative wait API), and worker/async
+startup loops recalculate the remaining budget after every wake. This also
+closes timeout extension after spurious or unrelated signals. Existing
+libbladeRF monotonic timestamp call sites now use the same platform helper so
+they do not depend on undeclared POSIX `clock_gettime()` symbols on Windows.
+Windows/macOS build and runtime checks, repeated-wakeup tests,
+clock-adjustment tests, and partial TX buffer recovery remain deferred under
+the source-audit gate.
 
 The timestamp seek boundary pass found an integer overflow in sync RX: a very
 large future timestamp multiplied by the RX_X2 lane factor before comparing

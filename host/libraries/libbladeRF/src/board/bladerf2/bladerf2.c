@@ -34,6 +34,7 @@
 
 #include "bladeRF.h"
 #include "host_config.h"
+#include "helpers/timeout.h"
 
 #include "log.h"
 #define LOGGER_ID_STRING
@@ -2764,11 +2765,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             bladerf2_rx_layout_unsupported(dev, layout, true);
             return false;
         }
-        struct timespec now_ts;
         uint64_t now_ns = 0;
-        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
-            now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
-                     (uint64_t)now_ts.tv_nsec;
+        if (bladerf_monotonic_now_ns(&now_ns) != 0) {
+            now_ns = 0;
         }
         if (!bladerf2_rx_first_host_data_admissible(
                 board_data->rf_transition_first_host_data_required,
@@ -6259,14 +6258,13 @@ static int bladerf_pll_calculate_ratio(bladerf_frequency ref_freq,
 static int bladerf2_wait_for_pll_lock(struct bladerf *dev)
 {
     const uint64_t timeout_ns = 500000000ULL;
-    struct timespec now_ts;
+    uint64_t now_ns;
     uint64_t deadline_ns;
 
-    if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+    if (bladerf_monotonic_now_ns(&now_ns) != 0) {
         return BLADERF_ERR_UNEXPECTED;
     }
-    deadline_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
-                  (uint64_t)now_ts.tv_nsec + timeout_ns;
+    deadline_ns = now_ns + timeout_ns;
 
     for (;;) {
         bool locked = false;
@@ -6275,12 +6273,9 @@ static int bladerf2_wait_for_pll_lock(struct bladerf *dev)
             return 0;
         }
 
-        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+        if (bladerf_monotonic_now_ns(&now_ns) != 0) {
             return BLADERF_ERR_UNEXPECTED;
         }
-        const uint64_t now_ns =
-            (uint64_t)now_ts.tv_sec * 1000000000ULL +
-            (uint64_t)now_ts.tv_nsec;
         if (now_ns >= deadline_ns) {
             return BLADERF_ERR_TIMEOUT;
         }

@@ -19,7 +19,6 @@
 #include <string.h>
 #include <errno.h>
 #include <inttypes.h>
-#include <time.h>
 
 /* Only switch on the verbose debug prints in this file when we *really* want
  * them. Otherwise, compile them out to avoid excessive log level checks
@@ -593,23 +592,8 @@ static int sync_timeout_remaining_ms(uint64_t call_start_ns,
                                      unsigned int timeout_ms,
                                      unsigned int *remaining_ms)
 {
-    struct timespec now;
-    uint64_t now_ns, elapsed_ns, remaining_ns;
-
-    if (remaining_ms == NULL || timeout_ms == 0 ||
-        clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-        return BLADERF_ERR_UNEXPECTED;
-    }
-
-    now_ns = (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
-    elapsed_ns = now_ns >= call_start_ns ? now_ns - call_start_ns : 0;
-    if (elapsed_ns >= (uint64_t)timeout_ms * 1000000ULL) {
-        return BLADERF_ERR_TIMEOUT;
-    }
-
-    remaining_ns = (uint64_t)timeout_ms * 1000000ULL - elapsed_ns;
-    *remaining_ms = (unsigned int)((remaining_ns + 999999ULL) / 1000000ULL);
-    return 0;
+    return bladerf_timeout_remaining_ms(call_start_ns, timeout_ms,
+                                        remaining_ms);
 }
 
 /* TX submission is nonblocking once the stream is running, but
@@ -827,12 +811,10 @@ bool sync_rx_epoch_filter_enabled(struct bladerf_sync *sync)
 
 static int sync_rx_epoch_check_deadline(uint64_t deadline_ns)
 {
-    struct timespec now;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+    uint64_t now_ns;
+    if (bladerf_monotonic_now_ns(&now_ns) != 0) {
         return BLADERF_ERR_UNEXPECTED;
     }
-    const uint64_t now_ns = (uint64_t)now.tv_sec * 1000000000ULL +
-                            (uint64_t)now.tv_nsec;
     return now_ns >= deadline_ns ? BLADERF_ERR_TIMEOUT : 0;
 }
 
@@ -1148,12 +1130,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
     if (timeout_ms != 0) {
-        struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        if (bladerf_monotonic_now_ns(&call_start_ns) != 0) {
             return BLADERF_ERR_UNEXPECTED;
         }
-        call_start_ns = (uint64_t)now.tv_sec * 1000000000ULL +
-                        (uint64_t)now.tv_nsec;
     }
 
     rx_epoch_generation = rx_epoch_generation_snapshot(s);
@@ -2570,12 +2549,9 @@ int sync_tx(struct bladerf_sync *s,
     }
 
     if (timeout_ms != 0) {
-        struct timespec now;
-        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        if (bladerf_monotonic_now_ns(&call_start_ns) != 0) {
             return BLADERF_ERR_UNEXPECTED;
         }
-        call_start_ns = (uint64_t)now.tv_sec * 1000000000ULL +
-                        (uint64_t)now.tv_nsec;
     }
 
     MUTEX_LOCK(&s->lock);

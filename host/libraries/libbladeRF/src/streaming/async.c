@@ -624,6 +624,13 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
                                bool nonblock)
 {
     int status = 0;
+    uint64_t start_ns = 0;
+    unsigned int backend_timeout_ms = timeout_ms;
+
+    if (timeout_ms != 0 &&
+        bladerf_monotonic_now_ns(&start_ns) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     MUTEX_LOCK(&stream->lock);
 
@@ -642,14 +649,25 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
                 status = COND_WAIT(&stream->stream_started,
                                            &stream->lock);
             } else {
-                status = COND_TIMED_WAIT(&stream->stream_started,
-                        &stream->lock, timeout_ms);
+                unsigned int remaining_ms;
+                status = bladerf_timeout_remaining_ms(
+                    start_ns, timeout_ms, &remaining_ms);
+                if (status == 0) {
+                    status = COND_TIMED_WAIT(&stream->stream_started,
+                                             &stream->lock, remaining_ms);
+                }
             }
 
             if (status == THREAD_TIMEOUT) {
-                status = BLADERF_ERR_TIMEOUT;
-                log_debug("%s: %u ms timeout expired",
-                          __FUNCTION__, timeout_ms);
+                if (stream->state == STREAM_RUNNING) {
+                    status = 0;
+                } else {
+                    status = BLADERF_ERR_TIMEOUT;
+                    log_debug("%s: %u ms timeout expired",
+                              __FUNCTION__, timeout_ms);
+                    goto error;
+                }
+            } else if (status == BLADERF_ERR_TIMEOUT) {
                 goto error;
             } else if (status != 0) {
                 status = BLADERF_ERR_UNEXPECTED;
@@ -664,8 +682,17 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
         goto error;
     }
 
+    if (buffer != BLADERF_STREAM_SHUTDOWN && timeout_ms != 0) {
+        status = bladerf_timeout_remaining_ms(start_ns, timeout_ms,
+                                              &backend_timeout_ms);
+        if (status != 0) {
+            goto error;
+        }
+    }
+
     status = stream->dev->backend->submit_stream_buffer(stream, buffer,
-                                           length, timeout_ms, nonblock);
+                                           length, backend_timeout_ms,
+                                           nonblock);
     if (status != 0 && status != BLADERF_ERR_WOULD_BLOCK &&
         status != BLADERF_ERR_TIMEOUT) {
         async_notify_tx_transport_failure(stream, status);

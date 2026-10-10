@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include <libbladeRF.h>
+#include "helpers/timeout.h"
 
 static bool _test_rx_transition_stall(const char *stage)
 {
@@ -127,9 +128,9 @@ static void _emit_event(struct bladerf *dev,
 
 static uint64_t _monotonic_ns(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    uint64_t now_ns = 0;
+    (void)bladerf_monotonic_now_ns(&now_ns);
+    return now_ns;
 }
 
 static void _rx_fault_monitor_stage(struct bladerf2_board_data *board_data,

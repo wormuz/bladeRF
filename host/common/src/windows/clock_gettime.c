@@ -37,6 +37,24 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp)
     FILETIME file_time;
     SYSTEMTIME system_time;
 
+    if (tp == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (clk_id == CLOCK_MONOTONIC) {
+        LARGE_INTEGER counter, frequency;
+        if (!QueryPerformanceCounter(&counter) ||
+            !QueryPerformanceFrequency(&frequency) || frequency.QuadPart <= 0) {
+            errno = EINVAL;
+            return -1;
+        }
+        tp->tv_sec = (time_t)(counter.QuadPart / frequency.QuadPart);
+        tp->tv_nsec = (long)(((counter.QuadPart % frequency.QuadPart) *
+                              1000000000LL) / frequency.QuadPart);
+        return 0;
+    }
+
     if (clk_id != CLOCK_REALTIME) {
         errno = EINVAL;
         return -1;

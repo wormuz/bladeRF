@@ -119,7 +119,34 @@ static inline int bladerf_thread_mutex_init(MUTEX *mutex)
 #   define THREAD_JOIN(t, s) pthread_join(t, s)
 #   define THREAD_EXIT(s) pthread_exit(s)
 
-#   define COND_INIT(m) pthread_cond_init(m, NULL)
+static inline int bladerf_thread_cond_init(COND *cond)
+{
+#if defined(__APPLE__)
+    /* macOS does not provide pthread_condattr_setclock on all supported
+     * deployment targets; its relative timed-wait extension is used below. */
+    return pthread_cond_init(cond, NULL);
+#else
+    pthread_condattr_t attr;
+    int status = pthread_condattr_init(&attr);
+    if (status != 0) {
+        return status;
+    }
+    status = pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    if (status == 0) {
+        status = pthread_cond_init(cond, &attr);
+    }
+    const int attr_status = pthread_condattr_destroy(&attr);
+    if (status != 0) {
+        return status;
+    }
+    if (attr_status != 0) {
+        pthread_cond_destroy(cond);
+        return attr_status;
+    }
+    return 0;
+#endif
+}
+#   define COND_INIT(m) bladerf_thread_cond_init(m)
 #   define COND_SIGNAL(m) pthread_cond_signal(m)
 #   define COND_DESTROY(m) pthread_cond_destroy(m)
 // POSIX implementation as a function
@@ -127,8 +154,16 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
                                        pthread_mutex_t *m,
                                        unsigned int t)
 {
+#if defined(__APPLE__)
+    struct timespec relative;
+    relative.tv_sec = t / 1000;
+    relative.tv_nsec = (long)(t % 1000) * 1000000L;
+    return pthread_cond_timedwait_relative_np(c, m, &relative);
+#else
     struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return errno;
+    }
     ts.tv_sec += t / 1000;
     ts.tv_nsec += (t % 1000) * 1000000;
     if (ts.tv_nsec >= 1000000000) {
@@ -136,6 +171,7 @@ static inline int posix_cond_timedwait(pthread_cond_t *c,
         ts.tv_nsec -= 1000000000;
     }
     return pthread_cond_timedwait(c, m, &ts);
+#endif
 }
 #define COND_TIMED_WAIT(c, m, t) posix_cond_timedwait(c, m, t)
 

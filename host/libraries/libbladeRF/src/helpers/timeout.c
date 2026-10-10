@@ -27,7 +27,47 @@
 #include <time.h>
 #endif
 
+#include <stddef.h>
 #include <libbladeRF.h>
+#include "helpers/timeout.h"
+
+int bladerf_monotonic_now_ns(uint64_t *now_ns)
+{
+    struct timespec now;
+
+    if (now_ns == NULL || clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    *now_ns = (uint64_t)now.tv_sec * 1000000000ULL + (uint64_t)now.tv_nsec;
+    return 0;
+}
+
+int bladerf_timeout_remaining_ms(uint64_t start_ns,
+                                 unsigned int timeout_ms,
+                                 unsigned int *remaining_ms)
+{
+    uint64_t now_ns, elapsed_ns, remaining_ns;
+    int status;
+
+    if (remaining_ms == NULL || timeout_ms == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = bladerf_monotonic_now_ns(&now_ns);
+    if (status != 0) {
+        return status;
+    }
+
+    elapsed_ns = now_ns >= start_ns ? now_ns - start_ns : 0;
+    if (elapsed_ns >= (uint64_t)timeout_ms * 1000000ULL) {
+        return BLADERF_ERR_TIMEOUT;
+    }
+
+    remaining_ns = (uint64_t)timeout_ms * 1000000ULL - elapsed_ns;
+    *remaining_ms = (unsigned int)((remaining_ns + 999999ULL) / 1000000ULL);
+    return 0;
+}
 
 int populate_abs_timeout(struct timespec *t, unsigned int timeout_ms)
 {

@@ -27,6 +27,14 @@
 #ifndef HELPERS_TIMEOUT_H_
 #define HELPERS_TIMEOUT_H_
 
+#include <stdint.h>
+#include "host_config.h"
+#if BLADERF_OS_WINDOWS || BLADERF_OS_OSX
+#include "clock_gettime.h"
+#else
+#include <time.h>
+#endif
+
 /**
  * Populate the provided timeval structure for the specified timeout
  *
@@ -36,5 +44,12 @@
  * 0 on success, BLADERF_ERR_UNEXPECTED on failure
  */
 int populate_abs_timeout(struct timespec *t_abs, unsigned int timeout_ms);
+
+/* Monotonic time helpers for enforcing one relative timeout across a loop of
+ * condition-variable wakes. */
+int bladerf_monotonic_now_ns(uint64_t *now_ns);
+int bladerf_timeout_remaining_ms(uint64_t start_ns,
+                                 unsigned int timeout_ms,
+                                 unsigned int *remaining_ms);
 
 #endif

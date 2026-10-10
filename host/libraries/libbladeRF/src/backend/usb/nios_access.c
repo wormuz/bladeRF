@@ -40,6 +40,7 @@
 
 #include "board/board.h"
 #include "helpers/version.h"
+#include "helpers/timeout.h"
 
 #if 0
 static void print_buf(const char *msg, const uint8_t *buf, size_t len)
@@ -61,9 +62,9 @@ static void print_buf(const char *msg, const uint8_t *buf, size_t len)
 
 static uint64_t monotonic_ns(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    uint64_t now_ns = 0;
+    (void)bladerf_monotonic_now_ns(&now_ns);
+    return now_ns;
 }
 
 struct nios_trace_context {

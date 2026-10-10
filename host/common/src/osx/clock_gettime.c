@@ -34,8 +34,23 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp)
     kern_return_t ret;
     clock_serv_t cclock;
     mach_timespec_t mts;
+    clock_id_t mach_clock;
 
-    ret = host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock);
+    if (tp == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (clk_id == CLOCK_REALTIME) {
+        mach_clock = CALENDAR_CLOCK;
+    } else if (clk_id == CLOCK_MONOTONIC) {
+        mach_clock = SYSTEM_CLOCK;
+    } else {
+        errno = EINVAL;
+        return -1;
+    }
+
+    ret = host_get_clock_service(mach_host_self(), mach_clock, &cclock);
     if (ret != 0) {
         errno = EINVAL;
         return -1;

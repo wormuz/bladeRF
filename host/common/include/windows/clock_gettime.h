@@ -39,6 +39,9 @@ typedef int clockid_t;
 #ifndef CLOCK_REALTIME
 #define CLOCK_REALTIME 0
 #endif
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
 
 int clock_gettime(clockid_t clk_id, struct timespec *tp);
 

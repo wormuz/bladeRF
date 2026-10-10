@@ -13,12 +13,13 @@
 #include "common.h"
 #include "rf_transition_policy.h"
 #include "streaming/metadata.h"
+#include "helpers/timeout.h"
 
 static uint64_t monotonic_ns(void)
 {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    uint64_t now_ns = 0;
+    (void)bladerf_monotonic_now_ns(&now_ns);
+    return now_ns;
 }
 
 void bladerf2_rx_report_clipping(
@@ -147,12 +148,10 @@ int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
 
 static int rx_epoch_admission_deadline_status(uint64_t deadline_ns)
 {
-    struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+    uint64_t now_ns;
+    if (bladerf_monotonic_now_ns(&now_ns) != 0) {
         return BLADERF_ERR_UNEXPECTED;
     }
-    const uint64_t now_ns = (uint64_t)ts.tv_sec * 1000000000ULL +
-                            (uint64_t)ts.tv_nsec;
     return now_ns >= deadline_ns ? BLADERF_ERR_TIMEOUT : 0;
 }
 
@@ -900,11 +899,9 @@ uint32_t bladerf2_rx_sync_data_admission_reason_locked(
         !board_data->rf_transition_first_host_data_reported) {
         const uint64_t deadline_ns =
             board_data->rf_transition_first_host_data_deadline_ns;
-        struct timespec now_ts;
         uint64_t now_ns = 0;
-        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) == 0) {
-            now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
-                     (uint64_t)now_ts.tv_nsec;
+        if (bladerf_monotonic_now_ns(&now_ns) != 0) {
+            now_ns = 0;
         }
         if (now_ns == 0) {
             bladerf2_rx_transition_fail_first_host_data_locked(
@@ -922,13 +919,11 @@ uint32_t bladerf2_rx_sync_data_admission_reason_locked(
             *admission_monotonic_ns = now_ns;
         }
     } else if (admission_monotonic_ns != NULL) {
-        struct timespec now_ts;
-        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+        uint64_t now_ns;
+        if (bladerf_monotonic_now_ns(&now_ns) != 0) {
             return BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
         }
-        *admission_monotonic_ns =
-            (uint64_t)now_ts.tv_sec * 1000000000ULL +
-            (uint64_t)now_ts.tv_nsec;
+        *admission_monotonic_ns = now_ns;
     }
     return 0;
 }

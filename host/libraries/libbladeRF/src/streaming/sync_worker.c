@@ -39,6 +39,7 @@
 
 #include "board/board.h"
 #include "backend/usb/usb.h"
+#include "helpers/timeout.h"
 
 #define worker2str(s) (direction2str(s->stream_config.layout & BLADERF_DIRECTION_MASK))
 
@@ -834,14 +835,27 @@ int sync_worker_wait_for_state(struct sync_worker *w, sync_worker_state state,
                                unsigned int timeout_ms)
 {
     int status = 0;
+    uint64_t start_ns = 0;
 
     if (timeout_ms != 0) {
+        status = bladerf_monotonic_now_ns(&start_ns);
+        if (status != 0) {
+            return status;
+        }
         MUTEX_LOCK(&w->state_lock);
-        status = 0;
-        while (w->state != state && status == THREAD_SUCCESS) {
+        while (w->state != state && status == 0) {
+            unsigned int remaining_ms;
+            status = bladerf_timeout_remaining_ms(start_ns, timeout_ms,
+                                                  &remaining_ms);
+            if (status != 0) {
+                break;
+            }
             status = COND_TIMED_WAIT(&w->state_changed,
                                             &w->state_lock,
-                                            timeout_ms);
+                                            remaining_ms);
+            if (status == THREAD_TIMEOUT && w->state == state) {
+                status = 0;
+            }
         }
         MUTEX_UNLOCK(&w->state_lock);
 
@@ -855,7 +869,13 @@ int sync_worker_wait_for_state(struct sync_worker *w, sync_worker_state state,
         MUTEX_UNLOCK(&w->state_lock);
     }
 
-    if (status != 0) {
+    if (status == BLADERF_ERR_TIMEOUT) {
+        log_debug("%s: Wait on state change deadline expired\n",
+                  __FUNCTION__);
+        return status;
+    } else if (status < 0) {
+        return status;
+    } else if (status != 0) {
         log_debug("%s: Wait on state change failed: %s\n",
                    __FUNCTION__, strerror(status));
 
