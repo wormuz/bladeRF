@@ -749,12 +749,18 @@ static void *count_async_rx_callback(struct bladerf *dev,
     assert(pthread_mutex_trylock(&stream->lock) == 0);
     assert(pthread_mutex_unlock(&stream->lock) == 0);
     async_callback_observed_unlocked = true;
+    for (size_t i = 0; i < sizeof(metadata->reserved); ++i) {
+        assert(metadata->reserved[i] == 0);
+    }
     if (num_samples == 0) {
         assert(samples == NULL);
         assert(metadata->timestamp == 0);
         assert(metadata->actual_count == 0);
         assert(metadata->rx_epoch_id_valid == 0);
         assert(metadata->rx_clipping_flags == 0);
+        for (size_t i = 0; i < sizeof(metadata->reserved); ++i) {
+            assert(metadata->reserved[i] == 0);
+        }
         assert(user_data != NULL);
         async_rx_event_wakeups++;
         async_fault_callback_order = ++async_fault_order;
@@ -767,6 +773,8 @@ static void *count_async_rx_callback(struct bladerf *dev,
             assert(metadata->actual_count == num_samples);
             assert(metadata->rx_clipping_flags == 0x03);
         }
+        /* Callback writes must not leak into metadata for the next transfer. */
+        metadata->reserved[0] = 0x5a;
         async_rx_callbacks++;
     }
     return samples;
@@ -2853,6 +2861,7 @@ int main(void)
     async_stream.user_data = async_samples;
     int16_t async_replacement[2048] = {0};
     async_rejected_replacement = async_replacement;
+    memset(async_meta.reserved, 0xa5, sizeof(async_meta.reserved));
     async_stream.rx_buffer_rejected = replace_rejected_async_buffer;
     async_rx_callbacks = 0;
     async_rx_event_wakeups = 0;

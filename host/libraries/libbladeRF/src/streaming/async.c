@@ -133,6 +133,7 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
     metadata->rx_epoch_id = 0;
     metadata->rx_epoch_id_valid = 0;
     metadata->rx_clipping_flags = 0;
+    memset(metadata->reserved, 0, sizeof(metadata->reserved));
 
     if (stream->format != BLADERF_FORMAT_PACKET_META &&
         received_bytes != async_stream_buf_bytes(stream)) {
