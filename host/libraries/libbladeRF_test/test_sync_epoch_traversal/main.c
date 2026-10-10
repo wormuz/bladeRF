@@ -3030,6 +3030,28 @@ int main(void)
                                    sizeof(async_samples)) == async_samples);
     assert(async_rx_callbacks == 4);
     assert(async_rx_event_wakeups == 3);
+    /* PACKET_META accepts short transfers, but a backend-reported length
+     * beyond the allocated buffer must be withheld before callback delivery. */
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
+               sizeof(async_samples) / 2) == async_samples);
+    assert(async_rx_callbacks == 5);
+    assert(async_rx_event_wakeups == 3);
+    assert(async_meta.actual_count == sizeof(async_samples) / 8);
+    assert(MUTEX_INIT(&f.dev.lock) == 0);
+    MUTEX_LOCK(&f.dev.lock);
+    assert(run_async_rx_process_buffer_locked(
+               &async_stream, &async_meta, async_samples,
+               sizeof(async_samples) + sizeof(uint32_t)) ==
+           async_replacement);
+    MUTEX_UNLOCK(&f.dev.lock);
+    assert(MUTEX_DESTROY(&f.dev.lock) == 0);
+    assert(async_rx_callbacks == 5);
+    assert(async_rx_event_wakeups == 4);
+    assert(async_meta.actual_count == 0);
+    assert(async_withheld_events == 2);
+    assert(async_withheld_reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+    assert(async_overrun_events == 4);
     assert(async_callback_observed_unlocked);
     async_stream.cb = stop_async_rx_stream_from_callback;
     MUTEX_LOCK(&async_stream.lock);
