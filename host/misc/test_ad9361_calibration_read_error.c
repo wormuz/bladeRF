@@ -226,6 +226,10 @@ int main(void)
             ad9361_set_dcxo_tune(NULL, 0, 0) != -EINVAL ||
             ad9361_get_temp(NULL) != -EINVAL ||
             ad9361_update_rf_bandwidth(NULL, 1000000, 1000000) != -EINVAL ||
+            ad9361_1rx1tx_channel_map(NULL, false, 0) != -EINVAL ||
+            ad9361_mcs(NULL, 1) != -EINVAL ||
+            ad9361_setup(NULL) != -EINVAL ||
+            ad9361_validate_enable_fir(NULL) != -EINVAL ||
             read_count != reads_before || write_count != writes_before) {
             fprintf(stderr,
                     "AD9361 API accepted incomplete state or touched SPI\n");
