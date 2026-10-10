@@ -1212,18 +1212,15 @@ static void *rx_fault_monitor_task(void *arg)
                                 _rx_fault_monitor_stage(
                                     board_data,
                                     "NIOS TX completion record");
-                                /* NIOS stores the selected module/sequence
-                                 * globally. Serialize selector+all field
-                                 * reads against every other device control
-                                 * transaction, not just individual USB ops. */
-                                WITH_MUTEX(&dev->lock, {
-                                    completion_read_status =
-                                        nios_retune2_completion_read(
-                                            dev, BLADERF_MODULE_TX, sequence,
-                                            &readback_frequency_hz,
-                                            &scheduled_timestamp,
-                                            &nios_profile);
-                                });
+                                /* This whole monitor state-commit block holds
+                                 * dev->lock, so the NIOS selector and all field
+                                 * reads stay atomic against other controls. */
+                                completion_read_status =
+                                    nios_retune2_completion_read(
+                                        dev, BLADERF_MODULE_TX, sequence,
+                                        &readback_frequency_hz,
+                                        &scheduled_timestamp,
+                                        &nios_profile);
                                 if (completion_read_status != 0) {
                                     completion_lost = true;
                                     break;
@@ -1329,7 +1326,6 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_retune_counter_reset && !counter_reset &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
-                        WITH_MUTEX(&dev->lock, {
                         bool release_still_valid;
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         release_still_valid =
@@ -1470,7 +1466,6 @@ static void *rx_fault_monitor_task(void *arg)
                             }
                         }
                         }
-                        });
                     }
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     tx_pending_after_completions =
