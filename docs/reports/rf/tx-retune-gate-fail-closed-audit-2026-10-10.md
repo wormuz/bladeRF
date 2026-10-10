@@ -29,3 +29,5 @@ A follow-up call-graph pass found that direct LO and scheduled-retune guards did
 The generic `bladerf_set_gain()` and `bladerf_set_gain_stage()` APIs also changed AD9361 TX attenuation without entering the board's TX configuration fence. They now invalidate TX before the RFIC write. The abort-failure live scenario checks `bladerf_set_gain()` returns `BLADERF_ERR_WOULD_BLOCK`. TX gain-mode setting remains as the existing no-op behavior and does not fence. Source-only; no compile or runtime test.
 
 The generic gain callback is invoked only after taking `dev->lock`, matching the board callback's serialization contract. If fencing fails, both `set_gain` and `set_gain_stage` release the mutex before returning.
+
+The live harness now has a normal-operation `RUNTIME_TX_GAIN_SETTER` scenario: establish TX frequency validity, change gain, require `TX_CONFIGURATION_INVALID` and sync-TX rejection, then recover with a confirmed retune. It is registered in the runner and remains uncompiled/unrun under the source-audit gate.

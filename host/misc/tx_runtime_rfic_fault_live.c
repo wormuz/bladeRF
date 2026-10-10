@@ -10,6 +10,7 @@
  *   RUNTIME_TX_LINK_FAULT_NO_RFIC_READ
  *   RUNTIME_TX_RETUNE_FAILURE
  *   RUNTIME_TX_RFIC_REGISTER_WRITE
+ *   RUNTIME_TX_GAIN_SETTER
  *   RUNTIME_TX_QUEUE_CLEAR_FAILURE
  *   RUNTIME_TX_GATE_STATUS_READ_FAILURE
  *   RUNTIME_TX_GATE_RELEASE_FAILURE
@@ -124,6 +125,7 @@ int main(void)
         strcmp(mode, "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") != 0 &&
         strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") != 0 &&
+        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") != 0 &&
         strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") != 0 &&
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") != 0 &&
@@ -149,6 +151,7 @@ int main(void)
     status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
     if (status != 0) goto cleanup;
     if (strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
@@ -367,6 +370,15 @@ int main(void)
         goto cleanup;
     }
 
+    if (strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0) {
+        status = bladerf_set_gain(dev, BLADERF_CHANNEL_TX(0), -20);
+        if (status != 0) {
+            fprintf(stderr, "TX gain setter failed: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+    }
+
     if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
         uint8_t tx_clock_data_delay;
         /* Rewrite the existing value while TX is live. The RFIC value stays
@@ -417,7 +429,8 @@ int main(void)
                        event->event_type ==
                            BLADERF_RF_EVT_TX_RETUNE_FAILED) {
                 expected_event_seen = true;
-            } else if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 &&
+            } else if ((strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 ||
+                        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0) &&
                        event->event_type ==
                            BLADERF_RF_EVT_TX_CONFIGURATION_INVALID) {
                 expected_event_seen = true;
@@ -458,7 +471,8 @@ int main(void)
         goto cleanup;
     }
 
-    if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
+    if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0) {
         bladerf_frequency current_frequency = 0;
         bool retune_valid_seen = false;
 
