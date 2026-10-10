@@ -407,6 +407,15 @@ static void test_public_sync_apis_reject_null_device(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_get_loopback_modes(NULL, NULL) == BLADERF_ERR_INVAL);
     assert(bladerf_get_loopback(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_correction(&dev, BLADERF_CHANNEL_RX(0),
+                                  BLADERF_CORR_PHASE, NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_get_tuning_mode(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_rx_mux(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_vctcxo_tamer_mode(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_vctcxo_trim(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_trim_dac_read(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_get_feature(&dev, NULL) == BLADERF_ERR_INVAL);
 }
 
 static void test_tx_transport_fault_is_not_hidden_by_other_invalidity(void)

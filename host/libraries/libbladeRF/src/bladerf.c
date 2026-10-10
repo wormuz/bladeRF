@@ -1499,6 +1499,7 @@ int bladerf_get_correction(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
+    CHECK_NULL(value);
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -2198,6 +2199,8 @@ int bladerf_set_tuning_mode(struct bladerf *dev, bladerf_tuning_mode mode)
 int bladerf_get_tuning_mode(struct bladerf *dev, bladerf_tuning_mode *mode)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(mode);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_tuning_mode(dev, mode);
@@ -2319,6 +2322,8 @@ int bladerf_set_rx_mux(struct bladerf *dev, bladerf_rx_mux mux)
 int bladerf_get_rx_mux(struct bladerf *dev, bladerf_rx_mux *mux)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(mux);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_rx_mux(dev, mux);
@@ -2364,6 +2369,8 @@ int bladerf_get_vctcxo_tamer_mode(struct bladerf *dev,
                                   bladerf_vctcxo_tamer_mode *mode)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(mode);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_vctcxo_tamer_mode(dev, mode);
@@ -2379,6 +2386,8 @@ int bladerf_get_vctcxo_tamer_mode(struct bladerf *dev,
 int bladerf_get_vctcxo_trim(struct bladerf *dev, uint16_t *trim)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(trim);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_vctcxo_trim(dev, trim);
@@ -2390,6 +2399,8 @@ int bladerf_get_vctcxo_trim(struct bladerf *dev, uint16_t *trim)
 int bladerf_trim_dac_read(struct bladerf *dev, uint16_t *trim)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(trim);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->trim_dac_read(dev, trim);
@@ -3216,6 +3227,8 @@ int bladerf_enable_feature(struct bladerf *dev, bladerf_feature feature, bool en
 
 int bladerf_get_feature(struct bladerf *dev, bladerf_feature* feature)
 {
+    CHECK_NULL(dev);
+    CHECK_NULL(feature);
     MUTEX_LOCK(&dev->lock);
     *feature = dev->feature;
     MUTEX_UNLOCK(&dev->lock);
