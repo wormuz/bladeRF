@@ -52,9 +52,9 @@ longer acquire it a second time. The same ownership correction was applied to
 sample-rate, bandwidth, band/port, loopback, and trim-DAC setters after tracing
 the previous generic fix into xA4 callbacks and finding duplicate TX
 invalidation events on the real path. The focused regression source checks the
-single-fence ordering for raw writes and fail-closed behavior. These source
-changes are not yet committed and the test remains unrun under the source-audit
-gate.
+single-fence ordering for raw writes and TX band/port setters, and fail-closed
+behavior. These source changes are not yet committed and the test remains
+unrun under the source-audit gate.
 
 ## Release qualification gates
 

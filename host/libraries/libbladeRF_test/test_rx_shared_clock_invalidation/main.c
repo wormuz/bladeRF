@@ -542,6 +542,13 @@ int main(void)
     assert(state.invalidate_calls == 17 && state.complete_calls == 12);
     state.tx_fence_status = 0;
 
+    state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
+    assert(bladerf_select_band(&dev, tx0, 2400000000) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(bladerf_set_rf_port(&dev, tx0, "B") == BLADERF_ERR_WOULD_BLOCK);
+    assert(state.select_band_calls == 1 && state.set_rf_port_calls == 1);
+    state.tx_fence_status = 0;
+
     /* XB-200 RX filter changes alter the RF path. Fence the common RX epoch
      * first and publish the dedicated reason before touching the expansion. */
     state.invalidate_status = 0;
