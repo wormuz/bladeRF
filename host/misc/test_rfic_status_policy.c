@@ -5,6 +5,15 @@
 
 int main(void)
 {
+    if (bladerf2_rfic_status_matches_retirement(0, true, 1, 0) ||
+        bladerf2_rfic_status_matches_retirement(1, true, 1, 1) ||
+        !bladerf2_rfic_status_matches_retirement(0, true, 1, 1) ||
+        !bladerf2_rfic_status_matches_retirement(0, false, 1, 0)) {
+        fputs("RFIC retirement wait accepted a stale or pending status\n",
+              stderr);
+        return 1;
+    }
+
     /* Queue reset's 0xFF sentinel has a set low success bit, but is not a
      * successful command completion until the explicit valid bit is set. */
     if (bladerf2_rfic_status_result_accepted(true, false, true,

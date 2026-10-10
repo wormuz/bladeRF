@@ -26,6 +26,11 @@ handling could therefore make an unexecuted RFIC command appear successful.
   behind a nonempty queue, preventing an older successful result from
   certifying a command that was dropped or is still pending. Sequence wrap is
   defined by unsigned 32-bit arithmetic.
+- A second ordering race was found during review: USB OUT completion can precede
+  NIOS dispatch, so the first status read may see an empty queue and the old
+  sequence. The host now polls the full status until the queue is empty and the
+  exact sequence retires, or returns timeout. The empty-queue/old-sequence
+  state is explicitly covered by the status-policy regression source.
 - Added host-side status-policy regression source for the `0xFF` sentinel,
   exact successful retirement, failed retirement, stale prior success,
   sequence wrap, and legacy firmware behavior.

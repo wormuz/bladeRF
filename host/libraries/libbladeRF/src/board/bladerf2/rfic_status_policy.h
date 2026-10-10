@@ -28,6 +28,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* Empty queue can be observed before NIOS dispatches a USB-delivered command.
+ * On capable firmware the command is complete only after its own retirement
+ * sequence appears and the queue is drained. */
+static inline bool bladerf2_rfic_status_matches_retirement(
+    uint8_t queue_length, bool sequence_supported,
+    uint32_t expected_sequence, uint32_t observed_sequence)
+{
+    return queue_length == 0 &&
+           (!sequence_supported || expected_sequence == observed_sequence);
+}
+
 /* Queue length zero and a success bit are insufficient: the initial 0xFF
  * last-result sentinel has its success bit set, but no command has retired. */
 static inline bool bladerf2_rfic_status_result_accepted(

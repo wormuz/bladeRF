@@ -133,26 +133,6 @@ static const char *_rfic_fpga_init_stage_name(uint8_t stage)
     }
 }
 
-static int _rfic_fpga_get_status_wqlen(struct bladerf *dev)
-{
-    struct bladerf_rfic_status_register rfic_status;
-    int status;
-
-    status = _rfic_fpga_get_status(dev, &rfic_status);
-    if (status < 0) {
-        return status;
-    }
-
-#ifdef BLADERF_HEADLESS_C_DEBUG
-    if (rfic_status.write_queue_length > 0) {
-        log_verbose("%s: queue len = %d\n", __FUNCTION__,
-                    rfic_status.write_queue_length);
-    }
-#endif
-
-    return (int)rfic_status.write_queue_length;
-}
-
 /* Most RFIC commands are a handful of SPI transactions and retire in well
  * under a millisecond. INIT is not one of them: it hard-resets the AD9361 and
  * runs the full ad9361_init(), calibrations included. Measured on this board,
@@ -180,38 +160,48 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     size_t const TRIES       = tries;
     unsigned int const DELAY = delay_us;
     size_t count             = 0;
-    int jobs;
     int status;
     struct bladerf_rfic_status_register rfic_status;
     const bool result_valid_supported = have_cap_dev(
         dev, BLADERF_CAP_RFIC_WQ_RESULT_VALID);
 
-    /* Poll the CPU and spin until the job has been completed. */
-    do {
-        jobs = _rfic_fpga_get_status_wqlen(dev);
-        if (0 != jobs) {
-            usleep(DELAY);
+    /* A successful USB OUT only means that the command packet reached the
+     * device. The first status read can race NIOS packet dispatch and still
+     * see an empty queue with the previous retirement token. On capable
+     * firmware, wait for both an empty queue and this command's exact token.
+     * Legacy firmware retains its queue-drained behavior. */
+    status = BLADERF_ERR_TIMEOUT;
+    for (count = 0; count < TRIES; count++) {
+        int read_status = _rfic_fpga_get_status(dev, &rfic_status);
+        if (read_status < 0) {
+            return read_status;
         }
-    } while ((0 != jobs) && (++count < TRIES));
 
-    /* If it's simply taking too long to dequeue the command, status will
-     * have the number of items in the queue. Bonk this down to a timeout. */
-    if (jobs > 0) {
-        jobs = BLADERF_ERR_TIMEOUT;
+        if (bladerf2_rfic_status_matches_retirement(
+                rfic_status.write_queue_length, sequence_supported,
+                expected_sequence, rfic_status.last_write_sequence)) {
+            status = 0;
+            break;
+        }
+
+        usleep(DELAY);
     }
 
-    if (jobs < 0) {
-        return jobs;
+    if (status != 0) {
+        if (sequence_supported) {
+            log_warning("%s: timed out waiting for RFIC command retirement "
+                        "(expected_sequence=%u, observed_sequence=%u, "
+                        "queue_length=%u)\n",
+                        __FUNCTION__, expected_sequence,
+                        rfic_status.last_write_sequence,
+                        rfic_status.write_queue_length);
+        }
+        return BLADERF_ERR_TIMEOUT;
     }
 
-    /* The queue drained, which is not the same as the command having worked:
-     * the firmware retires failed commands too (devices_rfic.c sets e->rv,
-     * reported as the WQSUCCESS bit). Without this an INIT that ran and
-     * failed is indistinguishable from one that succeeded. */
-    status = _rfic_fpga_get_status(dev, &rfic_status);
-    if (status < 0) {
-        return status;
-    }
+    /* The queue drained and this command retired, which is still not the
+     * same as the RFIC operation succeeding: NIOS retires failed commands
+     * too and publishes their result in WQSUCCESS. */
 
     /* The separate validity bit distinguishes a retired command result from
      * the 0xFF queue-reset sentinel (whose low bit is one). */
@@ -228,14 +218,6 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                         __FUNCTION__, rfic_status.rfic_initialized,
                         rfic_status.init_stage,
                         _rfic_fpga_init_stage_name(rfic_status.init_stage));
-        } else if (sequence_supported &&
-                   rfic_status.last_write_sequence != expected_sequence) {
-            log_warning("%s: NIOS RFIC queue drained without the expected "
-                        "command result (expected_sequence=%u, "
-                        "observed_sequence=%u, queue_length=%u)\n",
-                        __FUNCTION__, expected_sequence,
-                        rfic_status.last_write_sequence,
-                        rfic_status.write_queue_length);
         } else {
             log_warning("%s: NIOS RFIC command failed "
                         "(initialized=%u, init_stage=%u:%s)\n",
