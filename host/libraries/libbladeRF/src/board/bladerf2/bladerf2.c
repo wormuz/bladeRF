@@ -3758,8 +3758,13 @@ static int bladerf2_set_correction(struct bladerf *dev,
     struct ad9361_rf_phy *phy              = board_data->phy;
     bool low_band;
     uint16_t reg, data;
+    uint16_t correction_regs[2];
+    uint8_t old_correction[2], new_correction[2];
+    uint8_t old_force, new_force;
+    unsigned int correction_reg_count = 1;
     unsigned int shift;
     int32_t val;
+    int status;
 
     IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
         log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
@@ -3805,29 +3810,28 @@ static int bladerf2_set_correction(struct bladerf *dev,
          * the register map. See AD9361 register map page 51. */
         bool is_q = (corr == BLADERF_CORR_DCOFF_Q);
         uint8_t data_top, data_bot;
+        correction_reg_count = 2;
+        correction_regs[0] = ad9361_correction_rx_dcoff_reg_table
+            [ch][low_band][is_q].reg_top;
+        correction_regs[1] = ad9361_correction_rx_dcoff_reg_table
+            [ch][low_band][is_q].reg_bot;
 
-        /* Scale 13-bit to 10-bit */
-        data = value >> 3;
-
-        /* Read top register */
-        val = ad9361_spi_read(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_top);
+        /* Snapshot all packed bytes before changing the live correction. */
+        val = ad9361_spi_read(phy->spi, correction_regs[0]);
         if (val < 0) {
             RETURN_ERROR_AD9361("ad9361_spi_read(top)", val);
         }
-
-        data_top = val;
-
-        /* Read bottom register */
-        val = ad9361_spi_read(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_bot);
+        old_correction[0] = val;
+        val = ad9361_spi_read(phy->spi, correction_regs[1]);
         if (val < 0) {
             RETURN_ERROR_AD9361("ad9361_spi_read(bottom)", val);
         }
+        old_correction[1] = val;
+        data_top = old_correction[0];
+        data_bot = old_correction[1];
 
-        data_bot = val;
+        /* Scale 13-bit to 10-bit */
+        data = value >> 3;
 
         /* Modify registers */
         if (ch == BLADERF_CHANNEL_RX(0)) {
@@ -3857,43 +3861,81 @@ static int bladerf2_set_correction(struct bladerf *dev,
             }
         }
 
-        /* Write top register */
-        CHECK_AD936X(ad9361_spi_write(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_top,
-            data_top));
-
-        /* Write bottom register */
-        CHECK_AD936X(ad9361_spi_write(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_bot,
-            data_bot));
+        new_correction[0] = data_top;
+        new_correction[1] = data_bot;
     } else {
         /* Look up correction register and value shift in table */
         reg   = ad9361_correction_reg_table[ch].corr[corr].reg[low_band];
         shift = ad9361_correction_reg_table[ch].corr[corr].shift;
+        correction_regs[0] = reg;
+
+        val = ad9361_spi_read(phy->spi, reg);
+        if (val < 0) {
+            RETURN_ERROR_AD9361("ad9361_spi_read(correction)", val);
+        }
+        old_correction[0] = val;
 
         /* Scale 12-bit/13-bit to 8-bit */
         data = (value >> shift) & 0xff;
-
-        /* Write register */
-        CHECK_AD936X(ad9361_spi_write(phy->spi, reg, data & 0xff));
+        new_correction[0] = data & 0xff;
     }
 
     reg = (BLADERF_CHANNEL_IS_TX(ch)) ? AD936X_REG_TX_FORCE_BITS
                                       : AD936X_REG_FORCE_BITS;
 
-    /* Read force bit register */
+    /* Read the force state before touching correction registers. */
     val = ad9361_spi_read(phy->spi, reg);
     if (val < 0) {
         RETURN_ERROR_AD9361("ad9361_spi_read(force)", val);
     }
+    old_force = val;
 
-    /* Modify register */
-    data = val | (1 << ad9361_correction_force_bit[ch >> 1][corr][low_band]);
+    new_force = old_force |
+        (1 << ad9361_correction_force_bit[ch >> 1][corr][low_band]);
 
-    /* Write force bit register */
-    CHECK_AD936X(ad9361_spi_write(phy->spi, reg, data));
+    for (unsigned int i = 0; i < correction_reg_count; i++) {
+        status = ad9361_spi_write(phy->spi, correction_regs[i],
+                                  new_correction[i]);
+        if (status < 0) {
+            int rollback_status = 0;
+
+            /* A failed SPI write may have reached the RFIC. Restore the
+             * failing byte and every preceding byte before returning. */
+            for (unsigned int j = 0; j <= i; j++) {
+                int rollback = ad9361_spi_write(
+                    phy->spi, correction_regs[j], old_correction[j]);
+                if (rollback < 0 && rollback_status == 0)
+                    rollback_status = rollback;
+            }
+            if (rollback_status < 0) {
+                log_error("%s: correction rollback failed (%" PRId32
+                          ") after write error (%" PRId32 ")\n",
+                          __FUNCTION__, rollback_status, status);
+            }
+            RETURN_ERROR_AD9361("ad9361_spi_write(correction)", status);
+        }
+    }
+
+    status = ad9361_spi_write(phy->spi, reg, new_force);
+    if (status < 0) {
+        int rollback_status = 0;
+        int rollback = ad9361_spi_write(phy->spi, reg, old_force);
+
+        if (rollback < 0)
+            rollback_status = rollback;
+        for (unsigned int i = 0; i < correction_reg_count; i++) {
+            rollback = ad9361_spi_write(phy->spi, correction_regs[i],
+                                        old_correction[i]);
+            if (rollback < 0 && rollback_status == 0)
+                rollback_status = rollback;
+        }
+        if (rollback_status < 0) {
+            log_error("%s: force/correction rollback failed (%" PRId32
+                      ") after force write error (%" PRId32 ")\n",
+                      __FUNCTION__, rollback_status, status);
+        }
+        RETURN_ERROR_AD9361("ad9361_spi_write(force)", status);
+    }
 
     return 0;
 }
