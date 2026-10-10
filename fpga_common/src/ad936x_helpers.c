@@ -156,6 +156,20 @@ int set_ad9361_port_by_freq(struct ad9361_rf_phy *phy,
     struct band_port_map const *port_map = NULL;
     int status;
 
+    switch (ch) {
+        case BLADERF_CHANNEL_RX(0):
+        case BLADERF_CHANNEL_RX(1):
+        case BLADERF_CHANNEL_TX(0):
+        case BLADERF_CHANNEL_TX(1):
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
+    if (enabled && phy == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Leave the RFIC port alone when the direction is being disabled.
      *
      * The shutdown entry in the band port map exists for the RF SPDT

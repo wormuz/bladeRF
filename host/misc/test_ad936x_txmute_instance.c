@@ -39,6 +39,28 @@ int errno_ad9361_to_bladerf(int err)
     return err < 0 ? BLADERF_ERR_IO : 0;
 }
 
+struct band_port_map const *_get_band_port_map_by_freq(bladerf_channel ch,
+                                                       bladerf_frequency freq)
+{
+    (void)ch;
+    (void)freq;
+    return NULL;
+}
+
+int32_t ad9361_set_rx_rf_port_input(struct ad9361_rf_phy *phy, uint32_t mode)
+{
+    (void)phy;
+    (void)mode;
+    return -EINVAL;
+}
+
+int32_t ad9361_set_tx_rf_port_output(struct ad9361_rf_phy *phy, uint32_t mode)
+{
+    (void)phy;
+    (void)mode;
+    return -EINVAL;
+}
+
 int main(void)
 {
     struct ad9361_rf_phy first = { 0 };
@@ -78,6 +100,12 @@ int main(void)
            BLADERF_ERR_INVAL);
     assert(txmute_get(&first, BLADERF_CHANNEL_TX(0), NULL) ==
            BLADERF_ERR_INVAL);
+    assert(set_ad9361_port_by_freq(NULL, BLADERF_CHANNEL_RX(2), false, 0) ==
+           BLADERF_ERR_INVAL);
+    assert(set_ad9361_port_by_freq(NULL, BLADERF_CHANNEL_RX(0), true,
+                                   1800000000) == BLADERF_ERR_INVAL);
+    assert(set_ad9361_port_by_freq(NULL, BLADERF_CHANNEL_RX(0), false, 0) ==
+           0);
 
     puts("AD936x TX mute instance isolation: PASS");
     return 0;
