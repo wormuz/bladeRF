@@ -32,7 +32,10 @@ struct mock_state {
     unsigned int expansion_gpio_dir_write_calls;
     unsigned int lms_write_calls;
     unsigned int trigger_arm_calls;
+    unsigned int trigger_fire_calls;
     unsigned int trigger_write_calls;
+    unsigned int tx_fence_calls;
+    int tx_fence_status;
     unsigned int schedule_retune_calls;
     int schedule_retune_status;
     bladerf_channel scheduled_channel;
@@ -137,6 +140,22 @@ static int mock_trigger_arm(struct bladerf *dev,
     return 0;
 }
 
+static int mock_trigger_fire(struct bladerf *dev,
+                             const struct bladerf_trigger *trigger)
+{
+    struct mock_state *state = dev->board_data;
+    (void)trigger;
+    state->trigger_fire_calls++;
+    return 0;
+}
+
+static int mock_tx_config_change_begin(struct bladerf *dev)
+{
+    struct mock_state *state = dev->board_data;
+    state->tx_fence_calls++;
+    return state->tx_fence_status;
+}
+
 static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
                               bladerf_trigger_signal signal, uint8_t value)
 {
@@ -223,7 +242,9 @@ static const struct board_fns mock_board = {
     .config_gpio_write = mock_config_gpio_write,
     .wishbone_master_write = mock_wishbone_write,
     .trigger_arm = mock_trigger_arm,
+    .trigger_fire = mock_trigger_fire,
     .write_trigger = mock_trigger_write,
+    .tx_config_change_begin = mock_tx_config_change_begin,
     .schedule_retune = mock_schedule_retune,
 };
 
@@ -463,9 +484,8 @@ int main(void)
     assert(state.invalidate_calls == 26 && state.complete_calls == 18 &&
            state.expansion_gpio_write_calls == expansion_writes_before_raw_gpio);
 
-    /* RX trigger arm and raw trigger-register writes change when samples are
-     * admitted to capture. Fence RX2 before each mutation; TX trigger controls
-     * remain independent of the shared RX epoch. */
+    /* Trigger controls invalidate the matching direction. RX2 uses its RX
+     * epoch fence; TX controls use the separate TX configuration fence. */
     state.invalidate_status = 0;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
     assert(state.invalidate_calls == 27 && state.complete_calls == 19 &&
@@ -485,7 +505,8 @@ int main(void)
     assert(bladerf_write_trigger(&dev, tx0, BLADERF_TRIGGER_J51_1,
                                  BLADERF_TRIGGER_REG_ARM) == 0);
     assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
-           state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
+           state.trigger_arm_calls == 2 && state.trigger_write_calls == 2 &&
+           state.tx_fence_calls == 2);
 
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     trigger.channel = rx2;
@@ -530,6 +551,26 @@ int main(void)
                                    &quick_tune) == BLADERF_ERR_INVAL);
     assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
            state.schedule_retune_calls == 2);
+
+    trigger.channel = rx2;
+    assert(bladerf_trigger_fire(&dev, &trigger) == 0);
+    assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
+           state.trigger_fire_calls == 1 && state.tx_fence_calls == 2);
+
+    trigger.channel = tx0;
+    assert(bladerf_trigger_fire(&dev, &trigger) == 0);
+    assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
+           state.trigger_fire_calls == 2 && state.tx_fence_calls == 3);
+
+    state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
+    assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.trigger_arm_calls == 2 && state.tx_fence_calls == 4);
+
+    trigger.signal = BLADERF_TRIGGER_INVALID;
+    assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
+           BLADERF_ERR_INVAL);
+    assert(state.tx_fence_calls == 4 && state.trigger_arm_calls == 2);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
