@@ -52,6 +52,7 @@ proc compile_nuand { root platform } {
     vcom -work nuand -2008 [file join $root ./synthesis/lms6002d/vhdl/tb/lms6002d_tb.vhd]
 
     vcom -work nuand -2008 [file join $root ./synthesis/fifo_readwrite_p.vhd]
+    vcom -work nuand -2008 [file join $root ./synthesis/tx_retune_gate.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/fifo_reader.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/fifo_writer.vhd]
 
@@ -74,4 +75,5 @@ proc compile_nuand_tb { root platform } {
     vcom -work nuand -2008 [file join $root ./simulation/rfic_spi_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/fifo_writer_epoch_fence_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/sticky_epoch_snapshot_tb.vhd]
+    vcom -work nuand -2008 [file join $root ./simulation/tx_retune_gate_tb.vhd]
 }

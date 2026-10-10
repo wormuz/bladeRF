@@ -46,6 +46,15 @@ entity tx is
         tx_underflow_count   : out   unsigned(63 downto 0) := (others => '0');
         tx_timestamp         : in    unsigned(63 downto 0);
 
+        -- TX retune fence controls are bundled/synchronized by the system
+        -- controller. The defaults preserve existing non-event-driven
+        -- images until the NIOS mailbox is connected at the core level.
+        retune_gate_arm      : in std_logic := '0';
+        retune_gate_immediate : in std_logic := '0';
+        retune_gate_target   : in unsigned(63 downto 0) := (others => '0');
+        retune_gate_complete : in std_logic := '0';
+        retune_gate_abort    : in std_logic := '0';
+
         -- Link status (host register RF_LINK_STATUS)
         link_start_toggle          : in    std_logic := '0';
         link_stop_toggle           : in    std_logic := '0';
@@ -117,6 +126,13 @@ architecture arch of tx is
 
     signal sample_fifo_holdoff            : std_logic;
     signal sample_fifo_holdoff_i          : std_logic;
+    signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
+    signal retune_gate_state               : unsigned(1 downto 0);
+    signal retune_gate_muted               : std_logic;
+    signal retune_gate_mute_event          : std_logic;
+    signal retune_gate_resume_event        : std_logic;
+    signal retune_gate_mute_timestamp      : unsigned(63 downto 0);
+    signal retune_gate_muted_sample_count  : unsigned(63 downto 0);
 
 begin
 
@@ -269,11 +285,34 @@ begin
             meta_fifo_read      =>  meta_fifo.rreq,
 
             in_sample_controls  =>  dac_controls,
-            out_samples         =>  dac_streams,
+            out_samples         =>  dac_streams_raw,
 
             underflow_led       =>  tx_underflow_led,
             underflow_count     =>  tx_underflow_count,
             underflow_duration  =>  x"ffff"
+        );
+
+    U_tx_retune_gate : entity work.tx_retune_gate
+        generic map (
+            NUM_STREAMS => NUM_STREAMS
+        )
+        port map (
+            clock                => tx_clock,
+            reset                => tx_reset,
+            timestamp            => tx_timestamp,
+            arm                  => retune_gate_arm,
+            arm_immediate        => retune_gate_immediate,
+            target_timestamp     => retune_gate_target,
+            complete             => retune_gate_complete,
+            abort                => retune_gate_abort,
+            in_samples           => dac_streams_raw,
+            out_samples          => dac_streams,
+            state                => retune_gate_state,
+            muted                => retune_gate_muted,
+            mute_start_event     => retune_gate_mute_event,
+            resume_event         => retune_gate_resume_event,
+            mute_start_timestamp => retune_gate_mute_timestamp,
+            muted_sample_count  => retune_gate_muted_sample_count
         );
 
     txtrig : entity work.trigger(async)
