@@ -2680,7 +2680,7 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     if (metadata_fault != NULL && metadata_fault[0] != '\0' &&
         (strcmp(metadata_fault, "stale_epoch") == 0 ||
          strcmp(metadata_fault, "pre_boundary") == 0) &&
-        first_valid_timestamp != 0 && message_size >= METADATA_HEADER_SIZE &&
+        message_size >= METADATA_HEADER_SIZE &&
         length >= message_size) {
         bool inject = false;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);

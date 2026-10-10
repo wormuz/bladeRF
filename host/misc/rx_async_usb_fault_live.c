@@ -447,8 +447,9 @@ int main(void)
              ? (atomic_load(&test.resumed_events) != 1 ||
                 atomic_load(&test.first_valid_events) != 1 ||
                 !atomic_load(&test.withheld_timestamp_valid) ||
-                atomic_load(&test.withheld_timestamp) >=
-                    atomic_load(&test.resumed_timestamp))
+                !timestamp_strictly_after(
+                    atomic_load(&test.resumed_timestamp),
+                    atomic_load(&test.withheld_timestamp)))
              : (atomic_load(&test.resumed_events) != 0 ||
                 (atomic_load(&test.recoverable_short_mode) &&
                  (atomic_load(&test.first_valid_events) != 1 ||

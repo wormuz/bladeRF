@@ -417,4 +417,10 @@ ordering. RX epoch and USB-fault qualification harnesses now use a shared
 modulo comparator for boundary checks; the concurrent-consumer harness also
 tracks timestamp initialization separately so a legitimate wrapped value of
 zero is not mistaken for “no previous timestamp”. TX burst-window probes use
-modulo range checks as well. No harness was executed.
+modulo range checks as well. A test-only async metadata fault injector no
+longer treats timestamp zero as “not initialized”, and its withheld/resumed
+event ordering check is wrap-safe. In the Python chain, epoch splitting,
+RX1/RX2/RX_X2 admission, live-edge drain, TX drain, contiguous capture, and
+retune schedule scoring now share equivalent modulo ordering. Missing first
+META timestamp is tracked separately from the valid value zero. Source
+regressions were added; no harness or test was executed.
