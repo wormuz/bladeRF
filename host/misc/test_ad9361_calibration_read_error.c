@@ -480,6 +480,39 @@ int main(void)
         read_count = write_count = 0;
     }
 
+    /* Temporary RX/TX BBF tune enables are ambiguous writes: even when SPI
+     * reports failure, the tune circuit may have been enabled. Require the
+     * cleanup write on both directions. */
+    {
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fail_write_reg = -1;
+        fail_write_once_reg = REG_RX1_TUNE_CTRL;
+        ret = ad9361_rx_bb_analog_filter_calib(&phy, 20000000, 983040000);
+        if (ret != -EIO ||
+            fake_regs[REG_RX1_TUNE_CTRL] !=
+                (RX1_TUNE_RESAMPLE | RX1_PD_TUNE) ||
+            fake_regs[REG_RX2_TUNE_CTRL] !=
+                (RX2_TUNE_RESAMPLE | RX2_PD_TUNE)) {
+            fprintf(stderr,
+                    "RX BBF calibration skipped tune cleanup after setup error\n");
+            return EXIT_FAILURE;
+        }
+
+        fail_write_once_reg = REG_TX_TUNE_CTRL;
+        ret = ad9361_tx_bb_analog_filter_calib(&phy, 10000000, 983040000);
+        if (ret != -EIO ||
+            fake_regs[REG_TX_TUNE_CTRL] !=
+                (TUNER_RESAMPLE | TUNE_CTRL(1) | PD_TUNE)) {
+            fprintf(stderr,
+                    "TX BBF calibration skipped tune cleanup after setup error\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+        register_map_enabled = false;
+        read_count = write_count = 0;
+    }
+
     fail_write_reg = -1;
 
     /* Fastlock profile cache must only advance after the complete profile
