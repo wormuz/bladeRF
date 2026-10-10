@@ -1,6 +1,7 @@
 /* Test-only xA4 checks for terminal libusb RX failures and notifications. */
 #define _POSIX_C_SOURCE 200809L
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <assert.h>
 #include <pthread.h>
@@ -99,7 +100,8 @@ static bool consume_rf_events(struct fault_test *test, struct bladerf *dev)
             atomic_fetch_add(&test->overrun_events, 1);
         } else if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) {
             if (events[i].epoch_id != test->expected_epoch_id ||
-                events[i].fpga_timestamp < test->first_valid_timestamp ||
+                !timestamp_at_or_after(events[i].fpga_timestamp,
+                                       test->first_valid_timestamp) ||
                 (events[i].flags &
                  BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) == 0) {
                 atomic_fetch_add(&test->resume_metadata_mismatches, 1);
@@ -111,7 +113,8 @@ static bool consume_rf_events(struct fault_test *test, struct bladerf *dev)
                    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
             if ((events[i].flags &
                  BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) == 0 ||
-                events[i].fpga_timestamp < test->first_valid_timestamp) {
+                !timestamp_at_or_after(events[i].fpga_timestamp,
+                                       test->first_valid_timestamp)) {
                 atomic_fetch_add(&test->resume_metadata_mismatches, 1);
             }
             atomic_fetch_add(&test->first_valid_events, 1);
@@ -157,7 +160,8 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         uint8_t epoch_id = 0;
         if (!metadata_get_rx_epoch_id(message, &epoch_id) ||
             epoch_id != test->expected_epoch_id ||
-            metadata_get_timestamp(message) < test->first_valid_timestamp) {
+            !timestamp_at_or_after(metadata_get_timestamp(message),
+                                   test->first_valid_timestamp)) {
             atomic_fetch_add(&test->invalid_meta_buffers, 1);
             return BLADERF_STREAM_SHUTDOWN;
         }

@@ -1,5 +1,6 @@
 /* Live xA4 check: async RX must withhold IQ across invalid/cross-epoch data. */
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -290,7 +291,8 @@ static int require_first_host_data_event(
     for (uint32_t i = 0; i < count; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA &&
             events[i].epoch_id == epoch_event->epoch_id &&
-            events[i].fpga_timestamp >= epoch_event->fpga_timestamp) {
+            timestamp_at_or_after(events[i].fpga_timestamp,
+                                  epoch_event->fpga_timestamp)) {
             return 0;
         }
     }

@@ -413,4 +413,8 @@ checks were run because the complete source-audit gate remains open. FPGA
 synthesis/timing impact and exact-image NIOS behavior remain OPEN. The shared
 hardware-test timestamp wait helper and public sync TX metadata example now
 also use the modulo half-range completion condition instead of raw unsigned
-ordering.
+ordering. RX epoch and USB-fault qualification harnesses now use a shared
+modulo comparator for boundary checks; the concurrent-consumer harness also
+tracks timestamp initialization separately so a legitimate wrapped value of
+zero is not mistaken for “no previous timestamp”. TX burst-window probes use
+modulo range checks as well. No harness was executed.

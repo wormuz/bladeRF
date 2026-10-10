@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #define RX1 BLADERF_CHANNEL_RX(0)
 #define RX2 BLADERF_CHANNEL_RX(1)
@@ -181,7 +182,7 @@ int main(void)
         meta.rx_epoch_id != final.epoch_id ||
         meta.actual_count != SAMPLES * 2 ||
         (meta.status & BLADERF_META_STATUS_OVERRUN) ||
-        meta.timestamp <= final.fpga_timestamp) {
+        !timestamp_strictly_after(meta.timestamp, final.fpga_timestamp)) {
         fprintf(stderr, "paired stream did not survive rejected RX_X1 "
                 "reconfiguration: status=%d count=%u epoch=%u timestamp=%llu\n",
                 status, meta.actual_count, meta.rx_epoch_id,

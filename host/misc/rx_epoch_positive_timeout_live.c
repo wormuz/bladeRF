@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -134,7 +135,8 @@ static int assert_sync_valid(struct bladerf *dev,
         if (status != 0 || metadata.actual_count == 0 ||
             !metadata.rx_epoch_id_valid ||
             metadata.rx_epoch_id != event->epoch_id ||
-            metadata.timestamp < event->fpga_timestamp ||
+            !timestamp_at_or_after(metadata.timestamp,
+                                   event->fpga_timestamp) ||
             (total != 0 && metadata.timestamp != expected_timestamp)) {
             fprintf(stderr, "recovery META mismatch: status=%s count=%u "
                     "status_flags=0x%x valid=%d epoch=%u expected=%u "

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 /* Live xA4 regression: gain-calibration loading must revoke an existing RX
  * epoch, and the next event transition must restore admitted META IQ. Pass a
@@ -71,7 +72,7 @@ int main(int argc, char **argv)
         status = bladerf_sync_rx(dev, samples, 8192, &meta, 1000);
     if (status != 0 || meta.actual_count != 8192 || !meta.rx_epoch_id_valid ||
         meta.rx_epoch_id != event.epoch_id ||
-        meta.timestamp < event.fpga_timestamp) {
+        !timestamp_at_or_after(meta.timestamp, event.fpga_timestamp)) {
         fprintf(stderr, "recovery metadata mismatch: count=%u epoch=%u/%u ts=%llu/%llu\n",
                 meta.actual_count, meta.rx_epoch_id, event.epoch_id,
                 (unsigned long long)meta.timestamp,

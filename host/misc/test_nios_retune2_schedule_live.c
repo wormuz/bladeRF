@@ -7,6 +7,7 @@
 #include <stdlib.h>
 
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #define RX_CHANNEL BLADERF_CHANNEL_RX(0)
 #define RX_PROFILE_SETUP_REG 0x25a
@@ -123,7 +124,7 @@ int main(int argc, char **argv)
                         "\n", i, metadata.timestamp);
                 goto done;
             }
-        } while (metadata.timestamp < end_timestamp);
+        } while (!timestamp_at_or_after(metadata.timestamp, end_timestamp));
 
         if (check_status(bladerf_get_rfic_register(
                 dev, RX_PROFILE_SETUP_REG, &fastlock_setup),

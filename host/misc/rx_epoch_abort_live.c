@@ -9,6 +9,7 @@
  * This does not write FPGA flash or inject an RFIC/USB electrical fault.
  */
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -109,7 +110,7 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
         if (!metadata.rx_epoch_id_valid ||
             metadata.rx_epoch_id != expected_epoch ||
             metadata.actual_count == 0 ||
-            metadata.timestamp < min_timestamp) {
+            !timestamp_at_or_after(metadata.timestamp, min_timestamp)) {
             fprintf(stderr, "invalid IQ: epoch=%u expected=%u valid=%u count=%u "
                     "status=0x%x timestamp=%" PRIu64 " boundary=%" PRIu64 "\n",
                     metadata.rx_epoch_id, expected_epoch,

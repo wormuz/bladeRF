@@ -1,4 +1,5 @@
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <inttypes.h>
 #include <stdbool.h>
@@ -201,7 +202,8 @@ int main(int argc, char **argv)
                 !(metadata.status & BLADERF_META_STATUS_OVERRUN) &&
                 metadata.rx_epoch_id_valid &&
                 metadata.rx_epoch_id == final_event.epoch_id &&
-                metadata.timestamp >= final_event.fpga_timestamp) {
+                timestamp_at_or_after(metadata.timestamp,
+                                      final_event.fpga_timestamp)) {
                 clean_read = true;
                 break;
             }
@@ -241,7 +243,8 @@ int main(int argc, char **argv)
             metadata.status & BLADERF_META_STATUS_OVERRUN ||
             !metadata.rx_epoch_id_valid ||
             metadata.rx_epoch_id != final_event.epoch_id ||
-            metadata.timestamp < epoch_event.fpga_timestamp ||
+            !timestamp_at_or_after(metadata.timestamp,
+                                   epoch_event.fpga_timestamp) ||
             host_event.transaction_id != transaction ||
             host_event.epoch_id != final_event.epoch_id) {
             fprintf(stderr, "invalid host IQ trial=%u txn=%u count=%u "

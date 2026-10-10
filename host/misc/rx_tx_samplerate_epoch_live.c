@@ -6,6 +6,7 @@
 #include <unistd.h>
 
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #define RX_RATE_BEFORE 1920000u
 #define RX_RATE_AFTER  2000000u
@@ -161,7 +162,8 @@ int main(int argc, char **argv)
     if (status != 0 || metadata.actual_count != RX_SAMPLES ||
         !metadata.rx_epoch_id_valid ||
         metadata.rx_epoch_id != final_event.epoch_id ||
-        metadata.timestamp < final_event.fpga_timestamp) {
+        !timestamp_at_or_after(metadata.timestamp,
+                               final_event.fpga_timestamp)) {
         fprintf(stderr, "recovery META mismatch: status=%s count=%u epoch=%u/%u "
                 "timestamp=%" PRIu64 " boundary=%" PRIu64 "\n",
                 bladerf_strerror(status), metadata.actual_count,

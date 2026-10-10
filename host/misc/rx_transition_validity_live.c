@@ -1,5 +1,6 @@
 /* Live xA4 check: request policy must control whether IQ can be valid. */
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -64,7 +65,8 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
             metadata.rx_epoch_id == event->epoch_id &&
             metadata.actual_count == 8192 &&
             (metadata.status & BLADERF_META_STATUS_OVERRUN) == 0 &&
-            metadata.timestamp >= event->fpga_timestamp) {
+            timestamp_at_or_after(metadata.timestamp,
+                                  event->fpga_timestamp)) {
             return 0;
         }
     }
@@ -178,7 +180,8 @@ static int check_sync_timeout_timestamp_event(struct bladerf *dev,
                 BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
             if ((events[i].flags &
                  BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) == 0 ||
-                events[i].fpga_timestamp < epoch_start ||
+                !timestamp_at_or_after(events[i].fpga_timestamp,
+                                       epoch_start) ||
                 events[i].epoch_id != expected_epoch_id) {
                 fprintf(stderr, "sync timeout event has no current timestamp "
                         "boundary: epoch=%u timestamp=%llu valid=%u\n",
@@ -288,7 +291,8 @@ int main(int argc, char **argv)
                    metadata.rx_epoch_id == event.epoch_id &&
                    metadata.actual_count == 8192 &&
                    (metadata.status & BLADERF_META_STATUS_OVERRUN) == 0 &&
-                   metadata.timestamp >= event.fpga_timestamp;
+                   timestamp_at_or_after(metadata.timestamp,
+                                         event.fpga_timestamp);
     }
     if (!accepted) {
         fprintf(stderr, "no clean IQ block for event epoch=%u: status=%s "

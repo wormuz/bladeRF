@@ -98,7 +98,8 @@ static int verify_recovered_rx_event_chain(struct bladerf *dev)
             metadata.rx_epoch_id != event.epoch_id ||
             metadata.actual_count != 4096 ||
             (metadata.status & BLADERF_META_STATUS_OVERRUN) ||
-            metadata.timestamp < event.fpga_timestamp) {
+            (metadata.timestamp - event.fpga_timestamp) >=
+                (UINT64_C(1) << 63)) {
         fprintf(stderr, "Post-reload RX META failed epoch admission: "
                 "epoch=%u event_epoch=%u valid=%u count=%u status=0x%x "
                 "timestamp=%llu boundary=%llu\n",

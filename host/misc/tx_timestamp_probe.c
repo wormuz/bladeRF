@@ -28,6 +28,7 @@
  */
 
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -461,7 +462,10 @@ int main(int argc, char *argv[])
                          * (shouldn't normally happen, but keeps windows
                          * monotonic if a burst is missed). */
                         while (cur_burst < nbursts &&
-                               block_ts >= tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES &&
+                               timestamp_at_or_after(
+                                   block_ts,
+                                   tx_meta[cur_burst].timestamp +
+                                       (bladerf_timestamp)BURST_SAMPLES) &&
                                burst_k_found[cur_burst]) {
                             cur_burst++;
                         }
@@ -496,7 +500,8 @@ int main(int argc, char *argv[])
                          * it gets from prev_chunk_valid independent of win_lo. */
                         win_lo = tx_meta[cur_burst].timestamp;
                         win_hi = tx_meta[cur_burst].timestamp + (bladerf_timestamp)BURST_SAMPLES;
-                        if (block_ts < win_lo || block_ts >= win_hi) {
+                        if (!timestamp_at_or_after(block_ts, win_lo) ||
+                            timestamp_at_or_after(block_ts, win_hi)) {
                             /* Outside the current scheduled burst's window;
                              * not part of it (e.g. tail of previous burst
                              * bleeding past its window, or gap noise). */
@@ -556,7 +561,9 @@ int main(int argc, char *argv[])
                                     qv = src[2 * (local_frame * samples_per_frame + pair_offset) + 1];
                                     mag = (double)labs(iv) + (double)labs(qv);
 
-                                    if (mag > edge_threshold && sample_ts >= win_lo) {
+                                    if (mag > edge_threshold &&
+                                        timestamp_at_or_after(sample_ts,
+                                                              win_lo)) {
                                         burst_edge_ts = sample_ts;
                                         found_edge = true;
                                         break;
@@ -609,7 +616,8 @@ int main(int argc, char *argv[])
                 }
             }
 
-            if (!all_done && rx_meta.timestamp > search_limit) {
+            if (!all_done &&
+                timestamp_strictly_after(rx_meta.timestamp, search_limit)) {
                 if (nbursts == 1u) {
                     printf("no burst detected\n");
                 }

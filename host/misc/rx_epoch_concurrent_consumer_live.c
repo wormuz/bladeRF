@@ -1,4 +1,5 @@
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -26,6 +27,7 @@ static void *reader_thread(void *arg)
     struct reader_state *state = arg;
     int16_t *samples = calloc(RX_BLOCK_SAMPLES * 2, sizeof(*samples));
     uint64_t last_timestamp = 0;
+    bool have_last_timestamp = false;
 
     if (samples == NULL) {
         atomic_store(&state->invalid_blocks, 1);
@@ -56,10 +58,12 @@ static void *reader_thread(void *arg)
         if (meta.status & BLADERF_META_STATUS_OVERRUN) {
             atomic_fetch_add(&state->overruns, 1);
         }
-        if (last_timestamp != 0 && meta.timestamp <= last_timestamp) {
+        if (have_last_timestamp &&
+            !timestamp_strictly_after(meta.timestamp, last_timestamp)) {
             atomic_fetch_add(&state->bad_timestamps, 1);
         }
         last_timestamp = meta.timestamp;
+        have_last_timestamp = true;
         atomic_fetch_add(&state->blocks, 1);
     }
 

@@ -1,4 +1,5 @@
 #include <libbladeRF.h>
+#include "timestamp_order.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -99,7 +100,7 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
             (events[i].event_type == BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
              events[i].event_type == BLADERF_RF_EVT_RX_DATA_RESUMED) &&
             events[i].epoch_id == final_event->epoch_id &&
-            events[i].fpga_timestamp >= epoch_valid_ts) {
+            timestamp_at_or_after(events[i].fpga_timestamp, epoch_valid_ts)) {
             host_data_seen = true;
         }
     }
@@ -405,6 +406,7 @@ int main(int argc, char **argv) {
                                  &stream_overrun_events, &data_withheld_events,
                                  true));
     uint64_t last_ts = 0;
+    bool have_last_ts = false;
     unsigned failures = 0;
     unsigned first_read_faults = 0;
     unsigned recovered_reads = 0;
@@ -483,11 +485,14 @@ int main(int argc, char **argv) {
                         meta.rx_epoch_id == event.epoch_id &&
                         meta.actual_count == capture_samples * (paired ? 2 : 1) &&
                         !(meta.status & BLADERF_META_STATUS_OVERRUN) &&
-                        meta.timestamp >= event.fpga_timestamp &&
-                        (!last_ts || meta.timestamp > last_ts);
+                        timestamp_at_or_after(meta.timestamp,
+                                              event.fpga_timestamp) &&
+                        (!have_last_ts ||
+                         timestamp_strictly_after(meta.timestamp, last_ts));
                 if (valid) {
                     if (attempt) ++recovered_reads;
                     last_ts = meta.timestamp;
+                    have_last_ts = true;
                     break;
                 }
                 if (st == BLADERF_ERR_WOULD_BLOCK) ++retry_would_block;
