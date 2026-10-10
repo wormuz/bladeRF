@@ -1012,6 +1012,15 @@ int bladerf_set_sample_rate(struct bladerf *dev,
 
     MUTEX_LOCK(&dev->lock);
     feature = dev->feature;
+    /* AD9361 rate programming updates both RX and TX clock chains. Fence TX
+     * as well as RX before entering the board setter, regardless of which
+     * channel the caller used to request the new rate. */
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, rx_clock_channel);
+        return status;
+    }
     status = dev->board->set_sample_rate(dev, ch, rate, actual);
     /*****************************************************
       Sample rate assignments clear previous register
@@ -1099,6 +1108,13 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
 
     MUTEX_LOCK(&dev->lock);
     feature = dev->feature;
+    /* Rational-rate setters use the same shared AD9361 clock-chain update. */
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, rx_clock_channel);
+        return status;
+    }
     status = dev->board->set_rational_sample_rate(dev, ch, rate, actual);
 
     /*****************************************************
@@ -1168,6 +1184,15 @@ int bladerf_set_bandwidth(struct bladerf *dev,
     }
 
     MUTEX_LOCK(&dev->lock);
+    /* AD9361 bandwidth updates recalibrate TX quadrature and can change RX
+     * and TX filter state, so the TX RF certificate must be revoked before
+     * the shared RFIC operation begins. */
+    status = invalidate_tx_data_before_reconfigure(dev);
+    if (status != 0) {
+        MUTEX_UNLOCK(&dev->lock);
+        rx_reconfigure_complete(dev, rx_config_channel);
+        return status;
+    }
     status = dev->board->set_bandwidth(dev, ch, bandwidth, actual);
 
     MUTEX_UNLOCK(&dev->lock);

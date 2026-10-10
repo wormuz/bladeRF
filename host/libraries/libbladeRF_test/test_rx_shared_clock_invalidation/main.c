@@ -391,15 +391,15 @@ int main(void)
            BLADERF_ERR_UNSUPPORTED);
     assert(state.invalidate_calls == 0);
 
-    /* AD9361's TX samplerate API updates both clock chains. Fence RX before
-     * calling the TX setter and release the RX reservation afterward. */
+    /* AD9361 sample-rate APIs update both clock chains. Fence RX and TX
+     * before calling either channel's setter. */
     assert(bladerf_set_sample_rate(&dev, tx0, 2000000, NULL) == 0);
     assert(state.invalidate_calls == 1 && state.sample_rate_calls == 1);
     assert(state.invalidated_channel == rx0 &&
            state.sample_rate_channel == tx0 &&
            state.completed_channel == rx0);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_SAMPLE_RATE);
-    assert(state.complete_calls == 1);
+    assert(state.complete_calls == 1 && state.tx_fence_calls == 1);
 
     /* Rational TX rates use the same shared-clock fence, including when the
      * AD9361 operation reports an error. */
@@ -420,14 +420,15 @@ int main(void)
            state.completed_channel == rx2);
     assert(state.complete_calls == 3);
 
-    /* ADI's TX bandwidth path calls update_rf_bandwidth(), which also reruns
-     * RX analog filter, TIA, and ADC setup. It shares the same RX fence. */
+    /* ADI bandwidth updates rerun shared RX analog setup and TX quadrature
+     * calibration, so either bandwidth setter fences both directions. */
     assert(bladerf_set_bandwidth(&dev, tx0, 1000000, NULL) == 0);
     assert(state.invalidated_channel == rx0 &&
            state.bandwidth_channel == tx0 &&
            state.completed_channel == rx0);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_BANDWIDTH);
-    assert(state.bandwidth_calls == 1 && state.complete_calls == 4);
+    assert(state.bandwidth_calls == 1 && state.complete_calls == 4 &&
+           state.tx_fence_calls == 4);
 
     state.bandwidth_status = BLADERF_ERR_IO;
     assert(bladerf_set_bandwidth(&dev, tx0, 1200000, NULL) == BLADERF_ERR_IO);
@@ -440,7 +441,8 @@ int main(void)
     assert(state.invalidated_channel == rx2 &&
            state.bandwidth_channel == rx2 &&
            state.completed_channel == rx2);
-    assert(state.bandwidth_calls == 3 && state.complete_calls == 6);
+    assert(state.bandwidth_calls == 3 && state.complete_calls == 6 &&
+           state.tx_fence_calls == 6);
 
     /* Raw configuration GPIO writes can change RX mux or clock selection.
      * Fence the shared RX certificate even though the generic API cannot
@@ -606,7 +608,7 @@ int main(void)
                                  BLADERF_TRIGGER_REG_ARM) == 0);
     assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
            state.trigger_arm_calls == 2 && state.trigger_write_calls == 2 &&
-           state.tx_fence_calls == 2);
+           state.tx_fence_calls == 8);
 
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     trigger.channel = rx0;
@@ -655,22 +657,22 @@ int main(void)
     trigger.channel = rx0;
     assert(bladerf_trigger_fire(&dev, &trigger) == 0);
     assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
-           state.trigger_fire_calls == 1 && state.tx_fence_calls == 2);
+           state.trigger_fire_calls == 1 && state.tx_fence_calls == 8);
 
     trigger.channel = tx0;
     assert(bladerf_trigger_fire(&dev, &trigger) == 0);
     assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
-           state.trigger_fire_calls == 2 && state.tx_fence_calls == 3);
+           state.trigger_fire_calls == 2 && state.tx_fence_calls == 9);
 
     state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.trigger_arm_calls == 2 && state.tx_fence_calls == 4);
+    assert(state.trigger_arm_calls == 2 && state.tx_fence_calls == 10);
 
     trigger.signal = BLADERF_TRIGGER_INVALID;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
            BLADERF_ERR_INVAL);
-    assert(state.tx_fence_calls == 4 && state.trigger_arm_calls == 2);
+    assert(state.tx_fence_calls == 10 && state.trigger_arm_calls == 2);
 
     /* Stream format GPIOs are shared by RX and TX, so either layout fences
      * both directions before the board reconfigures the shared datapath. */
@@ -679,13 +681,13 @@ int main(void)
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) == 0);
     assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
-           state.tx_fence_calls == 5 && state.sync_config_calls == 1 &&
+           state.tx_fence_calls == 11 && state.sync_config_calls == 1 &&
            state.sync_config_layout == BLADERF_RX_X1);
     assert(bladerf_sync_config(&dev, BLADERF_TX_X1,
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) == 0);
     assert(state.invalidate_calls == 35 && state.complete_calls == 24 &&
-           state.tx_fence_calls == 6 && state.sync_config_calls == 2 &&
+           state.tx_fence_calls == 12 && state.sync_config_calls == 2 &&
            state.sync_config_layout == BLADERF_TX_X1);
 
     state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
@@ -694,7 +696,7 @@ int main(void)
                                8, 1024, 4, 1000) ==
            BLADERF_ERR_WOULD_BLOCK);
     assert(state.invalidate_calls == 36 && state.complete_calls == 25 &&
-           state.tx_fence_calls == 7 && state.sync_config_calls == 2);
+           state.tx_fence_calls == 13 && state.sync_config_calls == 2);
 
     state.tx_fence_status = 0;
     assert(bladerf_stream(&async_stream, BLADERF_RX_X1) == 0);
@@ -747,6 +749,31 @@ int main(void)
                                1024, 0, NULL) == BLADERF_ERR_INVAL);
     assert(stream_out == NULL && stream_buffers == NULL &&
            state.init_stream_calls == 2);
+
+    /* If the TX fail-closed fence rejects a shared RFIC change, the board
+     * setter must not run and the already acquired RX reservation is always
+     * released. Exercise all three shared setter families. */
+    state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
+    const unsigned int sample_calls_before_tx_fence = state.sample_rate_calls;
+    const unsigned int rational_calls_before_tx_fence =
+        state.rational_rate_calls;
+    const unsigned int bandwidth_calls_before_tx_fence = state.bandwidth_calls;
+    const unsigned int complete_before_tx_fence = state.complete_calls;
+    assert(bladerf_set_sample_rate(&dev, rx2, 2500000, NULL) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.sample_rate_calls == sample_calls_before_tx_fence &&
+           state.completed_channel == rx2 &&
+           state.complete_calls == complete_before_tx_fence + 1);
+    assert(bladerf_set_rational_sample_rate(
+               &dev, tx0, &rational, NULL) == BLADERF_ERR_WOULD_BLOCK);
+    assert(state.rational_rate_calls == rational_calls_before_tx_fence &&
+           state.completed_channel == rx0 &&
+           state.complete_calls == complete_before_tx_fence + 2);
+    assert(bladerf_set_bandwidth(&dev, rx0, 1300000, NULL) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(state.bandwidth_calls == bandwidth_calls_before_tx_fence &&
+           state.completed_channel == rx0 &&
+           state.complete_calls == complete_before_tx_fence + 3);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
