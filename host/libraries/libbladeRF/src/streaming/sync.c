@@ -1080,7 +1080,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         return BLADERF_ERR_INVAL;
     }
 
-    if (num_samples % s->meta.samples_per_ts != 0) {
+    if (!sync_sample_count_aligned(num_samples, s->meta.samples_per_ts)) {
         log_debug("%s: %u samples %% %u channels != 0\n",
                   __FUNCTION__, num_samples, s->meta.samples_per_ts);
         return BLADERF_ERR_INVAL;
@@ -2468,6 +2468,14 @@ int sync_tx(struct bladerf_sync *s,
         return BLADERF_ERR_INVAL;
     }
 
+    /* TX_X2 data is interleaved as paired lane samples. In META formats the
+     * timestamp advances once per pair, so accepting an odd count would
+     * truncate timestamp advancement and leave the next call on the wrong
+     * lane boundary. Reject it before changing burst state or copying IQ. */
+    if (!sync_sample_count_aligned(num_samples, s->meta.samples_per_ts)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     MUTEX_LOCK(&s->lock);
 
     status = handle_tx_parameters(user_meta, s, &op);
@@ -2708,15 +2716,14 @@ int sync_tx(struct bladerf_sync *s,
                                         __FUNCTION__, user_meta->timestamp,
                                         s->meta.curr_timestamp, delta);
 
-                            if (delta < left_in_msg(s)) {
-                                to_zero = (size_t)delta;
-
+                            to_zero = sync_timestamp_delta_to_samples(
+                                delta, s->meta.samples_per_ts,
+                                left_in_msg(s));
+                            if (to_zero < left_in_msg(s)) {
                                 log_verbose("%s: Padded subset of msg "
                                             "(%" PRIu64 " samples)\n",
                                             __FUNCTION__, (uint64_t)to_zero);
                             } else {
-                                to_zero = left_in_msg(s);
-
                                 log_verbose("%s: Padded remainder of msg "
                                             "(%" PRIu64 " samples)\n",
                                             __FUNCTION__, (uint64_t)to_zero);
@@ -2746,7 +2753,9 @@ int sync_tx(struct bladerf_sync *s,
                              * appropriately at the following message.
                              */
                             if (to_zero < 3 && left_in_msg(s) == 0) {
-                                s->meta.curr_timestamp += to_zero;
+                                s->meta.curr_timestamp +=
+                                    sync_samples_to_timestamp_delta(
+                                        to_zero, s->meta.samples_per_ts);
                                 log_verbose("Ended msg with < 3 zero samples. "
                                             "Padding into next message.\n");
                             } else {
@@ -2804,7 +2813,9 @@ int sync_tx(struct bladerf_sync *s,
                                 off);
 
                             s->meta.curr_msg_off += to_zero;
-                            s->meta.curr_timestamp += to_zero;
+                            s->meta.curr_timestamp +=
+                                sync_samples_to_timestamp_delta(
+                                    to_zero, s->meta.samples_per_ts);
                         }
 
                         if (left_in_msg(s) == 0) {

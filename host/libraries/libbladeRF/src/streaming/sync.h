@@ -212,6 +212,43 @@ typedef enum {
     SYNC_STATE_USING_BUFFER_META
 } sync_state;
 
+/* X2 layouts carry paired lane samples for each device timestamp. */
+static inline bool sync_sample_count_aligned(unsigned int num_samples,
+                                             unsigned int samples_per_ts)
+{
+    return samples_per_ts != 0 && num_samples % samples_per_ts == 0;
+}
+
+/* Convert a timestamp delta to an available number of lane samples without
+ * overflowing the multiplication when the requested gap is very large. */
+static inline unsigned int sync_timestamp_delta_to_samples(
+    uint64_t timestamp_delta, unsigned int samples_per_ts,
+    unsigned int samples_available)
+{
+    unsigned int timestamps_available;
+
+    if (samples_per_ts == 0) {
+        return 0;
+    }
+
+    timestamps_available = samples_available / samples_per_ts;
+    if (samples_available % samples_per_ts != 0) {
+        timestamps_available++;
+    }
+
+    if (timestamp_delta >= timestamps_available) {
+        return samples_available;
+    }
+
+    return (unsigned int)(timestamp_delta * samples_per_ts);
+}
+
+static inline unsigned int sync_samples_to_timestamp_delta(
+    unsigned int num_samples, unsigned int samples_per_ts)
+{
+    return samples_per_ts == 0 ? 0 : num_samples / samples_per_ts;
+}
+
 struct sync_meta {
     sync_meta_state state; /* State of metadata processing */
 

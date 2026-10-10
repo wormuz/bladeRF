@@ -74,6 +74,21 @@ static bool test_tx_buffer_valid = true;
 static unsigned int test_tx_validity_checks;
 static unsigned int test_tx_invalidate_at_check;
 
+static void test_sync_tx_x2_timestamp_units(void)
+{
+    assert(sync_sample_count_aligned(0, 2));
+    assert(sync_sample_count_aligned(2, 2));
+    assert(!sync_sample_count_aligned(1, 2));
+    assert(sync_sample_count_aligned(1, 1));
+
+    /* One device timestamp covers both interleaved lane samples. */
+    assert(sync_timestamp_delta_to_samples(3, 2, 10) == 6);
+    assert(sync_timestamp_delta_to_samples(3, 1, 10) == 3);
+    assert(sync_timestamp_delta_to_samples(UINT64_MAX, 2, 10) == 10);
+    assert(sync_samples_to_timestamp_delta(6, 2) == 3);
+    assert(sync_samples_to_timestamp_delta(6, 1) == 6);
+}
+
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
     assert(dev != NULL);
@@ -2401,6 +2416,8 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_sync_tx_x2_timestamp_units();
+
     {
         const int16_t packed_input[] = { -1, 0x123, 0x456, -0x234, 0x789, 0xabc };
         const uint8_t expected[] = {
