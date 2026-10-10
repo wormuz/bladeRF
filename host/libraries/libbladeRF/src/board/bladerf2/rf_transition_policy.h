@@ -164,6 +164,32 @@ static inline uint32_t bladerf2_rx_transition_channel_event_flags(
                 ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
 }
 
+/* Reasons that invalidate the shared RX epoch must report provenance from
+ * the epoch that was certified, rather than the lane used internally by a
+ * setter. RX FIR programming uses a dual-lane AD9361 configuration (rx=3). */
+static inline bool bladerf2_rx_invalidation_reason_is_shared(uint32_t reason)
+{
+    const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_RFIC_REG |
+                                    BLADERF_RF_INVALIDATE_RX_FIR |
+                                    BLADERF_RF_INVALIDATE_TX_FIR |
+                                    BLADERF_RF_INVALIDATE_CLOCK |
+                                    BLADERF_RF_INVALIDATE_MODULE |
+                                    BLADERF_RF_INVALIDATE_SAMPLE_RATE |
+                                    BLADERF_RF_INVALIDATE_BANDWIDTH |
+                                    BLADERF_RF_INVALIDATE_LOOPBACK |
+                                    BLADERF_RF_INVALIDATE_RX_MUX |
+                                    BLADERF_RF_INVALIDATE_STREAM_CONFIG |
+                                    BLADERF_RF_INVALIDATE_TUNING_MODE |
+                                    BLADERF_RF_INVALIDATE_DEVICE_RESET |
+                                    BLADERF_RF_INVALIDATE_FPGA_RELOAD |
+                                    BLADERF_RF_INVALIDATE_WISHBONE |
+                                    BLADERF_RF_INVALIDATE_CONFIG_GPIO |
+                                    BLADERF_RF_INVALIDATE_FEATURE |
+                                    BLADERF_RF_INVALIDATE_BOOTLOADER;
+
+    return (reason & shared_reasons) != 0;
+}
+
 /* The durable epoch certificate is also the snapshot used when the first
  * host META packet is admitted. Preserve channel identity in that snapshot,
  * not only in the separately published RX_EPOCH_VALID notification. */

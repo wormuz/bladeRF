@@ -95,6 +95,15 @@ int main(void)
     assert(bladerf2_rx_transition_channel_event_flags(
                BLADERF_CHANNEL_TX(0), true) == 0);
 
+    /* RX FIR configuration uses AD9361 rx=3 and invalidates the shared RX
+     * epoch. Its event provenance must follow the active epoch lane. */
+    assert(bladerf2_rx_invalidation_reason_is_shared(
+        BLADERF_RF_INVALIDATE_RX_FIR));
+    assert(bladerf2_rx_invalidation_reason_is_shared(
+        BLADERF_RF_INVALIDATE_RFIC_REG));
+    assert(!bladerf2_rx_invalidation_reason_is_shared(
+        BLADERF_RF_INVALIDATE_GAIN));
+
     invalidation_channel = bladerf2_rx_invalidation_channel_event(
         &invalidation,
         BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
