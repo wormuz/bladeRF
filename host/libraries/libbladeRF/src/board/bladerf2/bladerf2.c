@@ -1507,6 +1507,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_epoch_invalid_reported = false;
             board_data->tx_rfic_state_valid_reported = false;
             board_data->tx_rfic_state_invalid_reported = false;
+            board_data->tx_fir_configuration_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
             if (tx_link_valid_event_emitted) {
@@ -1526,6 +1527,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_epoch_invalid_reported = false;
             board_data->tx_rfic_state_valid_reported = false;
             board_data->tx_rfic_state_invalid_reported = false;
+            board_data->tx_fir_configuration_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
             if (tx_link_valid_event_emitted) {
@@ -1677,6 +1679,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_epoch_invalid_reported = false;
             board_data->tx_rfic_state_valid_reported = false;
             board_data->tx_rfic_state_invalid_reported = false;
+            board_data->tx_fir_configuration_invalid_reported = false;
             board_data->tx_recovery_blocked = false;
             board_data->tx_status_unavailable_reported = false;
         }

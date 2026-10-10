@@ -281,7 +281,7 @@ int main(void)
         true, false, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
-           BLADERF2_TX_RFIC_OBSERVATION_INVALID);
+           BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID);
     assert(bladerf2_tx_rfic_observation(
         true, true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==

@@ -1715,6 +1715,21 @@ static void *rx_fault_monitor_task(void *arg)
                                        BLADERF_ERR_UNEXPECTED :
                                        BLADERF_ERR_WOULD_BLOCK)))));
                     }
+                    if (!tx_fir_config_valid &&
+                        !board_data->tx_fir_configuration_invalid_reported) {
+                        /* Keep TX fenced, but leave configuration recovery
+                         * available: a complete FIR rewrite followed by the
+                         * normal TX retune can re-establish the certificate. */
+                        board_data->tx_fir_configuration_invalid_reported = true;
+                        bladerf2_tx_stream_set_faulted(board_data, true);
+                        abort_tx_retune_gate = true;
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_CONFIGURATION_INVALID,
+                            0, rf_link_status, BLADERF_ERR_WOULD_BLOCK);
+                    } else if (tx_fir_config_valid) {
+                        board_data->tx_fir_configuration_invalid_reported =
+                            false;
+                    }
                     if (tx_link_status_error == 0 &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_INVALID &&

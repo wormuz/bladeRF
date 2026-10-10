@@ -105,6 +105,7 @@ static inline bool bladerf2_loss_counter_snapshot(
 enum bladerf2_tx_rfic_observation {
     BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE = 0,
     BLADERF2_TX_RFIC_OBSERVATION_INVALID,
+    BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID,
     BLADERF2_TX_RFIC_OBSERVATION_VALID,
 };
 
@@ -130,7 +131,7 @@ bladerf2_tx_rfic_observation(bool status_read_succeeded,
         return BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE;
     }
     if (!fir_config_valid) {
-        return BLADERF2_TX_RFIC_OBSERVATION_INVALID;
+        return BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID;
     }
     const uint8_t ensm = ensm_status & BLADERF2_AD9361_ENSM_STATE_MASK;
     return (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
