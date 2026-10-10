@@ -335,6 +335,32 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    /* Public TX/RX status getters and their shared RSSI helper must reject a
+     * missing SPI descriptor before dereference or output publication. */
+    {
+        struct no_os_spi_desc *saved_spi = phy.spi;
+        struct rf_rssi rssi = { .ant = 1, .symbol = 0x1234 };
+        uint32_t attenuation = UINT32_MAX;
+        uint32_t tx_rssi_value = UINT32_MAX;
+        phy.spi = NULL;
+        pdata.rx2tx2 = true;
+        read_count = 0;
+        if (ad9361_get_tx_atten(&phy, 1) != -EINVAL ||
+            ad9361_get_tx_attenuation(&phy, 0, &attenuation) != -EINVAL ||
+            ad9361_get_rx_rssi(&phy, 0, &rssi) != -EINVAL ||
+            ad9361_get_tx_rssi(&phy, 0, &tx_rssi_value) != -EINVAL ||
+            ad9361_read_rssi(&phy, &rssi) != -EINVAL ||
+            ad9361_read_rssi(NULL, &rssi) != -EINVAL ||
+            ad9361_read_rssi(&phy, NULL) != -EINVAL ||
+            read_count != 0 || attenuation != UINT32_MAX ||
+            tx_rssi_value != UINT32_MAX || rssi.symbol != 0x1234) {
+            fprintf(stderr, "AD9361 status getter accepted missing SPI state\n");
+            return EXIT_FAILURE;
+        }
+        phy.spi = saved_spi;
+        pdata.rx2tx2 = false;
+    }
+
     /* In 1x1 mode with physical TX2 selected, logical channel zero must
      * report the same packed RSSI field as 2x2 channel one. */
     {
