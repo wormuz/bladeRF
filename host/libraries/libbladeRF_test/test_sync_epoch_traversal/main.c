@@ -753,6 +753,9 @@ static unsigned int sync_host_data_order;
 static atomic_bool sync_host_data_block;
 static atomic_bool sync_host_data_entered;
 static atomic_bool sync_host_data_release;
+static atomic_bool sync_admission_block;
+static atomic_bool sync_admission_entered;
+static atomic_bool sync_admission_release;
 static unsigned int sync_overrun_order;
 static unsigned int sync_withheld_order;
 static bool allow_sync_channel_selection = true;
@@ -826,6 +829,13 @@ static uint32_t sync_data_admission_reason(
         assert(clock_gettime(CLOCK_MONOTONIC, &ts) == 0);
         *admission_monotonic_ns = (uint64_t)ts.tv_sec * 1000000000ULL +
                                   (uint64_t)ts.tv_nsec;
+    }
+    if (atomic_load(&sync_admission_block)) {
+        atomic_store(&sync_admission_entered, true);
+        while (!atomic_load(&sync_admission_release)) {
+            struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+            nanosleep(&pause, NULL);
+        }
     }
     if (sync_admission_withheld_reason != 0) {
         const uint32_t reason = sync_admission_withheld_reason;
@@ -1047,6 +1057,9 @@ static void fixture_init(struct fixture *f)
 {
     memset(f, 0, sizeof(*f));
     sync_host_data_events = 0;
+    atomic_store(&sync_admission_block, false);
+    atomic_store(&sync_admission_entered, false);
+    atomic_store(&sync_admission_release, false);
     sync_event_order = 0;
     sync_host_data_order = 0;
     sync_overrun_order = 0;
@@ -2359,6 +2372,65 @@ static void test_first_host_event_commits_before_concurrent_invalidation(void)
     fixture_destroy(&f);
 }
 
+static void test_rejected_sync_read_clears_copied_iq_after_race(void)
+{
+    struct fixture f;
+    struct sync_epoch_race_read read = {0};
+    struct sync_epoch_race_revoke revoke = {0};
+    struct sync_epoch_race_invalidate invalidate = {0};
+    pthread_t reader, invalidator;
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 3551);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 3552);
+    assert(sync_rx_epoch_set_min_timestamp(&f.sync, 1000, 7) == 0);
+    for (size_t i = 0; i < sizeof(read.samples) / sizeof(read.samples[0]);
+         ++i) {
+        read.samples[i] = (int16_t)0x5a5a;
+    }
+    read.fixture = &f;
+    atomic_init(&revoke.called, false);
+    invalidate.fixture = &f;
+    invalidate.revoke = &revoke;
+    invalidate.status = BLADERF_ERR_UNEXPECTED;
+    atomic_store(&sync_admission_block, true);
+    assert(pthread_create(&reader, NULL, sync_epoch_race_read_thread,
+                          &read) == 0);
+    for (unsigned int i = 0; i < 1000 &&
+         !atomic_load(&sync_admission_entered); ++i) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    assert(atomic_load(&sync_admission_entered));
+
+    /* Revoke after the parser's loop check and admission decision, while it
+     * is held immediately before the IQ copy. The final return fence must
+     * reject the read and clear bytes copied after this revoke. */
+    assert(pthread_create(&invalidator, NULL,
+                          sync_epoch_race_invalidate_thread,
+                          &invalidate) == 0);
+    for (unsigned int i = 0; i < 1000 && !atomic_load(&revoke.called); ++i) {
+        struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
+        nanosleep(&pause, NULL);
+    }
+    assert(atomic_load(&revoke.called));
+    atomic_store(&sync_admission_release, true);
+    assert(pthread_join(reader, NULL) == 0);
+    assert(pthread_join(invalidator, NULL) == 0);
+    atomic_store(&sync_admission_block, false);
+
+    assert(read.status == BLADERF_ERR_WOULD_BLOCK);
+    assert(read.metadata.actual_count == 0);
+    assert(!read.metadata.rx_epoch_id_valid);
+    for (size_t i = 0; i < sizeof(read.samples) / sizeof(read.samples[0]);
+         ++i) {
+        assert(read.samples[i] == 0);
+    }
+    assert(invalidate.status == 0);
+    assert(sync_host_data_events == 0);
+    fixture_destroy(&f);
+}
+
 static void test_failed_transition_revokes_host_epoch_before_abort(void)
 {
     struct fixture f;
@@ -2697,6 +2769,7 @@ int main(void)
     test_meta_withheld_event_precedes_sync_read_timeout();
     test_sync_read_fails_closed_before_parser_invalidation();
     test_first_host_event_commits_before_concurrent_invalidation();
+    test_rejected_sync_read_clears_copied_iq_after_race();
     test_async_epoch_certificate_commit();
     test_expired_transition_deadline_keeps_sync_rx_fenced();
     test_async_data_withheld_event();

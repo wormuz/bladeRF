@@ -1104,6 +1104,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     uint8_t sync_epoch_id = 0;
     bool sync_timestamp_valid = false;
     unsigned int samples_returned = 0;
+    size_t samples_written_bytes = 0;
     uint8_t *samples_dest = (uint8_t*)samples;
     uint8_t *buf_src = NULL;
     unsigned int samples_to_copy = 0;
@@ -1563,10 +1564,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         2 * sizeof(int16_t) * samples_returned);
                     sc16q11_unpack_samples(meta_sample_ptr, dest_ptr,
                                            samples_to_copy);
+                    samples_written_bytes +=
+                        samples_to_copy * 2 * sizeof(int16_t);
                 } else {
+                    const size_t bytes_to_copy =
+                        samples2bytes(s, samples_to_copy);
                     memcpy(samples_dest + samples2bytes(s, samples_returned),
                         buf_src + samples2bytes(s, b->partial_off),
-                        samples2bytes(s, samples_to_copy));
+                        bytes_to_copy);
+                    samples_written_bytes += bytes_to_copy;
                 }
 
                 b->partial_off += samples_to_copy;
@@ -1919,11 +1925,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                 metadata_get_rx_clipping_flags(
                                     s->meta.curr_msg);
 
+                            const size_t bytes_to_copy =
+                                samples2bytes(s, samples_to_copy);
                             memcpy(samples_dest + samples2bytes(s, samples_returned),
                                    s->meta.curr_msg +
                                         METADATA_HEADER_SIZE +
                                         samples2bytes(s, s->meta.curr_msg_off),
-                                   samples2bytes(s, samples_to_copy));
+                                   bytes_to_copy);
+                            samples_written_bytes += bytes_to_copy;
 
                             samples_returned += samples_to_copy;
                             if (!copied_data &&
@@ -2042,10 +2051,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     status = BLADERF_ERR_MEM;
                     user_meta->actual_count = 0;
                 } else if (pkt_len_dwords > 0) {
+                    const size_t bytes_to_copy =
+                        samples2bytes(s, pkt_len_dwords);
                     samples_returned = pkt_len_dwords;
                     user_meta->actual_count = pkt_len_dwords;
                     memcpy(samples_dest, buf_src + METADATA_HEADER_SIZE,
-                           samples2bytes(s, pkt_len_dwords));
+                           bytes_to_copy);
+                    samples_written_bytes += bytes_to_copy;
                 }
 
                 advance_rx_buffer(b);
@@ -2104,6 +2116,12 @@ out:
             withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
             withheld_epoch_id = s->meta.rx_epoch_expected_id;
             sync_timestamp_valid = false;
+            /* IQ may have been copied after the loop's last generation
+             * check but before this return fence. Do not leave rejected
+             * samples in the caller's buffer with actual_count == 0. */
+            if (samples_written_bytes != 0) {
+                memset(samples, 0, samples_written_bytes);
+            }
             if (user_meta != NULL) {
                 user_meta->actual_count = 0;
                 user_meta->rx_epoch_id_valid = 0;

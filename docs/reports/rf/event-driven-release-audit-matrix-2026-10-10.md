@@ -183,6 +183,19 @@ succeeds. No new defect was confirmed in these slices. The complete exported
 AD9361/no-OS and NIOS call-site inventory, fault injection, and runtime gates
 remain open; no build or test was run.
 
+### Sync RX concurrent-invalidation output-buffer finding
+
+The final sync RX generation fence correctly returned `WOULD_BLOCK` and
+cleared metadata if RF invalidation raced after the parser's last in-loop
+check. However, if the parser had already copied old-epoch samples into the
+caller buffer, that error path left the bytes present while reporting
+`actual_count == 0`. The final fence now tracks bytes written across packed,
+sample-META, and packet-META paths and clears those bytes when generation
+changed before return. Added a deterministic regression that blocks immediately
+before META copy, revokes the generation, resumes the copy, and requires the
+read to fail with zeroed output and no first-host-data event. Source only;
+regression remains unrun under the gate.
+
 ### Sync RX delivery/invalidation linearization slice
 
 `sync_rx()` snapshots the RX generation before locking the parser, checks it
