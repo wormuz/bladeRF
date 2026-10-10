@@ -1124,6 +1124,79 @@ static int bladerf2_update_channel_enable_masks(
     return status;
 }
 
+/* A shared START clears sticky TX link faults. Snapshot the still-active TX
+ * generation before issuing it so an underflow/fault cannot disappear at
+ * the epoch boundary without a host-visible event. */
+static int bladerf2_tx_snapshot_before_shared_start(
+    struct bladerf *dev, struct bladerf2_board_data *board_data)
+{
+    uint32_t link_status = 0;
+    uint64_t loss_count = 0;
+    int status = nios_rf_link_status_read(dev, &link_status);
+
+    if (status != 0 ||
+        (link_status & RF_LINK_STATUS_VERSION_MASK) !=
+            RF_LINK_STATUS_VERSION_1) {
+        int error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+        board_data->tx_stream_faulted = true;
+        board_data->tx_status_unavailable_reported = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
+            error);
+        return error;
+    }
+
+    board_data->tx_link_epoch_id = (uint8_t)(link_status >> 20);
+    if ((link_status & RF_LINK_STATUS_TX_FAULT) != 0 &&
+        !board_data->tx_link_fault_reported) {
+        board_data->tx_link_fault_reported = true;
+        board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, link_status,
+            BLADERF_ERR_FPGA_OP);
+    }
+
+    if (dev->board->get_loss_event_count == NULL) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    } else {
+        status = dev->board->get_loss_event_count(
+            dev, BLADERF_TX, &loss_count);
+    }
+    if (status != 0 || !board_data->tx_fpga_loss_count_valid) {
+        int error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+        if (!board_data->tx_fpga_loss_count_valid) {
+            board_data->tx_recovery_blocked = true;
+        }
+        if (!board_data->tx_status_unavailable_reported) {
+            board_data->tx_status_unavailable_reported = true;
+            board_data->tx_stream_faulted = true;
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
+                error);
+        }
+        return error;
+    }
+
+    if (loss_count > board_data->tx_fpga_loss_count_last) {
+        board_data->tx_fpga_loss_count_last = loss_count;
+        board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_UNDERRUN, loss_count, 0,
+            BLADERF_ERR_FPGA_OP);
+    } else if (loss_count < board_data->tx_fpga_loss_count_last) {
+        board_data->tx_fpga_loss_count_last = loss_count;
+        board_data->tx_stream_faulted = true;
+        board_data->tx_recovery_blocked = true;
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_COUNTER_RESET, loss_count, link_status,
+            BLADERF_ERR_UNEXPECTED);
+    }
+
+    return 0;
+}
+
 static int bladerf2_fail_module_enable(struct bladerf *dev,
                                        bladerf_channel ch,
                                        int operation_status,
@@ -1134,6 +1207,7 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
     const bool is_tx = BLADERF_CHANNEL_IS_TX(ch);
     const unsigned int direction = is_tx ? 1u : 0u;
     int rollback_status = board_data->rfic->enable_module(dev, ch, false);
+    int mask_status;
 
     if (rollback_status != 0) {
         log_error("%s: failed to disable %s after enable failure: %s\n",
@@ -1141,15 +1215,21 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
                   bladerf_strerror(rollback_status));
         board_data->rf_link_dir_on[direction] = true;
     }
-    (void)bladerf2_update_channel_enable_masks(dev, board_data);
+    mask_status = bladerf2_update_channel_enable_masks(dev, board_data);
     if (is_tx || (shared_epoch_may_have_started &&
                   board_data->rf_link_dir_on[1])) {
+        const bool report_status_unavailable =
+            !board_data->tx_status_unavailable_reported;
         board_data->tx_stream_faulted = true;
-        board_data->tx_recovery_blocked = true;
+        board_data->tx_recovery_blocked = shared_epoch_may_have_started ||
+                                          rollback_status != 0 ||
+                                          mask_status != 0;
         board_data->tx_status_unavailable_reported = true;
-        bladerf2_tx_stream_event(
-            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
-            operation_status);
+        if (report_status_unavailable) {
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
+                operation_status);
+        }
     }
     if (stop_accepted_link_epoch && !board_data->rf_link_dir_on[0] &&
         !board_data->rf_link_dir_on[1]) {
@@ -1185,6 +1265,7 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * the same START cleared (fifo_writer.vhd:359, :414); either way the
      * datapath streams. */
     if (enable) {
+        bool const tx_direction_was_active = board_data->rf_link_dir_on[1];
         bool const rx_first_enable = !BLADERF_CHANNEL_IS_TX(ch) &&
                                      !board_data->rf_link_dir_on[0];
         bool const tx_first_enable = BLADERF_CHANNEL_IS_TX(ch) &&
@@ -1239,6 +1320,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
             }
         } else {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
+            if (status != 0) {
+                return bladerf2_fail_module_enable(dev, ch, status, false,
+                                                    false);
+            }
+        }
+        if (tx_direction_was_active) {
+            status = bladerf2_tx_snapshot_before_shared_start(dev,
+                                                              board_data);
             if (status != 0) {
                 return bladerf2_fail_module_enable(dev, ch, status, false,
                                                     false);
