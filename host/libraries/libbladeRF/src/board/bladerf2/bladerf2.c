@@ -3487,7 +3487,7 @@ static const struct {
         },
         [BLADERF_CORR_GAIN] = {
             FIELD_INIT(.reg, {  AD936X_REG_RX1_INPUT_A_GAIN_CORR,
-                                AD936X_REG_RX1_INPUT_BC_PHASE_CORR  }),
+                                AD936X_REG_RX1_INPUT_BC_GAIN_CORR   }),
             FIELD_INIT(.shift, 6),
         }
     },
@@ -3507,7 +3507,7 @@ static const struct {
         },
         [BLADERF_CORR_GAIN] = {
             FIELD_INIT(.reg, {  AD936X_REG_RX2_INPUT_A_GAIN_CORR,
-                                AD936X_REG_RX2_INPUT_BC_PHASE_CORR  }),
+                                AD936X_REG_RX2_INPUT_BC_GAIN_CORR   }),
             FIELD_INIT(.shift, 6),
         }
     },

@@ -174,6 +174,113 @@ static failure_count random_vals(struct bladerf *dev,
     return failures;
 }
 
+/* On bladeRF 2.x, RX gain and phase corrections use distinct AD9361
+ * registers in the B/C RF band. Verify that changing one does not overwrite
+ * the other; a simple set/get round trip cannot catch two API fields aliased
+ * to the same register. */
+static failure_count test_rx_bc_gain_phase_independence(
+    struct bladerf *dev, bladerf_channel ch)
+{
+    const char *ports[16];
+    const char *original_port = NULL;
+    const char *bc_port = NULL;
+    unsigned int i;
+    int port_count, status;
+    int16_t original_gain = 0, original_phase = 0;
+    int16_t gain_readback, phase_readback;
+    bool have_original_corrections = false;
+    failure_count failures = 0;
+
+    port_count = bladerf_get_rf_ports(dev, ch, NULL, 0);
+    if (port_count < 0 || (unsigned int)port_count > ARRAY_SIZE(ports)) {
+        PR_ERROR("Unable to enumerate RX ports for correction test\n");
+        return 1;
+    }
+    status = bladerf_get_rf_ports(dev, ch, ports, (unsigned int)port_count);
+    if (status < 0) {
+        PR_ERROR("Unable to read RX ports for correction test: %s\n",
+                 bladerf_strerror(status));
+        return 1;
+    }
+    for (i = 0; i < (unsigned int)port_count; i++) {
+        if (strcmp(ports[i], "B_BALANCED") == 0) {
+            bc_port = ports[i];
+            break;
+        }
+    }
+    if (bc_port == NULL) {
+        PRINT("    B_BALANCED unavailable; skipping RX correction alias check\n");
+        return 0;
+    }
+
+    status = bladerf_get_rf_port(dev, ch, &original_port);
+    if (status == 0) {
+        status = bladerf_set_rf_port(dev, ch, bc_port);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_GAIN,
+                                        &original_gain);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_PHASE,
+                                        &original_phase);
+    }
+    if (status != 0) {
+        PR_ERROR("Unable to prepare B/C correction independence check: %s\n",
+                 bladerf_strerror(status));
+        failures++;
+        goto restore_port;
+    }
+    have_original_corrections = true;
+
+    status = bladerf_set_correction(dev, ch, BLADERF_CORR_GAIN, 128);
+    if (status == 0) {
+        status = bladerf_set_correction(dev, ch, BLADERF_CORR_PHASE, 192);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_GAIN,
+                                        &gain_readback);
+    }
+    if (status == 0) {
+        status = bladerf_get_correction(dev, ch, BLADERF_CORR_PHASE,
+                                        &phase_readback);
+    }
+    if (status != 0 || gain_readback != 128 || phase_readback != 192) {
+        PR_ERROR("RX%u B/C gain/phase corrections aliased or failed "
+                 "(status=%s gain=%d phase=%d)\n",
+                 ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                 bladerf_strerror(status),
+                 status == 0 ? gain_readback : 0,
+                 status == 0 ? phase_readback : 0);
+        failures++;
+    }
+
+    if (have_original_corrections) {
+        int restore_status = bladerf_set_correction(
+            dev, ch, BLADERF_CORR_GAIN, original_gain);
+        if (restore_status == 0) {
+            restore_status = bladerf_set_correction(
+                dev, ch, BLADERF_CORR_PHASE, original_phase);
+        }
+        if (restore_status != 0) {
+            PR_ERROR("Failed to restore RX correction values: %s\n",
+                     bladerf_strerror(restore_status));
+            failures++;
+        }
+    }
+
+restore_port:
+    if (original_port != NULL) {
+        int restore_status = bladerf_set_rf_port(dev, ch, original_port);
+        if (restore_status != 0) {
+            PR_ERROR("Failed to restore RX RF port: %s\n",
+                     bladerf_strerror(restore_status));
+            failures++;
+        }
+    }
+    return failures;
+}
+
 
 failure_count test_correction(struct bladerf *dev,
                               struct app_params *p,
@@ -181,9 +288,19 @@ failure_count test_correction(struct bladerf *dev,
 {
     failure_count failures = 0;
 
-    if (0 != strcmp(bladerf_get_board_name(dev), "bladerf1")) {
-        PRINT("%s: board is not a bladerf1, skipping\n", __FUNCTION__);
+    const char *board_name = bladerf_get_board_name(dev);
+    if (0 != strcmp(board_name, "bladerf1") &&
+        0 != strcmp(board_name, "bladerf2")) {
+        PRINT("%s: unsupported board, skipping\n", __FUNCTION__);
         return 0;
+    }
+
+    if (0 == strcmp(board_name, "bladerf2")) {
+        failures += test_rx_bc_gain_phase_independence(
+            dev, BLADERF_CHANNEL_RX(0));
+        failures += test_rx_bc_gain_phase_independence(
+            dev, BLADERF_CHANNEL_RX(1));
+        return failures;
     }
 
     PRINT("%s: Sweeping RX corrections...\n", __FUNCTION__);
