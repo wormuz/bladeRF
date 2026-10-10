@@ -1360,6 +1360,12 @@ int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
 
     status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, cmd,
                              data);
+    /* The NIOS packet handler reports an absent RX epoch PIO as a failed
+     * command. Preserve that capability distinction at the public API edge;
+     * a transport failure still keeps its original error. */
+    if (status == BLADERF_ERR_FPGA_OP) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    }
 
 #ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
     if (status == 0) {
@@ -1376,6 +1382,9 @@ int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value)
 
     status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0,
                             value);
+    if (status == BLADERF_ERR_FPGA_OP) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    }
 
 #ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
     if (status == 0) {
@@ -1425,6 +1434,9 @@ int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value)
                              : NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO;
 
     status = nios_8x32_read(dev, target, 0, value);
+    if (status == BLADERF_ERR_FPGA_OP) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    }
 
 #ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
     if (status == 0) {
