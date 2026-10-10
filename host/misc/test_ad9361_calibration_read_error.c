@@ -183,7 +183,11 @@ int main(void)
     invalid_rfpll_clock.spi = &spi;
     invalid_rfpll_clock.source = NUM_AD9361_CLKS;
     invalid_clock_factor.phy = &phy;
-    if (ad9361_clk_factor_recalc_rate_checked(
+    if (clk_get_rate_checked(NULL, &invalid_rfpll_clock, &rfpll_rate) != -EINVAL ||
+        clk_set_rate(NULL, &invalid_rfpll_clock, 1000000000) != -EINVAL ||
+        clk_get_rate_checked(&phy, &invalid_rfpll_clock, &rfpll_rate) != -EINVAL ||
+        clk_set_rate(&phy, &invalid_rfpll_clock, 1000000000) != -EINVAL ||
+        ad9361_clk_factor_recalc_rate_checked(
             &invalid_clock_factor, 40000000, &rfpll_rate) != -EINVAL ||
         ad9361_bbpll_recalc_rate_checked(
             &invalid_clock_factor, 40000000, &rfpll_rate) != -EINVAL ||
