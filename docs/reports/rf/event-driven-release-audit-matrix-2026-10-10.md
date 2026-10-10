@@ -166,9 +166,23 @@ race, it clears `actual_count` and epoch metadata and reports a withheld-data
 reason; copied bytes are not reported as successful samples. Python drains RF
 events after the native call; if an otherwise successful read cannot complete
 event dispatch, it zeros the output buffer and raises. No additional source
-defect confirmed in this slice.
-Timestamp-boundary arithmetic, all parser failure branches, event-history
-overrun interleavings, and deferred regression execution remain open.
+defect confirmed in this slice. Read-path review now covers the worker state
+machine, stale/rejected ring slots, sample-only copies, META header/epoch
+dispositions, partial message copies, PACKET_META capacity rejection, and the
+common return path. Transitions that require `RX_EPOCH_VALID` reject active
+sync formats without epoch tags; stream replacement also refuses an epochless
+format while preserving an existing epoch contract. `PACKET_META` does not
+pretend its packet header is an epoch tag. The remaining contract is explicit:
+legacy/non-epoch reads remain available when the caller did not request epoch
+validity, while stream loss and malformed packets still publish native fault
+events.
+
+The source audit did not run the promised caller-buffer sentinel checks. Keep
+open: boundary/fault regressions proving no caller-buffer write on rejected
+reads, event-history loss interleavings at every return branch, and deferred
+regression execution. In particular, verify that each nonzero return's
+`actual_count` semantics agree with the public API for partial META reads and
+PACKET_META errors; no implementation change is made without that evidence.
 
 The timestamp seek boundary pass found an integer overflow in sync RX: a very
 large future timestamp multiplied by the RX_X2 lane factor before comparing
