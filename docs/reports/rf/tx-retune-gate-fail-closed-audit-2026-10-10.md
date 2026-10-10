@@ -23,3 +23,7 @@ A failed ABORT acknowledgement also left a gap in the recovery contract: the mon
 ## Follow-up: shared TX RF-configuration entry point
 
 A follow-up call-graph pass found that direct LO and scheduled-retune guards did not cover the shared `bladerf2_tx_rf_config_change_begin()` path used by bandwidth, gain, and other TX RF setters. After an unconfirmed mute, those setters could still enter configuration. The shared helper now rejects both `tx_recovery_blocked` and `tx_gate_abort_pending`; the abort-failure live scenario also checks that a TX bandwidth setter returns `BLADERF_ERR_WOULD_BLOCK`. This follow-up is source-only and not built or run.
+
+## Follow-up: generic TX gain controls
+
+The generic `bladerf_set_gain()` and `bladerf_set_gain_stage()` APIs also changed AD9361 TX attenuation without entering the board's TX configuration fence. They now invalidate TX before the RFIC write. The abort-failure live scenario checks `bladerf_set_gain()` returns `BLADERF_ERR_WOULD_BLOCK`. TX gain-mode setting remains as the existing no-op behavior and does not fence. Source-only; no compile or runtime test.

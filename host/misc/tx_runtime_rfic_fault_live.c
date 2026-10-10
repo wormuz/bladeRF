@@ -316,6 +316,13 @@ int main(void)
                 status = BLADERF_ERR_UNEXPECTED;
                 goto cleanup;
             }
+            status = bladerf_set_gain(dev, BLADERF_CHANNEL_TX(0), -20);
+            if (status != BLADERF_ERR_WOULD_BLOCK) {
+                fprintf(stderr, "TX gain setter bypassed missing mute ACK: %s\n",
+                        bladerf_strerror(status));
+                status = BLADERF_ERR_UNEXPECTED;
+                goto cleanup;
+            }
             status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
                                      TX_FEEDER_TIMEOUT_MS);
             if (status != BLADERF_ERR_FPGA_OP) {

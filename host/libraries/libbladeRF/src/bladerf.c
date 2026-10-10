@@ -710,6 +710,12 @@ int bladerf_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
     if (status != 0) {
         return status;
     }
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            return status;
+        }
+    }
 
     MUTEX_LOCK(&dev->lock);
     status = set_gain_locked(dev, ch, gain, false, NULL);
@@ -785,6 +791,12 @@ int bladerf_set_gain_stage(struct bladerf *dev,
         dev, ch, BLADERF_RF_INVALIDATE_GAIN);
     if (status != 0) {
         return status;
+    }
+    if (BLADERF_CHANNEL_IS_TX(ch)) {
+        status = invalidate_tx_data_before_reconfigure(dev);
+        if (status != 0) {
+            return status;
+        }
     }
     MUTEX_LOCK(&dev->lock);
 
