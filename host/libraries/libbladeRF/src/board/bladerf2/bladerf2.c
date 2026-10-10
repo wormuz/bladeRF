@@ -5864,7 +5864,7 @@ int bladerf_get_pll_refclk(struct bladerf *dev, bladerf_frequency *frequency)
     CHECK_STATUS(bladerf_get_pll_register(dev, N_LATCH_REG, &reg));
     N = (reg >> N_LATCH_SHIFT) & N_LATCH_MASK;
 
-    if (N == 0) {
+    if (R == 0 || N == 0) {
         return BLADERF_ERR_UNEXPECTED;
     }
 
