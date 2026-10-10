@@ -94,14 +94,14 @@ target_compile_options(ad936x PRIVATE
     -DBLADERF_NIOS_BUILD -DNUAND_MODIFICATIONS -Wall -Os
 )
 
-# ABLATION, temporary: does the Nios wedge on the AXI ad9361 core?
-# set_tuning_mode(FPGA) leaves the board answering nothing until the
-# bitstream is reloaded, and the suspect is ad9361_init -> axi_adc_init ->
-# IOWR_32DIRECT(0x10000) against a core clocked by if_l_clk. Defining this
-# drops those accesses; if the wedge survives, the suspect is wrong.
-# ⛔ The RX sample path is dead in this build - diagnostic only.
+# Diagnostic only: AXI_ADC_NOT_PRESENT stubs the converter/digital-tuning
+# helpers. BLADERF_NIOS_BUILD already excludes axi_adc_init/ad9361_post_setup
+# from ad9361_init(), so this option does not ablate those initialization
+# accesses (they are not present in this NIOS compile path). Do not use this
+# switch alone to attribute the NIOS no-response incident to the AXI core.
+# The diagnostic image also omits converter tuning and is not a release image.
 if(BLADERF_NIOS_ABLATE_AXI_ADC)
-    message(WARNING "libad936x: AXI_ADC_NOT_PRESENT - diagnostic build, RX dead")
+    message(WARNING "libad936x: AXI_ADC_NOT_PRESENT - diagnostic converter build, not for release")
     target_compile_options(ad936x PRIVATE -DAXI_ADC_NOT_PRESENT)
 endif()
 

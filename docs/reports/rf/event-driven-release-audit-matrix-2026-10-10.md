@@ -183,6 +183,24 @@ succeeds. No new defect was confirmed in these slices. The complete exported
 AD9361/no-OS and NIOS call-site inventory, fault injection, and runtime gates
 remain open; no build or test was run.
 
+### NIOS no-OS AXI timeout and init compile-path pass
+
+The NIOS no-OS adapter forwards AXI ADC/DAC reads and writes through
+`adi_axi_read/write()`, whose boolean result is converted to `-EIO`; converter
+init checks each register access. The AXI slave returns a bounded response
+after its 31-cycle counter, and the sticky timeout PIO is cleared/read in the
+same `system_clock` domain as `up_axi`, so the suspected timeout CDC gap is
+not present. A separate compile-path inconsistency was confirmed:
+`BLADERF_NIOS_BUILD` excludes `axi_adc_init()` and `ad9361_post_setup()` in
+`ad9361_init()`, leaving the NIOS-owned PHY without `rx_adc`, but the NIOS
+firmware sample-rate handler still calls `ad9361_dig_tune()`, whose converter
+validation rejects the missing handle with `-EINVAL` before issuing AXI
+traffic. The CMake ablation only stubs converter/tuning helpers and cannot
+establish that `ad9361_init()` AXI access caused a hardware wedge. Corrected
+those stale comments. The NIOS sample-rate contract, active compile
+command/image, and physical no-response incident remain open; no behavioral
+change or hardware conclusion is claimed.
+
 ### Sync RX concurrent-invalidation output-buffer finding
 
 The final sync RX generation fence correctly returned `WOULD_BLOCK` and
