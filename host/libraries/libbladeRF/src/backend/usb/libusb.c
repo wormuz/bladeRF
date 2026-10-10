@@ -1820,13 +1820,23 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
      * actually handles events while the others wait, and a waiter that
      * decided to wait before the state it is waiting on changed will keep
      * waiting - the classic lost wakeup that libusb_handle_events_completed()
-     * exists to close. Checking stream->state outside the event lock, as a
-     * plain handle_events_timeout() call requires, is exactly that pattern.
+     * exists to close. Snapshot stream state under stream->lock to avoid a C
+     * data race with stop/transfer paths; state can still become DONE after
+     * that snapshot, so the completion flag is also required.
      *
-     * Pass the completion flag instead: libusb re-checks it under its own
-     * event lock and returns immediately if it is already set.
+     * libusb re-checks the completion flag under its event lock and returns
+     * immediately if it was set between the state snapshot and the wait.
      */
-    while (stream->state != STREAM_DONE) {
+    for (;;) {
+        bool stream_done;
+
+        MUTEX_LOCK(&stream->lock);
+        stream_done = stream->state == STREAM_DONE;
+        MUTEX_UNLOCK(&stream->lock);
+        if (stream_done) {
+            break;
+        }
+
         status = libusb_handle_events_timeout_completed(
             lusb->context, &tv, &stream_data->done_flag);
 
