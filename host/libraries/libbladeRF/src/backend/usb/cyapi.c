@@ -650,6 +650,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
     void *next_buffer;
     ULONG timeout_ms;
     bool success, done;
+    bool rx_transport_fault = false;
     struct stream_data *data = get_stream_data(stream);
     struct bladerf_cyapi *cyapi = get_backend_data(driver);
     struct bladerf_metadata meta;
@@ -756,6 +757,13 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         done = true;
     }
 
+    if (status != 0 && stream->state == STREAM_RUNNING &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        /* Remember the fault before releasing stream->lock. A concurrent
+         * teardown may change state to SHUTTING_DOWN before the common exit
+         * path publishes it. */
+        rx_transport_fault = true;
+    }
     MUTEX_UNLOCK(&stream->lock);
     if (status != 0) {
         goto out;
@@ -771,8 +779,10 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 
         if (!success) {
             bool shutdown_requested;
+            bool stream_running;
             MUTEX_LOCK(&stream->lock);
             shutdown_requested = stream->shutdown_requested;
+            stream_running = stream->state == STREAM_RUNNING;
             MUTEX_UNLOCK(&stream->lock);
             if (shutdown_requested) {
                 /* Endpoint abort is a requested shutdown, not a transport
@@ -780,6 +790,9 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                 status = 0;
             } else {
                 status = BLADERF_ERR_TIMEOUT;
+                rx_transport_fault =
+                    stream_running &&
+                    (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
                 log_debug("Stream timed out.\n");
             }
             break;
@@ -822,6 +835,10 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         } else {
             done = true;
             status = BLADERF_ERR_IO;
+            if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+                stream->state == STREAM_RUNNING) {
+                rx_transport_fault = true;
+            }
             log_debug("Failed to finish transfer %u, buf=%p.\n",
                       (unsigned int)i, &data->transfers[i].buffer);
         }
@@ -857,6 +874,10 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             }
 
             done = (status != 0);
+            if (status != 0 && stream->state == STREAM_RUNNING &&
+                (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+                rx_transport_fault = true;
+            }
         }
 
         data->inflight_i = next_idx(data, data->inflight_i);
@@ -872,7 +893,8 @@ out:
     if (stream->error_code == 0) {
         stream->error_code = status;
     }
-    if (status != 0 && stream->state == STREAM_RUNNING) {
+    if ((status != 0 && stream->state == STREAM_RUNNING) ||
+        rx_transport_fault) {
         notify_rx_terminal_failure_once(stream, data, status);
     }
     stream->state = STREAM_SHUTTING_DOWN;
