@@ -48,6 +48,14 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 uint32_t reason);
 static void rx_reconfigure_complete(struct bladerf *dev,
                                    bladerf_channel ch);
+
+static bool valid_public_channel(bladerf_channel ch)
+{
+    return ch == BLADERF_CHANNEL_RX(0) ||
+           ch == BLADERF_CHANNEL_RX(1) ||
+           ch == BLADERF_CHANNEL_TX(0) ||
+           ch == BLADERF_CHANNEL_TX(1);
+}
 #include "conversions.h"
 #include "driver/fx3_fw.h"
 #include "device_calibration.h"
@@ -557,6 +565,10 @@ void bladerf_version(struct bladerf_version *version)
 
 int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 {
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     const bool starts_shared_rf_link_epoch =
         BLADERF_CHANNEL_IS_TX(ch) && enable;
     int status;
@@ -591,7 +603,7 @@ int bladerf_enable_module(struct bladerf *dev, bladerf_channel ch, bool enable)
 
 static bool valid_gain_cal_channel(bladerf_channel ch)
 {
-    return (unsigned int)ch < NUM_GAIN_CAL_TBLS;
+    return valid_public_channel(ch);
 }
 
 /* Apply a gain target while dev->lock is held. Keeping this operation
@@ -848,6 +860,10 @@ static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
                                                 uint32_t reason)
 {
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (!BLADERF_CHANNEL_IS_TX(ch) &&
         dev->board->invalidate_rx_data != NULL) {
         return dev->board->invalidate_rx_data(dev, ch, reason);
@@ -888,6 +904,9 @@ int bladerf_set_sample_rate(struct bladerf *dev,
                             bladerf_sample_rate *actual)
 {
     int status;
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     bladerf_feature feature;
     const bladerf_channel rx_clock_channel =
         rx_shared_rfic_invalidation_channel(ch);
@@ -1020,6 +1039,9 @@ int bladerf_set_bandwidth(struct bladerf *dev,
                           bladerf_bandwidth *actual)
 {
     int status;
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     const bladerf_channel rx_config_channel =
         rx_shared_rfic_invalidation_channel(ch);
 
