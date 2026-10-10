@@ -1473,8 +1473,10 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_rfic_state_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
-            board_data->tx_recovery_blocked = false;
-            board_data->tx_status_unavailable_reported = false;
+            if (tx_link_valid_event_emitted) {
+                board_data->tx_recovery_blocked = false;
+                board_data->tx_status_unavailable_reported = false;
+            }
         } else if (tx_first_enable) {
             board_data->tx_fpga_loss_count_valid = false;
             bladerf2_tx_stream_set_faulted(board_data, true);
@@ -1490,8 +1492,10 @@ static int bladerf2_enable_module(struct bladerf *dev,
             board_data->tx_rfic_state_invalid_reported = false;
             tx_link_valid_event_emitted = bladerf2_tx_stream_new_epoch(
                 dev, link_ack_status, tx_transport_failure_baseline);
-            board_data->tx_recovery_blocked = false;
-            board_data->tx_status_unavailable_reported = false;
+            if (tx_link_valid_event_emitted) {
+                board_data->tx_recovery_blocked = false;
+                board_data->tx_status_unavailable_reported = false;
+            }
         } else if (board_data->rf_link_dir_on[1]) {
             bladerf2_tx_stream_set_faulted(board_data, true);
             board_data->tx_recovery_blocked = true;
