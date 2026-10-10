@@ -69,12 +69,26 @@ static int test_tx_backend_stream_error_code;
 static int test_tx_submit_status;
 static unsigned int test_tx_submit_calls;
 static int16_t test_tx_submitted_markers[4];
+static bool test_tx_buffer_valid = true;
+static unsigned int test_tx_validity_checks;
+static unsigned int test_tx_invalidate_at_check;
 
 static void note_tx_transport_failure(struct bladerf *dev, int error_code)
 {
     assert(dev != NULL);
     tx_transport_failure_notifications++;
     tx_transport_failure_error = error_code;
+}
+
+static bool validate_async_tx_buffer(struct bladerf *dev)
+{
+    assert(dev != NULL);
+    test_tx_validity_checks++;
+    if (test_tx_invalidate_at_check != 0 &&
+        test_tx_validity_checks >= test_tx_invalidate_at_check) {
+        return false;
+    }
+    return test_tx_buffer_valid;
 }
 
 static int test_tx_backend_stream(struct bladerf_stream *stream,
@@ -216,6 +230,49 @@ static void test_tx_async_shutdown_reports_only_real_errors(void)
     assert(async_run_stream(&stream, BLADERF_TX_X1) == 0);
     assert(tx_transport_failure_notifications == 2);
 
+    assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
+    assert(COND_DESTROY(&stream.stream_started) == 0);
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
+}
+
+static void test_async_tx_submit_gate_closure_is_retryable(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+    int16_t samples[8] = {0};
+    size_t length = sizeof(samples);
+
+    dev.board = &test_async_board;
+    dev.backend = &test_tx_backend;
+    stream.dev = &dev;
+    stream.layout = BLADERF_TX_X1;
+    stream.state = STREAM_RUNNING;
+    test_tx_submit_calls = 0;
+    tx_transport_failure_notifications = 0;
+    test_tx_buffer_valid = true;
+    test_tx_invalidate_at_check = 0;
+    test_tx_validity_checks = 0;
+
+    assert(MUTEX_INIT(&stream.lock) == 0);
+    assert(COND_INIT(&stream.stream_started) == 0);
+    assert(COND_INIT(&stream.can_submit_buffer) == 0);
+
+    /* Admission already closed before submit. */
+    test_tx_buffer_valid = false;
+    assert(async_submit_stream_buffer(&stream, samples, &length, 0, true) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(test_tx_submit_calls == 0);
+
+    /* Admission closes between the initial snapshot and the final check. */
+    test_tx_buffer_valid = true;
+    test_tx_validity_checks = 0;
+    test_tx_invalidate_at_check = 2;
+    assert(async_submit_stream_buffer(&stream, samples, &length, 0, true) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(test_tx_submit_calls == 0);
+    assert(tx_transport_failure_notifications == 0);
+
+    test_tx_invalidate_at_check = 0;
     assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
     assert(COND_DESTROY(&stream.stream_started) == 0);
     assert(MUTEX_DESTROY(&stream.lock) == 0);
@@ -745,6 +802,7 @@ static const struct board_fns test_async_board = {
     .rx_async_stream_overrun = note_async_overrun,
     .rx_data_withheld = note_async_withheld,
     .rx_async_buffer_valid = validate_async_rx_buffer,
+    .tx_async_buffer_valid = validate_async_tx_buffer,
     .tx_async_transport_failure = note_tx_transport_failure,
 };
 
@@ -2308,6 +2366,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 int main(void)
 {
     test_tx_async_shutdown_reports_only_real_errors();
+    test_async_tx_submit_gate_closure_is_retryable();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();

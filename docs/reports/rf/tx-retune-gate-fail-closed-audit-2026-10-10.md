@@ -58,3 +58,10 @@ be reported by `async_run_stream()` as TX transport failures, unlike the
 libusb path. All three now return `BLADERF_ERR_WOULD_BLOCK`; the common native
 stream regression also checks that a retryable TX gate result creates no
 transport notification. Source-only; no build or test has run.
+
+The shared `async_submit_stream_buffer()` admission checks had the same
+permanent `BLADERF_ERR_FPGA_OP` result before and after its stream-start wait.
+They now return `BLADERF_ERR_WOULD_BLOCK`, matching both USB backends. The
+native regression covers admission already closed and revocation between the
+initial and final admission checks, and requires that no payload reaches the backend
+and no transport event is emitted. Source-only; not built or run.

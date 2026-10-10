@@ -502,7 +502,7 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 
     if (buffer != BLADERF_STREAM_SHUTDOWN &&
         !async_tx_buffer_valid(stream)) {
-        status = BLADERF_ERR_FPGA_OP;
+        status = BLADERF_ERR_WOULD_BLOCK;
         goto error;
     }
 
@@ -533,7 +533,7 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 
     if (buffer != BLADERF_STREAM_SHUTDOWN &&
         !async_tx_buffer_valid(stream)) {
-        status = BLADERF_ERR_FPGA_OP;
+        status = BLADERF_ERR_WOULD_BLOCK;
         goto error;
     }
 
