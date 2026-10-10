@@ -210,4 +210,6 @@ reset from serving as an escape path. Reset, FPGA reload, and bootloader
 handoff now use a dedicated shutdown invalidation: it revokes host admission,
 publishes TX configuration invalidation, attempts to mute an active TX gate,
 and permits teardown to proceed even if the gate response is unavailable.
+The board-level reset callback no longer re-enters the ordinary config fence
+after the generic wrapper has performed this shutdown invalidation.
 Source-only; no build/test under the active no-build audit gate.

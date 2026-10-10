@@ -4513,9 +4513,8 @@ static int bladerf2_device_reset(struct bladerf *dev)
 {
     CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
 
-    struct bladerf2_board_data *board_data = dev->board_data;
-    CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
-
+    /* The public reset wrapper has already revoked TX admission through the
+     * shutdown-specific callback, which must work while recovery is blocked. */
     return dev->backend->device_reset(dev);
 }
 
