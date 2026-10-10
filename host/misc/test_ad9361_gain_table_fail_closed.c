@@ -433,6 +433,48 @@ static int test_batched_row_failure_invalidates_cache(void)
     return 0;
 }
 
+static int test_bist_api_rejects_missing_state_and_outputs(void)
+{
+	struct ad9361_rf_phy phy;
+	struct no_os_spi_desc spi;
+	int32_t loopback = 123;
+	enum ad9361_bist_mode prbs = BIST_INJ_TX;
+	enum ad9361_bist_mode tone = BIST_INJ_RX;
+	uint32_t frequency = 456, level = 789, mask = 321;
+
+	memset(&phy, 0, sizeof(phy));
+	memset(&spi, 0, sizeof(spi));
+	if (ad9361_bist_loopback(NULL, 0) != -EINVAL ||
+	    ad9361_bist_prbs(NULL, BIST_DISABLE) != -EINVAL ||
+	    ad9361_bist_tone(NULL, BIST_DISABLE, 0, 0, 0) != -EINVAL) {
+		fprintf(stderr, "BIST setters accepted a null PHY\n");
+		return -1;
+	}
+	phy.spi = &spi;
+	if (ad9361_bist_loopback(&phy, 0) >= 0 ||
+	    ad9361_bist_prbs(&phy, BIST_DISABLE) >= 0 ||
+	    ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0) >= 0) {
+		fprintf(stderr, "BIST setters accepted a missing SPI transport\n");
+		return -1;
+	}
+
+	ad9361_get_bist_loopback(NULL, &loopback);
+	ad9361_get_bist_loopback(&phy, NULL);
+	ad9361_get_bist_prbs(NULL, &prbs);
+	ad9361_get_bist_prbs(&phy, NULL);
+	ad9361_get_bist_tone(NULL, &tone, &frequency, &level, &mask);
+	ad9361_get_bist_tone(&phy, NULL, &frequency, &level, &mask);
+	ad9361_get_bist_tone(&phy, &tone, NULL, &level, &mask);
+	ad9361_get_bist_tone(&phy, &tone, &frequency, NULL, &mask);
+	ad9361_get_bist_tone(&phy, &tone, &frequency, &level, NULL);
+	if (loopback != 123 || prbs != BIST_INJ_TX || tone != BIST_INJ_RX ||
+	    frequency != 456 || level != 789 || mask != 321) {
+		fprintf(stderr, "BIST getters modified outputs for invalid arguments\n");
+		return -1;
+	}
+	return 0;
+}
+
 int main(void)
 {
     if (test_rssi_setup_propagates_each_write_error() != 0 ||
@@ -444,10 +486,11 @@ int main(void)
         test_gain_index_write_failure_invalidates_cache() != 0 ||
         test_retry_reloads_complete_table() != 0 ||
         test_batched_rows_preserve_payload_and_delay() != 0 ||
-        test_batched_row_failure_invalidates_cache() != 0) {
+        test_batched_row_failure_invalidates_cache() != 0 ||
+	    test_bist_api_rejects_missing_state_and_outputs() != 0) {
         return EXIT_FAILURE;
     }
 
-    puts("PASS: AD9361 RSSI/AuxADC and gain-table SPI failures propagate; retry reloads all rows");
+    puts("PASS: AD9361 RSSI/AuxADC, gain-table failure, and BIST argument guards");
     return EXIT_SUCCESS;
 }
