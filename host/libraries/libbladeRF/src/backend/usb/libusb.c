@@ -34,6 +34,7 @@
 #include "devinfo.h"
 #include "backend/backend.h"
 #include "backend/usb/usb.h"
+#include "backend/usb/libusb_transfer_policy.h"
 #include "streaming/async.h"
 #include "helpers/timeout.h"
 #include "helpers/wallclock.h"
@@ -1211,6 +1212,26 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     MUTEX_LOCK(&stream->lock);
 
     transfer_i = transfer_idx(stream_data, transfer);
+    if (!libusb_transfer_index_valid(transfer_i,
+                                     stream_data->num_transfers)) {
+        log_error("Completion callback returned an unknown transfer\n");
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+            fail_rx_stream(stream, stream_data, BLADERF_ERR_UNEXPECTED,
+                           BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+        } else {
+            stream->error_code = BLADERF_ERR_UNEXPECTED;
+            stream->state = STREAM_SHUTTING_DOWN;
+        }
+
+        if (stream_data->num_avail == stream_data->num_transfers) {
+            mark_stream_done(stream);
+        } else {
+            cancel_all_transfers(stream);
+        }
+        MUTEX_UNLOCK(&stream->lock);
+        return;
+    }
+
     assert(stream_data->transfer_status[transfer_i] == TRANSFER_IN_FLIGHT ||
            stream_data->transfer_status[transfer_i] == TRANSFER_CANCEL_PENDING);
 
@@ -1254,16 +1275,11 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     }
 #endif
 
-    if (transfer_i >= stream_data->num_transfers) {
-        log_error("Unable to find transfer\n");
-        stream->state = STREAM_SHUTTING_DOWN;
-    } else {
-        stream_data->transfer_status[transfer_i] = TRANSFER_AVAIL;
-        stream_data->num_avail++;
+    stream_data->transfer_status[transfer_i] = TRANSFER_AVAIL;
+    stream_data->num_avail++;
 
 
-        COND_SIGNAL(&stream->can_submit_buffer);
-    }
+    COND_SIGNAL(&stream->can_submit_buffer);
 
     /* A short or failed transfer says a lot about a stalled feed, and the
      * status alone is easy to guess wrong about: a stalled TX feed shows up as
