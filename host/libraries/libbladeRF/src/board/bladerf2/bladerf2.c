@@ -5494,6 +5494,17 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         status = bladerf2_tx_rf_config_change_begin(dev, board_data);
         if (status == 0) {
+            /* Raw writes to the AD9361 fastlock programming interface can
+             * alter the hardware profile bank without updating no-OS's
+             * cached profile image. Retune verification must then read that
+             * profile from hardware instead of certifying the stale cache. */
+            if (address >= REG_RX_FAST_LOCK_PROGRAM_ADDR &&
+                address <= REG_RX_FAST_LOCK_PROGRAM_CTRL) {
+                ad9361_fastlock_invalidate_cache(board_data->phy, false);
+            } else if (address >= REG_TX_FAST_LOCK_PROGRAM_ADDR &&
+                       address <= REG_TX_FAST_LOCK_PROGRAM_CTRL) {
+                ad9361_fastlock_invalidate_cache(board_data->phy, true);
+            }
             status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });

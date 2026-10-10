@@ -2021,6 +2021,31 @@ int main(void)
         fail_read_reg = -1;
     }
 
+    /* An out-of-band profile-bank write invalidates only the corresponding
+     * direction's cached bytes, forcing subsequent LO verification to read
+     * the actual RFIC profile. */
+    {
+        phy.fastlock.entry[0][0].flags = FASTLOOK_INIT;
+        phy.fastlock.entry[0][7].flags = FASTLOOK_INIT;
+        phy.fastlock.entry[1][0].flags = FASTLOOK_INIT;
+        ad9361_fastlock_invalidate_cache(&phy, false);
+        if (phy.fastlock.entry[0][0].flags != 0 ||
+            phy.fastlock.entry[0][7].flags != 0 ||
+            phy.fastlock.entry[1][0].flags != FASTLOOK_INIT) {
+            fprintf(stderr, "RX fastlock invalidation changed wrong cache entries\n");
+            return EXIT_FAILURE;
+        }
+        phy.fastlock.entry[0][0].flags = FASTLOOK_INIT;
+        phy.fastlock.entry[0][7].flags = FASTLOOK_INIT;
+        ad9361_fastlock_invalidate_cache(&phy, true);
+        if (phy.fastlock.entry[0][0].flags != FASTLOOK_INIT ||
+            phy.fastlock.entry[0][7].flags != FASTLOOK_INIT ||
+            phy.fastlock.entry[1][0].flags != 0) {
+            fprintf(stderr, "TX fastlock invalidation changed wrong cache entries\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Malformed clocks/durations are rejected before arithmetic or writes. */
     {
         struct refclk_scale factor = { .spi = &spi, .phy = &phy };
