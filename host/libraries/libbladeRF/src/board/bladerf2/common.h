@@ -418,6 +418,7 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
                               int32_t error_code);
 void bladerf2_tx_stream_set_faulted(
     struct bladerf2_board_data *board_data, bool faulted);
+int bladerf2_rfic_reference_clock_status(struct bladerf *dev);
 void bladerf2_tx_stream_set_epoch_id(
     struct bladerf2_board_data *board_data, uint8_t epoch_id);
 uint64_t bladerf2_tx_transport_failure_generation(

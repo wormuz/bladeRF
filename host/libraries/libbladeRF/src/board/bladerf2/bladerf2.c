@@ -1368,6 +1368,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
         if (!frequency_model_known) {
             return BLADERF_ERR_WOULD_BLOCK;
         }
+        if (bladerf2_rfic_reference_clock_status(dev) != 0) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch) &&
@@ -2226,6 +2232,37 @@ static int bladerf2_select_band(struct bladerf *dev,
     return board_data->rfic->select_band(dev, ch, frequency);
 }
 
+int bladerf2_rfic_reference_clock_status(struct bladerf *dev)
+{
+    uint32_t config_gpio;
+    uint32_t rffe_status;
+    int status;
+
+    if (dev == NULL || dev->backend == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = dev->backend->config_gpio_read(dev, &config_gpio);
+    if (status != 0) {
+        return status;
+    }
+
+    if ((config_gpio & (1u << CFG_GPIO_CLOCK_SELECT)) != 0 ||
+        (config_gpio & (1u << CFG_GPIO_PLL_EN)) == 0) {
+        /* CLKIN is the specified 38.4 MHz direct reference. With onboard
+         * selection, a disabled ADF400x leaves the nominal VCTCXO running. */
+        return 0;
+    }
+
+    status = dev->backend->rffe_control_read(dev, &rffe_status);
+    if (status != 0) {
+        return status;
+    }
+
+    return (rffe_status & (1u << RFFE_CONTROL_ADF_MUXOUT)) != 0
+               ? 0 : BLADERF_ERR_FPGA_OP;
+}
+
 static int bladerf2_get_frequency(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_frequency *frequency)
@@ -2241,6 +2278,14 @@ static int bladerf2_get_frequency(struct bladerf *dev,
         board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (!model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    int reference_status = bladerf2_rfic_reference_clock_status(dev);
+    if (reference_status != 0) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -2261,6 +2306,14 @@ static int bladerf2_set_frequency(struct bladerf *dev,
         board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (!model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    int reference_status = bladerf2_rfic_reference_clock_status(dev);
+    if (reference_status != 0) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -2944,6 +2997,12 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
     if (!model_known) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
+    if (bladerf2_rfic_reference_clock_status(dev) != 0) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     struct controller_fns const *rfic      = board_data->rfic;
     struct band_port_map const *pm         = NULL;
@@ -3066,6 +3125,12 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (!frequency_model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    if (bladerf2_rfic_reference_clock_status(dev) != 0) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return BLADERF_ERR_WOULD_BLOCK;
     }
     uint32_t success_count;
@@ -6055,6 +6120,17 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
         dev->board_data->rfic_reference_clock_known = false;
         MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
         status = bladerf2_set_pll_enable_hw(dev, enable);
+        if (status == 0) {
+            bladerf_clock_select clock_select;
+            status = bladerf_get_clock_select(dev, &clock_select);
+            if (status == 0 &&
+                (!enable || clock_select == CLOCK_SELECT_EXTERNAL)) {
+                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                dev->board_data->rfic_reference_clock_known = true;
+                dev->board_data->tx_reference_clock_invalid_reported = false;
+                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            }
+        }
         bladerf2_tx_rf_config_operation_complete(dev);
     }
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
@@ -6156,7 +6232,14 @@ static int bladerf2_set_pll_refclk_internal(
         } else if (status == 0) {
             bool pll_enabled = false;
             status = bladerf_get_pll_enable(dev, &pll_enabled);
-            if (status == 0 && pll_enabled) {
+            if (status == 0 && !pll_enabled) {
+                /* With the disciplining PLL disabled, the selected onboard
+                 * VCTCXO still supplies the nominal 38.4 MHz reference. */
+                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                dev->board_data->rfic_reference_clock_known = true;
+                dev->board_data->tx_reference_clock_invalid_reported = false;
+                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            } else if (status == 0) {
                 status = bladerf2_wait_for_pll_lock(dev);
                 if (status == 0) {
                     MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
@@ -6333,18 +6416,28 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
             dev->board_data->rfic_reference_clock_known = false;
             MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             status = dev->backend->config_gpio_write(dev, gpio);
-            if (status == 0 && sel == CLOCK_SELECT_EXTERNAL) {
+            if (status == 0) {
                 uint32_t gpio_readback;
                 status = dev->backend->config_gpio_read(
                     dev, &gpio_readback);
-                if (status == 0 &&
-                    (gpio_readback & (1u << CFG_GPIO_CLOCK_SELECT)) != 0) {
-                    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                    dev->board_data->rfic_reference_clock_known = true;
-                    dev->board_data->tx_reference_clock_invalid_reported = false;
-                    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
-                } else if (status == 0) {
-                    status = BLADERF_ERR_UNEXPECTED;
+                if (status == 0) {
+                    bool selected_external =
+                        (gpio_readback &
+                         (1u << CFG_GPIO_CLOCK_SELECT)) != 0;
+                    bool pll_enabled =
+                        (gpio_readback & (1u << CFG_GPIO_PLL_EN)) != 0;
+                    if (selected_external !=
+                        (sel == CLOCK_SELECT_EXTERNAL)) {
+                        status = BLADERF_ERR_UNEXPECTED;
+                    } else if (selected_external || !pll_enabled) {
+                        /* External CLKIN is specified at 38.4 MHz; with the
+                         * onboard source, the free-running VCTCXO remains a
+                         * nominal reference when its disciplining PLL is off. */
+                        MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                        dev->board_data->rfic_reference_clock_known = true;
+                        dev->board_data->tx_reference_clock_invalid_reported = false;
+                        MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                    }
                 }
             }
         }

@@ -941,13 +941,13 @@ static void *rx_fault_monitor_task(void *arg)
                 }
                 if (reference_clock_status == 0 &&
                     (config_gpio & (1u << CFG_GPIO_CLOCK_SELECT)) == 0) {
-                    if ((config_gpio & (1u << CFG_GPIO_PLL_EN)) == 0) {
-                        reference_clock_status = BLADERF_ERR_WOULD_BLOCK;
-                    } else if (rx_channel_status != 0) {
-                        reference_clock_status = rx_channel_status;
-                    } else if ((rffe_status &
-                                (1u << RFFE_CONTROL_ADF_MUXOUT)) == 0) {
-                        reference_clock_status = BLADERF_ERR_FPGA_OP;
+                    if ((config_gpio & (1u << CFG_GPIO_PLL_EN)) != 0) {
+                        if (rx_channel_status != 0) {
+                            reference_clock_status = rx_channel_status;
+                        } else if ((rffe_status &
+                                    (1u << RFFE_CONTROL_ADF_MUXOUT)) == 0) {
+                            reference_clock_status = BLADERF_ERR_FPGA_OP;
+                        }
                     }
                 }
                 reference_clock_fault = reference_clock_status != 0;
@@ -2402,6 +2402,13 @@ static int _bladerf_rx_transition_begin(
                 board_data->rfic_reference_clock_known,
                 board_data->rfic_frequency_model_known);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!frequency_model_unknown &&
+            bladerf2_rfic_reference_clock_status(dev) != 0) {
+            frequency_model_unknown = true;
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        }
         if (frequency_model_unknown) {
             /* Divider readback is not a frequency certificate when the
              * reference source or AD9361 clock-tree model was modified. */
