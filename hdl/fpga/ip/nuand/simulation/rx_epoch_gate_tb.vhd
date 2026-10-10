@@ -90,7 +90,32 @@ begin
         samples_in(1).data_i <= to_signed(3456, 16);
         samples_in(1).data_q <= to_signed(-4567, 16);
         epoch_id_in <= x"29";
+
+        -- First register an old-epoch sample at the gate output. A
+        -- downstream FIFO samples this value on the ARM edge, before the
+        -- gate's registered zero-IQ fence takes effect. It must retain the
+        -- old epoch identity so the host can discard it after transition.
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_samples(0).data_v = '1' and
+               out_samples(0).data_i = to_signed(1234, 16) and
+               out_samples(1).data_i = to_signed(3456, 16) and
+               epoch_id = x"00"
+            report "pre-ARM sample did not retain its old epoch tag"
+            severity failure;
+
+        wait until falling_edge(clock);
         arm <= '1';
+        wait until rising_edge(clock);
+        -- Observe what a clocked downstream FIFO samples at this edge,
+        -- before the gate's nonblocking assignments replace it with zeros.
+        assert out_samples(0).data_v = '1' and
+               out_samples(0).data_i = to_signed(1234, 16) and
+               out_samples(1).data_i = to_signed(3456, 16) and
+               epoch_id = x"00"
+            report "ARM-edge in-flight sample lost its old epoch identity"
+            severity failure;
+
         wait until falling_edge(clock);
         arm <= '0';
         wait for 1 ns;
