@@ -125,13 +125,14 @@
  *   bit  0      TX link active
  *   bit  1      TX usb speed latched
  *   bit  2      usb speed as the host last set it
- *   bit  3      reserved, read as zero (was speed mismatch OR of TX/RX,
- *               a combinational cross-domain OR -- host can OR bits 4/5)
+ *   bit  3      RX sticky-fault aggregate from the epoch immediately before
+ *               the latest START. Captured in rx_clock before START clears
+ *               the live RX sticky vector; held until next START/reset.
  *   bit  4      speed mismatch, RX
  *   bit  5      speed mismatch, TX
- *   bit  6      reserved, read as zero (was protocol start violation OR of
- *               TX/RX, same combinational cross-domain defect -- host can
- *               OR bits 7/18)
+ *   bit  6      TX sticky-fault aggregate from the epoch immediately before
+ *               the latest START. Captured in tx_clock before START clears
+ *               the live TX sticky vector; held until next START/reset.
  *   bit  7      protocol start violation, RX
  *   bit  8      RX epoch current: RX mirrored back the epoch toggle the host
  *               issued, so RX consumed THIS epoch
@@ -154,22 +155,25 @@
  *               so it means "still running", not "took this epoch".
  *   bit  13     start refused: requested speed disagreed with the live
  *               GPIO speed bit at the moment START was issued
- *   bits 15:14  reserved, read as zero
+ *   bit  14     live RX sticky-fault aggregate for the current epoch
+ *   bit  15     live TX sticky-fault aggregate for the current epoch
  *   bit  16     RX link active
  *   bit  17     RX usb speed latched
  *   bit  18     protocol start violation, TX
- *   bit  19     reserved, read as zero
+ *   bit  19     RX abort active
  *   bits 27:20  link epoch count, 8 bits, advances once per accepted START,
  *               shared by both directions. Diagnostic only -- what the host
  *               waits on is bit 10, not this number. Eight bits rather than
  *               four because it is read while retrying a start, and four
  *               would wrap inside a single bad recovery session.
- *   bits 31:28  RF_LINK_STATUS protocol version, currently 0x1
+ *   bits 31:28  RF_LINK_STATUS protocol version, currently 0x2
  *
  * A mismatch means FX3 latched one USB speed for the epoch and the link is
  * now running at another, so the DMA buffer geometry no longer matches the
  * transfers. A start violation means the datapath was enabled without the
- * host first signalling a new epoch. Both are sticky within an epoch. */
+ * host first signalling a new epoch. Live faults are sticky within an epoch;
+ * bits 3 and 6 preserve the just-ended epoch's aggregate across START so the
+ * host can report a fault that raced its final pre-START status read. */
 #define NIOS_PKT_8x32_TARGET_RF_LINK_STATUS  0x81
 
 /* RF link control (write-only). The write half of the mechanism above: the

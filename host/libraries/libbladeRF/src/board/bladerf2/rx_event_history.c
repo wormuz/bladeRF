@@ -272,6 +272,49 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     bladerf2_rf_event_append(board_data, &event);
 }
 
+void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
+                                           uint32_t link_status)
+{
+    struct bladerf_rf_event event = {0};
+    struct bladerf2_board_data *board_data;
+    uint32_t first;
+    bool already_reported = false;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    event.host_monotonic_ns = monotonic_ns();
+    event.epoch_id = board_data->rf_transition_epoch_id;
+    event.rfic_status = link_status;
+    event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+    event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
+    event.flags = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+    event.error_code = BLADERF_ERR_FPGA_OP;
+
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    first = (board_data->rf_transition_event_head +
+             BLADERF2_RF_EVENT_HISTORY_SIZE -
+             board_data->rf_transition_event_count) %
+            BLADERF2_RF_EVENT_HISTORY_SIZE;
+    for (uint32_t i = 0; i < board_data->rf_transition_event_count; ++i) {
+        const struct bladerf_rf_event *prior =
+            &board_data->rf_transition_events[
+                (first + i) % BLADERF2_RF_EVENT_HISTORY_SIZE];
+        if (prior->event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED &&
+            prior->epoch_id == event.epoch_id &&
+            (prior->flags & BLADERF_RF_INVALIDATE_FPGA_RX_FAULT) != 0) {
+            already_reported = true;
+            break;
+        }
+    }
+    if (!already_reported) {
+        bladerf2_rf_event_append_locked(board_data, &event);
+    }
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+}
+
 void bladerf2_rf_event_append_rx_invalidation_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event, uint32_t channel_flags)

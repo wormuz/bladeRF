@@ -82,6 +82,62 @@ static void test_rf_transition_calibration_is_explicit(void)
     assert(!bladerf2_rf_transition_mode_supported(
         BLADERF_TUNING_MODE_FPGA));
 }
+
+static void test_rf_link_status_v2_epoch_policy(void)
+{
+    const uint32_t version = BLADERF2_RF_LINK_STATUS_VERSION_2;
+    const uint32_t entry = version | (7u << 20);
+    const uint32_t acknowledged = version | (8u << 20) | (1u << 8) |
+                                  BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT;
+
+    assert(bladerf2_rf_link_epoch_ack_valid(
+        entry, acknowledged, BLADERF2_RF_LINK_STATUS_VERSION_MASK,
+        BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
+        1u << 14));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        0x10000000u | (7u << 20), acknowledged,
+        BLADERF2_RF_LINK_STATUS_VERSION_MASK,
+        BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
+        1u << 14));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        entry, acknowledged | (1u << 14),
+        BLADERF2_RF_LINK_STATUS_VERSION_MASK,
+        BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
+        1u << 14));
+    assert(bladerf2_rf_link_epoch_id(acknowledged, 0) == 8);
+    assert(bladerf2_rf_link_epoch_id(0x10000000u | (9u << 20), 3) == 3);
+}
+
+static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data board_data = {0};
+
+    dev.board_data = &board_data;
+    board_data.rf_transition_epoch_id = 23;
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    board_data.rf_transition_event_lock_initialized = true;
+
+    bladerf2_rx_previous_link_fault_event(&dev, 0x20000008u);
+    bladerf2_rx_previous_link_fault_event(&dev, 0x20000008u);
+    assert(board_data.rf_transition_event_count == 1);
+    assert(board_data.rf_transition_events[0].event_type ==
+           BLADERF_RF_EVT_RX_DATA_INVALIDATED);
+    assert(board_data.rf_transition_events[0].epoch_id == 23);
+    assert(board_data.rf_transition_events[0].flags ==
+           BLADERF_RF_INVALIDATE_FPGA_RX_FAULT);
+
+    bladerf2_tx_stream_event(
+        &dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0,
+        BLADERF2_RF_LINK_STATUS_VERSION_2 | (7u << 20),
+        BLADERF_ERR_FPGA_OP);
+    assert(board_data.rf_transition_event_count == 2);
+    assert(board_data.rf_transition_events[1].event_type ==
+           BLADERF_RF_EVT_TX_LINK_FAULT);
+    assert(board_data.rf_transition_events[1].epoch_id == 7);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+}
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;
 static unsigned int async_fault_overrun_order;
@@ -1894,6 +1950,8 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_rf_link_status_v2_epoch_policy();
+    test_rx_previous_link_fault_event_is_durable_and_deduplicated();
     test_rf_transition_calibration_is_explicit();
     test_rx_epoch_admission_event_preserves_channel();
     test_rx_channel_mask_runtime_policy();

@@ -474,8 +474,8 @@ static void _emit_event(struct bladerf *dev,
 }
 
 #define RX_FAULT_MONITOR_INTERVAL_MS 100
-#define RF_LINK_STATUS_VERSION_MASK  0xf0000000u
-#define RF_LINK_STATUS_VERSION_1     0x10000000u
+#define RF_LINK_STATUS_VERSION_MASK BLADERF2_RF_LINK_STATUS_VERSION_MASK
+#define RF_LINK_STATUS_VERSION_2 BLADERF2_RF_LINK_STATUS_VERSION_2
 
 static bool _test_runtime_rx_fault(void)
 {
@@ -749,7 +749,7 @@ static void *rx_fault_monitor_task(void *arg)
                 }
                 if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
-                        RF_LINK_STATUS_VERSION_1 &&
+                        RF_LINK_STATUS_VERSION_2 &&
                     (rf_link_status & RF_LINK_STATUS_RX_FAULT) == 0) {
                     _rx_fault_monitor_stage(board_data, "RFIC PLL status");
                     rfic_status = _read_rfic_reg(
@@ -766,7 +766,7 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                 } else if (status == 0 && should_poll &&
                            (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
-                               RF_LINK_STATUS_VERSION_1 &&
+                               RF_LINK_STATUS_VERSION_2 &&
                            (rf_link_status & RF_LINK_STATUS_RX_FAULT) != 0) {
                     rx_fault_causes_read_attempted = true;
                     rx_fault_causes_status = nios_rx_fault_causes_read(
@@ -792,7 +792,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
                 ((rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
-                 RF_LINK_STATUS_VERSION_1 ? BLADERF_ERR_UNEXPECTED : 0);
+                 RF_LINK_STATUS_VERSION_2 ? BLADERF_ERR_UNEXPECTED : 0);
 
             WITH_MUTEX(&dev->lock, {
                 if (board_data->rf_link_dir_on[1] &&
@@ -930,7 +930,7 @@ static void *rx_fault_monitor_task(void *arg)
         }
         if (status != 0 ||
             (rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
-                RF_LINK_STATUS_VERSION_1) {
+                RF_LINK_STATUS_VERSION_2) {
             const int monitor_error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id, rf_link_status,

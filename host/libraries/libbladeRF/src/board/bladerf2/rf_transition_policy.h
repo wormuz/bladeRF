@@ -8,6 +8,11 @@
 
 #include <libbladeRF.h>
 
+#define BLADERF2_RF_LINK_STATUS_VERSION_MASK 0xf0000000u
+#define BLADERF2_RF_LINK_STATUS_VERSION_2    0x20000000u
+#define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)
+#define BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT (1u << 6)
+
 /* Preserve the transition handle that scoped an RX epoch on invalid-data
  * notifications. The epoch is shared by both RX lanes, but its requested
  * control channel is useful provenance for RX1/RX2 consumers. */
@@ -248,7 +253,8 @@ static inline bool bladerf2_rf_link_epoch_ack_valid(
 static inline uint8_t bladerf2_rf_link_epoch_id(uint32_t link_status,
                                                 uint8_t fallback_epoch_id)
 {
-    return (link_status & 0xf0000000u) == 0x10000000u
+    return (link_status & BLADERF2_RF_LINK_STATUS_VERSION_MASK) ==
+               BLADERF2_RF_LINK_STATUS_VERSION_2
         ? (uint8_t)(link_status >> 20) : fallback_epoch_id;
 }
 

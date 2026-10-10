@@ -205,6 +205,10 @@ architecture core_bladerf of bladerf_core is
     signal tx_fault_any                    : std_logic;
     signal rx_fault_any_sys                : std_logic;
     signal tx_fault_any_sys                : std_logic;
+    signal rx_fault_previous_epoch         : std_logic := '0';
+    signal tx_fault_previous_epoch         : std_logic := '0';
+    signal rx_fault_previous_epoch_sys     : std_logic;
+    signal tx_fault_previous_epoch_sys     : std_logic;
     signal rx_abort_active_sys             : std_logic;
 
     signal rx_link_active_sys              : std_logic;
@@ -1501,16 +1505,13 @@ begin
     rf_link_status(0)            <= tx_link_active_sys;
     rf_link_status(1)            <= tx_speed_latched_sys;
     rf_link_status(2)            <= nios_gpio.o.usb_speed;
-    -- bit 3 was tx_usb_speed_mismatch OR rx_usb_speed_mismatch, combining two
-    -- unrelated clock domains combinationally. Deleted: redundant with bits
-    -- 4/5 below, which the host can OR itself.
-    rf_link_status(3)            <= '0';
+    -- Version 2 retains the aggregate fault state from the epoch immediately
+    -- preceding START. This closes the host snapshot/START race: START clears
+    -- the live sticky vector, but the old epoch's fault remains observable.
+    rf_link_status(3)            <= rx_fault_previous_epoch_sys;
     rf_link_status(4)            <= rx_usb_speed_mismatch_sys;
     rf_link_status(5)            <= tx_usb_speed_mismatch_sys;
-    -- bit 6 was the same OR-of-two-domains pattern as bit 3, over
-    -- protocol_start_violation instead. Deleted for the same reason,
-    -- redundant with bits 7/18.
-    rf_link_status(6)            <= '0';
+    rf_link_status(6)            <= tx_fault_previous_epoch_sys;
     rf_link_status(7)            <= rx_protocol_start_violation_sys;
     -- Epoch acknowledgement. Each direction mirrors the toggle it actually
     -- acted on, so comparing that mirror against the toggle we issued proves
@@ -1567,7 +1568,7 @@ begin
     -- attempts -- which is well within one bad recovery session, exactly when
     -- the number needs to still mean something.
     rf_link_status(27 downto 20) <= std_logic_vector(rf_epoch_count_sys);
-    rf_link_status(31 downto 28) <= "0001";
+    rf_link_status(31 downto 28) <= "0010";
 
     -- SI53304 controls / clock output enables
     -- Inert termination for the Wishbone extension conduit.
@@ -2082,6 +2083,25 @@ begin
         port map ( clock => tx_clock, reset => tx_reset,
                    flags => tx_fault_sticky, any_set => tx_fault_any );
 
+    -- Snapshot the pre-START sticky state in each sample-clock domain. The
+    -- FIFO FSM clears its live vector on the same edge that consumes START;
+    -- this parallel process sees the old vector on that edge and holds its
+    -- aggregate until the next START/reset. Thus a fault arriving after the
+    -- host's last status read cannot disappear when START clears live state.
+    U_rx_fault_epoch_snapshot : entity work.sticky_epoch_snapshot
+        generic map ( WIDTH => rx_fault_sticky'length )
+        port map ( clock => rx_clock, reset => rx_reset,
+                   start_toggle => link_start_toggle_rx,
+                   sticky_flags => rx_fault_sticky,
+                   previous_fault => rx_fault_previous_epoch );
+
+    U_tx_fault_epoch_snapshot : entity work.sticky_epoch_snapshot
+        generic map ( WIDTH => tx_fault_sticky'length )
+        port map ( clock => tx_clock, reset => tx_reset,
+                   start_toggle => link_start_toggle_tx,
+                   sticky_flags => tx_fault_sticky,
+                   previous_fault => tx_fault_previous_epoch );
+
     -- Dwell/pre-trigger flags into the system domain. Five instances rather
     -- than one wide crossing: each is an independent single-bit level, and
     -- the host reads them as a snapshot where a one-cycle skew between them
@@ -2134,6 +2154,18 @@ begin
             async               =>  tx_fault_any,
             sync                =>  tx_fault_any_sys
         );
+
+    U_sync_rx_fault_previous_epoch : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => rx_fault_previous_epoch,
+                   sync => rx_fault_previous_epoch_sys );
+
+    U_sync_tx_fault_previous_epoch : entity work.synchronizer
+        generic map ( RESET_LEVEL => '0' )
+        port map ( reset => sys_reset, clock => sys_clock,
+                   async => tx_fault_previous_epoch,
+                   sync => tx_fault_previous_epoch_sys );
 
     U_sync_rx_abort_active : entity work.synchronizer
         generic map (

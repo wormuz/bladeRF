@@ -868,13 +868,18 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
  * NuandRFLinkStart, and never rebuilds its DMA geometry afterwards. The
  * two sides have to agree on which speed this generation runs at.
  *
- * Gateware with the versioned RF_LINK_STATUS protocol must acknowledge the
- * new epoch and report no direction fault before enable succeeds. Legacy
- * gateware that explicitly rejects the status target keeps its historical
- * best-effort path; an NIOS transport failure is never treated as legacy.
+ * Gateware protocol v2 must acknowledge the new epoch and report no active
+ * direction fault before enable succeeds. Version 1 cannot preserve a fault
+ * across START and is rejected. Gateware that explicitly lacks the status
+ * target keeps its historical best-effort path; an NIOS transport failure
+ * is never treated as legacy.
  */
-#define RF_LINK_STATUS_VERSION_MASK 0xf0000000u
-#define RF_LINK_STATUS_VERSION_1    0x10000000u
+#define RF_LINK_STATUS_VERSION_MASK BLADERF2_RF_LINK_STATUS_VERSION_MASK
+#define RF_LINK_STATUS_VERSION_2 BLADERF2_RF_LINK_STATUS_VERSION_2
+#define RF_LINK_STATUS_RX_PREVIOUS_FAULT \
+    BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT
+#define RF_LINK_STATUS_TX_PREVIOUS_FAULT \
+    BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT
 #define RF_LINK_STATUS_RX_FAULT     (1u << 14)
 #define RF_LINK_STATUS_TX_FAULT     (1u << 15)
 
@@ -901,6 +906,7 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     uint32_t required_fault_mask = fault_bit;
     uint8_t entry_epoch_count = 0;
     bool strict_epoch = false;
+    bool previous_rx_fault_reported = false;
     int status;
 
     NULL_CHECK(epoch_confirmed);
@@ -929,13 +935,15 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     if (status == 0) {
         log_verbose("%s: link status on entry: 0x%08x "
                     "(rx_active=%u rx_abort=%u rx_fault=%u tx_fault=%u "
-                    "epoch_both=%u epoch_count=%u)\n",
+                    "rx_prev_fault=%u tx_prev_fault=%u epoch_both=%u "
+                    "epoch_count=%u)\n",
                     __FUNCTION__, entry_status,
                     (entry_status >> 16) & 1, (entry_status >> 19) & 1,
                     (entry_status >> 14) & 1, (entry_status >> 15) & 1,
+                    (entry_status >> 3) & 1, (entry_status >> 6) & 1,
                     (entry_status >> 10) & 1, (entry_status >> 20) & 0xff);
         strict_epoch = (entry_status & RF_LINK_STATUS_VERSION_MASK) ==
-                       RF_LINK_STATUS_VERSION_1;
+                       RF_LINK_STATUS_VERSION_2;
         if (!strict_epoch) {
             log_error("%s: unsupported RF-link status protocol 0x%08x\n",
                       __FUNCTION__, entry_status);
@@ -1041,13 +1049,46 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
         }
 
         if ((st & RF_LINK_STATUS_VERSION_MASK) !=
-            RF_LINK_STATUS_VERSION_1) {
+            RF_LINK_STATUS_VERSION_2) {
             return BLADERF_ERR_UNSUPPORTED;
+        }
+        if (snapshot_active_tx &&
+            (uint8_t)(st >> 20) != entry_epoch_count &&
+            (st & (1u << 9)) != 0 &&
+            (st & RF_LINK_STATUS_TX_PREVIOUS_FAULT) != 0 &&
+            !board_data->tx_link_fault_reported) {
+            uint32_t previous_status =
+                (st & ~0x0ff00000u) |
+                ((uint32_t)entry_epoch_count << 20);
+
+            /* START clears the live fault vector. FPGA protocol v2 carries
+             * the pre-START aggregate separately, tagged here to the epoch
+             * that just ended, so a fault in the snapshot/START window is
+             * still delivered before the new TX_LINK_VALID event. */
+            board_data->tx_link_fault_reported = true;
+            board_data->tx_stream_faulted = true;
+            board_data->tx_recovery_blocked = true;
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, previous_status,
+                BLADERF_ERR_FPGA_OP);
         }
         if (board_data->rf_link_dir_on[1]) {
             /* Keep the observed generation on failure as well as success so
              * TX_STATUS_UNAVAILABLE identifies the epoch whose ACK was lost. */
             board_data->tx_link_epoch_id = (uint8_t)(st >> 20);
+        }
+
+        if ((uint8_t)(st >> 20) != entry_epoch_count &&
+            (required_ack_mask & (1u << 8)) != 0 &&
+            (st & (1u << 8)) != 0 &&
+            (st & RF_LINK_STATUS_RX_PREVIOUS_FAULT) != 0 &&
+            !previous_rx_fault_reported) {
+            /* This describes the RX link generation that ended at START.
+             * The RX epoch was already fenced for the shared transition;
+             * preserve its hardware fault reason as a durable event without
+             * revoking the new generation being established now. */
+            bladerf2_rx_previous_link_fault_event(dev, st);
+            previous_rx_fault_reported = true;
         }
 
         /* A direction bit left high by the preceding stream is not an ACK
@@ -1062,12 +1103,14 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
         }
         if (bladerf2_rf_link_epoch_ack_valid(
                 entry_status, st, RF_LINK_STATUS_VERSION_MASK,
-                RF_LINK_STATUS_VERSION_1, 0x0ff00000u,
+                RF_LINK_STATUS_VERSION_2, 0x0ff00000u,
                 required_ack_mask, required_fault_mask)) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
-                        "(rx_abort=%u rx_fault=%u epoch_count=%u)\n",
+                        "(rx_abort=%u rx_fault=%u rx_prev_fault=%u "
+                        "tx_prev_fault=%u epoch_count=%u)\n",
                         __FUNCTION__, attempt + 1, st,
-                        (st >> 19) & 1, (st >> 14) & 1, (st >> 20) & 0xff);
+                        (st >> 19) & 1, (st >> 14) & 1, (st >> 3) & 1,
+                        (st >> 6) & 1, (st >> 20) & 0xff);
             *epoch_confirmed = true;
             *acknowledged_status = st;
             return 0;
@@ -1149,7 +1192,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
 
     if (status != 0 ||
         (link_status & RF_LINK_STATUS_VERSION_MASK) !=
-            RF_LINK_STATUS_VERSION_1) {
+            RF_LINK_STATUS_VERSION_2) {
         int error = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
         board_data->tx_stream_faulted = true;
         board_data->tx_status_unavailable_reported = true;
@@ -1402,7 +1445,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * others -- measured as a strict pass/fail alternation over six
      * identical captures, where every failing run began with the previous
      * epoch still standing (status 0x1011df01, link active, epoch_count=1)
-     * and every passing one began from a reset fabric (0x10000000).
+     * and every passing one began from a reset fabric (protocol version set,
+     * epoch_count=0).
      *
      * So the host ends what the host began, rather than relying on a reset
      * that is not ours to schedule. */
@@ -1431,13 +1475,13 @@ static int bladerf2_enable_module(struct bladerf *dev,
                 : (link_status != 0 ? link_status : BLADERF_ERR_UNSUPPORTED);
             bool report_link_fault = link_status == 0 &&
                 (st & RF_LINK_STATUS_VERSION_MASK) ==
-                    RF_LINK_STATUS_VERSION_1 &&
+                    RF_LINK_STATUS_VERSION_2 &&
                 (st & RF_LINK_STATUS_TX_FAULT) != 0 &&
                 !board_data->tx_link_fault_reported;
             bool report_status_unavailable =
                 (link_status != 0 ||
                  (st & RF_LINK_STATUS_VERSION_MASK) !=
-                    RF_LINK_STATUS_VERSION_1 || tx_loss_status != 0) &&
+                    RF_LINK_STATUS_VERSION_2 || tx_loss_status != 0) &&
                 !board_data->tx_status_unavailable_reported;
             bool report_underrun = false;
             bool report_counter_reset = false;

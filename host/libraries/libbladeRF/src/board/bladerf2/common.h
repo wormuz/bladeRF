@@ -368,6 +368,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
                               bladerf_rf_event_type event_type,
                               uint64_t loss_count, uint32_t link_status,
                               int32_t error_code);
+void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
+                                           uint32_t link_status);
 void bladerf2_rf_event_append_locked(
     struct bladerf2_board_data *board_data,
     const struct bladerf_rf_event *event);

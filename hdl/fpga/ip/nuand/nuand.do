@@ -15,6 +15,7 @@ proc compile_nuand { root platform } {
     vcom -work nuand -2008 [file join $root ./synthesis/iq_correction.vhd]
 
     vcom -work nuand -2008 [file join $root ./synthesis/synchronizer.vhd]
+    vcom -work nuand -2008 [file join $root ./synthesis/sticky_epoch_snapshot.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/reset_synchronizer.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/handshake.vhd]
     vcom -work nuand -2008 [file join $root ./synthesis/rx_epoch_controller.vhd]
@@ -72,4 +73,5 @@ proc compile_nuand_tb { root platform } {
     vcom -work nuand -2008 [file join $root ./simulation/sample_stream_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/rfic_spi_tb.vhd]
     vcom -work nuand -2008 [file join $root ./simulation/fifo_writer_epoch_fence_tb.vhd]
+    vcom -work nuand -2008 [file join $root ./simulation/sticky_epoch_snapshot_tb.vhd]
 }
