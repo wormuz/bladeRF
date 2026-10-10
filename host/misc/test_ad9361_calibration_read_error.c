@@ -228,6 +228,7 @@ int main(void)
             ad9361_set_dcxo_tune(NULL, 0, 0) != -EINVAL ||
             ad9361_get_temp(NULL) != -EINVAL ||
             ad9361_update_rf_bandwidth(NULL, 1000000, 1000000) != -EINVAL ||
+            ad9361_validate_rf_bw(NULL, 18000000) != 0 ||
             ad9361_spi_readm(NULL, 0, &raw_byte, 1) != -EINVAL ||
             ad9361_spi_readm(&spi, 0, NULL, 1) != -EINVAL ||
             ad9361_spi_readm(&spi, 0, &raw_byte, 0) != -EINVAL ||
