@@ -3361,8 +3361,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             /* USB response failure can be ambiguous after OUT completion.
              * Keep watching because NIOS may still have accepted the queue
              * request and fail asynchronously. */
-            board_data->rx_retune2_failure_watch_active = true;
-            board_data->rx_retune2_failure_watch_generation++;
+            bladerf2_rx_retune_watch_begin(
+                &board_data->rx_retune2_failure_watch_active,
+                &board_data->rx_retune2_failure_watch_generation,
+                &board_data->rx_retune2_status_unavailable_reported);
         }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
@@ -3390,8 +3392,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                 rx_retune_failure_baseline;
             board_data->rx_retune2_failure_count_valid = true;
         }
-        board_data->rx_retune2_failure_watch_active = true;
-        board_data->rx_retune2_failure_watch_generation++;
+        bladerf2_rx_retune_watch_begin(
+            &board_data->rx_retune2_failure_watch_active,
+            &board_data->rx_retune2_failure_watch_generation,
+            &board_data->rx_retune2_status_unavailable_reported);
     }
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         if (timestamp == BLADERF_RETUNE_NOW) {
@@ -3538,8 +3542,9 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
             event.flags = failure_count;
             bladerf2_rf_event_append(board_data, &event);
         }
-        board_data->rx_retune2_failure_watch_active = false;
-        board_data->rx_retune2_failure_watch_generation++;
+        bladerf2_rx_retune_watch_retire(
+            &board_data->rx_retune2_failure_watch_active,
+            &board_data->rx_retune2_failure_watch_generation);
     }
     const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
     if (tx_queue_cleared) {

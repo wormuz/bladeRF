@@ -134,6 +134,25 @@ static inline bool bladerf2_rx_retune_watch_generation_current(
     return watch_active && observed_generation == current_generation;
 }
 
+/* Each queued scheduled retune starts a fresh notification-deduplication
+ * scope. Queue cancellation retires the scope and invalidates any monitor
+ * observation that was already in flight. */
+static inline void bladerf2_rx_retune_watch_begin(
+    bool *watch_active, uint64_t *generation,
+    bool *status_unavailable_reported)
+{
+    *watch_active = true;
+    (*generation)++;
+    *status_unavailable_reported = false;
+}
+
+static inline void bladerf2_rx_retune_watch_retire(
+    bool *watch_active, uint64_t *generation)
+{
+    *watch_active = false;
+    (*generation)++;
+}
+
 /* A scheduled RX failure counter is meaningful only while a queue may still
  * execute. After a successful queue clear, report any observed delta once and
  * retire the watch. A decreasing counter means reset/wrap, so its delta is

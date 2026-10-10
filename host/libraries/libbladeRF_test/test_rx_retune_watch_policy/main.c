@@ -5,6 +5,22 @@
 
 int main(void)
 {
+    bool watch_active = false;
+    bool status_unavailable_reported = true;
+    uint64_t generation = 4;
+
+    bladerf2_rx_retune_watch_begin(
+        &watch_active, &generation, &status_unavailable_reported);
+    assert(watch_active && generation == 5);
+    assert(!status_unavailable_reported);
+    status_unavailable_reported = true;
+    bladerf2_rx_retune_watch_retire(&watch_active, &generation);
+    assert(!watch_active && generation == 6);
+    bladerf2_rx_retune_watch_begin(
+        &watch_active, &generation, &status_unavailable_reported);
+    assert(watch_active && generation == 7);
+    assert(!status_unavailable_reported);
+
     assert(bladerf2_rx_retune_watch_generation_current(true, 4, 4));
     assert(!bladerf2_rx_retune_watch_generation_current(true, 4, 5));
     assert(!bladerf2_rx_retune_watch_generation_current(false, 4, 4));
