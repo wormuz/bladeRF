@@ -204,7 +204,10 @@ Raw trigger-register writes also preflight channel and signal before fencing.
 Source-only; no build/test under the active no-build audit gate.
 
 The same sweep found reset and bootloader handoff only revoked RX validity.
-Both operations now invoke the TX configuration fence under the device lock
-before issuing the destructive control request, and release the RX
-reservation if TX fencing fails. Source-only; no build/test under the active
-no-build audit gate.
+The first TX-fence implementation reused the ordinary configuration fence,
+which refuses work while TX recovery is blocked and could therefore prevent
+reset from serving as an escape path. Reset, FPGA reload, and bootloader
+handoff now use a dedicated shutdown invalidation: it revokes host admission,
+publishes TX configuration invalidation, attempts to mute an active TX gate,
+and permits teardown to proceed even if the gate response is unavailable.
+Source-only; no build/test under the active no-build audit gate.

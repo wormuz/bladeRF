@@ -294,7 +294,8 @@ int bladerf_jump_to_bootloader(struct bladerf *dev)
 
     MUTEX_LOCK(&dev->lock);
 
-    status = invalidate_tx_data_before_reconfigure(dev);
+    status = dev->board->tx_device_shutdown_begin != NULL
+                 ? dev->board->tx_device_shutdown_begin(dev) : 0;
     if (status != 0) {
         MUTEX_UNLOCK(&dev->lock);
         rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
@@ -1968,7 +1969,8 @@ int bladerf_load_fpga(struct bladerf *dev, const char *fpga_file)
     }
 
     MUTEX_LOCK(&dev->lock);
-    status = invalidate_tx_data_before_reconfigure(dev);
+    status = dev->board->tx_device_shutdown_begin != NULL
+                 ? dev->board->tx_device_shutdown_begin(dev) : 0;
     MUTEX_UNLOCK(&dev->lock);
     if (status != 0) {
         rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
@@ -2046,7 +2048,8 @@ int bladerf_device_reset(struct bladerf *dev)
 
     MUTEX_LOCK(&dev->lock);
 
-    status = invalidate_tx_data_before_reconfigure(dev);
+    status = dev->board->tx_device_shutdown_begin != NULL
+                 ? dev->board->tx_device_shutdown_begin(dev) : 0;
     if (status != 0) {
         MUTEX_UNLOCK(&dev->lock);
         rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));

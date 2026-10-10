@@ -5083,6 +5083,41 @@ static int bladerf2_tx_config_change_begin(struct bladerf *dev)
     return bladerf2_tx_rf_config_change_begin(dev, dev->board_data);
 }
 
+/* Reset and bootloader handoff are escape paths from a faulted TX state. Do
+ * not use the ordinary configuration fence here: it intentionally refuses a
+ * new RF change while recovery is blocked. Revoke host admission first,
+ * publish the loss, and best-effort mute an active/queued TX path; teardown
+ * must still proceed if the gate command itself cannot be acknowledged. */
+static int bladerf2_tx_device_shutdown_begin(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint8_t pending_count;
+    bool gate_may_be_active;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_channel_state_generation++;
+    board_data->tx_rfic_state_valid_reported = false;
+    board_data->tx_retune_recovery_pending = true;
+    board_data->tx_recovery_blocked = true;
+    board_data->tx_stream_faulted_async = true;
+    board_data->tx_async_link_certified = false;
+    board_data->tx_retune2_completion_faulted = true;
+    board_data->tx_retune2_applied_waiting_rf_valid = false;
+    pending_count = board_data->tx_retune2_pending_count;
+    gate_may_be_active = board_data->rf_link_dir_on[1] ||
+        board_data->tx_retune2_failure_watch_active || pending_count != 0;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    bladerf2_tx_stream_event(
+        dev, BLADERF_RF_EVT_TX_CONFIGURATION_INVALID, 0, 0, 0);
+
+    if (gate_may_be_active) {
+        (void)bladerf2_tx_gate_abort_fail_closed(dev, board_data, 0);
+    }
+
+    return 0;
+}
+
 
 /******************************************************************************/
 /* Low-level Configuration GPIO access */
@@ -5208,6 +5243,8 @@ struct board_fns const bladerf2_board_fns = {
                bladerf2_set_rfic_register_reserved),
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.tx_config_change_begin, bladerf2_tx_config_change_begin),
+    FIELD_INIT(.tx_device_shutdown_begin,
+               bladerf2_tx_device_shutdown_begin),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
     FIELD_INIT(.tx_frequency_reconfigure_begin,
                bladerf2_tx_frequency_reconfigure_begin),
