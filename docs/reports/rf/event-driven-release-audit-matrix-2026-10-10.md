@@ -134,6 +134,14 @@ defect confirmed in this slice.
 Timestamp-boundary arithmetic, all parser failure branches, event-history
 overrun interleavings, and deferred regression execution remain open.
 
+The timestamp seek boundary pass found an integer overflow in sync RX: a very
+large future timestamp multiplied by the RX_X2 lane factor before comparing
+against the remaining buffer length. It could mis-seek or wait until the read
+deadline. The seek now uses the bounded timestamp-to-samples helper, which
+clamps the requested gap to the available remainder before multiplication;
+regression source exercises huge deltas with even and odd available lengths.
+bladeRF `d3fe0489`. No tests/build run under the open source-audit gate.
+
 ## Release qualification gates
 
 These gates remain open until there is current evidence tied to the exact
