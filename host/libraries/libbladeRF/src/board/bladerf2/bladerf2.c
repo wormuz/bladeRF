@@ -2874,6 +2874,7 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     valid = bladerf2_tx_admission_allowed(
         board_data->tx_async_link_certified,
+        board_data->tx_async_rfic_state_certified,
         board_data->tx_stream_faulted_async,
         board_data->tx_async_transport_faulted,
         board_data->tx_gate_abort_pending,
@@ -4244,6 +4245,7 @@ static int bladerf2_sync_tx(struct bladerf *dev,
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     tx_admission_allowed = bladerf2_tx_admission_allowed(
         board_data->tx_async_link_certified,
+        board_data->tx_async_rfic_state_certified,
         board_data->tx_stream_faulted_async,
         board_data->tx_async_transport_faulted,
         board_data->tx_gate_abort_pending,

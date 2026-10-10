@@ -259,6 +259,8 @@ struct bladerf2_board_data {
     bool tx_link_fault_reported;
     bool tx_epoch_invalid_reported;
     bool tx_rfic_state_valid_reported;
+    /* Callback-safe mirror of the positive TX RFIC-state certificate. */
+    bool tx_async_rfic_state_certified;
     bool tx_rfic_state_invalid_reported;
     bool tx_rf_configuration_invalid_reported;
     bool tx_stream_faulted_async;

@@ -265,6 +265,27 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     event.event_type = event_type;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     const uint8_t current_epoch_id = board_data->tx_async_link_epoch_id;
+    switch (event_type) {
+        case BLADERF_RF_EVT_TX_LINK_VALID:
+        case BLADERF_RF_EVT_TX_UNDERRUN:
+        case BLADERF_RF_EVT_TX_LINK_FAULT:
+        case BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE:
+        case BLADERF_RF_EVT_TX_STREAM_STOPPED:
+        case BLADERF_RF_EVT_TX_COUNTER_RESET:
+        case BLADERF_RF_EVT_TX_EPOCH_INVALID:
+        case BLADERF_RF_EVT_TX_TRANSPORT_ERROR:
+        case BLADERF_RF_EVT_TX_RFIC_STATE_INVALID:
+        case BLADERF_RF_EVT_TX_CONFIGURATION_INVALID:
+        case BLADERF_RF_EVT_TX_RETUNE_FAILED:
+            board_data->tx_async_rfic_state_certified = false;
+            break;
+        case BLADERF_RF_EVT_TX_RFIC_STATE_VALID:
+        case BLADERF_RF_EVT_TX_STATUS_RECOVERED:
+            board_data->tx_async_rfic_state_certified = true;
+            break;
+        default:
+            break;
+    }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = bladerf2_rf_link_epoch_id(link_status, current_epoch_id);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
@@ -307,6 +328,9 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
     event.event_type = event_type;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->tx_async_link_epoch_id;
+    if (event_type != BLADERF_RF_EVT_TX_RETUNE_VALID) {
+        board_data->tx_async_rfic_state_certified = false;
+    }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
