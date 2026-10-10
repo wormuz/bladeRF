@@ -75,6 +75,27 @@ uint32_t tx_retune_gate_status_read(void) { return 0; }
         } \
     } while (0)
 
+#define CHECK_WRITE(target_value, addr_value, data_value, expected_success) \
+    do { \
+        struct pkt_buf packet = { .resp = { 0 }, .ready = false }; \
+        uint8_t target = 0, addr = 0; \
+        uint32_t data = 0; \
+        bool write = false, success = !(expected_success); \
+        nios_pkt_8x32_pack(packet.req, (target_value), true, (addr_value), \
+                           (data_value)); \
+        pkt_8x32(&packet); \
+        nios_pkt_8x32_resp_unpack(packet.resp, &target, &write, &addr, \
+                                  &data, &success); \
+        if (target != (target_value) || !write || addr != (addr_value) || \
+            success != (expected_success)) { \
+            fprintf(stderr, "xA4 8x32 capability write failed: " \
+                    "target=0x%02x addr=%u success=%u data=0x%08x\n", \
+                    (unsigned)(target_value), (unsigned)(addr_value), \
+                    (unsigned)success, (unsigned)data); \
+            return 1; \
+        } \
+    } while (0)
+
 int main(void)
 {
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, 1, true, 202);
@@ -90,6 +111,17 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 15, true,
                UINT32_C(0xd000000f));
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 16, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO, 0, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI, 0, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+               NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, false, 0);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
+                NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, 7, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_START, 0, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, false);
 
     puts("xA4 NIOS 8x32 diagnostic packet address status: PASS");
     return 0;
