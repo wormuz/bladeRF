@@ -146,8 +146,22 @@ int main(void)
     struct ad9361_rf_phy phy = {0};
     struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
+    uint64_t lo_frequency = UINT64_MAX;
     phy.spi = &spi;
     phy.pdata = &pdata;
+
+    /* Both public LO paths must reject missing objects/output before any
+     * dereference or clock/RFIC operation. */
+    if (ad9361_set_rx_lo_freq(NULL, 1) != -EINVAL ||
+        ad9361_set_tx_lo_freq(NULL, 1) != -EINVAL ||
+        ad9361_get_rx_lo_freq(&phy, NULL) != -EINVAL ||
+        ad9361_get_tx_lo_freq(&phy, NULL) != -EINVAL ||
+        ad9361_get_rx_lo_freq(NULL, &lo_frequency) != -EINVAL ||
+        ad9361_get_tx_lo_freq(NULL, &lo_frequency) != -EINVAL ||
+        lo_frequency != UINT64_MAX) {
+        fprintf(stderr, "AD9361 LO APIs accepted missing arguments\n");
+        return EXIT_FAILURE;
+    }
 
     spi_status = -EIO;
     int32_t ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
