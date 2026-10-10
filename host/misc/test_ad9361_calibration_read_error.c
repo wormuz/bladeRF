@@ -151,6 +151,8 @@ int main(void)
     uint64_t lo_frequency = UINT64_MAX;
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
+    int32_t rx_gain = INT32_MAX;
+    uint8_t rx_gc_mode = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
     phy.spi = &spi;
     phy.pdata = &pdata;
@@ -175,8 +177,15 @@ int main(void)
         ad9361_get_tx_attenuation(&phy, 1, &tx_attenuation) != -EINVAL ||
         ad9361_get_tx_rssi(&phy, 1, &tx_rssi) != -EINVAL ||
         ad9361_get_rx_rssi(&phy, 1, &rx_rssi) != -EINVAL ||
+        ad9361_set_rx_rf_gain(&phy, 1, 20) != -EINVAL ||
+        ad9361_set_rx_rf_gain(&phy, UINT8_MAX, 20) != -EINVAL ||
+        ad9361_get_rx_rf_gain(&phy, 1, &rx_gain) != -EINVAL ||
+        ad9361_set_rx_gain_control_mode(&phy, 1, RF_GAIN_MGC) != -EINVAL ||
+        ad9361_set_rx_gain_control_mode(&phy, UINT8_MAX, RF_GAIN_MGC) != -EINVAL ||
+        ad9361_get_rx_gain_control_mode(&phy, 1, &rx_gc_mode) != -EINVAL ||
         read_count != 0 || write_count != 0 ||
         tx_attenuation != UINT32_MAX || tx_rssi != UINT32_MAX ||
+        rx_gain != INT32_MAX || rx_gc_mode != UINT8_MAX ||
         rx_rssi.ant != UINT8_MAX) {
         fprintf(stderr, "AD9361 accepted invalid channel or touched SPI\n");
         return EXIT_FAILURE;
