@@ -22,6 +22,7 @@ enum response_mode {
     RESPONSE_SPI_READ_FAILURE,
     RESPONSE_RFIC_READ_TIMEOUT,
     RESPONSE_8X32_READ_TIMEOUT,
+    RESPONSE_SNAPSHOT_TIMEOUT,
 };
 
 static enum response_mode response_mode;
@@ -57,6 +58,10 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
     in_count++;
     if (response_mode == RESPONSE_8X32_READ_TIMEOUT) {
+        return BLADERF_ERR_TIMEOUT;
+    }
+    if (target == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT && !write &&
+        response_mode == RESPONSE_SNAPSHOT_TIMEOUT) {
         return BLADERF_ERR_TIMEOUT;
     }
     if (target == NIOS_PKT_16x64_TARGET_RFIC && !write &&
@@ -258,6 +263,30 @@ static int expect_link_status_timeout_clears_output(void)
     return 0;
 }
 
+static int expect_epoch_snapshot_timeout_clears_outputs(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint32_t status_word = UINT32_MAX;
+    uint32_t timestamp_lo = UINT32_MAX;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_SNAPSHOT_TIMEOUT;
+    status = nios_rx_epoch_status_snapshot_read(&dev, &status_word,
+                                                 &timestamp_lo);
+    if (status != BLADERF_ERR_TIMEOUT || status_word != 0 ||
+        timestamp_lo != 0) {
+        fprintf(stderr, "epoch snapshot timeout left stale outputs: "
+                        "status=%d state=%08x timestamp=%08x\n", status,
+                status_word, timestamp_lo);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -274,7 +303,8 @@ int main(void)
         expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
-        out_count != 12 || in_count != 12) {
+        expect_epoch_snapshot_timeout_clears_outputs() ||
+        out_count != 13 || in_count != 13) {
         return 1;
     }
 

@@ -1089,6 +1089,9 @@ int nios_retune2_completion_read(struct bladerf *dev,
         nios_profile == NULL) {
         return BLADERF_ERR_INVAL;
     }
+    *frequency_hz = 0;
+    *scheduled_timestamp = 0;
+    *nios_profile = 0;
     if (module == BLADERF_MODULE_RX) {
         select_addr = NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX;
     } else if (module == BLADERF_MODULE_TX) {
@@ -1368,6 +1371,8 @@ int nios_rx_epoch_status_snapshot_read(struct bladerf *dev,
     if (dev == NULL || status_word == NULL || timestamp_lo == NULL) {
         return BLADERF_ERR_INVAL;
     }
+    *status_word = 0;
+    *timestamp_lo = 0;
 
     nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT,
                         false, 0, 0);
