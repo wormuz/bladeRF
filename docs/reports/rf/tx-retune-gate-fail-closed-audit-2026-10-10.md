@@ -203,6 +203,14 @@ then revoke the corresponding RX or TX validity before touching hardware.
 Raw trigger-register writes also preflight channel and signal before fencing.
 Source-only; no build/test under the active no-build audit gate.
 
+The direct RX/TX FIR setters also accepted arbitrary enum values through to
+the host RFIC controller. An invalid value was rejected only after RX/TX
+invalidation, and the controller's defensive default unlocked a mutex that the
+caller would unlock again on return. Both public setters now validate every
+supported FIR enum and the low-sample-rate compatibility rule before acquiring
+invalidation/fence state, then recheck the rate after reservation to cover a
+concurrent setter. Source-only; no build/test under the active gate.
+
 The same sweep found reset and bootloader handoff only revoked RX validity.
 The first TX-fence implementation reused the ordinary configuration fence,
 which refuses work while TX recovery is blocked and could therefore prevent

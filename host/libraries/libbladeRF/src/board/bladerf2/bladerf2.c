@@ -5849,11 +5849,36 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    switch (rxfir) {
+        case BLADERF_RFIC_RXFIR_BYPASS:
+        case BLADERF_RFIC_RXFIR_CUSTOM:
+        case BLADERF_RFIC_RXFIR_DEC1:
+        case BLADERF_RFIC_RXFIR_DEC2:
+        case BLADERF_RFIC_RXFIR_DEC4:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const sr_range    = bladerf2_sample_rate_range_4x;
     bladerf_channel const ch               = BLADERF_CHANNEL_RX(0);
     int status = 0;
+
+    if (rxfir != BLADERF_RFIC_RXFIR_DEC4) {
+        bladerf_sample_rate sr;
+
+        WITH_MUTEX(&dev->lock, {
+            status = dev->board->get_sample_rate(dev, ch, &sr);
+        });
+        if (status != 0) {
+            return status;
+        }
+        if (is_within_range(&sr_range, sr)) {
+            return BLADERF_ERR_INVAL;
+        }
+    }
 
     status = bladerf2_rx_data_invalidate(
         dev, ch, BLADERF_RF_INVALIDATE_RX_FIR);
@@ -5913,11 +5938,36 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    switch (txfir) {
+        case BLADERF_RFIC_TXFIR_BYPASS:
+        case BLADERF_RFIC_TXFIR_CUSTOM:
+        case BLADERF_RFIC_TXFIR_INT1:
+        case BLADERF_RFIC_TXFIR_INT2:
+        case BLADERF_RFIC_TXFIR_INT4:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const sr_range    = bladerf2_sample_rate_range_4x;
     bladerf_channel const ch               = BLADERF_CHANNEL_TX(0);
     int status = 0;
+
+    if (txfir != BLADERF_RFIC_TXFIR_INT4) {
+        bladerf_sample_rate sr;
+
+        WITH_MUTEX(&dev->lock, {
+            status = dev->board->get_sample_rate(dev, ch, &sr);
+        });
+        if (status != 0) {
+            return status;
+        }
+        if (is_within_range(&sr_range, sr)) {
+            return BLADERF_ERR_INVAL;
+        }
+    }
 
     /* ADI documents FIR configuration as potentially data-path changing.
      * TX FIR programming recalculates shared RFIC clock/datapath state, so
