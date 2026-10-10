@@ -229,6 +229,13 @@ device lock immediately before applying format GPIOs. Regression source
 covers RX/TX start, malformed layout, unsupported X2 layout, and board-start
 failure; no build/test.
 
+`bladerf_init_stream()` also inspected `*stream` and an uninitialized sample
+rate after `init_stream()` failed, and could divide by a zero transfer timeout.
+It now nulls the output before initialization, stops on errors or a successful
+null result, and guards rate diagnostics against missing rates and zero
+timeout using floating-point arithmetic. Regression source covers init error
+and successful-null results; no build/test.
+
 The direct RX/TX FIR setters also accepted arbitrary enum values through to
 the host RFIC controller. An invalid value was rejected only after RX/TX
 invalidation, and the controller's defensive default unlocked a mutex that the

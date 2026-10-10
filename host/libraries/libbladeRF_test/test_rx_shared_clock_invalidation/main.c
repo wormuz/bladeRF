@@ -42,6 +42,9 @@ struct mock_state {
     unsigned int stream_calls;
     bladerf_channel_layout stream_layout;
     int stream_status;
+    unsigned int init_stream_calls;
+    int init_stream_status;
+    struct bladerf_stream *init_stream_return;
     unsigned int schedule_retune_calls;
     int schedule_retune_status;
     bladerf_channel scheduled_channel;
@@ -190,6 +193,29 @@ static int mock_stream(struct bladerf_stream *stream,
     return state->stream_status;
 }
 
+static int mock_init_stream(struct bladerf_stream **stream,
+                            struct bladerf *dev,
+                            bladerf_stream_cb callback,
+                            void ***buffers,
+                            size_t num_buffers,
+                            bladerf_format format,
+                            size_t samples_per_buffer,
+                            size_t num_transfers,
+                            void *data)
+{
+    struct mock_state *state = dev->board_data;
+    (void)callback;
+    (void)buffers;
+    (void)num_buffers;
+    (void)format;
+    (void)samples_per_buffer;
+    (void)num_transfers;
+    (void)data;
+    state->init_stream_calls++;
+    *stream = state->init_stream_return;
+    return state->init_stream_status;
+}
+
 static int mock_trigger_write(struct bladerf *dev, bladerf_channel ch,
                               bladerf_trigger_signal signal, uint8_t value)
 {
@@ -288,6 +314,7 @@ static const struct board_fns mock_board = {
     .trigger_fire = mock_trigger_fire,
     .write_trigger = mock_trigger_write,
     .tx_config_change_begin = mock_tx_config_change_begin,
+    .init_stream = mock_init_stream,
     .sync_config = mock_sync_config,
     .stream = mock_stream,
     .schedule_retune = mock_schedule_retune,
@@ -692,6 +719,20 @@ int main(void)
            BLADERF_ERR_UNEXPECTED);
     assert(state.invalidate_calls == 39 && state.complete_calls == 28 &&
            state.stream_calls == 3);
+
+    struct bladerf_stream *stream_out = &async_stream;
+    state.init_stream_status = BLADERF_ERR_MEM;
+    assert(bladerf_init_stream(&stream_out, &dev, NULL, NULL,
+                               8, BLADERF_FORMAT_SC16_Q11,
+                               1024, 4, NULL) == BLADERF_ERR_MEM);
+    assert(stream_out == NULL && state.init_stream_calls == 1);
+
+    state.init_stream_status = 0;
+    state.init_stream_return = NULL;
+    assert(bladerf_init_stream(&stream_out, &dev, NULL, NULL,
+                               8, BLADERF_FORMAT_SC16_Q11,
+                               1024, 4, NULL) == BLADERF_ERR_UNEXPECTED);
+    assert(stream_out == NULL && state.init_stream_calls == 2);
 
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;

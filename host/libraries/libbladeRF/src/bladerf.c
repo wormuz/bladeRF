@@ -1720,8 +1720,10 @@ int bladerf_init_stream(struct bladerf_stream **stream,
                         void *data)
 {
     int status;
-    bladerf_sample_rate tx_samp_rate;
-    bladerf_sample_rate rx_samp_rate;
+    bladerf_sample_rate samp_rate;
+    CHECK_NULL(stream);
+    CHECK_NULL(dev);
+    *stream = NULL;
     MUTEX_LOCK(&dev->lock);
 
     if (format == BLADERF_FORMAT_SC8_Q7 || format == BLADERF_FORMAT_SC8_Q7_META) {
@@ -1742,17 +1744,25 @@ int bladerf_init_stream(struct bladerf_stream **stream,
                                      num_buffers, format, samples_per_buffer,
                                      num_transfers, data);
 
-    dev->board->get_sample_rate(dev, BLADERF_MODULE_TX, &tx_samp_rate);
-    if (tx_samp_rate) {
-        if (tx_samp_rate < num_transfers * samples_per_buffer / (*stream)->transfer_timeout) {
+    if (status == 0 && *stream == NULL) {
+        status = BLADERF_ERR_UNEXPECTED;
+    }
+
+    if (status == 0 && (*stream)->transfer_timeout != 0) {
+        const double required_rate =
+            ((double)num_transfers * (double)samples_per_buffer) /
+            (double)(*stream)->transfer_timeout;
+
+        if (dev->board->get_sample_rate(
+                dev, BLADERF_MODULE_TX, &samp_rate) == 0 &&
+            samp_rate != 0 && (double)samp_rate < required_rate) {
             log_warning("TX samples may be dropped.\n");
             log_warning("Condition to meet: samp_rate > num_transfers * samples_per_buffer / transfer_timeout\n");
         }
-    }
 
-    dev->board->get_sample_rate(dev, BLADERF_MODULE_RX, &rx_samp_rate);
-    if (rx_samp_rate) {
-        if (rx_samp_rate < num_transfers * samples_per_buffer / (*stream)->transfer_timeout) {
+        if (dev->board->get_sample_rate(
+                dev, BLADERF_MODULE_RX, &samp_rate) == 0 &&
+            samp_rate != 0 && (double)samp_rate < required_rate) {
             log_warning("RX samples may be dropped.\n");
             log_warning("Condition to meet: samp_rate > num_transfers * samples_per_buffer / transfer_timeout\n");
         }
