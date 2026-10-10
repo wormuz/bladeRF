@@ -58,7 +58,10 @@ enum entry_state {
 
 struct queue_entry {
     volatile enum entry_state state;
-    fastlock_profile *profile;
+    /* Snapshot the selected profile. `fastlocks_*[nios_profile]` is a shared
+     * upload slot and may be overwritten by a later scheduled request before
+     * this timer fires. */
+    fastlock_profile profile;
     uint64_t timestamp;
 };
 
@@ -111,7 +114,10 @@ static inline uint8_t enqueue_retune(struct queue *q,
         return QUEUE_FULL;
     }
 
-    q->entries[q->ins_idx].profile = p;
+    q->entries[q->ins_idx].profile = *p;
+    /* The source cache's residency belongs to the shared upload slot, not
+     * this snapshot. Re-establish RFFE residency for the copied settings. */
+    q->entries[q->ins_idx].profile.state = FASTLOCK_STATE_BBP;
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].timestamp = timestamp;
 
@@ -216,11 +222,11 @@ static inline void profile_load_scheduled(struct queue *q,
         e = peek_next_retune_offset(q, i);
         if( e != NULL ) {
             if (e->state == ENTRY_STATE_NEW) {
-                if ( !(used & (1 << e->profile->profile_num)) ) {
+                if (!(used & (1 << e->profile.profile_num))) {
                     /* Profile slot is available in RFFE, fill it */
-                    if (profile_load(module, e->profile)) {
+                    if (profile_load(module, &e->profile)) {
                         /* Mark profile slot used */
-                        used |= 1 << e->profile->profile_num;
+                        used |= 1 << e->profile.profile_num;
                     } else {
                         INCREMENT_ERROR_COUNT();
                     }
@@ -331,7 +337,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         case ENTRY_STATE_NEW:
 
             /* Load the fast lock profile into the RFFE */
-            if (!profile_load(module, e->profile)) {
+            if (!profile_load(module, &e->profile)) {
                 record_retune2_failure(module);
                 dequeue_retune(q, NULL);
                 break;
@@ -352,7 +358,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         case ENTRY_STATE_READY:
 
             /* Activate the fast lock profile for this retune */
-            if (!profile_activate(module, e->profile)) {
+            if (!profile_activate(module, &e->profile)) {
                 record_retune2_failure(module);
             }
 
