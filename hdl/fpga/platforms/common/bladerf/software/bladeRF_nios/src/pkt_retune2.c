@@ -486,6 +486,13 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * authorizes activation. */
             if (tamer_compare_fired(module)) {
                 e->state = ENTRY_STATE_READY;
+            } else if (tamer_clock_stalled(module)) {
+                /* A stopped timestamp clock cannot generate the compare
+                 * event. Fail the accepted request visibly instead of
+                 * pinning this module's queue in SCHEDULED forever. */
+                record_retune2_failure(module);
+                (void)tamer_cancel(module);
+                dequeue_retune(q, NULL);
             }
             break;
 

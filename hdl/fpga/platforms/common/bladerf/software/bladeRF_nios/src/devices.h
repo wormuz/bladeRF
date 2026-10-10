@@ -487,6 +487,9 @@ bool time_tamer_read(bladerf_module m, uint64_t *time);
 /** Return whether the FPGA comparator has fired for the current schedule. */
 bool tamer_compare_fired(bladerf_module m);
 
+/** Return whether the FPGA watchdog detected a stopped timestamp clock. */
+bool tamer_clock_stalled(bladerf_module m);
+
 /**
  * Reset one of the time tamer's timestamp counters to 0
  */

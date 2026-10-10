@@ -350,9 +350,34 @@ begin
 
         nop( clock, 1000 ) ;
 
+        -- Once a future compare has been accepted, loss of ts_clock must be
+        -- reported independently of that clock. It must not look like a
+        -- successful compare or leave the Nios queue pending forever.
+        write_time( clock, addr, din, write,
+                    x"0000_0000_0010_0000" ) ;
+        set_intr( clock, addr, din, write ) ;
+        nop(clock, 100);
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(3) = '1'
+            report "running timestamp clock did not acknowledge compare arm"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+        ts_clock_enable <= '0';
+        nop(clock, 5000);
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(5) = '1' and dout(4) = '0'
+            report "stopped timestamp clock was not reported as a failed compare"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+
         -- A compare request must not report arm success while its timestamp
         -- domain is stopped. The Nios watchdog consumes this bit as failure.
-        ts_clock_enable <= '0';
         write_time( clock, addr, din, write,
                     x"0000_0000_0010_0000" ) ;
         set_intr( clock, addr, din, write ) ;

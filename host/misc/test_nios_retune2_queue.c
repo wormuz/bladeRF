@@ -26,6 +26,7 @@ static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_read;
 static bool compare_fired;
+static bool simulated_tamer_clock_stalled;
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
@@ -83,6 +84,12 @@ bool tamer_compare_fired(bladerf_module module)
 {
     (void)module;
     return compare_fired;
+}
+
+bool tamer_clock_stalled(bladerf_module module)
+{
+    (void)module;
+    return simulated_tamer_clock_stalled;
 }
 
 bool tamer_cancel(bladerf_module module)
@@ -286,6 +293,43 @@ static int check_lost_irq_recovers_from_fpga_event(void)
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
         fputs("FPGA comparator event did not recover the lost IRQ\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_stopped_tamer_clock_fails_queued_retunes(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 4;
+    if (enqueue_retune(&rx_queue, &profile, 4, 100) != 1 ||
+        enqueue_retune(&tx_queue, &profile, 4, 100) != 1) {
+        fputs("failed to enqueue stopped-clock cases\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || tx_queue.count != 1) {
+        fputs("retune did not remain pending before clock-loss event\n",
+              stderr);
+        return 1;
+    }
+
+    /* The independent FPGA watchdog reports loss for each tamer. No compare
+     * event or ISR is delivered, and neither module may remain wedged. */
+    simulated_tamer_clock_stalled = true;
+    pkt_retune2_work();
+    simulated_tamer_clock_stalled = false;
+    if (rx_queue.count != 0 || tx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 0) {
+        fputs("stopped timestamp clock left RX/TX retune pending or valid\n",
+              stderr);
         return 1;
     }
     return 0;
@@ -553,6 +597,9 @@ int main(void)
         return 1;
     }
     if (check_lost_irq_recovers_from_fpga_event() != 0) {
+        return 1;
+    }
+    if (check_stopped_tamer_clock_fails_queued_retunes() != 0) {
         return 1;
     }
     if (check_immediate_upload_failure_preserves_profile() != 0) {

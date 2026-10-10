@@ -360,6 +360,12 @@ bool tamer_compare_fired(bladerf_module m)
     return false;
 }
 
+bool tamer_clock_stalled(bladerf_module m)
+{
+    (void)m;
+    return false;
+}
+
 void time_tamer_reset(bladerf_module m)
 {
     switch (m) {

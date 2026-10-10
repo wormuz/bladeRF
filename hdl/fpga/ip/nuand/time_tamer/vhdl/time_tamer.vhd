@@ -38,6 +38,11 @@ architecture arch of time_tamer is
     -- This is a watchdog only: timeout is reported as invalid data, never as
     -- a successful timestamp snapshot.
     constant SNAPSHOT_TIMEOUT_CYCLES : positive := 4095;
+    -- A scheduled compare must not leave Nios waiting forever if the sample
+    -- timestamp clock stops after the command was accepted. This watchdog
+    -- runs on the independent Avalon clock and reports clock loss as an
+    -- error; it never treats elapsed system-clock time as compare success.
+    constant TS_CLOCK_TIMEOUT_CYCLES : positive := 4095;
 
     signal ack          : std_logic ;
 
@@ -51,6 +56,11 @@ architecture arch of time_tamer is
     signal compare_fired : std_logic := '0';
     signal snapshot_wait_count : natural range 0 to SNAPSHOT_TIMEOUT_CYCLES := 0;
     signal snap_read_active : std_logic := '0';
+    signal ts_clock_heartbeat : std_logic := '0';
+    signal ts_clock_heartbeat_mm : std_logic;
+    signal ts_clock_heartbeat_seen : std_logic := '0';
+    signal ts_clock_wait_count : natural range 0 to TS_CLOCK_TIMEOUT_CYCLES := 0;
+    signal ts_clock_stalled : std_logic := '0';
 
     -- Initialised because the comparison below evaluates hold_time every
     -- cycle, including before the host has ever written one. Left
@@ -115,7 +125,55 @@ begin
     ts_sync_out <= '0' ;
 
     status <= (4 => compare_fired, 3 => schedule_ack, 2 => snapshot_invalid,
-               1 => cancel_toggle, 0 => status_past, others =>'0') ;
+               1 => cancel_toggle, 0 => status_past,
+               5 => ts_clock_stalled, others =>'0') ;
+
+    -- A heartbeat is generated in the timestamp domain and observed by a
+    -- bounded watchdog in the system/Avalon domain. Synchronizer reset is
+    -- tied to the system reset so loss of ts_clock is observable as silence.
+    U_sync_ts_heartbeat : entity work.synchronizer
+      generic map (
+        RESET_LEVEL => '0'
+      ) port map (
+        reset       => reset,
+        clock       => clock,
+        async       => ts_clock_heartbeat,
+        sync        => ts_clock_heartbeat_mm
+      ) ;
+
+    timestamp_clock_heartbeat : process(ts_clock, ts_reset)
+    begin
+        if ts_reset = '1' then
+            ts_clock_heartbeat <= '0';
+        elsif rising_edge(ts_clock) then
+            ts_clock_heartbeat <= not ts_clock_heartbeat;
+        end if;
+    end process;
+
+    timestamp_clock_watchdog : process(clock, reset)
+    begin
+        if reset = '1' then
+            ts_clock_heartbeat_seen <= '0';
+            ts_clock_wait_count <= 0;
+            ts_clock_stalled <= '0';
+        elsif rising_edge(clock) then
+            if (uaddr = 8 and write = '1' and unsigned(din) = 0) or
+               intr_set = '1' or intr_cancel = '1' then
+                ts_clock_wait_count <= 0;
+                ts_clock_stalled <= '0';
+                ts_clock_heartbeat_seen <= ts_clock_heartbeat_mm;
+            elsif ts_clock_heartbeat_mm /= ts_clock_heartbeat_seen then
+                ts_clock_heartbeat_seen <= ts_clock_heartbeat_mm;
+                ts_clock_wait_count <= 0;
+            elsif ts_clock_stalled = '0' then
+                if ts_clock_wait_count = TS_CLOCK_TIMEOUT_CYCLES then
+                    ts_clock_stalled <= '1';
+                else
+                    ts_clock_wait_count <= ts_clock_wait_count + 1;
+                end if;
+            end if;
+        end if;
+    end process;
 
     U_sync_ts_reset : entity work.synchronizer
       generic map (
