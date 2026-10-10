@@ -1255,6 +1255,23 @@ static void test_shared_invalidation_uses_certified_rx_channel(void)
         BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID;
     const uint32_t rx2_flags = rx1_flags |
         BLADERF_RF_EVENT_F_TRANSITION_RX2;
+    const uint32_t shared_reasons[] = {
+        BLADERF_RF_INVALIDATE_CLOCK,
+        BLADERF_RF_INVALIDATE_RFIC_REG,
+        BLADERF_RF_INVALIDATE_TX_FIR,
+        BLADERF_RF_INVALIDATE_SAMPLE_RATE,
+        BLADERF_RF_INVALIDATE_BANDWIDTH,
+        BLADERF_RF_INVALIDATE_LOOPBACK,
+        BLADERF_RF_INVALIDATE_RX_MUX,
+        BLADERF_RF_INVALIDATE_STREAM_CONFIG,
+        BLADERF_RF_INVALIDATE_TUNING_MODE,
+        BLADERF_RF_INVALIDATE_DEVICE_RESET,
+        BLADERF_RF_INVALIDATE_FPGA_RELOAD,
+        BLADERF_RF_INVALIDATE_WISHBONE,
+        BLADERF_RF_INVALIDATE_CONFIG_GPIO,
+        BLADERF_RF_INVALIDATE_FEATURE,
+        BLADERF_RF_INVALIDATE_BOOTLOADER,
+    };
 
     assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
     board_data.rf_transition_epoch_contract_enabled = true;
@@ -1264,17 +1281,15 @@ static void test_shared_invalidation_uses_certified_rx_channel(void)
                BLADERF_RF_INVALIDATE_CLOCK) == 0);
     board_data.rf_transition_current_channel_valid = true;
 
-    /* Global clock/RFIC/TX-FIR setters have no RX channel argument; they
-     * invalidate the epoch selected by its last explicit RX transition. */
-    assert(bladerf2_rx_invalidation_channel_event_flags(
-               &board_data, BLADERF_CHANNEL_RX(0),
-               BLADERF_RF_INVALIDATE_CLOCK) == rx2_flags);
-    assert(bladerf2_rx_invalidation_channel_event_flags(
-               &board_data, BLADERF_CHANNEL_RX(0),
-               BLADERF_RF_INVALIDATE_RFIC_REG) == rx2_flags);
-    assert(bladerf2_rx_invalidation_channel_event_flags(
-               &board_data, BLADERF_CHANNEL_RX(0),
-               BLADERF_RF_INVALIDATE_TX_FIR) == rx2_flags);
+    /* Shared setters (including TX sample-rate/bandwidth calls and global
+     * FPGA/RF controls) invalidate the epoch selected by the last explicit
+     * RX transition, even when their generic call site uses RX1 as a marker. */
+    for (size_t i = 0; i < sizeof(shared_reasons) / sizeof(shared_reasons[0]);
+         ++i) {
+        assert(bladerf2_rx_invalidation_channel_event_flags(
+                   &board_data, BLADERF_CHANNEL_RX(0), shared_reasons[i]) ==
+               rx2_flags);
+    }
 
     /* A channel-specific RX setter retains its own call-site channel. */
     assert(bladerf2_rx_invalidation_channel_event_flags(
@@ -1282,9 +1297,12 @@ static void test_shared_invalidation_uses_certified_rx_channel(void)
                BLADERF_RF_INVALIDATE_GAIN) == rx1_flags);
 
     board_data.rf_transition_epoch_contract_enabled = false;
-    assert(bladerf2_rx_invalidation_channel_event_flags(
-               &board_data, BLADERF_CHANNEL_RX(0),
-               BLADERF_RF_INVALIDATE_CLOCK) == 0);
+    for (size_t i = 0; i < sizeof(shared_reasons) / sizeof(shared_reasons[0]);
+         ++i) {
+        assert(bladerf2_rx_invalidation_channel_event_flags(
+                   &board_data, BLADERF_CHANNEL_RX(0), shared_reasons[i]) ==
+               0);
+    }
 
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }

@@ -659,12 +659,26 @@ uint32_t bladerf2_rx_invalidation_channel_event_flags(
     const uint32_t shared_reasons = BLADERF_RF_INVALIDATE_RFIC_REG |
                                     BLADERF_RF_INVALIDATE_TX_FIR |
                                     BLADERF_RF_INVALIDATE_CLOCK |
-                                    BLADERF_RF_INVALIDATE_MODULE;
+                                    BLADERF_RF_INVALIDATE_MODULE |
+                                    BLADERF_RF_INVALIDATE_SAMPLE_RATE |
+                                    BLADERF_RF_INVALIDATE_BANDWIDTH |
+                                    BLADERF_RF_INVALIDATE_LOOPBACK |
+                                    BLADERF_RF_INVALIDATE_RX_MUX |
+                                    BLADERF_RF_INVALIDATE_STREAM_CONFIG |
+                                    BLADERF_RF_INVALIDATE_TUNING_MODE |
+                                    BLADERF_RF_INVALIDATE_DEVICE_RESET |
+                                    BLADERF_RF_INVALIDATE_FPGA_RELOAD |
+                                    BLADERF_RF_INVALIDATE_WISHBONE |
+                                    BLADERF_RF_INVALIDATE_CONFIG_GPIO |
+                                    BLADERF_RF_INVALIDATE_FEATURE |
+                                    BLADERF_RF_INVALIDATE_BOOTLOADER;
 
     if ((reason & shared_reasons) != 0) {
         /* These operations affect a shared RX epoch. Use the channel that
          * established the certified epoch; if no epoch contract is active,
-         * leave provenance unspecified. */
+         * leave provenance unspecified. This includes TX-side sample-rate
+         * and bandwidth setters, which reprogram shared AD9361 RX clocks and
+         * filters even though the public call selected a TX channel. */
         return bladerf2_rx_current_transition_channel_event_flags(board_data);
     }
 
