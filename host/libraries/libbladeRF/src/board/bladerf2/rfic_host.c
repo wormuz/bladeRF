@@ -124,9 +124,13 @@ static int _rfic_host_initialize(struct bladerf *dev)
      * stash it for the SPI and GPIO accessors. It now builds its descriptors
      * from the init parameters, so the handle travels in the .extra field of
      * those parameters instead. The parameter block is shared, so this has to
-     * be filled in on every init rather than once at compile time. */
+     * be filled in on every init rather than once at compile time. Keep the
+     * per-device values in a local copy: the base parameter blocks are
+     * process-global, and mutating their .extra fields races when two radios
+     * initialize concurrently. */
     {
-        AD9361_InitParam *p = (AD9361_InitParam *)board_data->rfic_init_params;
+        AD9361_InitParam init_params =
+            *(AD9361_InitParam *)board_data->rfic_init_params;
 
         /* The no_os_axi_io accessors (FPGA AXI ad9361 core over NIOS) have no
          * context argument, so the handle travels through a file-static in
@@ -136,13 +140,13 @@ static int _rfic_host_initialize(struct bladerf *dev)
             bladerf2_axi_io_set_dev(dev);
         }
 
-        p->spi_param.extra = dev;
-        p->gpio_resetb.extra = dev;
-        p->gpio_sync.extra = dev;
-        p->gpio_cal_sw1.extra = dev;
-        p->gpio_cal_sw2.extra = dev;
+        init_params.spi_param.extra = dev;
+        init_params.gpio_resetb.extra = dev;
+        init_params.gpio_sync.extra = dev;
+        init_params.gpio_cal_sw1.extra = dev;
+        init_params.gpio_cal_sw2.extra = dev;
 
-        CHECK_AD936X(ad9361_init(&phy, p));
+        CHECK_AD936X(ad9361_init(&phy, &init_params));
     }
 
     if (NULL == phy || NULL == phy->pdata) {
