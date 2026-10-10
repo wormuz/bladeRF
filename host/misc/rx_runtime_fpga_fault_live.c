@@ -6,7 +6,7 @@
  * ENABLE_TEST_RX_TRANSITION_STALL_INJECTION=ON and run with
  * BLADERF_TEST_RX_TRANSITION_STALL=RUNTIME_FPGA_FAULT, or use the
  * RUNTIME_FPGA_STATUS_READ_FAILURE / RUNTIME_FPGA_STATUS_VERSION /
- * RUNTIME_FPGA_RX_EPOCH_LOST, or
+ * RUNTIME_FPGA_RX_EPOCH_LOST / RUNTIME_RX_EPOCH_GATE_ERROR, or
  * RUNTIME_RFIC_* and RUNTIME_RX_CHANNEL_* values to verify runtime
  * control-plane loss handling. */
 #include <libbladeRF.h>
@@ -135,6 +135,12 @@ int main(int argc, char **argv)
         expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
         expected_status_mask = (1u << 16) | (1u << 11) | (1u << 8);
         expected_status_value = (1u << 16) | (1u << 11);
+        expected_error = BLADERF_ERR_UNEXPECTED;
+    } else if (strcmp(fault_mode,
+                      "RUNTIME_RX_EPOCH_GATE_ERROR") == 0) {
+        expected_reason = BLADERF_RF_INVALIDATE_FPGA_RX_FAULT;
+        expected_status_mask = 0x00f00000u;
+        expected_status_value = 0x00400000u;
         expected_error = BLADERF_ERR_UNEXPECTED;
     } else if (strcmp(fault_mode, "RUNTIME_FPGA_FAULT") != 0) {
         fprintf(stderr, "unknown monitor injection mode: %s\n", fault_mode);

@@ -488,6 +488,50 @@ begin
             report "ACTIVE_NEW ignored a superseding ARM or exposed IQ"
             severity failure;
 
+        -- Recover the replacement epoch, then inject a one-lane valid gap
+        -- after RX_X2 has opened. A partial pair must close the gate and
+        -- publish ERROR instead of passing one channel as certified IQ.
+        wait until falling_edge(clock);
+        arm <= '0';
+        complete <= '1';
+        samples_in(0).data_v <= '0';
+        samples_in(1).data_v <= '0';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        complete <= '0';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        samples_in(0).data_v <= '1';
+        samples_in(1).data_v <= '1';
+        samples_in(0).data_i <= to_signed(1111, 16);
+        samples_in(1).data_i <= to_signed(2222, 16);
+        timestamp <= to_unsigned(501, 64);
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert start_event = '1' and
+               out_samples(0).data_i = to_signed(1111, 16) and
+               out_samples(1).data_i = to_signed(2222, 16)
+            report "RX_X2 recovery did not admit a complete sample tuple"
+            severity failure;
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        samples_in(0).data_v <= '0';
+        samples_in(1).data_v <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16) and
+               discard_active = '1'
+            report "RX_X2 partial sample tuple was forwarded"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "0100" and
+               out_samples(0).data_i = to_signed(0, 16) and
+               out_samples(1).data_i = to_signed(0, 16)
+            report "RX_X2 lane-valid mismatch did not remain fail-closed"
+            severity failure;
+
         report "rx_epoch_gate_tb: PASS" severity note;
         stop;
         wait;

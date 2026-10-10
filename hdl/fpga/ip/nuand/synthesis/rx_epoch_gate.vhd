@@ -102,6 +102,9 @@ begin
     gate : process(clock, reset)
         variable any_enabled : std_logic;
         variable all_enabled_valid : std_logic;
+        variable enabled_lane_count : natural;
+        variable valid_enabled_lane_count : natural;
+        variable partial_enabled_valid : boolean;
     begin
         if( reset = '1' ) then
             state               <= STATE_ACTIVE;
@@ -124,15 +127,24 @@ begin
             -- ADC lane. RX_X1 enables one lane; RX_X2 requires both lanes.
             any_enabled := '0';
             all_enabled_valid := '1';
+            enabled_lane_count := 0;
+            valid_enabled_lane_count := 0;
             for i in in_sample_controls'range loop
                 if( in_sample_controls(i).enable = '1' ) then
                     any_enabled := '1';
+                    enabled_lane_count := enabled_lane_count + 1;
                     if( in_samples(i).data_v /= '1' ) then
                         all_enabled_valid := '0';
+                    else
+                        valid_enabled_lane_count :=
+                            valid_enabled_lane_count + 1;
                     end if;
                 end if;
             end loop;
             all_enabled_valid := all_enabled_valid and any_enabled;
+            partial_enabled_valid := enabled_lane_count > 1 and
+                valid_enabled_lane_count > 0 and
+                valid_enabled_lane_count < enabled_lane_count;
 
             case state is
                 when STATE_ACTIVE =>
@@ -164,6 +176,21 @@ begin
                                 data_v => in_samples(i).data_v
                             );
                         end loop;
+                    elsif( partial_enabled_valid ) then
+                        -- RX_X2 is one sample tuple, not two independent
+                        -- streams. Once active, a one-lane valid gap means
+                        -- the pair can no longer be proven aligned. Fence
+                        -- both lanes and publish ERROR instead of forwarding
+                        -- a partial tuple as certified IQ.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
+                        state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
                         out_samples         <= in_samples;
@@ -269,6 +296,18 @@ begin
                         end loop;
                         active_epoch_id <= epoch_id_in;
                         state <= STATE_PENDING;
+                    elsif( partial_enabled_valid ) then
+                        -- Keep RX_X2 fail-closed through the certificate
+                        -- handoff cycle as well as steady ACTIVE operation.
+                        out_sample_controls <= in_sample_controls;
+                        for i in in_samples'range loop
+                            out_samples(i) <= (
+                                data_i => (others => '0'),
+                                data_q => (others => '0'),
+                                data_v => in_samples(i).data_v
+                            );
+                        end loop;
+                        state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
                         out_samples         <= in_samples;

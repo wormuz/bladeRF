@@ -1019,6 +1019,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint32_t tx_channel_state_generation = 0;
         uint8_t epoch_id = 0;
         uint32_t rf_link_status = 0;
+        uint32_t rx_epoch_status_word = 0;
         uint32_t rx_fault_causes = 0;
         bool rx_fault_causes_valid = false;
         bool rx_fault_causes_read_attempted = false;
@@ -1031,6 +1032,9 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t expected_rx_channel_mask = 0;
         bool expected_rx_channel_mask_valid = false;
         int rx_channel_status = 0;
+        int rx_epoch_status_status = 0;
+        uint8_t rx_epoch_gate_state = 0;
+        uint8_t rx_epoch_gate_id = 0;
         uint64_t rx_loss_count = 0;
         uint64_t tx_loss_count = 0;
         uint32_t tx_retune2_failure_count = 0;
@@ -1134,6 +1138,13 @@ static void *rx_fault_monitor_task(void *arg)
                 }
                 if (status != 0 && should_poll_tx_retune) {
                     tx_retune2_status = status;
+                }
+                if (status == 0 && should_poll) {
+                    _rx_fault_monitor_stage(board_data,
+                                            "RX epoch gate status");
+                    rx_epoch_status_status = _read_rx_epoch_state(
+                        dev, &rx_epoch_status_word, &rx_epoch_gate_state,
+                        &rx_epoch_gate_id);
                 }
                 if (status == 0 && should_poll &&
                     dev->board->get_loss_event_count != NULL) {
@@ -2165,6 +2176,38 @@ static void *rx_fault_monitor_task(void *arg)
         if (!bladerf2_rf_link_rx_epoch_valid(rf_link_status)) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id, rf_link_status,
+                BLADERF_RF_INVALIDATE_FPGA_RX_FAULT,
+                BLADERF_ERR_UNEXPECTED);
+            continue;
+        }
+        /* The RF-link epoch only proves that the USB/FIFO link consumed its
+         * START toggle. It does not prove the separate RF sample gate still
+         * owns the certified epoch. In particular, RX_X2 can fault after
+         * opening if one enabled lane loses data_v; surface that state to
+         * the same durable invalidation path used by transport/RFIC faults. */
+        if (rx_epoch_status_status != 0) {
+            _invalidate_faulted_rx_epoch(
+                dev, transaction_id, epoch_id, rf_link_status,
+                BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE,
+                rx_epoch_status_status);
+            continue;
+        }
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+        if (test_mode != NULL &&
+            strcmp(test_mode, "RUNTIME_RX_EPOCH_GATE_ERROR") == 0) {
+            rx_epoch_gate_state = NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR;
+            rx_epoch_gate_id = epoch_id;
+            rx_epoch_status_word =
+                ((uint32_t)rx_epoch_gate_id <<
+                 NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) |
+                ((uint32_t)rx_epoch_gate_state <<
+                 NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT);
+        }
+#endif
+        if (rx_epoch_gate_state != NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE ||
+            rx_epoch_gate_id != epoch_id) {
+            _invalidate_faulted_rx_epoch(
+                dev, transaction_id, epoch_id, rx_epoch_status_word,
                 BLADERF_RF_INVALIDATE_FPGA_RX_FAULT,
                 BLADERF_ERR_UNEXPECTED);
             continue;
