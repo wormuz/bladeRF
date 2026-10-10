@@ -916,10 +916,16 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     /* START is shared. Require the newly enabled direction and any already
      * active opposite direction to consume this generation before either
      * stream is reported valid. */
-    uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch) ? (1u << 9) : (1u << 8);
+    uint32_t const applied_bit = BLADERF_CHANNEL_IS_TX(ch)
+        ? BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT
+        : BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT;
+    uint32_t const active_bit = BLADERF_CHANNEL_IS_TX(ch)
+        ? BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE
+        : BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE;
     uint32_t const fault_bit = BLADERF_CHANNEL_IS_TX(ch)
         ? RF_LINK_STATUS_TX_FAULT : RF_LINK_STATUS_RX_FAULT;
     uint32_t required_ack_mask = applied_bit;
+    uint32_t required_active_mask = active_bit;
     uint32_t required_fault_mask = fault_bit;
     uint8_t entry_epoch_count = 0;
     bool strict_epoch = false;
@@ -939,11 +945,13 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
     *acknowledged_status = 0;
 
     if (BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_link_dir_on[0]) {
-        required_ack_mask |= 1u << 8;
+        required_ack_mask |= BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT;
+        required_active_mask |= BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE;
         required_fault_mask |= RF_LINK_STATUS_RX_FAULT;
     } else if (!BLADERF_CHANNEL_IS_TX(ch) &&
                board_data->rf_link_dir_on[1]) {
-        required_ack_mask |= 1u << 9;
+        required_ack_mask |= BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT;
+        required_active_mask |= BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE;
         required_fault_mask |= RF_LINK_STATUS_TX_FAULT;
     }
 
@@ -1141,7 +1149,8 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
         if (bladerf2_rf_link_epoch_ack_valid(
                 entry_status, st, RF_LINK_STATUS_VERSION_MASK,
                 RF_LINK_STATUS_VERSION_2, 0x0ff00000u,
-                required_ack_mask, required_fault_mask) &&
+                required_ack_mask, required_active_mask,
+                required_fault_mask) &&
             previous_snapshot_stable) {
             log_verbose("%s: epoch applied after %u polls, status 0x%08x "
                         "(rx_abort=%u rx_fault=%u rx_prev_fault=%u "

@@ -79,3 +79,22 @@ fault, stream fault, shared RX/TX START, and confirmed TX stop revoke it. The
 shared START and stop paths publish `TX_EPOCH_INVALID` so wrappers observe the
 same fence. A policy regression source covers the uncertified case. Source-only;
 no build or test has run.
+
+## Follow-up: START acknowledgement must include active directions
+
+A further RX+TX startup trace found that `announce_rf_link_epoch()` accepted a
+new per-direction ACK/current bit and a stable fault snapshot, but did not
+require the corresponding FPGA `link_active` status bit. The HDL exports
+`link_active` independently from epoch-current; the signals cross into
+`sys_clock` through separate synchronizers. Host could therefore publish
+`TX_LINK_VALID` and reopen producer admission while the FPGA still reported
+the TX link inactive. Shared RX/TX START had the same gap for the already
+active direction, and RX START could return before its active status was
+visible.
+
+The START policy now requires the active bit for every direction whose epoch
+ACK is required. It continues polling while the ACK has arrived but the active
+state has not, and fails under the existing watchdog if the link never becomes
+active. Focused policy assertions cover missing TX active, missing RX active,
+and the fully active shared epoch. These source regressions have not been run;
+no build, simulation, synthesis, or hardware operation was performed.

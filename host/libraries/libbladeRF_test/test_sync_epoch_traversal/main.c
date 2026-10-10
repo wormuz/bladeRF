@@ -148,23 +148,30 @@ static void test_rf_link_status_v2_epoch_policy(void)
 {
     const uint32_t version = BLADERF2_RF_LINK_STATUS_VERSION_2;
     const uint32_t entry = version | (7u << 20);
+    const uint32_t rx_active = 1u << 16;
     const uint32_t acknowledged = version | (8u << 20) | (1u << 8) |
+                                  rx_active |
                                   BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT;
 
     assert(bladerf2_rf_link_epoch_ack_valid(
         entry, acknowledged, BLADERF2_RF_LINK_STATUS_VERSION_MASK,
         BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
-        1u << 14));
+        rx_active, 1u << 14));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         0x10000000u | (7u << 20), acknowledged,
         BLADERF2_RF_LINK_STATUS_VERSION_MASK,
         BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
-        1u << 14));
+        rx_active, 1u << 14));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         entry, acknowledged | (1u << 14),
         BLADERF2_RF_LINK_STATUS_VERSION_MASK,
         BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
-        1u << 14));
+        rx_active, 1u << 14));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        entry, acknowledged & ~rx_active,
+        BLADERF2_RF_LINK_STATUS_VERSION_MASK,
+        BLADERF2_RF_LINK_STATUS_VERSION_2, 0x0ff00000u, 1u << 8,
+        rx_active, 1u << 14));
     assert(bladerf2_rf_link_epoch_id(acknowledged, 0) == 8);
     assert(bladerf2_rf_link_epoch_id(0x10000000u | (9u << 20), 3) == 3);
     assert(!bladerf2_rf_link_previous_fault_snapshot_stable(

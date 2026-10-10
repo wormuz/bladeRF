@@ -142,51 +142,68 @@ int main(void)
     const uint32_t rf_link_version = 0x10000000u;
     const uint32_t rf_link_epoch_count_mask = 0x0ff00000u;
     const uint32_t rf_link_tx_ack = 1u << 9;
+    const uint32_t rf_link_tx_active = 1u << 0;
     const uint32_t rf_link_tx_fault = 1u << 15;
     const uint32_t rf_link_entry = rf_link_version | (7u << 20) |
                                    rf_link_tx_ack;
     const uint32_t rf_link_new_ack = rf_link_version | (8u << 20) |
-                                     rf_link_tx_ack;
+                                     rf_link_tx_ack | rf_link_tx_active;
     assert(bladerf2_rf_link_epoch_ack_valid(
         rf_link_entry, rf_link_new_ack, rf_link_version_mask,
         rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
-        rf_link_tx_fault));
+        rf_link_tx_active, rf_link_tx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_entry, rf_link_entry, rf_link_version_mask,
         rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
-        rf_link_tx_fault));
+        rf_link_tx_active, rf_link_tx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_entry, rf_link_version | (8u << 20), rf_link_version_mask,
         rf_link_version, rf_link_epoch_count_mask, rf_link_tx_ack,
-        rf_link_tx_fault));
+        rf_link_tx_active, rf_link_tx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_entry, rf_link_version | (8u << 20) | rf_link_tx_ack,
+        rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack, rf_link_tx_active, rf_link_tx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_entry, rf_link_new_ack | rf_link_tx_fault,
         rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
-        rf_link_tx_ack, rf_link_tx_fault));
+        rf_link_tx_ack, rf_link_tx_active, rf_link_tx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_entry, 0x20000000u | (8u << 20) | rf_link_tx_ack,
         rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
-        rf_link_tx_ack, rf_link_tx_fault));
+        rf_link_tx_ack, rf_link_tx_active, rf_link_tx_fault));
     const uint32_t rf_link_rx_ack = 1u << 8;
+    const uint32_t rf_link_rx_active = 1u << 16;
     const uint32_t rf_link_rx_fault = 1u << 14;
     const uint32_t rf_link_both_ack = rf_link_version | (9u << 20) |
-                                     rf_link_tx_ack | rf_link_rx_ack;
+                                     rf_link_tx_ack | rf_link_rx_ack |
+                                     rf_link_tx_active | rf_link_rx_active;
     assert(bladerf2_rf_link_epoch_ack_valid(
         rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
         rf_link_both_ack, rf_link_version_mask, rf_link_version,
         rf_link_epoch_count_mask, rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_active | rf_link_rx_active,
         rf_link_tx_fault | rf_link_rx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
         rf_link_version | (9u << 20) | rf_link_tx_ack,
         rf_link_version_mask, rf_link_version, rf_link_epoch_count_mask,
         rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_active | rf_link_rx_active,
+        rf_link_tx_fault | rf_link_rx_fault));
+    assert(!bladerf2_rf_link_epoch_ack_valid(
+        rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_both_ack & ~rf_link_rx_active, rf_link_version_mask,
+        rf_link_version, rf_link_epoch_count_mask,
+        rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_active | rf_link_rx_active,
         rf_link_tx_fault | rf_link_rx_fault));
     assert(!bladerf2_rf_link_epoch_ack_valid(
         rf_link_version | (8u << 20) | rf_link_tx_ack | rf_link_rx_ack,
         rf_link_both_ack | rf_link_rx_fault, rf_link_version_mask,
         rf_link_version, rf_link_epoch_count_mask,
         rf_link_tx_ack | rf_link_rx_ack,
+        rf_link_tx_active | rf_link_rx_active,
         rf_link_tx_fault | rf_link_rx_fault));
     assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
     assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);

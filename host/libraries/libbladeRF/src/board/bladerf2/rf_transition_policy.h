@@ -59,7 +59,9 @@ bladerf2_rx_invalidation_policy(bladerf_channel channel,
 #define BLADERF2_RF_LINK_STATUS_VERSION_2    0x20000000u
 #define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)
 #define BLADERF2_RF_LINK_STATUS_TX_PREVIOUS_FAULT (1u << 6)
+#define BLADERF2_RF_LINK_STATUS_RX_LINK_ACTIVE   (1u << 16)
 #define BLADERF2_RF_LINK_STATUS_TX_LINK_ACTIVE   (1u << 0)
+#define BLADERF2_RF_LINK_STATUS_RX_EPOCH_CURRENT (1u << 8)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_CURRENT (1u << 9)
 #define BLADERF2_RF_LINK_STATUS_TX_EPOCH_VALID   (1u << 12)
 #define BLADERF2_AD9361_VCO_LOCK_BIT 0x02u
@@ -367,18 +369,20 @@ static inline bool bladerf2_rf_event_cursor_is_valid(uint64_t after_sequence,
 }
 
 /* Active directions ACK a shared START as one generation. Accept it only
- * when the generation advanced, every required direction consumed it, and
- * none of their sticky fault bits is set. */
+ * when the generation advanced, every required direction consumed it and is
+ * active, and none of their sticky fault bits is set. */
 static inline bool bladerf2_rf_link_epoch_ack_valid(
     uint32_t entry_status, uint32_t observed_status,
     uint32_t version_mask, uint32_t version_value,
-    uint32_t epoch_count_mask, uint32_t applied_bit, uint32_t fault_bit)
+    uint32_t epoch_count_mask, uint32_t applied_bit,
+    uint32_t active_bit, uint32_t fault_bit)
 {
     return (entry_status & version_mask) == version_value &&
            (observed_status & version_mask) == version_value &&
            (entry_status & epoch_count_mask) !=
                (observed_status & epoch_count_mask) &&
            (observed_status & applied_bit) == applied_bit &&
+           (observed_status & active_bit) == active_bit &&
            (observed_status & fault_bit) == 0;
 }
 
