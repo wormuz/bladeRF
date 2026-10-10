@@ -274,6 +274,10 @@ struct bladerf_sync {
     uint64_t rx_epoch_certified_generation;
     struct bladerf *dev;
     bool initialized;
+    bool lock_initialized;
+    bool buf_lock_initialized;
+    bool buf_cond_initialized;
+    bool rx_epoch_lock_initialized;
     sync_state state;
     struct buffer_mgmt buf_mgmt;
     struct stream_config stream_config;

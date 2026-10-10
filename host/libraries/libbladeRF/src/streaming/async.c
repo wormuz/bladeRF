@@ -22,6 +22,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <string.h>
 
 #include "log.h"
 
@@ -31,6 +32,7 @@
 #include "board/board.h"
 #include "helpers/timeout.h"
 #include "helpers/have_cap.h"
+#include "helpers/version.h"
 
 /* Keep async RX discontinuities in the device-wide RF event history, just as
  * sync RX does. The backend invokes this only for a short RX transfer or a
@@ -241,8 +243,6 @@ void async_notify_tx_transport_failure(struct bladerf_stream *stream,
 
 /* Reserve part of the budget for other users of the bus: the limit is
  * per-host, not per-device, and a bladeRF is rarely alone on it. */
-#define USBFS_BUDGET_FRACTION 0.9
-
 /**
  * Verify that a stream configuration fits in the kernel's usbfs memory
  * budget. Each in-flight transfer is pinned for its lifetime, so a stream
@@ -266,8 +266,16 @@ static int usbfs_budget_check(size_t num_transfers, size_t buffer_size_bytes)
     }
 #endif
 
+    if (buffer_size_bytes == 0 ||
+        num_transfers > SIZE_MAX / buffer_size_bytes) {
+        return BLADERF_ERR_INVAL;
+    }
     needed = num_transfers * buffer_size_bytes;
-    budget = (size_t)(limit_mb * 1024 * 1024 * USBFS_BUDGET_FRACTION);
+
+    const size_t bytes_per_mb = 1024u * 1024u;
+    const size_t limit_bytes = limit_mb > SIZE_MAX / bytes_per_mb
+        ? SIZE_MAX : limit_mb * bytes_per_mb;
+    budget = limit_bytes - limit_bytes / 10;
 
     if (needed > budget) {
         size_t max_transfers = budget / buffer_size_bytes;
@@ -295,16 +303,67 @@ int async_init_stream(struct bladerf_stream **stream,
                       size_t num_transfers,
                       void *user_data)
 {
-    struct bladerf_stream *lstream;
+    struct bladerf_stream *lstream = NULL;
     size_t buffer_size_bytes;
+    size_t bytes_per_sample;
     size_t gpif_buffer_size = USB_MSG_SIZE_SS;
     struct bladerf_version fx3_version = FW_LARGER_BUFFER_VERSION;
     size_t i;
     int status = 0;
+    bool mutex_initialized = false;
+    bool can_submit_initialized = false;
+    bool stream_started_initialized = false;
 
-    if (num_transfers > num_buffers) {
-        log_error("num_transfers must be <= num_buffers\n");
+    if (stream == NULL || dev == NULL || callback == NULL ||
+        num_buffers == 0 || num_transfers == 0 ||
+        num_transfers > num_buffers) {
         return BLADERF_ERR_INVAL;
+    }
+    *stream = NULL;
+    if (buffers != NULL) {
+        *buffers = NULL;
+    }
+
+    switch (format) {
+        case BLADERF_FORMAT_SC8_Q7:
+        case BLADERF_FORMAT_SC8_Q7_META:
+            bytes_per_sample = 2;
+            break;
+        case BLADERF_FORMAT_SC16_Q11:
+        case BLADERF_FORMAT_SC16_Q11_META:
+        case BLADERF_FORMAT_PACKET_META:
+            bytes_per_sample = 4;
+            break;
+        case BLADERF_FORMAT_SC16_Q11_PACKED:
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
+    if (samples_per_buffer == 0 ||
+        samples_per_buffer > SIZE_MAX / bytes_per_sample) {
+        return BLADERF_ERR_INVAL;
+    }
+    buffer_size_bytes = samples_per_buffer * bytes_per_sample;
+
+    if (dev->board == NULL || dev->board->get_fw_version == NULL ||
+        dev->board->get_capabilities == NULL || dev->backend == NULL ||
+        dev->backend->init_stream == NULL ||
+        dev->backend->deinit_stream == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    /* Reject image/firmware formats before allocating the stream object and
+     * its synchronization primitives. Every error path below then has one
+     * unambiguous ownership cleanup. */
+    if (format == BLADERF_FORMAT_PACKET_META &&
+        (!have_cap_dev(dev, BLADERF_CAP_FW_SHORT_PACKET) ||
+         !have_cap_dev(dev, BLADERF_CAP_FPGA_PACKET_META))) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if ((format == BLADERF_FORMAT_SC8_Q7 ||
+         format == BLADERF_FORMAT_SC8_Q7_META) &&
+        !have_cap_dev(dev, BLADERF_CAP_FPGA_8BIT_SAMPLES)) {
+        return BLADERF_ERR_UNSUPPORTED;
     }
 
     status = dev->board->get_fw_version(dev, &fx3_version);
@@ -314,8 +373,7 @@ int async_init_stream(struct bladerf_stream **stream,
         return status;
     }
 
-    if (fx3_version.major <= FW_LARGER_BUFFER_VERSION.major &&
-        fx3_version.minor < FW_LARGER_BUFFER_VERSION.minor) {
+    if (version_less_than(&fx3_version, &FW_LARGER_BUFFER_VERSION)) {
         gpif_buffer_size = USB_MSG_SIZE_SS_LEGACY;
     }
 
@@ -323,7 +381,6 @@ int async_init_stream(struct bladerf_stream **stream,
         fx3_version.major, fx3_version.minor, fx3_version.patch,
         gpif_buffer_size, gpif_buffer_size == USB_MSG_SIZE_SS_LEGACY ? " (legacy)" : "");
 
-    buffer_size_bytes = samples_to_bytes(format, samples_per_buffer);
     if (buffer_size_bytes < gpif_buffer_size || buffer_size_bytes % gpif_buffer_size != 0) {
         log_error("Samples_per_buffer must be multiples of %u\n",
                   bytes_to_samples(format, gpif_buffer_size));
@@ -351,17 +408,21 @@ int async_init_stream(struct bladerf_stream **stream,
         return BLADERF_ERR_MEM;
     }
 
+    memset(lstream, 0, sizeof(*lstream));
     MUTEX_INIT(&lstream->lock);
+    mutex_initialized = true;
 
     if (COND_INIT(&lstream->can_submit_buffer) != THREAD_SUCCESS) {
-        free(lstream);
-        return BLADERF_ERR_UNEXPECTED;
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
     }
+    can_submit_initialized = true;
 
     if (COND_INIT(&lstream->stream_started) != THREAD_SUCCESS) {
-        free(lstream);
-        return BLADERF_ERR_UNEXPECTED;
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
     }
+    stream_started_initialized = true;
 
     lstream->dev = dev;
     lstream->error_code = 0;
@@ -373,28 +434,6 @@ int async_init_stream(struct bladerf_stream **stream,
     lstream->cb = callback;
     lstream->user_data = user_data;
     lstream->buffers = NULL;
-
-    if (format == BLADERF_FORMAT_PACKET_META) {
-        if (!have_cap_dev(dev, BLADERF_CAP_FW_SHORT_PACKET)) {
-            log_error("Firmware does not support short packets. "
-                    "Upgrade to at least firmware version 2.4.0.");
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-
-        if (!have_cap_dev(dev, BLADERF_CAP_FPGA_PACKET_META)) {
-            log_error("FPGA does not support packet meta format. "
-                    "Upgrade to at least FPGA version 0.12.0 .");
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-    }
-
-    if (format == BLADERF_FORMAT_SC8_Q7 || format == BLADERF_FORMAT_SC8_Q7_META) {
-        if (!have_cap_dev(dev, BLADERF_CAP_FPGA_8BIT_SAMPLES)) {
-            log_error("FPGA does not support 8bit mode. "
-                      "Upgrade to at least FPGA version 0.15.0.\n");
-            return BLADERF_ERR_UNSUPPORTED;
-        }
-    }
 
     if (!status) {
         lstream->buffers = calloc(num_buffers, sizeof(lstream->buffers[0]));
@@ -410,25 +449,14 @@ int async_init_stream(struct bladerf_stream **stream,
         }
     }
 
-    /* Clean up everything we've allocated if we hit any errors */
-    if (status) {
-
-        if (lstream->buffers) {
-            for (i = 0; i < num_buffers; i++) {
-                free(lstream->buffers[i]);
-            }
-
-            free(lstream->buffers);
-        }
-
-        free(lstream);
+    if (status != 0) {
+        goto cleanup;
     } else {
         /* Perform any backend-specific stream initialization */
         status = dev->backend->init_stream(lstream, num_transfers);
 
-        if (status < 0) {
+        if (status != 0) {
             async_deinit_stream(lstream);
-            *stream = NULL;
         } else {
             /* Update the caller's pointers */
             *stream = lstream;
@@ -439,6 +467,27 @@ int async_init_stream(struct bladerf_stream **stream,
         }
     }
 
+    return status;
+
+cleanup:
+    if (lstream != NULL) {
+        if (lstream->buffers != NULL) {
+            for (i = 0; i < num_buffers; ++i) {
+                free(lstream->buffers[i]);
+            }
+            free(lstream->buffers);
+        }
+        if (stream_started_initialized) {
+            COND_DESTROY(&lstream->stream_started);
+        }
+        if (can_submit_initialized) {
+            COND_DESTROY(&lstream->can_submit_buffer);
+        }
+        if (mutex_initialized) {
+            MUTEX_DESTROY(&lstream->lock);
+        }
+        free(lstream);
+    }
     return status;
 }
 
@@ -572,6 +621,10 @@ void async_deinit_stream(struct bladerf_stream *stream)
 
     /* Free up the backend data */
     stream->dev->backend->deinit_stream(stream);
+
+    COND_DESTROY(&stream->stream_started);
+    COND_DESTROY(&stream->can_submit_buffer);
+    MUTEX_DESTROY(&stream->lock);
 
     /* Free up the buffers */
     for (i = 0; i < stream->num_buffers; i++) {

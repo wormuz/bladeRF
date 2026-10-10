@@ -734,6 +734,20 @@ int main(void)
                                1024, 4, NULL) == BLADERF_ERR_UNEXPECTED);
     assert(stream_out == NULL && state.init_stream_calls == 2);
 
+    void *dummy_buffer = NULL;
+    void **stream_buffers = &dummy_buffer;
+    assert(bladerf_init_stream(&stream_out, &dev, NULL, &stream_buffers,
+                               0, BLADERF_FORMAT_SC16_Q11,
+                               1024, 4, NULL) == BLADERF_ERR_INVAL);
+    assert(stream_out == NULL && stream_buffers == NULL &&
+           state.init_stream_calls == 2);
+    stream_buffers = &dummy_buffer;
+    assert(bladerf_init_stream(&stream_out, &dev, NULL, &stream_buffers,
+                               8, BLADERF_FORMAT_SC16_Q11,
+                               1024, 0, NULL) == BLADERF_ERR_INVAL);
+    assert(stream_out == NULL && stream_buffers == NULL &&
+           state.init_stream_calls == 2);
+
     assert(MUTEX_DESTROY(&dev.lock) == 0);
     return 0;
 }

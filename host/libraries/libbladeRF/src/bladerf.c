@@ -1724,6 +1724,13 @@ int bladerf_init_stream(struct bladerf_stream **stream,
     CHECK_NULL(stream);
     CHECK_NULL(dev);
     *stream = NULL;
+    if (buffers != NULL) {
+        *buffers = NULL;
+    }
+    if (num_buffers == 0 || num_transfers == 0 ||
+        num_transfers > num_buffers || samples_per_buffer == 0) {
+        return BLADERF_ERR_INVAL;
+    }
     MUTEX_LOCK(&dev->lock);
 
     if (format == BLADERF_FORMAT_SC8_Q7 || format == BLADERF_FORMAT_SC8_Q7_META) {

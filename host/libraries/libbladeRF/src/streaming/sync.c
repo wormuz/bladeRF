@@ -41,6 +41,7 @@
 #include "helpers/timeout.h"
 #include "helpers/wallclock.h"
 #include "helpers/have_cap.h"
+#include "helpers/version.h"
 #include "backend/usb/usb.h"
 
 #ifdef ENABLE_LIBBLADERF_SYNC_LOG_VERBOSE
@@ -198,8 +199,23 @@ int sync_init(struct bladerf_sync *sync,
     size_t valid_buffer_size = gpif_buffer_size;
     struct bladerf_version fx3_version = FW_LARGER_BUFFER_VERSION;
 
-    if (num_transfers >= num_buffers) {
+    if (dev == NULL || num_buffers == 0 || num_transfers == 0 ||
+        num_transfers >= num_buffers || buffer_size == 0 ||
+        buffer_size > UINT_MAX || buffer_size > SIZE_MAX / 4 ||
+        num_buffers > SIZE_MAX / sizeof(size_t)) {
         return BLADERF_ERR_INVAL;
+    }
+
+    switch (format) {
+        case BLADERF_FORMAT_SC8_Q7:
+        case BLADERF_FORMAT_SC8_Q7_META:
+        case BLADERF_FORMAT_SC16_Q11:
+        case BLADERF_FORMAT_SC16_Q11_META:
+        case BLADERF_FORMAT_SC16_Q11_PACKED:
+        case BLADERF_FORMAT_PACKET_META:
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
     }
 
     if (format == BLADERF_FORMAT_PACKET_META) {
@@ -231,8 +247,7 @@ int sync_init(struct bladerf_sync *sync,
         return status;
     }
 
-    if (fx3_version.major <= FW_LARGER_BUFFER_VERSION.major &&
-        fx3_version.minor < FW_LARGER_BUFFER_VERSION.minor) {
+    if (version_less_than(&fx3_version, &FW_LARGER_BUFFER_VERSION)) {
         gpif_buffer_size = USB_MSG_SIZE_SS_LEGACY;
     }
 
@@ -250,9 +265,19 @@ int sync_init(struct bladerf_sync *sync,
         size_t original_size = buffer_size;
 
         /* Round up to the next multiple of valid_buffer_size, ensuring at least one GPIF buffer */
-        buffer_size = bytes_per_buffer == 0 ? valid_buffer_size / bytes_per_sample :
-                     ((bytes_per_buffer + valid_buffer_size - 1) / valid_buffer_size)
-                     * (valid_buffer_size / bytes_per_sample);
+        const size_t samples_per_valid_buffer =
+            valid_buffer_size / bytes_per_sample;
+        size_t valid_buffer_count = bytes_per_buffer / valid_buffer_size;
+        if (bytes_per_buffer % valid_buffer_size != 0) {
+            ++valid_buffer_count;
+        }
+        if (valid_buffer_count > SIZE_MAX / samples_per_valid_buffer) {
+            return BLADERF_ERR_INVAL;
+        }
+        buffer_size = valid_buffer_count * samples_per_valid_buffer;
+        if (buffer_size > UINT_MAX || buffer_size > SIZE_MAX / 4) {
+            return BLADERF_ERR_INVAL;
+        }
 
         log_warning("Requested buffer size %zu samples (%zu bytes) is invalid. "
                     "Adjusting to %zu samples (%zu bytes).\n",
@@ -266,6 +291,7 @@ int sync_init(struct bladerf_sync *sync,
     sync_deinit(sync);
 
     MUTEX_INIT(&sync->lock);
+    sync->lock_initialized = true;
 
     switch (layout & BLADERF_DIRECTION_MASK) {
         case BLADERF_TX:
@@ -310,7 +336,13 @@ int sync_init(struct bladerf_sync *sync,
                 __FUNCTION__, sync->meta.samples_per_msg);
 
     MUTEX_INIT(&sync->buf_mgmt.lock);
-    COND_INIT(&sync->buf_mgmt.buf_ready);
+    sync->buf_lock_initialized = true;
+    status = COND_INIT(&sync->buf_mgmt.buf_ready);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto error;
+    }
+    sync->buf_cond_initialized = true;
 
     sync->buf_mgmt.status = (sync_buffer_status*) malloc(num_buffers * sizeof(sync_buffer_status));
     if (sync->buf_mgmt.status == NULL) {
@@ -400,6 +432,7 @@ int sync_init(struct bladerf_sync *sync,
     }
 
     MUTEX_INIT(&sync->rx_epoch_generation_lock);
+    sync->rx_epoch_lock_initialized = true;
     sync->rx_epoch_generation = 0;
     sync->rx_epoch_certified_generation = 0;
     sync->initialized = true;
@@ -413,7 +446,13 @@ error:
 
 void sync_deinit(struct bladerf_sync *sync)
 {
-    if (sync->initialized) {
+    if (sync->initialized || sync->lock_initialized ||
+        sync->buf_lock_initialized || sync->buf_cond_initialized ||
+        sync->rx_epoch_lock_initialized || sync->worker != NULL ||
+        sync->buf_mgmt.status != NULL ||
+        sync->buf_mgmt.actual_lengths != NULL ||
+        sync->buf_mgmt.buffer_seq != NULL ||
+        sync->buf_mgmt.buffer_dropped != NULL) {
         /* Retire the handle before tearing anything down.
          *
          * sync_rx() and sync_tx() test sync->initialized without holding any
@@ -427,39 +466,47 @@ void sync_deinit(struct bladerf_sync *sync)
          */
         sync->initialized = false;
 
-        if ((sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        if (sync->worker != NULL &&
+            (sync->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
             async_submit_stream_buffer(sync->worker->stream,
                                        BLADERF_STREAM_SHUTDOWN, NULL, 0, false);
         }
 
-        sync_worker_deinit(sync->worker, &sync->buf_mgmt.lock,
-                           &sync->buf_mgmt.buf_ready);
+        if (sync->worker != NULL) {
+            sync_worker_deinit(sync->worker, &sync->buf_mgmt.lock,
+                               &sync->buf_mgmt.buf_ready);
+            sync->worker = NULL;
+        }
 
-        MUTEX_DESTROY(&sync->rx_epoch_generation_lock);
+        if (sync->rx_epoch_lock_initialized) {
+            MUTEX_DESTROY(&sync->rx_epoch_generation_lock);
+            sync->rx_epoch_lock_initialized = false;
+        }
 
         /* De-allocate our buffer management resources */
-        if (sync->buf_mgmt.status) {
+        if (sync->buf_lock_initialized) {
             MUTEX_DESTROY(&sync->buf_mgmt.lock);
-            free(sync->buf_mgmt.status);
-            sync->buf_mgmt.status = NULL;
+            sync->buf_lock_initialized = false;
         }
 
-        if (sync->buf_mgmt.actual_lengths) {
-            free(sync->buf_mgmt.actual_lengths);
-            sync->buf_mgmt.actual_lengths = NULL;
+        if (sync->buf_cond_initialized) {
+            COND_DESTROY(&sync->buf_mgmt.buf_ready);
+            sync->buf_cond_initialized = false;
         }
 
-        if (sync->buf_mgmt.buffer_seq) {
-            free(sync->buf_mgmt.buffer_seq);
-            sync->buf_mgmt.buffer_seq = NULL;
-        }
+        free(sync->buf_mgmt.status);
+        sync->buf_mgmt.status = NULL;
+        free(sync->buf_mgmt.actual_lengths);
+        sync->buf_mgmt.actual_lengths = NULL;
+        free(sync->buf_mgmt.buffer_seq);
+        sync->buf_mgmt.buffer_seq = NULL;
+        free(sync->buf_mgmt.buffer_dropped);
+        sync->buf_mgmt.buffer_dropped = NULL;
 
-        if (sync->buf_mgmt.buffer_dropped) {
-            free(sync->buf_mgmt.buffer_dropped);
-            sync->buf_mgmt.buffer_dropped = NULL;
+        if (sync->lock_initialized) {
+            MUTEX_DESTROY(&sync->lock);
+            sync->lock_initialized = false;
         }
-
-        MUTEX_DESTROY(&sync->lock);
     }
 }
 
