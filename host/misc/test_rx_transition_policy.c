@@ -168,6 +168,11 @@ int main(void)
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT) ==
            BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE);
+    /* An FPGA TX fault prevents the monitor from reading these registers;
+     * their zero-initialized storage is unavailable evidence, not proof of
+     * RFPLL/ENSM/BBPLL invalidity. */
+    assert(bladerf2_tx_rfic_observation(false, 0, 0, 0) ==
+           BLADERF2_TX_RFIC_OBSERVATION_UNAVAILABLE);
     assert(bladerf2_tx_rfic_observation(
         true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT) ==

@@ -815,6 +815,7 @@ static void *rx_fault_monitor_task(void *arg)
 
         bool should_poll = false;
         bool should_poll_tx = false;
+        bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
         uint32_t transaction_id = 0;
         uint32_t tx_channel_state_generation = 0;
@@ -932,6 +933,7 @@ static void *rx_fault_monitor_task(void *arg)
                         _rx_fault_monitor_stage(board_data, "TX BBPLL status");
                         tx_rfic_status = _read_rfic_reg(
                             dev, REG_BBPLL_LOCK_STATUS_ADDR, &bbpll_status);
+                        tx_rfic_status_observed = tx_rfic_status == 0;
                     }
                 }
             }
@@ -944,7 +946,13 @@ static void *rx_fault_monitor_task(void *arg)
         }
         const char *test_mode = _runtime_rx_monitor_test_mode();
         if (should_poll_tx && test_mode != NULL) {
-            if (strcmp(test_mode, "RUNTIME_TX_RFIC_STATUS_READ_FAILURE") == 0) {
+            if (strcmp(test_mode,
+                       "RUNTIME_TX_LINK_FAULT_NO_RFIC_READ") == 0) {
+                rf_link_status |= RF_LINK_STATUS_TX_FAULT;
+                tx_rfic_status = 0;
+                tx_rfic_status_observed = false;
+            } else if (strcmp(test_mode,
+                              "RUNTIME_TX_RFIC_STATUS_READ_FAILURE") == 0) {
                 tx_rfic_status = BLADERF_ERR_UNEXPECTED;
             } else if (strcmp(test_mode, "RUNTIME_TX_RFPLL_UNLOCKED") == 0) {
                 tx_pll_status &= (uint8_t)
@@ -959,8 +967,8 @@ static void *rx_fault_monitor_task(void *arg)
         if (should_poll_tx) {
             const enum bladerf2_tx_rfic_observation tx_rfic_observation =
                 bladerf2_tx_rfic_observation(
-                    tx_rfic_status == 0, tx_pll_status, ensm_status,
-                    bbpll_status);
+                    tx_rfic_status_observed && tx_rfic_status == 0,
+                    tx_pll_status, ensm_status, bbpll_status);
             bool report_status_unavailable = false;
             bool report_tx_fault = false;
             bool report_tx_epoch_invalid = false;
@@ -978,7 +986,8 @@ static void *rx_fault_monitor_task(void *arg)
                     board_data->tx_channel_state_generation ==
                         tx_channel_state_generation) {
                     if (tx_link_status_error != 0 ||
-                        tx_loss_count_status != 0 || tx_rfic_status != 0) {
+                        tx_loss_count_status != 0 || tx_rfic_status != 0 ||
+                        !tx_rfic_status_observed) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
                             bladerf2_tx_stream_set_faulted(board_data, true);
@@ -1047,7 +1056,9 @@ static void *rx_fault_monitor_task(void *arg)
                             rf_link_status, tx_link_status_error != 0
                                 ? tx_link_status_error :
                                 (tx_loss_count_status != 0
-                                    ? tx_loss_count_status : tx_rfic_status));
+                                    ? tx_loss_count_status :
+                                    (tx_rfic_status != 0 ? tx_rfic_status :
+                                     BLADERF_ERR_WOULD_BLOCK));
                     }
                     if (tx_link_status_error == 0 &&
                         tx_rfic_observation ==
