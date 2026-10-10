@@ -321,6 +321,15 @@ struct board_fns {
      * invalidate_rx_data after the legacy setter has fully returned. */
     void (*rx_reconfigure_complete)(struct bladerf *dev,
                                     bladerf_channel ch);
+    /* Revoke TX frequency validity around an ordinary host LO write and
+     * publish a candidate readback for the RFIC monitor to certify. */
+    int (*tx_frequency_reconfigure_begin)(struct bladerf *dev,
+                                          bladerf_channel ch,
+                                          bladerf_frequency target_hz);
+    void (*tx_frequency_reconfigure_complete)(struct bladerf *dev,
+                                             bladerf_channel ch,
+                                             bladerf_frequency target_hz,
+                                             int tune_status);
     /* Report an RX discontinuity surfaced by sync metadata or an async USB
      * transfer (short transfer / overflow). */
     void (*rx_stream_overrun)(struct bladerf *dev, uint32_t source_flags);

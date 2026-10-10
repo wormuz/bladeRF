@@ -294,7 +294,8 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
         (event_type != BLADERF_RF_EVT_TX_RETUNE_PENDING &&
          event_type != BLADERF_RF_EVT_TX_RETUNE_APPLIED &&
          event_type != BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST &&
-         event_type != BLADERF_RF_EVT_TX_RETUNE_VALID)) {
+         event_type != BLADERF_RF_EVT_TX_RETUNE_VALID &&
+         event_type != BLADERF_RF_EVT_TX_FREQUENCY_INVALID)) {
         return;
     }
 

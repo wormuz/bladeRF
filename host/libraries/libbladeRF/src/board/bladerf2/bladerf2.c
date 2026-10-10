@@ -2187,6 +2187,93 @@ static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
     bladerf2_rx_reconfigure_complete(dev, ch);
 }
 
+static int bladerf2_tx_frequency_reconfigure_begin(
+    struct bladerf *dev, bladerf_channel ch, bladerf_frequency target_hz)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->tx_retune2_pending_count != 0) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            /* Invalidate any TX RFIC snapshot collected before this
+             * configuration transaction began. */
+            board_data->tx_channel_state_generation++;
+            /* Only handles that have used the scheduled NIOS path can have
+             * an outstanding queue. Preserve ordinary host tuning on older
+             * firmware where retune2 is unavailable. */
+            if (board_data->tx_retune2_failure_watch_active) {
+                if (dev->backend->retune2 == NULL) {
+                    status = BLADERF_ERR_UNSUPPORTED;
+                } else {
+                    status = dev->backend->retune2(
+                        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+                }
+            }
+            if (status == 0) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->tx_retune2_completion_faulted = true;
+                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_FREQUENCY_INVALID,
+                    target_hz, 0, 0, 0);
+            } else {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->tx_retune2_completion_faulted = true;
+                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    target_hz, 0, board_data->tx_retune2_pending_count,
+                    status);
+            }
+        }
+    });
+
+    return status;
+}
+
+static void bladerf2_tx_frequency_reconfigure_complete(
+    struct bladerf *dev, bladerf_channel ch, bladerf_frequency target_hz,
+    int tune_status)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bladerf_frequency readback_hz = 0;
+    int readback_status;
+    uint8_t pending_count;
+
+    WITH_MUTEX(&dev->lock, {
+        /* Discard a monitor snapshot taken after invalidation began but
+         * before the actual AD9361 tune completed. */
+        board_data->tx_channel_state_generation++;
+        readback_status = board_data->rfic->get_frequency(
+            dev, ch, &readback_hz);
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        pending_count = board_data->tx_retune2_pending_count;
+        board_data->tx_retune2_completion_faulted = true;
+        board_data->tx_retune2_applied_waiting_rf_valid =
+            readback_status == 0 && readback_hz == target_hz &&
+            pending_count == 0;
+        board_data->tx_retune2_applied_frequency_hz = readback_hz;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+        if (readback_status == 0 && readback_hz == target_hz) {
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED, target_hz,
+                readback_hz, pending_count, tune_status);
+        } else {
+            bladerf2_tx_retune_event(
+                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                target_hz, readback_status == 0 ? readback_hz : 0,
+                pending_count,
+                readback_status != 0 ? readback_status :
+                                       BLADERF_ERR_UNEXPECTED);
+        }
+    });
+}
+
 static void bladerf2_rx_stream_overrun_cb(struct bladerf *dev,
                                          uint32_t source_flags)
 {
@@ -2823,6 +2910,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         board_data->tx_retune2_pending_count++;
         board_data->tx_retune2_completion_faulted = true;
         board_data->tx_retune2_applied_waiting_rf_valid = false;
+        board_data->tx_channel_state_generation++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
@@ -2947,6 +3035,9 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
 
     int status = dev->backend->retune2(
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch)) {
+        board_data->tx_channel_state_generation++;
+    }
     if (status == 0 && BLADERF_CHANNEL_IS_TX(ch) &&
         board_data->tx_retune2_pending_count != 0) {
         unsigned int i;
@@ -4630,6 +4721,10 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.set_frequency, bladerf2_set_frequency),
     FIELD_INIT(.invalidate_rx_data, bladerf2_invalidate_rx_data),
     FIELD_INIT(.rx_reconfigure_complete, bladerf2_reconfigure_complete_cb),
+    FIELD_INIT(.tx_frequency_reconfigure_begin,
+               bladerf2_tx_frequency_reconfigure_begin),
+    FIELD_INIT(.tx_frequency_reconfigure_complete,
+               bladerf2_tx_frequency_reconfigure_complete),
     FIELD_INIT(.rx_stream_overrun, bladerf2_rx_stream_overrun_cb),
     FIELD_INIT(.rx_sync_data_valid, bladerf2_rx_sync_data_valid_cb),
     FIELD_INIT(.rx_sync_data_admission_reason,

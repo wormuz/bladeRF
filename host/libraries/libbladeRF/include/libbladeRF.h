@@ -4931,7 +4931,10 @@ typedef enum {
     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
     /** The final completed TX retune has a matching LO readback and the
      * monitor has confirmed the TX PLL/ENSM/BBPLL state. */
-    BLADERF_RF_EVT_TX_RETUNE_VALID
+    BLADERF_RF_EVT_TX_RETUNE_VALID,
+    /** An ordinary host TX LO write has begun. Frequency validity is
+     * revoked until the readback and RFIC monitor confirm the new state. */
+    BLADERF_RF_EVT_TX_FREQUENCY_INVALID
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

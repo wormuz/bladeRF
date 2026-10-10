@@ -1053,6 +1053,7 @@ int bladerf_set_frequency(struct bladerf *dev,
                           bladerf_channel ch,
                           bladerf_frequency frequency)
 {
+    bool tx_frequency_reserved = false;
     int status;
 
     status = invalidate_rx_data_before_reconfigure(
@@ -1061,9 +1062,24 @@ int bladerf_set_frequency(struct bladerf *dev,
         return status;
     }
 
+    if (BLADERF_CHANNEL_IS_TX(ch) &&
+        dev->board->tx_frequency_reconfigure_begin != NULL) {
+        status = dev->board->tx_frequency_reconfigure_begin(
+            dev, ch, frequency);
+        if (status != 0) {
+            return status;
+        }
+        tx_frequency_reserved = true;
+    }
+
     MUTEX_LOCK(&dev->lock);
     status = bladerf_set_frequency_locked(dev, ch, frequency);
     MUTEX_UNLOCK(&dev->lock);
+    if (tx_frequency_reserved &&
+        dev->board->tx_frequency_reconfigure_complete != NULL) {
+        dev->board->tx_frequency_reconfigure_complete(
+            dev, ch, frequency, status);
+    }
     rx_reconfigure_complete(dev, ch);
     return status;
 }
