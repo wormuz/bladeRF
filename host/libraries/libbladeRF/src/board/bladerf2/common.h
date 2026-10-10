@@ -260,6 +260,7 @@ struct bladerf2_board_data {
         uint64_t timestamp;
         uint64_t requested_frequency_hz;
         uint16_t nios_profile;
+        uint16_t rffe_profile;
         bool valid;
     } tx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
     uint8_t tx_link_epoch_id;

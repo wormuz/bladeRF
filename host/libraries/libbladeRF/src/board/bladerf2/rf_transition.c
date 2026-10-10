@@ -1573,6 +1573,7 @@ static void *rx_fault_monitor_task(void *arg)
                                 uint32_t i;
                                 bool request_found = false;
                                 uint64_t requested_frequency_hz = 0;
+                                uint16_t rffe_profile = 0;
                                 uint8_t pending_after = 0;
                                 int completion_read_status = 0;
 
@@ -1618,6 +1619,9 @@ static void *rx_fault_monitor_task(void *arg)
                                             requested_frequency_hz =
                                                 board_data->tx_retune2_pending[i].
                                                     requested_frequency_hz;
+                                            rffe_profile =
+                                                board_data->tx_retune2_pending[i].
+                                                    rffe_profile;
                                             board_data->tx_retune2_pending[i].
                                                 valid = false;
                                             board_data->tx_retune2_pending_count--;
@@ -1635,11 +1639,29 @@ static void *rx_fault_monitor_task(void *arg)
                                 }
                                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 if (request_found && !completion_lost) {
-                                    bladerf2_tx_retune_event(
-                                        dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED,
-                                        requested_frequency_hz,
-                                        readback_frequency_hz,
-                                        pending_after, 0);
+                                    uint64_t profile_frequency_hz = 0;
+                                    completion_read_status =
+                                        ad9361_fastlock_sync_current_lo(
+                                            board_data->phy, true,
+                                            rffe_profile,
+                                            requested_frequency_hz,
+                                            &profile_frequency_hz);
+                                    if (completion_read_status != 0 ||
+                                        (profile_frequency_hz >
+                                             readback_frequency_hz
+                                         ? profile_frequency_hz -
+                                               readback_frequency_hz > 1000
+                                         : readback_frequency_hz -
+                                               profile_frequency_hz > 1000)) {
+                                        completion_lost = true;
+                                    } else {
+                                        bladerf2_tx_retune_event(
+                                            dev,
+                                            BLADERF_RF_EVT_TX_RETUNE_APPLIED,
+                                            requested_frequency_hz,
+                                            readback_frequency_hz,
+                                            pending_after, 0);
+                                    }
                                 }
                                 if (!request_found) {
                                     completion_lost = true;
@@ -3368,8 +3390,9 @@ static int _bladerf_rx_transition_begin(
         /* Nios performs the RFIC fastlock recall without updating ADI's
          * host clock-tree cache. Read back the selected RFIC profile's
          * PLL words directly instead of accepting the previous cached LO. */
-        status = ad9361_rx_fastlock_get_freq(
-            board_data->phy, quick_tune->rffe_profile, &readback_hz);
+        status = ad9361_fastlock_sync_current_lo(
+            board_data->phy, false, quick_tune->rffe_profile,
+            request->target_frequency_hz, &readback_hz);
         if (status != 0) {
             status = BLADERF_ERR_UNEXPECTED;
         }

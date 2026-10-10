@@ -2870,6 +2870,18 @@ int main(void)
                     " frequency=%" PRIu64 "\n", ret, frequency);
             return EXIT_FAILURE;
         }
+        phy.current_rx_lo_freq = 1800000000;
+        phy.fastlock.entry[0][0].flags = 0;
+        ret = ad9361_fastlock_sync_current_lo(&phy, false, 0,
+                                               1800000000, &frequency);
+        if (ret != -EIO || phy.current_rx_lo_freq != 0) {
+            fprintf(stderr,
+                    "Failed fastlock sync retained stale RX LO cache: "
+                    "ret=%" PRId32 " cached=%" PRIu64 "\n",
+                    ret, phy.current_rx_lo_freq);
+            return EXIT_FAILURE;
+        }
+        phy.fastlock.entry[0][0].flags = saved_rx_profile_flags;
         fail_read_reg = -1;
 
         reads_before = read_count;
@@ -2922,6 +2934,65 @@ int main(void)
         phy.fastlock.entry[0][0].flags = saved_rx0_flags;
         phy.fastlock.entry[0][7].flags = saved_rx7_flags;
         phy.fastlock.entry[1][0].flags = saved_tx0_flags;
+    }
+
+    /* A confirmed fastlock profile sync updates the active ADI LO/divider
+     * model and invalidates the host frequency-request cache. */
+    {
+        struct no_os_clk refclk = { .rate = 40000000 };
+        struct no_os_clk rxpll_clk = { .rate = 1 };
+        struct refclk_scale rx_refclk = {
+            .spi = &spi,
+            .phy = &phy,
+            .source = RX_REFCLK,
+        };
+        uint8_t saved_profile_data[RX_FAST_LOCK_CONFIG_WORD_NUM];
+        uint64_t saved_lo = phy.current_rx_lo_freq;
+        uint8_t saved_div = phy.cached_rx_rfpll_div;
+        bool saved_requested_valid = phy.rfpll_requested_valid[0];
+        bool saved_register_map_enabled = register_map_enabled;
+        struct no_os_clk *saved_refclk = phy.clk_refin;
+        struct no_os_clk *saved_rxpll = phy.clks[RX_RFPLL];
+        struct refclk_scale *saved_rx_refclk = phy.ref_clk_scale[RX_REFCLK];
+        uint32_t saved_profile_flags = phy.fastlock.entry[0][0].flags;
+        uint64_t frequency = 0;
+        uint8_t *profile_data = phy.fastlock.entry[0][0].profile_data;
+
+        memcpy(saved_profile_data, profile_data, sizeof(saved_profile_data));
+        memset(profile_data, 0, RX_FAST_LOCK_CONFIG_WORD_NUM);
+        profile_data[0] = 190; /* 40 MHz * 190 = 7.6 GHz VCO. */
+        profile_data[12] = 1; /* Divide VCO by four for 1.9 GHz LO. */
+        phy.fastlock.entry[0][0].flags = FASTLOOK_INIT;
+        phy.clk_refin = &refclk;
+        phy.clks[RX_RFPLL] = &rxpll_clk;
+        phy.ref_clk_scale[RX_REFCLK] = &rx_refclk;
+        phy.current_rx_lo_freq = ad9361_to_clk(1800000000);
+        phy.cached_rx_rfpll_div = 2;
+        phy.rfpll_requested_valid[0] = true;
+        register_map_enabled = true;
+        ret = ad9361_fastlock_sync_current_lo(
+            &phy, false, 0, 1900000000, &frequency);
+        register_map_enabled = saved_register_map_enabled;
+        if (ret != 0 || frequency != 1900000000 ||
+            phy.current_rx_lo_freq != ad9361_to_clk(1900000000) ||
+            phy.cached_rx_rfpll_div != 1 ||
+            phy.rfpll_requested_valid[0]) {
+            fprintf(stderr,
+                    "Fastlock sync did not publish profile state: ret=%" PRId32
+                    " freq=%" PRIu64 " cached=%" PRIu64 " div=%u valid=%u\n",
+                    ret, frequency, phy.current_rx_lo_freq,
+                    phy.cached_rx_rfpll_div,
+                    phy.rfpll_requested_valid[0]);
+            return EXIT_FAILURE;
+        }
+        memcpy(profile_data, saved_profile_data, sizeof(saved_profile_data));
+        phy.fastlock.entry[0][0].flags = saved_profile_flags;
+        phy.current_rx_lo_freq = saved_lo;
+        phy.cached_rx_rfpll_div = saved_div;
+        phy.rfpll_requested_valid[0] = saved_requested_valid;
+        phy.clk_refin = saved_refclk;
+        phy.clks[RX_RFPLL] = saved_rxpll;
+        phy.ref_clk_scale[RX_REFCLK] = saved_rx_refclk;
     }
 
     /* Malformed clocks/durations are rejected before arithmetic or writes. */

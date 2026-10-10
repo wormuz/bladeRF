@@ -3307,6 +3307,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             frequency;
         board_data->tx_retune2_pending[pending_slot].nios_profile =
             quick_tune->nios_profile;
+        board_data->tx_retune2_pending[pending_slot].rffe_profile =
+            quick_tune->rffe_profile;
         board_data->tx_retune2_pending[pending_slot].valid = true;
         board_data->tx_retune2_pending_count++;
         board_data->tx_retune2_completion_faulted = true;
@@ -3407,9 +3409,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             /* Nios recalls the TX fastlock profile directly in the RFIC;
              * that does not update ADI's host clock-tree cache. Verify the
              * selected profile's PLL words, as the RX transition path does. */
-            readback_status = ad9361_tx_fastlock_get_freq(
-                board_data->phy, quick_tune->rffe_profile,
-                &readback_frequency);
+            readback_status = ad9361_fastlock_sync_current_lo(
+                board_data->phy, true, quick_tune->rffe_profile,
+                frequency, &readback_frequency);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
