@@ -5972,6 +5972,38 @@ static int bladerf_pll_calculate_ratio(bladerf_frequency ref_freq,
     RETURN_INVAL("requested ratio", "not achievable");
 }
 
+static int bladerf2_wait_for_pll_lock(struct bladerf *dev)
+{
+    const uint64_t timeout_ns = 500000000ULL;
+    struct timespec now_ts;
+    uint64_t deadline_ns;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    deadline_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                  (uint64_t)now_ts.tv_nsec + timeout_ns;
+
+    for (;;) {
+        bool locked = false;
+        CHECK_STATUS(bladerf_get_pll_lock_state(dev, &locked));
+        if (locked) {
+            return 0;
+        }
+
+        if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        const uint64_t now_ns =
+            (uint64_t)now_ts.tv_sec * 1000000000ULL +
+            (uint64_t)now_ts.tv_nsec;
+        if (now_ns >= deadline_ns) {
+            return BLADERF_ERR_TIMEOUT;
+        }
+        usleep(1000);
+    }
+}
+
 int bladerf_get_pll_lock_state(struct bladerf *dev, bool *locked)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
@@ -6112,44 +6144,24 @@ static int bladerf2_set_pll_refclk_internal(
 
     status = bladerf_pll_configure(dev, R, N);
     if (status == 0) {
-        bool pll_enabled = false;
-        status = bladerf_get_pll_enable(dev, &pll_enabled);
-        if (status == 0 && pll_enabled) {
-            const uint64_t timeout_ns = 500000000ULL;
-            uint64_t deadline_ns = 0;
-            struct timespec now_ts;
-
-            if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
-                status = BLADERF_ERR_UNEXPECTED;
-            } else {
-                deadline_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
-                              (uint64_t)now_ts.tv_nsec + timeout_ns;
-                for (;;) {
-                    bool locked = false;
-                    status = bladerf_get_pll_lock_state(dev, &locked);
-                    if (status != 0 || locked) {
-                        break;
-                    }
-
-                    if (clock_gettime(CLOCK_MONOTONIC, &now_ts) != 0) {
-                        status = BLADERF_ERR_UNEXPECTED;
-                        break;
-                    }
-                    const uint64_t now_ns =
-                        (uint64_t)now_ts.tv_sec * 1000000000ULL +
-                        (uint64_t)now_ts.tv_nsec;
-                    if (now_ns >= deadline_ns) {
-                        status = BLADERF_ERR_TIMEOUT;
-                        break;
-                    }
-                    usleep(1000);
+        bladerf_clock_select clock_select;
+        status = bladerf_get_clock_select(dev, &clock_select);
+        if (status == 0 && clock_select == CLOCK_SELECT_EXTERNAL) {
+            /* CLKIN is the specified 38.4 MHz direct RFIC reference; the
+             * ADF400x lock detector only describes the onboard VCTCXO path. */
+            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+            dev->board_data->rfic_reference_clock_known = true;
+            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+        } else if (status == 0) {
+            bool pll_enabled = false;
+            status = bladerf_get_pll_enable(dev, &pll_enabled);
+            if (status == 0 && pll_enabled) {
+                status = bladerf2_wait_for_pll_lock(dev);
+                if (status == 0) {
+                    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                    dev->board_data->rfic_reference_clock_known = true;
+                    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
                 }
-            }
-
-            if (status == 0) {
-                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                dev->board_data->rfic_reference_clock_known = true;
-                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             }
         }
     }
@@ -6319,6 +6331,19 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
             dev->board_data->rfic_reference_clock_known = false;
             MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
             status = dev->backend->config_gpio_write(dev, gpio);
+            if (status == 0 && sel == CLOCK_SELECT_EXTERNAL) {
+                uint32_t gpio_readback;
+                status = dev->backend->config_gpio_read(
+                    dev, &gpio_readback);
+                if (status == 0 &&
+                    (gpio_readback & (1u << CFG_GPIO_CLOCK_SELECT)) != 0) {
+                    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
+                    dev->board_data->rfic_reference_clock_known = true;
+                    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                } else if (status == 0) {
+                    status = BLADERF_ERR_UNEXPECTED;
+                }
+            }
         }
     });
 
