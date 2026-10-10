@@ -1965,6 +1965,24 @@ int main(void)
     {
         uint64_t frequency = UINT64_C(0xfeedface);
         unsigned reads_before = read_count;
+        struct no_os_spi_desc *saved_spi = phy.spi;
+
+        phy.spi = NULL;
+        ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
+        if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
+            read_count != reads_before) {
+            fprintf(stderr, "RX fastlock getter accepted missing SPI: ret=%" PRId32
+                    " frequency=%" PRIu64 "\n", ret, frequency);
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_tx_fastlock_get_freq(&phy, 0, &frequency);
+        if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
+            read_count != reads_before) {
+            fprintf(stderr, "TX fastlock getter accepted missing SPI: ret=%" PRId32
+                    " frequency=%" PRIu64 "\n", ret, frequency);
+            return EXIT_FAILURE;
+        }
+        phy.spi = saved_spi;
 
         fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
         ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
