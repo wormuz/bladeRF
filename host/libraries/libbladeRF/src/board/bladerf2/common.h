@@ -232,6 +232,8 @@ struct bladerf2_board_data {
     bool tx_retune2_applied_waiting_rf_valid;
     bool tx_retune_gate_release_requested;
     bool tx_retune_recovery_pending;
+    bool tx_gate_abort_pending;
+    bool tx_gate_abort_failure_reported;
     uint64_t tx_retune2_applied_frequency_hz;
     struct {
         uint64_t timestamp;

@@ -200,8 +200,16 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     report = !board_data->tx_stream_faulted_async;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
+    board_data->tx_gate_abort_pending = true;
+    board_data->tx_gate_abort_failure_reported = false;
     board_data->tx_async_transport_failure_generation++;
     epoch_id = board_data->tx_async_link_epoch_id;
+    /* Keep callback wakeup lifetime ordered with monitor teardown through
+     * this callback-safe lock. The pending flag remains authoritative if the
+     * periodic wait begins after this signal. */
+    if (board_data->rx_fault_monitor_sync_initialized) {
+        COND_SIGNAL(&board_data->rx_fault_monitor_cond);
+    }
     if (report) {
         event.host_monotonic_ns = _monotonic_ns();
         event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
@@ -211,6 +219,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
         bladerf2_rf_event_append(board_data, &event);
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
 }
 
 bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
@@ -1004,6 +1013,8 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_retune_failure = false;
             bool report_tx_retune_counter_reset = false;
             bool abort_tx_retune_gate = false;
+            bool abort_tx_gate_pending = false;
+            uint64_t tx_transport_failure_generation = 0;
             bool counter_reset = false;
             bool tx_counter_baseline_was_valid = false;
             const int tx_link_status_error = status != 0 ? status :
@@ -1011,6 +1022,14 @@ static void *rx_fault_monitor_task(void *arg)
                  RF_LINK_STATUS_VERSION_2 ? BLADERF_ERR_UNEXPECTED : 0);
 
             WITH_MUTEX(&dev->lock, {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                abort_tx_gate_pending = board_data->tx_gate_abort_pending;
+                tx_transport_failure_generation =
+                    board_data->tx_async_transport_failure_generation;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                if (abort_tx_gate_pending) {
+                    abort_tx_retune_gate = true;
+                }
                 if (board_data->rf_link_dir_on[1] &&
                     board_data->tx_channel_state_generation ==
                         tx_channel_state_generation) {
@@ -1034,6 +1053,7 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_link_fault_reported = true;
                         bladerf2_tx_stream_set_faulted(board_data, true);
                         board_data->tx_recovery_blocked = true;
+                        abort_tx_retune_gate = true;
                         report_tx_fault = true;
                     }
                     if (tx_link_status_error == 0 &&
@@ -1043,6 +1063,7 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_epoch_invalid_reported = true;
                         bladerf2_tx_stream_set_faulted(board_data, true);
                         board_data->tx_recovery_blocked = true;
+                        abort_tx_retune_gate = true;
                         report_tx_epoch_invalid = true;
                     }
                     if (tx_link_status_error == 0 &&
@@ -1057,12 +1078,14 @@ static void *rx_fault_monitor_task(void *arg)
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
+                            abort_tx_retune_gate = true;
                             counter_reset = true;
                         } else if (tx_loss_count >
                                    board_data->tx_fpga_loss_count_last) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
+                            abort_tx_retune_gate = true;
                             report_tx_underrun = true;
                         }
                     }
@@ -1090,6 +1113,7 @@ static void *rx_fault_monitor_task(void *arg)
                             report_tx_retune_counter_reset) {
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
+                            abort_tx_retune_gate = true;
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = true;
                             board_data->tx_retune2_pending_count = 0;
@@ -1209,6 +1233,7 @@ static void *rx_fault_monitor_task(void *arg)
                             tx_retune2_success_count;
                         if (completion_lost) {
                             unsigned int i;
+                            abort_tx_retune_gate = true;
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = true;
                             board_data->tx_retune2_pending_count = 0;
@@ -1392,6 +1417,11 @@ static void *rx_fault_monitor_task(void *arg)
                             tx_loss_count, rf_link_status,
                             BLADERF_ERR_UNEXPECTED);
                     }
+                    if (abort_tx_retune_gate) {
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->tx_gate_abort_pending = true;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    }
                 }
             });
 
@@ -1404,11 +1434,29 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->tx_retune_recovery_pending = true;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
-                gate_status = nios_tx_retune_gate_cmd(
-                    dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+                gate_status = nios_tx_retune_gate_abort(dev);
                 if (gate_status != 0) {
                     log_debug("Failed to abort TX retune gate after invalid RFIC/status: %s\n",
                               bladerf_strerror(gate_status));
+                    bool report_abort_failure;
+                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                    report_abort_failure =
+                        !board_data->tx_gate_abort_failure_reported;
+                    board_data->tx_gate_abort_failure_reported = true;
+                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    if (report_abort_failure) {
+                        bladerf2_tx_stream_event(
+                            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+                            rf_link_status, gate_status);
+                    }
+                } else {
+                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                    if (board_data->tx_async_transport_failure_generation ==
+                        tx_transport_failure_generation) {
+                        board_data->tx_gate_abort_pending = false;
+                        board_data->tx_gate_abort_failure_reported = false;
+                    }
+                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 }
             }
         }
@@ -1634,9 +1682,11 @@ void bladerf2_rx_fault_monitor_stop(struct bladerf *dev)
         board_data->rx_fault_monitor_started = false;
     }
     if (board_data->rx_fault_monitor_sync_initialized) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        board_data->rx_fault_monitor_sync_initialized = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         COND_DESTROY(&board_data->rx_fault_monitor_cond);
         MUTEX_DESTROY(&board_data->rx_fault_monitor_lock);
-        board_data->rx_fault_monitor_sync_initialized = false;
     }
 }
 

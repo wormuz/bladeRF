@@ -885,6 +885,9 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 
 static int bladerf2_tx_snapshot_before_shared_start(
     struct bladerf *dev, struct bladerf2_board_data *board_data);
+static int bladerf2_tx_gate_abort_fail_closed(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    uint32_t link_status);
 
 static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
                                   bool snapshot_active_tx,
@@ -1209,6 +1212,7 @@ static int bladerf2_tx_snapshot_before_shared_start(
 {
     uint32_t link_status = 0;
     uint64_t loss_count = 0;
+    bool report_tx_loss_fault = false;
     int status = nios_rf_link_status_read(dev, &link_status);
 
     if (status != 0 ||
@@ -1220,6 +1224,8 @@ static int bladerf2_tx_snapshot_before_shared_start(
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
             error);
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, link_status);
         return error;
     }
 
@@ -1234,6 +1240,8 @@ static int bladerf2_tx_snapshot_before_shared_start(
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_LINK_FAULT, 0, link_status,
             BLADERF_ERR_FPGA_OP);
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, link_status);
     }
 
     if (dev->board->get_loss_event_count == NULL) {
@@ -1254,11 +1262,14 @@ static int bladerf2_tx_snapshot_before_shared_start(
                 dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, link_status,
                 error);
         }
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, link_status);
         return error;
     }
 
     if (loss_count > board_data->tx_fpga_loss_count_last) {
         board_data->tx_fpga_loss_count_last = loss_count;
+        report_tx_loss_fault = true;
         bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         bladerf2_tx_stream_event(
@@ -1266,11 +1277,17 @@ static int bladerf2_tx_snapshot_before_shared_start(
             BLADERF_ERR_FPGA_OP);
     } else if (loss_count < board_data->tx_fpga_loss_count_last) {
         board_data->tx_fpga_loss_count_last = loss_count;
+        report_tx_loss_fault = true;
         bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_COUNTER_RESET, loss_count, link_status,
             BLADERF_ERR_UNEXPECTED);
+    }
+
+    if (report_tx_loss_fault) {
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, link_status);
     }
 
     return 0;
@@ -1309,6 +1326,8 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
                 dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
                 operation_status);
         }
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, 0);
     }
     if (stop_accepted_link_epoch && !board_data->rf_link_dir_on[0] &&
         !board_data->rf_link_dir_on[1]) {
@@ -1467,6 +1486,8 @@ static int bladerf2_enable_module(struct bladerf *dev,
             bladerf2_tx_stream_event(
                 dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
                 link_ack_status, BLADERF_ERR_UNSUPPORTED);
+            (void)bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, link_ack_status);
         } else if (board_data->rf_link_dir_on[1] &&
                    epoch_confirmed && !tx_link_valid_event_emitted) {
             log_warning("%s: TX transport failed during shared START; "
@@ -1604,12 +1625,16 @@ static int bladerf2_enable_module(struct bladerf *dev,
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0,
             disable_status);
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, 0);
     } else if (BLADERF_CHANNEL_IS_TX(ch) && mask_status != 0) {
         bladerf2_tx_stream_set_faulted(board_data, true);
         board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_event(
             dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0, 0, mask_status);
+        (void)bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, 0);
     }
 
     if (disable_status == 0 && mask_status == 0 &&
@@ -2187,6 +2212,31 @@ static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
     bladerf2_rx_reconfigure_complete(dev, ch);
 }
 
+static int bladerf2_tx_gate_abort_fail_closed(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    uint32_t link_status)
+{
+    int status;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_retune2_completion_faulted = true;
+    board_data->tx_retune2_applied_waiting_rf_valid = false;
+    board_data->tx_retune_recovery_pending = true;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_retune_gate_release_requested = false;
+
+    status = nios_tx_retune_gate_abort(dev);
+    if (status != 0) {
+        board_data->tx_recovery_blocked = true;
+        board_data->tx_status_unavailable_reported = true;
+        bladerf2_tx_stream_set_faulted(board_data, true);
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+            link_status, status);
+    }
+    return status;
+}
+
 static int bladerf2_tx_frequency_reconfigure_begin(
     struct bladerf *dev, bladerf_channel ch, bladerf_frequency target_hz)
 {
@@ -2225,8 +2275,8 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                 if (status == 0) {
                     board_data->tx_retune_gate_release_requested = false;
                 } else {
-                    (void)nios_tx_retune_gate_cmd(
-                        dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+                    (void)bladerf2_tx_gate_abort_fail_closed(
+                        dev, board_data, 0);
                     bladerf2_tx_retune_event(
                         dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                         target_hz, 0, 0, status);
@@ -2274,8 +2324,8 @@ static void bladerf2_tx_frequency_reconfigure_complete(
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
         if (tune_status != 0) {
-            (void)nios_tx_retune_gate_cmd(
-                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            (void)bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
         }
         if (tune_status == 0 && readback_status == 0 && readback_hz == target_hz) {
             bladerf2_tx_retune_event(
@@ -2940,8 +2990,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             dev, timestamp == BLADERF_RETUNE_NOW ? 0 : timestamp,
             timestamp == BLADERF_RETUNE_NOW);
         if (gate_status != 0) {
-            (void)nios_tx_retune_gate_cmd(
-                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            (void)bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
@@ -2964,8 +3014,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->port, quick_tune->spdt);
     if (status != 0) {
         if (BLADERF_CHANNEL_IS_TX(ch)) {
-            (void)nios_tx_retune_gate_cmd(
-                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            (void)bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
@@ -3078,8 +3128,8 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
     const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
     if (tx_queue_cleared) {
         if (board_data->tx_retune2_pending_count != 0) {
-            int gate_status = nios_tx_retune_gate_cmd(
-                dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+            int gate_status = bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
             if (gate_status != 0) {
                 status = gate_status;
             }

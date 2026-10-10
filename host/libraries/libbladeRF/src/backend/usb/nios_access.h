@@ -473,6 +473,8 @@ int nios_rx_epoch_ts_read(struct bladerf *dev, bool is_high, uint32_t *value);
 int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
                             bool immediate);
 int nios_tx_retune_gate_cmd(struct bladerf *dev, uint8_t cmd);
+/* Return success only after FPGA reports ERROR and MUTED for ABORT. */
+int nios_tx_retune_gate_abort(struct bladerf *dev);
 int nios_tx_retune_gate_status_read(struct bladerf *dev, uint32_t *value);
 
 /**
