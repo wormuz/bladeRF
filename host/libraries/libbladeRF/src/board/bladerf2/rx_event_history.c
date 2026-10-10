@@ -720,6 +720,21 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return;
     }
+    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
+        reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
+        reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
+        reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
+        reason == BLADERF_RF_WITHHELD_DEVICE_LOST) {
+        /* A failed USB transfer may contain only a partial META header. Do
+         * not label the diagnostic with the epoch that happens to be current
+         * when this callback runs. The consumer still fails closed, but the
+         * source identity remains explicitly unknown. */
+        event.epoch_id = 0;
+        event.transaction_id = 0;
+        event.fpga_timestamp = 0;
+        event.flags &= ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID;
+        event.flags |= BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN;
+    }
     /* Keep the epoch snapshot and its durable event in one critical
      * section. Otherwise a new transition and its first-valid-host-data
      * event can be appended after this snapshot but before this withheld
@@ -1127,6 +1142,11 @@ void bladerf2_rx_async_stream_overrun(struct bladerf *dev)
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
     event.event_type = BLADERF_RF_EVT_RX_STREAM_OVERRUN;
+    /* The transfer-length failure does not guarantee a complete META header;
+     * report a global stream-integrity fault without inventing its epoch. */
+    event.transaction_id = 0;
+    event.epoch_id = 0;
+    event.flags |= BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN;
     bladerf2_rf_event_append(board_data, &event);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }

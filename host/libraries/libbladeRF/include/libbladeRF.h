@@ -5018,6 +5018,10 @@ typedef enum {
  * are not used on RX_DATA_INVALIDATED, whose reason values may occupy bits
  * 28-30. */
 #define BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID (1U << 28)
+/** Source epoch/timestamp could not be recovered for this RX diagnostic.
+ * Consumers must treat the notification as a conservative current-stream
+ * discontinuity, not attribute it to a specific RX transaction. */
+#define BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN (1U << 27)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

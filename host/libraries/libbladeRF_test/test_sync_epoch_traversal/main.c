@@ -1561,9 +1561,12 @@ static void test_async_data_withheld_event(void)
     assert(board_data->rf_transition_event_count == 6);
     event = &board_data->rf_transition_events[5];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
+    assert(event->epoch_id == 0 && event->transaction_id == 0);
+    assert(event->flags & BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN);
     assert((event->flags &
             ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
-              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+              BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+              BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN)) ==
            BLADERF_RF_WITHHELD_USB_OVERFLOW);
     MUTEX_LOCK(&dev.lock);
     bladerf2_rx_async_stream_overrun(&dev);
@@ -1571,9 +1574,12 @@ static void test_async_data_withheld_event(void)
     assert(board_data->rf_transition_event_count == 7);
     event = &board_data->rf_transition_events[6];
     assert(event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN);
+    assert(event->epoch_id == 0 && event->transaction_id == 0);
+    assert(event->flags & BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN);
     assert((event->flags &
             ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
-              BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
+              BLADERF_RF_EVENT_F_TRANSITION_RX2 |
+              BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN)) ==
            (BLADERF_RF_STREAM_STATUS_OVERRUN |
             BLADERF_RF_STREAM_STATUS_ASYNC_USB));
 
