@@ -201,6 +201,7 @@ int main(void)
         const unsigned reads_before = read_count;
         const unsigned writes_before = write_count;
 
+        ad9361_clear_state(NULL);
         if (ad9361_set_gain_ctrl_mode(NULL, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy_without_spi, &gain_ctrl) != -EINVAL ||
             ad9361_set_gain_ctrl_mode(&phy_without_pdata, &gain_ctrl) != -EINVAL ||
@@ -240,6 +241,7 @@ int main(void)
             ad9361_spi_write(&spi, 0, 0x100) != -EINVAL ||
             ad9361_1rx1tx_channel_map(NULL, false, 0) != -EINVAL ||
             ad9361_mcs(NULL, 1) != -EINVAL ||
+            ad9361_gt(NULL) != 0 ||
             ad9361_setup(NULL) != -EINVAL ||
             ad9361_validate_enable_fir(NULL) != -EINVAL ||
             ad9361_register_clocks(NULL) != -EINVAL ||
