@@ -225,7 +225,8 @@ The same shared-format path is used by the asynchronous `bladerf_stream()`
 API, which had no RX invalidation at all. Generic stream start now revokes RX
 validity for either layout, while the bladeRF2 callback fences TX under the
 device lock immediately before applying format GPIOs. Regression source
-covers RX/TX start, malformed layout, and board-start failure; no build/test.
+covers RX/TX start, malformed layout, unsupported X2 layout, and board-start
+failure; no build/test.
 
 The direct RX/TX FIR setters also accepted arbitrary enum values through to
 the host RFIC controller. An invalid value was rejected only after RX/TX

@@ -674,6 +674,10 @@ int main(void)
            BLADERF_ERR_INVAL);
     assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
            state.stream_calls == 2);
+    assert(bladerf_stream(&async_stream, BLADERF_RX_X2) ==
+           BLADERF_ERR_UNSUPPORTED);
+    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+           state.stream_calls == 2);
 
     state.stream_status = BLADERF_ERR_UNEXPECTED;
     assert(bladerf_stream(&async_stream, BLADERF_TX_X1) ==
