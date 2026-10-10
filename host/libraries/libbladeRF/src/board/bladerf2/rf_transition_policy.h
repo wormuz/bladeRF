@@ -109,9 +109,13 @@ enum bladerf2_tx_rfic_observation {
 };
 
 static inline bool bladerf2_rx_fir_configuration_valid(
-    bool host_phy_available, bool fir_config_valid)
+    bool host_phy_available, bool rx2tx2, uint8_t rx_coefficients_valid_mask,
+    uint8_t tx_coefficients_valid_mask)
 {
-    return host_phy_available && fir_config_valid;
+    const uint8_t required_mask = rx2tx2 ? 0x03 : 0x01;
+    return host_phy_available &&
+           (rx_coefficients_valid_mask & required_mask) == required_mask &&
+           (tx_coefficients_valid_mask & required_mask) == required_mask;
 }
 
 /* A TX FPGA link ACK does not prove the analog RFIC path is operational. */

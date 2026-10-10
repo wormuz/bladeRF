@@ -2559,11 +2559,19 @@ static int _bladerf_rx_transition_begin(
              * before allocating a transaction or invalidating the RX epoch. */
             tuning_mode_unsupported = true;
         } else if (!bladerf2_rx_fir_configuration_valid(
-                       board_data->phy != NULL,
                        board_data->phy != NULL &&
-                           board_data->phy->fir_config_valid)) {
-            /* Failed FIR programming can leave coefficient RAM partial;
-             * RFPLL and ENSM status alone cannot certify that datapath. */
+                           board_data->phy->pdata != NULL,
+                       board_data->phy != NULL &&
+                           board_data->phy->pdata != NULL &&
+                           board_data->phy->pdata->rx2tx2,
+                       board_data->phy != NULL
+                           ? board_data->phy->rx_fir_coefficients_valid_mask
+                           : 0,
+                       board_data->phy != NULL
+                           ? board_data->phy->tx_fir_coefficients_valid_mask
+                           : 0)) {
+            /* Failed FIR programming can leave either coefficient RAM
+             * partial; RFPLL and ENSM status alone cannot certify it. */
             rfic_fir_configuration_invalid = true;
         } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
                        (required_events_mask &
