@@ -21,6 +21,7 @@ enum response_mode {
     RESPONSE_SPI_READ_SUCCESS,
     RESPONSE_SPI_READ_FAILURE,
     RESPONSE_RFIC_READ_TIMEOUT,
+    RESPONSE_8X32_READ_TIMEOUT,
 };
 
 static enum response_mode response_mode;
@@ -55,6 +56,9 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
 
     nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
     in_count++;
+    if (response_mode == RESPONSE_8X32_READ_TIMEOUT) {
+        return BLADERF_ERR_TIMEOUT;
+    }
     if (target == NIOS_PKT_16x64_TARGET_RFIC && !write &&
         response_mode == RESPONSE_RFIC_READ_TIMEOUT) {
         return BLADERF_ERR_TIMEOUT;
@@ -234,6 +238,26 @@ static int expect_rfic_read_timeout_clears_output(void)
     return 0;
 }
 
+static int expect_link_status_timeout_clears_output(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint32_t status_word = UINT32_MAX;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_8X32_READ_TIMEOUT;
+    status = nios_rf_link_status_read(&dev, &status_word);
+    if (status != BLADERF_ERR_TIMEOUT || status_word != 0) {
+        fprintf(stderr, "RF-link status timeout left stale output: "
+                        "status=%d data=%08x\n", status, status_word);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -249,7 +273,8 @@ int main(void)
         expect_spi_read(RESPONSE_SPI_READ_SUCCESS, 0) ||
         expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
         expect_rfic_read_timeout_clears_output() ||
-        out_count != 11 || in_count != 11) {
+        expect_link_status_timeout_clears_output() ||
+        out_count != 12 || in_count != 12) {
         return 1;
     }
 

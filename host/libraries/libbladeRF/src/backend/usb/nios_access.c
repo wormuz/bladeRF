@@ -142,6 +142,11 @@ static int nios_8x8_read(struct bladerf *dev, uint8_t id,
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
 
+    if (data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *data = 0;
+
     nios_pkt_8x8_pack(buf, id, false, addr, 0);
 
     status = nios_access(dev, buf);
@@ -191,6 +196,11 @@ static int nios_8x16_read(struct bladerf *dev, uint8_t id,
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
     uint16_t tmp;
+
+    if (data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *data = 0;
 
     nios_pkt_8x16_pack(buf, id, false, addr, 0);
 
@@ -266,6 +276,11 @@ static int nios_8x32_read(struct bladerf *dev, uint8_t id,
     int status;
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
+
+    if (data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *data = 0;
 
     nios_pkt_8x32_pack(buf, id, false, addr, 0);
 
@@ -414,6 +429,11 @@ static int nios_32x32_read(struct bladerf *dev, uint32_t id,
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
 
+    if (data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *data = 0;
+
     nios_pkt_32x32_pack(buf, id, false, addr, 0);
 
     status = nios_access(dev, buf);
@@ -462,6 +482,11 @@ static int nios_32x32_masked_read(struct bladerf *dev, uint8_t id,
     int status;
     bool success;
     uint8_t buf[NIOS_PKT_LEN];
+
+    if (val == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *val = 0;
 
     /* The address is used as a mask of bits to read and return */
     nios_pkt_32x32_pack(buf, id, false, mask, 0);
