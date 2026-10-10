@@ -230,6 +230,11 @@ int main(void)
             ad9361_mcs(NULL, 1) != -EINVAL ||
             ad9361_setup(NULL) != -EINVAL ||
             ad9361_validate_enable_fir(NULL) != -EINVAL ||
+            ad9361_register_clocks(NULL) != -EINVAL ||
+            ad9361_unregister_clocks(NULL) != -EINVAL ||
+            ad9361_rssi_gain_step_calib(NULL) != -EINVAL ||
+            ad9361_rssi_program_lna_gain(NULL) != -EINVAL ||
+            ad9361_rssi_write_err_tbl(NULL) != -EINVAL ||
             read_count != reads_before || write_count != writes_before) {
             fprintf(stderr,
                     "AD9361 API accepted incomplete state or touched SPI\n");
