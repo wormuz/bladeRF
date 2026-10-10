@@ -255,6 +255,7 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
          event_type != BLADERF_RF_EVT_TX_TRANSPORT_ERROR &&
          event_type != BLADERF_RF_EVT_TX_RFIC_STATE_VALID &&
          event_type != BLADERF_RF_EVT_TX_RFIC_STATE_INVALID &&
+         event_type != BLADERF_RF_EVT_TX_CONFIGURATION_INVALID &&
          event_type != BLADERF_RF_EVT_TX_RETUNE_FAILED)) {
         return;
     }

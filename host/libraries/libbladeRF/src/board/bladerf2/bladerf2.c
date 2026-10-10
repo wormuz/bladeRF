@@ -5247,7 +5247,7 @@ static int bladerf2_tx_rf_config_change_begin(
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     bladerf2_tx_stream_event(
-        dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0, pending_count, 0);
+        dev, BLADERF_RF_EVT_TX_CONFIGURATION_INVALID, 0, 0, 0);
 
     if (queue_may_exist) {
         if (dev->backend->retune2 == NULL) {

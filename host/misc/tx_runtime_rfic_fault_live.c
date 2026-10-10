@@ -173,7 +173,7 @@ int main(void)
                 expected_event_seen = true;
             } else if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 &&
                        event->event_type ==
-                           BLADERF_RF_EVT_TX_RFIC_STATE_INVALID) {
+                           BLADERF_RF_EVT_TX_CONFIGURATION_INVALID) {
                 expected_event_seen = true;
             }
         }

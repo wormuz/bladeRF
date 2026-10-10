@@ -4948,7 +4948,11 @@ typedef enum {
     BLADERF_RF_EVT_TX_RETUNE_VALID,
     /** An ordinary host TX LO write has begun. RFIC-state and frequency
      * certificates are revoked until fresh post-retune observations arrive. */
-    BLADERF_RF_EVT_TX_FREQUENCY_INVALID
+    BLADERF_RF_EVT_TX_FREQUENCY_INVALID,
+    /** A TX RF configuration control changed outside the certified retune
+     * path. RFIC-state and frequency certificates are revoked; the TX link
+     * certificate remains independent and is not reported as failed. */
+    BLADERF_RF_EVT_TX_CONFIGURATION_INVALID
 } bladerf_rf_event_type;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
