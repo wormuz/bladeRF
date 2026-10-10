@@ -196,6 +196,20 @@ before META copy, revokes the generation, resumes the copy, and requires the
 read to fail with zeroed output and no first-host-data event. Source only;
 regression remains unrun under the gate.
 
+### Async RX backend/admission source pass
+
+Re-traced libusb and CyAPI callback exits. Terminal transport errors publish
+the reason-coded withheld event and event-only callback before stream teardown;
+requested shutdown is handled separately and does not become a transport
+fault. Completed transfers pass through the shared length/epoch/timestamp/
+channel validator, which commits the timestamp cursor and first-host-data
+event under the RX-state lock before the sample callback. The callback path
+rechecks stream state before resubmission. In sync mode, the reject hook
+retires the submitted sequence and chooses a replacement ring slot before
+the withheld callback can wake the reader. No new source defect confirmed in
+these slices. Backend fault injection, stale callback and close/restart races,
+and exact-image RX1/RX2 qualification remain open; no build/test was run.
+
 ### Sync RX delivery/invalidation linearization slice
 
 `sync_rx()` snapshots the RX generation before locking the parser, checks it
