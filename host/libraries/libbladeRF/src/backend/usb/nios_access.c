@@ -343,6 +343,13 @@ static int nios_16x64_read(struct bladerf *dev,
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
 
+    if (data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    /* A missing/late NIOS response must not leave a previous RFIC register
+     * value in the caller's output slot. */
+    *data = 0;
+
     nios_pkt_16x64_pack(buf, id, false, addr, 0);
 
     /* Wait for the response without retransmitting the command. */

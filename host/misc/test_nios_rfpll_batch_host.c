@@ -20,6 +20,7 @@ enum response_mode {
     RESPONSE_SNAPSHOT_UNSUPPORTED,
     RESPONSE_SPI_READ_SUCCESS,
     RESPONSE_SPI_READ_FAILURE,
+    RESPONSE_RFIC_READ_TIMEOUT,
 };
 
 static enum response_mode response_mode;
@@ -54,6 +55,10 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
 
     nios_pkt_16x64_unpack(request, &target, &write, &count, &data);
     in_count++;
+    if (target == NIOS_PKT_16x64_TARGET_RFIC && !write &&
+        response_mode == RESPONSE_RFIC_READ_TIMEOUT) {
+        return BLADERF_ERR_TIMEOUT;
+    }
     if (target == NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT && !write) {
         if (response_mode == RESPONSE_SNAPSHOT_SUCCESS) {
             nios_pkt_16x64_resp_pack(bytes, target, false, count,
@@ -209,6 +214,26 @@ static int expect_spi_read(enum response_mode mode, int expected_status)
     return 0;
 }
 
+static int expect_rfic_read_timeout_clears_output(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint64_t data = UINT64_MAX;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_RFIC_READ_TIMEOUT;
+    status = nios_rfic_command_read(&dev, 0x0100, &data);
+    if (status != BLADERF_ERR_TIMEOUT || data != 0) {
+        fprintf(stderr, "RFIC timeout left stale output: status=%d data=%016llx\n",
+                status, (unsigned long long)data);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 int main(void)
 {
     if (expect(RESPONSE_SUCCESS, 0) ||
@@ -223,7 +248,8 @@ int main(void)
                         BLADERF_ERR_UNSUPPORTED) ||
         expect_spi_read(RESPONSE_SPI_READ_SUCCESS, 0) ||
         expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
-        out_count != 10 || in_count != 10) {
+        expect_rfic_read_timeout_clears_output() ||
+        out_count != 11 || in_count != 11) {
         return 1;
     }
 
