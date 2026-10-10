@@ -2217,11 +2217,19 @@ static int bladerf2_tx_gate_abort_fail_closed(
     uint32_t link_status)
 {
     int status;
+    bool report_abort_failure;
+    uint64_t transport_failure_generation;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_retune2_completion_faulted = true;
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     board_data->tx_retune_recovery_pending = true;
+    if (!board_data->tx_gate_abort_pending) {
+        board_data->tx_gate_abort_failure_reported = false;
+    }
+    board_data->tx_gate_abort_pending = true;
+    transport_failure_generation =
+        board_data->tx_async_transport_failure_generation;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_retune_gate_release_requested = false;
 
@@ -2230,9 +2238,24 @@ static int bladerf2_tx_gate_abort_fail_closed(
         board_data->tx_recovery_blocked = true;
         board_data->tx_status_unavailable_reported = true;
         bladerf2_tx_stream_set_faulted(board_data, true);
-        bladerf2_tx_stream_event(
-            dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
-            link_status, status);
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        report_abort_failure =
+            !board_data->tx_gate_abort_failure_reported;
+        board_data->tx_gate_abort_failure_reported = true;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (report_abort_failure) {
+            bladerf2_tx_stream_event(
+                dev, BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE, 0,
+                link_status, status);
+        }
+    } else {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        if (board_data->tx_async_transport_failure_generation ==
+            transport_failure_generation) {
+            board_data->tx_gate_abort_pending = false;
+            board_data->tx_gate_abort_failure_reported = false;
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
     return status;
 }
