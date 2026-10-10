@@ -321,9 +321,10 @@ static inline void profile_load_scheduled(struct queue *q,
                     if (profile_load(module, &e->profile)) {
                         /* Mark profile slot used */
                         used |= 1 << e->profile.profile_num;
-                    } else {
-                        INCREMENT_ERROR_COUNT();
                     }
+                    /* Preload is opportunistic. ENTRY_STATE_NEW retries the
+                     * load before arming this entry, and only that terminal
+                     * failure should be published to the host. */
                 }
             }
         }

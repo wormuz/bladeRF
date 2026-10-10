@@ -274,6 +274,45 @@ static int check_deferred_failure_reporting(void)
     return 0;
 }
 
+static int check_preload_retry_is_not_a_terminal_failure(void)
+{
+    fastlock_profile tx_profile = { 0 };
+
+    pkt_retune2_init();
+    tx_profile.profile_num = 5;
+    tx_profile.state = FASTLOCK_STATE_BBP;
+    if (enqueue_retune(&tx_queue, &tx_profile, 5, 10) != 1) {
+        fputs("failed to enqueue speculative preload case\n", stderr);
+        return 1;
+    }
+
+    fail_profile_load = true;
+    profile_load_scheduled(&tx_queue, BLADERF_MODULE_TX);
+    fail_profile_load = false;
+    if (pkt_retune2_failure_count(BLADERF_MODULE_TX) != 0 ||
+        tx_queue.count != 1 ||
+        tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_NEW) {
+        fputs("speculative preload failure was reported as terminal\n",
+              stderr);
+        return 1;
+    }
+
+    /* The execution path retries the preload; a successful retry and recall
+     * must leave the host-visible failure counter unchanged. */
+    pkt_retune2_work();
+    retune_isr(&tx_queue);
+    pkt_retune2_work();
+    if (pkt_retune2_failure_count(BLADERF_MODULE_TX) != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
+        tx_queue.count != 0) {
+        fputs("successful preload retry still reported a retune failure\n",
+              stderr);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int check_profile_index_validation(void)
 {
     if (!retune2_profile_indices_valid(0, 0) ||
@@ -365,6 +404,9 @@ int main(void)
         return 1;
     }
     if (check_deferred_failure_reporting() != 0) {
+        return 1;
+    }
+    if (check_preload_retry_is_not_a_terminal_failure() != 0) {
         return 1;
     }
     if (check_profile_index_validation() != 0) {
