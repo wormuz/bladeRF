@@ -184,6 +184,24 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* Public lifecycle boundaries must reject missing arguments before
+     * allocation, SPI, or teardown side effects. */
+    {
+        AD9361_InitParam init_param = {0};
+        struct ad9361_rf_phy *init_result = &phy;
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+
+        if (ad9361_init(NULL, &init_param) != -EINVAL ||
+            ad9361_init(&init_result, NULL) != -EINVAL || init_result != NULL ||
+            ad9361_remove(NULL) != -EINVAL ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "AD9361 lifecycle API accepted missing state or touched SPI\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* post_setup is public and can be reached outside normal init. Its shared
      * preflight must reject each missing dependency before AXI is touched. */
     {
