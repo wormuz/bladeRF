@@ -1638,6 +1638,7 @@ int bladerf_set_stream_timeout(struct bladerf *dev,
                                unsigned int timeout)
 {
     int status;
+    CHECK_NULL(dev);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->set_stream_timeout(dev, dir, timeout);
@@ -1651,6 +1652,7 @@ int bladerf_get_stream_timeout(struct bladerf *dev,
                                unsigned int *timeout)
 {
     int status;
+    CHECK_NULL(dev);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->get_stream_timeout(dev, dir, timeout);
@@ -1670,6 +1672,7 @@ int bladerf_sync_config(struct bladerf *dev,
     int status;
     const bool is_rx =
         (layout & BLADERF_DIRECTION_MASK) == BLADERF_RX;
+    CHECK_NULL(dev);
 
     if (is_rx) {
         status = invalidate_rx_data_before_reconfigure(
@@ -1710,6 +1713,7 @@ int bladerf_sync_tx(struct bladerf *dev,
                     struct bladerf_metadata *metadata,
                     unsigned int timeout_ms)
 {
+    CHECK_NULL(dev);
     CHECK_NULL(samples);
     return dev->board->sync_tx(dev, samples, num_samples, metadata, timeout_ms);
 }
@@ -1720,6 +1724,7 @@ int bladerf_sync_rx(struct bladerf *dev,
                     struct bladerf_metadata *metadata,
                     unsigned int timeout_ms)
 {
+    CHECK_NULL(dev);
     return dev->board->sync_rx(dev, samples, num_samples, metadata, timeout_ms);
 }
 
