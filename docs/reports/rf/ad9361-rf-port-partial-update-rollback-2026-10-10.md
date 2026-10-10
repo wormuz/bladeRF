@@ -6,6 +6,8 @@ The no-OS implementation now snapshots `REG_INPUT_SELECT`, `REG_ANALOG_POWER_DOW
 
 This closes the recoverable partial-update path when the SPI link accepts rollback writes. A persistent SPI fault can still prevent restoration; the original failure remains visible to libbladeRF. This source finding is not evidence that shielding complaints or observed spurs came from this path. Correlation still requires RF captures and register/event traces.
 
-Commit: `e1e955322 Rollback partial AD9361 RF port changes`.
+A related cache-state defect existed in external band control. A band update can partially change external-switch GPIOs before a later operation fails, while `current_rx_setting` or `current_tx_setting` still points to the old band. Returning to that cached band used to skip all writes, preserving the partial switch state. On any failed band application, no-OS now clears the cached setting so the next request fully reapplies the configured GPIOs and RF ports. This is recovery on the next band request; it does not claim hardware rollback during the failing request.
+
+Commits: `e1e955322 Rollback partial AD9361 RF port changes`; `cb035cd61 Invalidate cached band after partial switch failure`.
 
 Validation: `git diff --check` passed before commit. Builds and tests were intentionally not run because the broader RX/TX source audit is still open under the no-build instruction.
