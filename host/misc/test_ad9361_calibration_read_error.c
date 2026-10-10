@@ -209,6 +209,18 @@ int main(void)
         struct axiadc_converter converter = {0};
         struct axiadc_chip_info chip_info = {0};
         struct axi_adc rx_adc = {0};
+        struct refclk_scale sample_clock = {0};
+		struct {
+			char buf[AD9361_TIMING_ANALYSIS_BUFFER_SIZE];
+			char canary;
+		} report = {{0}, (char)0x6b};
+		uint8_t timing_field[16][16] = {{0}};
+		int32_t report_len;
+        struct {
+            char buf[4];
+            char canary;
+        } bounded_output = {{0}, (char)0x5a};
+        size_t output_len = 0;
 
         incomplete.pdata = &pdata;
         if (ad9361_post_setup_validate(NULL) != -EINVAL ||
@@ -220,6 +232,7 @@ int main(void)
             return EXIT_FAILURE;
 
         converter.chip_info = &chip_info;
+        chip_info.num_channels = 4;
         if (ad9361_post_setup_validate(&incomplete) != -EINVAL)
             return EXIT_FAILURE;
 
@@ -229,8 +242,40 @@ int main(void)
             return EXIT_FAILURE;
 
         incomplete.pdata = &pdata;
+        incomplete.spi = &spi;
         if (ad9361_post_setup_validate(&incomplete) != 0)
             return EXIT_FAILURE;
+
+        incomplete.ref_clk_scale[RX_SAMPL_CLK] = &sample_clock;
+		if (ad9361_timing_analysis_validate(&incomplete, NULL,
+						    sizeof(report.buf)) != -EINVAL ||
+		    ad9361_timing_analysis_validate(&incomplete, report.buf, 0) != -ENOSPC ||
+		    ad9361_timing_analysis_validate(
+			    &incomplete, report.buf,
+			    AD9361_TIMING_ANALYSIS_BUFFER_SIZE - 1) != -ENOSPC ||
+		    ad9361_timing_analysis_validate(
+			    &incomplete, report.buf, sizeof(report.buf)) != 0 ||
+            ad9361_timing_append(bounded_output.buf,
+                                 sizeof(bounded_output.buf), &output_len,
+                                 "%s", "more than four bytes") != -ENOSPC ||
+            bounded_output.canary != (char)0x5a ||
+            bounded_output.buf[sizeof(bounded_output.buf) - 1] != '\0') {
+            fprintf(stderr,
+                    "AD9361 timing-analysis validation exceeded its buffer\n");
+            return EXIT_FAILURE;
+        }
+		report_len = ad9361_format_timing_report(
+			report.buf, sizeof(report.buf), UINT32_MAX, timing_field);
+		if (report_len <= 0 || report_len >= (int32_t)sizeof(report.buf) ||
+		    report.buf[report_len] != '\0' || report.canary != (char)0x6b ||
+		    ad9361_format_timing_report(
+			    report.buf, AD9361_TIMING_ANALYSIS_BUFFER_SIZE - 1,
+			    UINT32_MAX, timing_field) != -ENOSPC ||
+		    report.canary != (char)0x6b) {
+			fprintf(stderr,
+				"AD9361 timing report formatter exceeded its buffer\n");
+			return EXIT_FAILURE;
+		}
     }
 
     /* The exported gain-control primitive must reject incomplete state
