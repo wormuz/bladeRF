@@ -27,6 +27,7 @@
 #include "nios_pkt_8x32.h"
 #include "pkt_8x32.h"
 #include "pkt_retune2.h"
+#include "nios_pkt_8x32_diag.h"
 #include "devices.h"
 #include "debug.h"
 
@@ -45,6 +46,13 @@ static uint16_t pretrig_base = 0;
 
 static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
 {
+#ifdef BOARD_BLADERF_MICRO
+    if (!nios_pkt_8x32_diagnostic_read_addr_valid(id, addr)) {
+        *data = 0;
+        return false;
+    }
+#endif
+
     switch (id) {
         case NIOS_PKT_8x32_TARGET_VERSION:
             *data = fpga_version();

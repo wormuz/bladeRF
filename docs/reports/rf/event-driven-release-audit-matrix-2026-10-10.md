@@ -377,9 +377,11 @@ out-of-range retune failure/success counters, completion-record fields,
 loss-counter halves, and dwell-record words. A caller typo or ABI mismatch
 could therefore be mistaken for a valid zero diagnostic. These cases now
 preserve zero data but return packet failure; valid address ranges remain
-unchanged. The existing generic packet regression compiles without the xA4
-board macro and cannot exercise these guarded branches, so add a board-path
-packet regression before the source-audit gate closes. No build or test run.
+unchanged. A shared bounds helper and regression source now cover the last
+valid and first invalid subaddress for each diagnostic family. The generic packet runner
+compiles without the xA4 board macro, so it does not exercise the guarded
+packet response branch; add a board-path packet regression before the
+source-audit gate closes. No build or test run.
 
 A direct source review of `rx_fault_monitor_task()` confirmed its certified-RX
 failure handling order: channel-mask read failure/change, FPGA status transport

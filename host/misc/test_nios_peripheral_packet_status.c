@@ -10,6 +10,7 @@
 #include "nios_pkt_8x16.h"
 #include "nios_pkt_8x8.h"
 #include "nios_pkt_8x32.h"
+#include "nios_pkt_8x32_diag.h"
 
 static bool peripheral_success;
 static bool lms_success;
@@ -232,11 +233,38 @@ static int check_8x8_lms_read_failure(void)
     return target == NIOS_PKT_8x8_TARGET_LMS6 && !write && !success ? 0 : 1;
 }
 
+static int check_8x32_diagnostic_address_bounds(void)
+{
+    static const struct {
+        uint8_t target;
+        uint8_t valid_addr;
+        uint8_t invalid_addr;
+    } bounds[] = {
+        { NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, 1, 2 },
+        { NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, 1, 2 },
+        { NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, 5, 6 },
+        { NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 3, 4 },
+        { NIOS_PKT_8x32_TARGET_DWELL_READOUT, 15, 16 },
+    };
+    unsigned int i;
+
+    for (i = 0; i < sizeof(bounds) / sizeof(bounds[0]); ++i) {
+        if (!nios_pkt_8x32_diagnostic_read_addr_valid(
+                bounds[i].target, bounds[i].valid_addr) ||
+            nios_pkt_8x32_diagnostic_read_addr_valid(
+                bounds[i].target, bounds[i].invalid_addr)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (check_8x16_write_failure() || check_8x16_read_failure() ||
         check_8x32_write_failure() || check_8x8_si5338_failure() ||
-        check_8x8_lms_failure() || check_8x8_lms_read_failure()) {
+        check_8x8_lms_failure() || check_8x8_lms_read_failure() ||
+        check_8x32_diagnostic_address_bounds()) {
         fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;
     }
