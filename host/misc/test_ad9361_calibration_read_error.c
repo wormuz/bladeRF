@@ -85,6 +85,7 @@ int32_t ad9361_hdl_loopback(struct ad9361_rf_phy *phy, bool enable)
 }
 
 static unsigned read_count;
+static unsigned write_count;
 static unsigned delay_count;
 static int32_t spi_status;
 static bool register_map_enabled;
@@ -123,6 +124,7 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     command = (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
     reg = command & 0x3ff;
     if (command & AD_WRITE) {
+        ++write_count;
         if ((int32_t)reg == fail_write_reg)
             return -EIO;
         if (register_map_enabled) {
@@ -147,6 +149,9 @@ int main(void)
     struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
     uint64_t lo_frequency = UINT64_MAX;
+    uint32_t tx_attenuation = UINT32_MAX;
+    uint32_t tx_rssi = UINT32_MAX;
+    struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
     phy.spi = &spi;
     phy.pdata = &pdata;
 
@@ -160,6 +165,20 @@ int main(void)
         ad9361_get_tx_lo_freq(NULL, &lo_frequency) != -EINVAL ||
         lo_frequency != UINT64_MAX) {
         fprintf(stderr, "AD9361 LO APIs accepted missing arguments\n");
+        return EXIT_FAILURE;
+    }
+
+    /* A nonexistent 1x1 TX channel must not become a successful no-op, and
+     * invalid RX/TX lane reads must fail before touching SPI or outputs. */
+    if (ad9361_set_tx_attenuation(&phy, 1, 10000) != -EINVAL ||
+        ad9361_set_tx_attenuation(&phy, 2, 10000) != -EINVAL ||
+        ad9361_get_tx_attenuation(&phy, 1, &tx_attenuation) != -EINVAL ||
+        ad9361_get_tx_rssi(&phy, 1, &tx_rssi) != -EINVAL ||
+        ad9361_get_rx_rssi(&phy, 1, &rx_rssi) != -EINVAL ||
+        read_count != 0 || write_count != 0 ||
+        tx_attenuation != UINT32_MAX || tx_rssi != UINT32_MAX ||
+        rx_rssi.ant != UINT8_MAX) {
+        fprintf(stderr, "AD9361 accepted invalid channel or touched SPI\n");
         return EXIT_FAILURE;
     }
 
