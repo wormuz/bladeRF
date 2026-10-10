@@ -1206,16 +1206,25 @@ static void *rx_fault_monitor_task(void *arg)
                                 bool request_found = false;
                                 uint64_t requested_frequency_hz = 0;
                                 uint8_t pending_after = 0;
+                                int completion_read_status = 0;
 
                                 sequence++;
                                 _rx_fault_monitor_stage(
                                     board_data,
                                     "NIOS TX completion record");
-                                if (nios_retune2_completion_read(
-                                        dev, BLADERF_MODULE_TX, sequence,
-                                        &readback_frequency_hz,
-                                        &scheduled_timestamp,
-                                        &nios_profile) != 0) {
+                                /* NIOS stores the selected module/sequence
+                                 * globally. Serialize selector+all field
+                                 * reads against every other device control
+                                 * transaction, not just individual USB ops. */
+                                WITH_MUTEX(&dev->lock, {
+                                    completion_read_status =
+                                        nios_retune2_completion_read(
+                                            dev, BLADERF_MODULE_TX, sequence,
+                                            &readback_frequency_hz,
+                                            &scheduled_timestamp,
+                                            &nios_profile);
+                                });
+                                if (completion_read_status != 0) {
                                     completion_lost = true;
                                     break;
                                 }
