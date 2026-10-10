@@ -198,7 +198,10 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
 
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    report = !board_data->tx_stream_faulted_async;
+    /* Stream admission may already be closed for an RF retune/configuration.
+     * That must not suppress the first distinct USB/host transport error;
+     * deduplicate against the transport latch itself, not aggregate TX state. */
+    report = !board_data->tx_async_transport_faulted;
     new_gate_abort = !board_data->tx_gate_abort_pending;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;

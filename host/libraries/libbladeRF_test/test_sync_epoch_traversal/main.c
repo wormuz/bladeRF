@@ -194,6 +194,39 @@ static void test_public_sync_apis_reject_null_device(void)
            BLADERF_ERR_INVAL);
 }
 
+static void test_tx_transport_fault_is_not_hidden_by_other_invalidity(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+
+    /* A prior RF/config event has already closed admission, but the first
+     * transport error in this link epoch still needs its own durable event. */
+    board_data.tx_stream_faulted_async = true;
+    bladerf2_tx_async_transport_failure(&dev, BLADERF_ERR_IO);
+    assert(board_data.tx_async_transport_faulted);
+    assert(board_data.tx_stream_faulted_async);
+    assert(board_data.rf_transition_event_sequence == 1);
+    const uint32_t event_index =
+        (board_data.rf_transition_event_head +
+         BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+        BLADERF2_RF_EVENT_HISTORY_SIZE;
+    assert(board_data.rf_transition_events[event_index].event_type ==
+           BLADERF_RF_EVT_TX_TRANSPORT_ERROR);
+    assert(board_data.rf_transition_events[event_index].error_code ==
+           BLADERF_ERR_IO);
+
+    /* Repeated callback failures remain deduplicated until a new link epoch. */
+    bladerf2_tx_async_transport_failure(&dev, BLADERF_ERR_MEM);
+    assert(board_data.rf_transition_event_sequence == 1);
+
+    MUTEX_DESTROY(&board_data.rf_transition_event_lock);
+    MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
+}
+
 static void test_rf_event_cursor_resynchronizes_after_overrun(void)
 {
     struct bladerf dev = {0};
@@ -2110,6 +2143,7 @@ int main(void)
 {
     test_tx_async_shutdown_reports_only_real_errors();
     test_public_sync_apis_reject_null_device();
+    test_tx_transport_fault_is_not_hidden_by_other_invalidity();
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();
