@@ -58,7 +58,7 @@ uint8_t rfic_dequeue(struct rfic_queue *q, struct rfic_queue_entry *e)
     }
 
     if (e != NULL) {
-        memcpy(&e, &q->entries[q->rem_idx], sizeof(e[0]));
+        memcpy(e, &q->entries[q->rem_idx], sizeof(*e));
     }
 
     q->rem_idx = (q->rem_idx + 1) & (COMMAND_QUEUE_MAX - 1);
