@@ -503,6 +503,108 @@ int main(void)
         }
     }
 
+    /* Fastlock recall must propagate read, ALC workaround, and prepare
+     * failures without publishing the selected profile as active. */
+    {
+        struct ad9361_fastlock_entry *profile = &phy.fastlock.entry[0][0];
+        unsigned writes_before;
+
+        writes_before = write_count;
+        if (ad9361_fastlock_recall(NULL, false, 0) != -EINVAL ||
+            ad9361_fastlock_recall(&phy, false, 8) != -EINVAL) {
+            fprintf(stderr, "Fastlock recall accepted missing/invalid arguments\n");
+            return EXIT_FAILURE;
+        }
+        phy.fastlock.current_profile[0] = 9;
+        if (ad9361_fastlock_recall(&phy, false, 0) != -EINVAL ||
+            write_count != writes_before) {
+            fprintf(stderr, "Fastlock recall indexed an invalid cached profile\n");
+            return EXIT_FAILURE;
+        }
+        phy.fastlock.current_profile[0] = 0;
+
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        profile->flags = FASTLOOK_INIT;
+        profile->alc_written = 0x10;
+        profile->alc_orig = 0x10;
+        phy.fastlock.current_profile[0] = 0;
+        fail_read_reg = REG_RX_FORCE_ALC;
+        ret = ad9361_fastlock_recall(&phy, false, 0);
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 0) {
+            fprintf(stderr, "Fastlock recall hid ALC status read failure\n");
+            return EXIT_FAILURE;
+        }
+
+        fail_read_reg = -1;
+        profile->alc_written = 0;
+        profile->alc_orig = 0;
+        fail_write_once_reg = REG_RX_FAST_LOCK_PROGRAM_ADDR;
+        write_count = 0;
+        ret = ad9361_fastlock_recall(&phy, false, 0);
+        if (ret != -EIO || profile->flags != 0 ||
+            phy.fastlock.current_profile[0] != 0 ||
+            fake_regs[REG_RX_FAST_LOCK_PROGRAM_CTRL] != 0) {
+            fprintf(stderr,
+                    "Fastlock recall hid ALC profile write failure: ret=%" PRId32
+                    " flags=%" PRIu32 " current=%u\n", ret, profile->flags,
+                    phy.fastlock.current_profile[0]);
+            return EXIT_FAILURE;
+        }
+
+        profile->flags = FASTLOOK_INIT;
+        profile->alc_written = 0x10;
+        profile->alc_orig = 0x10;
+        fail_write_reg = REG_RX_FAST_LOCK_SETUP_INIT_DELAY;
+        ret = ad9361_fastlock_recall(&phy, false, 0);
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 0) {
+            fprintf(stderr,
+                    "Fastlock recall hid prepare failure: ret=%" PRId32
+                    " current=%u\n", ret,
+                    phy.fastlock.current_profile[0]);
+            return EXIT_FAILURE;
+        }
+
+        fail_write_reg = -1;
+        fail_write_once_reg = REG_ENSM_CONFIG_2;
+        ret = ad9361_fastlock_recall(&phy, false, 0);
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 0 ||
+            (fake_regs[REG_RX_FAST_LOCK_SETUP] & RX_FAST_LOCK_MODE_ENABLE) != 0) {
+            fprintf(stderr,
+                    "Fastlock recall did not clean up partial preparation: "
+                    "ret=%" PRId32 " current=%u setup=0x%02x\n", ret,
+                    phy.fastlock.current_profile[0],
+                    fake_regs[REG_RX_FAST_LOCK_SETUP]);
+            return EXIT_FAILURE;
+        }
+        fail_write_once_reg = -1;
+
+        /* The same shared recall implementation serves TX profiles; check
+         * that the TX register bank reports failures and bounds-checks its
+         * independent active-profile cache as well. */
+        phy.fastlock.entry[1][0].flags = FASTLOOK_INIT;
+        phy.fastlock.entry[1][0].alc_written = 0x10;
+        phy.fastlock.entry[1][0].alc_orig = 0x10;
+        phy.fastlock.current_profile[1] = 0;
+        fail_read_reg = REG_TX_FORCE_ALC;
+        ret = ad9361_fastlock_recall(&phy, true, 0);
+        if (ret != -EIO || phy.fastlock.current_profile[1] != 0) {
+            fprintf(stderr, "TX fastlock recall hid ALC status read failure\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = -1;
+        phy.fastlock.current_profile[1] = 9;
+        writes_before = write_count;
+        if (ad9361_fastlock_recall(&phy, true, 0) != -EINVAL ||
+            write_count != writes_before) {
+            fprintf(stderr, "TX fastlock recall indexed invalid cached profile\n");
+            return EXIT_FAILURE;
+        }
+        phy.fastlock.current_profile[1] = 0;
+        register_map_enabled = false;
+        read_count = write_count = 0;
+    }
+
     /* Public status/configuration APIs must not report cached or fabricated
      * values when their underlying SPI transaction fails. */
     {
