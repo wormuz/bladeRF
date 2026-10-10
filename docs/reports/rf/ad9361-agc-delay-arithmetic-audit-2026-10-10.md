@@ -17,13 +17,18 @@ The delay intermediates and rounded clock ratio now use `uint64_t`, with each
 hardware field saturated before narrowing. The RF clock is rejected below
 1000 Hz, which keeps the smallest attack-delay divisor nonzero. Measurement
 duration and its divider are calculated and validated before the first AGC
-register write.
+register write. `ad9361_gc_setup()` now runs the same timing preflight using
+the requested modes before mutating cached modes or programming any of its
+registers, so invalid clock/interval inputs cannot leave a partial setup. The
+internal update/setup entry points also reject missing state before
+dereferencing SPI, platform-data, or clock objects.
 
-Regression source in `host/misc/test_ad9361_calibration_read_error.c` covers a
-499 Hz clock with no SPI writes and `UINT32_MAX` eLNA/fast-energy delays that
-must saturate all corresponding fields. The existing test's write-count
-baseline was also corrected; its RX ADC no-write check now uses a separate
-read-count baseline.
+Regression source in `host/misc/test_ad9361_calibration_read_error.c` covers
+invalid AGC setup timing, missing state, and a 499 Hz clock with no SPI writes
+or cached-mode mutation, plus `UINT32_MAX` eLNA/fast-energy delays that must
+saturate all corresponding fields. The existing test's write-count baseline
+was also corrected; its RX ADC no-write check now uses a separate read-count
+baseline.
 
 ## Validation status
 

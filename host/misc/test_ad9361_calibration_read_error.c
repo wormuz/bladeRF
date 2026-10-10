@@ -339,6 +339,10 @@ int main(void)
             ad9361_ensm_mode_restore_pinctrl(&phy_without_spi) != -EINVAL ||
             ad9361_set_cal_sw(NULL, 0) != -EINVAL ||
             ad9361_set_cal_sw(&phy_without_spi, 0) != -EINVAL ||
+            ad9361_gc_update(NULL) != -EINVAL ||
+            ad9361_gc_update(&phy_without_spi) != -EINVAL ||
+            ad9361_gc_setup(NULL, &gain) != -EINVAL ||
+            ad9361_gc_setup(&phy_without_spi, &gain) != -EINVAL ||
             read_count != reads_before || write_count != writes_before ||
             phy.rate_governor != UINT32_MAX ||
             rate_governor != UINT32_MAX || temperature != INT32_MAX ||
@@ -2164,6 +2168,17 @@ int main(void)
             fprintf(stderr, "AGC setup accepted zero measurement duration: ret=%" PRId32 "\n", ret);
             return EXIT_FAILURE;
         }
+        writes_before = write_count;
+        ret = ad9361_gc_setup(&agc_phy, &agc_pdata.gain_ctrl);
+        if (ret != -EINVAL || write_count != writes_before ||
+            agc_phy.agc_mode[0] != 0 || agc_phy.agc_mode[1] != 0) {
+            fprintf(stderr,
+                    "AGC setup partially configured invalid timing: "
+                    "ret=%" PRId32 " writes=%u/%u modes=%u/%u\n",
+                    ret, write_count, writes_before,
+                    agc_phy.agc_mode[0], agc_phy.agc_mode[1]);
+            return EXIT_FAILURE;
+        }
         if (ad9361_gc_gain_update_counter(0, 30720000, 20,
                                          &gain_update_counter) != -EINVAL ||
             gain_update_counter != UINT32_MAX ||
@@ -2196,6 +2211,16 @@ int main(void)
         agc_pdata.gain_ctrl.gain_update_interval_us = 100;
         agc_rf_clock.rate = 499;
         writes_before = write_count;
+        ret = ad9361_gc_setup(&agc_phy, &agc_pdata.gain_ctrl);
+        if (ret != -EIO || write_count != writes_before ||
+            agc_phy.agc_mode[0] != 0 || agc_phy.agc_mode[1] != 0) {
+            fprintf(stderr,
+                    "AGC setup partially configured low RF clock: "
+                    "ret=%" PRId32 " writes=%u/%u modes=%u/%u\n",
+                    ret, write_count, writes_before,
+                    agc_phy.agc_mode[0], agc_phy.agc_mode[1]);
+            return EXIT_FAILURE;
+        }
         ret = ad9361_gc_update(&agc_phy);
         if (ret != -EIO || write_count != writes_before) {
             fprintf(stderr,
