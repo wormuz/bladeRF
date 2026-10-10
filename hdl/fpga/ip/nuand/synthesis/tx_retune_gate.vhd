@@ -141,18 +141,14 @@ begin
                         state_i <= STATE_ARMED;
                     end if;
                 elsif state_i = STATE_ERROR then
-                    -- Recovery requires a fresh ARM and later COMPLETE;
-                    -- ABORT cannot itself reopen TX.
+                    -- Recovery after an abort remains muted immediately.
+                    -- Waiting until a future scheduled boundary here would
+                    -- briefly replay stale IQ while RFIC state is unknown.
+                    -- A fresh ARM and later COMPLETE are both required to
+                    -- resume the stream.
                     target_i <= target_timestamp;
                     immediate_i <= arm_immediate;
-                    if arm_immediate = '1' or
-                       signed(timestamp - target_timestamp) >= 0 then
-                        state_i <= STATE_MUTED;
-                        mute_start_timestamp_i <= timestamp;
-                        mute_start_event <= '1';
-                    else
-                        state_i <= STATE_ARMED;
-                    end if;
+                    state_i <= STATE_MUTED;
                 elsif state_i = STATE_ARMED then
                     -- Requests are ordered by NIOS; retain the earliest
                     -- boundary so queued transitions cannot reopen a gap.

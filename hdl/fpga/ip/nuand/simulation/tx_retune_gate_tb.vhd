@@ -115,22 +115,26 @@ begin
         wait until rising_edge(clock);
         wait for 1 ns;
         arm <= '0';
-        -- Timestamp wraps from FFFF...FFFF to 1; target is due within three
-        -- ticks under the same signed modular comparison as NIOS scheduling.
-        assert state = "01" and muted = '0'
-            report "TX gate recovery arm did not wait for wrapped target"
+        -- An ERROR-state recovery must remain muted immediately, even when
+        -- the fresh ARM names a future timestamp. Otherwise stale queued IQ
+        -- leaks before RFIC recovery completes.
+        assert state = "10" and muted = '1' and
+               samples_out(0).data_i = to_signed(0, 16)
+            report "TX gate recovery ARM reopened output before completion"
             severity failure;
         timestamp <= unsigned'(x"ffffffffffffffff");
         wait for 1 ns;
-        assert muted = '0' report "TX gate muted before wrapped target"
+        assert muted = '1' report "TX gate unmuted during recovery"
             severity failure;
         timestamp <= to_unsigned(1, 64);
         wait for 1 ns;
-        assert muted = '1' report "TX gate missed wrapped target"
-            severity failure;
+        complete <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert state = "10" report "TX gate did not latch wrapped boundary"
+        complete <= '0';
+        assert state = "00" and muted = '0' and resume_event = '1' and
+               samples_out(0).data_i = to_signed(1234, 16)
+            report "TX gate did not resume after recovery completion"
             severity failure;
 
         report "tx_retune_gate_tb: PASS" severity note;
