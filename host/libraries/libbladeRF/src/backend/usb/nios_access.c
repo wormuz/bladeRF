@@ -25,7 +25,6 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <time.h>
-#include <unistd.h>
 
 #include "log.h"
 #include "conversions.h"
@@ -1377,7 +1376,7 @@ int nios_tx_retune_gate_cmd(struct bladerf *dev, uint8_t cmd)
 
 int nios_tx_retune_gate_abort(struct bladerf *dev)
 {
-    const useconds_t poll_interval_us = 120;
+    const unsigned int poll_interval_us = 120;
     int status = nios_tx_retune_gate_cmd(
         dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
     if (status == 0) {
@@ -1412,7 +1411,7 @@ int nios_tx_retune_gate_abort(struct bladerf *dev)
 int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
                             bool immediate)
 {
-    const useconds_t poll_interval_us = 120;
+    const unsigned int poll_interval_us = 120;
     int status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
         NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO, (uint32_t)timestamp);
     if (status == 0) {
