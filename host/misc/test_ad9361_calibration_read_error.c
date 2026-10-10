@@ -163,6 +163,7 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 int main(void)
 {
     struct ad9361_rf_phy phy = {0};
+    struct ad9361_rf_phy phy_without_spi = {0};
     struct ad9361_phy_platform_data pdata = {0};
     struct no_os_spi_desc spi = {0};
     int32_t ret;
@@ -170,6 +171,7 @@ int main(void)
     uint32_t tx_attenuation = UINT32_MAX;
     uint32_t rfpll_rate = UINT32_MAX;
     uint32_t tx_rssi = UINT32_MAX;
+    uint32_t tx_rf_port = UINT32_MAX;
     int32_t rx_gain = INT32_MAX;
     uint8_t rx_gc_mode = UINT8_MAX;
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
@@ -1689,6 +1691,15 @@ int main(void)
 	if (ret != -EIO || phy.pdata->rf_tx_output_sel != 0 ||
 	    ad9361_set_tx_rf_port_output(&phy, 2) != -EINVAL) {
 		fprintf(stderr, "TX RF-port API hid error, committed cache, or accepted invalid mode\n");
+		return EXIT_FAILURE;
+	}
+	phy_without_spi.pdata = &pdata;
+	if (ad9361_set_tx_rf_port_output(NULL, 0) != -EINVAL ||
+	    ad9361_set_tx_rf_port_output(&phy_without_spi, 0) != -EINVAL ||
+	    ad9361_get_tx_rf_port_output(NULL, &tx_rf_port) != -EINVAL ||
+	    ad9361_get_tx_rf_port_output(&phy, NULL) != -EINVAL ||
+	    tx_rf_port != UINT32_MAX) {
+		fprintf(stderr, "TX RF-port API accepted missing state/output\n");
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
