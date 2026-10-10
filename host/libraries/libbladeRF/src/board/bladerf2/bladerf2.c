@@ -26,6 +26,9 @@
 #include <errno.h>
 #include <stdlib.h>
 #endif
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+#include <stdlib.h>
+#endif
 
 #include <libbladeRF.h>
 
@@ -2311,7 +2314,17 @@ static int bladerf2_tx_frequency_reconfigure_begin(
              * an outstanding queue. Preserve ordinary host tuning on older
              * firmware where retune2 is unavailable. */
             if (board_data->tx_retune2_failure_watch_active) {
-                if (dev->backend->retune2 == NULL) {
+                bool inject_queue_clear_failure = false;
+#ifdef BLADERF_ENABLE_TEST_RX_TRANSITION_STALL_INJECTION
+                const char *requested_test =
+                    getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+                inject_queue_clear_failure = requested_test != NULL &&
+                    strcmp(requested_test,
+                           "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0;
+#endif
+                if (inject_queue_clear_failure) {
+                    status = BLADERF_ERR_IO;
+                } else if (dev->backend->retune2 == NULL) {
                     status = BLADERF_ERR_UNSUPPORTED;
                 } else {
                     status = dev->backend->retune2(
