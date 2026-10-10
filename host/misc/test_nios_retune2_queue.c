@@ -466,6 +466,6 @@ int main(void)
         return 1;
     }
 
-    puts("NIOS retune2 queue lifecycle and completion-ring overwrite: PASS");
+    puts("NIOS retune2 queue, time-tamer failure, and completion ring: PASS");
     return 0;
 }
