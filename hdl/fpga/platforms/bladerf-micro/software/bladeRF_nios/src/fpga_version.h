@@ -13,7 +13,7 @@
  * compared against an expected value anywhere in the host or Nios tree. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      16
+#define FPGA_VERSION_MINOR      17
 #define FPGA_VERSION_PATCH      1
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \

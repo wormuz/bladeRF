@@ -162,6 +162,12 @@
 #define BLADERF_CAP_FPGA_8BIT_SAMPLES (((uint64_t)1) << 39)
 
 /**
+ * FPGA v0.17.0 reports whether an RFIC write-queue result belongs to a
+ * command retired since the queue was reset.
+ */
+#define BLADERF_CAP_RFIC_WQ_RESULT_VALID (((uint64_t)1) << 40)
+
+/**
  * Max number of gain calibration tables associated to max number of channels
  */
 #define NUM_GAIN_CAL_TBLS 4

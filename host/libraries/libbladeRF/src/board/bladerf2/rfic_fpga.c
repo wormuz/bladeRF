@@ -24,6 +24,7 @@
 #include "board/board.h"
 #include "common.h"
 #include "conversions.h"
+#include "helpers/have_cap.h"
 #include "iterators.h"
 #include "log.h"
 #include "rfic_status_policy.h"
@@ -177,6 +178,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     int jobs;
     int status;
     struct bladerf_rfic_status_register rfic_status;
+    const bool result_valid_supported = have_cap_dev(
+        dev, BLADERF_CAP_RFIC_WQ_RESULT_VALID);
 
     /* Poll the CPU and spin until the job has been completed. */
     do {
@@ -208,9 +211,11 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     /* The separate validity bit distinguishes a retired command result from
      * the 0xFF queue-reset sentinel (whose low bit is one). */
     if (!bladerf2_rfic_status_result_accepted(
+            result_valid_supported,
             rfic_status.last_write_result_valid,
             rfic_status.last_write_success)) {
-        if (!rfic_status.last_write_result_valid) {
+        if (result_valid_supported &&
+            !rfic_status.last_write_result_valid) {
             log_warning("%s: NIOS RFIC queue drained without a retired "
                         "command (initialized=%u, init_stage=%u:%s)\n",
                         __FUNCTION__, rfic_status.rfic_initialized,

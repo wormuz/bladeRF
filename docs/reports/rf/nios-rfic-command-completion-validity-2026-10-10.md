@@ -22,6 +22,16 @@ handling could therefore make an unexecuted RFIC command appear successful.
 - Added a host-side status-policy regression source for the `0xFF` sentinel,
   a successful retired command, and a failed retired command.
 
+## Compatibility follow-up
+
+The validity bit is absent from FPGA/NIOS images predating this change, so a
+new host library must not require it from an older image. FPGA capability
+`BLADERF_CAP_RFIC_WQ_RESULT_VALID` is advertised starting at v0.17.0; the
+bladeRF2 host applies the strict validity check only when that capability is
+present and retains the legacy success-bit check otherwise. The bladeRF2 and
+bladeRF-micro NIOS image version headers now report v0.17.0. The policy
+regression source covers both legacy and capability-enabled behavior.
+
 ## Verification boundary
 
 `git diff --check` passes. The regression runner, host/NIOS builds, and device

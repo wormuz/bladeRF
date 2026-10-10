@@ -29,10 +29,10 @@
 
 /* Queue length zero and a success bit are insufficient: the initial 0xFF
  * last-result sentinel has its success bit set, but no command has retired. */
-static inline bool bladerf2_rfic_status_result_accepted(bool result_valid,
-                                                         bool success)
+static inline bool bladerf2_rfic_status_result_accepted(
+    bool result_valid_supported, bool result_valid, bool success)
 {
-    return result_valid && success;
+    return success && (!result_valid_supported || result_valid);
 }
 
 #endif
