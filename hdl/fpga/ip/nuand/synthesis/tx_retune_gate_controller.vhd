@@ -16,6 +16,7 @@ entity tx_retune_gate_controller is
         tx_reset           : in  std_logic;
         arm                : out std_logic := '0';
         arm_immediate      : out std_logic := '0';
+        arm_ack_toggle     : out std_logic := '0';
         target_timestamp   : out unsigned(63 downto 0) := (others => '0');
         complete           : out std_logic := '0';
         abort              : out std_logic := '0'
@@ -73,6 +74,7 @@ begin
             previous_toggles <= (others => '0');
             arm <= '0';
             arm_immediate <= '0';
+            arm_ack_toggle <= '0';
             target_timestamp <= (others => '0');
             complete <= '0';
             abort <= '0';
@@ -82,6 +84,7 @@ begin
             abort <= '0';
             if control_tx(0) /= previous_toggles(0) then
                 arm <= '1';
+                arm_ack_toggle <= control_tx(0);
             end if;
             if control_tx(1) /= previous_toggles(1) then
                 complete <= '1';

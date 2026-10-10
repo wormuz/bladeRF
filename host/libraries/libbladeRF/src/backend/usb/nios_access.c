@@ -1479,8 +1479,12 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
                             bool immediate)
 {
     const unsigned int poll_interval_us = 120;
-    int status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
-        NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO, (uint32_t)timestamp);
+    uint32_t status_before = 0;
+    int status = nios_tx_retune_gate_status_read(dev, &status_before);
+    if (status == 0) {
+        status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO, (uint32_t)timestamp);
+    }
     if (status == 0) {
         status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
             NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI,
@@ -1501,14 +1505,16 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
                 break;
             }
             state = gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
-            /* ABORT intentionally leaves the gate in sticky ERROR/mute.
-             * The FPGA accepts a fresh ARM from ERROR; wait for that ARM's
-             * synchronized state change instead of treating the expected
-             * pre-ARM state as a permanent failure. */
-            if ((immediate && state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) ||
-                (!immediate &&
-                 (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED ||
-                  state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED))) {
+            /* State alone is not an acknowledgement: an earlier scheduled
+             * request may already have left the gate ARMED. Wait for the
+             * mailbox to capture this command's ARM toggle first. */
+            if (((gate_status ^ status_before) &
+                 NIOS_PKT_8x32_TX_RETUNE_STATUS_ARM_ACK_TOGGLE) != 0 &&
+                ((immediate &&
+                  state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED) ||
+                 (!immediate &&
+                  (state == NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED ||
+                   state == NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED)))) {
                 acknowledged = true;
                 break;
             }

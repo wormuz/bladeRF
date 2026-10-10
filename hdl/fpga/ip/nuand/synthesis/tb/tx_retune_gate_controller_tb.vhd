@@ -15,6 +15,7 @@ architecture test of tx_retune_gate_controller_tb is
     signal target_hi : std_logic_vector(31 downto 0) := (others => '0');
     signal arm : std_logic;
     signal immediate : std_logic;
+    signal arm_ack_toggle : std_logic;
     signal target : unsigned(63 downto 0);
     signal complete : std_logic;
     signal abort : std_logic;
@@ -33,6 +34,7 @@ begin
             tx_reset => tx_reset,
             arm => arm,
             arm_immediate => immediate,
+            arm_ack_toggle => arm_ack_toggle,
             target_timestamp => target,
             complete => complete,
             abort => abort
@@ -66,6 +68,19 @@ begin
         assert std_logic_vector(target) = x"0123456789abcdef"
             report "TX gate target was torn across CDC" severity failure;
         assert immediate = '0' report "future ARM became immediate" severity failure;
+        assert arm_ack_toggle = '1'
+            report "ARM acknowledgement did not match the captured toggle"
+            severity failure;
+        wait_for(arm, '0');
+
+        target_lo <= x"00000002";
+        target_hi <= x"00000003";
+        control(0) <= '0';
+        wait_for(arm, '1');
+        assert std_logic_vector(target) = x"0000000300000002" and
+               arm_ack_toggle = '0'
+            report "back-to-back ARM acknowledgement was stale"
+            severity failure;
         wait_for(arm, '0');
 
         control(1) <= '1';

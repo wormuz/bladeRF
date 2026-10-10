@@ -298,6 +298,7 @@ architecture core_bladerf of bladerf_core is
     signal tx_retune_gate_target_lo_sys  : std_logic_vector(31 downto 0);
     signal tx_retune_gate_target_hi_sys  : std_logic_vector(31 downto 0);
     signal tx_retune_gate_arm_tx         : std_logic := '0';
+    signal tx_retune_gate_arm_ack_tx     : std_logic := '0';
     signal tx_retune_gate_immediate_tx   : std_logic := '0';
     signal tx_retune_gate_target_tx      : unsigned(63 downto 0) := (others => '0');
     signal tx_retune_gate_complete_tx    : std_logic := '0';
@@ -1294,6 +1295,7 @@ begin
             tx_reset          => tx_reset,
             arm               => tx_retune_gate_arm_tx,
             arm_immediate     => tx_retune_gate_immediate_tx,
+            arm_ack_toggle    => tx_retune_gate_arm_ack_tx,
             target_timestamp  => tx_retune_gate_target_tx,
             complete          => tx_retune_gate_complete_tx,
             abort             => tx_retune_gate_abort_tx
@@ -1702,6 +1704,7 @@ begin
             tx_underflow_count   => tx_underflow_count,
             tx_timestamp         => tx_timestamp,
             retune_gate_arm      => tx_retune_gate_arm_tx,
+            retune_gate_arm_ack_toggle => tx_retune_gate_arm_ack_tx,
             retune_gate_arm_immediate => tx_retune_gate_immediate_tx,
             retune_gate_target   => tx_retune_gate_target_tx,
             retune_gate_complete => tx_retune_gate_complete_tx,

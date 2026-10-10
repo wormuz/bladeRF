@@ -50,6 +50,7 @@ entity tx is
         -- controller. The defaults preserve existing non-event-driven
         -- images until the NIOS mailbox is connected at the core level.
         retune_gate_arm      : in std_logic := '0';
+        retune_gate_arm_ack_toggle : in std_logic := '0';
         retune_gate_immediate : in std_logic := '0';
         retune_gate_target   : in unsigned(63 downto 0) := (others => '0');
         retune_gate_complete : in std_logic := '0';
@@ -130,6 +131,7 @@ architecture arch of tx is
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
     signal tx_underflow_event              : std_logic := '0';
     signal retune_gate_state               : unsigned(1 downto 0);
+    signal retune_gate_arm_ack_seen        : std_logic := '0';
     signal retune_gate_muted               : std_logic;
     signal retune_gate_mute_event          : std_logic;
     signal retune_gate_resume_event        : std_logic;
@@ -330,10 +332,12 @@ begin
         if tx_reset = '1' then
             retune_gate_mute_seen <= '0';
             retune_gate_resume_seen <= '0';
+            retune_gate_arm_ack_seen <= '0';
         elsif rising_edge(tx_clock) then
             if retune_gate_arm = '1' then
                 retune_gate_mute_seen <= '0';
                 retune_gate_resume_seen <= '0';
+                retune_gate_arm_ack_seen <= retune_gate_arm_ack_toggle;
             else
                 if retune_gate_mute_event = '1' then
                     retune_gate_mute_seen <= '1';
@@ -345,7 +349,8 @@ begin
         end if;
     end process;
 
-    retune_gate_status <= (31 downto 5 => '0') & retune_gate_resume_seen &
+    retune_gate_status <= (31 downto 6 => '0') & retune_gate_arm_ack_seen &
+                          retune_gate_resume_seen &
                           retune_gate_mute_seen & retune_gate_muted &
                           std_logic_vector(retune_gate_state);
 
