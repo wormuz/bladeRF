@@ -77,12 +77,8 @@ int32_t ad9361_adjust_tx_ext_band_settings(struct ad9361_rf_phy *phy,
     (void)freq;
     return 0;
 }
-int32_t ad9361_hdl_loopback(struct ad9361_rf_phy *phy, bool enable)
-{
-    (void)phy;
-    (void)enable;
-    return 0;
-}
+
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_conv.c"
 
 static unsigned read_count;
 static unsigned write_count;
@@ -187,6 +183,37 @@ int main(void)
     phy.spi = &spi;
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
+
+    /* post_setup is public and can be reached outside normal init. Its shared
+     * preflight must reject each missing dependency before AXI is touched. */
+    {
+        struct ad9361_rf_phy incomplete = {0};
+        struct axiadc_converter converter = {0};
+        struct axiadc_chip_info chip_info = {0};
+        struct axi_adc rx_adc = {0};
+
+        incomplete.pdata = &pdata;
+        if (ad9361_post_setup_validate(NULL) != -EINVAL ||
+            ad9361_post_setup_validate(&incomplete) != -EINVAL)
+            return EXIT_FAILURE;
+
+        incomplete.adc_conv = &converter;
+        if (ad9361_post_setup_validate(&incomplete) != -EINVAL)
+            return EXIT_FAILURE;
+
+        converter.chip_info = &chip_info;
+        if (ad9361_post_setup_validate(&incomplete) != -EINVAL)
+            return EXIT_FAILURE;
+
+        incomplete.rx_adc = &rx_adc;
+        incomplete.pdata = NULL;
+        if (ad9361_post_setup_validate(&incomplete) != -EINVAL)
+            return EXIT_FAILURE;
+
+        incomplete.pdata = &pdata;
+        if (ad9361_post_setup_validate(&incomplete) != 0)
+            return EXIT_FAILURE;
+    }
 
     /* The exported gain-control primitive must reject incomplete state
      * before it derives the SPI pointer or performs any register access. */
