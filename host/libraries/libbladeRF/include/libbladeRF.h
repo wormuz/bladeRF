@@ -1895,6 +1895,9 @@ struct bladerf_quick_tune {
  *       BLADERF_ERR_QUEUE_FULL will be returned. In this case, it should be
  *       possible to schedule a retune after the timestamp of one of the earlier
  *       requests occurs.
+ * @note On bladeRF 2, a scheduled timestamp must be strictly in the future
+ *       and later than the previous queued request; otherwise the call
+ *       returns BLADERF_ERR_INVAL rather than arming a timer in the past.
 
  * @note NULL quick_tune parameters are not supported by the bladeRF 2.0 micro.
  * @note On bladeRF 2, scheduling an RX retune revokes the current RX IQ-valid

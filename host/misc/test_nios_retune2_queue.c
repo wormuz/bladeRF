@@ -186,15 +186,44 @@ static int check_deferred_failure_reporting(void)
     return 0;
 }
 
+static int check_profile_index_validation(void)
+{
+    if (!retune2_profile_indices_valid(0, 0) ||
+        !retune2_profile_indices_valid(NUM_BBP_FASTLOCK_PROFILES - 1,
+                                       NUM_RFFE_FASTLOCK_PROFILES - 1) ||
+        retune2_profile_indices_valid(NUM_BBP_FASTLOCK_PROFILES, 0) ||
+        retune2_profile_indices_valid(0, NUM_RFFE_FASTLOCK_PROFILES) ||
+        retune2_profile_indices_valid(UINT16_MAX, UINT8_MAX)) {
+        fputs("retune2 profile index validation accepted invalid input\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     fastlock_profile profile = { 0 };
     struct queue q = { 0 };
+    struct queue ordered = { 0 };
     struct queue_entry actual = { 0 };
+    fastlock_profile ordered_profile = { 0 };
     const uint8_t empty = QUEUE_EMPTY;
     uint8_t remaining;
 
     profile.profile_num = 5;
+    ordered_profile.profile_num = 6;
+    if (enqueue_retune(&ordered, &ordered_profile, 200) != 1 ||
+        enqueue_retune(&ordered, &ordered_profile, 200) !=
+            QUEUE_INVALID_TIMESTAMP ||
+        enqueue_retune(&ordered, &ordered_profile, 199) !=
+            QUEUE_INVALID_TIMESTAMP ||
+        ordered.count != 1 ||
+        ordered.entries[ordered.rem_idx].timestamp != 200) {
+        fputs("duplicate/out-of-order retune changed the queue\n", stderr);
+        return 1;
+    }
+
     q.count = 1;
     q.rem_idx = RETUNE2_QUEUE_MAX - 1;
     q.entries[q.rem_idx].state = ENTRY_STATE_READY;
@@ -222,6 +251,9 @@ int main(void)
         return 1;
     }
     if (check_deferred_failure_reporting() != 0) {
+        return 1;
+    }
+    if (check_profile_index_validation() != 0) {
         return 1;
     }
 

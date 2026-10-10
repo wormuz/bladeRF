@@ -215,10 +215,15 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
  *                of the tuning algorithm failing to occur, and such other
  *                unexpected failurs.
  *
- *                The scheduled tune request will failure if the retune queue
- *                is full.
+ *                The scheduled tune request will fail if the retune queue is
+ *                full or if its timestamp is not later than the current
+ *                module time or the last queued request.
  *
- *      flags[7:2]    Reserved. Set to 0.
+ *      flags[2]: 1 = Scheduled request was rejected because its timestamp
+ *                    is not strictly in the future and after the last queued
+ *                    request.
+ *
+ *      flags[7:3]    Reserved. Set to 0.
  */
 
 #define NIOS_PKT_RETUNE2_RESP_IDX_MAGIC   0
@@ -228,6 +233,7 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
 
 #define NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID (1 << 0)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS       (1 << 1)
+#define NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP (1 << 2)
 
 static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
                                               uint64_t duration,

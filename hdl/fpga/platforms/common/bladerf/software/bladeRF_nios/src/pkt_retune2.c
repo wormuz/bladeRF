@@ -44,6 +44,7 @@ void rfic_invalidate_frequency(bladerf_module module);
 #define RETUNE2_QUEUE_MAX   16
 #define QUEUE_FULL          0xff
 #define QUEUE_EMPTY         0xfe
+#define QUEUE_INVALID_TIMESTAMP 0xfd
 
 /* State of items in the retune queue */
 enum entry_state {
@@ -102,6 +103,13 @@ static void record_retune2_failure(bladerf_module module)
     INCREMENT_ERROR_COUNT();
 }
 
+static bool retune2_profile_indices_valid(uint16_t nios_profile,
+                                          uint8_t rffe_profile)
+{
+    return nios_profile < NUM_BBP_FASTLOCK_PROFILES &&
+           rffe_profile < NUM_RFFE_FASTLOCK_PROFILES;
+}
+
 /* Returns queue size after enqueue operation, or QUEUE_FULL if we could
  * not enqueue the requested item */
 static inline uint8_t enqueue_retune(struct queue *q,
@@ -112,6 +120,14 @@ static inline uint8_t enqueue_retune(struct queue *q,
 
     if (q->count >= RETUNE2_QUEUE_MAX) {
         return QUEUE_FULL;
+    }
+
+    if (q->count != 0) {
+        const uint8_t last_idx =
+            (q->ins_idx - 1) & (RETUNE2_QUEUE_MAX - 1);
+        if (timestamp <= q->entries[last_idx].timestamp) {
+            return QUEUE_INVALID_TIMESTAMP;
+        }
     }
 
     q->entries[q->ins_idx].profile = *p;
@@ -343,6 +359,15 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                 break;
             }
 
+            /* Profile loading can take long enough for a future timestamp
+             * to pass. Never arm a timer in the past; report the deferred
+             * request as failed instead of letting the tamer wrap around. */
+            if (e->timestamp <= time_tamer_read(module)) {
+                record_retune2_failure(module);
+                dequeue_retune(q, NULL);
+                break;
+            }
+
             /* Schedule the retune */
             e->state = ENTRY_STATE_SCHEDULED;
             tamer_schedule(module, e->timestamp);
@@ -393,64 +418,16 @@ void pkt_retune2(struct pkt_buf *b)
     uint8_t port;
     uint8_t spdt;
     fastlock_profile *profile;
+    fastlock_profile requested_profile;
 
     flags = NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
 
     nios_pkt_retune2_unpack(b->req, &module, &timestamp,
                             &nios_profile, &rffe_profile, &port, &spdt);
 
-    switch (module) {
-        case BLADERF_MODULE_RX:
-            profile = &fastlocks_rx[nios_profile];
-            break;
-        case BLADERF_MODULE_TX:
-            profile = &fastlocks_tx[nios_profile];
-            break;
-        default:
-            profile = NULL;
-    }
-
-    if (profile == NULL) {
-        INCREMENT_ERROR_COUNT();
-        status = -1;
-    } else {
-        /* Update the fastlock profile data */
-        profile->profile_num = rffe_profile;
-        profile->port = port;
-        profile->spdt = spdt;
-    }
-
     start_time = time_tamer_read(module);
 
-    if (timestamp == NIOS_PKT_RETUNE2_NOW) {
-        /* Fire off this retune operation now */
-        switch (module) {
-            case BLADERF_MODULE_RX:
-            case BLADERF_MODULE_TX:
-
-                /* Load the profile data into RFFE memory */
-                if (!profile_load(module, profile)) {
-                    INCREMENT_ERROR_COUNT();
-                    status = -1;
-                    break;
-                }
-
-                /* Activate the fast lock profile for this retune */
-                if (profile_activate(module, profile)) {
-                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
-                    status = 0;
-                } else {
-                    INCREMENT_ERROR_COUNT();
-                    status = -1;
-                }
-                break;
-
-            default:
-                INCREMENT_ERROR_COUNT();
-                status = -1;
-        }
-
-    } else if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
+    if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         switch (module) {
             case BLADERF_MODULE_RX:
                 reset_queue(&rx_queue);
@@ -466,30 +443,100 @@ void pkt_retune2(struct pkt_buf *b)
                 INCREMENT_ERROR_COUNT();
                 status = -1;
         }
+    } else if (!retune2_profile_indices_valid(nios_profile, rffe_profile)) {
+        /* Do not index the per-direction profile arrays or shift a
+         * caller-controlled RFFE slot into the preload bitmask unchecked. */
+        INCREMENT_ERROR_COUNT();
+        status = -1;
     } else {
-        uint8_t queue_size;
-
         switch (module) {
             case BLADERF_MODULE_RX:
-                queue_size = enqueue_retune(&rx_queue, profile, timestamp);
-                profile_load_scheduled(&rx_queue, module);
+                profile = &fastlocks_rx[nios_profile];
                 break;
-
             case BLADERF_MODULE_TX:
-                queue_size = enqueue_retune(&tx_queue, profile, timestamp);
-                profile_load_scheduled(&tx_queue, module);
+                profile = &fastlocks_tx[nios_profile];
                 break;
-
             default:
-                INCREMENT_ERROR_COUNT();
-                queue_size = QUEUE_FULL;
-
+                profile = NULL;
         }
 
-        if (queue_size == QUEUE_FULL) {
+        if (profile == NULL) {
+            INCREMENT_ERROR_COUNT();
             status = -1;
         } else {
-            status = 0;
+            requested_profile = *profile;
+            requested_profile.profile_num = rffe_profile;
+            requested_profile.port = port;
+            requested_profile.spdt = spdt;
+            if (timestamp == NIOS_PKT_RETUNE2_NOW) {
+                /* Fire off this retune operation now */
+                *profile = requested_profile;
+                switch (module) {
+                    case BLADERF_MODULE_RX:
+                    case BLADERF_MODULE_TX:
+                        /* Load the profile data into RFFE memory */
+                        if (!profile_load(module, profile)) {
+                            INCREMENT_ERROR_COUNT();
+                            status = -1;
+                            break;
+                        }
+
+                        /* Activate the fast lock profile for this retune */
+                        if (profile_activate(module, profile)) {
+                            flags |=
+                                NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
+                            status = 0;
+                        } else {
+                            INCREMENT_ERROR_COUNT();
+                            status = -1;
+                        }
+                        break;
+
+                    default:
+                        INCREMENT_ERROR_COUNT();
+                        status = -1;
+                }
+            } else if (timestamp <= start_time) {
+                flags |= NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP;
+                status = -1;
+            } else {
+                uint8_t queue_size;
+
+                switch (module) {
+                    case BLADERF_MODULE_RX:
+                        queue_size = enqueue_retune(
+                            &rx_queue, &requested_profile, timestamp);
+                        if (queue_size != QUEUE_FULL &&
+                            queue_size != QUEUE_INVALID_TIMESTAMP) {
+                            *profile = requested_profile;
+                            profile_load_scheduled(&rx_queue, module);
+                        }
+                        break;
+
+                    case BLADERF_MODULE_TX:
+                        queue_size = enqueue_retune(
+                            &tx_queue, &requested_profile, timestamp);
+                        if (queue_size != QUEUE_FULL &&
+                            queue_size != QUEUE_INVALID_TIMESTAMP) {
+                            *profile = requested_profile;
+                            profile_load_scheduled(&tx_queue, module);
+                        }
+                        break;
+
+                    default:
+                        INCREMENT_ERROR_COUNT();
+                        queue_size = QUEUE_FULL;
+                }
+
+                if (queue_size == QUEUE_FULL) {
+                    status = -1;
+                } else if (queue_size == QUEUE_INVALID_TIMESTAMP) {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP;
+                    status = -1;
+                } else {
+                    status = 0;
+                }
+            }
         }
     }
 
