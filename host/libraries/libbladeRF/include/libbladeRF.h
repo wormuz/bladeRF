@@ -5229,10 +5229,14 @@ struct bladerf_rx_transition_request {
  * Begin an event-driven RX retune transaction (ADR-0207 §5).
  *
  * This performs the existing host-mode RX LO retune (bladerf_set_frequency
- * internally) and arms observation of the required RF state transitions. It
- * does not block; the caller must follow up with
- * ::bladerf_rx_transition_wait to confirm the transaction reached the
- * requested state. A request with require_rx_data_valid=true or
+ * internally) and arms observation of the required RF state transitions.
+ * This call performs that setup synchronously and may block while the FPGA
+ * fence, RFIC programming, and LO readback complete. The request timeout
+ * bounds the epoch prepare/fence work described by the request; it is not an
+ * end-to-end deadline for RFIC programming. The caller must follow up with
+ * ::bladerf_rx_transition_wait to confirm the required PLL/ENSM/epoch events
+ * and, when requested, first host IQ. A request with
+ * require_rx_data_valid=true or
  * BLADERF_RF_REQUIRE_EPOCH_VALID confirms the FPGA epoch boundary, but does
  * not prove host IQ delivery. Add BLADERF_RF_REQUIRE_FIRST_HOST_DATA (or
  * BLADERF_RF_REQUIRE_RX_X2_HOST_DATA for paired RX) when the wait must also
