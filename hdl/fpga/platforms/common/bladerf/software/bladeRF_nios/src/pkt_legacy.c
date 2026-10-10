@@ -226,6 +226,14 @@ static inline void legacy_config_read(uint8_t count, struct pkt_buf *b)
 
     param = lookup_param(b->req[PAYLOAD_IDX]);
 
+    if (param == CONFIG_UNKNOWN) {
+        b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+        n = 0;
+        payload = 0;
+        last_param = CONFIG_UNKNOWN;
+        return;
+    }
+
     for (i = 0; i < count; i++) {
 
         /* Reset if we're at the beggining of a requst, or if it appears
@@ -297,6 +305,7 @@ static inline void legacy_pkt_read(uint8_t dev_id, uint8_t count,
 
         default:
             DBG("Got invalid device ID: 0x%x\n", dev_id);
+            b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
             break;
     }
 }
@@ -385,6 +394,14 @@ static inline void legacy_config_write(uint8_t count, struct pkt_buf *b)
 
     param = lookup_param(b->req[PAYLOAD_IDX]);
 
+    if (param == CONFIG_UNKNOWN) {
+        b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+        n = 0;
+        payload = 0;
+        last_param = CONFIG_UNKNOWN;
+        return;
+    }
+
     /* Reset if we're at the beggining of a requst, or if it appears
      * that we got a different request while in the middle of the previous
      * series of accesses. */
@@ -448,6 +465,7 @@ static inline void legacy_pkt_write(uint8_t dev_id, uint8_t count,
 
         default:
             DBG("Got invalid device ID: 0x%x\n", dev_id);
+            b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
             break;
     }
 }
@@ -468,11 +486,14 @@ void pkt_legacy(struct pkt_buf *b)
     DBG("%s: read=%s, write=%s, dev_id=0x%x, cfg=0x%x, count=0x%x\n", __FUNCTION__,
         is_read ? "true" : "false", is_write ? "true" : "false", dev_id, cfg, count);
 
-    if (is_read) {
+    if (is_read && is_write) {
+        b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+    } else if (is_read) {
         legacy_pkt_read(dev_id, count, b);
     } else if (is_write) {
         legacy_pkt_write(dev_id, count, b);
     } else {
         DBG("Config word did not have R/W: 0x%x\n", cfg);
+        b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
     }
 }

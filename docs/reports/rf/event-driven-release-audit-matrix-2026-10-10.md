@@ -357,3 +357,15 @@ not close them.
   evidence.
 - Mark a row CLOSED only when its stated evidence exists and is tied to the
   relevant source/image version; otherwise keep it OPEN or PARTIAL.
+
+### Legacy NIOS packet malformed-request fail-open
+
+A source pass found that the legacy NIOS dispatcher preserved the success
+magic for an unsupported device ID and for packets with no valid direction
+bit. Legacy config reads also indexed `CONFIG_UNKNOWN` and returned a normal
+response for an unsupported config address; writes relied on the zero-length
+sentinel and could leave multi-packet aggregation state inconsistent. The
+legacy firmware now returns the protocol error magic for those cases and
+resets the affected config aggregation state. Simultaneous READ and WRITE
+flags are rejected. This is source-only; packet-level firmware regression and
+full release audit remain open.
