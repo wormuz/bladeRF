@@ -121,6 +121,37 @@ static inline bool bladerf2_retune_completion_matches(
            requested_profile == completed_profile;
 }
 
+enum bladerf2_rx_retune_watch_event {
+    BLADERF2_RX_RETUNE_WATCH_NONE = 0,
+    BLADERF2_RX_RETUNE_WATCH_FAILED,
+    BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE,
+};
+
+/* A scheduled RX failure counter is meaningful only while a queue may still
+ * execute. After a successful queue clear, report any observed delta once and
+ * retire the watch. A decreasing counter means reset/wrap, so its delta is
+ * unknowable and must not be reported as a confirmed retune failure. */
+static inline enum bladerf2_rx_retune_watch_event
+bladerf2_rx_retune_watch_observation(bool watch_active,
+                                    bool count_read_succeeded,
+                                    bool baseline_valid,
+                                    uint32_t baseline,
+                                    uint32_t observed)
+{
+    if (!watch_active) {
+        return BLADERF2_RX_RETUNE_WATCH_NONE;
+    }
+    if (!count_read_succeeded) {
+        return BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE;
+    }
+    if (!baseline_valid || observed == baseline) {
+        return BLADERF2_RX_RETUNE_WATCH_NONE;
+    }
+    return observed > baseline
+        ? BLADERF2_RX_RETUNE_WATCH_FAILED
+        : BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE;
+}
+
 /* The two 32-bit PIOs are read in separate NIOS transactions. The high word
  * must match around the low-word read before the host can join the snapshot. */
 static inline bool bladerf2_loss_counter_snapshot(

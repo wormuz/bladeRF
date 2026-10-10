@@ -3487,6 +3487,55 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
 
     int status = dev->backend->retune2(
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch) &&
+        board_data->rx_retune2_failure_watch_active) {
+        uint32_t failure_count = 0;
+        const int count_status = nios_retune2_failure_count_read(
+            dev, BLADERF_MODULE_RX, &failure_count);
+        const enum bladerf2_rx_retune_watch_event watch_event =
+            bladerf2_rx_retune_watch_observation(
+                board_data->rx_retune2_failure_watch_active,
+                count_status == 0,
+                board_data->rx_retune2_failure_count_valid,
+                board_data->rx_retune2_failure_count_last,
+                failure_count);
+        struct bladerf_rf_event event = {0};
+
+        /* A successful queue clear is the boundary after which an old
+         * scheduled RX recall cannot affect a subsequently certified epoch.
+         * Reconcile its deferred failure counter here, before the transition
+         * starts, then retire this watch. Keeping it active for the lifetime
+         * of the handle would turn unrelated later NIOS read errors into RX
+         * validity failures. */
+        if (watch_event ==
+            BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE) {
+            if (!board_data->rx_retune2_status_unavailable_reported) {
+                event.event_type =
+                    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+                event.error_code = count_status != 0
+                    ? count_status : BLADERF_ERR_UNEXPECTED;
+                board_data->rx_retune2_status_unavailable_reported = true;
+            }
+        } else {
+            board_data->rx_retune2_status_unavailable_reported = false;
+            if (watch_event == BLADERF2_RX_RETUNE_WATCH_FAILED) {
+                event.event_type = BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                event.error_code = BLADERF_ERR_FPGA_OP;
+            }
+            if (count_status == 0) {
+                board_data->rx_retune2_failure_count_last = failure_count;
+                board_data->rx_retune2_failure_count_valid = true;
+            }
+        }
+
+        if (event.event_type != 0) {
+            (void)bladerf_monotonic_now_ns(&event.host_monotonic_ns);
+            event.fpga_state = BLADERF_RF_STATE_ERROR;
+            event.flags = failure_count;
+            bladerf2_rf_event_append(board_data, &event);
+        }
+        board_data->rx_retune2_failure_watch_active = false;
+    }
     const bool tx_queue_cleared = status == 0 && BLADERF_CHANNEL_IS_TX(ch);
     if (tx_queue_cleared) {
         uint8_t pending_count;
