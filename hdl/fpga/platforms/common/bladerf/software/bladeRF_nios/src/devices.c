@@ -233,7 +233,7 @@ void tamer_schedule(bladerf_module m, uint64_t time)
     IOWR_8DIRECT(base, 4, (time >> 32) & 0xff);
     IOWR_8DIRECT(base, 5, (time >> 40) & 0xff);
     IOWR_8DIRECT(base, 6, (time >> 48) & 0xff);
-    IOWR_8DIRECT(base, 7, (time >> 54) & 0xff);
+    IOWR_8DIRECT(base, 7, (time >> 56) & 0xff);
 
     /* Commit it and arm the comparison */
     IOWR_8DIRECT(base, 8, 0);
