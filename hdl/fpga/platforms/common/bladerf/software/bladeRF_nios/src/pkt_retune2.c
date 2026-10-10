@@ -447,7 +447,8 @@ static inline void perform_work(struct queue *q, bladerf_module module)
     }
 
     switch (e->state) {
-        case ENTRY_STATE_NEW:
+        case ENTRY_STATE_NEW: {
+            uint64_t current_time;
 
             /* Load the fast lock profile into the RFFE */
             if (!profile_load(module, &e->profile)) {
@@ -459,7 +460,8 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             /* Profile loading can take long enough for a future timestamp
              * to pass. Never arm a timer in the past; report the deferred
              * request as failed instead of letting the tamer wrap around. */
-            if (e->timestamp <= time_tamer_read(module)) {
+            if (!time_tamer_read(module, &current_time) ||
+                e->timestamp <= current_time) {
                 record_retune2_failure(module);
                 dequeue_retune(q, NULL);
                 break;
@@ -467,9 +469,13 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
             /* Schedule the retune */
             e->state = ENTRY_STATE_SCHEDULED;
-            tamer_schedule(module, e->timestamp);
+            if (!tamer_schedule(module, e->timestamp)) {
+                record_retune2_failure(module);
+                dequeue_retune(q, NULL);
+            }
 
             break;
+        }
 
         case ENTRY_STATE_SCHEDULED:
 
@@ -534,6 +540,7 @@ void pkt_retune2(struct pkt_buf *b)
     uint64_t start_time;
     uint64_t end_time;
     uint64_t duration = 0;
+    bool start_time_valid = false;
     uint16_t nios_profile;
     uint8_t rffe_profile;
     uint8_t port;
@@ -546,7 +553,16 @@ void pkt_retune2(struct pkt_buf *b)
     nios_pkt_retune2_unpack(b->req, &module, &timestamp,
                             &nios_profile, &rffe_profile, &port, &spdt);
 
-    start_time = time_tamer_read(module);
+    if (timestamp != NIOS_PKT_RETUNE_NOW &&
+        timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
+        if (!time_tamer_read(module, &start_time)) {
+            INCREMENT_ERROR_COUNT();
+            flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
+            nios_pkt_retune2_resp_pack(b->resp, 0, flags);
+            return;
+        }
+        start_time_valid = true;
+    }
 
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         switch (module) {
@@ -678,8 +694,9 @@ void pkt_retune2(struct pkt_buf *b)
         }
     }
 
-    end_time = time_tamer_read(module);
-    duration = end_time - start_time;
+    if (start_time_valid && time_tamer_read(module, &end_time)) {
+        duration = end_time - start_time;
+    }
 
     if (status != 0) {
         flags &= ~(NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS);

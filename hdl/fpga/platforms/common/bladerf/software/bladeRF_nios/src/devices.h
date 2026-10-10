@@ -459,9 +459,13 @@ INLINE uint32_t expansion_port_get_direction();
 INLINE void expansion_port_set_direction(uint32_t dir);
 
 /**
- * Read timestamp from time tamer
+ * Read a coherent time-tamer snapshot.
+ *
+ * Returns false if timestamping is reset/disabled or the FPGA snapshot CDC
+ * does not acknowledge before its watchdog expires. On failure, *time is not
+ * modified.
  */
-uint64_t time_tamer_read(bladerf_module m);
+bool time_tamer_read(bladerf_module m, uint64_t *time);
 
 /**
  * Reset one of the time tamer's timestamp counters to 0
@@ -474,13 +478,18 @@ INLINE void time_tamer_reset(bladerf_module m);
 INLINE void timer_tamer_clear_interrupt(bladerf_module m);
 
 /**
- * Schedule a timer interrupt on the specified module
+ * Schedule a timer interrupt on the specified module and wait for the FPGA
+ * comparator to acknowledge the arm (or report that the target is already
+ * due). A false return is a failed schedule, not a delay-based success.
  *
  * @param   m       Module to schedule interrupt for
  * @param   time    Timestamp to schedule interrupt to occur at.
- *                  If this is in the past, the interrupt will file immediately.
+ *                  If this is in the past, the interrupt fires immediately.
+ *
+ * @return true after comparator acknowledgement, false on invalid module or
+ *         arm timeout.
  */
-void tamer_schedule(bladerf_module m, uint64_t time);
+bool tamer_schedule(bladerf_module m, uint64_t time);
 
 /** Cancel an armed timer compare and wait until the time-tamer acknowledges. */
 bool tamer_cancel(bladerf_module m);

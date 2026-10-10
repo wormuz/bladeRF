@@ -32,6 +32,12 @@ end entity ;
 
 architecture arch of time_tamer is
 
+    -- The Avalon read for timestamp byte zero crosses into ts_clock. A
+    -- stopped timestamp clock must not hold the Nios Avalon master forever.
+    -- This is a watchdog only: timeout is reported as invalid data, never as
+    -- a successful timestamp snapshot.
+    constant SNAPSHOT_TIMEOUT_CYCLES : positive := 4095;
+
     signal ack          : std_logic ;
 
     signal snap_time : unsigned(63 downto 0);
@@ -39,6 +45,10 @@ architecture arch of time_tamer is
     signal snap_req  : std_logic ;
 
     signal snap_ack  : std_logic ;
+    signal snapshot_invalid : std_logic := '0';
+    signal schedule_ack : std_logic := '0';
+    signal snapshot_wait_count : natural range 0 to SNAPSHOT_TIMEOUT_CYCLES := 0;
+    signal snap_read_active : std_logic := '0';
 
     -- Initialised because the comparison below evaluates hold_time every
     -- cycle, including before the host has ever written one. Left
@@ -102,7 +112,8 @@ begin
 
     ts_sync_out <= '0' ;
 
-    status <= (1 => cancel_toggle, 0 => status_past, others =>'0') ;
+    status <= (3 => schedule_ack, 2 => snapshot_invalid,
+               1 => cancel_toggle, 0 => status_past, others =>'0') ;
 
     U_sync_ts_reset : entity work.synchronizer
       generic map (
@@ -227,12 +238,52 @@ begin
     begin
         if( reset = '1' ) then
             ack <= '0' ;
+            snapshot_invalid <= '0';
+            snapshot_wait_count <= 0;
+            snap_read_active <= '0';
+            schedule_ack <= '0';
         elsif( rising_edge(clock) ) then
-            if( uaddr = 0 and read = '1' and mm_ts_reset = '0' ) then
-                ack <= snap_ack ;
+            if( uaddr = 0 and read = '1' ) then
+                if snap_read_active = '0' then
+                    snapshot_invalid <= mm_ts_reset;
+                    snapshot_wait_count <= 0;
+                    snap_read_active <= '1';
+                end if;
+
+                if mm_ts_reset = '1' then
+                    -- Timestamping is deliberately reset while META is
+                    -- disabled. Complete the bus cycle, but mark the value
+                    -- invalid so software cannot mistake zero/stale data for
+                    -- a valid sample timestamp.
+                    ack <= '1';
+                    snapshot_invalid <= '1';
+                    snapshot_wait_count <= 0;
+                elsif snap_ack = '1' then
+                    ack <= '1';
+                    snapshot_wait_count <= 0;
+                elsif snapshot_wait_count = SNAPSHOT_TIMEOUT_CYCLES then
+                    ack <= '1';
+                    snapshot_invalid <= '1';
+                    snapshot_wait_count <= 0;
+                else
+                    ack <= '0';
+                    snapshot_wait_count <= snapshot_wait_count + 1;
+                end if;
             else
                 ack <= read ;
+                snapshot_wait_count <= 0;
+                snap_read_active <= '0';
             end if ;
+
+            if (uaddr = 8 and write = '1' and unsigned(din) = 0) or
+               intr_set = '1' or intr_cancel = '1' then
+                schedule_ack <= '0';
+            elsif mm_compare_loaded = '1' or status_past = '1' or
+                  mm_time_trigger = '1' then
+                -- Sticky until the next arm/cancel so a short compare cannot
+                -- disappear before the Nios caller observes acceptance.
+                schedule_ack <= '1';
+            end if;
         end if ;
     end process ;
 

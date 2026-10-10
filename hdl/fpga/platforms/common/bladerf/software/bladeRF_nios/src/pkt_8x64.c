@@ -53,12 +53,10 @@ static inline bool read_timestamp(uint8_t addr, uint64_t *data)
 {
     switch (addr) {
         case NIOS_PKT_8x64_TIMESTAMP_RX:
-            *data = time_tamer_read(BLADERF_MODULE_RX);
-            break;
+            return time_tamer_read(BLADERF_MODULE_RX, data);
 
         case NIOS_PKT_8x64_TIMESTAMP_TX:
-            *data = time_tamer_read(BLADERF_MODULE_TX);
-            break;
+            return time_tamer_read(BLADERF_MODULE_TX, data);
 
         default:
             DBG("Invalid addr: 0x%x\n", addr);

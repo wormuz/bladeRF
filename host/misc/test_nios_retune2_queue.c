@@ -21,6 +21,8 @@ static uint8_t recalled_port;
 static uint8_t recalled_spdt;
 static bool fail_profile_load;
 static bool fail_profile_recall;
+static bool fail_tamer_schedule;
+static bool fail_tamer_read;
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
@@ -55,17 +57,22 @@ void adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)
     spdt_count++;
 }
 
-void tamer_schedule(bladerf_module module, uint64_t timestamp)
+bool tamer_schedule(bladerf_module module, uint64_t timestamp)
 {
     schedule_count++;
     scheduled_module = module;
     scheduled_timestamp = timestamp;
+    return !fail_tamer_schedule;
 }
 
-uint64_t time_tamer_read(bladerf_module module)
+bool time_tamer_read(bladerf_module module, uint64_t *timestamp)
 {
     (void)module;
-    return 0;
+    if (timestamp == NULL || fail_tamer_read) {
+        return false;
+    }
+    *timestamp = 0;
+    return true;
 }
 
 bool tamer_cancel(bladerf_module module)
@@ -313,6 +320,46 @@ static int check_preload_retry_is_not_a_terminal_failure(void)
     return 0;
 }
 
+static int check_tamer_read_and_arm_fail_closed(void)
+{
+    fastlock_profile profile = { 0 };
+    unsigned schedules_before;
+
+    pkt_retune2_init();
+    profile.profile_num = 2;
+    if (enqueue_retune(&rx_queue, &profile, 2, 10) != 1) {
+        fputs("failed to enqueue tamer read failure case\n", stderr);
+        return 1;
+    }
+    schedules_before = schedule_count;
+    fail_tamer_read = true;
+    pkt_retune2_work();
+    fail_tamer_read = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        schedule_count != schedules_before) {
+        fputs("tamer snapshot failure did not fail closed\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_init();
+    if (enqueue_retune(&rx_queue, &profile, 2, 10) != 1) {
+        fputs("failed to enqueue tamer arm failure case\n", stderr);
+        return 1;
+    }
+    fail_tamer_schedule = true;
+    pkt_retune2_work();
+    fail_tamer_schedule = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        schedule_count == 0) {
+        fputs("tamer arm timeout did not fail closed\n", stderr);
+        return 1;
+    }
+
+    return 0;
+}
+
 static int check_profile_index_validation(void)
 {
     if (!retune2_profile_indices_valid(0, 0) ||
@@ -407,6 +454,9 @@ int main(void)
         return 1;
     }
     if (check_preload_retry_is_not_a_terminal_failure() != 0) {
+        return 1;
+    }
+    if (check_tamer_read_and_arm_fail_closed() != 0) {
         return 1;
     }
     if (check_profile_index_validation() != 0) {

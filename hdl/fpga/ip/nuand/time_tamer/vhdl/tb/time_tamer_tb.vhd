@@ -20,7 +20,9 @@ architecture arch of time_tamer_tb is
     signal readack      :   std_logic ;
     signal intr         :   std_logic ;
 
-    signal ts_clock     :   std_logic       := '1' ;
+    signal ts_clock     :   std_logic;
+    signal ts_clock_osc :   std_logic       := '1' ;
+    signal ts_clock_enable : std_logic := '1';
     signal ts_reset     :   std_logic       := '1' ;
     signal ts_time      :   std_logic_vector(63 downto 0) ;
 
@@ -118,7 +120,8 @@ begin
 
     clock <= not clock after 1 ns ;
 
-    ts_clock <= not ts_clock after 12 ns ;
+    ts_clock_osc <= not ts_clock_osc after 12 ns ;
+    ts_clock <= ts_clock_osc when ts_clock_enable = '1' else '0';
 
     ts_reset <= '0' after 100 ns ;
 
@@ -160,6 +163,18 @@ begin
         -- Write a comparison time in the future
         write_time( clock, addr, din, write, x"0000_0000_0000_0400" ) ;
         set_intr( clock, addr, din, write ) ;
+
+        -- The sticky system-domain arm acknowledgement is the evidence Nios
+        -- needs before it reports an asynchronous compare as accepted.
+        nop( clock, 100 ) ;
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(3) = '1'
+            report "time-tamer did not publish comparator arm acknowledgement"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
 
         -- Wait for an interrupt. The compare that decides future-vs-past is
         -- registered a cycle ahead of the FSM branch, so this is the check
@@ -252,6 +267,40 @@ begin
             report "near-current compare did not fire"
             severity failure ;
         clear_intr( clock, addr, din, write ) ;
+
+        -- A stopped timestamp clock must not hold the Avalon master forever.
+        -- The read completes through its watchdog and status bit 2 marks the
+        -- returned snapshot invalid. Once the clock resumes, a new snapshot
+        -- clears the diagnostic and returns to normal operation.
+        ts_clock_enable <= '0';
+        addr <= std_logic_vector(to_unsigned(0, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1' for 20 us;
+        assert readack = '1'
+            report "timestamp snapshot timeout held Avalon read forever"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(2) = '1'
+            report "timestamp snapshot timeout was not reported"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
+
+        ts_clock_enable <= '1';
+        read_time( clock, addr, dout, read, readack, ts ) ;
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1';
+        assert dout(2) = '0'
+            report "valid timestamp snapshot retained stale timeout status"
+            severity failure;
+        read <= '0';
+        wait until rising_edge(clock);
 
         nop( clock, 1000 ) ;
 

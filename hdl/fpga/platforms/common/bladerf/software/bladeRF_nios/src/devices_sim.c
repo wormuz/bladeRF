@@ -303,29 +303,30 @@ void expansion_port_set_direction(uint32_t dir)
     DBG("%s: dir=0x%08x\n", __FUNCTION__, dir);
 }
 
-uint64_t time_tamer_read(bladerf_module m)
+bool time_tamer_read(bladerf_module m, uint64_t *time)
 {
-    uint64_t ret = (uint64_t) -1;
+    if (time == NULL) {
+        return false;
+    }
 
     switch (m) {
         case BLADERF_MODULE_RX:
-            ret = 0x123456780a1b2c3d;
+            *time = 0x123456780a1b2c3d;
             break;
 
         case BLADERF_MODULE_TX:
-            ret = 0x87654321a1b2c3d4;
+            *time = 0x87654321a1b2c3d4;
             break;
 
         default:
             DBG("%s: Invalid module %u\n", __FUNCTION__, m);
-            ASSERT(0);
-            break;
+            return false;
     }
 
     DBG("%s: module=%s, returning 0x%016"PRIx64"\n",
-         __FUNCTION__, module2str(m), ret);
+         __FUNCTION__, module2str(m), *time);
 
-    return ret;
+    return true;
 }
 
 void time_tamer_reset(bladerf_module m)
@@ -360,8 +361,9 @@ void time_tamer_clear_interrupt(bladerf_module m)
     DBG("%s: module=%s\n", __FUNCTION__, module2str(m));
 }
 
-void tamer_schedule(bladerf_module m, uint64_t time) {
+bool tamer_schedule(bladerf_module m, uint64_t time) {
     DBG("%s: module=%s, time=%"PRIu64"\n", __FUNCTION__, module2str(m), time);
+    return m == BLADERF_MODULE_RX || m == BLADERF_MODULE_TX;
 }
 
 bool tamer_cancel(bladerf_module m)

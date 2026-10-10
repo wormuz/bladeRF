@@ -167,12 +167,12 @@ static uint64_t perform_config_read(enum config_param param)
 
         case CONFIG_RX_TIMESTAMP:
             DBG("%s: Performing RX timestamp read.\n", __FUNCTION__);
-            payload = time_tamer_read(BLADERF_MODULE_RX);
+            payload = UINT64_MAX;
             break;
 
         case CONFIG_TX_TIMESTAMP:
             DBG("%s: Performing TX timestamp read.\n", __FUNCTION__);
-            payload = time_tamer_read(BLADERF_MODULE_TX);
+            payload = UINT64_MAX;
             break;
 
         case CONFIG_VCTXCO:
@@ -234,7 +234,19 @@ static inline void legacy_config_read(uint8_t count, struct pkt_buf *b)
         if (n == 0 || (param != last_param)) {
             DBG("Resetting read state for param=0x%x with n=0x%x\n", param, n);
             n = 0;
-            payload = perform_config_read(param);
+            if (param == CONFIG_RX_TIMESTAMP ||
+                param == CONFIG_TX_TIMESTAMP) {
+                bladerf_module module = param == CONFIG_RX_TIMESTAMP
+                    ? BLADERF_MODULE_RX : BLADERF_MODULE_TX;
+                if (!time_tamer_read(module, &payload)) {
+                    b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+                    last_param = CONFIG_UNKNOWN;
+                    n = 0;
+                    return;
+                }
+            } else {
+                payload = perform_config_read(param);
+            }
             last_param = param;
         }
 

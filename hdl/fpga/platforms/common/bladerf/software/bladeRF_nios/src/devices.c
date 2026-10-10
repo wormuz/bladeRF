@@ -221,9 +221,22 @@ void vctcxo_tamer_write(uint8_t addr, uint8_t data)
     IOWR_8DIRECT(VCTCXO_TAMER_0_BASE, addr, data);
 }
 
-void tamer_schedule(bladerf_module m, uint64_t time)
+#define TAMER_STATUS_SNAPSHOT_INVALID (1u << 2)
+#define TAMER_STATUS_SCHEDULE_ACK     (1u << 3)
+#define TAMER_SCHEDULE_WAIT_ATTEMPTS  100000u
+
+bool tamer_schedule(bladerf_module m, uint64_t time)
 {
-    uint32_t base = (m == BLADERF_MODULE_RX) ? RX_TAMER_BASE : TX_TAMER_BASE;
+    uint32_t base;
+    uint32_t attempt;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return false;
+    }
 
     /* Set the holding time */
     IOWR_8DIRECT(base, 0, (time >> 0) & 0xff);
@@ -238,7 +251,22 @@ void tamer_schedule(bladerf_module m, uint64_t time)
     /* Commit it and arm the comparison */
     IOWR_8DIRECT(base, 8, 0);
 
-    return;
+    /* A successful MMIO write only means the command reached the system
+     * clock domain. Require the timestamp-domain comparator to acknowledge
+     * the payload (or classify it as already due) before accepting the
+     * schedule. Expiry is a failure watchdog, never proof of success. */
+    for (attempt = 0; attempt < TAMER_SCHEDULE_WAIT_ATTEMPTS; ++attempt) {
+        if ((IORD_8DIRECT(base, 9) & TAMER_STATUS_SCHEDULE_ACK) != 0) {
+            return true;
+        }
+    }
+
+    /* Best-effort cancellation prevents a delayed CDC arm from firing after
+     * the caller has been told the schedule failed. If the timestamp clock
+     * is still unavailable, cancellation also fails boundedly and the host
+     * remains in the already-invalid state. */
+    (void)tamer_cancel(m);
+    return false;
 }
 
 bool tamer_cancel(bladerf_module m)
@@ -1394,11 +1422,22 @@ void agc_dc_corr_write(uint16_t addr, uint16_t value)
 #endif  // AGC_DC_I_MIN_BASE
 }
 
-uint64_t time_tamer_read(bladerf_module m)
+bool time_tamer_read(bladerf_module m, uint64_t *time)
 {
-    uint32_t base  = (m == BLADERF_MODULE_RX) ? RX_TAMER_BASE : TX_TAMER_BASE;
+    uint32_t base;
     uint8_t offset = 0;
     uint64_t value = 0;
+
+    if (time == NULL) {
+        return false;
+    }
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return false;
+    }
 
     value = IORD_8DIRECT(base, offset++);
     value |= ((uint64_t)IORD_8DIRECT(base, offset++)) << 8;
@@ -1409,7 +1448,16 @@ uint64_t time_tamer_read(bladerf_module m)
     value |= ((uint64_t)IORD_8DIRECT(base, offset++)) << 48;
     value |= ((uint64_t)IORD_8DIRECT(base, offset++)) << 56;
 
-    return value;
+    /* Address zero's read handshake latches a coherent snapshot. The
+     * following status read distinguishes a valid capture from timestamp
+     * reset or a bounded CDC timeout. Never return the stale snapshot as a
+     * successful timestamp. */
+    if ((IORD_8DIRECT(base, 9) & TAMER_STATUS_SNAPSHOT_INVALID) != 0) {
+        return false;
+    }
+
+    *time = value;
+    return true;
 }
 
 #endif

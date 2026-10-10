@@ -261,7 +261,10 @@ static inline void perform_work(struct queue *q, bladerf_module module)
     switch (e->state) {
         case ENTRY_STATE_NEW:
             e->state = ENTRY_STATE_SCHEDULED;
-            tamer_schedule(module, e->timestamp);
+            if (!tamer_schedule(module, e->timestamp)) {
+                INCREMENT_ERROR_COUNT();
+                dequeue_retune(q, NULL);
+            }
             break;
 
         case ENTRY_STATE_SCHEDULED:
@@ -309,6 +312,7 @@ void pkt_retune(struct pkt_buf *b)
     uint64_t start_time;
     uint64_t end_time;
     uint64_t duration = 0;
+    bool start_time_valid = false;
     bool low_band;
     uint8_t xb_gpio;
     bool quick_tune;
@@ -331,7 +335,14 @@ void pkt_retune(struct pkt_buf *b)
         f.flags |= LMS_FREQ_FLAGS_FORCE_VCOCAP;
     }
 
-    start_time = time_tamer_read(module);
+    if (timestamp != NIOS_PKT_RETUNE_NOW &&
+        timestamp != NIOS_PKT_RETUNE_CLEAR_QUEUE) {
+        if (!time_tamer_read(module, &start_time)) {
+            status = -1;
+            goto out;
+        }
+        start_time_valid = true;
+    }
 
     if (timestamp == NIOS_PKT_RETUNE_NOW) {
         /* Fire off this retune operation now */
@@ -411,8 +422,9 @@ void pkt_retune(struct pkt_buf *b)
         }
     }
 
-    end_time = time_tamer_read(module);
-    duration = end_time - start_time;
+    if (start_time_valid && time_tamer_read(module, &end_time)) {
+        duration = end_time - start_time;
+    }
 
 out:
     if (status != 0) {
