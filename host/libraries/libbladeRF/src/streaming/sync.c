@@ -2136,7 +2136,12 @@ out:
          * lock. An invalidator takes this lock before revoking the board's
          * epoch certificate, so the durable event is ordered either before
          * invalidation or the read is rejected above. */
-        if (status == 0 && s->dev != NULL && s->dev->board != NULL &&
+        /* A timed-out or otherwise incomplete request may still return a
+         * valid contiguous prefix. Certify that prefix after the same final
+         * generation fence; the read error and withheld-data event describe
+         * the missing suffix separately. */
+        if ((status == 0 || samples_returned != 0) &&
+            s->dev != NULL && s->dev->board != NULL &&
             s->dev->board->rx_sync_data_valid != NULL &&
             metadata_rx_has_epoch_samples(user_meta)) {
             s->dev->board->rx_sync_data_valid(

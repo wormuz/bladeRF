@@ -1136,6 +1136,34 @@ static void receive(struct fixture *f, int16_t *out, unsigned int count,
     }
 }
 
+static void test_sync_timeout_certifies_only_returned_valid_prefix(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta = {0};
+    const unsigned int prefix_samples = 2 * MSG_SAMPLES;
+    int16_t *out = calloc((size_t)(prefix_samples + 1) * 2, sizeof(*out));
+    assert(out != NULL);
+
+    fixture_init(&f);
+    write_msg(f.buffers[0], 1000, 7, 1911);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 2011);
+    f.states[1] = SYNC_BUFFER_EMPTY;
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+
+    assert(sync_rx(&f.sync, out, prefix_samples + 1, &meta, 1) ==
+           BLADERF_ERR_TIMEOUT);
+    assert(meta.actual_count == prefix_samples);
+    assert(meta.rx_epoch_id_valid && meta.rx_epoch_id == 7);
+    assert(sync_host_data_events == 1);
+    assert(sync_withheld_events == 1);
+    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(sync_host_data_order < sync_withheld_order);
+    assert_marker(out, prefix_samples, 1911, 0);
+
+    fixture_destroy(&f);
+    free(out);
+}
+
 static void test_sync_channel_selection_fail_closed(void)
 {
     struct fixture f;
@@ -2795,6 +2823,7 @@ int main(void)
     test_rx_channel_mask_runtime_policy();
     test_rx_fault_causes_read_error_provenance();
     test_sync_channel_selection_fail_closed();
+    test_sync_timeout_certifies_only_returned_valid_prefix();
     test_sync_first_host_data_deadline_withholds_before_copy();
     test_failed_transition_revokes_host_epoch_before_abort();
     assert(sync_rx_should_drop_stale(BLADERF_FORMAT_SC16_Q11, 0));
