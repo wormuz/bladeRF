@@ -168,6 +168,21 @@ harness adds lost-IRQ recovery coverage. RTL/status compatibility,
 timestamp-clock stall after successful arm, and exact-image qualification
 remain open. No build, simulation, or test was run under the source-audit gate.
 
+### AD9361 AXI converter call-result inventory source pass
+
+Reviewed the active AD9361 converter/init/IIO slices that call AXI ADC/DAC
+operations, together with the NIOS sample-rate mutation path. Converter
+register reads/writes and status-returning helpers propagate errors; post-setup
+uses a fail-fast wrapper; digital-tune cleanup preserves the original error
+and promotes a cleanup failure when the main operation succeeded. The AXI
+ADC/DAC remove functions used during rollback return unconditional success
+after freeing their descriptors, so ignored cleanup return values do not mask
+a reported failure in this implementation. NIOS sample-rate state is marked
+invalid before mutation and restored only after the full RX retune sequence
+succeeds. No new defect was confirmed in these slices. The complete exported
+AD9361/no-OS and NIOS call-site inventory, fault injection, and runtime gates
+remain open; no build or test was run.
+
 ### Sync RX delivery/invalidation linearization slice
 
 `sync_rx()` snapshots the RX generation before locking the parser, checks it
