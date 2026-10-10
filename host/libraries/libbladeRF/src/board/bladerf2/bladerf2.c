@@ -2755,6 +2755,11 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(quick_tune);
 
+    if (quick_tune->nios_profile >= NUM_BBP_FASTLOCK_PROFILES ||
+        quick_tune->rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES) {
+        return BLADERF_ERR_INVAL;
+    }
+
     struct bladerf2_board_data *board_data = dev->board_data;
 
     /* An ordinary scheduled retune has no host completion event or
