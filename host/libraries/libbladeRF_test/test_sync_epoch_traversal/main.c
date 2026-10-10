@@ -896,9 +896,13 @@ static void receive(struct fixture *f, int16_t *out, unsigned int count,
                     struct bladerf_metadata *meta)
 {
     memset(meta, 0, sizeof(*meta));
+    memset(meta->reserved, 0xa5, sizeof(meta->reserved));
     meta->flags = BLADERF_META_FLAG_RX_NOW;
     assert(sync_rx(&f->sync, out, count, meta, 0) == 0);
     assert(meta->actual_count == count);
+    for (size_t i = 0; i < sizeof(meta->reserved); ++i) {
+        assert(meta->reserved[i] == 0);
+    }
 }
 
 static void test_sync_channel_selection_fail_closed(void)

@@ -1107,6 +1107,7 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
             user_meta->rx_epoch_id = 0;
             user_meta->rx_epoch_id_valid = 0;
             user_meta->rx_clipping_flags = 0;
+            memset(user_meta->reserved, 0, sizeof(user_meta->reserved));
             target_timestamp = user_meta->timestamp;
 
             /* Report an overrun the worker recovered from. Its recovery
