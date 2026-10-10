@@ -22,6 +22,7 @@
 #ifndef STREAMING_FORMAT_H_
 #define STREAMING_FORMAT_H_
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "rel_assert.h"
