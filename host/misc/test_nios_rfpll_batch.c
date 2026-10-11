@@ -166,6 +166,27 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
     return 0;
 }
 
+static int run_batch_reserved_bits_case(uint16_t count, uint64_t data)
+{
+    struct pkt_buf packet = { .ready = false };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false;
+    bool success = true;
+    const unsigned int calls_before = calls;
+
+    nios_pkt_16x64_pack(packet.req,
+                        NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH,
+                        true, count, data);
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+
+    return target == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH && write &&
+           addr == count && !success && calls == calls_before ? 0 : 1;
+}
+
 static int run_update_bits_case(bool requested_success,
                                 bool expected_success)
 {
@@ -263,6 +284,8 @@ int main(void)
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
+        run_batch_reserved_bits_case(1, UINT64_C(1) << 18) ||
+        run_batch_reserved_bits_case(3, UINT64_C(1) << 54) ||
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||

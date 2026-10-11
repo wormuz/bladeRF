@@ -124,8 +124,15 @@ void pkt_16x64(struct pkt_buf *b)
     if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         uint8_t completed = 0;
-        success = adi_spi_write_register_batch(addr, data, &completed);
-        data = completed;
+        /* Each batch entry occupies 18 bits (10-bit register plus 8-bit
+         * value). Reject payload bits outside the entries selected by the
+         * count instead of silently accepting malformed/truncated commands. */
+        if (addr >= 1 && addr <= 3 && (data >> (18 * addr)) == 0) {
+            success = adi_spi_write_register_batch(addr, data, &completed);
+            data = completed;
+        } else {
+            success = false;
+        }
 #else
         success = false;
 #endif
