@@ -23,6 +23,8 @@ static bool tamer_mode_success;
 static bool agc_dc_success;
 static bool iqcorr_success;
 static bool trigger_ctl_write_success = true;
+static unsigned int control_reg_write_calls;
+static uint32_t control_reg_write_value;
 static uint8_t tx_trigger_ctl_value;
 static uint8_t rx_trigger_ctl_value;
 static bladerf_vctcxo_tamer_mode tamer_mode_readback =
@@ -158,7 +160,12 @@ bool agc_dc_corr_write(uint16_t addr, uint16_t value)
 }
 
 uint32_t control_reg_read(void) { return 0; }
-bool control_reg_write(uint32_t value) { (void)value; return true; }
+bool control_reg_write(uint32_t value)
+{
+    control_reg_write_calls++;
+    control_reg_write_value = value;
+    return true;
+}
 uint32_t rffe_csr_read(void) { return 0; }
 void rffe_csr_write(uint32_t value) { (void)value; }
 bool rffe_csr_read_checked(uint32_t *value)
@@ -225,6 +232,47 @@ static int check_legacy_zero_count(void)
            si5338_write_calls == si_write_calls &&
            lms_read_calls == read_calls && lms_write_calls == write_calls
                ? 0 : 1;
+}
+
+static int check_legacy_malformed_packet_resets_config_write(void)
+{
+    const uint8_t write_cfg = NIOS_PKT_LEGACY_MODE_DIR_WRITE |
+                              NIOS_PKT_LEGACY_DEV_CONFIG;
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    const unsigned int initial_calls = control_reg_write_calls;
+
+    /* Start a four-byte control-register write, then interrupt it with an
+     * invalid zero-pair packet. The remaining three bytes must not complete
+     * the stale transaction. */
+    packet.req[0] = NIOS_PKT_LEGACY_MAGIC;
+    packet.req[1] = write_cfg | 1;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
+    packet.req[3] = 0x01;
+    pkt_legacy(&packet);
+    if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+
+    packet.req[1] = write_cfg;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
+    packet.req[3] = 0xee;
+    pkt_legacy(&packet);
+    if (packet.resp[0] != NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+
+    packet.req[1] = write_cfg | 3;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
+    packet.req[3] = 0x02;
+    packet.req[4] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1;
+    packet.req[5] = 0x03;
+    packet.req[6] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2;
+    packet.req[7] = 0x04;
+    pkt_legacy(&packet);
+    if (control_reg_write_calls != initial_calls) return 1;
+
+    packet.req[1] = write_cfg | 1;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 3;
+    packet.req[3] = 0x05;
+    pkt_legacy(&packet);
+    return control_reg_write_calls == initial_calls + 1 &&
+           control_reg_write_value == 0x05040302u ? 0 : 1;
 }
 
 static int check_8x16_write_failure(void)
@@ -602,7 +650,9 @@ static int check_8x32_diagnostic_address_bounds(void)
 
 int main(void)
 {
-    if (check_legacy_zero_count() || check_8x16_write_failure() ||
+    if (check_legacy_zero_count() ||
+        check_legacy_malformed_packet_resets_config_write() ||
+        check_8x16_write_failure() ||
         check_8x16_read_failure() ||
         check_8x32_write_failure() || check_8x8_si5338_failure() ||
         check_8x8_lms_failure() || check_8x8_lms_read_failure() ||

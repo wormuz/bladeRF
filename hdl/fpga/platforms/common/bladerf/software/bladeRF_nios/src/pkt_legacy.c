@@ -112,6 +112,34 @@ static const struct config_param_info config_params[] = {
     [CONFIG_UNKNOWN]          = { 255, 0 },
 };
 
+struct legacy_config_state {
+    uint64_t payload;
+    uint8_t n;
+    enum config_param param;
+    enum config_param last_param;
+};
+
+static struct legacy_config_state config_read_state = {
+    .param = CONFIG_UNKNOWN,
+    .last_param = CONFIG_UNKNOWN,
+};
+static struct legacy_config_state config_write_state = {
+    .param = CONFIG_UNKNOWN,
+    .last_param = CONFIG_UNKNOWN,
+};
+
+static void legacy_config_reset(void)
+{
+    config_read_state.payload = 0;
+    config_read_state.n = 0;
+    config_read_state.param = CONFIG_UNKNOWN;
+    config_read_state.last_param = CONFIG_UNKNOWN;
+    config_write_state.payload = 0;
+    config_write_state.n = 0;
+    config_write_state.param = CONFIG_UNKNOWN;
+    config_write_state.last_param = CONFIG_UNKNOWN;
+}
+
 static inline enum config_param lookup_param(uint8_t addr)
 {
     uint8_t i;
@@ -222,21 +250,18 @@ static inline void legacy_config_read(uint8_t count, struct pkt_buf *b)
 
 {
     uint8_t i;
-    static uint8_t n = 0;
-    static uint64_t payload = 0;
-    static enum config_param param = CONFIG_UNKNOWN;
-    static enum config_param last_param = CONFIG_UNKNOWN;
+    struct legacy_config_state *state = &config_read_state;
 
     const uint8_t *req_data = &b->req[PAYLOAD_IDX];
     uint8_t *resp_data = &b->resp[PAYLOAD_IDX];
 
-    param = lookup_param(b->req[PAYLOAD_IDX]);
+    state->param = lookup_param(b->req[PAYLOAD_IDX]);
 
-    if (param == CONFIG_UNKNOWN) {
+    if (state->param == CONFIG_UNKNOWN) {
         b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
-        n = 0;
-        payload = 0;
-        last_param = CONFIG_UNKNOWN;
+        state->n = 0;
+        state->payload = 0;
+        state->last_param = CONFIG_UNKNOWN;
         return;
     }
 
@@ -245,43 +270,44 @@ static inline void legacy_config_read(uint8_t count, struct pkt_buf *b)
         /* Reset if we're at the beggining of a requst, or if it appears
          * that we got a different request while in the middle of the previous
          * series of accesses. */
-        if (n == 0 || (param != last_param)) {
-            DBG("Resetting read state for param=0x%x with n=0x%x\n", param, n);
-            n = 0;
-            if (param == CONFIG_RX_TIMESTAMP ||
-                param == CONFIG_TX_TIMESTAMP) {
-                bladerf_module module = param == CONFIG_RX_TIMESTAMP
+        if (state->n == 0 || (state->param != state->last_param)) {
+            DBG("Resetting read state for param=0x%x with n=0x%x\n",
+                state->param, state->n);
+            state->n = 0;
+            if (state->param == CONFIG_RX_TIMESTAMP ||
+                state->param == CONFIG_TX_TIMESTAMP) {
+                bladerf_module module = state->param == CONFIG_RX_TIMESTAMP
                     ? BLADERF_MODULE_RX : BLADERF_MODULE_TX;
-                if (!time_tamer_read(module, &payload)) {
+                if (!time_tamer_read(module, &state->payload)) {
                     b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
-                    last_param = CONFIG_UNKNOWN;
-                    n = 0;
+                    state->last_param = CONFIG_UNKNOWN;
+                    state->n = 0;
                     return;
                 }
             } else {
-                if (!perform_config_read(param, &payload)) {
+                if (!perform_config_read(state->param, &state->payload)) {
                     b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
-                    last_param = CONFIG_UNKNOWN;
-                    n = 0;
+                    state->last_param = CONFIG_UNKNOWN;
+                    state->n = 0;
                     return;
                 }
             }
-            last_param = param;
+            state->last_param = state->param;
         }
 
         /* Copy address offset from request to response buffer */
-        *resp_data++ = *req_data++ - config_params[param].start;
+        *resp_data++ = *req_data++ - config_params[state->param].start;
 
         /* Write read data into response buffer */
-        *resp_data++ = (uint8_t) (payload >> (n * 8));
+        *resp_data++ = (uint8_t) (state->payload >> (state->n * 8));
 
         req_data++;
-        n++;
+        state->n++;
 
         /* We've finished returning data for this request - reset and quit . */
-        if (n >= config_params[param].len) {
-            n = 0;
-            param = CONFIG_UNKNOWN;
+        if (state->n >= config_params[state->param].len) {
+            state->n = 0;
+            state->param = CONFIG_UNKNOWN;
             break;
         }
     }
@@ -389,55 +415,53 @@ static inline bool perform_config_write(enum config_param p,
 static inline void legacy_config_write(uint8_t count, struct pkt_buf *b)
 {
     uint8_t i;
-    static uint64_t payload = 0;
-    static uint8_t n = 0;
-    static enum config_param param = CONFIG_UNKNOWN;
-    static enum config_param last_param = CONFIG_UNKNOWN;
+    struct legacy_config_state *state = &config_write_state;
 
     const uint8_t *req_data = &b->req[PAYLOAD_IDX];
     uint8_t *resp_data = &b->resp[PAYLOAD_IDX];
 
-    param = lookup_param(b->req[PAYLOAD_IDX]);
+    state->param = lookup_param(b->req[PAYLOAD_IDX]);
 
-    if (param == CONFIG_UNKNOWN) {
+    if (state->param == CONFIG_UNKNOWN) {
         b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
-        n = 0;
-        payload = 0;
-        last_param = CONFIG_UNKNOWN;
+        state->n = 0;
+        state->payload = 0;
+        state->last_param = CONFIG_UNKNOWN;
         return;
     }
 
     /* Reset if we're at the beggining of a requst, or if it appears
      * that we got a different request while in the middle of the previous
      * series of accesses. */
-    if (n == 0 || (param != last_param)) {
-        DBG("Resetting write state for param=0x%x with n=0x%x\n", param, n);
-        payload = 0;
-        n = 0;
+    if (state->n == 0 || (state->param != state->last_param)) {
+        DBG("Resetting write state for param=0x%x with n=0x%x\n",
+            state->param, state->n);
+        state->payload = 0;
+        state->n = 0;
     }
 
-    for (i = 0; i < count && n < config_params[param].len; i++) {
+    for (i = 0; i < count && state->n < config_params[state->param].len; i++) {
         /* Copy over address offset into response, and zero out data*/
-        *resp_data++ = *req_data++ - config_params[param].start;
+        *resp_data++ = *req_data++ - config_params[state->param].start;
         *resp_data++ = 0;
 
         /* Shift data into our aggregated payload word */
-        payload |= (*req_data) << (n * 8);
+        state->payload |= ((uint64_t) *req_data) << (state->n * 8);
 
         req_data++;
-        n++;
+        state->n++;
     }
 
     /* We aggregated all the data we need - perform the write and reset */
-    if (n >= config_params[param].len) {
-        if (!perform_config_write(param, payload)) {
+    if (state->n >= config_params[state->param].len) {
+        if (!perform_config_write(state->param, state->payload)) {
             b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
         }
-        n = 0;
-        param = CONFIG_UNKNOWN;
+        state->n = 0;
+        state->param = CONFIG_UNKNOWN;
     }
 
-    last_param = param;
+    state->last_param = state->param;
 }
 
 
@@ -505,5 +529,9 @@ void pkt_legacy(struct pkt_buf *b)
     } else {
         DBG("Config word did not have R/W: 0x%x\n", cfg);
         b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+    }
+
+    if (b->resp[PKT_MAGIC_IDX] == NIOS_PKT_LEGACY_ERROR_MAGIC) {
+        legacy_config_reset();
     }
 }
