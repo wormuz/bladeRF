@@ -77,12 +77,10 @@ static bool _wait_for_ad9361_if_clock(void)
  * stale DC-offset correction indefinitely. */
 #define BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ 100000000ULL
 
-/* ad9361_dig_tune() is called after an RX sample-rate change in
- * _rfic_cmd_wr_samplerate() below. Its ADC reset was initially suspected
- * of causing a spectral spur, but hardware ablation with the call removed
- * showed the spur persisted and moved across Bluetooth FHSS channels. The
- * detailed observation and reason for retaining the call are documented at
- * the call site; do not treat the earlier suspicion as a confirmed defect. */
+/* The NIOS-owned PHY deliberately has no axi_adc handle. Production uses
+ * digital_interface_tune_skip_mode=2 and preset DATA_CLK delays, so the NIOS
+ * sample-rate path must not invoke the BIST tuner. The host-owned PHY and its
+ * converter handle are separate from this NIOS instance. */
 
 extern int32_t ad9361_do_calib(struct ad9361_rf_phy *phy, uint32_t cal,
                                int32_t arg);
@@ -694,6 +692,7 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
 {
     bladerf_direction direction =
         BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
+    bool converter_available = false;
 
     state->samplerate_invalid[direction] = true;
 
@@ -702,31 +701,23 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
     } else {
         CHECK_BOOL(ad9361_set_rx_sampling_freq(state->phy, rate));
 
-        /* Rerun the real BIST-measured digital interface (DATA_CLK/
-         * RX_FRAME) timing sweep for the new clock rate -- see the
-         * long comment above ad9361_do_calib's extern for why this
-         * never ran before. max_freq matches what ad9361_post_setup()
-         * already passes (61440000, the platform max) so the sweep
-         * covers the full valid range regardless of which rate we
-         * just switched to. DO_IDELAY/DO_ODELAY come from ad9361.h,
-         * already visible transitively in this file.
-         *
-         * ad9361_dig_tune_rx() pulses AXI_ADC_REG_RSTN on axi_adc_core,
-         * the same reset axi_adc_init() skips with `#ifndef
-         * BLADERF_NIOS_BUILD` on this platform. This was suspected as
-         * the source of a fixed-frequency spectral peak seen on both
-         * RX1 and RX2 (including a 50-ohm-terminated port). Measured
-         * on hardware after removing this call entirely and reflashing:
-         * the peak is still present, and hops between discrete
-         * frequencies across successive short captures (2422.6, 2451.5,
-         * 2425.8, 2426.1, 2451.4 MHz on repeated 50ms grabs at a fixed
-         * LO/fs) -- exactly the Bluetooth Classic FHSS channel grid
-         * (2402+k MHz; 2426=k24, 2451=k49). It is ambient Bluetooth
-         * traffic leaking into the RX path near the board, not a
-         * digital-interface reset artifact. This call is not the
-         * cause and is kept. */
-        CHECK_BOOL(ad9361_dig_tune(state->phy, 61440000,
-                                   DO_IDELAY | DO_ODELAY));
+        /* Only a PHY with an AXI ADC handle can execute the BIST timing
+         * sweep. The NIOS-owned PHY intentionally omits that handle and uses
+         * preset delays (skip mode 2); calling ad9361_dig_tune() anyway
+         * fails validation before touching the RFIC and rejects every RX
+         * sample-rate update. Keep an explicit failure for calibration modes
+         * that require a tuner but have no converter owner. */
+#ifndef AXI_ADC_NOT_PRESENT
+        converter_available = state->phy->rx_adc != NULL;
+#endif
+        if (converter_available) {
+            CHECK_BOOL(ad9361_dig_tune(state->phy, 61440000,
+                                       DO_IDELAY | DO_ODELAY));
+        } else if (state->phy->pdata->dig_interface_tune_skipmode != 2) {
+            DBG("%s: digital interface tuning requires an AXI ADC handle\n",
+                __FUNCTION__);
+            return false;
+        }
     }
 
     state->samplerate_invalid[direction] = false;
