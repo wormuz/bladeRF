@@ -1705,7 +1705,7 @@ begin
             tx_timestamp         => tx_timestamp,
             retune_gate_arm      => tx_retune_gate_arm_tx,
             retune_gate_arm_ack_toggle => tx_retune_gate_arm_ack_tx,
-            retune_gate_arm_immediate => tx_retune_gate_immediate_tx,
+            retune_gate_immediate => tx_retune_gate_immediate_tx,
             retune_gate_target   => tx_retune_gate_target_tx,
             retune_gate_complete => tx_retune_gate_complete_tx,
             retune_gate_abort    => tx_retune_gate_abort_tx,
