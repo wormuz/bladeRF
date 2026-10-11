@@ -624,6 +624,16 @@ void pkt_retune2(struct pkt_buf *b)
     nios_pkt_retune2_unpack(b->req, &module, &timestamp,
                             &nios_profile, &rffe_profile, &port, &spdt);
 
+    /* Reserved request bytes are part of the wire contract. Reject them
+     * before even reading the timer, so malformed commands cannot enter any
+     * retune or queue-clear path. */
+    if (!nios_pkt_retune2_reserved_valid(b->req)) {
+        INCREMENT_ERROR_COUNT();
+        flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
+        nios_pkt_retune2_resp_pack(b->resp, 0, flags);
+        return;
+    }
+
     if (timestamp != NIOS_PKT_RETUNE_NOW &&
         timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         if (!time_tamer_read(module, &start_time)) {

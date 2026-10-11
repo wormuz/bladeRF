@@ -120,6 +120,13 @@ static inline bool nios_pkt_retune2_route_valid(bladerf_module module,
     return false;
 }
 
+static inline bool nios_pkt_retune2_reserved_valid(const uint8_t *buf)
+{
+    return buf != NULL &&
+           buf[NIOS_PKT_RETUNE2_IDX_RESV] == 0 &&
+           buf[NIOS_PKT_RETUNE2_IDX_RESV + 1] == 0;
+}
+
 /* Pack the retune2 request buffer with the provided parameters */
 static inline void nios_pkt_retune2_pack(uint8_t *buf,
                                          bladerf_module module,

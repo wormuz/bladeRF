@@ -804,6 +804,17 @@ static int check_completion_ring_overwrite_is_visible(void)
 
 int main(void)
 {
+    uint8_t retune_request[16] = { 0 };
+    if (!nios_pkt_retune2_reserved_valid(retune_request)) {
+        fputs("zeroed retune2 reserved fields were rejected\n", stderr);
+        return 1;
+    }
+    retune_request[NIOS_PKT_RETUNE2_IDX_RESV + 1] = 1;
+    if (nios_pkt_retune2_reserved_valid(retune_request)) {
+        fputs("nonzero retune2 reserved field was accepted\n", stderr);
+        return 1;
+    }
+
     if (!nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x80, 0x00) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x8c, 0x0a) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x05) ||
