@@ -2634,7 +2634,10 @@ static void bladerf2_tx_frequency_reconfigure_complete(
             dev, ch, &readback_hz);
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         pending_count = board_data->tx_retune2_pending_count;
-        board_data->tx_retune2_completion_faulted = true;
+        board_data->tx_retune2_completion_faulted =
+            tune_status != 0 || readback_status != 0 ||
+            !bladerf2_rfic_frequency_matches(target_hz, readback_hz) ||
+            bladerf2_retune_completion_unresolved(pending_count);
         board_data->tx_retune2_applied_waiting_rf_valid =
             tune_status == 0 && readback_status == 0 &&
             bladerf2_rfic_frequency_matches(target_hz, readback_hz) &&
