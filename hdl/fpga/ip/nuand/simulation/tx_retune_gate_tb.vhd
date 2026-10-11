@@ -161,6 +161,33 @@ begin
             report "split comparator changed the scheduled mute timestamp"
             severity failure;
 
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to re-arm after carry-boundary test"
+            severity failure;
+        timestamp <= unsigned'(x"fffffffffffffffe");
+        target_timestamp <= to_unsigned(1, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        assert state = "01" and muted = '0'
+            report "split comparator muted early across 64-bit wrap"
+            severity failure;
+        timestamp <= to_unsigned(1, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "split comparator missed target across 64-bit wrap"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(1, 64)
+            report "64-bit wrap changed the TX mute timestamp"
+            severity failure;
+
         report "tx_retune_gate_tb: PASS" severity note;
         stop;
         wait;
