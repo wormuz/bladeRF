@@ -3634,7 +3634,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
             pending_count = board_data->tx_retune2_pending_count;
-            board_data->tx_retune2_completion_faulted = true;
+            board_data->tx_retune2_completion_faulted =
+                bladerf2_retune_completion_unresolved(pending_count);
             board_data->tx_retune2_applied_waiting_rf_valid =
                 readback_status == 0 &&
                 bladerf2_rfic_frequency_matches(frequency,
