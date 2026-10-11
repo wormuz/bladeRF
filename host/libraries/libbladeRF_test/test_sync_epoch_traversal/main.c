@@ -965,9 +965,11 @@ static void *replace_rejected_async_buffer(void *user_data, void *buffer)
 static bool validate_async_rx_buffer(struct bladerf *dev,
                                      bladerf_channel_layout layout,
                                      bladerf_format format,
+                                     bool sync_consumer,
                                      const void *buffer, size_t length,
                                      struct bladerf_metadata *metadata)
 {
+    (void)sync_consumer;
     assert(dev != NULL && buffer != NULL && length > 0);
     assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX);
     assert(metadata != NULL);
@@ -2956,7 +2958,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
     metadata.flags = BLADERF_META_FLAG_RX_NOW;
     assert(sync_rx(&f.sync, samples, MSG_SAMPLES, &metadata, 1) ==
-           BLADERF_ERR_WOULD_BLOCK);
+           BLADERF_ERR_TIMEOUT);
     assert(metadata.actual_count == 0);
     assert(f.sync.meta.rx_epoch_data_invalidated);
 
@@ -3400,12 +3402,16 @@ int main(void)
     write_msg(f.buffers[1], 200, 8, 1001);
     memset(&meta, 0, sizeof(meta));
     meta.flags = BLADERF_META_FLAG_RX_NOW;
-    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_WOULD_BLOCK);
+    assert(sync_rx(&f.sync, out, 100, &meta, 1) == BLADERF_ERR_TIMEOUT);
     assert(meta.actual_count == 0);
     assert(f.sync.meta.rx_epoch_data_invalidated);
-    assert(sync_withheld_events == 1);
-    assert(sync_withheld_reason == BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
-    assert(!sync_withheld_timestamp_valid[0]);
+    assert(sync_withheld_events == 2);
+    assert(sync_withheld_reasons[0] ==
+           BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED);
+    assert(sync_withheld_reasons[1] == BLADERF_RF_WITHHELD_SYNC_TIMEOUT);
+    assert(sync_withheld_timestamp_valid[0]);
+    assert(!sync_withheld_timestamp_valid[1]);
+    assert(sync_withheld_epochs[0] == 7);
     fixture_destroy(&f);
 
     /* Only the exact successful boundary clears invalidation; old queued

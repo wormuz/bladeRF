@@ -298,11 +298,15 @@ struct sync_meta {
     uint64_t rx_epoch_min_timestamp;
     bool rx_epoch_id_filter_enabled;
     bool rx_epoch_data_invalidated;
+    bool rx_epoch_transition_pending;
     uint8_t rx_epoch_expected_id;
 };
 
 struct bladerf_sync {
     MUTEX lock;
+    /* Serialize public RX readers while lock is released during buffer wait. */
+    MUTEX rx_reader_lock;
+    bool rx_reader_lock_initialized;
     /* Epoch invalidation must cancel a blocked sync_rx before acquiring
      * lock: rejected old-epoch callbacks can otherwise wake that reader
      * indefinitely while a transition waits for the same lock. */

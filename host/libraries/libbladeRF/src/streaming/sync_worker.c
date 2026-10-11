@@ -654,6 +654,7 @@ int sync_worker_init(struct bladerf_sync *s)
     }
 
     if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        s->worker->stream->sync_consumer = true;
         s->worker->stream->rx_buffer_rejected =
             sync_worker_rx_buffer_rejected;
     }

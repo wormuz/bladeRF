@@ -2004,6 +2004,13 @@ int bladerf_sync_config(struct bladerf *dev,
         return BLADERF_ERR_UNSUPPORTED;
     }
 
+    if (dev->board->sync_config_validate != NULL) {
+        status = dev->board->sync_config_validate(dev, layout, format);
+        if (status != 0) {
+            return status;
+        }
+    }
+
     /* Stream format controls are shared FPGA state: timestamp, packet,
      * packed-sample, and 8-bit GPIO settings can affect either RF direction,
      * regardless of the layout passed to this call. Revoke both certificates

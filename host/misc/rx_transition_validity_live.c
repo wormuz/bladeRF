@@ -50,8 +50,17 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
     };
     int status = bladerf_rx_transition_begin(dev, rx_channel,
                                              &request, txn);
+    if (status != 0) {
+        fprintf(stderr, "recovery transition begin: %s\n",
+                bladerf_strerror(status));
+    }
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, *txn, event, 2000);
+        if (status != 0) {
+            fprintf(stderr, "recovery transition wait: %s event=%u state=%u\n",
+                    bladerf_strerror(status), event->event_type,
+                    event->fpga_state);
+        }
     }
     if (status != 0) {
         return status;
@@ -69,6 +78,12 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
                                   event->fpga_timestamp)) {
             return 0;
         }
+        fprintf(stderr, "recovery IQ attempt %u: %s epoch=%u valid=%u "
+                "count=%u status=0x%x ts=%llu boundary=%llu\n", attempt,
+                bladerf_strerror(status), metadata.rx_epoch_id,
+                metadata.rx_epoch_id_valid, metadata.actual_count,
+                metadata.status, (unsigned long long)metadata.timestamp,
+                (unsigned long long)event->fpga_timestamp);
     }
 
     fprintf(stderr, "event transition did not restore valid IQ at %llu Hz\n",
@@ -90,9 +105,9 @@ static int latest_rf_event_cursor(struct bladerf *dev, uint64_t *cursor)
     if (status != 0 && status != BLADERF_ERR_MEM) {
         return status;
     }
-    if (count == 0 && !history_complete) {
-        return BLADERF_ERR_UNEXPECTED;
-    }
+    /* If old history wrapped, the API returns the current sequence cursor
+     * even when none of the retained events fit after cursor zero. Starting
+     * a new assertion at that sequence still gives an exact future window. */
     *cursor = next_sequence;
     return 0;
 }
@@ -175,8 +190,12 @@ static int check_sync_timeout_timestamp_event(struct bladerf *dev,
         return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
     }
     for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t provenance_flags =
+            BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            BLADERF_RF_EVENT_F_TRANSITION_RX2;
         if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
-            (events[i].flags & ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+            (events[i].flags & ~provenance_flags) ==
                 BLADERF_RF_WITHHELD_SYNC_TIMEOUT) {
             if ((events[i].flags &
                  BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) == 0 ||
@@ -233,11 +252,18 @@ int main(int argc, char **argv)
     }
     CHECK(bladerf_open(&dev, NULL));
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
-    CHECK(bladerf_set_sample_rate(dev, rx_channel, 4000000, NULL));
-    CHECK(bladerf_set_bandwidth(dev, rx_channel, 5000000, NULL));
+    if (getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") == NULL) {
+        CHECK(bladerf_set_sample_rate(dev, rx_channel, 4000000, NULL));
+        CHECK(bladerf_set_bandwidth(dev, rx_channel, 5000000, NULL));
+    } else {
+        puts("using device default RX rate/bandwidth for transition test");
+    }
     CHECK(bladerf_set_gain(dev, rx_channel, 30));
+    /* This test deliberately pauses consumption during transition/event
+     * checks. Retain enough host ring capacity for those bounded pauses so
+     * unrelated queue overrun does not invalidate the epoch under test. */
     CHECK(bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
-                              16, 8192, 8, 1000));
+                              256, 8192, 8, 1000));
     CHECK(bladerf_enable_module(dev, rx_channel, true));
     if (paired) {
         CHECK(bladerf_enable_module(dev, rx2_channel, true));

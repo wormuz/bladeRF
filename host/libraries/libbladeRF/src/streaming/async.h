@@ -47,6 +47,8 @@ struct bladerf_stream {
     unsigned int transfer_timeout;
     bladerf_stream_cb cb;
     void *user_data;
+    /* True when this async transport is the internal sync RX worker. */
+    bool sync_consumer;
     /* Optional sync-RX bookkeeping hook. Called for each transfer rejected
      * before the sample callback so sequence tracking can retire its slot. */
     void *(*rx_buffer_rejected)(void *user_data, void *buffer);

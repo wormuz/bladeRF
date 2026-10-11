@@ -2713,6 +2713,7 @@ static void bladerf2_rx_async_note_withheld_source(
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
+                                           bool sync_consumer,
                                            const void *buffer,
                                            size_t length,
                                            struct bladerf_metadata *metadata)
@@ -2905,10 +2906,9 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         }
         bladerf2_rx_data_rearm_notifications_locked(board_data);
 
-        /* A validated async META transfer is the first host-visible IQ for
-         * this epoch just as a complete sync read is. Record it before
-         * invoking the application callback, atomically with the admission
-         * commit. This path never takes dev->lock from the USB callback. */
+        /* Async callers receive this accepted transfer at their callback
+         * boundary. A sync worker only places it in an internal ring; defer
+         * RX_FIRST_VALID_HOST_DATA until sync_rx actually returns IQ. */
         struct bladerf_metadata first_packet = {0};
         first_packet.timestamp = metadata_get_timestamp(bytes);
         first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
@@ -2924,12 +2924,14 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             metadata->rx_epoch_id_valid = 1;
             metadata->rx_clipping_flags = first_packet.rx_clipping_flags;
         }
-        if (now_ns != 0) {
-            bladerf2_rx_transition_note_first_packet_epoch_locked_at(
-                dev, &first_packet, layout, now_ns);
-        } else {
-            bladerf2_rx_transition_note_first_packet_epoch_locked(
-                dev, &first_packet, layout);
+        if (!sync_consumer) {
+            if (now_ns != 0) {
+                bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+                    dev, &first_packet, layout, now_ns);
+            } else {
+                bladerf2_rx_transition_note_first_packet_epoch_locked(
+                    dev, &first_packet, layout);
+            }
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rx_report_clipping(dev, &first_packet);
@@ -4578,6 +4580,33 @@ static int bladerf2_get_stream_timeout(struct bladerf *dev,
     return 0;
 }
 
+static int bladerf2_sync_config_validate(struct bladerf *dev,
+                                        bladerf_channel_layout layout,
+                                        bladerf_format format)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bool require_rx_x2_host_data;
+    (void)format;
+
+    if ((layout & BLADERF_DIRECTION_MASK) != BLADERF_RX) {
+        return 0;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    require_rx_x2_host_data =
+        board_data->rf_transition_rx_x2_host_data_required;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (!bladerf2_rx_layout_satisfies_transition(
+            require_rx_x2_host_data, layout)) {
+        /* Report and reject before bladerf_sync_config() revokes the active
+         * stream's certified epoch. */
+        bladerf2_rx_layout_unsupported(dev, layout, true);
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return 0;
+}
+
 static int bladerf2_sync_config(struct bladerf *dev,
                                 bladerf_channel_layout layout,
                                 bladerf_format format,
@@ -4603,7 +4632,6 @@ static int bladerf2_sync_config(struct bladerf *dev,
         require_rx_x2_host_data =
             board_data->rf_transition_rx_x2_host_data_required;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
         /* The contract can be enabled by transition_begin() before a sync
          * stream exists. Preserve it across stream creation/replacement so
          * raw formats cannot bypass the metadata fence in that call order. */
@@ -5774,6 +5802,7 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.deinit_stream, bladerf2_deinit_stream),
     FIELD_INIT(.set_stream_timeout, bladerf2_set_stream_timeout),
     FIELD_INIT(.get_stream_timeout, bladerf2_get_stream_timeout),
+    FIELD_INIT(.sync_config_validate, bladerf2_sync_config_validate),
     FIELD_INIT(.sync_config, bladerf2_sync_config),
     FIELD_INIT(.sync_tx, bladerf2_sync_tx),
     FIELD_INIT(.sync_rx, bladerf2_sync_rx),

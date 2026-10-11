@@ -310,6 +310,13 @@ int sync_init(struct bladerf_sync *sync,
     }
     sync->lock_initialized = true;
 
+    status = MUTEX_INIT(&sync->rx_reader_lock);
+    if (status != THREAD_SUCCESS) {
+        status = BLADERF_ERR_UNEXPECTED;
+        goto error;
+    }
+    sync->rx_reader_lock_initialized = true;
+
     switch (layout & BLADERF_DIRECTION_MASK) {
         case BLADERF_TX:
             sync->buf_mgmt.submitter = SYNC_TX_SUBMITTER_FN;
@@ -334,6 +341,7 @@ int sync_init(struct bladerf_sync *sync,
     sync->meta.rx_epoch_boundary_enabled = false;
     sync->meta.rx_epoch_min_timestamp = 0;
     sync->meta.rx_epoch_id_filter_enabled = false;
+    sync->meta.rx_epoch_transition_pending = false;
     sync->meta.rx_epoch_expected_id = 0;
     sync->meta.msg_size = msg_size;
     sync->meta.msg_per_buf = msg_per_buf(msg_size, buffer_size, bytes_per_sample);
@@ -472,6 +480,7 @@ error:
 void sync_deinit(struct bladerf_sync *sync)
 {
     if (sync->initialized || sync->lock_initialized ||
+        sync->rx_reader_lock_initialized ||
         sync->buf_lock_initialized || sync->buf_cond_initialized ||
         sync->rx_epoch_lock_initialized || sync->worker != NULL ||
         sync->buf_mgmt.status != NULL ||
@@ -531,6 +540,10 @@ void sync_deinit(struct bladerf_sync *sync)
         if (sync->lock_initialized) {
             MUTEX_DESTROY(&sync->lock);
             sync->lock_initialized = false;
+        }
+        if (sync->rx_reader_lock_initialized) {
+            MUTEX_DESTROY(&sync->rx_reader_lock);
+            sync->rx_reader_lock_initialized = false;
         }
     }
 }
@@ -734,6 +747,7 @@ int sync_rx_epoch_invalidate_with_revoke(
         sync->meta.rx_epoch_min_timestamp = 0;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
+        sync->meta.rx_epoch_transition_pending = false;
         /* A loss marker staged for the epoch being discarded stays in the
          * RF event history, but must not mark samples from the next epoch. */
         MUTEX_LOCK(&sync->buf_mgmt.lock);
@@ -861,6 +875,7 @@ int sync_rx_epoch_require_transition(struct bladerf_sync *sync)
         sync->meta.rx_epoch_expected_id = 0;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
+        sync->meta.rx_epoch_transition_pending = false;
         sync->meta.have_timestamp = false;
     }
     MUTEX_UNLOCK(&sync->lock);
@@ -917,6 +932,7 @@ int sync_rx_epoch_stage_min_timestamp_before_deadline(
             /* Do not release samples until RX_EPOCH_VALID is durable in the
              * device event history. The commit function clears this latch. */
             sync->meta.rx_epoch_data_invalidated = true;
+            sync->meta.rx_epoch_transition_pending = true;
             sync->buf_mgmt.rx_epoch_trace_remaining = 4;
         }
     }
@@ -978,6 +994,7 @@ int sync_rx_epoch_activate_with_admission_before_deadline(
                 sync->rx_epoch_certified_generation =
                     sync->rx_epoch_generation;
                 sync->meta.rx_epoch_data_invalidated = false;
+                sync->meta.rx_epoch_transition_pending = false;
                 if (prepare != NULL && finish != NULL) {
                     /* The async admission lock stays held while the sync
                      * latch changes. Neither stream can observe a half
@@ -1015,6 +1032,7 @@ int sync_rx_epoch_expect_id(struct bladerf_sync *sync, uint8_t epoch_id)
         sync->meta.rx_epoch_expected_id = epoch_id;
         sync->meta.rx_epoch_id_filter_enabled = true;
         sync->meta.rx_epoch_data_invalidated = true;
+        sync->meta.rx_epoch_transition_pending = true;
         /* Timestamp continuity is scoped to an RX epoch. The first packet
          * admitted for the next epoch must not be compared with the prior
          * epoch's final sample coordinate. */
@@ -1159,6 +1177,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         }
     }
 
+    MUTEX_LOCK(&s->rx_reader_lock);
+
     rx_epoch_generation = rx_epoch_generation_snapshot(s);
 
     MUTEX_LOCK(&s->lock);
@@ -1198,16 +1218,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         }
     }
 
-    /* Once a certified RX epoch is revoked, continuously arriving but
-     * uncertified packets can never satisfy this read. Fail promptly instead
-     * of draining forever (and resetting the per-buffer timeout each time).
-     * A later confirmed epoch clears this latch in
-     * sync_rx_epoch_set_min_timestamp(). */
+    /* A revoked epoch cannot satisfy this read. Only a transition that has
+     * installed its expected FPGA epoch may keep a blocking caller waiting;
+     * legacy setters and stream reconfiguration fail closed immediately. */
     if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
         (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
          s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
         s->meta.rx_epoch_id_filter_enabled &&
-        rx_epoch_delivery_revoked(s)) {
+        rx_epoch_delivery_revoked(s) &&
+        (!s->meta.rx_epoch_transition_pending || timeout_ms == 0)) {
         status = BLADERF_ERR_WOULD_BLOCK;
         withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
         goto out;
@@ -1217,7 +1236,9 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
          s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
         s->meta.rx_epoch_id_filter_enabled &&
-        s->meta.rx_epoch_data_invalidated) {
+        s->meta.rx_epoch_data_invalidated &&
+        (!s->meta.rx_epoch_transition_pending || timeout_ms == 0)) {
+        /* A nonblocking caller cannot wait for a pending transition. */
         status = BLADERF_ERR_WOULD_BLOCK;
         withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
         goto out;
@@ -1488,8 +1509,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             break;
                         }
                     }
+                    /* Transition waiters must install the new epoch boundary
+                     * while this read is blocked. Keep the buffer lock (the
+                     * condition-variable contract), but release parser state. */
+                    MUTEX_UNLOCK(&s->lock);
                     status = wait_for_buffer(b, wait_timeout_ms,
                                              __FUNCTION__, b->cons_i);
+                    MUTEX_LOCK(&s->lock);
 
                     if (status == 0) {
                         if (b->status[b->cons_i] != SYNC_BUFFER_FULL) {
@@ -2100,6 +2126,22 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
     }
 
 out:
+    /* A blocking read may wait through an in-flight transition instead of
+     * returning WOULD_BLOCK immediately. If its deadline expires before any
+     * sample arrives, preserve the epoch-invalid reason as well as the
+     * separate sync-timeout event below. */
+    if (withheld_reason == 0 && status == BLADERF_ERR_TIMEOUT &&
+        samples_returned == 0 &&
+        (s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_RX &&
+        (s->stream_config.format == BLADERF_FORMAT_SC16_Q11_META ||
+         s->stream_config.format == BLADERF_FORMAT_SC8_Q7_META) &&
+        s->meta.rx_epoch_id_filter_enabled &&
+        s->meta.rx_epoch_data_invalidated) {
+        withheld_reason = BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED;
+        withheld_epoch_id = s->meta.rx_epoch_expected_id;
+        withheld_timestamp_valid = false;
+    }
+
     /* The worker can detect a USB overrun in every sync format. Metadata
      * callers also receive the status bit above; the RF event must not depend
      * on that optional format. The worker publishes queue overruns immediately
@@ -2176,6 +2218,7 @@ out:
     } else {
         MUTEX_UNLOCK(&s->lock);
     }
+    MUTEX_UNLOCK(&s->rx_reader_lock);
 
     /* Keep stream discontinuities in the same device event history as RF
      * invalidation. Invoke only after dropping sync->lock: RF setters acquire

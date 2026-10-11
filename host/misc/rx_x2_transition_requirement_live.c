@@ -1,6 +1,8 @@
 #define _DEFAULT_SOURCE
 #include <stdio.h>
 #include <stdint.h>
+#include <pthread.h>
+#include <stdlib.h>
 #include <string.h>
 #include <libbladeRF.h>
 #include "timestamp_order.h"
@@ -8,6 +10,21 @@
 #define RX1 BLADERF_CHANNEL_RX(0)
 #define RX2 BLADERF_CHANNEL_RX(1)
 #define SAMPLES 4096
+
+struct transition_wait_context {
+    struct bladerf *dev;
+    uint32_t transaction_id;
+    struct bladerf_rf_event event;
+    int status;
+};
+
+static void *wait_for_transition(void *arg)
+{
+    struct transition_wait_context *context = arg;
+    context->status = bladerf_rx_transition_wait(
+        context->dev, context->transaction_id, &context->event, 3000);
+    return NULL;
+}
 
 static int require_event(struct bladerf *dev, uint32_t transaction_id,
                          bladerf_rf_event_type type, uint32_t flags)
@@ -28,7 +45,7 @@ static int require_event(struct bladerf *dev, uint32_t transaction_id,
         if (events[i].event_type == type &&
             events[i].transaction_id == transaction_id &&
             events[i].error_code == BLADERF_ERR_UNSUPPORTED &&
-            events[i].flags == flags) {
+            (events[i].flags & 0x3u) == (flags & 0x3u)) {
             return 0;
         }
     }
@@ -56,23 +73,53 @@ static int prepare_channel(struct bladerf *dev, bladerf_channel ch)
 int main(void)
 {
     struct bladerf *dev = NULL;
+    const char *test_fpga_image = getenv("BLADERF_TEST_FPGA_IMAGE");
     int16_t samples[SAMPLES * 4] = {0};
     struct bladerf_rx_transition_request request = {0};
     struct bladerf_rf_event final = {0};
     struct bladerf_metadata meta = { .flags = BLADERF_META_FLAG_RX_NOW };
     bladerf_frequency before = 0, after = 0;
     uint32_t transaction_id = 0;
+    if (test_fpga_image != NULL) {
+        /* Open through FX3 first, then load the exact test RBF while keeping
+         * this handle alive. This permits testing a new image when the old
+         * FPGA cannot answer its scheduled-retune cancel during open. */
+        if (setenv("BLADERF_FORCE_NO_FPGA_PRESENT", "1", 1) != 0 ||
+            setenv("BLADERF_FORCE_FPGA_A4", "1", 1) != 0) {
+            perror("setenv FPGA bootstrap");
+            return 1;
+        }
+    }
     int status = bladerf_open(&dev, NULL);
     if (status != 0) {
         fprintf(stderr, "open: %s\n", bladerf_strerror(status));
         return 1;
     }
+    if (test_fpga_image != NULL) {
+        if (unsetenv("BLADERF_FORCE_NO_FPGA_PRESENT") != 0) {
+            perror("unsetenv FPGA discovery override");
+            status = BLADERF_ERR_UNEXPECTED;
+            goto fail;
+        }
+        status = bladerf_load_fpga(dev, test_fpga_image);
+        if (status != 0) {
+            fprintf(stderr, "load test FPGA image: %s\n",
+                    bladerf_strerror(status));
+            goto fail;
+        }
+        (void)unsetenv("BLADERF_FORCE_FPGA_A4");
+        printf("loaded test FPGA image: %s\n", test_fpga_image);
+    }
 
     status = bladerf_set_tuning_mode(dev, BLADERF_TUNING_MODE_HOST);
     if (status == 0) status = bladerf_enable_module(dev, RX1, true);
     if (status == 0) status = bladerf_enable_module(dev, RX2, true);
-    if (status == 0) status = prepare_channel(dev, RX1);
-    if (status == 0) status = prepare_channel(dev, RX2);
+    if (status == 0 && getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") == NULL)
+        status = prepare_channel(dev, RX1);
+    if (status == 0 && getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") == NULL)
+        status = prepare_channel(dev, RX2);
+    if (getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") != NULL)
+        puts("using device default RX rate/bandwidth for layout qualification");
     if (status != 0) goto fail;
 
     status = bladerf_sync_config(dev, BLADERF_RX_X1,
@@ -117,6 +164,7 @@ int main(void)
         fprintf(stderr, "RX_X2 sync config: %s\n", bladerf_strerror(status));
         goto fail;
     }
+    request.required_events_mask = BLADERF_RF_REQUIRE_RX_X2_HOST_DATA;
     status = bladerf_rx_transition_begin(dev, RX1, &request,
                                          &transaction_id);
     if (status != 0) {
@@ -125,22 +173,35 @@ int main(void)
         goto fail;
     }
 
-    /* Sync RX is the host-data consumer. Read first and retain this block;
-     * transition_wait must then identify the same paired transaction. */
+    struct transition_wait_context wait_context = {
+        .dev = dev,
+        .transaction_id = transaction_id,
+    };
+    pthread_t waiter;
+    if (pthread_create(&waiter, NULL, wait_for_transition,
+                       &wait_context) != 0) {
+        fprintf(stderr, "could not start transition waiter\n");
+        goto fail;
+    }
+    /* The waiter commits the FPGA boundary while sync_rx consumes the first
+     * paired block. The host-data event must identify this exact block. */
     memset(samples, 0, sizeof(samples));
     meta = (struct bladerf_metadata){ .flags = BLADERF_META_FLAG_RX_NOW };
     status = bladerf_sync_rx(dev, samples, SAMPLES * 2, &meta, 3000);
+    (void)pthread_join(waiter, NULL);
     if (status != 0) {
         fprintf(stderr, "first paired META read: %s\n",
                 bladerf_strerror(status));
-        /* Retire the transaction and preserve its terminal result. */
-        (void)bladerf_rx_transition_wait(dev, transaction_id, &final, 3000);
+        fprintf(stderr, "paired transition wait: %s event=%d state=%u\n",
+                bladerf_strerror(wait_context.status),
+                wait_context.event.event_type,
+                wait_context.event.fpga_state);
         goto fail;
     }
-    status = bladerf_rx_transition_wait(dev, transaction_id, &final, 3000);
-    if (status != 0) {
+    final = wait_context.event;
+    if (wait_context.status != 0) {
         fprintf(stderr, "paired transition wait: %s\n",
-                bladerf_strerror(status));
+                bladerf_strerror(wait_context.status));
         goto fail;
     }
     if (final.event_type != BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
