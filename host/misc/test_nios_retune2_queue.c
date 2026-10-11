@@ -103,10 +103,12 @@ bool tamer_clock_stalled(bladerf_module module)
 bool tamer_cancel(bladerf_module module)
 {
     cancel_count++;
-    if (module == BLADERF_MODULE_RX) {
-        compare_fired_rx = false;
-    } else if (module == BLADERF_MODULE_TX) {
-        compare_fired_tx = false;
+    if (!fail_tamer_cancel) {
+        if (module == BLADERF_MODULE_RX) {
+            compare_fired_rx = false;
+        } else if (module == BLADERF_MODULE_TX) {
+            compare_fired_tx = false;
+        }
     }
     return !fail_tamer_cancel;
 }
@@ -600,6 +602,19 @@ static int check_failed_schedule_retains_timer_ownership(void)
         schedule_count != 1 || cancel_count != 0) {
         fputs("schedule timeout released an unacknowledged compare\n",
               stderr);
+        return 1;
+    }
+
+    /* A late compare and its IRQ cannot activate either request while the
+     * failed schedule still owns the comparator. */
+    compare_fired_rx = true;
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    pkt_retune2_work();
+    if (rx_queue.count != 2 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
+        recall_count != 0 || schedule_count != 1) {
+        fputs("late compare activated a request before cancel ACK\n", stderr);
         return 1;
     }
 
