@@ -854,6 +854,16 @@ def check_nios():
                  "without including its declaration",
                  "the NIOS -Werror build fails with an implicit declaration")
 
+    retune = NIOS_SRC / "pkt_retune2.c"
+    if retune.exists():
+        text = code_only(retune.read_text(), comment="//")
+        if ("rfic_frequency_peer_unknown(" in text and
+                '#include "devices_rfic.h"' not in text):
+            fail("nios-rfic-api-include",
+                 "pkt_retune2.c calls rfic_frequency_peer_unknown without "
+                 "including its declaration",
+                 "the NIOS -Werror build fails with an implicit declaration")
+
 
 def check_rfpll_errors_propagate():
     """Keep RFPLL SPI/lock failures visible to the host frequency API.
@@ -1741,6 +1751,7 @@ vhdl-cross-domain-or       an OR of two domains has no owning domain
 header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
 nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
 nios-frequency-policy-include    NIOS frequency policy call must include its declaration
+nios-rfic-api-include             NIOS RFIC API calls must include their declaration
 adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune result
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
