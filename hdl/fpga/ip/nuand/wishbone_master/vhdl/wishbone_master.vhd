@@ -140,6 +140,7 @@ architecture arch of wishbone_master is
     signal wb_timeout_pulse : std_logic;
     signal wb_fault_response : std_logic;
     signal wb_request_pop : std_logic;
+    signal wb_response_push : std_logic;
     signal wb2av_data : std_logic_vector(DATA_BITS downto 0);
     signal av_timeout_status : std_logic := '0';
     signal wb_timeout_clear_toggle_d : std_logic := '0';
@@ -220,6 +221,12 @@ begin
         when ((wb_current.state = WAIT_FOR_REQ and
                (wb_ack_i = '1' or wb_timeout_pulse = '1')) or
               wb_fault_response = '1') and wb_empty = '0'
+        else '0';
+
+    wb_response_push <= '1'
+        when ((wb_current.state = WAIT_FOR_REQ and wb_ack_i = '1') or
+              wb_timeout_pulse = '1' or wb_fault_response = '1') and
+             wb2av_wfull = '0'
         else '0';
 
     wb_timeout_counter_proc : process(wb_clk_i, wb_rst_i)
@@ -357,9 +364,7 @@ begin
         aclr            => reset,
 
         wrclk           => wb_clk_i,
-        wrreq           => ((wb_current.state = WAIT_FOR_REQ and wb_ack_i) or
-                            wb_timeout_pulse or wb_fault_response) and
-                           not wb2av_wfull,
+        wrreq           => wb_response_push,
         data            => wb2av_data,
 
         wrfull          => wb2av_wfull,
