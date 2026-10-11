@@ -29,13 +29,13 @@
 #include "nios_pkt_retune2.h"    /* Packet format definition */
 #include "nios_pkt_8x32.h"       /* Completion record protocol */
 #include "devices.h"
-#include "devices_rfic.h"
 #include "debug.h"
 
 #ifdef BLADERF_NIOS_LIBAD936X
 void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz);
+bool rfic_frequency_peer_unknown(bladerf_module target);
 #endif  // BLADERF_NIOS_LIBAD936X
 
 #ifdef BLADERF_NIOS_DEBUG

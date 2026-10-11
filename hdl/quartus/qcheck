@@ -858,10 +858,12 @@ def check_nios():
     if retune.exists():
         text = code_only(retune.read_text(), comment="//")
         if ("rfic_frequency_peer_unknown(" in text and
-                '#include "devices_rfic.h"' not in text):
+                not re.search(
+                    r"bool\s+rfic_frequency_peer_unknown\s*\(\s*"
+                    r"bladerf_module\s+\w+\s*\)\s*;", text)):
             fail("nios-rfic-api-include",
                  "pkt_retune2.c calls rfic_frequency_peer_unknown without "
-                 "including its declaration",
+                 "a visible prototype",
                  "the NIOS -Werror build fails with an implicit declaration")
 
 
