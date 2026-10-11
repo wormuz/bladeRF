@@ -1,6 +1,26 @@
 #include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 
+static bool nios_response_has_zero_tail(const uint8_t *response,
+                                        uint8_t first_reserved)
+{
+    uint8_t i;
+
+    for (i = first_reserved; i < NIOS_PKT_LEN; i++) {
+        if (response[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool nios_response_flags_and_reserved_valid(
+    const uint8_t *response, uint8_t flags_offset, uint8_t reserved_offset)
+{
+    return (response[flags_offset] & 0xfcu) == 0 &&
+           response[reserved_offset] == 0;
+}
+
 /* Standard register packets echo the request identity in their response.
  * A successful flag alone is insufficient: after an ambiguous/late NIOS
  * response it could certify a different request. Keep this check inside the
@@ -39,6 +59,12 @@ static bool nios_response_matches_request(const uint8_t *request,
 
     switch (request[0]) {
     case NIOS_PKT_8x8_MAGIC: {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_8x8_IDX_FLAGS, NIOS_PKT_8x8_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_8x8_IDX_RESV2)) {
+            return false;
+        }
         uint8_t req_target, resp_target, req_addr, resp_addr;
         uint8_t req_data, resp_data;
         bool req_write, resp_write;
@@ -51,6 +77,12 @@ static bool nios_response_matches_request(const uint8_t *request,
                (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x16_MAGIC: {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_8x16_IDX_FLAGS, NIOS_PKT_8x16_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_8x16_IDX_RESV2)) {
+            return false;
+        }
         uint8_t req_target, resp_target, req_addr, resp_addr;
         uint16_t req_data, resp_data;
         bool req_write, resp_write;
@@ -63,6 +95,12 @@ static bool nios_response_matches_request(const uint8_t *request,
                (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x32_MAGIC: {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_8x32_IDX_FLAGS, NIOS_PKT_8x32_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_8x32_IDX_RESV2)) {
+            return false;
+        }
         uint8_t req_target, resp_target, req_addr, resp_addr;
         uint32_t req_data, resp_data;
         bool req_write, resp_write;
@@ -75,6 +113,12 @@ static bool nios_response_matches_request(const uint8_t *request,
                (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x64_MAGIC: {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_8x64_IDX_FLAGS, NIOS_PKT_8x64_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_8x64_IDX_RESV2)) {
+            return false;
+        }
         uint8_t req_target, resp_target, req_addr, resp_addr;
         uint64_t req_data, resp_data;
         bool req_write, resp_write;
@@ -95,10 +139,11 @@ static bool nios_response_matches_request(const uint8_t *request,
         /* These fields are reserved by the packet ABI and are always zero in
          * firmware-generated responses. Reject malformed or stale framing
          * before trusting the echoed request identity. */
-        if ((response[NIOS_PKT_16x64_IDX_FLAGS] & 0xfcu) != 0 ||
-            response[NIOS_PKT_16x64_IDX_RESV1] != 0 ||
-            response[NIOS_PKT_16x64_IDX_RESV2] != 0 ||
-            response[NIOS_PKT_16x64_IDX_RESV2 + 1] != 0) {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_16x64_IDX_FLAGS,
+                NIOS_PKT_16x64_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_16x64_IDX_RESV2)) {
             return false;
         }
 
@@ -124,6 +169,12 @@ static bool nios_response_matches_request(const uint8_t *request,
         return true;
     }
     case NIOS_PKT_32x32_MAGIC: {
+        if (!nios_response_flags_and_reserved_valid(
+                response, NIOS_PKT_32x32_IDX_FLAGS, NIOS_PKT_32x32_IDX_RESV1) ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_32x32_IDX_RESV2)) {
+            return false;
+        }
         uint8_t req_target, resp_target;
         uint32_t req_addr, resp_addr;
         uint32_t req_data, resp_data;

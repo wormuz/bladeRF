@@ -16,6 +16,7 @@ struct fake_usb {
     bool mutate_response_target;
     bool mutate_response_data;
     bool mutate_response_reserved;
+    uint8_t mutate_response_reserved_offset;
 };
 
 static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
@@ -44,7 +45,7 @@ static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         ((uint8_t *)buffer)[NIOS_PKT_16x64_IDX_DATA] ^= 1u;
     }
     if (endpoint == PERIPHERAL_EP_IN && fake->mutate_response_reserved) {
-        ((uint8_t *)buffer)[NIOS_PKT_16x64_IDX_RESV1] = 1u;
+        ((uint8_t *)buffer)[fake->mutate_response_reserved_offset] = 1u;
     }
     return call + 1 == fake->fail_call ? BLADERF_ERR_TIMEOUT : 0;
 }
@@ -213,7 +214,29 @@ static void test_nonzero_16x64_reserved_response_fails_closed(void)
 
     setup(&usb, &fns, &fake);
     fake.mutate_response_reserved = true;
+    fake.mutate_response_reserved_offset = NIOS_PKT_16x64_IDX_RESV1;
     nios_pkt_16x64_pack(buffer, NIOS_PKT_16x64_TARGET_AD9361, false, 0x42, 0);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+    assert(usb.peripheral_desynchronized);
+    teardown(&usb);
+}
+
+
+static void test_8x8_reserved_tail_fails_closed(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_COMPLETE;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.mutate_response_reserved = true;
+    fake.mutate_response_reserved_offset = NIOS_PKT_8x8_IDX_RESV2;
+    nios_pkt_8x8_pack(buffer, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                       false, 0, 0);
     assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
                                 NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
     assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
@@ -266,6 +289,7 @@ int main(void)
     test_mismatched_register_response_fails_closed();
     test_mismatched_16x64_write_payload_fails_closed();
     test_nonzero_16x64_reserved_response_fails_closed();
+    test_8x8_reserved_tail_fails_closed();
     test_16x64_batch_result_is_not_compared_as_payload();
     test_nios_poll_deadline_fails_closed_on_clock_error();
     puts("NIOS USB transaction fail-closed tests: PASS");
