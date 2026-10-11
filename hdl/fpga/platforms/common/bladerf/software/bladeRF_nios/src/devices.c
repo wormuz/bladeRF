@@ -426,6 +426,23 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     return true;
 }
 
+/* A failed byte can leave the OpenCores controller holding the bus after a
+ * START. Best-effort STOP keeps a NACKed slave from contaminating the next
+ * SI5338/INA219 transaction. This cleanup is bounded too: it must not turn a
+ * reported peripheral failure into a wedged Nios main loop. */
+static void i2c_abort_transfer(void)
+{
+    uint32_t count = 0;
+
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STO);
+    while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) != 0) {
+        if (++count >= 100000) {
+            DBG("%s: timed out issuing I2C STOP\n", __FUNCTION__);
+            return;
+        }
+    }
+}
+
 /* The comment that used to sit here claimed this applies only to bladeRF1.
  * It does not: the xA4 BSP defines ARBITER_0_BASE and the design carries a
  * real arbiter instance, so every AD9361 SPI access below takes this path.
@@ -1194,7 +1211,8 @@ bool si5338_read(uint8_t addr, uint8_t *data)
     return true;
 
 i2c_fail:
-    /* Bus did not complete; a zero read beats never returning. */
+    /* Preserve the read failure and release any transaction already started. */
+    i2c_abort_transfer();
     return false;
 }
 
@@ -1215,10 +1233,15 @@ bool si5338_write(uint8_t addr, uint8_t data)
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    return i2c_complete_transfer(0);
+    if (!i2c_complete_transfer(0)) {
+        i2c_abort_transfer();
+        return false;
+    }
+    return true;
 
 i2c_fail:
-    /* Bus did not complete; the write is lost, which beats never returning. */
+    /* Preserve the write failure and release any transaction already started. */
+    i2c_abort_transfer();
     return false;
 }
 
@@ -1265,7 +1288,8 @@ bool ina219_read(uint8_t addr, uint16_t *data)
     return true;
 
 i2c_fail:
-    /* Bus did not complete; a zero read beats never returning. */
+    /* Preserve the read failure and release any transaction already started. */
+    i2c_abort_transfer();
     return false;
 }
 #endif  // BOARD_BLADERF_MICRO
@@ -1294,10 +1318,15 @@ bool ina219_write(uint8_t addr, uint16_t data)
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    return i2c_complete_transfer(0);
+    if (!i2c_complete_transfer(0)) {
+        i2c_abort_transfer();
+        return false;
+    }
+    return true;
 
 i2c_fail:
-    /* Bus did not complete; the write is lost, which beats never returning. */
+    /* Preserve the write failure and release any transaction already started. */
+    i2c_abort_transfer();
     return false;
 }
 #endif  // BOARD_BLADERF_MICRO
