@@ -25,6 +25,8 @@ static bool fail_profile_recall;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_read;
+static bool fail_tamer_cancel;
+static unsigned cancel_count;
 static bool compare_fired_rx;
 static bool compare_fired_tx;
 static bool simulated_tamer_clock_stalled;
@@ -100,12 +102,13 @@ bool tamer_clock_stalled(bladerf_module module)
 
 bool tamer_cancel(bladerf_module module)
 {
+    cancel_count++;
     if (module == BLADERF_MODULE_RX) {
         compare_fired_rx = false;
     } else if (module == BLADERF_MODULE_TX) {
         compare_fired_tx = false;
     }
-    return true;
+    return !fail_tamer_cancel;
 }
 
 static void simulate_tamer_irq(struct queue *queue, bladerf_module module)
@@ -157,8 +160,7 @@ static int check_schedule_ready_lifecycle(void)
     fastlock_profile rx_profile = { 0 };
     fastlock_profile tx_profile = { 0 };
 
-    memset(&rx_queue, 0, sizeof(rx_queue));
-    memset(&tx_queue, 0, sizeof(tx_queue));
+    pkt_retune2_init();
     rx_profile.profile_num = 1;
     rx_profile.port = 0x11;
     rx_profile.spdt = 0x02;
@@ -275,7 +277,7 @@ static int check_schedule_ready_lifecycle(void)
     pkt_retune2_work();
     fail_spdt_select = false;
     if (tx_queue.count != 0 ||
-        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 2 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 1) {
         fputs("TX RF switch readback failure was reported as success\n",
               stderr);
@@ -324,6 +326,7 @@ static int check_stale_irq_cannot_release_rearmed_retune(void)
     fastlock_profile profile = { 0 };
 
     pkt_retune2_init();
+    recall_count = 0;
     profile.profile_num = 6;
     compare_fired_rx = false;
     if (enqueue_retune(&rx_queue, &profile, 6, 100) != 1) {
@@ -385,17 +388,61 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
         return 1;
     }
 
-    /* The independent FPGA watchdog reports loss for each tamer. No compare
-     * event or ISR is delivered, and neither module may remain wedged. */
+    /* The independent FPGA watchdog reports loss for each tamer. If the
+     * cancel ACK is missing, report failure once but keep ownership of the
+     * armed compare and do not activate another queued request. */
+    fail_tamer_cancel = true;
+    cancel_count = 0;
     simulated_tamer_clock_stalled = true;
     pkt_retune2_work();
-    simulated_tamer_clock_stalled = false;
-    if (rx_queue.count != 0 || tx_queue.count != 0 ||
+    if (rx_queue.count != 1 || tx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
+        tx_queue.entries[tx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
+        cancel_count != 2 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 0) {
-        fputs("stopped timestamp clock left RX/TX retune pending or valid\n",
+        fputs("unacknowledged cancel lost RX/TX retune ownership\n", stderr);
+        return 1;
+    }
+
+    /* While the clock remains stalled, servicing must not repeat the
+     * million-read cancellation watchdog. */
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || tx_queue.count != 1 ||
+        cancel_count != 2 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
+        fputs("stalled cancel-pending path retried or duplicated failure\n",
+              stderr);
+        return 1;
+    }
+
+    /* A recovered clock permits one bounded retry. If that retry still
+     * fails, later worker passes wait until another stall/recovery cycle. */
+    simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || tx_queue.count != 1 ||
+        cancel_count != 4 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
+        fputs("cancel recovery retry was not bounded\n", stderr);
+        return 1;
+    }
+
+    simulated_tamer_clock_stalled = true;
+    pkt_retune2_work();
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_cancel = false;
+    pkt_retune2_work();
+    if (rx_queue.count != 0 || tx_queue.count != 0 || cancel_count != 6 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 0) {
+        fputs("acknowledged cancel did not retire failed RX/TX entries\n",
               stderr);
         return 1;
     }
@@ -407,8 +454,7 @@ static int check_deferred_failure_reporting(void)
     fastlock_profile tx_profile = { 0 };
     fastlock_profile rx_profile = { 0 };
 
-    reset_queue(&rx_queue);
-    reset_queue(&tx_queue);
+    pkt_retune2_init();
     tx_profile.profile_num = 3;
     rx_profile.profile_num = 4;
 
@@ -423,10 +469,7 @@ static int check_deferred_failure_reporting(void)
     if (tx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
-        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
-        !pkt_retune2_completion_select(BLADERF_MODULE_TX, 1) ||
-        pkt_retune2_completion_word(0) != 1 ||
-        pkt_retune2_completion_word(3) != 7) {
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 0) {
         fputs("deferred TX profile-load failure was not retained\n", stderr);
         return 1;
     }
@@ -444,10 +487,7 @@ static int check_deferred_failure_reporting(void)
     if (rx_queue.count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
-        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
-        !pkt_retune2_completion_select(BLADERF_MODULE_RX, 1) ||
-        pkt_retune2_completion_word(0) != 1 ||
-        pkt_retune2_completion_word(3) != 5) {
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
         fputs("deferred RX activation failure was not retained\n", stderr);
         return 1;
     }

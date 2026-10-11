@@ -57,6 +57,7 @@ enum entry_state {
     ENTRY_STATE_NEW,          /* We have a new retune request to satisfy */
     ENTRY_STATE_SCHEDULED,    /* We've scheduled the timer interrupt for
                                * this entry and are awaiting the ISR */
+    ENTRY_STATE_CANCEL_PENDING, /* Timer failure reported; await cancel ACK */
     ENTRY_STATE_READY,        /* The timer interrupt has fired - we should
                                * handle this retune */
     ENTRY_STATE_DONE,         /* Retune is complete */
@@ -70,6 +71,7 @@ struct queue_entry {
     fastlock_profile profile;
     uint16_t nios_profile;
     uint64_t timestamp;
+    bool cancel_recovery_seen;
 };
 
 static struct queue {
@@ -216,6 +218,7 @@ static inline uint8_t enqueue_retune(struct queue *q,
     q->entries[q->ins_idx].profile.state = FASTLOCK_STATE_BBP;
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].timestamp = timestamp;
+    q->entries[q->ins_idx].cancel_recovery_seen = false;
 
     q->ins_idx = (q->ins_idx + 1) & (RETUNE2_QUEUE_MAX - 1);
 
@@ -503,10 +506,33 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             } else if (tamer_clock_stalled(module)) {
                 /* A stopped timestamp clock cannot generate the compare
                  * event. Fail the accepted request visibly instead of
-                 * pinning this module's queue in SCHEDULED forever. */
+                 * pinning this module's queue in SCHEDULED forever. Keep
+                 * owning the compare until cancellation is acknowledged:
+                 * after clock recovery an un-cancelled compare could still
+                 * fire and interfere with the next queued request. */
                 record_retune2_failure(module);
-                (void)tamer_cancel(module);
-                dequeue_retune(q, NULL);
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                if (tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
+            }
+            break;
+
+        case ENTRY_STATE_CANCEL_PENDING:
+            /* The failure was already published on entry. Retry only the
+             * hardware cancellation; never activate or discard this entry
+             * until the time-tamer confirms that its compare is disarmed.
+             * Do not spin through the million-read cancel watchdog on every
+             * worker pass: make one retry after the FPGA reports clock
+             * recovery, then wait for another observed stall/recovery cycle
+             * if that retry also fails. */
+            if (tamer_clock_stalled(module)) {
+                e->cancel_recovery_seen = false;
+            } else if (!e->cancel_recovery_seen) {
+                e->cancel_recovery_seen = true;
+                if (tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
             }
             break;
 

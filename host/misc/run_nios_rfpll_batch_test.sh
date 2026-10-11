@@ -28,6 +28,7 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
     -I"$repo_root/firmware_common" \
     "$repo_root/host/libraries/libbladeRF/src/backend/usb/nios_access.c" \
     "$repo_root/host/libraries/libbladeRF/src/backend/usb/nios_transaction.c" \
+    "$repo_root/host/libraries/libbladeRF/src/helpers/timeout.c" \
     "$repo_root/host/misc/test_nios_rfpll_batch_host.c" \
     -Wl,--gc-sections -o "$host_test_bin"
 
