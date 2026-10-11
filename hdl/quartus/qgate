@@ -303,11 +303,11 @@ else
             c105_dispositioned=1
         fi
         if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
-    d101_expect=720
-    held_expect=389
+            d101_expect=720
+            held_expect=389
         elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
-            d101_expect=669
-            held_expect=338
+            d101_expect=687
+            held_expect=356
         else
             d101_expect=0
             held_expect=0
@@ -338,6 +338,15 @@ else
                         d101_dispositioned=1
                         note ok "Design Assistant D101: all $d101_expect current-source findings classified; fitted CDC bounds required above"
                         note ok "RX fault-status bundle present in fitted handshake evidence; it is not counted as D101 by this DRC run"
+                    elif [ "$d101_expect" = 687 ] &&
+                         [ -r "$fit_report" ] &&
+                         grep -Fq 'U_rx_fault_causes_handshake|grab_source' "$fit_report" &&
+                         grep -Fq 'U_rx_epoch_snapshot_handshake|grab_source' "$fit_report" &&
+                         grep -Fq 'U_tx_retune_gate_controller|handshake:transfer|grab_source' "$fit_report"; then
+                        d101_dispositioned=1
+                        note ok "Design Assistant D101: all $d101_expect current-source findings classified; fitted CDC bounds required above"
+                        note ok "RX status, epoch snapshot, and TX retune bundles present in fitted handshake evidence"
+                        note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                         note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
                     elif [ "$d101_expect" = 720 ] &&
                          [ -r "$fit_report" ] &&

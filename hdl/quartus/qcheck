@@ -992,6 +992,17 @@ def check_tx_retune_gate_port_map():
             fail("tx-retune-gate-port-map",
                  f"bladerf_core does not map TX retune gate port {port}",
                  "TX RF transition gating must be connected end to end")
+
+    sdc = ROOT / "hdl/fpga/platforms/bladerf-micro/constraints/bladerf.sdc"
+    if sdc.exists():
+        sdc_text = code_only(sdc.read_text(errors="replace"), comment="#")
+        if ("tx_retune_gate_controller:U_tx_retune_gate_controller|"
+                "handshake:transfer|source_holding[*]" not in sdc_text or
+                "tx_retune_gate_controller:U_tx_retune_gate_controller|"
+                "control_tx[*]" not in sdc_text):
+            fail("tx-retune-gate-port-map",
+                 "TX retune mailbox source/capture pair is missing from SDC",
+                 "unbounded 96-bit system-to-TX transfer caused -8.379 ns setup slack")
         if not re.search(r"\b" + re.escape(port) + r"\s*:", tx_text):
             fail("tx-retune-gate-port-map",
                  f"tx entity does not declare retune gate port {port}",
@@ -1272,11 +1283,11 @@ def check_qgate_sweep_handshake_count():
         fail("qgate-sweep-d101-inventory",
              "sweep qgate must require the 720/389 current-source D101 inventory",
              "the fitted sweep report uses the handshakes as fitted structures rather than D101 rows")
-    if ("hs_expect=12" not in text or "d101_expect=669" not in text or
-            "held_expect=338" not in text or "d101_expect=720" not in text or
+    if ("hs_expect=12" not in text or "d101_expect=687" not in text or
+            "held_expect=356" not in text or "d101_expect=720" not in text or
             "held_expect=389" not in text):
         fail("qgate-hosted-handshake-count",
-             "hosted qgate must require 12 handshakes and its 669/338 current-source D101 inventory",
+             "hosted qgate must require 12 handshakes and its 687/356 current-source D101 inventory",
              "a sweep-only inventory rejects or silently weakens the hosted release gate")
     sdc = code_only(SDC.read_text())
     optional = (
@@ -1632,9 +1643,8 @@ def check_qgate_sta_resolution():
                  "known bundled crossings need endpoint classification plus fitted max-skew evidence")
             return
 
-        # Hosted omits the three sweep-only bundles. Exercise its independent
-        # 12-pair / 669-source DRC inventory. In this fitted DRC run the
-        # 30-bit fault-cause transfer is represented as a handshake, not D101.
+        # Hosted omits sweep-only bundles. Exercise its independent 12-pair /
+        # 687-source DRC inventory and require all current RX/TX CDC evidence.
         host_project = quartus / "work" / "bladerf-micro-A4-hosted"
         host_output = host_project / "output_files"
         host_output.mkdir(parents=True)
@@ -1643,9 +1653,11 @@ def check_qgate_sta_resolution():
         host_fit = host_output / "hosted.fit.rpt"
         host_sta.write_text("Type\nSlack : 0.073\n")
         host_fit.write_text(
-            "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n")
+            "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n"
+            "bladerf_core:U_core|handshake:U_rx_epoch_snapshot_handshake|grab_source~0\n"
+            "bladerf_core:U_core|tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|grab_source~0\n")
         host_sources = (
-            (338, "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
+            (356, "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
             (128, "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),
             (129, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|axi_ad9361_rx_channel:i_rx_channel_0|up_adc_channel:i_up_adc_channel|up_xfer_cntrl:i_xfer_cntrl|up_xfer_data[0]"),
             (10, "bladerf_core:U_core|nios_system:U_nios_system|axi_ad9361:axi_ad9361_0|axi_ad9361_rx:i_rx|up_adc_common:i_up_adc_common|up_xfer_status:i_xfer_status|d_xfer_data[0]"),
@@ -1654,9 +1666,9 @@ def check_qgate_sta_resolution():
         host_lines = [
             "; Design Assistant Status ; Analyzed ;",
             "; Total Critical Violations ; 0 ;",
-            "; Total High Violations ; 670 ;",
+            "; Total High Violations ; 688 ;",
             "; - Rule C105 ; 1 ;",
-            "; - Rule D101 ; 669 ;",
+            "; - Rule D101 ; 687 ;",
             "; Rule C105: Clock signal should be a global signal ; altera_internal_jtag~TCKUTAP ;",
         ]
         host_number = 0
@@ -1688,10 +1700,10 @@ def check_qgate_sta_resolution():
             check=False)
         if (result.returncode != 0 or
                 "cdc handshake: 12" not in result.stdout or
-                "D101: all 669 current-source findings classified" not in result.stdout or
-                "RX fault-status bundle present in fitted handshake evidence" not in result.stdout):
+                "D101: all 687 current-source findings classified" not in result.stdout or
+                "RX status, epoch snapshot, and TX retune bundles present in fitted handshake evidence" not in result.stdout):
             fail("qgate-hosted-classified-bundled-d101",
-                 "qgate rejected the exact hosted 12-pair / 669-source D101 inventory",
+                 "qgate rejected the exact hosted 12-pair / 687-source D101 inventory",
                  "hosted release must validate its fitted RF status and bundled-data paths")
             return
         host_fit.write_text("")
@@ -1807,6 +1819,7 @@ rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and
 qgate-revision-cdc-inventory  qgate expects the separate hosted and sweep fitted CDC inventories
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
+tx-retune-gate-sdc-binding       96-bit TX retune mailbox must have a fitted source/capture bundle constraint
 nios-qsys-stale-workdir-cache reused Quartus workdirs regenerate Nios RTL and BSP from current Qsys/IP sources
 nios-wishbone-timeout-qsys-wiring NIOS timeout PIOs must connect to declared Wishbone component interfaces
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded

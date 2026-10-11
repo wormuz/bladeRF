@@ -52,7 +52,13 @@ set crossings [list \
     "handshake snap tx"    {*time_tamer:tx_tamer|handshake:U_snap|source_holding[*]} \
                            {*time_tamer:tx_tamer|dout[*]} \
     "handshake timestamp"  {*U_handshake_timestamp|source_holding[*]} \
-                           {*fx3_gpif:*|current.tx_timestamp[*]} ]
+                           {*fx3_gpif:*|current.tx_timestamp[*]} \
+    "handshake RX epoch snapshot" {*U_rx_epoch_snapshot_handshake|source_holding[*]} \
+                           {*bladerf_core:*|rx_epoch_snapshot_sys[*]} \
+    "handshake RX fault causes" {*U_rx_fault_causes_handshake|source_holding[*]} \
+                           {*bladerf_core:*|rx_fault_causes_sys[*]} \
+    "handshake TX retune control" {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} \
+                           {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} ]
 
 foreach { label src_pat dst_pat } $crossings {
     set src [get_keepers -nowarn $src_pat]
