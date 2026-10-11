@@ -133,6 +133,7 @@ architecture arch of tx is
     signal retune_gate_state               : unsigned(1 downto 0);
     signal retune_gate_arm_ack_seen        : std_logic := '0';
     signal retune_gate_muted               : std_logic;
+    signal retune_gate_muted_status         : std_logic;
     signal retune_gate_mute_event          : std_logic;
     signal retune_gate_resume_event        : std_logic;
     signal retune_gate_mute_timestamp      : unsigned(63 downto 0);
@@ -349,9 +350,16 @@ begin
         end if;
     end process;
 
+    -- The telemetry bit follows the registered state. The DAC mute itself
+    -- remains combinational in tx_retune_gate for exact timestamp alignment;
+    -- exporting that live comparator result here made the CDC status bus
+    -- timing-critical and is unnecessary for host state polling.
+    retune_gate_muted_status <= '1' when retune_gate_state = "10" or
+                                         retune_gate_state = "11" else '0';
+
     retune_gate_status <= (31 downto 6 => '0') & retune_gate_arm_ack_seen &
                           retune_gate_resume_seen &
-                          retune_gate_mute_seen & retune_gate_muted &
+                          retune_gate_mute_seen & retune_gate_muted_status &
                           std_logic_vector(retune_gate_state);
 
     txtrig : entity work.trigger(async)
