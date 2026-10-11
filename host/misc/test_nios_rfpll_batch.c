@@ -219,6 +219,28 @@ static int run_update_bits_case(bool requested_success,
     return 0;
 }
 
+static int run_update_bits_value_outside_mask(void)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS,
+                 NIOS_PKT_16x64_FLAG_WRITE, 0x00, 0x3b, 0x02,
+                 0x00, 0x00, 0x00, 0x00, 0x00, 0x11, 0x30, 0xa6,
+                 0x00, 0x00 },
+        .ready = false,
+    };
+    uint64_t response = 0;
+    bool success = true;
+    unsigned int calls_before = update_calls;
+
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, NULL, NULL, NULL, &response,
+                               &success);
+    return !success &&
+           response == ((uint64_t)NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER
+                        << 56) &&
+           update_calls == calls_before ? 0 : 1;
+}
+
 static int run_epoch_snapshot_case(uint16_t request_addr,
                                    bool expected_success,
                                    unsigned int expected_calls)
@@ -292,6 +314,7 @@ int main(void)
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
+        run_update_bits_value_outside_mask() || update_calls != 2 ||
         run_epoch_snapshot_case(0, true, 1) ||
         run_epoch_snapshot_case(1, false, 1) ||
         run_read_case(true, true) ||

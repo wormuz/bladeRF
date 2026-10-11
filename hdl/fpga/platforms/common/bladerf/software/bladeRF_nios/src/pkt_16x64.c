@@ -161,7 +161,8 @@ void pkt_16x64(struct pkt_buf *b)
         uint8_t result = 0;
 
         success = marker == NIOS_PKT_16x64_UPDATE_BITS_MARKER &&
-                  mask != 0 && addr <= 0x03ff &&
+                  mask != 0 && (value & (uint8_t)~mask) == 0 &&
+                  addr <= 0x03ff &&
                   (data & NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK) == 0 &&
                   adi_spi_update_bits(addr, mask, value, &result);
         if (success) {
