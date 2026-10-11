@@ -1082,18 +1082,12 @@ class BladeRF:
         `history_complete` is false when events were overwritten; callers must
         discard state derived from the missing interval before resuming.
         """
-        count = ffi.new("uint32_t *")
-        complete = ffi.new("bool *")
-        next_sequence = ffi.new("uint64_t *")
         get_since = _require_api_symbol("bladerf_rf_events_get_since")
-        ret = get_since(
-            self.dev[0], int(after_sequence), ffi.NULL, 0, count,
-            next_sequence, complete)
-        if ret == libbladeRF.BLADERF_ERR_INVAL:
-            raise RFEventHistoryError(ret, next_sequence[0])
-        _check_error(ret)
-        capacity = max(count[0], int(capacity or 0))
+        capacity = max(libbladeRF.BLADERF_RF_EVENT_HISTORY_SIZE,
+                       int(capacity or 0))
         event_count = ffi.new("uint32_t *")
+        next_sequence = ffi.new("uint64_t *")
+        complete = ffi.new("bool *")
         while True:
             events_ptr = (ffi.NULL if capacity == 0 else
                           ffi.new("struct bladerf_rf_event[]", capacity))
@@ -1102,7 +1096,15 @@ class BladeRF:
                 event_count, next_sequence, complete)
             if ret == libbladeRF.BLADERF_ERR_INVAL:
                 raise RFEventHistoryError(ret, next_sequence[0])
-            if ret != libbladeRF.BLADERF_ERR_MEM and event_count[0] <= capacity:
+            if event_count[0] > capacity:
+                capacity = event_count[0]
+                continue
+            if ret == libbladeRF.BLADERF_ERR_MEM and not complete[0]:
+                # The event ring was overwritten before this poll. C returns
+                # its current tail in next_sequence so the caller can discard
+                # derived state and resume from that cursor.
+                break
+            if ret != libbladeRF.BLADERF_ERR_MEM:
                 _check_error(ret)
                 break
             capacity = max(event_count[0], capacity * 2, 1)
