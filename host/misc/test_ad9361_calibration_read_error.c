@@ -398,14 +398,42 @@ int main(void)
 
     {
         struct ad9361_rf_phy cleared_phy = {
+            .rfpll_requested_valid = { true, true },
+            .bbpll_initialized = true,
             .current_bw_valid = true,
             .rfpll_source_valid = { true, true },
+            .fir_config_valid = true,
+            .rx_fir_coefficients_valid_mask = 3,
+            .tx_fir_coefficients_valid_mask = 3,
+            .filt_valid = true,
+            .rf_port_select_valid = true,
+            .tracking_config_valid = true,
+            .tx1_atten_cached_valid = true,
+            .tx2_atten_cached_valid = true,
+            .tx_mute_restore_valid = true,
+            .tx1_muted_valid = true,
+            .tx2_muted_valid = true,
+            .bist_loopback_valid = true,
+            .bist_config_valid = true,
         };
 
         ad9361_clear_state(&cleared_phy);
-        if (cleared_phy.current_bw_valid ||
+        if (cleared_phy.rfpll_requested_valid[0] ||
+            cleared_phy.rfpll_requested_valid[1] ||
+            cleared_phy.bbpll_initialized ||
+            cleared_phy.current_bw_valid ||
             cleared_phy.rfpll_source_valid[0] ||
-            cleared_phy.rfpll_source_valid[1]) {
+            cleared_phy.rfpll_source_valid[1] ||
+            cleared_phy.fir_config_valid ||
+            cleared_phy.rx_fir_coefficients_valid_mask ||
+            cleared_phy.tx_fir_coefficients_valid_mask ||
+            cleared_phy.filt_valid || cleared_phy.rf_port_select_valid ||
+            cleared_phy.tracking_config_valid ||
+            cleared_phy.tx1_atten_cached_valid ||
+            cleared_phy.tx2_atten_cached_valid ||
+            cleared_phy.tx_mute_restore_valid ||
+            cleared_phy.tx1_muted_valid || cleared_phy.tx2_muted_valid ||
+            cleared_phy.bist_loopback_valid || cleared_phy.bist_config_valid) {
             fprintf(stderr,
                     "AD9361 clear-state retained prior RF validity\n");
             return EXIT_FAILURE;
