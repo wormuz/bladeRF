@@ -292,9 +292,23 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
-        case NIOS_PKT_8x32_TARGET_FASTLOCK:
-            return adi_fastlock_save((addr == 1), (data >> 16),
-                                     (data & 0xff));
+        case NIOS_PKT_8x32_TARGET_FASTLOCK: {
+            /* The request carries a direction in addr, followed by the full
+             * 16-bit NIOS index and 8-bit RFIC index. Validate before
+             * narrowing: otherwise malformed high bits alias a different
+             * profile, and every address except 1 silently selects RX. */
+            const uint16_t nios_profile = (uint16_t)(data & 0xffffu);
+            const uint8_t rffe_profile = (uint8_t)(data >> 16);
+
+            if (addr > 1 || (data >> 24) != 0 ||
+                nios_profile >= NUM_BBP_FASTLOCK_PROFILES ||
+                rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES) {
+                return false;
+            }
+
+            return adi_fastlock_save(addr == 1, rffe_profile,
+                                     nios_profile);
+        }
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO

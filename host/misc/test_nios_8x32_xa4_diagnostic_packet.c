@@ -17,8 +17,19 @@ bool rffe_csr_write_checked(uint32_t value, uint32_t mask)
 bool adf4351_write(uint32_t value) { (void)value; return true; }
 uint32_t adf400x_spi_read(uint8_t addr) { return addr; }
 bool adf400x_spi_write(uint32_t value) { (void)value; return true; }
+static unsigned int fastlock_save_calls;
+static bool fastlock_save_success = true;
+static bool fastlock_save_last_tx;
+static uint8_t fastlock_save_last_rffe;
+static uint16_t fastlock_save_last_nios;
 bool adi_fastlock_save(bool is_tx, uint8_t rffe, uint16_t nios)
-{ (void)is_tx; (void)rffe; (void)nios; return true; }
+{
+    fastlock_save_calls++;
+    fastlock_save_last_tx = is_tx;
+    fastlock_save_last_rffe = rffe;
+    fastlock_save_last_nios = nios;
+    return fastlock_save_success;
+}
 uint32_t pkt_retune2_failure_count(bladerf_module module)
 { return module == BLADERF_MODULE_RX ? 101 : 202; }
 uint32_t pkt_retune2_success_count(bladerf_module module)
@@ -203,6 +214,44 @@ int main(void)
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                 NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, true);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0, 0, false);
+
+    /* Legacy fastlock packets must validate the full fields before any
+     * narrowing or direction selection. */
+    fastlock_save_calls = 0;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 0,
+                UINT32_C(0x00010002), true);
+    if (fastlock_save_calls != 1 || fastlock_save_last_tx ||
+        fastlock_save_last_rffe != 1 || fastlock_save_last_nios != 2) {
+        fputs("fastlock RX packet fields were not preserved\n", stderr);
+        return 1;
+    }
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 1,
+                UINT32_C(0x0007000f), true);
+    if (fastlock_save_calls != 2 || !fastlock_save_last_tx ||
+        fastlock_save_last_rffe != 7 || fastlock_save_last_nios != 15) {
+        fputs("fastlock TX packet fields were not preserved\n", stderr);
+        return 1;
+    }
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 2,
+                UINT32_C(0x00010002), false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 0,
+                UINT32_C(0x00010102), false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 0,
+                UINT32_C(0x00080002), false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 0,
+                UINT32_C(0x01010002), false);
+    if (fastlock_save_calls != 2) {
+        fputs("malformed fastlock packet reached the profile saver\n",
+              stderr);
+        return 1;
+    }
+    fastlock_save_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_FASTLOCK, 0,
+                UINT32_C(0x00010002), false);
+    if (fastlock_save_calls != 3) {
+        fputs("fastlock saver failure was not propagated\n", stderr);
+        return 1;
+    }
 
     puts("xA4 NIOS 8x32 diagnostic packet address status: PASS");
     return 0;

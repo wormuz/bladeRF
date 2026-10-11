@@ -906,7 +906,8 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
         fastlocks          = fastlocks_rx;
     }
 
-    if (nios_profile >= NUM_BBP_FASTLOCK_PROFILES) {
+    if (nios_profile >= NUM_BBP_FASTLOCK_PROFILES ||
+        rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES) {
         return false;
     }
 
