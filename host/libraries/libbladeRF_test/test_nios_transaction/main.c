@@ -19,6 +19,9 @@ struct fake_usb {
     uint8_t mutate_response_reserved_offset;
     bool mutate_response_flags;
     uint8_t mutate_response_flags_offset;
+    bool make_legacy_config_response;
+    bool make_legacy_error_response;
+    bool mutate_legacy_config_response_addr;
 };
 
 static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
@@ -32,6 +35,17 @@ static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     assert(call < 4);
     fake->endpoints[call] = endpoint;
     fake->timeouts[call] = timeout_ms;
+    if (endpoint == PERIPHERAL_EP_IN && fake->make_legacy_config_response) {
+        uint8_t *response = buffer;
+        response[2] = 0; /* PIO address normalized to its config base. */
+        response[3] = 0x5a;
+        if (fake->mutate_legacy_config_response_addr) {
+            response[2] = 1;
+        }
+    }
+    if (endpoint == PERIPHERAL_EP_IN && fake->make_legacy_error_response) {
+        ((uint8_t *)buffer)[0] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+    }
     if (endpoint == PERIPHERAL_EP_IN && fake->make_register_response) {
         uint8_t *response = buffer;
         response[NIOS_PKT_16x64_IDX_FLAGS] |=
@@ -308,6 +322,71 @@ static void test_retune2_reserved_tail_fails_closed(void)
     teardown(&usb);
 }
 
+
+static void test_legacy_config_normalized_address_is_validated(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_legacy_config_response = true;
+    buffer[0] = NIOS_PKT_LEGACY_MAGIC;
+    buffer[1] = NIOS_PKT_LEGACY_MODE_DIR_READ |
+                NIOS_PKT_LEGACY_DEV_CONFIG | 1;
+    buffer[2] = NIOS_PKT_LEGACY_PIO_ADDR_IQ_RX_GAIN;
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(!usb.peripheral_desynchronized);
+    teardown(&usb);
+}
+
+static void test_mismatched_legacy_config_response_fails_closed(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_COMPLETE;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_legacy_config_response = true;
+    fake.mutate_legacy_config_response_addr = true;
+    buffer[0] = NIOS_PKT_LEGACY_MAGIC;
+    buffer[1] = NIOS_PKT_LEGACY_MODE_DIR_READ |
+                NIOS_PKT_LEGACY_DEV_CONFIG | 1;
+    buffer[2] = NIOS_PKT_LEGACY_PIO_ADDR_IQ_RX_GAIN;
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+    assert(usb.peripheral_desynchronized);
+    teardown(&usb);
+}
+
+static void test_legacy_error_marker_remains_a_valid_response(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_legacy_error_response = true;
+    buffer[0] = NIOS_PKT_LEGACY_MAGIC;
+    buffer[1] = NIOS_PKT_LEGACY_MODE_DIR_READ |
+                NIOS_PKT_LEGACY_DEV_CONFIG | 1;
+    buffer[2] = NIOS_PKT_LEGACY_PIO_ADDR_IQ_RX_GAIN;
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(!usb.peripheral_desynchronized);
+    teardown(&usb);
+}
+
 static void test_nios_poll_deadline_fails_closed_on_clock_error(void)
 {
     uint64_t deadline = UINT64_C(0xfeedface);
@@ -338,6 +417,9 @@ int main(void)
     test_16x64_batch_result_is_not_compared_as_payload();
     test_retune_reserved_flags_fail_closed();
     test_retune2_reserved_tail_fails_closed();
+    test_legacy_config_normalized_address_is_validated();
+    test_mismatched_legacy_config_response_fails_closed();
+    test_legacy_error_marker_remains_a_valid_response();
     test_nios_poll_deadline_fails_closed_on_clock_error();
     puts("NIOS USB transaction fail-closed tests: PASS");
     return 0;

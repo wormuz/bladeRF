@@ -21,6 +21,87 @@ static bool nios_response_flags_and_reserved_valid(
            response[reserved_offset] == 0;
 }
 
+struct nios_legacy_config_range {
+    uint8_t start;
+    uint8_t length;
+};
+
+static bool nios_legacy_config_response_matches(const uint8_t *request,
+                                               const uint8_t *response)
+{
+    static const struct nios_legacy_config_range ranges[] = {
+        { NIOS_PKT_LEGACY_PIO_ADDR_CONTROL,
+          NIOS_PKT_LEGACY_PIO_LEN_CONTROL },
+        { NIOS_PKT_LEGACY_PIO_ADDR_IQ_RX_GAIN,
+          NIOS_PKT_LEGACY_PIO_LEN_IQ_RX_GAIN },
+        { NIOS_PKT_LEGACY_PIO_ADDR_IQ_RX_PHASE,
+          NIOS_PKT_LEGACY_PIO_LEN_IQ_RX_PHASE },
+        { NIOS_PKT_LEGACY_PIO_ADDR_IQ_TX_GAIN,
+          NIOS_PKT_LEGACY_PIO_LEN_IQ_TX_GAIN },
+        { NIOS_PKT_LEGACY_PIO_ADDR_IQ_TX_PHASE,
+          NIOS_PKT_LEGACY_PIO_LEN_IQ_TX_PHASE },
+        { NIOS_PKT_LEGACY_PIO_ADDR_FPGA_VERSION,
+          NIOS_PKT_LEGACY_PIO_LEN_FPGA_VERSION },
+        { NIOS_PKT_LEGACY_PIO_ADDR_RX_TIMESTAMP,
+          NIOS_PKT_LEGACY_PIO_LEN_RX_TIMESTAMP },
+        { NIOS_PKT_LEGACY_PIO_ADDR_TX_TIMESTAMP,
+          NIOS_PKT_LEGACY_PIO_LEN_TX_TIMESTAMP },
+        { NIOS_PKT_LEGACY_PIO_ADDR_VCTCXO,
+          NIOS_PKT_LEGACY_PIO_LEN_VCTCXO },
+        { NIOS_PKT_LEGACY_PIO_ADDR_XB200_SYNTH,
+          NIOS_PKT_LEGACY_PIO_LEN_XB200_SYNTH },
+        { NIOS_PKT_LEGACY_PIO_ADDR_EXP,
+          NIOS_PKT_LEGACY_PIO_LEN_EXP },
+        { NIOS_PKT_LEGACY_PIO_ADDR_EXP_DIR,
+          NIOS_PKT_LEGACY_PIO_LEN_EXP_DIR },
+    };
+    const uint8_t count = request[1] & NIOS_PKT_LEGACY_MODE_CNT_MASK;
+    const uint8_t first_addr = request[2];
+    uint8_t i, range_index;
+    uint8_t range_start = 0;
+    uint8_t range_length = 0;
+
+    if (count == 0) {
+        return false;
+    }
+
+    for (range_index = 0;
+         range_index < sizeof(ranges) / sizeof(ranges[0]);
+         range_index++) {
+        if (first_addr >= ranges[range_index].start &&
+            first_addr < (uint8_t)(ranges[range_index].start +
+                                   ranges[range_index].length)) {
+            range_start = ranges[range_index].start;
+            range_length = ranges[range_index].length;
+            break;
+        }
+    }
+
+    if (range_length == 0) {
+        return false;
+    }
+
+    /* Legacy firmware stops once the current PIO value has been exhausted,
+     * even when a larger pair count was requested. Validate only the tuples
+     * that it actually emits. */
+    if (count > (uint8_t)(range_length - (first_addr - range_start))) {
+        i = (uint8_t)(range_length - (first_addr - range_start));
+    } else {
+        i = count;
+    }
+
+    for (range_index = 0; range_index < i; range_index++) {
+        const uint8_t request_offset = (uint8_t)(2 + 2 * range_index);
+        const uint8_t expected_response_addr =
+            (uint8_t)(request[request_offset] - range_start);
+        if (response[request_offset] != expected_response_addr) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /* Standard register packets echo the request identity in their response.
  * A successful flag alone is insufficient: after an ambiguous/late NIOS
  * response it could certify a different request. Keep this check inside the
@@ -41,7 +122,17 @@ static bool nios_response_matches_request(const uint8_t *request,
             return false;
         }
 
+        /* Device-reported failures carry a valid config echo, but their
+         * payload is not meaningful and may contain stale response bytes. */
+        if (response[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) {
+            return true;
+        }
+
         legacy_device = request[1] & NIOS_PKT_LEGACY_MODE_DEV_MASK;
+        if (legacy_device == NIOS_PKT_LEGACY_DEV_CONFIG) {
+            return nios_legacy_config_response_matches(request, response);
+        }
+
         if (legacy_device == NIOS_PKT_LEGACY_DEV_LMS ||
             legacy_device == NIOS_PKT_LEGACY_DEV_SI5338) {
             /* These handlers echo the first register address for both reads
