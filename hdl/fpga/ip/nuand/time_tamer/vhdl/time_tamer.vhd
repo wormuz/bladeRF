@@ -548,7 +548,14 @@ begin
                 mm_compare_load <= '0' ;
                 current_req <= '0' ;
                 status_past <= '0' ;
-                cancel_toggle <= '0' ;
+                -- No compare can be armed while the timestamp domain is
+                -- held in reset, so cancellation is already effective.
+                -- Still acknowledge the host's queue-clear request. Keep
+                -- the toggle latched here: clearing it on the next cycle
+                -- would make the acknowledgement unobservable to Nios.
+                if( intr_cancel = '1' ) then
+                    cancel_toggle <= not cancel_toggle ;
+                end if;
             else
                 if( intr_cancel = '1' ) then
                     intr <= '0' ;

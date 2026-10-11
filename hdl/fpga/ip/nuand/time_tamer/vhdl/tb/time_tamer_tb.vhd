@@ -25,6 +25,7 @@ architecture arch of time_tamer_tb is
     signal ts_clock_osc :   std_logic       := '1' ;
     signal ts_clock_enable : std_logic := '1';
     signal ts_reset     :   std_logic       := '1' ;
+    signal ts_reset_hold : std_logic := '1';
     signal ts_time      :   std_logic_vector(63 downto 0) ;
 
     procedure read_time(
@@ -127,6 +128,25 @@ architecture arch of time_tamer_tb is
         wait until rising_edge(clock) ;
     end procedure ;
 
+    procedure read_status(
+        signal clock    : in  std_logic;
+        signal addr     : out std_logic_vector(4 downto 0);
+        signal dout     : in  std_logic_vector(7 downto 0);
+        signal read     : out std_logic;
+        signal readack  : in  std_logic;
+        variable value  : out std_logic_vector(7 downto 0)
+    ) is
+    begin
+        addr <= std_logic_vector(to_unsigned(9, addr'length));
+        read <= '1';
+        wait until rising_edge(clock) and readack = '1' for 20 us;
+        assert readack = '1' report "time-tamer status read was not acknowledged"
+            severity failure;
+        value := dout;
+        read <= '0';
+        wait until rising_edge(clock);
+    end procedure;
+
 begin
 
     clock <= not clock after 1 ns ;
@@ -134,7 +154,7 @@ begin
     ts_clock_osc <= not ts_clock_osc after 12 ns ;
     ts_clock <= ts_clock_osc when ts_clock_enable = '1' else '0';
 
-    ts_reset <= '0' after 100 ns ;
+    ts_reset <= ts_reset_hold;
 
     U_tamer : entity work.time_tamer
       port map (
@@ -161,6 +181,8 @@ begin
 
     tb : process
         variable ts : unsigned(63 downto 0) := (others =>'0') ;
+        variable status_before : std_logic_vector(7 downto 0);
+        variable status_after : std_logic_vector(7 downto 0);
     begin
         assert not timestamp_has_reached(
             unsigned'(x"FFFFFFFFFFFFFFFE"), unsigned'(x"0000000000000002"))
@@ -188,6 +210,28 @@ begin
 
         reset <= '0' ;
         nop( clock, 100 ) ;
+
+        -- With META disabled the timestamp domain remains in reset. Nios
+        -- still clears both scheduled-retune queues during device open, so
+        -- the time-tamer must acknowledge cancellation without waiting for
+        -- a timestamp-domain handshake that cannot run.
+        read_status(clock, addr, dout, read, readack, status_before);
+        cancel_compare(clock, addr, din, write);
+        nop(clock, 20);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(1) /= status_before(1)
+            report "cancel while timestamp domain reset was not acknowledged"
+            severity failure;
+        status_before := status_after;
+        cancel_compare(clock, addr, din, write);
+        nop(clock, 20);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(1) /= status_before(1)
+            report "repeated cancel while timestamp domain reset was not acknowledged"
+            severity failure;
+
+        ts_reset_hold <= '0';
+        nop(clock, 100);
 
         nop( clock, 1000 ) ;
         read_time( clock, addr, dout, read, readack, ts ) ;
