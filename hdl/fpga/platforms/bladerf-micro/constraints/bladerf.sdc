@@ -605,10 +605,26 @@ if { $status_done == 0 || $status_done != 6 } {
 # run off the same system PLL, producing eight violations up to -14.061 ns
 # on unrelated domains.)
 set hs_all [get_keepers -nowarn {*handshake:*|source_holding[0]}]
-set hs_inst [get_collection_size $hs_all]
-if { $hs_inst > $hs_done } {
+set hs_physical [get_collection_size $hs_all]
+set hs_unique_names [list]
+foreach_in_collection hs_item $hs_all {
+    set hs_name [get_node_info -name $hs_item]
+    # Quartus physical synthesis can duplicate a source_holding register to
+    # reduce fanout. That is still one RTL handshake crossing and its duplicate
+    # is already included by the paired source collection above. Do not count
+    # the physical replica as a second crossing in this completeness guard.
+    regsub {~DUPLICATE[0-9]*$} $hs_name {} hs_name
+    if { [lsearch -exact $hs_unique_names $hs_name] < 0 } {
+        lappend hs_unique_names $hs_name
+    }
+}
+set hs_inst [llength $hs_unique_names]
+if { $hs_inst != $hs_done } {
     post_message -type critical_warning \
-        "handshake instances: $hs_inst, endpoint pairs written: $hs_done -- some crossing has no capture endpoint named"
+        "unique handshake instances: $hs_inst, endpoint pairs written: $hs_done -- some crossing has no capture endpoint named"
+} else {
+    post_message -type info \
+        "handshake instances: $hs_inst (from $hs_physical physical keepers), endpoint pairs written: $hs_done"
 }
 
 if { $hs_inst == 0 } {

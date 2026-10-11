@@ -463,6 +463,17 @@ def check_handshake_pairs_are_crossings():
     if not m:
         return
 
+    # Fitter may duplicate one physical source_holding flop for fanout. The
+    # SDC's completeness guard must count unique RTL handshake instances while
+    # keeping the paired max-delay/skew bounds applied to the matched keepers.
+    if (not re.search(r"regsub\s+\{~DUPLICATE\[0-9\]\*\$\}", src) or
+            not re.search(r"if\s*\{\s*\$hs_inst\s*!=\s*\$hs_done\s*\}", src)):
+        fail("sdc-handshake-duplicate-count",
+             "handshake completeness guard must normalize Quartus physical "
+             "duplicates and compare unique instances with paired bounds",
+             "a physical fanout copy is not an additional RTL CDC crossing")
+        return
+
     # Where the handshake instances live, so their clocks can be read.
     vhdl = {}
     for d in ("hdl/fpga/ip/nuand", "hdl/fpga/platforms/bladerf-micro/vhdl",
