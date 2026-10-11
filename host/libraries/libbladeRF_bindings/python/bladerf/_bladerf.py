@@ -204,10 +204,245 @@ class Correction(enum.Enum):
 
 class Format(enum.Enum):
     SC16_Q11 = libbladeRF.BLADERF_FORMAT_SC16_Q11
+    SC16_Q11_PACKED = libbladeRF.BLADERF_FORMAT_SC16_Q11_PACKED
     SC16_Q11_META = libbladeRF.BLADERF_FORMAT_SC16_Q11_META
     PACKET_META = libbladeRF.BLADERF_FORMAT_PACKET_META
     SC8_Q7 = libbladeRF.BLADERF_FORMAT_SC8_Q7
     SC8_Q7_META = libbladeRF.BLADERF_FORMAT_SC8_Q7_META
+
+
+class RFState(enum.IntEnum):
+    Idle = libbladeRF.BLADERF_RF_STATE_IDLE
+    ConfigPending = libbladeRF.BLADERF_RF_STATE_CONFIG_PENDING
+    SPIProgramming = libbladeRF.BLADERF_RF_STATE_SPI_PROGRAMMING
+    PLLAcquiring = libbladeRF.BLADERF_RF_STATE_PLL_ACQUIRING
+    PLLLocked = libbladeRF.BLADERF_RF_STATE_PLL_LOCKED
+    Calibrating = libbladeRF.BLADERF_RF_STATE_CALIBRATING
+    RXPathArming = libbladeRF.BLADERF_RF_STATE_RX_PATH_ARMING
+    RXDataInvalid = libbladeRF.BLADERF_RF_STATE_RX_DATA_INVALID
+    RXDataValid = libbladeRF.BLADERF_RF_STATE_RX_DATA_VALID
+    Error = libbladeRF.BLADERF_RF_STATE_ERROR
+
+
+class RFEventType(enum.IntEnum):
+    ConfigAccepted = libbladeRF.BLADERF_RF_EVT_CONFIG_ACCEPTED
+    SPIDone = libbladeRF.BLADERF_RF_EVT_SPI_DONE
+    RXPLLLocked = libbladeRF.BLADERF_RF_EVT_RX_PLL_LOCKED
+    ENSMRX = libbladeRF.BLADERF_RF_EVT_ENSM_RX
+    RXBBDC_CalDone = libbladeRF.BLADERF_RF_EVT_RX_BBDC_CAL_DONE
+    RXRFDC_CalDone = libbladeRF.BLADERF_RF_EVT_RX_RFDC_CAL_DONE
+    RXQuadCalDone = libbladeRF.BLADERF_RF_EVT_RX_QUAD_CAL_DONE
+    RXDatapathArmed = libbladeRF.BLADERF_RF_EVT_RX_DATAPATH_ARMED
+    RXEpochInvalid = libbladeRF.BLADERF_RF_EVT_RX_EPOCH_INVALID
+    RXEpochValid = libbladeRF.BLADERF_RF_EVT_RX_EPOCH_VALID
+    Error = libbladeRF.BLADERF_RF_EVT_ERROR
+    LOSetReturned = libbladeRF.BLADERF_RF_EVT_LO_SET_RETURNED
+    LOReadbackMatch = libbladeRF.BLADERF_RF_EVT_LO_READBACK_MATCH
+    RXFirstValidHostData = libbladeRF.BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA
+    SPIWriteBegin = libbladeRF.BLADERF_RF_EVT_SPI_WRITE_BEGIN
+    ControlPlaneConfirmed = libbladeRF.BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED
+    NIOSRetuneBegin = libbladeRF.BLADERF_RF_EVT_NIOS_RETUNE_BEGIN
+    NIOSRetuneUSBOutDone = libbladeRF.BLADERF_RF_EVT_NIOS_RETUNE_USB_OUT_DONE
+    NIOSRetuneResponse = libbladeRF.BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE
+    RXDataInvalidated = libbladeRF.BLADERF_RF_EVT_RX_DATA_INVALIDATED
+    RXStreamOverrun = libbladeRF.BLADERF_RF_EVT_RX_STREAM_OVERRUN
+    RXFormatUnsupported = libbladeRF.BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED
+    RXDataWithheld = libbladeRF.BLADERF_RF_EVT_RX_DATA_WITHHELD
+    RXEpochAbortFailed = libbladeRF.BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED
+    RXDataResumed = libbladeRF.BLADERF_RF_EVT_RX_DATA_RESUMED
+    RXBBPLLLocked = libbladeRF.BLADERF_RF_EVT_RX_BBPLL_LOCKED
+    RXLayoutUnsupported = libbladeRF.BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED
+    RXInvalidationChannel = libbladeRF.BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL
+    RXCaptureClosed = libbladeRF.BLADERF_RF_EVT_RX_CAPTURE_CLOSED
+    RXADCClipping = libbladeRF.BLADERF_RF_EVT_RX_ADC_CLIPPING
+    TXLinkValid = libbladeRF.BLADERF_RF_EVT_TX_LINK_VALID
+    TXUnderrun = libbladeRF.BLADERF_RF_EVT_TX_UNDERRUN
+    TXLinkFault = libbladeRF.BLADERF_RF_EVT_TX_LINK_FAULT
+    TXStatusUnavailable = libbladeRF.BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE
+    TXStreamStopped = libbladeRF.BLADERF_RF_EVT_TX_STREAM_STOPPED
+    TXCounterReset = libbladeRF.BLADERF_RF_EVT_TX_COUNTER_RESET
+    TXStatusRecovered = libbladeRF.BLADERF_RF_EVT_TX_STATUS_RECOVERED
+    TXEpochInvalid = libbladeRF.BLADERF_RF_EVT_TX_EPOCH_INVALID
+    TXTransportError = libbladeRF.BLADERF_RF_EVT_TX_TRANSPORT_ERROR
+    TXRFICStateValid = libbladeRF.BLADERF_RF_EVT_TX_RFIC_STATE_VALID
+    TXRFICStateInvalid = libbladeRF.BLADERF_RF_EVT_TX_RFIC_STATE_INVALID
+    TXRetuneFailed = libbladeRF.BLADERF_RF_EVT_TX_RETUNE_FAILED
+    TXRetunePending = libbladeRF.BLADERF_RF_EVT_TX_RETUNE_PENDING
+    TXRetuneApplied = libbladeRF.BLADERF_RF_EVT_TX_RETUNE_APPLIED
+    TXRetuneCompletionLost = libbladeRF.BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST
+    TXRetuneValid = libbladeRF.BLADERF_RF_EVT_TX_RETUNE_VALID
+    TXFrequencyInvalid = libbladeRF.BLADERF_RF_EVT_TX_FREQUENCY_INVALID
+    TXConfigurationInvalid = libbladeRF.BLADERF_RF_EVT_TX_CONFIGURATION_INVALID
+    RXRetuneFailed = libbladeRF.BLADERF_RF_EVT_RX_RETUNE_FAILED
+    RXRetuneStatusUnavailable = libbladeRF.BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
+
+
+class RFTransitionRequirement(enum.IntEnum):
+    PLL_LOCKED = libbladeRF.BLADERF_RF_REQUIRE_PLL_LOCKED
+    ENSM_RX = libbladeRF.BLADERF_RF_REQUIRE_ENSM_RX
+    DATAPATH_ARMED = libbladeRF.BLADERF_RF_REQUIRE_DATAPATH_ARMED
+    EPOCH_VALID = libbladeRF.BLADERF_RF_REQUIRE_EPOCH_VALID
+    BBPLL_LOCKED = libbladeRF.BLADERF_RF_REQUIRE_BBPLL_LOCKED
+    FIRST_HOST_DATA = libbladeRF.BLADERF_RF_REQUIRE_FIRST_HOST_DATA
+    RX_X2_HOST_DATA = libbladeRF.BLADERF_RF_REQUIRE_RX_X2_HOST_DATA
+    RX_RFDC_CAL_DONE = libbladeRF.BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE
+
+
+class RXWithheldReason(enum.IntEnum):
+    EPOCH_UNCERTIFIED = libbladeRF.BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED
+    EPOCH_OR_TIMESTAMP_MISMATCH = libbladeRF.BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH
+    TIMESTAMP_DISCONTINUITY = libbladeRF.BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY
+    SHORT_TRANSFER = libbladeRF.BLADERF_RF_WITHHELD_SHORT_TRANSFER
+    USB_OVERFLOW = libbladeRF.BLADERF_RF_WITHHELD_USB_OVERFLOW
+    USB_TRANSFER_ERROR = libbladeRF.BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR
+    USB_TIMEOUT = libbladeRF.BLADERF_RF_WITHHELD_USB_TIMEOUT
+    DEVICE_LOST = libbladeRF.BLADERF_RF_WITHHELD_DEVICE_LOST
+    SYNC_TIMEOUT = libbladeRF.BLADERF_RF_WITHHELD_SYNC_TIMEOUT
+    RX_CHANNEL_SELECTION = libbladeRF.BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION
+
+
+class RXStreamStatus(enum.IntEnum):
+    OVERRUN = libbladeRF.BLADERF_RF_STREAM_STATUS_OVERRUN
+    FPGA_RX_LOSS = libbladeRF.BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS
+    SYNC_RX_QUEUE = libbladeRF.BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE
+    ASYNC_USB = libbladeRF.BLADERF_RF_STREAM_STATUS_ASYNC_USB
+    TIMESTAMP_DISCONTINUITY = libbladeRF.BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY
+    RUNTIME_STATE_FAULT = libbladeRF.BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT
+    SYNC_RX_RING_FULL = libbladeRF.BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL
+    SYNC_RX_REORDER = libbladeRF.BLADERF_RF_STREAM_STATUS_SYNC_RX_REORDER
+    SYNC_RX_SEQUENCE_TRACKER = libbladeRF.BLADERF_RF_STREAM_STATUS_SYNC_RX_SEQUENCE_TRACKER
+
+
+class RFInvalidationReason(enum.IntEnum):
+    FREQUENCY = libbladeRF.BLADERF_RF_INVALIDATE_FREQUENCY
+    SAMPLE_RATE = libbladeRF.BLADERF_RF_INVALIDATE_SAMPLE_RATE
+    BANDWIDTH = libbladeRF.BLADERF_RF_INVALIDATE_BANDWIDTH
+    GAIN = libbladeRF.BLADERF_RF_INVALIDATE_GAIN
+    GAIN_MODE = libbladeRF.BLADERF_RF_INVALIDATE_GAIN_MODE
+    RF_PORT = libbladeRF.BLADERF_RF_INVALIDATE_RF_PORT
+    CORRECTION = libbladeRF.BLADERF_RF_INVALIDATE_CORRECTION
+    RX_MUX = libbladeRF.BLADERF_RF_INVALIDATE_RX_MUX
+    LOOPBACK = libbladeRF.BLADERF_RF_INVALIDATE_LOOPBACK
+    MODULE = libbladeRF.BLADERF_RF_INVALIDATE_MODULE
+    RFIC_REGISTER = libbladeRF.BLADERF_RF_INVALIDATE_RFIC_REG
+    RX_FIR = libbladeRF.BLADERF_RF_INVALIDATE_RX_FIR
+    CLOCK = libbladeRF.BLADERF_RF_INVALIDATE_CLOCK
+    STREAM_CONFIG = libbladeRF.BLADERF_RF_INVALIDATE_STREAM_CONFIG
+    TUNING_MODE = libbladeRF.BLADERF_RF_INVALIDATE_TUNING_MODE
+    DEVICE_RESET = libbladeRF.BLADERF_RF_INVALIDATE_DEVICE_RESET
+    FPGA_RELOAD = libbladeRF.BLADERF_RF_INVALIDATE_FPGA_RELOAD
+    BOOTLOADER = libbladeRF.BLADERF_RF_INVALIDATE_BOOTLOADER
+    FPGA_RX_FAULT = libbladeRF.BLADERF_RF_INVALIDATE_FPGA_RX_FAULT
+    FPGA_STATUS_UNAVAILABLE = libbladeRF.BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE
+    RFIC_PLL_UNLOCKED = libbladeRF.BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED
+    RFIC_ENSM_NOT_RX = libbladeRF.BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX
+    RFIC_STATUS_UNAVAILABLE = libbladeRF.BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE
+    RFIC_BBPLL_UNLOCKED = libbladeRF.BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED
+    FPGA_RX_LOSS_STATUS_UNAVAILABLE = libbladeRF.BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE
+    TX_FIR = libbladeRF.BLADERF_RF_INVALIDATE_TX_FIR
+    CONFIG_GPIO = libbladeRF.BLADERF_RF_INVALIDATE_CONFIG_GPIO
+    WISHBONE = libbladeRF.BLADERF_RF_INVALIDATE_WISHBONE
+    FEATURE = libbladeRF.BLADERF_RF_INVALIDATE_FEATURE
+    RX_CHANNEL_STATE_CHANGED = libbladeRF.BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED
+    RX_CHANNEL_STATUS_UNAVAILABLE = libbladeRF.BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE
+    TRIGGER = libbladeRF.BLADERF_RF_INVALIDATE_TRIGGER
+
+
+class RFTransitionRequest(collections.namedtuple(
+        "RFTransitionRequest", ["target_frequency_hz", "required_events_mask",
+                                 "timeout_ms", "require_rx_data_valid",
+                                 "epoch_settle_samples"])):
+    __slots__ = ()
+
+    def __new__(cls, target_frequency_hz,
+                required_events_mask=(RFTransitionRequirement.PLL_LOCKED |
+                                      RFTransitionRequirement.ENSM_RX |
+                                      RFTransitionRequirement.EPOCH_VALID),
+                timeout_ms=0, require_rx_data_valid=True,
+                epoch_settle_samples=0):
+        return super(RFTransitionRequest, cls).__new__(
+            cls, int(target_frequency_hz), int(required_events_mask),
+            int(timeout_ms), bool(require_rx_data_valid),
+            int(epoch_settle_samples))
+
+    def to_struct(self):
+        request = ffi.new("struct bladerf_rx_transition_request *")
+        request.target_frequency_hz = self.target_frequency_hz
+        request.required_events_mask = self.required_events_mask
+        request.timeout_ms = self.timeout_ms
+        request.require_rx_data_valid = self.require_rx_data_valid
+        request.epoch_settle_samples = self.epoch_settle_samples
+        return request
+
+
+class RFEvent(collections.namedtuple(
+        "RFEvent", ["host_monotonic_ns", "fpga_timestamp", "transaction_id",
+                    "epoch_id", "requested_rx_lo_hz", "readback_rx_lo_hz",
+                    "rfic_status", "fpga_state", "event_type", "flags",
+                    "error_code"])):
+    __slots__ = ()
+
+    @staticmethod
+    def from_struct(event):
+        return RFEvent(
+            event.host_monotonic_ns, event.fpga_timestamp,
+            event.transaction_id, event.epoch_id,
+            event.requested_rx_lo_hz, event.readback_rx_lo_hz,
+            event.rfic_status, RFState(event.fpga_state),
+            RFEventType(event.event_type), event.flags, event.error_code)
+
+    @property
+    def fpga_timestamp_valid(self):
+        return bool(self.flags & libbladeRF.BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID)
+
+    @property
+    def rx_x2_layout(self):
+        return bool(self.flags & libbladeRF.BLADERF_RF_EVENT_F_RX_X2_LAYOUT)
+
+    @property
+    def rx1_clipped(self):
+        return bool(self.flags & libbladeRF.BLADERF_RF_EVENT_F_RX_CLIPPING_RX1)
+
+    @property
+    def rx2_clipped(self):
+        return bool(self.flags & libbladeRF.BLADERF_RF_EVENT_F_RX_CLIPPING_RX2)
+
+    @property
+    def transition_channel_valid(self):
+        return bool(self.flags &
+                    libbladeRF.BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID)
+
+    @property
+    def transition_was_rx2(self):
+        return bool(self.flags & libbladeRF.BLADERF_RF_EVENT_F_TRANSITION_RX2)
+
+
+class QuickTune:
+    """Opaque quick-tune profile returned by get_quick_tune()."""
+
+    def __init__(self, struct_ptr):
+        self._struct = ffi.new("struct bladerf_quick_tune *")
+        ffi.memmove(self._struct, struct_ptr,
+                    ffi.sizeof("struct bladerf_quick_tune"))
+
+    def to_struct(self):
+        return self._struct
+
+    @property
+    def nios_profile(self):
+        return self._struct.nios_profile
+
+    @property
+    def rffe_profile(self):
+        return self._struct.rffe_profile
+
+    @property
+    def port(self):
+        return self._struct.port
+
+    @property
+    def spdt(self):
+        return self._struct.spdt
 
 
 class Loopback(enum.Enum):
@@ -390,6 +625,31 @@ class WouldBlockError(BladeRFError):
 
 class NotInitError(BladeRFError):
     """Device insufficiently initialized for operation"""
+
+
+class RFTransitionError(BladeRFError):
+    """An RF transition failed; `event` contains its terminal native event."""
+
+    def __init__(self, code, event):
+        super(RFTransitionError, self).__init__(code)
+        self.event = event
+
+
+class RFEventHistoryError(BladeRFError):
+    """RF event cursor error; `next_sequence` is the native resync cursor."""
+
+    def __init__(self, code, next_sequence):
+        super(RFEventHistoryError, self).__init__(code)
+        self.next_sequence = next_sequence
+
+
+def _require_api_symbol(name):
+    try:
+        return getattr(libbladeRF, name)
+    except AttributeError:
+        raise UnsupportedError(
+            "The loaded libbladeRF does not provide {}; install the matching "
+            "library and Python binding".format(name))
 
 
 def _check_error(err):
@@ -734,6 +994,131 @@ class BladeRF:
         ret = libbladeRF.bladerf_get_frequency(self.dev[0], ch, frequency)
         _check_error(ret)
         return frequency[0]
+
+    def get_quick_tune(self, ch):
+        quick_tune = ffi.new("struct bladerf_quick_tune *")
+        ret = libbladeRF.bladerf_get_quick_tune(
+            self.dev[0], ch, quick_tune)
+        _check_error(ret)
+        return QuickTune(quick_tune)
+
+    def rx_transition_begin(self, ch, request):
+        """Start a fail-closed, event-driven RX transition.
+
+        Returns the transaction ID. Call rx_transition_wait() to observe the
+        required RFIC and FPGA events. For first-host-data requirements with
+        synchronous RX, a separate thread must consume sync_rx concurrently.
+        """
+        if not isinstance(request, RFTransitionRequest):
+            request = RFTransitionRequest(**request)
+        transaction_id = ffi.new("uint32_t *")
+        ret = _require_api_symbol("bladerf_rx_transition_begin")(
+            self.dev[0], ch, request.to_struct(), transaction_id)
+        _check_error(ret)
+        return transaction_id[0]
+
+    def rx_transition_begin_quick_tune(self, ch, request, quick_tune):
+        """Start an event-driven transition using a native quick-tune struct."""
+        if not isinstance(request, RFTransitionRequest):
+            request = RFTransitionRequest(**request)
+        if isinstance(quick_tune, QuickTune):
+            quick_tune = quick_tune.to_struct()
+        transaction_id = ffi.new("uint32_t *")
+        ret = _require_api_symbol("bladerf_rx_transition_begin_quick_tune")(
+            self.dev[0], ch, request.to_struct(), quick_tune,
+            transaction_id)
+        _check_error(ret)
+        return transaction_id[0]
+
+    def rx_transition_wait(self, transaction_id, timeout_ms):
+        """Wait for the required state; a timeout never certifies IQ."""
+        event = ffi.new("struct bladerf_rf_event *")
+        ret = _require_api_symbol("bladerf_rx_transition_wait")(
+            self.dev[0], int(transaction_id), event, int(timeout_ms))
+        result = (RFEvent.from_struct(event[0])
+                  if event.transaction_id != 0 or event.error_code != 0
+                  else None)
+        if ret < 0:
+            raise RFTransitionError(ret, result)
+        return result
+
+    def rx_transition(self, ch, request, wait_timeout_ms=1000):
+        """Begin and wait for an event-driven transition."""
+        if not isinstance(request, RFTransitionRequest):
+            request = RFTransitionRequest(**request)
+        transaction_id = self.rx_transition_begin(ch, request)
+        return transaction_id, self.rx_transition_wait(
+            transaction_id, wait_timeout_ms)
+
+    def rx_capture_close(self, ch):
+        ret = _require_api_symbol("bladerf_rx_capture_close")(
+            self.dev[0], ch)
+        _check_error(ret)
+
+    def rx_transition_events(self, transaction_id):
+        count = ffi.new("uint32_t *")
+        complete = ffi.new("bool *")
+        get_events = _require_api_symbol("bladerf_rx_transition_get_events")
+        ret = get_events(
+            self.dev[0], int(transaction_id), ffi.NULL, 0, count, complete)
+        _check_error(ret)
+        capacity = count[0]
+        while True:
+            events_ptr = (ffi.NULL if capacity == 0 else
+                          ffi.new("struct bladerf_rf_event[]", capacity))
+            ret = get_events(
+                self.dev[0], int(transaction_id), events_ptr, capacity, count,
+                complete)
+            if ret != libbladeRF.BLADERF_ERR_MEM and count[0] <= capacity:
+                _check_error(ret)
+                break
+            capacity = max(count[0], capacity * 2, 1)
+        return ([RFEvent.from_struct(events_ptr[i]) for i in range(count[0])],
+                bool(complete[0]))
+
+    def rf_events_get_since(self, after_sequence, capacity=None):
+        """Return device RF events and the cursor for the next poll.
+
+        `history_complete` is false when events were overwritten; callers must
+        discard state derived from the missing interval before resuming.
+        """
+        count = ffi.new("uint32_t *")
+        complete = ffi.new("bool *")
+        next_sequence = ffi.new("uint64_t *")
+        get_since = _require_api_symbol("bladerf_rf_events_get_since")
+        ret = get_since(
+            self.dev[0], int(after_sequence), ffi.NULL, 0, count,
+            next_sequence, complete)
+        if ret == libbladeRF.BLADERF_ERR_INVAL:
+            raise RFEventHistoryError(ret, next_sequence[0])
+        _check_error(ret)
+        capacity = max(count[0], int(capacity or 0))
+        event_count = ffi.new("uint32_t *")
+        while True:
+            events_ptr = (ffi.NULL if capacity == 0 else
+                          ffi.new("struct bladerf_rf_event[]", capacity))
+            ret = get_since(
+                self.dev[0], int(after_sequence), events_ptr, capacity,
+                event_count, next_sequence, complete)
+            if ret == libbladeRF.BLADERF_ERR_INVAL:
+                raise RFEventHistoryError(ret, next_sequence[0])
+            if ret != libbladeRF.BLADERF_ERR_MEM and event_count[0] <= capacity:
+                _check_error(ret)
+                break
+            capacity = max(event_count[0], capacity * 2, 1)
+        events = [RFEvent.from_struct(events_ptr[i])
+                  for i in range(event_count[0])]
+        return events, next_sequence[0], bool(complete[0])
+
+    def rx_transition_nios_timing(self, transaction_id):
+        timing = ffi.new("struct bladerf_rx_transition_nios_timing *")
+        ret = _require_api_symbol("bladerf_rx_transition_get_nios_timing")(
+            self.dev[0], int(transaction_id), timing)
+        _check_error(ret)
+        return (bool(timing.transaction_retained),
+                bool(timing.nios_retune_observed),
+                bool(timing.device_duration_valid),
+                timing.device_duration_ticks)
 
     def select_band(self, ch, frequency):
         ret = libbladeRF.bladerf_select_band(self.dev[0], ch, int(frequency))

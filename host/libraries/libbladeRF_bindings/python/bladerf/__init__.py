@@ -36,6 +36,18 @@ from bladerf import _bladerf
 from bladerf import _tool
 
 BladeRF = _bladerf.BladeRF
+Format = _bladerf.Format
+QuickTune = _bladerf.QuickTune
+RFEventHistoryError = _bladerf.RFEventHistoryError
+RFEvent = _bladerf.RFEvent
+RFEventType = _bladerf.RFEventType
+RFInvalidationReason = _bladerf.RFInvalidationReason
+RFState = _bladerf.RFState
+RFTransitionError = _bladerf.RFTransitionError
+RFTransitionRequest = _bladerf.RFTransitionRequest
+RFTransitionRequirement = _bladerf.RFTransitionRequirement
+RXStreamStatus = _bladerf.RXStreamStatus
+RXWithheldReason = _bladerf.RXWithheldReason
 
 get_bootloader_list = _bladerf.get_bootloader_list
 get_device_list = _bladerf.get_device_list
@@ -52,4 +64,8 @@ main = _tool.main
 
 __all__ = ['BladeRF', 'get_bootloader_list', 'get_device_list',
            'load_fw_from_bootloader', 'set_verbosity', 'version', 'RX', 'TX',
-           'CHANNEL_RX', 'CHANNEL_TX', 'main']
+           'CHANNEL_RX', 'CHANNEL_TX', 'Format', 'QuickTune', 'RFEvent', 'RFEventType',
+           'RFEventHistoryError', 'RFInvalidationReason', 'RFState',
+           'RFTransitionError', 'RFTransitionRequest',
+           'RFTransitionRequirement', 'RXStreamStatus', 'RXWithheldReason',
+           'main']

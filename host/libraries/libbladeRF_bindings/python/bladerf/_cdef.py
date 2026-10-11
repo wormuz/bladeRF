@@ -304,6 +304,7 @@ header = """
   typedef enum
   {
     BLADERF_FORMAT_SC16_Q11,
+    BLADERF_FORMAT_SC16_Q11_PACKED,
     BLADERF_FORMAT_SC16_Q11_META,
     BLADERF_FORMAT_PACKET_META,
     BLADERF_FORMAT_SC8_Q7,
@@ -315,7 +316,10 @@ header = """
     uint32_t flags;
     uint32_t status;
     unsigned int actual_count;
-    uint8_t reserved[32];
+    uint8_t rx_epoch_id;
+    uint8_t rx_epoch_id_valid;
+    uint8_t rx_clipping_flags;
+    uint8_t reserved[29];
   };
   int bladerf_interleave_stream_buffer(bladerf_channel_layout layout,
     bladerf_format format, unsigned int buffer_size, void *samples);
@@ -724,4 +728,190 @@ header = """
   } bladerf_rf_switch_config;
   int bladerf_get_rf_switch_config(struct bladerf *dev,
     bladerf_rf_switch_config *config);
+  typedef enum
+  {
+    BLADERF_RF_STATE_IDLE = 0,
+    BLADERF_RF_STATE_CONFIG_PENDING,
+    BLADERF_RF_STATE_SPI_PROGRAMMING,
+    BLADERF_RF_STATE_PLL_ACQUIRING,
+    BLADERF_RF_STATE_PLL_LOCKED,
+    BLADERF_RF_STATE_CALIBRATING,
+    BLADERF_RF_STATE_RX_PATH_ARMING,
+    BLADERF_RF_STATE_RX_DATA_INVALID,
+    BLADERF_RF_STATE_RX_DATA_VALID,
+    BLADERF_RF_STATE_ERROR
+  } bladerf_rf_state;
+  typedef enum
+  {
+    BLADERF_RF_EVT_CONFIG_ACCEPTED = 0,
+    BLADERF_RF_EVT_SPI_DONE,
+    BLADERF_RF_EVT_RX_PLL_LOCKED,
+    BLADERF_RF_EVT_ENSM_RX,
+    BLADERF_RF_EVT_RX_BBDC_CAL_DONE,
+    BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
+    BLADERF_RF_EVT_RX_QUAD_CAL_DONE,
+    BLADERF_RF_EVT_RX_DATAPATH_ARMED,
+    BLADERF_RF_EVT_RX_EPOCH_INVALID,
+    BLADERF_RF_EVT_RX_EPOCH_VALID,
+    BLADERF_RF_EVT_ERROR,
+    BLADERF_RF_EVT_LO_SET_RETURNED,
+    BLADERF_RF_EVT_LO_READBACK_MATCH,
+    BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA,
+    BLADERF_RF_EVT_SPI_WRITE_BEGIN,
+    BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED,
+    BLADERF_RF_EVT_NIOS_RETUNE_BEGIN,
+    BLADERF_RF_EVT_NIOS_RETUNE_USB_OUT_DONE,
+    BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE,
+    BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+    BLADERF_RF_EVT_RX_STREAM_OVERRUN,
+    BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED,
+    BLADERF_RF_EVT_RX_DATA_WITHHELD,
+    BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED,
+    BLADERF_RF_EVT_RX_DATA_RESUMED,
+    BLADERF_RF_EVT_RX_BBPLL_LOCKED,
+    BLADERF_RF_EVT_RX_LAYOUT_UNSUPPORTED,
+    BLADERF_RF_EVT_RX_INVALIDATION_CHANNEL,
+    BLADERF_RF_EVT_RX_CAPTURE_CLOSED,
+    BLADERF_RF_EVT_RX_ADC_CLIPPING,
+    BLADERF_RF_EVT_TX_LINK_VALID,
+    BLADERF_RF_EVT_TX_UNDERRUN,
+    BLADERF_RF_EVT_TX_LINK_FAULT,
+    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
+    BLADERF_RF_EVT_TX_STREAM_STOPPED,
+    BLADERF_RF_EVT_TX_COUNTER_RESET,
+    BLADERF_RF_EVT_TX_STATUS_RECOVERED,
+    BLADERF_RF_EVT_TX_EPOCH_INVALID,
+    BLADERF_RF_EVT_TX_TRANSPORT_ERROR,
+    BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
+    BLADERF_RF_EVT_TX_RFIC_STATE_INVALID,
+    BLADERF_RF_EVT_TX_RETUNE_FAILED,
+    BLADERF_RF_EVT_TX_RETUNE_PENDING,
+    BLADERF_RF_EVT_TX_RETUNE_APPLIED,
+    BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+    BLADERF_RF_EVT_TX_RETUNE_VALID,
+    BLADERF_RF_EVT_TX_FREQUENCY_INVALID,
+    BLADERF_RF_EVT_TX_CONFIGURATION_INVALID,
+    BLADERF_RF_EVT_RX_RETUNE_FAILED,
+    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
+  } bladerf_rf_event_type;
+  struct bladerf_rf_event
+  {
+    uint64_t host_monotonic_ns;
+    uint64_t fpga_timestamp;
+    uint32_t transaction_id;
+    uint32_t epoch_id;
+    uint64_t requested_rx_lo_hz;
+    uint64_t readback_rx_lo_hz;
+    uint32_t rfic_status;
+    bladerf_rf_state fpga_state;
+    bladerf_rf_event_type event_type;
+    uint32_t flags;
+    int32_t error_code;
+  };
+  struct bladerf_rx_transition_request
+  {
+    uint64_t target_frequency_hz;
+    uint32_t required_events_mask;
+    uint32_t timeout_ms;
+    bool require_rx_data_valid;
+    uint32_t epoch_settle_samples;
+  };
+  struct bladerf_rx_transition_nios_timing
+  {
+    bool transaction_retained;
+    bool nios_retune_observed;
+    bool device_duration_valid;
+    uint64_t device_duration_ticks;
+  };
+  int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    uint32_t *transaction_id);
+  int bladerf_rx_transition_begin_quick_tune(struct bladerf *dev,
+    bladerf_channel ch,
+    const struct bladerf_rx_transition_request *request,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t *transaction_id);
+  int bladerf_rx_transition_wait(struct bladerf *dev,
+    uint32_t transaction_id, struct bladerf_rf_event *final_event,
+    uint32_t timeout_ms);
+  int bladerf_rx_capture_close(struct bladerf *dev, bladerf_channel ch);
+  int bladerf_rx_transition_get_events(struct bladerf *dev,
+    uint32_t transaction_id, struct bladerf_rf_event *events,
+    uint32_t capacity, uint32_t *event_count, bool *history_complete);
+  int bladerf_rf_events_get_since(struct bladerf *dev,
+    uint64_t after_sequence, struct bladerf_rf_event *events,
+    uint32_t capacity, uint32_t *event_count, uint64_t *next_sequence,
+    bool *history_complete);
+  int bladerf_rx_transition_get_nios_timing(struct bladerf *dev,
+    uint32_t transaction_id,
+    struct bladerf_rx_transition_nios_timing *timing);
+  #define BLADERF_RF_REQUIRE_PLL_LOCKED 1U
+  #define BLADERF_RF_REQUIRE_ENSM_RX 2U
+  #define BLADERF_RF_REQUIRE_DATAPATH_ARMED 4U
+  #define BLADERF_RF_REQUIRE_EPOCH_VALID 8U
+  #define BLADERF_RF_REQUIRE_BBPLL_LOCKED 16U
+  #define BLADERF_RF_REQUIRE_FIRST_HOST_DATA 32U
+  #define BLADERF_RF_REQUIRE_RX_X2_HOST_DATA 64U
+  #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE 128U
+  #define BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID 0x80000000U
+  #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 1U
+  #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX2 2U
+  #define BLADERF_RF_EVENT_F_RX_X2_LAYOUT 0x40000000U
+  #define BLADERF_RF_EVENT_F_TRANSITION_RX2 0x20000000U
+  #define BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID 0x10000000U
+  #define BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN 0x08000000U
+  #define BLADERF_ERR_INVAL (-3)
+  #define BLADERF_ERR_MEM (-4)
+  #define BLADERF_RF_STREAM_STATUS_OVERRUN 0x00000001U
+  #define BLADERF_RF_STREAM_STATUS_FPGA_RX_LOSS 0x00000002U
+  #define BLADERF_RF_STREAM_STATUS_SYNC_RX_QUEUE 0x00000004U
+  #define BLADERF_RF_STREAM_STATUS_ASYNC_USB 0x00000008U
+  #define BLADERF_RF_STREAM_STATUS_TIMESTAMP_DISCONTINUITY 0x00000010U
+  #define BLADERF_RF_STREAM_STATUS_RUNTIME_STATE_FAULT 0x00000020U
+  #define BLADERF_RF_STREAM_STATUS_SYNC_RX_RING_FULL 0x00000040U
+  #define BLADERF_RF_STREAM_STATUS_SYNC_RX_REORDER 0x00000080U
+  #define BLADERF_RF_STREAM_STATUS_SYNC_RX_SEQUENCE_TRACKER 0x00000100U
+  #define BLADERF_RF_INVALIDATE_FREQUENCY 0x00000001U
+  #define BLADERF_RF_INVALIDATE_SAMPLE_RATE 0x00000002U
+  #define BLADERF_RF_INVALIDATE_BANDWIDTH 0x00000004U
+  #define BLADERF_RF_INVALIDATE_GAIN 0x00000008U
+  #define BLADERF_RF_INVALIDATE_GAIN_MODE 0x00000010U
+  #define BLADERF_RF_INVALIDATE_RF_PORT 0x00000020U
+  #define BLADERF_RF_INVALIDATE_CORRECTION 0x00000040U
+  #define BLADERF_RF_INVALIDATE_RX_MUX 0x00000080U
+  #define BLADERF_RF_INVALIDATE_LOOPBACK 0x00000100U
+  #define BLADERF_RF_INVALIDATE_MODULE 0x00000200U
+  #define BLADERF_RF_INVALIDATE_RFIC_REG 0x00000400U
+  #define BLADERF_RF_INVALIDATE_RX_FIR 0x00000800U
+  #define BLADERF_RF_INVALIDATE_CLOCK 0x00001000U
+  #define BLADERF_RF_INVALIDATE_STREAM_CONFIG 0x00002000U
+  #define BLADERF_RF_INVALIDATE_TUNING_MODE 0x00004000U
+  #define BLADERF_RF_INVALIDATE_DEVICE_RESET 0x00008000U
+  #define BLADERF_RF_INVALIDATE_FPGA_RELOAD 0x00010000U
+  #define BLADERF_RF_INVALIDATE_BOOTLOADER 0x00020000U
+  #define BLADERF_RF_INVALIDATE_FPGA_RX_FAULT 0x00040000U
+  #define BLADERF_RF_INVALIDATE_FPGA_STATUS_UNAVAILABLE 0x00080000U
+  #define BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED 0x00100000U
+  #define BLADERF_RF_INVALIDATE_RFIC_ENSM_NOT_RX 0x00200000U
+  #define BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE 0x00400000U
+  #define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED 0x00800000U
+  #define BLADERF_RF_INVALIDATE_FPGA_RX_LOSS_STATUS_UNAVAILABLE 0x01000000U
+  #define BLADERF_RF_INVALIDATE_TX_FIR 0x02000000U
+  #define BLADERF_RF_INVALIDATE_CONFIG_GPIO 0x04000000U
+  #define BLADERF_RF_INVALIDATE_WISHBONE 0x08000000U
+  #define BLADERF_RF_INVALIDATE_FEATURE 0x10000000U
+  #define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED 0x20000000U
+  #define BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE 0x40000000U
+  #define BLADERF_RF_INVALIDATE_TRIGGER 0x80000000U
+  #define BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED 0x00000001U
+  #define BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH 0x00000002U
+  #define BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY 0x00000004U
+  #define BLADERF_RF_WITHHELD_SHORT_TRANSFER 0x00000008U
+  #define BLADERF_RF_WITHHELD_USB_OVERFLOW 0x00000010U
+  #define BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR 0x00000020U
+  #define BLADERF_RF_WITHHELD_USB_TIMEOUT 0x00000040U
+  #define BLADERF_RF_WITHHELD_DEVICE_LOST 0x00000080U
+  #define BLADERF_RF_WITHHELD_SYNC_TIMEOUT 0x00000100U
+  #define BLADERF_RF_WITHHELD_RX_CHANNEL_SELECTION 0x00000200U
+  #define BLADERF_RF_EVENT_HISTORY_SIZE 64
 """
