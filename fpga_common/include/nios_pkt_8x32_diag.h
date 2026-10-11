@@ -33,6 +33,12 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
                                                              uint8_t addr)
 {
     switch (target) {
+        case NIOS_PKT_8x32_TARGET_ADF400X:
+            /* Register index is encoded by the packet address. The device
+             * cache has four entries; rejecting larger values avoids an
+             * out-of-contract read aliasing onto a valid register. */
+            return addr <= 3;
+
         case NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES:
         case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:
             return addr <= NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR;
@@ -45,6 +51,17 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
 
         case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
             return addr <= 15;
+
+        case NIOS_PKT_8x32_TARGET_RF_LINK_STATUS:
+        case NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES:
+        case NIOS_PKT_8x32_TARGET_DWELL_STATUS:
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:
+        case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
+            return addr == 0;
+
+        case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
+            return addr == NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS;
 
         default:
             return true;
