@@ -364,14 +364,11 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
     defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             switch (addr) {
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_ARM:
-                    rx_epoch_arm((uint8_t)data);
-                    break;
+                    return rx_epoch_arm((uint8_t)data);
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE:
-                    rx_epoch_complete();
-                    break;
+                    return rx_epoch_complete();
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT:
-                    rx_epoch_abort();
-                    break;
+                    return rx_epoch_abort();
                 default:
                     DBG("Invalid RX epoch command: 0x%x\n", addr);
                     return false;
@@ -388,45 +385,42 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * backing PIO or effect. */
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE:
             (void)data;
-            break;
+            return false;
 
         case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
             switch (addr) {
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO:
 #ifdef TX_RETUNE_GATE_TARGET_LO_BASE
                     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE, data);
+                    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) == data;
 #else
                     return false;
 #endif
-                    break;
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI:
 #ifdef TX_RETUNE_GATE_TARGET_HI_BASE
                     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE, data);
+                    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) == data;
 #else
                     return false;
 #endif
-                    break;
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ARM:
 #if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && defined(TX_RETUNE_GATE_TARGET_HI_BASE)
-                    tx_retune_gate_arm(
+                    return tx_retune_gate_arm(
                         ((uint64_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) << 32) |
                         IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE),
                         (data & 1u) != 0);
 #else
                     return false;
 #endif
-                    break;
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE:
 #ifdef TX_RETUNE_GATE_CTRL_BASE
-                    tx_retune_gate_complete();
-                    break;
+                    return tx_retune_gate_complete();
 #else
                     return false;
 #endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT:
 #ifdef TX_RETUNE_GATE_CTRL_BASE
-                    tx_retune_gate_abort();
-                    break;
+                    return tx_retune_gate_abort();
 #else
                     return false;
 #endif

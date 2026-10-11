@@ -491,7 +491,8 @@ static inline uint32_t rx_epoch_ctrl_current(void)
     #endif
 }
 
-static inline void rx_epoch_ctrl_modify(uint32_t clear, uint32_t set, uint32_t toggle)
+static inline bool rx_epoch_ctrl_modify(uint32_t clear, uint32_t set,
+                                        uint32_t toggle)
 {
     #ifdef RX_EPOCH_CTRL_BASE
     uint32_t word = rx_epoch_ctrl_current();
@@ -499,25 +500,32 @@ static inline void rx_epoch_ctrl_modify(uint32_t clear, uint32_t set, uint32_t t
     word |= set;
     word ^= toggle;
     IOWR_ALTERA_AVALON_PIO_DATA(RX_EPOCH_CTRL_BASE, word);
+    return rx_epoch_ctrl_current() == word;
+    #else
+    (void)clear;
+    (void)set;
+    (void)toggle;
+    return false;
     #endif
 }
 
-static inline void rx_epoch_arm(uint8_t epoch_id)
+static inline bool rx_epoch_arm(uint8_t epoch_id)
 {
-    rx_epoch_ctrl_modify(0xFFu << RX_EPOCH_CTRL_ID_LSB,
-                         (((uint32_t)epoch_id) << RX_EPOCH_CTRL_ID_LSB) |
-                             RX_EPOCH_CTRL_META_ENABLE,
-                         RX_EPOCH_CTRL_ARM_TOGGLE);
+    return rx_epoch_ctrl_modify(
+        0xFFu << RX_EPOCH_CTRL_ID_LSB,
+        (((uint32_t)epoch_id) << RX_EPOCH_CTRL_ID_LSB) |
+            RX_EPOCH_CTRL_META_ENABLE,
+        RX_EPOCH_CTRL_ARM_TOGGLE);
 }
 
-static inline void rx_epoch_complete(void)
+static inline bool rx_epoch_complete(void)
 {
-    rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_COMPLETE_TOGGLE);
+    return rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_COMPLETE_TOGGLE);
 }
 
-static inline void rx_epoch_abort(void)
+static inline bool rx_epoch_abort(void)
 {
-    rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_ABORT_TOGGLE);
+    return rx_epoch_ctrl_modify(0, 0, RX_EPOCH_CTRL_ABORT_TOGGLE);
 }
 
 /* Status word, rx_clock -> sys_clock through its own work.handshake
@@ -584,14 +592,33 @@ static inline uint32_t tx_retune_gate_ctrl_current(void)
 #endif
 }
 
-static inline void tx_retune_gate_arm(uint64_t timestamp, bool immediate)
+static inline bool tx_retune_gate_set_target(uint64_t timestamp)
 {
-    uint32_t word;
-#ifdef TX_RETUNE_GATE_TARGET_LO_BASE
+#if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && \
+    defined(TX_RETUNE_GATE_TARGET_HI_BASE)
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE,
                                 (uint32_t)timestamp);
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE,
                                 (uint32_t)(timestamp >> 32));
+    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) ==
+               (uint32_t)timestamp &&
+           IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) ==
+               (uint32_t)(timestamp >> 32);
+#else
+    (void)timestamp;
+    return false;
+#endif
+}
+
+static inline bool tx_retune_gate_arm(uint64_t timestamp, bool immediate)
+{
+    uint32_t word;
+#if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && \
+    defined(TX_RETUNE_GATE_TARGET_HI_BASE) && \
+    defined(TX_RETUNE_GATE_CTRL_BASE)
+    if (!tx_retune_gate_set_target(timestamp)) {
+        return false;
+    }
     word = tx_retune_gate_ctrl_current();
     word &= ~TX_RETUNE_CTRL_IMMEDIATE;
     if (immediate) {
@@ -599,25 +626,35 @@ static inline void tx_retune_gate_arm(uint64_t timestamp, bool immediate)
     }
     word ^= TX_RETUNE_CTRL_ARM_TOGGLE;
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE, word);
+    return tx_retune_gate_ctrl_current() == word;
 #else
     (void)timestamp;
     (void)immediate;
+    return false;
 #endif
 }
 
-static inline void tx_retune_gate_complete(void)
+static inline bool tx_retune_gate_complete(void)
 {
 #ifdef TX_RETUNE_GATE_CTRL_BASE
-    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE,
-        tx_retune_gate_ctrl_current() ^ TX_RETUNE_CTRL_COMPLETE_TOGGLE);
+    uint32_t word = tx_retune_gate_ctrl_current() ^
+                    TX_RETUNE_CTRL_COMPLETE_TOGGLE;
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE, word);
+    return tx_retune_gate_ctrl_current() == word;
+#else
+    return false;
 #endif
 }
 
-static inline void tx_retune_gate_abort(void)
+static inline bool tx_retune_gate_abort(void)
 {
 #ifdef TX_RETUNE_GATE_CTRL_BASE
-    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE,
-        tx_retune_gate_ctrl_current() ^ TX_RETUNE_CTRL_ABORT_TOGGLE);
+    uint32_t word = tx_retune_gate_ctrl_current() ^
+                    TX_RETUNE_CTRL_ABORT_TOGGLE;
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE, word);
+    return tx_retune_gate_ctrl_current() == word;
+#else
+    return false;
 #endif
 }
 
