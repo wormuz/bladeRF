@@ -1003,6 +1003,16 @@ def check_tx_retune_gate_port_map():
             fail("tx-retune-gate-port-map",
                  "TX retune mailbox source/capture pair is missing from SDC",
                  "unbounded 96-bit system-to-TX transfer caused -8.379 ns setup slack")
+    qbind = ROOT / "hdl/quartus/qbind.tcl"
+    if qbind.exists():
+        bind_text = code_only(qbind.read_text(errors="replace"), comment="#")
+        for marker in ("handshake TX retune control",
+                       "handshake RX epoch snapshot",
+                       "handshake RX fault causes"):
+            if marker not in bind_text:
+                fail("tx-retune-gate-port-map",
+                     f"post-fit qbind omits current handshake endpoint {marker}",
+                     "an SDC declaration is not proof until both fitted endpoints bind")
         if not re.search(r"\b" + re.escape(port) + r"\s*:", tx_text):
             fail("tx-retune-gate-port-map",
                  f"tx entity does not declare retune gate port {port}",
