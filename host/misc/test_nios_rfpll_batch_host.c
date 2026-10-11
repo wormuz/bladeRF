@@ -6,6 +6,7 @@
 #include "board/board.h"
 #include "backend/usb/usb.h"
 #include "backend/usb/nios_access.h"
+#include "backend/usb/nios_transaction.h"
 #include "nios_pkt_16x64.h"
 #include "nios_pkt_8x32.h"
 #include "nios_pkt_formats.h"
@@ -24,6 +25,8 @@ enum response_mode {
     RESPONSE_RFIC_READ_TIMEOUT,
     RESPONSE_8X32_READ_TIMEOUT,
     RESPONSE_SNAPSHOT_TIMEOUT,
+    RESPONSE_WRONG_8X32_TARGET,
+    RESPONSE_LEGACY_ERROR_MARKER,
 };
 
 static enum response_mode response_mode;
@@ -78,10 +81,20 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     if (timeout_on_in_count != 0 && in_count == timeout_on_in_count) {
         return BLADERF_ERR_TIMEOUT;
     }
+    if (request[0] == NIOS_PKT_LEGACY_MAGIC &&
+        response_mode == RESPONSE_LEGACY_ERROR_MARKER) {
+        bytes[0] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+        return 0;
+    }
     if (request[0] == NIOS_PKT_8x32_MAGIC) {
         nios_pkt_8x32_unpack(request, &target8, &write8, &addr8, &data8);
         if (response_mode == RESPONSE_8X32_READ_TIMEOUT) {
             return BLADERF_ERR_TIMEOUT;
+        }
+        if (response_mode == RESPONSE_WRONG_8X32_TARGET) {
+            nios_pkt_8x32_resp_pack(bytes, target8 + 1, write8, addr8, 0,
+                                    true);
+            return 0;
         }
         nios_pkt_8x32_resp_pack(bytes, target8, write8, addr8, 0, true);
         return 0;
@@ -290,6 +303,62 @@ static int expect_link_status_timeout_clears_output(void)
     return 0;
 }
 
+static int expect_mismatched_response_poisoned_channel(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    uint32_t status_word = UINT32_MAX;
+    unsigned int requests_before = out_count;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_WRONG_8X32_TARGET;
+    status = nios_rf_link_status_read(&dev, &status_word);
+    if (status != BLADERF_ERR_UNEXPECTED || status_word != 0 ||
+        !usb.peripheral_desynchronized) {
+        fprintf(stderr, "mismatched NIOS response was accepted: status=%d "
+                        "value=0x%08x desynchronized=%u\n", status,
+                status_word, usb.peripheral_desynchronized);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+
+    status = nios_rf_link_status_read(&dev, &status_word);
+    if (status != BLADERF_ERR_UNEXPECTED || out_count != requests_before + 1) {
+        fprintf(stderr, "desynchronized NIOS channel sent another request: "
+                        "status=%d out=%u before=%u\n", status, out_count,
+                requests_before);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
+static int expect_legacy_error_marker_is_completed_response(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    uint8_t packet[NIOS_PKT_LEN] = { NIOS_PKT_LEGACY_MAGIC };
+    enum nios_transaction_stage stage;
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_LEGACY_ERROR_MARKER;
+    status = nios_usb_transaction(&usb, packet, sizeof(packet),
+                                  PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
+    if (status != 0 || stage != NIOS_TRANSACTION_COMPLETE ||
+        packet[0] != NIOS_PKT_LEGACY_ERROR_MAGIC ||
+        usb.peripheral_desynchronized) {
+        fprintf(stderr, "legacy error marker mishandled: status=%d stage=%d "
+                        "magic=0x%02x desynchronized=%u\n", status, stage,
+                packet[0], usb.peripheral_desynchronized);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 static int expect_epoch_snapshot_timeout_clears_outputs(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
@@ -366,9 +435,11 @@ int main(void)
         expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
+        expect_mismatched_response_poisoned_channel() ||
+        expect_legacy_error_marker_is_completed_response() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
         expect_partial_dwell_summary_timeout_is_atomic() ||
-        out_count != 18 || in_count != 18) {
+        out_count != 20 || in_count != 20) {
         return 1;
     }
 

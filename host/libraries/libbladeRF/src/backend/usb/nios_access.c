@@ -109,6 +109,9 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     if (status != 0) {
         if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
             log_error("NIOS request channel is desynchronized; reopen the device\n");
+        } else if (stage == NIOS_TRANSACTION_RESPONSE_MISMATCH) {
+            log_error("NIOS response identity did not match the request; "
+                      "reopen the device\n");
         } else if (stage == NIOS_TRANSACTION_OUT_FAILED) {
             log_error("Failed to send NIOS II request: %s\n", bladerf_strerror(status));
         } else {
