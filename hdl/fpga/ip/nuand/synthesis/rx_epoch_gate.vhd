@@ -98,8 +98,46 @@ architecture arch of rx_epoch_gate is
     -- Reset/unarmed identity. Host epoch allocation reserves zero so an
     -- FPGA reset cannot reproduce a certified epoch tag after 8-bit wrap.
     signal active_epoch_id  : unsigned(7 downto 0)  := (others => '0');
+    signal sample_stage_iq  : sample_streams_t(0 to NUM_STREAMS-1) :=
+                                  (others => ZERO_SAMPLE);
+    signal sample_forward_i : std_logic_vector(NUM_STREAMS-1 downto 0) :=
+                                  (others => '0');
+    signal keepalive_valid_i : std_logic_vector(NUM_STREAMS-1 downto 0) :=
+                                  (others => '0');
 
 begin
+
+    -- Register RF IQ independently from the epoch/control decision. The
+    -- previous combined FSM mux put adc_enable through two levels of wide
+    -- sample-data selection, which became the RX setup bottleneck.
+    stage_samples : process(clock, reset)
+    begin
+        if reset = '1' then
+            sample_stage_iq <= (others => ZERO_SAMPLE);
+        elsif rising_edge(clock) then
+            sample_stage_iq <= in_samples;
+        end if;
+    end process;
+
+    -- A registered per-lane mode selects either the staged RF IQ or the
+    -- zero-IQ transport keepalive. This preserves the original one-cycle
+    -- sample/metadata alignment while keeping lane-enable logic off the
+    -- 32-bit IQ register D paths.
+    output_samples : process(all)
+        variable samples_v : sample_streams_t(0 to NUM_STREAMS-1);
+    begin
+        for i in samples_v'range loop
+            samples_v(i) := ZERO_SAMPLE;
+            if sample_forward_i(i) = '1' then
+                samples_v(i).data_i := sample_stage_iq(i).data_i;
+                samples_v(i).data_q := sample_stage_iq(i).data_q;
+                samples_v(i).data_v := sample_stage_iq(i).data_v;
+            else
+                samples_v(i).data_v := keepalive_valid_i(i);
+            end if;
+        end loop;
+        out_samples <= samples_v;
+    end process;
 
     gate : process(clock, reset)
         variable any_enabled : std_logic;
@@ -113,7 +151,8 @@ begin
             state               <= STATE_ACTIVE;
             active_epoch_id      <= (others => '0');
             out_sample_controls  <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-            out_samples          <= (in_sample_controls'range => ZERO_SAMPLE);
+            sample_forward_i     <= (others => '0');
+            keepalive_valid_i    <= (others => '0');
             out_timestamp        <= (others => '0');
             out_epoch_id         <= (others => '0');
             out_state            <= STATE_ACTIVE;
@@ -125,6 +164,7 @@ begin
             -- timestamp in the same pipeline stage so fifo_writer metadata
             -- names the sample it describes rather than the next ADC tick.
             out_timestamp <= rx_timestamp;
+            sample_forward_i <= (others => '0');
 
             -- A common epoch boundary must be a real sample on every enabled
             -- ADC lane. RX_X1 enables one lane; RX_X2 requires both lanes.
@@ -150,6 +190,10 @@ begin
             partial_enabled_valid := enabled_lane_count > 1 and
                 valid_enabled_lane_count > 0 and
                 valid_enabled_lane_count < enabled_lane_count;
+            for i in keepalive_valid_i'range loop
+                keepalive_valid_i(i) <= in_sample_controls(i).enable and
+                                         keepalive_data_valid;
+            end loop;
 
             case state is
                 when STATE_ACTIVE =>
@@ -159,14 +203,6 @@ begin
                         -- forward the current RF samples: emit zero-IQ
                         -- keepalives just like PENDING and ERROR.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                         state <= STATE_ERROR;
                     elsif( epoch_arm = '1' ) then
                         -- Fence on the ARM edge itself. The host has already
@@ -175,14 +211,6 @@ begin
                         -- PENDING. Preserve lane enables and sample-valid so
                         -- transport liveness is unchanged.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                     elsif( partial_enabled_valid ) then
                         -- RX_X2 is one sample tuple, not two independent
                         -- streams. Once active, a one-lane valid gap means
@@ -190,18 +218,10 @@ begin
                         -- both lanes and publish ERROR instead of forwarding
                         -- a partial tuple as certified IQ.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
-                        out_samples         <= in_samples;
+                        sample_forward_i   <= (others => '1');
                     end if;
 
                     if( epoch_arm = '1' and epoch_abort = '0' ) then
@@ -215,14 +235,6 @@ begin
                     -- old-LO IQ with zero-IQ keepalives so async USB does not
                     -- time out while the host waits for transition events.
                     out_sample_controls <= in_sample_controls;
-                    for i in in_samples'range loop
-                        out_samples(i) <= (
-                            data_i => (others => '0'),
-                            data_q => (others => '0'),
-                            data_v => in_sample_controls(i).enable and
-                                      keepalive_data_valid
-                        );
-                    end loop;
 
                     if( epoch_abort = '1' ) then
                         -- The RFIC may already have changed even when the
@@ -249,14 +261,6 @@ begin
                     -- so the host cannot observe success before the
                     -- timestamp latch is valid.
                     out_sample_controls <= in_sample_controls;
-                    for i in in_samples'range loop
-                        out_samples(i) <= (
-                            data_i => (others => '0'),
-                            data_q => (others => '0'),
-                            data_v => in_sample_controls(i).enable and
-                                      keepalive_data_valid
-                        );
-                    end loop;
 
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
@@ -268,7 +272,7 @@ begin
                         state <= STATE_PENDING;
                     elsif( all_enabled_valid = '1' ) then
                         out_sample_controls  <= in_sample_controls;
-                        out_samples          <= in_samples;
+                        sample_forward_i     <= (others => '1');
                         epoch_start_event    <= '1';
                         first_valid_timestamp <= rx_timestamp;
                         state <= STATE_ACTIVE_NEW;
@@ -284,46 +288,22 @@ begin
                         -- stream with zero-IQ keepalives while withholding
                         -- all samples from this epoch.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                         state <= STATE_ERROR;
                     elsif( epoch_arm = '1' ) then
                         -- A request may arrive before the one-cycle
                         -- ACTIVE_NEW certificate has retired. Fence on this
                         -- edge and replace the candidate epoch atomically.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                         active_epoch_id <= epoch_id_in;
                         state <= STATE_PENDING;
                     elsif( partial_enabled_valid ) then
                         -- Keep RX_X2 fail-closed through the certificate
                         -- handoff cycle as well as steady ACTIVE operation.
                         out_sample_controls <= in_sample_controls;
-                        for i in in_samples'range loop
-                            out_samples(i) <= (
-                                data_i => (others => '0'),
-                                data_q => (others => '0'),
-                                data_v => in_sample_controls(i).enable and
-                                          keepalive_data_valid
-                            );
-                        end loop;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
-                        out_samples         <= in_samples;
+                        sample_forward_i   <= (others => '1');
                         state               <= STATE_ACTIVE;
                     end if;
 
@@ -334,14 +314,6 @@ begin
                     -- The host epoch certificate is revoked until a later
                     -- explicit ARM/COMPLETE transaction admits real samples.
                     out_sample_controls <= in_sample_controls;
-                    for i in in_samples'range loop
-                        out_samples(i) <= (
-                            data_i => (others => '0'),
-                            data_q => (others => '0'),
-                            data_v => in_sample_controls(i).enable and
-                                      keepalive_data_valid
-                        );
-                    end loop;
                     if( epoch_abort = '1' ) then
                         state <= STATE_ERROR;
                     elsif( epoch_arm = '1' ) then
