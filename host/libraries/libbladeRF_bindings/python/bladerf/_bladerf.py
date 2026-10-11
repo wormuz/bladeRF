@@ -445,6 +445,41 @@ class QuickTune:
         return self._struct.spdt
 
 
+class Metadata:
+    """Sample metadata, including RX epoch validity and clipping status."""
+
+    def __init__(self, timestamp=0, flags=0, status=0, actual_count=0,
+                 rx_epoch_id=0, rx_epoch_id_valid=False,
+                 rx_clipping_flags=0):
+        self.timestamp = int(timestamp)
+        self.flags = int(flags)
+        self.status = int(status)
+        self.actual_count = int(actual_count)
+        self.rx_epoch_id = int(rx_epoch_id)
+        self.rx_epoch_id_valid = bool(rx_epoch_id_valid)
+        self.rx_clipping_flags = int(rx_clipping_flags)
+
+    def to_struct(self):
+        metadata = ffi.new("struct bladerf_metadata *")
+        metadata.timestamp = self.timestamp
+        metadata.flags = self.flags
+        metadata.status = self.status
+        metadata.actual_count = self.actual_count
+        metadata.rx_epoch_id = self.rx_epoch_id
+        metadata.rx_epoch_id_valid = self.rx_epoch_id_valid
+        metadata.rx_clipping_flags = self.rx_clipping_flags
+        return metadata
+
+    def update_from_struct(self, metadata):
+        self.timestamp = metadata.timestamp
+        self.flags = metadata.flags
+        self.status = metadata.status
+        self.actual_count = metadata.actual_count
+        self.rx_epoch_id = metadata.rx_epoch_id
+        self.rx_epoch_id_valid = bool(metadata.rx_epoch_id_valid)
+        self.rx_clipping_flags = metadata.rx_clipping_flags
+
+
 class Loopback(enum.Enum):
     Disabled = libbladeRF.BLADERF_LB_NONE
     Firmware = libbladeRF.BLADERF_LB_FIRMWARE
@@ -1249,19 +1284,27 @@ class BladeRF:
         _check_error(ret)
 
     def sync_tx(self, buf, num_samples, timeout_ms=None, meta=ffi.NULL):
+        metadata = meta.to_struct() if isinstance(meta, Metadata) else meta
         ret = libbladeRF.bladerf_sync_tx(self.dev[0],
                                          ffi.from_buffer(buf),
                                          num_samples,
-                                         ffi.cast("struct bladerf_metadata *", meta),
+                                         ffi.cast("struct bladerf_metadata *",
+                                                  metadata),
                                          timeout_ms or 0)
+        if isinstance(meta, Metadata):
+            meta.update_from_struct(metadata)
         _check_error(ret)
 
     def sync_rx(self, buf, num_samples, timeout_ms=None, meta=ffi.NULL):
+        metadata = meta.to_struct() if isinstance(meta, Metadata) else meta
         ret = libbladeRF.bladerf_sync_rx(self.dev[0],
                                          ffi.from_buffer(buf),
                                          num_samples,
-                                         meta,
+                                         ffi.cast("struct bladerf_metadata *",
+                                                  metadata),
                                          timeout_ms or 0)
+        if isinstance(meta, Metadata):
+            meta.update_from_struct(metadata)
         _check_error(ret)
 
     # FPGA/Firmware Loading/Flashing

@@ -37,6 +37,7 @@ from bladerf import _tool
 
 BladeRF = _bladerf.BladeRF
 Format = _bladerf.Format
+Metadata = _bladerf.Metadata
 QuickTune = _bladerf.QuickTune
 RFEventHistoryError = _bladerf.RFEventHistoryError
 RFEvent = _bladerf.RFEvent
@@ -64,7 +65,8 @@ main = _tool.main
 
 __all__ = ['BladeRF', 'get_bootloader_list', 'get_device_list',
            'load_fw_from_bootloader', 'set_verbosity', 'version', 'RX', 'TX',
-           'CHANNEL_RX', 'CHANNEL_TX', 'Format', 'QuickTune', 'RFEvent', 'RFEventType',
+           'CHANNEL_RX', 'CHANNEL_TX', 'Format', 'Metadata', 'QuickTune',
+           'RFEvent', 'RFEventType',
            'RFEventHistoryError', 'RFInvalidationReason', 'RFState',
            'RFTransitionError', 'RFTransitionRequest',
            'RFTransitionRequirement', 'RXStreamStatus', 'RXWithheldReason',
