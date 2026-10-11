@@ -582,7 +582,16 @@ static inline void perform_work(struct queue *q, bladerf_module module)
         }
 
         default:
-            INCREMENT_ERROR_COUNT();
+            /* Preserve ownership of a possibly armed compare until the
+             * hardware confirms cancellation. Merely logging an impossible
+             * state leaves the accepted request at the queue head forever
+             * and never tells the host that it failed. */
+            record_retune2_failure(module);
+            e->state = ENTRY_STATE_CANCEL_PENDING;
+            e->cancel_recovery_seen = !tamer_clock_stalled(module);
+            if (e->cancel_recovery_seen && tamer_cancel(module)) {
+                dequeue_retune(q, NULL);
+            }
             break;
     }
 }

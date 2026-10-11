@@ -711,6 +711,59 @@ static int check_timestamp_wrap_ordering(void)
     return 0;
 }
 
+static int check_invalid_queue_state_fails_closed(void)
+{
+    pkt_retune2_init();
+    cancel_count = 0;
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = false;
+    rx_queue.count = 1;
+    rx_queue.rem_idx = 0;
+    rx_queue.ins_idx = 1;
+    rx_queue.entries[0].state = (enum entry_state)0xff;
+
+    pkt_retune2_work();
+    if (pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        rx_queue.count != 0 || cancel_count != 1) {
+        fputs("invalid retune state was not reported/cancelled\n", stderr);
+        return 1;
+    }
+
+    /* If the hardware does not acknowledge cancellation, the request must
+     * remain owned in CANCEL_PENDING and must never activate by a late event. */
+    pkt_retune2_init();
+    cancel_count = 0;
+    fail_tamer_cancel = true;
+    rx_queue.count = 1;
+    rx_queue.rem_idx = 0;
+    rx_queue.ins_idx = 1;
+    rx_queue.entries[0].state = (enum entry_state)0xff;
+    pkt_retune2_work();
+    compare_fired_rx = true;
+    pkt_retune2_work();
+    if (pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        rx_queue.count != 1 ||
+        rx_queue.entries[0].state != ENTRY_STATE_CANCEL_PENDING) {
+        fputs("uncancelled invalid retune state was falsely released\n", stderr);
+        return 1;
+    }
+
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = true;
+    pkt_retune2_work();
+    simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
+    if (rx_queue.count != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
+        fputs("invalid retune state survived acknowledged recovery cancel\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
 static int check_profile_index_validation(void)
 {
     if (!retune2_profile_indices_valid(0, 0) ||
@@ -824,6 +877,9 @@ int main(void)
         return 1;
     }
     if (check_timestamp_wrap_ordering() != 0) {
+        return 1;
+    }
+    if (check_invalid_queue_state_fails_closed() != 0) {
         return 1;
     }
     if (check_profile_index_validation() != 0) {
