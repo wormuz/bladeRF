@@ -406,7 +406,8 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ARM:
 #if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && defined(TX_RETUNE_GATE_TARGET_HI_BASE)
                     return tx_retune_gate_arm(
-                        ((uint64_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) << 32) |
+                        ((uint64_t)IORD_ALTERA_AVALON_PIO_DATA(
+                             TX_RETUNE_GATE_TARGET_HI_BASE) << 32) |
                         IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE),
                         (data & 1u) != 0);
 #else
