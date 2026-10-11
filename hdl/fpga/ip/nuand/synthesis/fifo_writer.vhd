@@ -460,9 +460,14 @@ begin
                     -- returns. Measured before this: rx_fault=1 at TX
                     -- disable in every RX+TX session, from this counter.
                     progress_count   <= (others => '0');
-                elsif( rx_epoch_discard_active = '1' ) then
+                elsif( rx_epoch_discard_active = '1' or
+                      rx_epoch_gate_fault = '1' ) then
                     -- Fencing is an expected data-plane pause. Restart the
                     -- watchdog after the gate admits the next valid epoch.
+                    -- A terminal gate fault is already reported by the RX
+                    -- epoch controller; classifying its intentional FIFO
+                    -- suppression as a second no-progress transport fault
+                    -- would report the wrong cause.
                     progress_count   <= (others => '0');
                 elsif( fifo_write = '1' ) then
                     progress_count   <= (others => '0');
@@ -515,11 +520,12 @@ begin
             -- abort/discard decode from feeding the wide snapshot register.
             start_fault_pending_i <= '0';
             fault_context_pending_i <= '0';
-            if( start_link_pulse = '1' ) then
+            if( start_link_pulse = '1' or rx_epoch_gate_fault = '1' ) then
                 start_fault_pending_i <= '0';
                 fault_context_pending_i <= '0';
             elsif( link_active_i = '1' and enable = '1' and
                    rx_epoch_discard_active = '0' and
+                   rx_epoch_gate_fault = '0' and
                    progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
                 if( wrote_this_epoch = '0' and
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) = '0' and
@@ -535,7 +541,7 @@ begin
 
             -- Publish each sticky flag and its context snapshot on the same
             -- edge, preserving the host's atomic status/context contract.
-            if( start_link_pulse = '0' ) then
+            if( start_link_pulse = '0' and rx_epoch_gate_fault = '0' ) then
                 if( start_fault_pending_i = '1' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
                 end if;

@@ -128,6 +128,10 @@ begin
         assert fifo_write = '0'
             report "RX epoch gate fault allowed another sample FIFO write"
             severity failure;
+        for i in 1 to 24 loop wait until rising_edge(clock); end loop;
+        assert fault_sticky = "000000"
+            report "RX epoch gate fault was misreported as a FIFO no-progress fault"
+            severity failure;
         wait until falling_edge(clock);
         samples <= (others => ZERO_SAMPLE);
         epoch_gate_fault <= '0';
@@ -137,11 +141,11 @@ begin
             severity failure;
         for i in 1 to 3 loop wait until rising_edge(clock); end loop;
 
-        -- With no sample writes, advance the watchdog to its terminal
-        -- count. The next edge would latch START_NO_PROGRESS. Assert the
+        -- With no sample writes, advance the watchdog to one below its
+        -- terminal count (three cycles above plus twelve here). Assert the
         -- fence during the preceding half-cycle, matching the RX gate's
-        -- combinational ARM indication, and prove it wins that same edge.
-        for i in 1 to 16 loop wait until rising_edge(clock); end loop;
+        -- combinational ARM indication, before the threshold edge.
+        for i in 1 to 12 loop wait until rising_edge(clock); end loop;
         wait until falling_edge(clock);
         discard_active <= '1';
         wait until rising_edge(clock);
