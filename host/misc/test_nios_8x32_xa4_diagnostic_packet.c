@@ -21,7 +21,9 @@ bool rffe_csr_write_checked(uint32_t value, uint32_t mask)
 bool adf4351_write(uint32_t value)
 { (void)value; adf4351_write_calls++; return true; }
 uint32_t adf400x_spi_read(uint8_t addr) { return addr; }
-bool adf400x_spi_write(uint32_t value) { (void)value; return true; }
+static unsigned int adf400x_write_calls;
+bool adf400x_spi_write(uint32_t value)
+{ (void)value; adf400x_write_calls++; return true; }
 static unsigned int fastlock_save_calls;
 static bool fastlock_save_success = true;
 static bool fastlock_save_last_tx;
@@ -58,9 +60,11 @@ uint32_t dwell_status_read(void) { return 0; }
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
 static bool dwell_cfg_success;
+static unsigned int dwell_cfg_calls;
 bool dwell_cfg_write(uint32_t value)
 {
     (void)value;
+    dwell_cfg_calls++;
     return dwell_cfg_success;
 }
 uint32_t pretrig_read(uint16_t index) { return index; }
@@ -205,6 +209,12 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 16, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_ADF400X, 3, true, 3);
     CHECK_READ(NIOS_PKT_8x32_TARGET_ADF400X, 4, false, 0);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_ADF400X, 0, 3, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_ADF400X, 1, 3, false);
+    if (adf400x_write_calls != 1) {
+        fputs("ADF400X accepted reserved write address\n", stderr);
+        return 1;
+    }
     CHECK_READ(NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, 0, true, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES, 0, true, 0);
@@ -291,6 +301,17 @@ int main(void)
     dwell_cfg_success = true;
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
                 UINT32_C(0x12345678), true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 1,
+                UINT32_C(0x12345678), false);
+    if (dwell_cfg_calls != 2) {
+        fputs("dwell config accepted reserved write address\n", stderr);
+        return 1;
+    }
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_PRETRIG_READ, 0, 0x300, true);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_PRETRIG_READ, 2, true, 0x302);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_PRETRIG_READ, 1, 0x400, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_PRETRIG_READ, 0, 0x1000, false);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_PRETRIG_READ, 2, true, 0x302);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                 NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, false);
     gate_command_success = true;

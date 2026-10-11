@@ -205,10 +205,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * field is not available: this is the vendor packet format and we
          * keep it compatible.
          *
-         * So the index is split. A write to this target sets the base --
-         * any 32-bit value, of which the low 12 bits are used -- and a read
-         * returns base + addr. The host writes a base every 256 entries and
-         * reads 256 words between them.
+         * So the index is split. A write to this target sets the base; only
+         * the low 12 bits are valid and reserved high bits are rejected. A
+         * read returns base + addr. The host writes a base every 256 entries
+         * and reads 256 words between them.
          *
          * addr is a RAW ring index, not an offset from the oldest sample.
          * The caller converts using oldest_index from DWELL_STATUS; the
@@ -306,7 +306,8 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x32_TARGET_ADF400X:
-            if (data > 0x00ffffffu) {
+            /* Register selection is encoded in data[1:0]; addr is reserved. */
+            if (addr != 0 || data > 0x00ffffffu) {
                 return false;
             }
             if (!adf400x_spi_write(data)) {
@@ -359,6 +360,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * depth here rather than trusted: a base past the end would other-
          * wise alias to a valid entry and return a plausible wrong sample. */
         case NIOS_PKT_8x32_TARGET_PRETRIG_READ:
+            if (addr != 0 || (data & ~(uint32_t)(PRETRIG_DEPTH - 1u)) != 0) {
+                return false;
+            }
             pretrig_base = (uint16_t) (data & (PRETRIG_DEPTH - 1u));
             break;
 
@@ -367,6 +371,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * selects the settling interval from two bits, so no value here can
          * produce an out-of-range setting. */
         case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
+            if (addr != 0) {
+                return false;
+            }
             return dwell_cfg_write(data);
 
         case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
