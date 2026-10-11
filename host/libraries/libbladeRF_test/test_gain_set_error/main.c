@@ -139,11 +139,16 @@ int main(void)
     dev.gain_tbls[ch].gain_target = initial_target;
     assert(MUTEX_INIT(&dev.lock) == 0);
 
+    /* A failed gain operation after borrowing MGC must restore the original
+     * AGC mode even when failure occurs before the RFIC gain write. */
+    state.current_gain_mode = BLADERF_GAIN_DEFAULT;
     status = bladerf_set_gain(&dev, ch, 30);
     assert(status == BLADERF_ERR_IO);
     assert(state.set_gain_calls == 0);
+    assert(state.current_gain_mode == BLADERF_GAIN_DEFAULT);
     assert(dev.gain_tbls[ch].gain_target == initial_target);
     assert(state.invalidate_calls == 1 && state.complete_calls == 1);
+    state.current_gain_mode = BLADERF_GAIN_MGC;
 
     /* A failed gain-mode read must not produce a successful target query. */
     dev.gain_tbls[ch].state = BLADERF_GAIN_CAL_LOADED;

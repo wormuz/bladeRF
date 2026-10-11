@@ -674,6 +674,7 @@ static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
     bladerf_gain_mode gain_mode  = BLADERF_GAIN_MGC;
     bladerf_gain_mode restore_to = BLADERF_GAIN_MGC;
     bool restore_gain_mode       = false;
+    bool restore_gain_mode_attempted = false;
     bool gain_applied            = false;
     bladerf_frequency freq;
     bladerf_gain old_gain_target;
@@ -693,14 +694,16 @@ static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
         }
 
         if (gain_mode != BLADERF_GAIN_MGC) {
+            /* The mode write can fail after reaching the RFIC. Arrange the
+             * rollback before issuing it so every exit restores the mode
+             * whose state was observed above. */
+            restore_to = gain_mode;
+            restore_gain_mode = true;
             status = dev->board->set_gain_mode(dev, ch, BLADERF_GAIN_MGC);
             if (status != 0) {
                 log_error("Failed to set gain mode\n");
                 goto error;
             }
-
-            restore_to         = gain_mode;
-            restore_gain_mode  = true;
         }
     }
 
@@ -749,6 +752,7 @@ static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
     }
 
     if (restore_gain_mode) {
+        restore_gain_mode_attempted = true;
         int restore_status = dev->board->set_gain_mode(dev, ch, restore_to);
         if (restore_status != 0) {
             log_error("Failed to restore gain mode\n");
@@ -759,6 +763,15 @@ static int set_gain_locked(struct bladerf *dev, bladerf_channel ch, int gain,
     }
 
 error:
+    if (restore_gain_mode && !restore_gain_mode_attempted) {
+        int restore_status = dev->board->set_gain_mode(dev, ch, restore_to);
+        if (restore_status != 0) {
+            log_error("Failed to restore gain mode after gain setup failure\n");
+            if (status == 0) {
+                status = restore_status;
+            }
+        }
+    }
     if (!gain_applied) {
         dev->gain_tbls[ch].gain_target = old_gain_target;
     }
