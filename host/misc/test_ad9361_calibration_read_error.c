@@ -1746,6 +1746,26 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+        {
+            int32_t old_state_after_write = state_after_ensm_write;
+            unsigned ensm_writes = fake_write_counts[REG_ENSM_CONFIG_1];
+
+            fake_regs[REG_STATE] = ENSM_STATE_RX;
+            state_after_ensm_write = ENSM_STATE_RX;
+            fail_write_once_reg = REG_ENSM_CONFIG_1;
+            fail_write_once_reg_occurrence = 1;
+            apply_failed_write_once = true;
+            ret = ad9361_load_fir_filter_coef(&phy, FIR_TX1, 0, 16,
+                                               fir_coef);
+            fail_write_once_reg = -1;
+            state_after_ensm_write = old_state_after_write;
+            if (ret != -EIO || fake_regs[REG_STATE] != ENSM_STATE_RX ||
+                fake_write_counts[REG_ENSM_CONFIG_1] < ensm_writes + 3) {
+                fprintf(stderr,
+                        "FIR loader skipped ENSM recovery after failed ALERT request\n");
+                return EXIT_FAILURE;
+            }
+        }
 	{
 		char fir_text[512];
 		size_t used;
