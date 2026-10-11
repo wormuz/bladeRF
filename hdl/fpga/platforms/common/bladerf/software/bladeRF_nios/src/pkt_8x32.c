@@ -335,20 +335,15 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 #ifdef RF_LINK_CFG_BASE
             switch (addr) {
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:
-                    rf_link_cfg_set_speed(data != 0);
-                    break;
+                    return rf_link_cfg_set_speed(data != 0);
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG:
-                    rf_link_cfg_set_epoch_tag((uint8_t)data);
-                    break;
+                    return rf_link_cfg_set_epoch_tag((uint8_t)data);
                 case NIOS_PKT_8x32_RF_LINK_CMD_START:
-                    rf_link_cfg_start();
-                    break;
+                    return rf_link_cfg_start();
                 case NIOS_PKT_8x32_RF_LINK_CMD_STOP:
-                    rf_link_cfg_stop();
-                    break;
+                    return rf_link_cfg_stop();
                 case NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS:
-                    rf_link_cfg_clear_faults();
-                    break;
+                    return rf_link_cfg_clear_faults();
                 default:
                     DBG("Invalid RF link command: 0x%x\n", addr);
                     return false;

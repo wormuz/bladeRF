@@ -431,7 +431,8 @@ static inline uint32_t rf_link_cfg_current(void)
 
 /* Read-modify-write against the register, so a fabric reset that zeroed the
  * PIO is seen here as zero rather than papered over by memory. */
-static inline void rf_link_cfg_modify(uint32_t clear, uint32_t set, uint32_t toggle)
+static inline bool rf_link_cfg_modify(uint32_t clear, uint32_t set,
+                                      uint32_t toggle)
 {
     #ifdef RF_LINK_CFG_BASE
     uint32_t word = rf_link_cfg_current();
@@ -439,6 +440,12 @@ static inline void rf_link_cfg_modify(uint32_t clear, uint32_t set, uint32_t tog
     word |= set;
     word ^= toggle;
     IOWR_ALTERA_AVALON_PIO_DATA(RF_LINK_CFG_BASE, word);
+    return rf_link_cfg_current() == word;
+    #else
+    (void)clear;
+    (void)set;
+    (void)toggle;
+    return false;
     #endif
 }
 
@@ -451,16 +458,16 @@ static inline void rf_link_cfg_modify(uint32_t clear, uint32_t set, uint32_t tog
 /* Speed is a level, not a toggle: it is latched by the fabric at the next
  * start, so setting it twice is harmless and setting it after the start is
  * too late. */
-static inline void rf_link_cfg_set_speed(bool high_speed)
+static inline bool rf_link_cfg_set_speed(bool high_speed)
 {
-    rf_link_cfg_modify(RF_LINK_CFG_USB_SPEED,
-                       high_speed ? RF_LINK_CFG_USB_SPEED : 0, 0);
+    return rf_link_cfg_modify(RF_LINK_CFG_USB_SPEED,
+                              high_speed ? RF_LINK_CFG_USB_SPEED : 0, 0);
 }
 
-static inline void rf_link_cfg_set_epoch_tag(uint8_t tag)
+static inline bool rf_link_cfg_set_epoch_tag(uint8_t tag)
 {
-    rf_link_cfg_modify(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB,
-                       ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB, 0);
+    return rf_link_cfg_modify(0xFFu << RF_LINK_CFG_EPOCH_TAG_LSB,
+                              ((uint32_t)tag) << RF_LINK_CFG_EPOCH_TAG_LSB, 0);
 }
 
 /* RX data-plane epoch gate (ADR-0207 §6). Control word crosses sys_clock ->
@@ -625,21 +632,21 @@ static inline uint32_t tx_retune_gate_status_read(void)
 
 /* Call only after the FX3 RF link start has actually succeeded. This asserts
  * that it did; it is not evidence about FX3 on its own. */
-static inline void rf_link_cfg_start(void)
+static inline bool rf_link_cfg_start(void)
 {
-    rf_link_cfg_modify(0, 0, RF_LINK_CFG_START_TOGGLE);
+    return rf_link_cfg_modify(0, 0, RF_LINK_CFG_START_TOGGLE);
 }
 
-static inline void rf_link_cfg_stop(void)
+static inline bool rf_link_cfg_stop(void)
 {
-    rf_link_cfg_modify(0, 0, RF_LINK_CFG_STOP_TOGGLE);
+    return rf_link_cfg_modify(0, 0, RF_LINK_CFG_STOP_TOGGLE);
 }
 
 /* Clears the sticky fault bits. Does not restart anything -- only a new
  * epoch does that. */
-static inline void rf_link_cfg_clear_faults(void)
+static inline bool rf_link_cfg_clear_faults(void)
 {
-    rf_link_cfg_modify(0, 0, RF_LINK_CFG_CLEAR_FAULT);
+    return rf_link_cfg_modify(0, 0, RF_LINK_CFG_CLEAR_FAULT);
 }
 
 static inline uint32_t expansion_port_read(void)
