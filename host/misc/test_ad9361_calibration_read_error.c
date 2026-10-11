@@ -652,6 +652,42 @@ int main(void)
         }
     }
 
+    /* FIR text is caller supplied through the IIO attribute. Reject more
+     * taps than the fixed coefficient arrays can hold before any SPI write. */
+    {
+        char oversized_fir[2048];
+        size_t used = 0;
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+        int written;
+        unsigned tap;
+
+        written = snprintf(oversized_fir, sizeof(oversized_fir),
+                           "TX 1 GAIN 0 INT 1\nRX 1 GAIN 0 DEC 1\n");
+        if (written < 0 || (size_t)written >= sizeof(oversized_fir))
+            return EXIT_FAILURE;
+        used = (size_t)written;
+        for (tap = 0; tap < 129; ++tap) {
+            written = snprintf(oversized_fir + used,
+                               sizeof(oversized_fir) - used, "1,1\n");
+            if (written < 0 || (size_t)written >= sizeof(oversized_fir) - used)
+                return EXIT_FAILURE;
+            used += (size_t)written;
+        }
+
+        phy.filt_valid = true;
+        if (ad9361_parse_fir(&phy, oversized_fir, (uint32_t)used) != -EINVAL ||
+            phy.filt_valid || read_count != reads_before ||
+            write_count != writes_before ||
+            ad9361_parse_fir(NULL, oversized_fir, (uint32_t)used) != -EINVAL ||
+            ad9361_parse_fir(&phy, NULL, 1) != -EINVAL ||
+            ad9361_parse_fir(&phy, oversized_fir, 0) != -EINVAL) {
+            fprintf(stderr,
+                    "Invalid FIR input was not rejected before touching RFIC\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Public paired-path and diagnostic APIs must reject missing state or
      * output storage before touching SPI or publishing caller-visible data. */
     {
@@ -1710,6 +1746,37 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+	{
+		char fir_text[512];
+		size_t used;
+		unsigned rx_gain_writes = fake_write_counts[REG_RX_FILTER_GAIN];
+		int written;
+		unsigned tap;
+
+		written = snprintf(fir_text, sizeof(fir_text),
+				   "TX 1 GAIN 0 INT 1\nRX 1 GAIN 0 DEC 1\n");
+		if (written < 0 || (size_t)written >= sizeof(fir_text))
+			return EXIT_FAILURE;
+		used = (size_t)written;
+		for (tap = 0; tap < 16; ++tap) {
+			written = snprintf(fir_text + used, sizeof(fir_text) - used,
+					   "0,0\n");
+			if (written < 0 || (size_t)written >= sizeof(fir_text) - used)
+				return EXIT_FAILURE;
+			used += (size_t)written;
+		}
+
+		fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+		fail_write_reg = REG_TX_FILTER_CONF;
+		ret = ad9361_parse_fir(&phy, fir_text, (uint32_t)used);
+		fail_write_reg = -1;
+		if (ret != -EIO ||
+		    fake_write_counts[REG_RX_FILTER_GAIN] != rx_gain_writes) {
+			fprintf(stderr,
+				"FIR parser hid TX load error or continued into RX load\n");
+			return EXIT_FAILURE;
+		}
+	}
         register_map_enabled = false;
     }
     /* Measurement and multi-register helpers must return transport errors
