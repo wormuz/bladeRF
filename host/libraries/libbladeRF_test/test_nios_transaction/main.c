@@ -4,12 +4,15 @@
 
 #include "backend/usb/nios_transaction.h"
 #include "libbladeRF.h"
+#include "nios_pkt_formats.h"
 
 struct fake_usb {
     int calls;
     int fail_call;
     uint8_t endpoints[4];
     uint32_t timeouts[4];
+    bool make_register_response;
+    bool mutate_response_target;
 };
 
 static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
@@ -23,6 +26,17 @@ static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     assert(call < 4);
     fake->endpoints[call] = endpoint;
     fake->timeouts[call] = timeout_ms;
+    if (endpoint == PERIPHERAL_EP_IN && fake->make_register_response) {
+        uint8_t *response = buffer;
+        response[NIOS_PKT_16x64_IDX_FLAGS] |=
+            NIOS_PKT_16x64_FLAG_SUCCESS;
+        /* Reads return data different from the request. Identity validation
+         * must compare only the transaction key, not response payload. */
+        response[NIOS_PKT_16x64_IDX_DATA] = 0x5a;
+    }
+    if (endpoint == PERIPHERAL_EP_IN && fake->mutate_response_target) {
+        ((uint8_t *)buffer)[NIOS_PKT_16x64_IDX_TARGET_ID] ^= 1u;
+    }
     return call + 1 == fake->fail_call ? BLADERF_ERR_TIMEOUT : 0;
 }
 
@@ -112,11 +126,60 @@ static void test_out_failure_does_not_read(void)
     teardown(&usb);
 }
 
+static void test_matching_register_response_identity(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_register_response = true;
+    nios_pkt_16x64_pack(buffer, NIOS_PKT_16x64_TARGET_RFIC, false, 0x42,
+                        0x12345678);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(fake.calls == 2);
+    assert(!usb.peripheral_desynchronized);
+    teardown(&usb);
+}
+
+static void test_mismatched_register_response_fails_closed(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_COMPLETE;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_register_response = true;
+    fake.mutate_response_target = true;
+    nios_pkt_16x64_pack(buffer, NIOS_PKT_16x64_TARGET_RFIC, false, 0x42,
+                        0x12345678);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+    assert(fake.calls == 2);
+    assert(usb.peripheral_desynchronized);
+
+    /* Never let the late/misidentified response contaminate another request. */
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_DESYNCHRONIZED);
+    assert(fake.calls == 2);
+    teardown(&usb);
+}
+
 int main(void)
 {
     test_success();
     test_in_timeout_fails_closed();
     test_out_failure_does_not_read();
+    test_matching_register_response_identity();
+    test_mismatched_register_response_fails_closed();
     puts("NIOS USB transaction fail-closed tests: PASS");
     return 0;
 }
