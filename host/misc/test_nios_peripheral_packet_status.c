@@ -117,9 +117,23 @@ void agc_dc_corr_write(uint16_t addr, uint16_t value)
 }
 
 uint32_t control_reg_read(void) { return 0; }
-void control_reg_write(uint32_t value) { (void)value; }
+bool control_reg_write(uint32_t value) { (void)value; return true; }
 uint32_t rffe_csr_read(void) { return 0; }
 void rffe_csr_write(uint32_t value) { (void)value; }
+bool rffe_csr_read_checked(uint32_t *value)
+{
+    if (value == NULL) {
+        return false;
+    }
+    *value = rffe_csr_read();
+    return true;
+}
+bool rffe_csr_write_checked(uint32_t value, uint32_t verify_mask)
+{
+    (void)value;
+    (void)verify_mask;
+    return true;
+}
 bool adf4351_write(uint32_t value)
 {
     (void)value;

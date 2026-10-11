@@ -14,6 +14,7 @@ cc -std=gnu11 -DNUAND_MODIFICATIONS=1 -DLOG_INCLUDE_FILE_INFO \
   -I"$bladerf_root/host/libraries/libbladeRF/src" \
   -I"$bladerf_root/host/libraries/libbladeRF/include" \
   -I"$bladerf_root/host/common/include" \
+  -I"$bladerf_root/fpga_common/include" \
   -I"$bladerf_root/firmware_common" \
   -I"$build_dir/host/common/include" \
   -I"$build_dir/common/include" \

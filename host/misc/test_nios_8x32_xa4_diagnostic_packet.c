@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "devices.h"
 #include "nios_pkt_8x32.h"
@@ -77,12 +78,25 @@ uint32_t tx_retune_gate_status_read(void) { return 0; }
 
 #define CHECK_WRITE(target_value, addr_value, data_value, expected_success) \
     do { \
-        struct pkt_buf packet = { .resp = { 0 }, .ready = false }; \
+        uint8_t packed[NIOS_PKT_LEN]; \
+        struct pkt_buf packet = { \
+            .req = { NIOS_PKT_8x32_MAGIC, (target_value), \
+                     NIOS_PKT_8x32_FLAG_WRITE, 0, (addr_value), \
+                     (uint8_t)(data_value), (uint8_t)((data_value) >> 8), \
+                     (uint8_t)((data_value) >> 16), \
+                     (uint8_t)((data_value) >> 24), \
+                     0, 0, 0, 0, 0, 0, 0 }, \
+            .resp = { 0 }, .ready = false, \
+        }; \
         uint8_t target = 0, addr = 0; \
         uint32_t data = 0; \
         bool write = false, success = !(expected_success); \
-        nios_pkt_8x32_pack(packet.req, (target_value), true, (addr_value), \
+        nios_pkt_8x32_pack(packed, (target_value), true, (addr_value), \
                            (data_value)); \
+        if (memcmp(packed, packet.req, sizeof(packed)) != 0) { \
+            fputs("xA4 8x32 request packing changed", stderr); \
+            return 1; \
+        } \
         pkt_8x32(&packet); \
         nios_pkt_8x32_resp_unpack(packet.resp, &target, &write, &addr, \
                                   &data, &success); \

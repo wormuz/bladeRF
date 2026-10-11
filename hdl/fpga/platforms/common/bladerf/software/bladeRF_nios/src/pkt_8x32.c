@@ -29,6 +29,7 @@
 #include "pkt_retune2.h"
 #include "nios_pkt_8x32_diag.h"
 #include "devices.h"
+#include "rffe_csr_policy.h"
 #include "debug.h"
 
 #ifdef BOARD_BLADERF_MICRO

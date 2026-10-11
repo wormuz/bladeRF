@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "devices.h"
 #include "nios_pkt_32x32.h"
@@ -46,15 +47,21 @@ bool wishbone_master_write(uint32_t addr, uint32_t data)
 
 static int check_read_failure(void)
 {
+    uint8_t packed[NIOS_PKT_LEN];
     struct pkt_buf packet = {
+        .req = { NIOS_PKT_32x32_MAGIC, NIOS_PKT_32x32_TARGET_WB_MSTR,
+                 0, 0, 0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .resp = { 0 }, .ready = false,
     };
     uint8_t id = 0;
     uint32_t addr = 0, data = UINT32_MAX;
     bool write = true, success = true;
 
-    nios_pkt_32x32_pack(packet.req, NIOS_PKT_32x32_TARGET_WB_MSTR,
+    nios_pkt_32x32_pack(packed, NIOS_PKT_32x32_TARGET_WB_MSTR,
                         false, 0x10, 0);
+    if (memcmp(packed, packet.req, sizeof(packed)) != 0) {
+        return 1;
+    }
     wishbone_success = false;
     pkt_32x32(&packet);
     nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,
@@ -65,15 +72,22 @@ static int check_read_failure(void)
 
 static int check_write_failure(void)
 {
+    uint8_t packed[NIOS_PKT_LEN];
     struct pkt_buf packet = {
+        .req = { NIOS_PKT_32x32_MAGIC, NIOS_PKT_32x32_TARGET_WB_MSTR,
+                 NIOS_PKT_32x32_FLAG_WRITE, 0,
+                 0x10, 0, 0, 0, 0x5a, 0, 0, 0, 0, 0, 0, 0 },
         .resp = { 0 }, .ready = false,
     };
     uint8_t id = 0;
     uint32_t addr = 0, data = 0;
     bool write = false, success = true;
 
-    nios_pkt_32x32_pack(packet.req, NIOS_PKT_32x32_TARGET_WB_MSTR,
+    nios_pkt_32x32_pack(packed, NIOS_PKT_32x32_TARGET_WB_MSTR,
                         true, 0x10, 0x5a);
+    if (memcmp(packed, packet.req, sizeof(packed)) != 0) {
+        return 1;
+    }
     wishbone_success = false;
     pkt_32x32(&packet);
     nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,
