@@ -13,6 +13,7 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data);
 struct test_device {
     struct bladerf dev;
     uint32_t identity;
+    uint32_t register_value;
 };
 
 static pthread_barrier_t both_bound;
@@ -49,7 +50,7 @@ static void *exercise_device_context(void *arg)
     assert(no_os_axi_io_read(0x1000, 4, &value) == 0);
     assert(value == test_dev->identity);
     assert(no_os_axi_io_write(0x1000, 8, test_dev->identity + 1) == 0);
-    assert(*(uint32_t *)test_dev->dev.backend_data == test_dev->identity + 1);
+    assert(test_dev->register_value == test_dev->identity + 1);
     bladerf2_axi_io_set_dev(NULL);
     assert(no_os_axi_io_read(0, 0, &value) < 0);
     return NULL;
@@ -57,14 +58,20 @@ static void *exercise_device_context(void *arg)
 
 int main(void)
 {
-    struct test_device a = {.identity = 0xA11CE001};
-    struct test_device b = {.identity = 0xB0B00002};
+    struct test_device a = {
+        .identity = 0xA11CE001,
+        .register_value = 0xA11CE001,
+    };
+    struct test_device b = {
+        .identity = 0xB0B00002,
+        .register_value = 0xB0B00002,
+    };
     pthread_t ta, tb;
 
     a.dev.backend = &backend;
-    a.dev.backend_data = &a.identity;
+    a.dev.backend_data = &a.register_value;
     b.dev.backend = &backend;
-    b.dev.backend_data = &b.identity;
+    b.dev.backend_data = &b.register_value;
 
     assert(pthread_barrier_init(&both_bound, NULL, 2) == 0);
     assert(pthread_create(&ta, NULL, exercise_device_context, &a) == 0);
