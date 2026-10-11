@@ -998,6 +998,20 @@ def check_tx_retune_gate_port_map():
                  "the core map and TX entity interface must stay aligned")
 
 
+def check_wishbone_fifo_pop_is_typed():
+    """Keep the Avalon-to-Wishbone pop enable as an explicit std_logic."""
+    source = ROOT / "hdl/fpga/ip/nuand/wishbone_master/vhdl/wishbone_master.vhd"
+    if not source.exists():
+        return
+    text = code_only(source.read_text(errors="replace"), comment="--")
+    if ("signal wb_request_pop : std_logic;" not in text or
+            "rdreq           => wb_request_pop" not in text or
+            "wb_fault_response = '1'" not in text):
+        fail("wishbone-fifo-pop-typed",
+             "Wishbone FIFO rdreq must use the explicit typed pop enable",
+             "Quartus rejects mixed boolean/std_logic expressions at the FIFO port")
+
+
 def check_public_rf_lifecycle_calls_invalidate_rx():
     """Guard public operations that replace RF/FPGA/device ownership."""
     source = ROOT / "host/libraries/libbladeRF/src/bladerf.c"
@@ -1786,6 +1800,7 @@ rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_ga
 rx-epoch-controller-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_controller.vhd
 rx-epoch-no-dead-settle-cdc   removed sample-discard control must not leave an unbound timing pair
 tx-retune-gate-port-map       core TX retune gate associations must match the TX entity interface
+wishbone-fifo-pop-typed        Wishbone read FIFO pop expression must resolve as std_logic
 rx-epoch-host-timestamp-fence libbladeRF confirms gate fencing before retune and filters queued samples before epoch success
 qgate-revision-cdc-inventory  qgate expects the separate hosted and sweep fitted CDC inventories
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
@@ -1816,6 +1831,7 @@ def main():
     check_rx_epoch_gate_in_all_rx_projects()
     check_rx_epoch_has_no_dead_settle_cdc()
     check_tx_retune_gate_port_map()
+    check_wishbone_fifo_pop_is_typed()
     check_public_rf_lifecycle_calls_invalidate_rx()
     check_scheduled_rx_retune_invalidates_epoch()
     check_fpga_reload_quiesces_and_reinitializes_rfic()
