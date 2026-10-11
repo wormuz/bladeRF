@@ -1,6 +1,17 @@
 #include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 
+static uint64_t nios_read_le64(const uint8_t *buf, uint8_t offset)
+{
+    uint64_t value = 0;
+    uint8_t i;
+
+    for (i = 0; i < 8; i++) {
+        value |= (uint64_t)buf[offset + i] << (8 * i);
+    }
+    return value;
+}
+
 static bool nios_response_has_zero_tail(const uint8_t *response,
                                         uint8_t first_reserved)
 {
@@ -278,17 +289,51 @@ static bool nios_response_matches_request(const uint8_t *request,
                req_addr == resp_addr &&
                (!req_write || req_data == resp_data);
     }
-    case NIOS_PKT_RETUNE_MAGIC:
-        /* Retune responses define only three flag bits and zero the tail. */
-        return (response[NIOS_PKT_RETUNERESP_IDX_FLAGS] & 0xf8u) == 0 &&
-               nios_response_has_zero_tail(
-                   response, NIOS_PKT_RETUNERESP_IDX_RESV);
+    case NIOS_PKT_RETUNE_MAGIC: {
+        const uint8_t flags = response[NIOS_PKT_RETUNERESP_IDX_FLAGS];
+        const uint64_t timestamp =
+            nios_read_le64(request, NIOS_PKT_RETUNE_IDX_TIME);
 
-    case NIOS_PKT_RETUNE2_MAGIC:
-        /* Retune2 responses define four flag bits and zero the tail. */
-        return (response[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] & 0xf0u) == 0 &&
-               nios_response_has_zero_tail(
-                   response, NIOS_PKT_RETUNE2_RESP_IDX_RESV);
+        /* Retune responses define three flag bits. Hardware reports a valid
+         * completion timestamp only for NOW, and cancel failure only for a
+         * queue-clear request that did not succeed. */
+        if ((flags & 0xf8u) != 0 ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_RETUNERESP_IDX_RESV) ||
+            ((flags & NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID) != 0 &&
+             timestamp != NIOS_PKT_RETUNE_NOW) ||
+            ((flags & NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED) != 0 &&
+             (timestamp != NIOS_PKT_RETUNE_CLEAR_QUEUE ||
+              (flags & NIOS_PKT_RETUNERESP_FLAG_SUCCESS) != 0))) {
+            return false;
+        }
+        return true;
+    }
+
+    case NIOS_PKT_RETUNE2_MAGIC: {
+        const uint8_t flags = response[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS];
+        const uint64_t timestamp =
+            nios_read_le64(request, NIOS_PKT_RETUNE2_IDX_TIME);
+
+        /* Retune2's invalid-time bit only accompanies a failed scheduled
+         * request. The other response flags are similarly request-scoped. */
+        if ((flags & 0xf0u) != 0 ||
+            !nios_response_has_zero_tail(
+                response, NIOS_PKT_RETUNE2_RESP_IDX_RESV) ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0 &&
+             timestamp != NIOS_PKT_RETUNE2_NOW) ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) != 0 &&
+             (timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
+              (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0)) ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP) != 0 &&
+             (timestamp == NIOS_PKT_RETUNE2_NOW ||
+              timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
+              (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED)) != 0))) {
+            return false;
+        }
+        return true;
+    }
 
     default:
         /* Legacy packets have distinct, variable-length response contracts

@@ -22,6 +22,8 @@ struct fake_usb {
     bool make_legacy_config_response;
     bool make_legacy_error_response;
     bool mutate_legacy_config_response_addr;
+    bool make_semantic_retune_response;
+    bool make_semantic_retune2_response;
 };
 
 static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
@@ -35,6 +37,27 @@ static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     assert(call < 4);
     fake->endpoints[call] = endpoint;
     fake->timeouts[call] = timeout_ms;
+    if (endpoint == PERIPHERAL_EP_IN && fake->make_semantic_retune_response) {
+        uint8_t *response = buffer;
+        response[0] = NIOS_PKT_RETUNE_MAGIC;
+        memset(response + NIOS_PKT_RETUNERESP_IDX_TIME, 0, 8);
+        response[NIOS_PKT_RETUNERESP_IDX_VCOCAP] = 0;
+        response[NIOS_PKT_RETUNERESP_IDX_FLAGS] =
+            NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID |
+            NIOS_PKT_RETUNERESP_FLAG_SUCCESS;
+        memset(response + NIOS_PKT_RETUNERESP_IDX_RESV, 0,
+               NIOS_PKT_LEN - NIOS_PKT_RETUNERESP_IDX_RESV);
+    }
+    if (endpoint == PERIPHERAL_EP_IN && fake->make_semantic_retune2_response) {
+        uint8_t *response = buffer;
+        response[0] = NIOS_PKT_RETUNE2_MAGIC;
+        memset(response + NIOS_PKT_RETUNE2_RESP_IDX_TIME, 0, 8);
+        response[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] =
+            NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID |
+            NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
+        memset(response + NIOS_PKT_RETUNE2_RESP_IDX_RESV, 0,
+               NIOS_PKT_LEN - NIOS_PKT_RETUNE2_RESP_IDX_RESV);
+    }
     if (endpoint == PERIPHERAL_EP_IN && fake->make_legacy_config_response) {
         uint8_t *response = buffer;
         response[2] = 0; /* PIO address normalized to its config base. */
@@ -322,6 +345,67 @@ static void test_retune2_reserved_tail_fails_closed(void)
     teardown(&usb);
 }
 
+static void test_retune_timestamp_valid_flag_matches_request(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_COMPLETE;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_semantic_retune_response = true;
+    nios_pkt_retune_pack(buffer, BLADERF_MODULE_RX, 123, 0, 0, 0, 0, false,
+                         0, false);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+    teardown(&usb);
+}
+
+static void test_retune2_timestamp_valid_flag_matches_request(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_COMPLETE;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_semantic_retune2_response = true;
+    nios_pkt_retune2_pack(buffer, BLADERF_MODULE_RX, 123, 0, 0, 0, 0);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+    teardown(&usb);
+}
+
+static void test_retune_now_timestamp_valid_responses_are_accepted(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
+    uint8_t buffer[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    fake.make_semantic_retune_response = true;
+    nios_pkt_retune_pack(buffer, BLADERF_MODULE_RX, NIOS_PKT_RETUNE_NOW,
+                         0, 0, 0, 0, false, 0, false);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    teardown(&usb);
+
+    setup(&usb, &fns, &fake);
+    fake.make_semantic_retune2_response = true;
+    nios_pkt_retune2_pack(buffer, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_NOW,
+                          0, 0, 0, 0);
+    assert(nios_usb_transaction(&usb, buffer, sizeof(buffer), 250,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    teardown(&usb);
+}
 
 static void test_legacy_config_normalized_address_is_validated(void)
 {
@@ -417,6 +501,9 @@ int main(void)
     test_16x64_batch_result_is_not_compared_as_payload();
     test_retune_reserved_flags_fail_closed();
     test_retune2_reserved_tail_fails_closed();
+    test_retune_timestamp_valid_flag_matches_request();
+    test_retune2_timestamp_valid_flag_matches_request();
+    test_retune_now_timestamp_valid_responses_are_accepted();
     test_legacy_config_normalized_address_is_validated();
     test_mismatched_legacy_config_response_fails_closed();
     test_legacy_error_marker_remains_a_valid_response();
