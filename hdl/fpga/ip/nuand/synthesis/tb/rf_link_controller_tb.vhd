@@ -168,6 +168,32 @@ begin
             report "FAIL case6: mismatched start was forwarded"
             severity error;
 
+        ----------------------------------------------------------------
+        -- NIOS and its PIO survive FX3 SYS_RST. Reset the FPGA decoder
+        -- while the PIO command toggles remain high; none may be replayed.
+        -- A real START must still be recognized relative to that baseline.
+        ----------------------------------------------------------------
+        usb_speed_live <= '1';
+        cfg_word <= x"0000000f";
+        wait until rising_edge(clock);
+        reset <= '1';
+        wait for 3 * CLOCK_HALF_PERIOD * 2;
+        wait until rising_edge(clock);
+        reset <= '0';
+        wait for 5 * CLOCK_HALF_PERIOD * 2;
+        assert start_toggle_out = '0' and stop_toggle_out = '0' and
+               clear_fault_out = '0' and start_speed_disagreement = '0'
+            report "FAIL reset: stale RF-link command toggle was replayed"
+            severity error;
+
+        cfg_word <= x"0000000d";  -- fresh START 1->0; other toggles unchanged
+        wait until rising_edge(clock);
+        wait until rising_edge(clock);
+        assert start_toggle_out = '1' and stop_toggle_out = '0' and
+               clear_fault_out = '0'
+            report "FAIL reset: fresh START was lost or stale command replayed"
+            severity error;
+
         report "rf_link_controller_tb: all assertions passed";
         stop_sim <= true;
         wait;

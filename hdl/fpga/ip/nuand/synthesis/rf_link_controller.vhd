@@ -72,6 +72,7 @@ architecture simple of rf_link_controller is
     signal start_prev         : std_logic := '0';
     signal stop_prev          : std_logic := '0';
     signal clear_fault_prev   : std_logic := '0';
+    signal cfg_initialized    : std_logic := '0';
 
     signal start_toggle_i     : std_logic := '0';
     signal stop_toggle_i      : std_logic := '0';
@@ -99,6 +100,7 @@ begin
             start_prev        <= '0';
             stop_prev         <= '0';
             clear_fault_prev  <= '0';
+            cfg_initialized   <= '0';
             start_toggle_i    <= '0';
             stop_toggle_i     <= '0';
             clear_fault_i     <= '0';
@@ -107,58 +109,61 @@ begin
             epoch_tag_i       <= (others => '0');
         elsif( rising_edge(clock) ) then
 
-            -- One-cycle pulses from a change on each toggle bit. A repeated
-            -- write of the same cfg_word (same bit values) produces no
-            -- pulse on any of the three commands.
-            start_pulse       := '0';
-            stop_pulse        := '0';
-            clear_fault_pulse := '0';
+            if( cfg_initialized = '0' ) then
+                -- SYS_RST resets this decoder while NIOS and its rf_link_cfg
+                -- PIO remain alive. Adopt persistent command levels without
+                -- replaying a pre-reset START/STOP/CLEAR command.
+                start_prev        <= cfg_start_i;
+                stop_prev         <= cfg_stop_i;
+                clear_fault_prev  <= cfg_clear_fault_i;
+                requested_speed_i <= cfg_speed_i;
+                epoch_tag_i       <= cfg_epoch_tag_i;
+                cfg_initialized   <= '1';
+            else
+                -- One-cycle pulses from a change on each toggle bit. A
+                -- repeated write of the same cfg_word produces no pulse.
+                start_pulse       := '0';
+                stop_pulse        := '0';
+                clear_fault_pulse := '0';
 
-            if( cfg_start_i /= start_prev ) then
-                start_pulse := '1';
-            end if;
-            if( cfg_stop_i /= stop_prev ) then
-                stop_pulse := '1';
-            end if;
-            if( cfg_clear_fault_i /= clear_fault_prev ) then
-                clear_fault_pulse := '1';
-            end if;
+                if( cfg_start_i /= start_prev ) then
+                    start_pulse := '1';
+                end if;
+                if( cfg_stop_i /= stop_prev ) then
+                    stop_pulse := '1';
+                end if;
+                if( cfg_clear_fault_i /= clear_fault_prev ) then
+                    clear_fault_pulse := '1';
+                end if;
 
-            start_prev       <= cfg_start_i;
-            stop_prev        <= cfg_stop_i;
-            clear_fault_prev <= cfg_clear_fault_i;
+                start_prev       <= cfg_start_i;
+                stop_prev        <= cfg_stop_i;
+                clear_fault_prev <= cfg_clear_fault_i;
 
-            requested_speed_i <= cfg_speed_i;
-            epoch_tag_i       <= cfg_epoch_tag_i;
+                requested_speed_i <= cfg_speed_i;
+                epoch_tag_i       <= cfg_epoch_tag_i;
 
-            -- stop and clear-fault mirror their toggles unconditionally,
-            -- no speed gate applies to them.
-            if( stop_pulse = '1' ) then
-                stop_toggle_i <= not stop_toggle_i;
-            end if;
-            if( clear_fault_pulse = '1' ) then
-                clear_fault_i <= not clear_fault_i;
-            end if;
+                -- stop and clear-fault mirror their toggles unconditionally,
+                -- no speed gate applies to them.
+                if( stop_pulse = '1' ) then
+                    stop_toggle_i <= not stop_toggle_i;
+                end if;
+                if( clear_fault_pulse = '1' ) then
+                    clear_fault_i <= not clear_fault_i;
+                end if;
 
-            -- Fail-closed speed check on start: a start pulse only forwards
-            -- if the requested speed matches what the link is actually
-            -- running at right now. Disagreement is latched sticky and the
-            -- start toggle is withheld -- the host must not be handed a
-            -- link epoch whose speed premise is already wrong.
-            -- Clear first, then evaluate: a clear-fault pulse forgives the
-            -- PREVIOUS disagreement, never a disagreement detected in the
-            -- same cycle. Ordered the other way round, a host that cleared
-            -- faults and started in one go would see no fault flag and no
-            -- link either, with nothing saying why the start was refused.
-            if( clear_fault_pulse = '1' ) then
-                speed_disagree_i <= '0';
-            end if;
+                -- Clear forgives the prior disagreement, not a new one in
+                -- the same command word.
+                if( clear_fault_pulse = '1' ) then
+                    speed_disagree_i <= '0';
+                end if;
 
-            if( start_pulse = '1' ) then
-                if( cfg_speed_i /= usb_speed_live ) then
-                    speed_disagree_i <= '1';
-                else
-                    start_toggle_i <= not start_toggle_i;
+                if( start_pulse = '1' ) then
+                    if( cfg_speed_i /= usb_speed_live ) then
+                        speed_disagree_i <= '1';
+                    else
+                        start_toggle_i <= not start_toggle_i;
+                    end if;
                 end if;
             end if;
 
