@@ -1,6 +1,7 @@
 #define _XOPEN_SOURCE 700
 
 #include <assert.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 
@@ -14,22 +15,27 @@ struct test_device {
     struct bladerf dev;
     uint32_t identity;
     uint32_t register_value;
+    int axi_status;
 };
 
 static pthread_barrier_t both_bound;
 
 static int fake_axi_read(struct bladerf *dev, uint32_t addr, uint32_t *data)
 {
+    struct test_device *test_dev = dev->backend_data;
+
     (void)addr;
-    *data = *(uint32_t *)dev->backend_data;
-    return 0;
+    *data = test_dev->register_value;
+    return test_dev->axi_status;
 }
 
 static int fake_axi_write(struct bladerf *dev, uint32_t addr, uint32_t data)
 {
+    struct test_device *test_dev = dev->backend_data;
+
     (void)addr;
-    *(uint32_t *)dev->backend_data = data;
-    return 0;
+    test_dev->register_value = data;
+    return test_dev->axi_status;
 }
 
 static const struct backend_fns backend = {
@@ -51,6 +57,12 @@ static void *exercise_device_context(void *arg)
     assert(value == test_dev->identity);
     assert(no_os_axi_io_write(0x1000, 8, test_dev->identity + 1) == 0);
     assert(test_dev->register_value == test_dev->identity + 1);
+    test_dev->axi_status = -ETIMEDOUT;
+    value = UINT32_MAX;
+    assert(no_os_axi_io_read(0x1000, 4, &value) == -ETIMEDOUT);
+    assert(value == 0);
+    assert(no_os_axi_io_write(0x1000, 8, test_dev->identity + 2) ==
+           -ETIMEDOUT);
     bladerf2_axi_io_set_dev(NULL);
     assert(no_os_axi_io_read(0, 0, &value) < 0);
     return NULL;
@@ -69,9 +81,9 @@ int main(void)
     pthread_t ta, tb;
 
     a.dev.backend = &backend;
-    a.dev.backend_data = &a.register_value;
+    a.dev.backend_data = &a;
     b.dev.backend = &backend;
-    b.dev.backend_data = &b.register_value;
+    b.dev.backend_data = &b;
 
     assert(pthread_barrier_init(&both_bound, NULL, 2) == 0);
     assert(pthread_create(&ta, NULL, exercise_device_context, &a) == 0);
