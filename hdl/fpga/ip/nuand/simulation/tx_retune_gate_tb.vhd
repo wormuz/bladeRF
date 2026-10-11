@@ -373,6 +373,23 @@ begin
             report "64-bit wrap changed the TX mute timestamp"
             severity failure;
 
+        -- A request that arrives after its scheduled timestamp must still
+        -- fail closed through the full ordering comparator on the ARM path.
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        timestamp <= to_unsigned(100, 64);
+        target_timestamp <= to_unsigned(99, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        arm <= '0';
+        assert state = "10" and muted = '1' and
+               mute_start_timestamp = to_unsigned(100, 64)
+            report "late TX gate ARM did not fail closed immediately"
+            severity failure;
+
         report "tx_retune_gate_tb: PASS" severity note;
         stop;
         wait;

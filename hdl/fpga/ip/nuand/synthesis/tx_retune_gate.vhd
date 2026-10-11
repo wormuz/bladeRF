@@ -62,44 +62,19 @@ architecture rtl of tx_retune_gate is
     signal mute_start_timestamp_i : unsigned(63 downto 0) := (others => '0');
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
 
-    -- Equivalent to signed(current_ts - target_ts) >= 0 for the modulo
-    -- half-range contract. Compute the borrow into bit 63, then derive the
-    -- difference sign directly instead of subtracting the upper 16-bit word.
+    -- Modulo half-range ordering: a signed 64-bit difference is nonnegative
+    -- exactly when current_ts has reached target_ts. Keep this as one native
+    -- arithmetic operation so Quartus can map the compare onto the Cyclone V
+    -- carry chain; the hand-built 16-bit borrow tree mapped through MLAB/LAB
+    -- stages and became the critical timestamp-to-DAC path.
     function timestamp_reached(
         current_ts : unsigned(63 downto 0);
         target_ts  : unsigned(63 downto 0)
     ) return boolean is
-        variable borrow_16 : std_logic;
-        variable borrow_32 : std_logic;
-        variable borrow_48 : std_logic;
-        variable borrow_63 : std_logic;
-        variable result_sign : std_logic;
+        variable delta : signed(63 downto 0);
     begin
-        if current_ts(15 downto 0) < target_ts(15 downto 0) then
-            borrow_16 := '1';
-        else
-            borrow_16 := '0';
-        end if;
-        borrow_32 := '0';
-        if current_ts(31 downto 16) < target_ts(31 downto 16) or
-           (current_ts(31 downto 16) = target_ts(31 downto 16) and
-            borrow_16 = '1') then
-            borrow_32 := '1';
-        end if;
-        borrow_48 := '0';
-        if current_ts(47 downto 32) < target_ts(47 downto 32) or
-           (current_ts(47 downto 32) = target_ts(47 downto 32) and
-            borrow_32 = '1') then
-            borrow_48 := '1';
-        end if;
-        borrow_63 := '0';
-        if current_ts(62 downto 48) < target_ts(62 downto 48) or
-           (current_ts(62 downto 48) = target_ts(62 downto 48) and
-            borrow_48 = '1') then
-            borrow_63 := '1';
-        end if;
-        result_sign := current_ts(63) xor target_ts(63) xor borrow_63;
-        return result_sign = '0';
+        delta := signed(current_ts) - signed(target_ts);
+        return delta(63) = '0';
     end function;
 
     -- Strict modulo ordering for two scheduled timestamps. The caller's

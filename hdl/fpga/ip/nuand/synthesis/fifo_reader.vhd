@@ -260,7 +260,6 @@ architecture simple of fifo_reader is
         eight_bit_sample_sel: std_logic;
 
         -- Highly packed mode signals
-        packed_buffer       : std_logic_vector(47 downto 0);
         packed_cycle        : integer range 0 to 4;
     end record;
 
@@ -278,12 +277,14 @@ architecture simple of fifo_reader is
         fifo_read           => '0',
         out_samples         => (others => ZERO_SAMPLE),
         eight_bit_sample_sel => '0',
-        packed_buffer       => (others => '0'),
         packed_cycle        => 0
     );
 
     signal fifo_current : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
     signal fifo_future  : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
+    signal packed_buffer_i : std_logic_vector(47 downto 0) := (others => '0');
+    signal packed_buffer_write_i : std_logic := '0';
+    signal packed_buffer_data_i : std_logic_vector(47 downto 0) := (others => '0');
 
 begin
 
@@ -734,6 +735,20 @@ begin
         end if;
     end process;
 
+    -- Keep the wide SC12 carry buffer out of the aggregate FSM record. A
+    -- dedicated enabled register avoids the record-wide next-state mux on
+    -- this datapath while preserving the original update edge.
+    packed_buffer_sync : process(clock, reset)
+    begin
+        if reset = '1' then
+            packed_buffer_i <= (others => '0');
+        elsif rising_edge(clock) then
+            if packed_buffer_write_i = '1' then
+                packed_buffer_i <= packed_buffer_data_i;
+            end if;
+        end if;
+    end process;
+
     -- Sample FIFO combinatorial process
     fifo_fsm_comb : process( all )
 
@@ -926,6 +941,7 @@ begin
 
         variable unpacked : sample_streams_t(out_samples'range);
         variable read_req : std_logic := '0';
+        variable packed_buffer_write_v : std_logic;
 
     begin
 
@@ -935,11 +951,13 @@ begin
         fifo_future.packet_control.pkt_sop <= meta_current.meta_pkt_sop;
 
         fifo_future.packet_control.data_valid <= '0';
+        packed_buffer_write_v := '0';
+        packed_buffer_data_i <= fifo_data(fifo_data'high downto fifo_data'high-47);
         -- MIMO UNPACKER: STEP 1 of 5
         if (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
             unpack_sc12q11(
                 data => fifo_data,
-                previous_data => fifo_current.packed_buffer,
+                previous_data => packed_buffer_i,
                 cycle => fifo_current.packed_cycle,
                 rv => unpacked
             );
@@ -1056,7 +1074,7 @@ begin
                                 fifo_future.eight_bit_sample_sel <= not fifo_current.eight_bit_sample_sel;
                             elsif (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
                                 fifo_future.packed_cycle <= (fifo_current.packed_cycle + 1);
-                                fifo_future.packed_buffer <= fifo_data(fifo_data'high downto fifo_data'high-47);
+                                packed_buffer_write_v := '1';
                                 if fifo_current.packed_cycle = 3 then
                                     fifo_future.packed_cycle <= 0;
                                     fifo_future.fifo_read <= '0';
@@ -1121,6 +1139,8 @@ begin
         out_samples <= fifo_current.out_samples;
 
         packet_control <= fifo_current.packet_control;
+
+        packed_buffer_write_i <= packed_buffer_write_v;
 
     end process;
 

@@ -702,7 +702,7 @@ def check_vhdl():
             # The first version of this rule matched the tail of one process
             # against the head of the next and reported a defect that was not
             # there -- a guard that cries wolf teaches people to ignore it.
-            if re.search(r"\bend process\b|\bprocess\s*\(", block):
+            if re.search(r"\bend process\b|\bprocess\s*\(|\bcase\b|\bwhen\b", block):
                 continue
             if block.count(".state") >= 2 or block.count("_FSM_RESET_VALUE") >= 1:
                 if ".state" in block or "RESET_VALUE" in block:

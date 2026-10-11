@@ -166,6 +166,10 @@ architecture simple of fifo_writer is
     -- input sample present, writer in HOLDOFF, META packet written, and room
     -- for another full DMA buffer, respectively.
     signal fault_context_i     : std_logic_vector(24 downto 0) := (others => '0');
+    signal fault_context_shadow_i : std_logic_vector(24 downto 0) := (others => '0');
+    signal fault_context_pending_i : std_logic := '0';
+    signal start_fault_pending_i : std_logic := '0';
+    signal fault_fifo_full_pending_i : std_logic := '0';
     signal gpif_diag_rx        : std_logic_vector(2 downto 0) := (others => '0');
 
     -- Progress watchdogs for FAULT_BIT_START_NO_PROGRESS and
@@ -324,6 +328,7 @@ begin
         variable clear_fault_pulse : std_logic;
         variable abort_active_next : std_logic;
         variable sample_valid_at_stall : std_logic;
+        variable fault_context_snapshot : std_logic_vector(24 downto 0);
     begin
         if( reset = '1' ) then
             latched_usb_speed  <= '0';  -- matches DMA_BUF_SIZE_SS reset value
@@ -336,6 +341,10 @@ begin
             settle_count       <= (others => '1');
             fault_sticky_i     <= (others => '0');
             fault_context_i    <= (others => '0');
+            fault_context_shadow_i <= (others => '0');
+            fault_context_pending_i <= '0';
+            start_fault_pending_i <= '0';
+            fault_fifo_full_pending_i <= '0';
             progress_count     <= (others => '0');
             abort_active_i     <= '0';
             stop_toggle_prev   <= '0';
@@ -376,6 +385,40 @@ begin
                 clear_fault_pulse := '1';
             end if;
             clear_toggle_prev <= clear_fault_toggle;
+
+            -- Keep a continuously refreshed diagnostic sample. The timeout
+            -- decision is pipelined below, so the shadow preserves the values
+            -- from the edge that raised the pending event without placing the
+            -- discard/abort qualification chain on the wide context register.
+            sample_valid_at_stall := '0';
+            for i in 0 to NUM_STREAMS-1 loop
+                if( fifo_current.in_sample_controls_r(i).enable = '1' and
+                    fifo_current.in_samples_r(i).data_v = '1' ) then
+                    sample_valid_at_stall := '1';
+                end if;
+            end loop;
+            fault_context_snapshot := (others => '0');
+            fault_context_snapshot(0) := meta_fifo_full;
+            fault_context_snapshot(1) := sample_valid_at_stall;
+            if( fifo_current.state = HOLDOFF ) then
+                fault_context_snapshot(2) := '1';
+            end if;
+            fault_context_snapshot(3) := meta_current.meta_written;
+            if( fifo_enough ) then
+                fault_context_snapshot(4) := '1';
+            end if;
+            for i in 0 to 8 loop
+                if( i + 4 < fifo_usedw'length ) then
+                    fault_context_snapshot(5 + i) := fifo_usedw(i + 4);
+                end if;
+            end loop;
+            for i in 0 to 7 loop
+                if( i + 3 < meta_fifo_usedw'length ) then
+                    fault_context_snapshot(14 + i) := meta_fifo_usedw(i + 3);
+                end if;
+            end loop;
+            fault_context_snapshot(24 downto 22) := gpif_diag_rx;
+            fault_context_shadow_i <= fault_context_snapshot;
 
             if( start_link_pulse = '1' ) then
                 latched_usb_speed <= usb_speed;
@@ -461,60 +504,42 @@ begin
             -- wedged. Guarded on start_link_pulse = '0' like the term
             -- above, so the clear at the top of a new epoch is not undone
             -- by a counter that has not been reset yet in the same cycle.
-            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
-                rx_epoch_discard_active = '0' and
-                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
-                if( wrote_this_epoch = '0' ) then
+            -- Detect the slow progress fault into a one-cycle pending event.
+            -- This is not on the sample-valid path; the extra clock is
+            -- negligible beside the watchdog interval and prevents the
+            -- abort/discard decode from feeding the wide snapshot register.
+            start_fault_pending_i <= '0';
+            fault_context_pending_i <= '0';
+            if( start_link_pulse = '1' ) then
+                start_fault_pending_i <= '0';
+                fault_context_pending_i <= '0';
+            elsif( link_active_i = '1' and enable = '1' and
+                   rx_epoch_discard_active = '0' and
+                   progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                if( wrote_this_epoch = '0' and
+                    fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) = '0' and
+                    start_fault_pending_i = '0' ) then
+                    start_fault_pending_i <= '1';
+                elsif( wrote_this_epoch = '1' and
+                       fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) = '0' and
+                       fault_context_pending_i = '0' ) then
+                    fault_context_pending_i <= '1';
+                    fault_fifo_full_pending_i <= fifo_full;
+                end if;
+            end if;
+
+            -- Publish each sticky flag and its context snapshot on the same
+            -- edge, preserving the host's atomic status/context contract.
+            if( start_link_pulse = '0' ) then
+                if( start_fault_pending_i = '1' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
-                else
-                    if( fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) = '0' ) then
-                        fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
-                        if( fifo_full = '1' ) then
-                            fault_sticky_i(FAULT_BIT_FIFO_FULL_AT_STALL) <= '1';
-                        end if;
-                        sample_valid_at_stall := '0';
-                        for i in 0 to NUM_STREAMS-1 loop
-                            if( fifo_current.in_sample_controls_r(i).enable = '1' and
-                                fifo_current.in_samples_r(i).data_v = '1' ) then
-                                sample_valid_at_stall := '1';
-                            end if;
-                        end loop;
-                        fault_context_i(0) <= meta_fifo_full;
-                        fault_context_i(1) <= sample_valid_at_stall;
-                        if( fifo_current.state = HOLDOFF ) then
-                            fault_context_i(2) <= '1';
-                        else
-                            fault_context_i(2) <= '0';
-                        end if;
-                        fault_context_i(3) <= meta_current.meta_written;
-                        if( fifo_enough ) then
-                            fault_context_i(4) <= '1';
-                        else
-                            fault_context_i(4) <= '0';
-                        end if;
-                        -- Keep the sample FIFO occupancy in 16 write-word
-                        -- units (9 bits for its 8192-word depth). META FIFO
-                        -- occupancy uses 8-word units in 8 bits; meta-full
-                        -- is captured separately. The final 3 bits are
-                        -- synchronized GPIF-side drain prerequisites.
-                        for i in 0 to 8 loop
-                            if( i + 4 < fifo_usedw'length ) then
-                                fault_context_i(5 + i) <= fifo_usedw(i + 4);
-                            else
-                                fault_context_i(5 + i) <= '0';
-                            end if;
-                        end loop;
-                        for i in 0 to 7 loop
-                            if( i + 3 < meta_fifo_usedw'length ) then
-                                fault_context_i(14 + i) <= meta_fifo_usedw(i + 3);
-                            else
-                                fault_context_i(14 + i) <= '0';
-                            end if;
-                        end loop;
-                        fault_context_i(22) <= gpif_diag_rx(0);
-                        fault_context_i(23) <= gpif_diag_rx(1);
-                        fault_context_i(24) <= gpif_diag_rx(2);
+                end if;
+                if( fault_context_pending_i = '1' ) then
+                    fault_sticky_i(FAULT_BIT_GPIF_TIMEOUT) <= '1';
+                    if( fault_fifo_full_pending_i = '1' ) then
+                        fault_sticky_i(FAULT_BIT_FIFO_FULL_AT_STALL) <= '1';
                     end if;
+                    fault_context_i <= fault_context_shadow_i;
                 end if;
             end if;
 
@@ -1125,41 +1150,52 @@ begin
 
             when WRITE_PACKET_PAYLOAD =>
 
+                -- Stage packet payload independently of the FIFO-capacity
+                -- decision. packet_ready is fifo_enough, so a conforming
+                -- producer holds this DWORD stable until acceptance. Latching
+                -- it while not ready is harmless: it cannot be committed
+                -- until the acceptance branch below, and it removes the
+                -- registered free-space flag from the wide fifo_data mux.
+                if( packet_control.data_valid = '1' ) then
+                    if( packet_control.pkt_eop = '1' and fifo_current.samples_left /= 0 ) then
+                        if (fifo_current.fifo_data'high > 31) then
+                            fifo_future.fifo_data(fifo_future.fifo_data'high
+                                        downto fifo_future.fifo_data'high - 31) <= (others => '0');
+                        end if;
+                        fifo_future.fifo_data(31 downto 0) <= unsigned(packet_control.data);
+                    elsif( fifo_current.samples_left = 0 ) then
+                        if (fifo_current.fifo_data'high > 31) then
+                            fifo_future.fifo_data <= unsigned(packet_control.data) &
+                               fifo_current.fifo_data(fifo_current.fifo_data'high downto 32);
+                        else
+                            fifo_future.fifo_data <= unsigned(packet_control.data);
+                        end if;
+                    else
+                        fifo_future.fifo_data(fifo_future.fifo_data'high
+                                    downto fifo_future.fifo_data'high - 31) <=
+                                          unsigned(packet_control.data);
+
+                        if (fifo_current.fifo_data'high > 31) then
+                            fifo_future.fifo_data(fifo_future.fifo_data'high - 32 downto 0) <=
+                                     (others => '0');
+                        end if;
+                    end if;
+                end if;
+
                 if( meta_current.meta_written = '1' or (fifo_enough and packet_control.pkt_sop = '1' )) then
                     -- This code converts DWORD packet data into a fifo_data std_logic_vector
                     -- that is controlled by a generic.
                     if( packet_control.data_valid = '1' ) then
                         if( packet_control.pkt_eop = '1' and fifo_current.samples_left /= 0 ) then
-                           -- End of packet asserted, however fifo_data is not full so
-                           -- zero out the unset bits, commit what has been accumulated
+                           -- End of packet asserted before fifo_data is full;
+                           -- commit the partial DWORD assembled above.
                            fifo_future.samples_left <= NUM_STREAMS - 1;
                            fifo_future.fifo_write <= '1';
-
-                           if (fifo_current.fifo_data'high > 31) then
-                               fifo_future.fifo_data(fifo_future.fifo_data'high
-                                           downto fifo_future.fifo_data'high - 31) <= (others => '0');
-                           end if;
-                           fifo_future.fifo_data(31 downto 0) <= unsigned(packet_control.data);
                         elsif( fifo_current.samples_left = 0 ) then
                            -- DWORDs perfectly filled fifo_data, commit fifo_data
                            fifo_future.samples_left <= NUM_STREAMS - 1;
                            fifo_future.fifo_write <= '1';
-
-                           if (fifo_current.fifo_data'high > 31) then
-                              fifo_future.fifo_data <= unsigned(packet_control.data) &
-                                 fifo_current.fifo_data(fifo_current.fifo_data'high downto 32);
-                           else
-                              fifo_future.fifo_data <= unsigned(packet_control.data);
-                           end if;
                         else
-                           fifo_future.fifo_data(fifo_future.fifo_data'high
-                                       downto fifo_future.fifo_data'high - 31) <=
-                                             unsigned(packet_control.data);
-
-                           if (fifo_current.fifo_data'high > 31) then
-                               fifo_future.fifo_data(fifo_future.fifo_data'high - 32 downto 0) <=
-                                        (others => '0');
-                           end if;
                            fifo_future.samples_left <= fifo_current.samples_left - 1;
                         end if;
 

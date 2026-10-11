@@ -26,8 +26,10 @@ run_one() {
     local tb="$1"
     local src="$N/simulation/$tb.vhd"
     local extra_src=""
+    local extra_pkg=""
     if [ ! -r "$src" ] && [ "$tb" = "time_tamer_tb" ]; then
         src="$N/time_tamer/vhdl/tb/$tb.vhd"
+        extra_pkg="$N/time_tamer/vhdl/time_tamer_timestamp_p.vhd"
         extra_src="$N/time_tamer/vhdl/time_tamer.vhd"
     fi
     [ -r "$src" ] || { printf '%-28s no such testbench\n' "$tb"; return 1; }
@@ -91,6 +93,7 @@ run_one() {
     }
 
     analyse "$N/synthesis/fifo_readwrite_p.vhd"
+    [ -z "$extra_pkg" ] || analyse "$extra_pkg"
     analyse "$GPIF"
     # Frozen pre-pipeline reference used only by the dwell-summary
     # cycle-equivalence regression; never included in a Quartus QIP.

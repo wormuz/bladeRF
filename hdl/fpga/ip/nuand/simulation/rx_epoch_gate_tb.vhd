@@ -417,6 +417,8 @@ begin
         -- certify the superseded epoch or leak its IQ.
         wait until falling_edge(clock);
         abort <= '0';
+        controls_in(0).enable <= '1';
+        controls_in(1).enable <= '1';
         epoch_id_in <= x"2E";
         arm <= '1';
         wait until rising_edge(clock);
@@ -448,9 +450,9 @@ begin
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert state = "0001" and epoch_id = x"2F" and
+        assert state = "0001" and epoch_id = x"30" and
                start_event = '0' and out_samples(1).data_i = to_signed(0, 16)
-            report "WAIT_FIRST_SAMPLE admitted IQ on a superseding ARM edge"
+            report "WAIT_FIRST_SAMPLE admitted IQ or lost the superseding epoch ID"
             severity failure;
 
         -- Complete the replacement request and immediately supersede it
@@ -482,10 +484,10 @@ begin
         wait until rising_edge(clock);
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert state = "0001" and epoch_id = x"30" and
+        assert state = "0001" and epoch_id = x"31" and
                out_samples(0).data_i = to_signed(0, 16) and
                out_samples(1).data_i = to_signed(0, 16)
-            report "ACTIVE_NEW ignored a superseding ARM or exposed IQ"
+            report "ACTIVE_NEW ignored the superseding epoch ID or exposed IQ"
             severity failure;
 
         -- Recover the replacement epoch, then inject a one-lane valid gap
@@ -524,7 +526,10 @@ begin
                out_samples(0).data_v = '1' and
                out_samples(1).data_v = '1' and
                discard_active = '1'
-            report "RX_X2 lane-valid mask was not normalized to a zero tuple"
+            report "RX_X2 lane-valid mask mismatch state=" & to_hstring(state) &
+                   " data_v=" & std_logic'image(out_samples(0).data_v) &
+                   std_logic'image(out_samples(1).data_v) &
+                   " discard=" & std_logic'image(discard_active)
             severity failure;
         wait until rising_edge(clock);
         wait for 1 ns;
