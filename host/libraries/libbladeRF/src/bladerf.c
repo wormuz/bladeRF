@@ -1005,8 +1005,35 @@ int bladerf_set_sample_rate(struct bladerf *dev,
                             bladerf_sample_rate *actual)
 {
     int status;
+    CHECK_NULL(dev);
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
+    }
+    /* bladeRF2 rejects out-of-range rates in its setter, but this API must
+     * revoke the RX epoch and fence both clock chains first. Preflight the
+     * board's active range so a request known to be rejected has no RF side
+     * effects; the setter retains its own check for a changing feature mode. */
+    if (dev->board == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (dev->board->name != NULL &&
+        strcmp(dev->board->name, "bladerf2") == 0) {
+        const struct bladerf_range *range = NULL;
+        if (dev->board->get_sample_rate_range == NULL) {
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+        WITH_MUTEX(&dev->lock, {
+            status = dev->board->get_sample_rate_range(dev, ch, &range);
+        });
+        if (status != 0) {
+            return status;
+        }
+        if (range == NULL) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (!is_within_range(range, rate)) {
+            return BLADERF_ERR_RANGE;
+        }
     }
     bladerf_feature feature;
     const bladerf_channel rx_clock_channel =
