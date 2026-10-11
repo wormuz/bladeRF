@@ -9,13 +9,28 @@ static bool nios_response_matches_request(const uint8_t *request,
                                           const uint8_t *response)
 {
     if (request[0] == NIOS_PKT_LEGACY_MAGIC) {
+        uint8_t legacy_device;
+
         /* Legacy peripheral failures are valid completed responses with a
          * distinct marker; nios_legacy_access maps that marker to FPGA_OP.
          * The configuration byte is echoed and identifies direction,
          * peripheral, and pair count. */
-        return (response[0] == NIOS_PKT_LEGACY_MAGIC ||
-                response[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) &&
-               response[1] == request[1];
+        if ((response[0] != NIOS_PKT_LEGACY_MAGIC &&
+             response[0] != NIOS_PKT_LEGACY_ERROR_MAGIC) ||
+            response[1] != request[1]) {
+            return false;
+        }
+
+        legacy_device = request[1] & NIOS_PKT_LEGACY_MODE_DEV_MASK;
+        if (legacy_device == NIOS_PKT_LEGACY_DEV_LMS ||
+            legacy_device == NIOS_PKT_LEGACY_DEV_SI5338) {
+            /* These handlers echo the first register address for both reads
+             * and writes. Config-PIO replies normalize addresses to offsets,
+             * so their payload cannot be compared this way. */
+            return response[2] == request[2];
+        }
+
+        return true;
     }
 
     if (request[0] != response[0]) {
