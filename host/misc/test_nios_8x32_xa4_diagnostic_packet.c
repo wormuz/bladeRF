@@ -8,13 +8,18 @@
 #include "pkt_8x32.h"
 #include "pkt_retune2.h"
 
+static unsigned int control_write_calls;
+static unsigned int rffe_write_calls;
+static unsigned int adf4351_write_calls;
 uint32_t control_reg_read(void) { return 0; }
-bool control_reg_write(uint32_t value) { (void)value; return true; }
+bool control_reg_write(uint32_t value)
+{ (void)value; control_write_calls++; return true; }
 bool rffe_csr_read_checked(uint32_t *value)
 { if (value != NULL) *value = 0; return value != NULL; }
 bool rffe_csr_write_checked(uint32_t value, uint32_t mask)
-{ (void)value; (void)mask; return true; }
-bool adf4351_write(uint32_t value) { (void)value; return true; }
+{ (void)value; (void)mask; rffe_write_calls++; return true; }
+bool adf4351_write(uint32_t value)
+{ (void)value; adf4351_write_calls++; return true; }
 uint32_t adf400x_spi_read(uint8_t addr) { return addr; }
 bool adf400x_spi_write(uint32_t value) { (void)value; return true; }
 static unsigned int fastlock_save_calls;
@@ -152,8 +157,36 @@ uint32_t tx_retune_gate_status_read(void) { return 0; }
         } \
     } while (0)
 
+static int check_single_register_write_rejected(uint8_t target, uint8_t addr)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x32_MAGIC, target, NIOS_PKT_8x32_FLAG_WRITE,
+                 0, addr, 0x78, 0x56, 0x34, 0x12, 0, 0, 0, 0, 0, 0, 0 },
+        .resp = { 0 }, .ready = false,
+    };
+    unsigned int control_before = control_write_calls;
+    unsigned int rffe_before = rffe_write_calls;
+    unsigned int adf4351_before = adf4351_write_calls;
+    uint8_t response_target = 0, response_addr = 0;
+    uint32_t response_data = 0;
+    bool response_write = false, success = true;
+
+    pkt_8x32(&packet);
+    nios_pkt_8x32_resp_unpack(packet.resp, &response_target,
+                              &response_write, &response_addr,
+                              &response_data, &success);
+    return response_target == target && response_write &&
+           response_addr == addr && !success &&
+           control_write_calls == control_before &&
+           rffe_write_calls == rffe_before &&
+           adf4351_write_calls == adf4351_before ? 0 : 1;
+}
+
 int main(void)
 {
+    CHECK_READ(NIOS_PKT_8x32_TARGET_VERSION, 1, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_CONTROL, 1, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RFFE_CSR, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, 1, true, 202);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, 2, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, 1, true, 404);
@@ -188,6 +221,15 @@ int main(void)
                NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, true, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS + 1, false, 0);
+    if (check_single_register_write_rejected(
+            NIOS_PKT_8x32_TARGET_CONTROL, 1) ||
+        check_single_register_write_rejected(
+            NIOS_PKT_8x32_TARGET_ADF4351, 1) ||
+        check_single_register_write_rejected(
+            NIOS_PKT_8x32_TARGET_RFFE_CSR, 1)) {
+        fputs("single-register packet accepted a nonzero address\n", stderr);
+        return 1;
+    }
     gate_command_success = true;
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
                 NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, 7, true);

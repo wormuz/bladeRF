@@ -33,6 +33,11 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
                                                              uint8_t addr)
 {
     switch (target) {
+        case NIOS_PKT_8x32_TARGET_VERSION:
+        case NIOS_PKT_8x32_TARGET_CONTROL:
+        case NIOS_PKT_8x32_TARGET_RFFE_CSR:
+            return addr == 0;
+
         case NIOS_PKT_8x32_TARGET_ADF400X:
             /* Register index is encoded by the packet address. The device
              * cache has four entries; rejecting larger values avoids an

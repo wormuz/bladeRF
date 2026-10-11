@@ -284,15 +284,24 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             return false;
 
         case NIOS_PKT_8x32_TARGET_CONTROL:
+            if (addr != 0) {
+                return false;
+            }
             return control_reg_write(data);
 
         case NIOS_PKT_8x32_TARGET_ADF4351:
+            if (addr != 0) {
+                return false;
+            }
             if (!adf4351_write(data)) {
                 return false;
             }
             break;
 
         case NIOS_PKT_8x32_TARGET_RFFE_CSR:
+            if (addr != 0) {
+                return false;
+            }
             return rffe_csr_write_checked(data, RFFE_CSR_OUTPUT_MASK);
 
 #ifdef BOARD_BLADERF_MICRO
