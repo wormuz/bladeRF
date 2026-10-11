@@ -329,6 +329,13 @@ static bool _rfic_initialize(struct rfic_state *state)
             state->phy = NULL;
             return false;
         }
+
+        /* ad9361_setup() completed RFDC calibration at the configured RX
+         * synthesizer frequency. Preserve that verified baseline so the
+         * cold-init staging tune and return to this LO do not repeat the
+         * long calibration unnecessarily. */
+        state->last_rfdc_calib_freq[BLADERF_RX] =
+            init_param->rx_synthesizer_frequency_hz;
     }
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_MODULE;
@@ -833,9 +840,11 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
         {
             bladerf_frequency last = state->last_rfdc_calib_freq[BLADERF_RX];
 
-            if (rfic_rfdc_calibration_required(
+            if (rfic_rfdc_calibration_required_for_tune(
                     last, frequency,
-                    BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ)) {
+                    BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ,
+                    init_sequence,
+                    RESET_FREQUENCY)) {
                 CHECK_BOOL(ad9361_do_calib(state->phy,
                                           BLADERF_AD9361_RFDC_CAL_MASK, -1));
                 state->last_rfdc_calib_freq[BLADERF_RX] = frequency;
