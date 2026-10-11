@@ -332,7 +332,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 e->rv = false;
                 if (NULL != f->write64) {
                     e->rv = f->write64(&state, e->ch, e->value);
-                } else {
+                } else if (_rfic_write32_payload_valid(e->value)) {
                     e->rv = f->write32(&state, e->ch, (uint32_t)e->value);
                 }
             }
@@ -389,7 +389,7 @@ bool rfic_command_write_immed(bladerf_rfic_command cmd,
         rv = false;
     } else if (NULL != f->write64) {
         rv = f->write64(&state, ch, data);
-    } else if (NULL != f->write32) {
+    } else if (NULL != f->write32 && _rfic_write32_payload_valid(data)) {
         rv = f->write32(&state, ch, (uint32_t)data);
     }
 

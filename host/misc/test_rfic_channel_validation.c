@@ -38,5 +38,11 @@ int main(void)
         return 1;
     }
 
+    if (!_rfic_write32_payload_valid(UINT32_MAX) ||
+        _rfic_write32_payload_valid(UINT64_C(0x100000000))) {
+        fprintf(stderr, "RFIC 32-bit payload width validation failed\n");
+        return 1;
+    }
+
     return 0;
 }
