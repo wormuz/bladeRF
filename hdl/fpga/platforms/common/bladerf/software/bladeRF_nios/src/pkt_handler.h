@@ -38,6 +38,7 @@
 struct pkt_buf {
     const uint8_t req[NIOS_PKT_LEN];      /* Request */
     uint8_t       resp[NIOS_PKT_LEN];     /* Response */
+    uint32_t      session_generation;     /* FX3/FPGA command-link session */
     volatile bool ready;                  /* Ready flag */
 };
 

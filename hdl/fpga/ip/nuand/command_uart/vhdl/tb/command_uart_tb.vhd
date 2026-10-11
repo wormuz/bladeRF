@@ -12,6 +12,11 @@ architecture arch of command_uart_tb is
 
     signal clock        :   std_logic       := '1' ;
     signal reset        :   std_logic       := '1' ;
+    signal host_session_reset : std_logic := '0';
+    signal dev_session_reset  : std_logic := '0';
+    signal host_session_generation : std_logic_vector(31 downto 0) := (others => '0');
+    signal dev_session_generation  : std_logic_vector(31 downto 0) := (others => '0');
+    signal stale_response_attempted : std_logic := '0';
 
     signal host_sin     :   std_logic ;
     signal host_sout    :   std_logic ;
@@ -58,6 +63,23 @@ architecture arch of command_uart_tb is
             wait until rising_edge(clock) ;
         end loop ;
     end procedure ;
+
+    procedure write_word(
+        signal clock : in std_logic ;
+        signal addr : out std_logic_vector(4 downto 0) ;
+        signal din : out std_logic_vector(31 downto 0) ;
+        signal write : out std_logic ;
+               offset : in natural ;
+               value : in std_logic_vector(31 downto 0)
+    ) is
+    begin
+        addr <= std_logic_vector(to_unsigned(offset, addr'length));
+        din <= value;
+        write <= '1';
+        wait until rising_edge(clock);
+        write <= '0';
+        wait until rising_edge(clock);
+    end procedure;
 
     procedure read_command(
         signal clock : in std_logic ;
@@ -119,6 +141,8 @@ begin
 
         rs232_sin   =>  host_sin,
         rs232_sout  =>  host_sout,
+        session_reset => host_session_reset,
+        session_generation => host_session_generation,
 
         addr        =>  host_addr,
         din         =>  host_din,
@@ -137,6 +161,8 @@ begin
 
         rs232_sin   =>  host_sout,
         rs232_sout  =>  host_sin,
+        session_reset => dev_session_reset,
+        session_generation => dev_session_generation,
 
         addr        =>  dev_addr,
         din         =>  dev_din,
@@ -172,22 +198,32 @@ begin
             bandsel     => '0'
         ) ;
 
-        wait until rising_edge(clock) and host_irq = '1' ;
-        report "HOST: Received response" ;
-        read_command(clock, host_addr, host_dout, host_read, response) ;
+        -- Let the first request enter NIOS, then send a second request while
+        -- that handler is still busy across the simulated reconnect.
+        nop(clock, 4500);
 
-        nop( clock, 100 ) ;
-
-        write_command(clock, host_addr, host_din, host_write, (others =>'0'));
-
-        nop( clock, 10000 ) ;
-
-        write_command(clock, host_addr, host_din, host_write, response ) ;
-
-        wait until rising_edge(clock) and host_irq = '1' ;
-        nop(clock, 500) ;
-        report "HOST: Received response" ;
-        read_command(clock, host_addr, host_dout, host_read, response ) ;
+        -- A fresh request in the new session must be held until NIOS finishes.
+        send_retune(
+            clock       => clock,
+            addr        => host_addr,
+            din         => host_din,
+            write       => host_write,
+            timestamp   => (others => '0'),
+            nint        => 131,
+            nfrac       => 0,
+            vcocap      => 32,
+            freqsel     => 44,
+            tx          => '0',
+            rx          => '0',
+            bandsel     => '0'
+        );
+        wait until stale_response_attempted = '1';
+        assert host_irq = '0'
+            report "stale response crossed an FX3 session reset" severity failure;
+        wait until rising_edge(clock) and host_irq = '1';
+        nop(clock, 500);
+        report "HOST: Received response in new session";
+        read_command(clock, host_addr, host_dout, host_read, response);
 
         nop( clock, 1000 ) ;
 
@@ -195,17 +231,51 @@ begin
 
     end process ;
 
-    -- Just turn it around and send it back
+    -- Simulate the NIOS command handler. On its first request, force an FX3
+    -- reconnect before it writes the response, then attempt the stale reply.
     receive_command : process
-        variable request : std_logic_vector(127 downto 0) ;
+        variable request : std_logic_vector(127 downto 0);
+        variable request_generation : std_logic_vector(31 downto 0);
+        variable first_request : boolean := true;
     begin
-        wait until rising_edge(clock) and dev_irq = '1' ;
-        report "DEVICE: Received request" ;
-        nop( clock, 100 ) ;
-        read_command(clock, dev_addr, dev_dout, dev_read, request) ;
-        nop( clock, 1000 ) ;
-        report "DEVICE: Writing response" ;
-        write_command(clock, dev_addr, dev_din, dev_write, request) ;
-    end process ;
+        loop
+            wait until rising_edge(clock) and dev_irq = '1';
+            report "DEVICE: Received request";
+            nop(clock, 100);
+            read_command(clock, dev_addr, dev_dout, dev_read, request);
+            dev_addr <= std_logic_vector(to_unsigned(20, dev_addr'length));
+            dev_read <= '1';
+            wait until rising_edge(clock);
+            wait for 1 ns;
+            request_generation := dev_dout;
+            dev_read <= '0';
+
+            if first_request then
+                first_request := false;
+                write_word(clock, dev_addr, dev_din, dev_write, 16,
+                           x"00000000");
+                dev_session_generation <= x"00000001";
+                host_session_generation <= x"00000001";
+                dev_session_reset <= '1';
+                host_session_reset <= '1';
+                nop(clock, 4);
+                dev_session_reset <= '0';
+                host_session_reset <= '0';
+                nop(clock, 10000);
+            end if;
+
+            write_word(clock, dev_addr, dev_din, dev_write, 24, request_generation);
+            report "DEVICE: Writing response";
+            write_command(clock, dev_addr, dev_din, dev_write, request);
+            if not first_request then
+                if request_generation = x"00000000" then
+                    stale_response_attempted <= '1';
+                    nop(clock, 50);
+                    write_word(clock, dev_addr, dev_din, dev_write, 16,
+                               x"00000001");
+                end if;
+            end if;
+        end loop;
+    end process;
 
 end architecture ;

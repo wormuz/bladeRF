@@ -431,6 +431,8 @@ add_interface clk clock sink
 set_interface_property clk EXPORT_OF system_clock.clk_in
 add_interface command conduit end
 set_interface_property command EXPORT_OF command_uart.rs232
+add_interface command_session conduit end
+set_interface_property command_session EXPORT_OF command_uart.session
 add_interface correction_rx_phase_gain conduit end
 set_interface_property correction_rx_phase_gain EXPORT_OF iq_corr_rx_phase_gain.external_connection
 add_interface correction_tx_phase_gain conduit end

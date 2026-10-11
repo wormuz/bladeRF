@@ -69,7 +69,9 @@ entity nios_system is
         ad9361_device_if_tx_data_out_n  : out std_logic_vector(5 downto 0);                     -- tx_data_out_n
         clk_clk                         : in  std_logic                     := 'X';             -- clk
         command_serial_in               : in  std_logic                     := 'X';             -- serial_in
-        command_serial_out              : out std_logic;                                        -- serial_out
+        command_serial_out              : out std_logic;
+        command_session_reset           : in std_logic := '0';
+        command_session_generation      : in std_logic_vector(31 downto 0) := (others => '0');                                        -- serial_out
         dac_MISO                        : in  std_logic                     := 'X';             -- MISO
         dac_MOSI                        : out std_logic;                                        -- MOSI
         dac_SCLK                        : out std_logic;                                        -- SCLK

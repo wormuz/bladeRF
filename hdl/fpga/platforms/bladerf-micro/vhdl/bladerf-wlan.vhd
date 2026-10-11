@@ -120,6 +120,9 @@ architecture hosted_bladerf of bladerf is
 
     signal command_serial_in      : std_logic;
     signal command_serial_out     : std_logic;
+    signal command_session_generation : std_logic_vector(31 downto 0) := (others => '0');
+    signal command_session_generation_count : unsigned(31 downto 0) := (others => '0');
+    signal command_session_reset_prev : std_logic := '0';
 
     signal timestamp_req          : std_logic;
     signal timestamp_ack          : std_logic;
@@ -461,6 +464,17 @@ begin
     -- NIOS SYSTEM
     -- ========================================================================
 
+    command_session_generation <= std_logic_vector(command_session_generation_count);
+    command_session_generation_count_proc : process(sys_clock)
+    begin
+        if rising_edge(sys_clock) then
+            if sys_reset = '1' and command_session_reset_prev = '0' then
+                command_session_generation_count <= command_session_generation_count + 1;
+            end if;
+            command_session_reset_prev <= sys_reset;
+        end if;
+    end process;
+
     U_nios_system : component nios_system
         port map (
             clk_clk                         => sys_clock,
@@ -526,6 +540,8 @@ begin
             xb_gpio_dir_export              => nios_xb_gpio_oe,
             command_serial_in               => command_serial_in,
             command_serial_out              => command_serial_out,
+            command_session_reset           => sys_reset,
+            command_session_generation      => command_session_generation,
             oc_i2c_arst_i                   => '0',
             oc_i2c_scl_pad_i                => i2c_scl_in,
             oc_i2c_scl_pad_o                => i2c_scl_out,

@@ -60,7 +60,7 @@ fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
 fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
 #endif  // BOARD_BLADERF_MICRO
 
-static void command_uart_enable_isr(bool enable)
+void command_uart_enable_isr(bool enable)
 {
     uint32_t val = enable ? 1 : 0;
     IOWR_32DIRECT(COMMAND_UART_BASE, 16, val);
@@ -73,6 +73,12 @@ static void command_uart_isr(void *context)
 
     /* Reading the request should clear the interrupt */
     command_uart_read_request((uint8_t *)pkt->req);
+    pkt->session_generation = command_uart_request_session_generation();
+
+    /* Keep the UART's single request buffer stable while the synchronous
+     * packet handler uses pkt->req. A complete next request is held in the
+     * UART block until the main loop finishes and enables this interrupt. */
+    command_uart_enable_isr(false);
 
     /* Tell the main loop that there is a request pending */
     pkt->ready = true;

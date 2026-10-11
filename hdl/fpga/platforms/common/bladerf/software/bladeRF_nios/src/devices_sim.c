@@ -453,7 +453,18 @@ void command_uart_read_request(uint8_t *req) {
     }
 }
 
-void command_uart_write_response(uint8_t *resp) {
+uint32_t command_uart_request_session_generation(void)
+{
+    return 0;
+}
+
+void command_uart_enable_isr(bool enable)
+{
+    (void)enable;
+}
+
+void command_uart_write_response(uint8_t *resp, uint32_t session_generation) {
+    (void)session_generation;
     print_bytes("Response data:", resp, NIOS_PKT_LEN);
 
     /* At this point, we'll already have incremented the test_case_idx past

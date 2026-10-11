@@ -741,9 +741,15 @@ INLINE void command_uart_read_request(uint8_t *req) {
     return ;
 }
 
-INLINE void command_uart_write_response(uint8_t *resp) {
+INLINE uint32_t command_uart_request_session_generation(void) {
+    return IORD_32DIRECT(COMMAND_UART_BASE, 20);
+}
+
+INLINE void command_uart_write_response(uint8_t *resp,
+                                        uint32_t session_generation) {
     int i ;
     uint32_t val ;
+    IOWR_32DIRECT(COMMAND_UART_BASE, 24, session_generation);
     for( i = 0 ; i < 16 ; i+=4 ) {
         val = ((uint32_t)resp[i+0]) | (((uint32_t)resp[i+1])<<8) | (((uint32_t)resp[i+2])<<16) | (((uint32_t)resp[i+3])<<24) ;
         IOWR_32DIRECT(COMMAND_UART_BASE, i, val) ;

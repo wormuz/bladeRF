@@ -32,6 +32,10 @@ entity command_uart is
     rs232_sout      :   out std_logic ;
     rs232_sin       :   in  std_logic ;
 
+    -- FX3 link/session state, supplied in the command UART clock domain.
+    session_reset      : in std_logic := '0' ;
+    session_generation : in std_logic_vector(31 downto 0) := (others => '0') ;
+
     -- Avalon-MM interface
     addr            :   in  std_logic_vector(4 downto 0) ;
     dout            :   out std_logic_vector(31 downto 0) ;
@@ -63,6 +67,8 @@ architecture arch of command_uart is
 
     signal reg_response : std_logic_vector(127 downto 0) ;
     signal reg_request  : std_logic_vector(127 downto 0) ;
+    signal request_session  : std_logic_vector(31 downto 0) := (others => '0');
+    signal response_session : std_logic_vector(31 downto 0) := (others => '0');
 
     signal sin_data     : std_logic_vector(7 downto 0) ;
     signal sin_we       : std_logic ;
@@ -111,18 +117,20 @@ begin
                     when  4| 5| 6| 7 => reg_response( 63 downto  32) <= din ;
                     when  8| 9|10|11 => reg_response( 95 downto  64) <= din ;
                     when 12|13|14|15 => reg_response(127 downto  96) <= din ;
-                    when others => control(7 downto 0) <= din(7 downto 0) ;
+                    when 16|17|18|19 => control(7 downto 0) <= din(7 downto 0) ;
+                    when 24|25|26|27 => response_session <= din ;
+                    when others => null ;
                 end case ;
             end if ;
         end if ;
     end process ;
 
-    send_command : process(clock, reset)
+    send_command : process(clock, reset, session_reset)
         type state_t is (WAITING_FOR_COMMAND, SEND_BYTE, WAITING_FOR_START, WAITING_FOR_DONE) ;
         variable state : state_t ;
         variable count : natural range 0 to 15 := 15 ;
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or session_reset = '1' ) then
             state := WAITING_FOR_COMMAND ;
             sout_we <= '0' ;
         elsif( rising_edge(clock) ) then
@@ -130,7 +138,8 @@ begin
             sout_data <= reg_response(count*8+7 downto count*8) ;
             case state is
                 when WAITING_FOR_COMMAND =>
-                    if( command_in = '1' ) then
+                    if( command_in = '1' and
+                        response_session = session_generation ) then
                         state := SEND_BYTE ;
                         count := 0 ;
                     end if ;
@@ -168,23 +177,26 @@ begin
                     when  4| 5| 6| 7 => dout <= reg_request( 63 downto 32) ;
                     when  8| 9|10|11 => dout <= reg_request( 95 downto 64) ;
                     when 12|13|14|15 => dout <= reg_request(127 downto 96) ;
-                    when others => dout(7 downto 0) <= control ;
+                    when 16|17|18|19 => dout(7 downto 0) <= control ;
+                    when 20|21|22|23 => dout <= request_session ;
+                    when others => dout <= (others => '0') ;
                 end case ;
             end if ;
         end if ;
     end process ;
 
-    receive_command : process(clock, reset)
+    receive_command : process(clock, reset, session_reset)
         type state_t is (WAIT_FOR_MAGIC, CHECK_MAGIC, RECEIVE_COMMAND, INTERRUPT, WAIT_FOR_READ) ;
         variable state : state_t ;
         variable count : natural range 0 to 15 ;
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or session_reset = '1' ) then
             state := WAIT_FOR_MAGIC ;
             count := 0 ;
             irq <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( sin_we = '1' and state /= WAIT_FOR_READ ) then
+            if( sin_we = '1' and state /= WAIT_FOR_READ and
+                state /= INTERRUPT ) then
                 reg_request(count*8+7 downto count*8) <= sin_data ;
             end if ;
             case state is
@@ -198,6 +210,7 @@ begin
                         if( magics(i) = reg_request(7 downto 0) ) then
                             state := RECEIVE_COMMAND ;
                             count := count + 1 ;
+                            request_session <= session_generation;
                         end if ;
                     end loop ;
                     if( count = 0 ) then
@@ -210,17 +223,17 @@ begin
                             count := count + 1 ;
                         else
                             count := 0 ;
-                            if( isr_enable = '1' ) then
-                                state := INTERRUPT ;
-                            else
-                                state := WAIT_FOR_MAGIC ;
-                            end if ;
+                            state := INTERRUPT ;
                         end if ;
                     end if ;
 
                 when INTERRUPT =>
-                    irq <= '1' ;
-                    state := WAIT_FOR_READ ;
+                    if( isr_enable = '1' ) then
+                        irq <= '1' ;
+                        state := WAIT_FOR_READ ;
+                    else
+                        irq <= '0' ;
+                    end if ;
 
                 when WAIT_FOR_READ =>
                     if( read = '1' ) then
@@ -236,13 +249,13 @@ begin
     sync_sin <= reg_sin when rising_edge( clock ) ;
 
     -- Receive data from the UART and put it in the FIFO
-    receive_from_uart : process(clock, reset)
+    receive_from_uart : process(clock, reset, session_reset)
         variable bits           :   std_logic_vector(7 downto 0) ;
         variable bit_count      :   natural range 0 to bits'length ;
         variable clock_count    :   natural range 0 to CLOCKS_PER_BIT ;
         variable sin_delay      :   std_logic ;
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or session_reset = '1' ) then
             receive_fsm <= WAIT_FOR_START ;
             sin_we <= '0' ;
             sin_data <= (others =>'0') ;
@@ -298,9 +311,9 @@ begin
     end process ;
 
     -- Register outputs
-    register_sout : process(clock, reset) is
+    register_sout : process(clock, reset, session_reset) is
     begin
-        if (reset = '1') then
+        if (reset = '1' or session_reset = '1') then
             rs232_sout <= '1';
         elsif (rising_edge(clock)) then
             rs232_sout <= rs232_sout_reg;
@@ -308,12 +321,12 @@ begin
     end process register_sout;
 
     -- Send data to the UART from the FIFO
-    send_to_uart : process(clock, reset)
+    send_to_uart : process(clock, reset, session_reset)
         variable bits           : std_logic_vector(7 downto 0) ;
         variable bit_count      : natural range 0 to bits'length ;
         variable clock_count    : natural range 0 to CLOCKS_PER_BIT ;
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or session_reset = '1' ) then
             send_fsm        <= IDLE ;
             rs232_sout_reg  <= '1' ;
             bit_count       := 0 ;

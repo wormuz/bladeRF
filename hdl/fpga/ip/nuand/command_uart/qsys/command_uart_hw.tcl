@@ -83,6 +83,15 @@ set_interface_property rs232 SVD_ADDRESS_GROUP ""
 add_interface_port rs232 rs232_sin serial_in Input 1
 add_interface_port rs232 rs232_sout serial_out Output 1
 
+# Session signals arrive from the FPGA top level. Reset aborts a partial UART
+# frame during FX3 reconnect; generation tags responses so an in-flight NIOS
+# command from the previous link cannot acknowledge a new USB request.
+add_interface session conduit end
+set_interface_property session associatedClock clock
+set_interface_property session ENABLED true
+add_interface_port session session_reset reset Input 1
+add_interface_port session session_generation generation Input 32
+
 
 #
 # connection point interrupt

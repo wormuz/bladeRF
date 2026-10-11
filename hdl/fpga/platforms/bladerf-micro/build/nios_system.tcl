@@ -775,6 +775,8 @@ add_interface clk clock sink
 set_interface_property clk EXPORT_OF system_clock.clk_in
 add_interface command conduit end
 set_interface_property command EXPORT_OF command_uart.rs232
+add_interface command_session conduit end
+set_interface_property command_session EXPORT_OF command_uart.session
 add_interface dac conduit end
 set_interface_property dac EXPORT_OF peripheral_spi.external
 add_interface gpio conduit end

@@ -55,6 +55,7 @@
         have_request = !have_request; \
         if (have_request) { \
             command_uart_read_request( (uint8_t*) pkt.req); \
+            pkt.session_generation = command_uart_request_session_generation(); \
         } \
         have_request; \
     })
@@ -345,6 +346,7 @@ int main(void)
                  * we hit a magic value */
                 DBG("Got invalid magic value: 0x%x\n", pkt.req[PKT_MAGIC_IDX]);
                 run_deferred_packet_work();
+                command_uart_enable_isr(true);
                 continue;
             }
 
@@ -358,7 +360,8 @@ int main(void)
             handler->exec(&pkt);
 
             /* Write response to host */
-            command_uart_write_response(pkt.resp);
+            command_uart_write_response(pkt.resp, pkt.session_generation);
+            command_uart_enable_isr(true);
         } else {
 
             /* Temporarily putting the VCTCXO Calibration stuff here. */

@@ -153,6 +153,8 @@ package bladerf_p is
         xb_gpio_dir_export              :   out std_logic_vector(31 downto 0);
         command_serial_in               :   in  std_logic;
         command_serial_out              :   out std_logic;
+        command_session_reset           :   in  std_logic := '0';
+        command_session_generation      :   in  std_logic_vector(31 downto 0) := (others => '0');
         rx_tamer_ts_sync_in             :   in  std_logic;
         rx_tamer_ts_sync_out            :   out std_logic;
         rx_tamer_ts_pps                 :   in  std_logic;

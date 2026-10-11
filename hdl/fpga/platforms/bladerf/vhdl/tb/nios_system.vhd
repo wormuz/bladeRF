@@ -6,6 +6,8 @@ entity nios_system is
     clk_clk                         : in  std_logic                     := '0';             --                      clk.clk
     command_serial_in               : in  std_logic                     := '0';             --                  command.serial_in
     command_serial_out              : out std_logic;                                        --                         .serial_out
+    command_session_reset           : in std_logic := '0';
+    command_session_generation      : in std_logic_vector(31 downto 0) := (others => '0');
     correction_rx_phase_gain_export : out std_logic_vector(31 downto 0);                    -- correction_rx_phase_gain.export
     correction_tx_phase_gain_export : out std_logic_vector(31 downto 0);                    -- correction_tx_phase_gain.export
     dac_MISO                        : in  std_logic                     := '0';             --                      dac.MISO

@@ -430,6 +430,8 @@ architecture core_bladerf of bladerf_core is
 
     signal command_serial_in      : std_logic;
     signal command_serial_out     : std_logic;
+    signal command_session_generation : unsigned(31 downto 0) := (others => '0');
+    signal sys_reset_prev_for_command : std_logic := '0';
 
     signal timestamp_req          : std_logic;
     signal timestamp_ack          : std_logic;
@@ -861,6 +863,8 @@ begin
             xb_gpio_dir_export              => nios_xb_gpio_oe,
             command_serial_in               => command_serial_in,
             command_serial_out              => command_serial_out,
+            command_session_reset           => sys_reset,
+            command_session_generation      => std_logic_vector(command_session_generation),
             oc_i2c_arst_i                   => '0',
             oc_i2c_scl_pad_i                => i2c_scl_in,
             oc_i2c_scl_pad_o                => i2c_scl_out,
@@ -1955,6 +1959,19 @@ begin
             async               =>  sys_reset_async,
             sync                =>  sys_reset
         );
+
+    -- Keep a command-link generation across FX3 SYS_RST pulses. The NIOS core
+    -- is deliberately not reset by SYS_RST, so this distinguishes a reply
+    -- from a command accepted before an FX3 reconnect.
+    command_session_generation_count : process(sys_clock)
+    begin
+        if rising_edge(sys_clock) then
+            if sys_reset = '1' and sys_reset_prev_for_command = '0' then
+                command_session_generation <= command_session_generation + 1;
+            end if;
+            sys_reset_prev_for_command <= sys_reset;
+        end if;
+    end process;
 
     U_reset_sync_rx : entity work.reset_synchronizer
         generic map (
