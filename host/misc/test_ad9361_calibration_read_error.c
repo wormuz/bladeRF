@@ -396,6 +396,22 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    {
+        struct ad9361_rf_phy cleared_phy = {
+            .current_bw_valid = true,
+            .rfpll_source_valid = { true, true },
+        };
+
+        ad9361_clear_state(&cleared_phy);
+        if (cleared_phy.current_bw_valid ||
+            cleared_phy.rfpll_source_valid[0] ||
+            cleared_phy.rfpll_source_valid[1]) {
+            fprintf(stderr,
+                    "AD9361 clear-state retained prior RF validity\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* A mux may commit its new source and then fail while restoring ENSM or
      * relocking the internal PLL. Keep the software source aligned only when
      * the mux confirms that commit; roll it back when the mux stayed put. */
