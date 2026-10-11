@@ -6293,14 +6293,16 @@ static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
         unsigned long parsed = strtoul(fault_address, &end, 0);
         if (end != fault_address && *end == '\0' && parsed ==
             (unsigned long)reg_address) {
-            return errno_ad9361_to_bladerf(-EIO);
+            return BLADERF_ERR_IO;
         }
     }
 #endif
 
     int status = dev->backend->ad9361_spi_write(
         dev, address, (((uint64_t)val) << 56));
-    return status < 0 ? errno_ad9361_to_bladerf(status) : status;
+    /* This backend already returns libbladeRF statuses; only no-OS ADI
+     * errors should pass through errno_ad9361_to_bladerf(). */
+    return status;
 }
 
 int bladerf_set_rfic_register(struct bladerf *dev,

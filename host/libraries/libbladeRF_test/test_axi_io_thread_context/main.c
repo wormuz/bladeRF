@@ -57,7 +57,7 @@ static void *exercise_device_context(void *arg)
     assert(value == test_dev->identity);
     assert(no_os_axi_io_write(0x1000, 8, test_dev->identity + 1) == 0);
     assert(test_dev->register_value == test_dev->identity + 1);
-    test_dev->axi_status = -ETIMEDOUT;
+    test_dev->axi_status = BLADERF_ERR_TIMEOUT;
     value = UINT32_MAX;
     assert(no_os_axi_io_read(0x1000, 4, &value) == -ETIMEDOUT);
     assert(value == 0);

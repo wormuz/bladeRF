@@ -47,6 +47,7 @@
 #include <string.h>
 
 #include "board/board.h"
+#include "bladerf2_status.h"
 #include "backend/usb/nios_access.h"
 #include "log.h"
 
@@ -213,7 +214,7 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
         status = dev->backend->ad9361_spi_write(dev, cmd, word);
         bladerf2_rx_transition_spi_observe(dev, false, status);
         if (status < 0) {
-            return -EIO;
+            return bladerf2_status_to_errno(status);
         }
 
         return 0;
@@ -222,7 +223,7 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
     word = 0;
     status = dev->backend->ad9361_spi_read(dev, cmd, &word);
     if (status < 0) {
-        return -EIO;
+        return bladerf2_status_to_errno(status);
     }
 
     /* The read replaces the payload in place; the command bytes are left
@@ -328,7 +329,7 @@ static int32_t bladerf2_spi_write_register_batch(
 
         if (status != BLADERF_ERR_UNSUPPORTED) {
             no_os_mutex_unlock(desc->bus->mutex);
-            return -EIO;
+            return bladerf2_status_to_errno(status);
         }
 
         bladerf2_rx_transition_spi_observe_rollback(dev, count);
@@ -385,7 +386,7 @@ static int32_t bladerf2_spi_update_register_bits(struct no_os_spi_desc *desc,
         return -ENOTSUP;
     }
     if (status != 0) {
-        return -EIO;
+        return bladerf2_status_to_errno(status);
     }
 
     ctx->register_bits_update = REGISTER_BITS_UPDATE_SUPPORTED;

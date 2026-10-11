@@ -16,6 +16,7 @@
 
 #include "board/board.h"
 
+#include "bladerf2_status.h"
 #include "no_os_axi_io.h"
 
 #if defined(_MSC_VER)
@@ -50,7 +51,7 @@ int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
         /* Some backends can partially write the output before reporting a
          * transport failure. Never let that value escape as register data. */
         *data = 0;
-        return status;
+        return bladerf2_status_to_errno(status);
     }
 
     return 0;
@@ -70,7 +71,7 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
     int status = axi_io_dev->backend->adi_axi_write(
         axi_io_dev, (uint32_t)address, data);
     if (status < 0) {
-        return status;
+        return bladerf2_status_to_errno(status);
     }
 
     return 0;

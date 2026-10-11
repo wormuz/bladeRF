@@ -57,6 +57,10 @@ int errno_ad9361_to_bladerf(int err)
             return BLADERF_ERR_INVAL;
         case -ETIMEDOUT:
             return BLADERF_ERR_TIMEOUT;
+#ifdef ENOTSUP
+        case -ENOTSUP:
+            return BLADERF_ERR_UNSUPPORTED;
+#endif
     }
 
     return BLADERF_ERR_UNEXPECTED;

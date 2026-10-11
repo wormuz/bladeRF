@@ -41,6 +41,7 @@
 #include "board/board.h"
 
 #include "no_os_gpio.h"
+#include "bladerf2_status.h"
 
 static int32_t bladerf2_gpio_get(struct no_os_gpio_desc **desc,
                                  const struct no_os_gpio_init_param *param)
@@ -139,7 +140,7 @@ static int32_t bladerf2_gpio_set_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_read(dev, &reg);
     if (status < 0) {
-        return -EIO;
+        return bladerf2_status_to_errno(status);
     }
 
     if (value) {
@@ -150,7 +151,7 @@ static int32_t bladerf2_gpio_set_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_write(dev, reg);
     if (status < 0) {
-        return -EIO;
+        return bladerf2_status_to_errno(status);
     }
 
     return 0;
@@ -174,7 +175,7 @@ static int32_t bladerf2_gpio_get_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_read(dev, &reg);
     if (status < 0) {
-        return -EIO;
+        return bladerf2_status_to_errno(status);
     }
 
     *value = (reg & (1u << desc->number)) ? 1 : 0;
