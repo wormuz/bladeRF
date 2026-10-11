@@ -261,6 +261,32 @@ static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
     assert(!sync.meta.in_burst);
 }
 
+static void test_sync_tx_rejects_timestamp_before_wrapped_counter(void)
+{
+    struct bladerf_sync sync = {0};
+    struct bladerf_metadata metadata = {0};
+    int16_t samples[4] = {0};
+
+    sync.initialized = true;
+    sync.stream_config.layout = BLADERF_TX_X1;
+    sync.stream_config.format = BLADERF_FORMAT_SC16_Q11_META;
+    sync.meta.samples_per_ts = 1;
+    sync.meta.curr_timestamp = 1;
+    metadata.flags = BLADERF_META_FLAG_TX_BURST_START;
+    metadata.timestamp = UINT64_MAX - 2;
+
+    assert(MUTEX_INIT(&sync.lock) == 0);
+    assert(sync_tx(&sync, samples, 2, &metadata, 0) ==
+           BLADERF_ERR_TIME_PAST);
+    assert(!sync.meta.in_burst);
+    assert(MUTEX_DESTROY(&sync.lock) == 0);
+
+    /* A timestamp a few ticks after UINT64_MAX is future, establishing the
+     * opposite side of the modulo-order decision used for TX scheduling. */
+    assert(metadata_timestamp_at_or_after(1, UINT64_MAX - 2));
+    assert(!metadata_timestamp_at_or_after(UINT64_MAX - 2, 1));
+}
+
 static void test_rx_transition_apis_reject_non_bladerf2_before_state_access(void)
 {
     const struct board_fns unsupported_board = {
@@ -3127,6 +3153,7 @@ int main(void)
     test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity();
     test_rx_packet_meta_length_is_bounded_by_transfer();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
+    test_sync_tx_rejects_timestamp_before_wrapped_counter();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
     test_close_wakes_and_drains_transition_waiter();
     test_epoch_transition_rejects_non_baseband_mux_before_mutation();
