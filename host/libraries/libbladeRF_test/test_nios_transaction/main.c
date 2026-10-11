@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "backend/usb/nios_transaction.h"
+#include "backend/usb/nios_deadline_policy.h"
 #include "libbladeRF.h"
 #include "nios_pkt_formats.h"
 
@@ -173,6 +174,23 @@ static void test_mismatched_register_response_fails_closed(void)
     teardown(&usb);
 }
 
+static void test_nios_poll_deadline_fails_closed_on_clock_error(void)
+{
+    uint64_t deadline = UINT64_C(0xfeedface);
+    bool expired = true;
+
+    assert(!nios_deadline_start(-1, 100, 1000, &deadline));
+    assert(deadline == UINT64_C(0xfeedface));
+    assert(nios_deadline_start(0, 100, 1000, &deadline));
+    assert(deadline == 1100);
+    assert(nios_deadline_check(0, 1099, deadline, &expired));
+    assert(!expired);
+    assert(nios_deadline_check(0, 1100, deadline, &expired));
+    assert(expired);
+    assert(!nios_deadline_check(-1, 1101, deadline, &expired));
+    assert(!nios_deadline_start(0, UINT64_MAX - 5, 10, &deadline));
+}
+
 int main(void)
 {
     test_success();
@@ -180,6 +198,7 @@ int main(void)
     test_out_failure_does_not_read();
     test_matching_register_response_identity();
     test_mismatched_register_response_fails_closed();
+    test_nios_poll_deadline_fails_closed_on_clock_error();
     puts("NIOS USB transaction fail-closed tests: PASS");
     return 0;
 }

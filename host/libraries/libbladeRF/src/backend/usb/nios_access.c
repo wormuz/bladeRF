@@ -37,6 +37,7 @@
 #include "nios_access.h"
 #include "nios_completion_policy.h"
 #include "nios_transaction.h"
+#include "nios_deadline_policy.h"
 #include "nios_pkt_formats.h"
 
 #include "board/board.h"
@@ -1465,15 +1466,32 @@ int nios_tx_retune_gate_cmd(struct bladerf *dev, uint8_t cmd)
 int nios_tx_retune_gate_abort(struct bladerf *dev)
 {
     const unsigned int poll_interval_us = 120;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
     int status = nios_tx_retune_gate_cmd(
         dev, NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
     if (status == 0) {
-        const uint64_t deadline_ns = monotonic_ns() + 1000000000ULL;
         bool acknowledged = false;
+        bool expired = false;
 
-        while (monotonic_ns() < deadline_ns) {
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_start(status, now_ns, 1000000000ULL,
+                                 &deadline_ns)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+
+        while (!expired) {
             uint32_t gate_status = 0;
             uint32_t state;
+
+            status = bladerf_monotonic_now_ns(&now_ns);
+            if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+                status = BLADERF_ERR_UNEXPECTED;
+                break;
+            }
+            if (expired) {
+                break;
+            }
 
             status = nios_tx_retune_gate_status_read(dev, &gate_status);
             if (status != 0) {
@@ -1501,6 +1519,8 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
 {
     const unsigned int poll_interval_us = 120;
     uint32_t status_before = 0;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
     int status = nios_tx_retune_gate_status_read(dev, &status_before);
     if (status == 0) {
         status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
@@ -1516,11 +1536,28 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
             NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, immediate ? 1u : 0u);
     }
     if (status == 0) {
-        const uint64_t deadline_ns = monotonic_ns() + 1000000000ULL;
         bool acknowledged = false;
-        while (monotonic_ns() < deadline_ns) {
+        bool expired = false;
+
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_start(status, now_ns, 1000000000ULL,
+                                 &deadline_ns)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+
+        while (!expired) {
             uint32_t gate_status = 0;
             uint32_t state;
+
+            status = bladerf_monotonic_now_ns(&now_ns);
+            if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+                status = BLADERF_ERR_UNEXPECTED;
+                break;
+            }
+            if (expired) {
+                break;
+            }
+
             status = nios_tx_retune_gate_status_read(dev, &gate_status);
             if (status != 0) {
                 break;
