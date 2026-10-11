@@ -1509,9 +1509,10 @@ bool iqbal_set_phase(bladerf_module m, uint16_t value)
 }
 #endif
 
-void tx_trigger_ctl_write(uint8_t data)
+bool tx_trigger_ctl_write(uint8_t data)
 {
     IOWR_ALTERA_AVALON_PIO_DATA(TX_TRIGGER_CTL_BASE, data);
+    return (tx_trigger_ctl_read() & 0xf0u) == (data & 0xf0u);
 }
 
 uint8_t tx_trigger_ctl_read(void)
@@ -1519,9 +1520,10 @@ uint8_t tx_trigger_ctl_read(void)
     return IORD_ALTERA_AVALON_PIO_DATA(TX_TRIGGER_CTL_BASE);
 }
 
-void rx_trigger_ctl_write(uint8_t data)
+bool rx_trigger_ctl_write(uint8_t data)
 {
     IOWR_ALTERA_AVALON_PIO_DATA(RX_TRIGGER_CTL_BASE, data);
+    return (rx_trigger_ctl_read() & 0xf0u) == (data & 0xf0u);
 }
 
 uint8_t rx_trigger_ctl_read(void)

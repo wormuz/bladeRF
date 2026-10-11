@@ -120,14 +120,18 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint8_t data)
             if (addr != 0) {
                 return false;
             }
-            tx_trigger_ctl_write(data);
+            if (!tx_trigger_ctl_write(data)) {
+                return false;
+            }
             break;
 
         case NIOS_PKT_8x8_RX_TRIGGER_CTL:
             if (addr != 0) {
                 return false;
             }
-            rx_trigger_ctl_write(data);
+            if (!rx_trigger_ctl_write(data)) {
+                return false;
+            }
             break;
 
         /* Add user customizations here

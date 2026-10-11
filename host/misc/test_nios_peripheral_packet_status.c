@@ -17,6 +17,9 @@ static bool lms_success;
 static bool tamer_mode_success;
 static bool agc_dc_success;
 static bool iqcorr_success;
+static bool trigger_ctl_write_success = true;
+static uint8_t tx_trigger_ctl_value;
+static uint8_t rx_trigger_ctl_value;
 static bladerf_vctcxo_tamer_mode tamer_mode_readback =
     BLADERF_VCTCXO_TAMER_DISABLED;
 
@@ -76,10 +79,22 @@ bool vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
             mode == BLADERF_VCTCXO_TAMER_1_PPS ||
             mode == BLADERF_VCTCXO_TAMER_10_MHZ);
 }
-uint8_t tx_trigger_ctl_read(void) { return 0; }
-void tx_trigger_ctl_write(uint8_t value) { (void)value; }
-uint8_t rx_trigger_ctl_read(void) { return 0; }
-void rx_trigger_ctl_write(uint8_t value) { (void)value; }
+uint8_t tx_trigger_ctl_read(void) { return tx_trigger_ctl_value; }
+bool tx_trigger_ctl_write(uint8_t value)
+{
+    if (trigger_ctl_write_success) {
+        tx_trigger_ctl_value = value & 0xf0u;
+    }
+    return trigger_ctl_write_success;
+}
+uint8_t rx_trigger_ctl_read(void) { return rx_trigger_ctl_value; }
+bool rx_trigger_ctl_write(uint8_t value)
+{
+    if (trigger_ctl_write_success) {
+        rx_trigger_ctl_value = value & 0xf0u;
+    }
+    return trigger_ctl_write_success;
+}
 
 bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t value)
 {
@@ -403,6 +418,40 @@ static int check_8x8_trigger_subaddresses(void)
     return 0;
 }
 
+static int check_8x8_trigger_write_status(void)
+{
+    static const uint8_t targets[] = {
+        NIOS_PKT_8x8_TX_TRIGGER_CTL, NIOS_PKT_8x8_RX_TRIGGER_CTL,
+    };
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    uint8_t target, addr, data;
+    bool write, success;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+        nios_pkt_8x8_pack(packet.req, targets[i], true, 0, 0xa0);
+
+        trigger_ctl_write_success = true;
+        pkt_8x8(&packet);
+        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                                 &success);
+        if (target != targets[i] || !write || addr != 0 || !success) {
+            return 1;
+        }
+
+        trigger_ctl_write_success = false;
+        pkt_8x8(&packet);
+        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                                 &success);
+        if (target != targets[i] || !write || addr != 0 || success) {
+            return 1;
+        }
+    }
+
+    trigger_ctl_write_success = true;
+    return 0;
+}
+
 static int check_8x16_agc_write_status(void)
 {
     struct pkt_buf packet = { .resp = { 0 }, .ready = false };
@@ -504,7 +553,8 @@ int main(void)
         check_8x8_tamer_set_failure() || check_8x8_tamer_invalid_mode() ||
         check_8x8_tamer_set_success() || check_8x8_tamer_invalid_readback() ||
         check_8x8_tamer_invalid_subaddress() ||
-        check_8x8_trigger_subaddresses() || check_8x16_agc_write_status() ||
+        check_8x8_trigger_subaddresses() || check_8x8_trigger_write_status() ||
+        check_8x16_agc_write_status() ||
         check_8x16_iq_correction_status() ||
         check_8x32_diagnostic_address_bounds()) {
         fputs("peripheral failure was reported as packet success\n", stderr);

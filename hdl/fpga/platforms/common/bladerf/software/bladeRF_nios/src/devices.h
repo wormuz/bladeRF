@@ -603,7 +603,7 @@ static inline  uint32_t fpga_version(void)
  *
  * @param   data    Data to write
  */
-void tx_trigger_ctl_write(uint8_t data);
+bool tx_trigger_ctl_write(uint8_t data);
 
 /**
  * Read the Tx trigger control register
@@ -617,7 +617,7 @@ uint8_t tx_trigger_ctl_read(void);
  *
  * @param   data    Data to write
  */
-void rx_trigger_ctl_write(uint8_t data);
+bool rx_trigger_ctl_write(uint8_t data);
 
 /**
  * Read the Rx trigger control register
