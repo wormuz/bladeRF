@@ -14,6 +14,9 @@
 
 static bool peripheral_success;
 static bool lms_success;
+static bool tamer_mode_success;
+static bladerf_vctcxo_tamer_mode tamer_mode_readback =
+    BLADERF_VCTCXO_TAMER_DISABLED;
 
 bool si5338_read(uint8_t addr, uint8_t *value)
 {
@@ -63,8 +66,14 @@ bool lms6_write(uint8_t addr, uint8_t value)
     return lms_success;
 }
 bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode(void)
-{ return BLADERF_VCTCXO_TAMER_DISABLED; }
-void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode) { (void)mode; }
+{ return tamer_mode_readback; }
+bool vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
+{
+    return tamer_mode_success &&
+           (mode == BLADERF_VCTCXO_TAMER_DISABLED ||
+            mode == BLADERF_VCTCXO_TAMER_1_PPS ||
+            mode == BLADERF_VCTCXO_TAMER_10_MHZ);
+}
 uint8_t tx_trigger_ctl_read(void) { return 0; }
 void tx_trigger_ctl_write(uint8_t value) { (void)value; }
 uint8_t rx_trigger_ctl_read(void) { return 0; }
@@ -247,6 +256,114 @@ static int check_8x8_lms_read_failure(void)
     return target == NIOS_PKT_8x8_TARGET_LMS6 && !write && !success ? 0 : 1;
 }
 
+static int check_8x8_tamer_set_failure(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0xff,
+                 BLADERF_VCTCXO_TAMER_1_PPS },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = false, success = true;
+
+    tamer_mode_success = false;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_VCTCXO_TAMER && write &&
+           addr == 0xff && !success ? 0 : 1;
+}
+
+static int check_8x8_tamer_invalid_mode(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0xff, 0xff },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = false, success = true;
+
+    tamer_mode_success = true;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_VCTCXO_TAMER && write &&
+           addr == 0xff && !success ? 0 : 1;
+}
+
+static int check_8x8_tamer_set_success(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0xff,
+                 BLADERF_VCTCXO_TAMER_1_PPS },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = false, success = false;
+
+    tamer_mode_success = true;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_VCTCXO_TAMER && write &&
+           addr == 0xff && success ? 0 : 1;
+}
+
+static int check_8x8_tamer_invalid_readback(void)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 0, 0, 0xff, 0 },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0xff;
+    bool write = true, success = true;
+
+    tamer_mode_readback = BLADERF_VCTCXO_TAMER_INVALID;
+    pkt_8x8(&packet);
+    nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                             &success);
+    tamer_mode_readback = BLADERF_VCTCXO_TAMER_DISABLED;
+    return target == NIOS_PKT_8x8_TARGET_VCTCXO_TAMER && !write &&
+           addr == 0xff && !success ? 0 : 1;
+}
+
+static int check_8x8_tamer_invalid_subaddress(void)
+{
+    struct pkt_buf read_packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 0, 0, 0x01, 0 },
+        .resp = { 0 }, .ready = false,
+    };
+    struct pkt_buf write_packet = {
+        .req = { NIOS_PKT_8x8_MAGIC, NIOS_PKT_8x8_TARGET_VCTCXO_TAMER,
+                 NIOS_PKT_8x8_FLAG_WRITE, 0, 0x01,
+                 BLADERF_VCTCXO_TAMER_1_PPS },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target = 0, addr = 0, data = 0;
+    bool write = true, success = true;
+
+    pkt_8x8(&read_packet);
+    nios_pkt_8x8_resp_unpack(read_packet.resp, &target, &write, &addr, &data,
+                             &success);
+    if (target != NIOS_PKT_8x8_TARGET_VCTCXO_TAMER || write ||
+        addr != 0x01 || success) {
+        return 1;
+    }
+
+    write = false;
+    success = true;
+    pkt_8x8(&write_packet);
+    nios_pkt_8x8_resp_unpack(write_packet.resp, &target, &write, &addr, &data,
+                             &success);
+    return target == NIOS_PKT_8x8_TARGET_VCTCXO_TAMER && write &&
+           addr == 0x01 && !success ? 0 : 1;
+}
+
 static int check_8x32_diagnostic_address_bounds(void)
 {
     static const struct {
@@ -278,10 +395,13 @@ int main(void)
     if (check_8x16_write_failure() || check_8x16_read_failure() ||
         check_8x32_write_failure() || check_8x8_si5338_failure() ||
         check_8x8_lms_failure() || check_8x8_lms_read_failure() ||
+        check_8x8_tamer_set_failure() || check_8x8_tamer_invalid_mode() ||
+        check_8x8_tamer_set_success() || check_8x8_tamer_invalid_readback() ||
+        check_8x8_tamer_invalid_subaddress() ||
         check_8x32_diagnostic_address_bounds()) {
         fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;
     }
-    puts("NIOS peripheral SPI packet failure status: PASS");
+    puts("NIOS peripheral packet failure status: PASS");
     return 0;
 }

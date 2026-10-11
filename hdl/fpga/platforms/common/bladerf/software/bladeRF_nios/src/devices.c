@@ -143,7 +143,7 @@ void vctcxo_tamer_reset_counters(bool reset)
     return;
 }
 
-void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
+bool vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
 {
     switch (mode) {
         case BLADERF_VCTCXO_TAMER_DISABLED:
@@ -154,7 +154,7 @@ void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
 
         default:
             /* Erroneous value */
-            return;
+            return false;
     }
 
     /* Set tuning mode */
@@ -181,7 +181,7 @@ void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
             break;
     }
 
-    return;
+    return vctcxo_tamer_get_tune_mode() == mode;
 }
 
 bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode()
@@ -366,7 +366,9 @@ void bladerf_nios_init(struct pkt_buf *pkt,
                         NULL);
 
     /* Default VCTCXO Tamer and its interrupts to be disabled. */
-    vctcxo_tamer_set_tune_mode(BLADERF_VCTCXO_TAMER_DISABLED);
+    if (!vctcxo_tamer_set_tune_mode(BLADERF_VCTCXO_TAMER_DISABLED)) {
+        DBG("Unable to initialize VCTCXO tamer mode\n");
+    }
 
     /* Enable interrupts */
     command_uart_enable_isr(true);

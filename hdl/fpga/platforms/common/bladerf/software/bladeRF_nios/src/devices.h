@@ -553,7 +553,7 @@ void vctcxo_tamer_reset_counters( bool reset );
  * @param mode      One of the BLADERF_VCTCXO_TAMER_* values.
  *
  */
-void vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode);
+bool vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode);
 
 /**
  * Gets the current VCTCXO Tamer mode

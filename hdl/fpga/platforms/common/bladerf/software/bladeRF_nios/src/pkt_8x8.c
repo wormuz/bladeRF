@@ -44,15 +44,19 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint8_t *data)
             break;
 
         case NIOS_PKT_8x8_TARGET_VCTCXO_TAMER:
-            switch (addr) {
-                /* Using 0xff for mode selection operation so that we can
-                 * reserve lower values for register-level access */
-                case 0xff:
-                    *data = (uint8_t) vctcxo_tamer_get_tune_mode();
-                    break;
-
-                default:
-                    *data = 0x00;
+            /* 0xff is the only defined selector on this protocol. */
+            if (addr != 0xff) {
+                *data = 0;
+                return false;
+            }
+            {
+                bladerf_vctcxo_tamer_mode mode =
+                    vctcxo_tamer_get_tune_mode();
+                if (mode == BLADERF_VCTCXO_TAMER_INVALID) {
+                    *data = 0;
+                    return false;
+                }
+                *data = (uint8_t)mode;
             }
             break;
 
@@ -97,18 +101,12 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint8_t data)
             break;
 
         case NIOS_PKT_8x8_TARGET_VCTCXO_TAMER:
-            switch (addr) {
-                /* Using 0xff for mode selection operation so that we can
-                 * reserve lower values for register-level access */
-                case 0xff:
-                    vctcxo_tamer_set_tune_mode((bladerf_vctcxo_tamer_mode) data);
-                    break;
-
-                default:
-                    /* Throw away data for unused subaddress values */
-                    break;
+            /* 0xff is the only defined selector on this protocol. */
+            if (addr != 0xff) {
+                return false;
             }
-            break;
+            return vctcxo_tamer_set_tune_mode(
+                (bladerf_vctcxo_tamer_mode)data);
 
         case NIOS_PKT_8x8_TX_TRIGGER_CTL:
             tx_trigger_ctl_write(data);
