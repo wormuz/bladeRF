@@ -98,6 +98,79 @@ begin
             report "TX gate failed to resume after RFIC completion"
             severity failure;
 
+        -- A queued replacement must never move an already armed mute
+        -- boundary later. This exercises the compare that selects which
+        -- timestamp is retained when ARM arrives in STATE_ARMED.
+        timestamp <= to_unsigned(20, 64);
+        target_timestamp <= to_unsigned(40, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= to_unsigned(50, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        timestamp <= to_unsigned(39, 64);
+        wait for 1 ns;
+        assert state = "01" and muted = '0'
+            report "later replacement moved the queued boundary"
+            severity failure;
+        timestamp <= to_unsigned(40, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "gate failed to retain the earlier queued boundary"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(40, 64)
+            report "retained earlier boundary was not recorded exactly"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after later-target test"
+            severity failure;
+
+        -- Conversely, an earlier replacement must supersede the queued
+        -- boundary and mute at the replacement timestamp.
+        timestamp <= to_unsigned(50, 64);
+        target_timestamp <= to_unsigned(80, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= to_unsigned(65, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        timestamp <= to_unsigned(64, 64);
+        wait for 1 ns;
+        assert state = "01" and muted = '0'
+            report "earlier replacement muted before its boundary"
+            severity failure;
+        timestamp <= to_unsigned(65, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "earlier replacement did not move the boundary earlier"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(65, 64)
+            report "earlier replacement boundary was not recorded exactly"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after earlier-target test"
+            severity failure;
+
         -- The TX integration ORs FIFO underflow into ABORT so DAC muting
         -- does not wait for the host's periodic status monitor.
         underflow_event <= '1';

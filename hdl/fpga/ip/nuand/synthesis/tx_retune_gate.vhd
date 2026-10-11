@@ -187,7 +187,13 @@ begin
                 elsif state_i = STATE_ARMED then
                     -- Requests are ordered by NIOS; retain the earliest
                     -- boundary so queued transitions cannot reopen a gap.
-                    if signed(target_i - target_timestamp) > 0 then
+                    -- Keep the earliest requested boundary while a retune
+                    -- is already armed.  A 64-bit subtract here fed the
+                    -- target register mux and became the fitted critical
+                    -- path.  Reuse the segmented modulo comparator instead
+                    --; equality must retain the existing target.
+                    if timestamp_reached(target_i, target_timestamp) and
+                       target_i /= target_timestamp then
                         target_i <= target_timestamp;
                     end if;
                     if arm_immediate = '1' or due_now then
