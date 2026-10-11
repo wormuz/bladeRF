@@ -36,7 +36,7 @@ bool rffe_csr_read_checked(uint32_t *value);
 bool rffe_csr_write_checked(uint32_t value, uint32_t output_mask);
 uint32_t rf_link_status_read(void);
 uint32_t rx_fault_causes_read(void);
-uint32_t loss_counter_half_read(loss_counter_half_t which);
+bool loss_counter_half_read(loss_counter_half_t which, uint32_t *value);
 uint32_t dwell_status_read(void);
 uint32_t dwell_word_read(uint8_t word);
 bool dwell_cfg_write(uint32_t value);

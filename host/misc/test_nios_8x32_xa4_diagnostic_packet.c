@@ -40,8 +40,15 @@ uint32_t pkt_retune2_completion_word(uint8_t addr)
 { return UINT32_C(0xc0000000) | addr; }
 uint32_t rf_link_status_read(void) { return 0; }
 uint32_t rx_fault_causes_read(void) { return 0; }
-uint32_t loss_counter_half_read(loss_counter_half_t which)
-{ return UINT32_C(0xa0000000) | (uint32_t)which; }
+static bool loss_counter_available = true;
+bool loss_counter_half_read(loss_counter_half_t which, uint32_t *value)
+{
+    if (!loss_counter_available || value == NULL) {
+        return false;
+    }
+    *value = UINT32_C(0xa0000000) | (uint32_t)which;
+    return true;
+}
 uint32_t dwell_status_read(void) { return 0; }
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
@@ -157,6 +164,9 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 3, true,
                UINT32_C(0xa0000003));
     CHECK_READ(NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 4, false, 0);
+    loss_counter_available = false;
+    CHECK_READ(NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 0, false, 0);
+    loss_counter_available = true;
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 15, true,
                UINT32_C(0xd000000f));
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 16, false, 0);

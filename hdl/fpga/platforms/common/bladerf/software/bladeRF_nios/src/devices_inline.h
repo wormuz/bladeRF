@@ -178,27 +178,35 @@ typedef enum {
     LOSS_CNT_TX_HI = 3,
 } loss_counter_half_t;
 
-static inline uint32_t loss_counter_half_read(loss_counter_half_t which)
+static inline bool loss_counter_half_read(loss_counter_half_t which,
+                                          uint32_t *value)
 {
+    if (value == NULL) {
+        return false;
+    }
     switch (which) {
     #ifdef RX_OVERFLOW_COUNT_LO_BASE
         case LOSS_CNT_RX_LO:
-            return IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_LO_BASE);
+            *value = IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_LO_BASE);
+            return true;
     #endif
     #ifdef RX_OVERFLOW_COUNT_HI_BASE
         case LOSS_CNT_RX_HI:
-            return IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_HI_BASE);
+            *value = IORD_ALTERA_AVALON_PIO_DATA(RX_OVERFLOW_COUNT_HI_BASE);
+            return true;
     #endif
     #ifdef TX_UNDERFLOW_COUNT_LO_BASE
         case LOSS_CNT_TX_LO:
-            return IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_LO_BASE);
+            *value = IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_LO_BASE);
+            return true;
     #endif
     #ifdef TX_UNDERFLOW_COUNT_HI_BASE
         case LOSS_CNT_TX_HI:
-            return IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_HI_BASE);
+            *value = IORD_ALTERA_AVALON_PIO_DATA(TX_UNDERFLOW_COUNT_HI_BASE);
+            return true;
     #endif
         default:
-            return 0;
+            return false;
     }
 }
 

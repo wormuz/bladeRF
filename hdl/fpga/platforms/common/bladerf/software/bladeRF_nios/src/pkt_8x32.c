@@ -154,16 +154,28 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
         case NIOS_PKT_8x32_TARGET_LOSS_COUNTERS:
             switch (addr) {
                 case 0:
-                    *data = loss_counter_half_read(LOSS_CNT_RX_LO);
+                    if (!loss_counter_half_read(LOSS_CNT_RX_LO, data)) {
+                        *data = 0;
+                        return false;
+                    }
                     break;
                 case 1:
-                    *data = loss_counter_half_read(LOSS_CNT_RX_HI);
+                    if (!loss_counter_half_read(LOSS_CNT_RX_HI, data)) {
+                        *data = 0;
+                        return false;
+                    }
                     break;
                 case 2:
-                    *data = loss_counter_half_read(LOSS_CNT_TX_LO);
+                    if (!loss_counter_half_read(LOSS_CNT_TX_LO, data)) {
+                        *data = 0;
+                        return false;
+                    }
                     break;
                 case 3:
-                    *data = loss_counter_half_read(LOSS_CNT_TX_HI);
+                    if (!loss_counter_half_read(LOSS_CNT_TX_HI, data)) {
+                        *data = 0;
+                        return false;
+                    }
                     break;
                 default:
                     *data = 0;
