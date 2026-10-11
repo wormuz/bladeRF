@@ -940,6 +940,67 @@ static void _invalidate_faulted_rx_epoch(struct bladerf *dev,
     });
 }
 
+/* TX can finish a scheduled recall while its data link is disabled. Read-only
+ * pairing here detects a completion with no accepted host request without
+ * probing the inactive RFIC or consuming records needed by the active monitor.
+ * Caller holds dev->lock so queue mutation and NIOS reads stay serialized. */
+static bool tx_retune_completion_batch_matches_pending(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    uint32_t baseline, uint32_t observed, uint8_t pending_count,
+    uint32_t *completed_out, int *read_status_out)
+{
+    bool matched[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH] = { false };
+    uint32_t completed = observed - baseline;
+    uint32_t sequence = baseline;
+
+    *completed_out = completed;
+    *read_status_out = 0;
+    if (completed == 0) {
+        return true;
+    }
+    if (!bladerf2_retune_completion_batch_valid(
+            completed, pending_count,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH)) {
+        return false;
+    }
+
+    for (uint32_t n = 0; n < completed; ++n) {
+        uint64_t readback_frequency_hz = 0;
+        uint64_t scheduled_timestamp = 0;
+        uint16_t nios_profile = 0;
+        bool request_found = false;
+        uint32_t i;
+        int status = nios_retune2_completion_read(
+            dev, BLADERF_MODULE_TX, ++sequence, &readback_frequency_hz,
+            &scheduled_timestamp, &nios_profile);
+        if (status != 0) {
+            *read_status_out = status;
+            return false;
+        }
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            if (!matched[i] && board_data->tx_retune2_pending[i].valid &&
+                bladerf2_retune_completion_matches(
+                    board_data->tx_retune2_pending[i].timestamp,
+                    board_data->tx_retune2_pending[i].requested_frequency_hz,
+                    board_data->tx_retune2_pending[i].nios_profile,
+                    scheduled_timestamp, readback_frequency_hz,
+                    nios_profile)) {
+                matched[i] = true;
+                request_found = true;
+                break;
+            }
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!request_found) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static void *rx_fault_monitor_task(void *arg)
 {
     struct bladerf *dev = arg;
@@ -2223,11 +2284,16 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_failure = false;
             bool report_counter_reset = false;
             bool report_unavailable = false;
+            bool report_completion_lost = false;
+            uint32_t unpaired_completion_count = 0;
+            int32_t completion_lost_error = BLADERF_ERR_UNEXPECTED;
             WITH_MUTEX(&dev->lock, {
                 /* TX may have been enabled after the polling decision. Leave
                  * the counter baseline untouched so the active-link pass can
                  * process the same observation and abort the FPGA gate. */
-                if (!board_data->rf_link_dir_on[1]) {
+                if (!board_data->rf_link_dir_on[1] &&
+                    board_data->tx_channel_state_generation ==
+                        tx_channel_state_generation) {
                     report_unavailable =
                         (tx_retune2_status != 0 ||
                          tx_retune2_success_status != 0) &&
@@ -2272,6 +2338,67 @@ static void *rx_fault_monitor_task(void *arg)
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune_recovery_pending = true;
                         }
+                        if (!report_failure && !report_counter_reset) {
+                            uint32_t baseline;
+                            uint8_t pending_count;
+                            bool baseline_valid;
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            baseline =
+                                board_data->tx_retune2_success_count_last;
+                            baseline_valid =
+                                board_data->tx_retune2_success_count_valid;
+                            pending_count =
+                                board_data->tx_retune2_pending_count;
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+                            if (baseline_valid) {
+                                int completion_read_status = 0;
+                                report_completion_lost =
+                                    !tx_retune_completion_batch_matches_pending(
+                                        dev, board_data, baseline,
+                                        tx_retune2_success_count, pending_count,
+                                        &unpaired_completion_count,
+                                        &completion_read_status);
+                                if (completion_read_status != 0) {
+                                    completion_lost_error =
+                                        completion_read_status;
+                                }
+                            } else if (pending_count == 0) {
+                                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                                board_data->tx_retune2_success_count_last =
+                                    tx_retune2_success_count;
+                                board_data->tx_retune2_success_count_valid =
+                                    true;
+                                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            } else {
+                                /* An accepted request exists but its
+                                 * completion baseline is unavailable. Keep
+                                 * TX invalid and report the unpairable state. */
+                                report_completion_lost = true;
+                                unpaired_completion_count = 1;
+                            }
+
+                            if (report_completion_lost) {
+                                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                                board_data->tx_retune2_success_count_last =
+                                    tx_retune2_success_count;
+                                board_data->tx_retune2_success_count_valid =
+                                    true;
+                                board_data->tx_retune2_completion_faulted =
+                                    true;
+                                board_data->tx_retune2_pending_count = 0;
+                                board_data->tx_retune2_applied_waiting_rf_valid =
+                                    false;
+                                for (unsigned int i = 0; i <
+                                     NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+                                     ++i) {
+                                    board_data->tx_retune2_pending[i].valid =
+                                        false;
+                                }
+                                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                                board_data->tx_retune_recovery_pending = true;
+                            }
+                        }
                     }
                 }
             });
@@ -2294,6 +2421,12 @@ static void *rx_fault_monitor_task(void *arg)
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                     tx_retune2_failure_count, 0, 0,
                     BLADERF_ERR_UNEXPECTED);
+            }
+            if (report_completion_lost) {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    0, 0, unpaired_completion_count,
+                    completion_lost_error);
             }
         }
 

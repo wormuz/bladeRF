@@ -336,6 +336,7 @@ int main(void)
     assert(bladerf2_retune_completion_batch_valid(0, 0, 16));
     assert(bladerf2_retune_completion_batch_valid(16, 16, 16));
     assert(!bladerf2_retune_completion_batch_valid(17, 17, 16));
+    assert(!bladerf2_retune_completion_batch_valid(1, 0, 16));
     assert(!bladerf2_retune_completion_batch_valid(2, 1, 16));
     assert(bladerf2_retune_completion_unresolved(1));
     assert(!bladerf2_retune_completion_unresolved(0));
@@ -346,6 +347,10 @@ int main(void)
         1234, 1840000000ULL, 3, 1234, 1840000000ULL, 3));
     assert(!bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1235, 1840000000ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1841000000ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 4));
     assert(bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1234, 1840000001ULL, 3));
     assert(bladerf2_retune_completion_matches(
