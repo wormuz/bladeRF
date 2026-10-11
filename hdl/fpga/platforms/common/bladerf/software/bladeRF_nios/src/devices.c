@@ -271,11 +271,9 @@ bool tamer_schedule(bladerf_module m, uint64_t time)
         }
     }
 
-    /* Best-effort cancellation prevents a delayed CDC arm from firing after
-     * the caller has been told the schedule failed. If the timestamp clock
-     * is still unavailable, cancellation also fails boundedly and the host
-     * remains in the already-invalid state. */
-    (void)tamer_cancel(m);
+    /* The compare state is uncertain on timeout. The queue owner must keep
+     * this request until tamer_cancel() confirms disarm; releasing it here
+     * would let a later request share a still-armed comparator. */
     return false;
 }
 

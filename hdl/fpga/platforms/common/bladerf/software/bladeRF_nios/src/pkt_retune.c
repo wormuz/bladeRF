@@ -48,6 +48,8 @@ enum entry_state {
     ENTRY_STATE_NEW,          /* We have a new retune request to satisfy */
     ENTRY_STATE_SCHEDULED,    /* We've scheduled the timer interrupt for
                                * this entry and are awaiting the ISR */
+    ENTRY_STATE_CANCEL_PENDING, /* Schedule failed; retain timer ownership
+                                 * until cancellation is acknowledged */
     ENTRY_STATE_READY,        /* The timer interrupt has fired - we should
                                * handle this retune */
 };
@@ -56,6 +58,7 @@ struct queue_entry {
     volatile enum entry_state state;
     struct lms_freq freq;
     uint64_t timestamp;
+    bool cancel_recovery_seen;
 };
 
 static struct queue {
@@ -82,6 +85,7 @@ static inline uint8_t enqueue_retune(struct queue *q,
 
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].timestamp = timestamp;
+    q->entries[q->ins_idx].cancel_recovery_seen = false;
 
     q->ins_idx = (q->ins_idx + 1) & (RETUNE_QUEUE_MAX - 1);
 
@@ -269,7 +273,11 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             e->state = ENTRY_STATE_SCHEDULED;
             if (!tamer_schedule(module, e->timestamp)) {
                 INCREMENT_ERROR_COUNT();
-                dequeue_retune(q, NULL);
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = !tamer_clock_stalled(module);
+                if (e->cancel_recovery_seen && tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
             }
             break;
 
@@ -278,6 +286,28 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * timestamp comparator actually fired. */
             if (tamer_compare_fired(module)) {
                 e->state = ENTRY_STATE_READY;
+            } else if (tamer_clock_stalled(module)) {
+                /* A stopped timestamp clock cannot fire this compare. Fail
+                 * the queued request and retain ownership until the FPGA
+                 * confirms cancellation, so a later request cannot inherit
+                 * a compare still crossing the clock boundary. */
+                INCREMENT_ERROR_COUNT();
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = false;
+                if (tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
+            }
+            break;
+
+        case ENTRY_STATE_CANCEL_PENDING:
+            if (tamer_clock_stalled(module)) {
+                e->cancel_recovery_seen = false;
+            } else if (!e->cancel_recovery_seen) {
+                e->cancel_recovery_seen = true;
+                if (tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
             }
             break;
 

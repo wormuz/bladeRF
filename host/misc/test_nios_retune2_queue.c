@@ -574,6 +574,85 @@ static int check_tamer_read_and_arm_fail_closed(void)
     return 0;
 }
 
+static int check_failed_schedule_retains_timer_ownership(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 3;
+    fail_tamer_schedule = true;
+    fail_tamer_cancel = true;
+    simulated_tamer_clock_stalled = true;
+    cancel_count = 0;
+    schedule_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 3, 10) != 1 ||
+        enqueue_retune(&rx_queue, &profile, 3, 20) != 2) {
+        fputs("failed to enqueue schedule/cancel ownership cases\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.count != 2 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        schedule_count != 1 || cancel_count != 0) {
+        fputs("schedule timeout released an unacknowledged compare\n",
+              stderr);
+        return 1;
+    }
+
+    fail_tamer_schedule = false;
+    pkt_retune2_work();
+    if (rx_queue.count != 2 || schedule_count != 1 || cancel_count != 0) {
+        fputs("stalled compare ownership advanced the following request\n",
+              stderr);
+        return 1;
+    }
+
+    simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
+    if (rx_queue.count != 2 || schedule_count != 1 || cancel_count != 1) {
+        fputs("failed cancel retry released the compare owner\n", stderr);
+        return 1;
+    }
+
+    simulated_tamer_clock_stalled = true;
+    pkt_retune2_work();
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || schedule_count != 1 || cancel_count != 2 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_NEW) {
+        fputs("acknowledged cancellation did not release queue ownership\n",
+              stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || schedule_count != 2 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        scheduled_timestamp != 20 || recall_count != 0) {
+        fputs("next compare did not wait for prior cancellation\n", stderr);
+        return 1;
+    }
+
+    compare_fired_rx = true;
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    pkt_retune2_work();
+    if (rx_queue.count != 0 || recall_count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1) {
+        fputs("recovered schedule did not complete after new compare\n",
+              stderr);
+        return 1;
+    }
+
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_schedule = false;
+    fail_tamer_cancel = false;
+    return 0;
+}
+
 static int check_timestamp_wrap_ordering(void)
 {
     fastlock_profile profile = { 0 };
@@ -723,6 +802,9 @@ int main(void)
         return 1;
     }
     if (check_tamer_read_and_arm_fail_closed() != 0) {
+        return 1;
+    }
+    if (check_failed_schedule_retains_timer_ownership() != 0) {
         return 1;
     }
     if (check_timestamp_wrap_ordering() != 0) {

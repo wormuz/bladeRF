@@ -514,6 +514,8 @@ INLINE void timer_tamer_clear_interrupt(bladerf_module m);
  * @return true after comparator acknowledgement, false on invalid module or
  *         arm timeout.
  */
+/* False means the schedule was not acknowledged; caller must retain ownership
+ * of the time-tamer until tamer_cancel() confirms disarm. */
 bool tamer_schedule(bladerf_module m, uint64_t time);
 
 /** Cancel an armed timer compare and wait until the time-tamer acknowledges. */

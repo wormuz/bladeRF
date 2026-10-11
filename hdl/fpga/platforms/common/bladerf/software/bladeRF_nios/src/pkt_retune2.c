@@ -491,7 +491,15 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             e->state = ENTRY_STATE_SCHEDULED;
             if (!tamer_schedule(module, e->timestamp)) {
                 record_retune2_failure(module);
-                dequeue_retune(q, NULL);
+                /* A schedule timeout is ambiguous: the compare payload may
+                 * already be crossing into ts_clock. Keep the queue head
+                 * until cancellation is acknowledged so a later request
+                 * cannot inherit a late compare event. */
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = !tamer_clock_stalled(module);
+                if (e->cancel_recovery_seen && tamer_cancel(module)) {
+                    dequeue_retune(q, NULL);
+                }
             }
 
             break;
