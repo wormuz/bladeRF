@@ -1043,6 +1043,42 @@ int main(void)
     }
     phy.fastlock.current_profile[1] = 0;
 
+    /* Calibration must not consume stale cached bandwidth or an
+     * unconfirmed RFPLL source after a failed transition. */
+    {
+        struct no_os_clk rxpll = { .rate = 2400000000U };
+        struct no_os_clk *old_rxpll = phy.clks[RX_RFPLL];
+        bool old_rx_source_valid = phy.rfpll_source_valid[0];
+        bool old_tx_source_valid = phy.rfpll_source_valid[1];
+        bool old_bw_valid = phy.current_bw_valid;
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+
+        phy.clks[RX_RFPLL] = &rxpll;
+        phy.rfpll_source_valid[0] = false;
+        if (ad9361_do_calib(&phy, RFDC_CAL, -1) != -EIO ||
+            ad9361_do_calib_timeout(&phy, RFDC_CAL, -1, 1000) != -EIO) {
+            fprintf(stderr,
+                    "RFDC calibration accepted an unconfirmed RX LO source\n");
+            return EXIT_FAILURE;
+        }
+
+        phy.rfpll_source_valid[0] = true;
+        phy.rfpll_source_valid[1] = true;
+        phy.current_bw_valid = false;
+        if (ad9361_do_calib(&phy, TX_QUAD_CAL, -1) != -EIO ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "TX quadrature calibration accepted an invalid bandwidth cache\n");
+            return EXIT_FAILURE;
+        }
+
+        phy.clks[RX_RFPLL] = old_rxpll;
+        phy.rfpll_source_valid[0] = old_rx_source_valid;
+        phy.rfpll_source_valid[1] = old_tx_source_valid;
+        phy.current_bw_valid = old_bw_valid;
+    }
+
     /* AD9361 burst reads descend through register addresses. The integer
      * BBPLL word is at 0x44, followed by fractional bytes 3, 2, 1. */
     {
@@ -1245,9 +1281,11 @@ int main(void)
                                      ENABLE_RF_OFFSET_TRACKING;
         struct no_os_clk rxpll_clock = { .rate = 2400000000U };
         struct no_os_clk *saved_rxpll_clock = phy.clks[RX_RFPLL];
+        bool saved_rx_source_valid = phy.rfpll_source_valid[0];
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
         phy.clks[RX_RFPLL] = &rxpll_clock;
+        phy.rfpll_source_valid[0] = true;
         phy.bbdc_track_en = true;
         phy.rfdc_track_en = true;
         phy.quad_track_en = true;
@@ -1265,6 +1303,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         phy.clks[RX_RFPLL] = saved_rxpll_clock;
+        phy.rfpll_source_valid[0] = saved_rx_source_valid;
         register_map_enabled = false;
         read_count = write_count = 0;
     }
