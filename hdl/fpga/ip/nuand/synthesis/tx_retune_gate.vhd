@@ -63,8 +63,8 @@ architecture rtl of tx_retune_gate is
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
 
     -- Equivalent to signed(current_ts - target_ts) >= 0 for the modulo
-    -- half-range contract. Compute the lower 48-bit borrow as a prefix over
-    -- three parallel 16-bit comparisons, then subtract only the upper word.
+    -- half-range contract. Compute the borrow into bit 63, then derive the
+    -- difference sign directly instead of subtracting the upper 16-bit word.
     function timestamp_reached(
         current_ts : unsigned(63 downto 0);
         target_ts  : unsigned(63 downto 0)
@@ -72,7 +72,8 @@ architecture rtl of tx_retune_gate is
         variable borrow_16 : std_logic;
         variable borrow_32 : std_logic;
         variable borrow_48 : std_logic;
-        variable high_delta : unsigned(15 downto 0);
+        variable borrow_63 : std_logic;
+        variable result_sign : std_logic;
     begin
         if current_ts(15 downto 0) < target_ts(15 downto 0) then
             borrow_16 := '1';
@@ -91,10 +92,14 @@ architecture rtl of tx_retune_gate is
             borrow_32 = '1') then
             borrow_48 := '1';
         end if;
-        high_delta := current_ts(63 downto 48) -
-                      target_ts(63 downto 48) -
-                      resize(unsigned'(0 => borrow_48), high_delta'length);
-        return high_delta(15) = '0';
+        borrow_63 := '0';
+        if current_ts(62 downto 48) < target_ts(62 downto 48) or
+           (current_ts(62 downto 48) = target_ts(62 downto 48) and
+            borrow_48 = '1') then
+            borrow_63 := '1';
+        end if;
+        result_sign := current_ts(63) xor target_ts(63) xor borrow_63;
+        return result_sign = '0';
     end function;
 
     -- Strict modulo ordering for two scheduled timestamps. The caller's
