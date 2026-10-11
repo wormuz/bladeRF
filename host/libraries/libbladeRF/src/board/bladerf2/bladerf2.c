@@ -5983,6 +5983,9 @@ int bladerf_get_rfic_register(struct bladerf *dev,
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(val);
+    if (address != AD936X_ADDR(address)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     WITH_MUTEX(&dev->lock, {
         uint64_t data;
@@ -6282,6 +6285,9 @@ int bladerf_set_rfic_register(struct bladerf *dev,
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (address != AD936X_ADDR(address)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     struct bladerf2_board_data *board_data = dev->board_data;
     if (bladerf2_rx_retune_blocks_rf_config(board_data)) {

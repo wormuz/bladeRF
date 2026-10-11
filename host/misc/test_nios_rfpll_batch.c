@@ -30,6 +30,28 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     return true;
 }
 
+static int run_invalid_ad9361_read(uint16_t request_addr)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_AD9361, 0, 0,
+                 (uint8_t)request_addr, (uint8_t)(request_addr >> 8),
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = UINT64_MAX;
+    bool write = true, success = true;
+    unsigned int calls_before = read_calls;
+
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_AD9361 && !write &&
+           addr == request_addr && !success && read_calls == calls_before
+        ? 0 : 1;
+}
+
 uint64_t rx_epoch_status_snapshot_read(void)
 {
     return UINT64_C(0x123456789abcdef0);
@@ -199,7 +221,9 @@ int main(void)
         run_update_bits_case(false, false) || update_calls != 2 ||
         run_epoch_snapshot_case() ||
         run_read_case(true, true) ||
-        run_read_case(false, false) || read_calls != 2) {
+        run_read_case(false, false) || read_calls != 2 ||
+        run_invalid_ad9361_read(0x8247) ||
+        run_invalid_ad9361_read(0x0c47) || read_calls != 2) {
         return 1;
     }
 

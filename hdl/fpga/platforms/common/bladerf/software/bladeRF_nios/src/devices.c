@@ -607,7 +607,7 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     uint64_t rv;
     int status;
 
-    if (value == NULL || !spi_arbiter_lock()) {
+    if (value == NULL || (addr & 0x8c00u) != 0 || !spi_arbiter_lock()) {
         return false;
     }
 
@@ -650,6 +650,10 @@ static bool adi_spi_write_unlocked(uint16_t addr, uint64_t data)
     alt_u8 bytes;
     uint8_t i;
     int status;
+
+    if ((addr & 0x0c00u) != 0) {
+        return false;
+    }
 
     // The alt_avalon_spi_command expects parameters to be arrays of bytes
 

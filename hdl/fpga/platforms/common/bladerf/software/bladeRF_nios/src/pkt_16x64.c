@@ -74,6 +74,11 @@ static inline bool perform_read(uint8_t id, uint16_t addr, uint64_t *data)
     switch (id) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         case NIOS_PKT_16x64_TARGET_AD9361:
+            /* Bit 15 is the AD9361 write flag and bits 10..11 are reserved.
+             * A malformed read with bit 15 set can write zero-filled bytes. */
+            if ((addr & 0x8c00u) != 0) {
+                return false;
+            }
             return adi_spi_read_checked(addr, data);
 #endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
 
