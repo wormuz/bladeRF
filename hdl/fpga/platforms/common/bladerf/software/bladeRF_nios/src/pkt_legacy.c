@@ -491,7 +491,12 @@ void pkt_legacy(struct pkt_buf *b)
     DBG("%s: read=%s, write=%s, dev_id=0x%x, cfg=0x%x, count=0x%x\n", __FUNCTION__,
         is_read ? "true" : "false", is_write ? "true" : "false", dev_id, cfg, count);
 
-    if (is_read && is_write) {
+    if (count == 0) {
+        /* The count is the number of address/data pairs. A zero-pair packet
+         * must not fall through to peripheral handlers that still consume
+         * the payload bytes as a single register access. */
+        b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+    } else if (is_read && is_write) {
         b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
     } else if (is_read) {
         legacy_pkt_read(dev_id, count, b);

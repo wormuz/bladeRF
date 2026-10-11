@@ -12,6 +12,7 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     -I"$repo_root/fpga_common/include" \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
     -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \
+    "$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_legacy.c" \
     "$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x16.c" \
     "$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x8.c" \
     "$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_8x32.c" \

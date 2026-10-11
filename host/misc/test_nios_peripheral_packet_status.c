@@ -6,6 +6,7 @@
 #include "pkt_8x16.h"
 #include "pkt_8x8.h"
 #include "pkt_8x32.h"
+#include "pkt_legacy.h"
 #include "pkt_handler.h"
 #include "nios_pkt_8x16.h"
 #include "nios_pkt_8x8.h"
@@ -14,6 +15,10 @@
 
 static bool peripheral_success;
 static bool lms_success;
+static unsigned int si5338_read_calls;
+static unsigned int si5338_write_calls;
+static unsigned int lms_read_calls;
+static unsigned int lms_write_calls;
 static bool tamer_mode_success;
 static bool agc_dc_success;
 static bool iqcorr_success;
@@ -26,6 +31,7 @@ static bladerf_vctcxo_tamer_mode tamer_mode_readback =
 bool si5338_read(uint8_t addr, uint8_t *value)
 {
     (void)addr;
+    si5338_read_calls++;
     if (peripheral_success) {
         *value = 0x5a;
     }
@@ -36,6 +42,7 @@ bool si5338_write(uint8_t addr, uint8_t value)
 {
     (void)addr;
     (void)value;
+    si5338_write_calls++;
     return peripheral_success;
 }
 
@@ -58,6 +65,7 @@ bool ina219_write(uint8_t addr, uint16_t value)
 bool lms6_read(uint8_t addr, uint8_t *value)
 {
     (void)addr;
+    lms_read_calls++;
     if (lms_success && value != NULL) {
         *value = 0x5a;
         return true;
@@ -68,6 +76,7 @@ bool lms6_write(uint8_t addr, uint8_t value)
 {
     (void)addr;
     (void)value;
+    lms_write_calls++;
     return lms_success;
 }
 bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode(void)
@@ -170,6 +179,52 @@ bool adf4351_write(uint32_t value)
 {
     (void)value;
     return peripheral_success;
+}
+bool time_tamer_read(bladerf_module module, uint64_t *time)
+{
+    (void)module;
+    (void)time;
+    return false;
+}
+void time_tamer_reset(bladerf_module module) { (void)module; }
+uint32_t expansion_port_read(void) { return 0; }
+uint32_t expansion_port_get_direction(void) { return 0; }
+bool expansion_port_write(uint32_t value) { (void)value; return true; }
+bool expansion_port_set_direction(uint32_t value)
+{ (void)value; return true; }
+
+static int check_legacy_zero_count(void)
+{
+    static const uint8_t modes[] = {
+        NIOS_PKT_LEGACY_MODE_DIR_READ | NIOS_PKT_LEGACY_DEV_LMS,
+        NIOS_PKT_LEGACY_MODE_DIR_WRITE | NIOS_PKT_LEGACY_DEV_LMS,
+        NIOS_PKT_LEGACY_MODE_DIR_READ | NIOS_PKT_LEGACY_DEV_SI5338,
+        NIOS_PKT_LEGACY_MODE_DIR_WRITE | NIOS_PKT_LEGACY_DEV_SI5338,
+        NIOS_PKT_LEGACY_MODE_DIR_READ | NIOS_PKT_LEGACY_DEV_CONFIG,
+        NIOS_PKT_LEGACY_MODE_DIR_WRITE | NIOS_PKT_LEGACY_DEV_CONFIG,
+    };
+    unsigned int si_read_calls = si5338_read_calls;
+    unsigned int si_write_calls = si5338_write_calls;
+    unsigned int read_calls = lms_read_calls;
+    unsigned int write_calls = lms_write_calls;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(modes) / sizeof(modes[0]); ++i) {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, modes[i], 0x12, 0x34 },
+            .resp = { 0 },
+            .ready = false,
+        };
+        pkt_legacy(&packet);
+        if (packet.resp[0] != NIOS_PKT_LEGACY_ERROR_MAGIC) {
+            return 1;
+        }
+    }
+
+    return si5338_read_calls == si_read_calls &&
+           si5338_write_calls == si_write_calls &&
+           lms_read_calls == read_calls && lms_write_calls == write_calls
+               ? 0 : 1;
 }
 
 static int check_8x16_write_failure(void)
@@ -547,7 +602,8 @@ static int check_8x32_diagnostic_address_bounds(void)
 
 int main(void)
 {
-    if (check_8x16_write_failure() || check_8x16_read_failure() ||
+    if (check_legacy_zero_count() || check_8x16_write_failure() ||
+        check_8x16_read_failure() ||
         check_8x32_write_failure() || check_8x8_si5338_failure() ||
         check_8x8_lms_failure() || check_8x8_lms_read_failure() ||
         check_8x8_tamer_set_failure() || check_8x8_tamer_invalid_mode() ||
