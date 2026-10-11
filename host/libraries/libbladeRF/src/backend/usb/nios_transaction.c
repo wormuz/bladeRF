@@ -25,42 +25,51 @@ static bool nios_response_matches_request(const uint8_t *request,
     switch (request[0]) {
     case NIOS_PKT_8x8_MAGIC: {
         uint8_t req_target, resp_target, req_addr, resp_addr;
+        uint8_t req_data, resp_data;
         bool req_write, resp_write;
-        nios_pkt_8x8_unpack(request, &req_target, &req_write, &req_addr, NULL);
+        nios_pkt_8x8_unpack(request, &req_target, &req_write, &req_addr,
+                            &req_data);
         nios_pkt_8x8_unpack(response, &resp_target, &resp_write, &resp_addr,
-                            NULL);
+                            &resp_data);
         return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+               req_addr == resp_addr &&
+               (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x16_MAGIC: {
         uint8_t req_target, resp_target, req_addr, resp_addr;
+        uint16_t req_data, resp_data;
         bool req_write, resp_write;
         nios_pkt_8x16_unpack(request, &req_target, &req_write, &req_addr,
-                             NULL);
+                             &req_data);
         nios_pkt_8x16_unpack(response, &resp_target, &resp_write, &resp_addr,
-                             NULL);
+                             &resp_data);
         return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+               req_addr == resp_addr &&
+               (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x32_MAGIC: {
         uint8_t req_target, resp_target, req_addr, resp_addr;
+        uint32_t req_data, resp_data;
         bool req_write, resp_write;
         nios_pkt_8x32_unpack(request, &req_target, &req_write, &req_addr,
-                             NULL);
+                             &req_data);
         nios_pkt_8x32_unpack(response, &resp_target, &resp_write, &resp_addr,
-                             NULL);
+                             &resp_data);
         return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+               req_addr == resp_addr &&
+               (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x64_MAGIC: {
         uint8_t req_target, resp_target, req_addr, resp_addr;
+        uint64_t req_data, resp_data;
         bool req_write, resp_write;
         nios_pkt_8x64_unpack(request, &req_target, &req_write, &req_addr,
-                             NULL);
+                             &req_data);
         nios_pkt_8x64_unpack(response, &resp_target, &resp_write, &resp_addr,
-                             NULL);
+                             &resp_data);
         return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+               req_addr == resp_addr &&
+               (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_16x64_MAGIC: {
         uint8_t req_target, resp_target;
@@ -76,13 +85,15 @@ static bool nios_response_matches_request(const uint8_t *request,
     case NIOS_PKT_32x32_MAGIC: {
         uint8_t req_target, resp_target;
         uint32_t req_addr, resp_addr;
+        uint32_t req_data, resp_data;
         bool req_write, resp_write;
         nios_pkt_32x32_unpack(request, &req_target, &req_write, &req_addr,
-                              NULL);
+                              &req_data);
         nios_pkt_32x32_unpack(response, &resp_target, &resp_write, &resp_addr,
-                              NULL);
+                              &resp_data);
         return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+               req_addr == resp_addr &&
+               (!req_write || req_data == resp_data);
     }
     default:
         /* Legacy and fastlock packets have distinct response contracts and
