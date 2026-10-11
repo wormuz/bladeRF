@@ -91,6 +91,7 @@ architecture sim of fifo_reader_tb is
 
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
+    signal first_read_timestamp : unsigned(63 downto 0) := (others => '0');
     signal done         : boolean := false;
 
     -- Link epoch stimulus: real firmware signals a new epoch via
@@ -137,6 +138,9 @@ begin
     counters : process(clock)
     begin
         if rising_edge(clock) and reset = '0' and fifo_read = '1' then
+            if reads_before = 0 and reads_after = 0 then
+                first_read_timestamp <= timestamp;
+            end if;
             if timestamp < to_unsigned(TGT, 64) then
                 reads_before <= reads_before + 1;
             else
@@ -228,6 +232,11 @@ begin
                 severity failure;
             assert reads_after > 0
                 report "gate never opened at its timestamp"
+                severity failure;
+            assert first_read_timestamp = to_unsigned(TGT, 64)
+                report "scheduled TX feed opened at " &
+                       to_hstring(std_logic_vector(first_read_timestamp)) &
+                       ", expected " & integer'image(TGT)
                 severity failure;
             report "scheduled: gate held until the timestamp";
         end if;

@@ -541,16 +541,18 @@ begin
 
         -- Precompute the modulo timestamp-due condition one cycle early.
         --
-        -- The FIFO header is captured in META_LOAD. In META_EVAL the result
-        -- is registered one cycle before META_WAIT consumes it, so compare
-        -- against timestamp + 1 to preserve the original release edge.
+        -- The FIFO header is captured in META_LOAD. META_EVAL adds one
+        -- cycle before the decision is consumed, and the META_WAIT/DOWNCOUNT
+        -- path takes two more cycles to issue the first sample read. Compare
+        -- against timestamp + 3 so that first read still lands exactly on
+        -- the scheduled timestamp.
         --
         -- meta_p_time is constant for the whole of META_WAIT, and equals
         -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
         -- one cycle ahead of that capture is consistent for both states.
         -- Compare against the RAW header, not against (header - 1).
         --
-        ts_next := timestamp + 1;
+        ts_next := timestamp + 3;
         -- Compare the raw header using a low-half borrow and a 33-bit high-half
         -- delta. The sign bit is the sign of the full modulo-2^64 delta,
         -- without one 64-bit subtract/comparator carry chain. Keep reading the
