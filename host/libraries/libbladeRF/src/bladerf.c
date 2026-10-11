@@ -3112,11 +3112,40 @@ int bladerf_expansion_gpio_dir_masked_write(struct bladerf *dev,
 
 /* XB200 */
 
+static bool valid_xb200_channel(bladerf_channel ch)
+{
+    return ch == BLADERF_CHANNEL_RX(0) || ch == BLADERF_CHANNEL_TX(0);
+}
+
+static bool valid_xb200_filter(bladerf_xb200_filter filter)
+{
+    switch (filter) {
+        case BLADERF_XB200_50M:
+        case BLADERF_XB200_144M:
+        case BLADERF_XB200_222M:
+        case BLADERF_XB200_CUSTOM:
+        case BLADERF_XB200_AUTO_1DB:
+        case BLADERF_XB200_AUTO_3DB:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool valid_xb200_path(bladerf_xb200_path path)
+{
+    return path == BLADERF_XB200_BYPASS || path == BLADERF_XB200_MIX;
+}
+
 int bladerf_xb200_set_filterbank(struct bladerf *dev,
                                  bladerf_channel ch,
                                  bladerf_xb200_filter filter)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_xb200_channel(ch) || !valid_xb200_filter(filter)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {
@@ -3145,9 +3174,10 @@ int bladerf_xb200_get_filterbank(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
-    if (!valid_public_channel(ch)) {
+    if (!valid_xb200_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(filter);
     MUTEX_LOCK(&dev->lock);
 
     status = xb200_get_filterbank(dev, ch, filter);
@@ -3161,6 +3191,10 @@ int bladerf_xb200_set_path(struct bladerf *dev,
                            bladerf_xb200_path path)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_xb200_channel(ch) || !valid_xb200_path(path)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {
@@ -3189,9 +3223,10 @@ int bladerf_xb200_get_path(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
-    if (!valid_public_channel(ch)) {
+    if (!valid_xb200_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    CHECK_NULL(path);
     MUTEX_LOCK(&dev->lock);
 
     status = xb200_get_path(dev, ch, path);
@@ -3202,9 +3237,27 @@ int bladerf_xb200_get_path(struct bladerf *dev,
 
 /* XB300 */
 
+static bool valid_xb300_trx(bladerf_xb300_trx trx)
+{
+    return trx == BLADERF_XB300_TRX_TX ||
+           trx == BLADERF_XB300_TRX_RX ||
+           trx == BLADERF_XB300_TRX_UNSET;
+}
+
+static bool valid_xb300_amplifier(bladerf_xb300_amplifier amp)
+{
+    return amp == BLADERF_XB300_AMP_PA ||
+           amp == BLADERF_XB300_AMP_LNA ||
+           amp == BLADERF_XB300_AMP_PA_AUX;
+}
+
 int bladerf_xb300_set_trx(struct bladerf *dev, bladerf_xb300_trx trx)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_xb300_trx(trx)) {
+        return BLADERF_ERR_INVAL;
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {
@@ -3229,6 +3282,8 @@ int bladerf_xb300_set_trx(struct bladerf *dev, bladerf_xb300_trx trx)
 int bladerf_xb300_get_trx(struct bladerf *dev, bladerf_xb300_trx *trx)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(trx);
     MUTEX_LOCK(&dev->lock);
 
     status = xb300_get_trx(dev, trx);
@@ -3242,6 +3297,10 @@ int bladerf_xb300_set_amplifier_enable(struct bladerf *dev,
                                        bool enable)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_xb300_amplifier(amp)) {
+        return BLADERF_ERR_INVAL;
+    }
     if (amp == BLADERF_XB300_AMP_LNA) {
         status = invalidate_rx_data_before_reconfigure(
             dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_GAIN);
@@ -3273,6 +3332,11 @@ int bladerf_xb300_get_amplifier_enable(struct bladerf *dev,
                                        bool *enable)
 {
     int status;
+    CHECK_NULL(dev);
+    if (!valid_xb300_amplifier(amp)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_NULL(enable);
     MUTEX_LOCK(&dev->lock);
 
     status = xb300_get_amplifier_enable(dev, amp, enable);
@@ -3284,6 +3348,8 @@ int bladerf_xb300_get_amplifier_enable(struct bladerf *dev,
 int bladerf_xb300_get_output_power(struct bladerf *dev, float *val)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(val);
     MUTEX_LOCK(&dev->lock);
 
     status = xb300_get_output_power(dev, val);

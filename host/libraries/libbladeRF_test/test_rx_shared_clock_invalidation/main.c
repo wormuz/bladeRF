@@ -419,6 +419,27 @@ int main(void)
            BLADERF_ERR_UNSUPPORTED);
     assert(state.invalidate_calls == 0);
 
+    /* Expansion-board APIs must reject invalid selectors and null outputs
+     * before revoking a live RF certificate or entering GPIO/LMS access. */
+    assert(bladerf_xb200_set_filterbank(
+               &dev, rx0, (bladerf_xb200_filter)-1) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb200_set_filterbank(
+               &dev, rx2, BLADERF_XB200_50M) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb200_set_path(
+               &dev, rx0, (bladerf_xb200_path)-1) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb200_get_filterbank(&dev, rx0, NULL) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_xb200_get_path(&dev, rx0, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb300_set_trx(
+               &dev, BLADERF_XB300_TRX_INVAL) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb300_set_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_INVAL, true) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb300_get_trx(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb300_get_amplifier_enable(
+               &dev, BLADERF_XB300_AMP_LNA, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_xb300_get_output_power(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(state.invalidate_calls == 0);
+
     /* A rational rate wider than the board callbacks' unsigned-int rate
      * aliases to a low valid value if it is narrowed before range checking.
      * Reject it before changing RF configuration or RX validity. */
