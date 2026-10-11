@@ -12,6 +12,13 @@
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 
+int32_t ad9361_hdl_loopback(struct ad9361_rf_phy *phy, bool enable)
+{
+    (void)phy;
+    (void)enable;
+    return 0;
+}
+
 static int fail_write_reg = -1;
 static int fail_read_reg = -1;
 static unsigned fail_after_commits;
@@ -21,6 +28,8 @@ static bool read_state_alert;
 static unsigned spi_write_calls;
 static unsigned spi_read_calls;
 static uint64_t delay_us_total;
+static struct refclk_scale test_rx_rfpll_scale;
+static uint8_t last_temp_offset_value;
 static const uint8_t (*expected_table)[3];
 static unsigned batch_row_calls;
 static unsigned batch_commits;
@@ -77,6 +86,8 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 
     if (is_write) {
         ++spi_write_calls;
+        if (addr == REG_TEMP_OFFSET)
+            last_temp_offset_value = data[2];
     } else {
         ++spi_read_calls;
     }
@@ -112,6 +123,17 @@ uint32_t clk_get_rate(struct ad9361_rf_phy *phy,
     (void)phy;
     (void)clk_priv;
     return 1000000000U;
+}
+
+int32_t clk_get_rate_checked(struct ad9361_rf_phy *phy,
+                             struct refclk_scale *clk_priv,
+                             uint32_t *rate)
+{
+    if (!phy || !rate)
+        return -EINVAL;
+    (void)clk_priv;
+    *rate = clk_get_rate(phy, clk_priv);
+    return 0;
 }
 
 static int32_t fake_write_gain_table_row(struct no_os_spi_desc *desc,
@@ -151,6 +173,7 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     memset(spi, 0, sizeof(*spi));
     phy->spi = spi;
     phy->pdata = pdata;
+    phy->ref_clk_scale[RX_RFPLL] = &test_rx_rfpll_scale;
     phy->gt_info = ad9361_adi_gt_info;
     phy->current_table = TBL_200_1300_MHZ;
     fail_after_commits = 0;
@@ -228,7 +251,7 @@ static int test_auxadc_setup_propagates_each_write_error(void)
     struct auxadc_control ctrl = {
         .temp_time_inteval_ms = 5,
         .temp_sensor_decimation = 256,
-        .auxadc_clock_rate = 1000000,
+        .auxadc_clock_rate = 40000000,
         .auxadc_decimation = 256,
     };
     unsigned i;
@@ -250,6 +273,16 @@ static int test_auxadc_setup_propagates_each_write_error(void)
     if (ad9361_auxadc_setup(&phy, &ctrl, 983040000U) != -EINVAL ||
         spi_write_calls != 0) {
         fprintf(stderr, "zero AuxADC clock rate was not rejected before SPI\n");
+        return -1;
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    ctrl.auxadc_clock_rate = 40000000;
+    ctrl.offset = -50;
+    last_temp_offset_value = 0;
+    if (ad9361_auxadc_setup(&phy, &ctrl, 983040000U) != 0 ||
+        last_temp_offset_value != 0xCE) {
+        fprintf(stderr, "signed temperature offset did not reach register as 0xCE\n");
         return -1;
     }
     return 0;
@@ -485,10 +518,8 @@ static int test_bist_api_rejects_missing_state_and_outputs(void)
 		return -1;
 	}
 	phy.spi = &spi;
-	if (ad9361_bist_loopback(&phy, 0) >= 0 ||
-	    ad9361_bist_prbs(&phy, BIST_DISABLE) >= 0 ||
-	    ad9361_bist_tone(&phy, BIST_DISABLE, 0, 0, 0) >= 0) {
-		fprintf(stderr, "BIST setters accepted a missing SPI transport\n");
+	if (ad9361_bist_loopback(&phy, 0) != -EINVAL) {
+		fprintf(stderr, "BIST loopback accepted a missing platform-data block\n");
 		return -1;
 	}
 

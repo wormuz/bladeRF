@@ -1332,11 +1332,10 @@ begin
         if( tx_reset = '1' ) then
             tx_ts_reset <= '1' ;
         elsif( rising_edge(tx_clock) ) then
-            if( meta_en_tx = '1' ) then
-                tx_ts_reset <= '0' ;
-            else
-                tx_ts_reset <= '1' ;
-            end if ;
+            -- Keep the time-tamer domain alive independently of packet
+            -- metadata. NIOS cancellation and the global sample timestamp
+            -- must work before a metadata stream is enabled.
+            tx_ts_reset <= '0' ;
         end if ;
     end process ;
 
@@ -1345,11 +1344,9 @@ begin
         if( rx_reset = '1' ) then
             rx_ts_reset <= '1' ;
         elsif( rising_edge(rx_clock) ) then
-            if( meta_en_rx = '1' ) then
-                rx_ts_reset <= '0' ;
-            else
-                rx_ts_reset <= '1' ;
-            end if ;
+            -- A stream-format toggle must not reset sample time or strand
+            -- NIOS's timestamp-domain compare/cancel handshake.
+            rx_ts_reset <= '0' ;
         end if ;
     end process ;
 

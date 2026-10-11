@@ -89,6 +89,8 @@ static int32_t spi_status;
 static bool register_map_enabled;
 static int32_t fail_read_reg = -1;
 static int32_t fail_write_reg = -1;
+static uint8_t last_fir_high_byte;
+static uint16_t last_spi_write_addr;
 static int32_t fail_write_once_reg = -1;
 static unsigned fail_write_once_reg_occurrence = 1;
 static bool apply_failed_write_once;
@@ -197,6 +199,7 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
 {
     uint16_t command;
     uint16_t reg;
+    uint16_t i;
 
     (void)desc;
     if (bytes_number < 3)
@@ -206,6 +209,11 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     reg = command & 0x3ff;
     if (command & AD_WRITE) {
         ++write_count;
+        last_spi_write_addr = reg;
+        if (register_map_enabled && reg == REG_RX_FILTER_COEF_DATA_2 &&
+            fake_regs[REG_RX_FILTER_COEF_ADDR] == 0) {
+            last_fir_high_byte = data[2];
+        }
         ++fake_write_counts[reg];
         if ((int32_t)reg == fail_write_once_reg) {
             if (fail_write_once_reg_occurrence > 1) {
@@ -230,10 +238,14 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     }
 
     ++read_count;
-    if ((int32_t)reg == fail_read_reg)
-        return -EIO;
     if (spi_status < 0) return spi_status;
-    data[2] = register_map_enabled ? fake_regs[reg] : (uint8_t)spi_status;
+    for (i = 0; i < bytes_number - 2; i++) {
+        uint16_t read_reg = reg - i;
+        if ((int32_t)read_reg == fail_read_reg)
+            return -EIO;
+        data[2 + i] = register_map_enabled ? fake_regs[read_reg] :
+                      (uint8_t)spi_status;
+    }
     return 0;
 }
 
@@ -816,6 +828,29 @@ int main(void)
         return EXIT_FAILURE;
     }
     phy.fastlock.current_profile[1] = 0;
+
+    /* AD9361 burst reads descend through register addresses. The integer
+     * BBPLL word is at 0x44, followed by fractional bytes 3, 2, 1. */
+    {
+        struct refclk_scale bbpll = { .spi = &spi, .phy = &phy };
+
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_INTEGER_BB_FREQ_WORD] = 25;
+        fake_regs[REG_FRACT_BB_FREQ_WORD_3] = 0x13;
+        fake_regs[REG_FRACT_BB_FREQ_WORD_2] = 0x20;
+        fake_regs[REG_FRACT_BB_FREQ_WORD_1] = 0x00;
+        register_map_enabled = true;
+        read_count = 0;
+        ret = ad9361_bbpll_recalc_rate_checked(&bbpll, 38400000, &rfpll_rate);
+        register_map_enabled = false;
+        if (ret != 0 || rfpll_rate != 983040000 || read_count != 1) {
+            fprintf(stderr,
+                    "BBPLL burst read decoded wrong word: ret=%" PRId32
+                    " rate=%" PRIu32 " reads=%u\n",
+                    ret, rfpll_rate, read_count);
+            return EXIT_FAILURE;
+        }
+    }
 
     /* Clock scaler candidates become cache only after validation/programming
      * succeeds; failed SPI writes and invalid divider choices keep the last
@@ -1595,6 +1630,21 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+        {
+            int16_t signed_coef[16] = {0};
+            signed_coef[0] = -1;
+            last_fir_high_byte = 0;
+            ret = ad9361_load_fir_filter_coef(&phy, FIR_RX1, 0, 16,
+                                               signed_coef);
+            if (ret != 0 || last_fir_high_byte != 0xFF) {
+                fprintf(stderr,
+                        "negative FIR coefficient high byte was not serialized: "
+                        "ret=%" PRId32 " high=0x%02x writes=%u last=0x%03x\n",
+                        ret, last_fir_high_byte, write_count,
+                        last_spi_write_addr);
+                return EXIT_FAILURE;
+            }
+        }
         register_map_enabled = false;
     }
     /* Measurement and multi-register helpers must return transport errors

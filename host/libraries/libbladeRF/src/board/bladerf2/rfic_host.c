@@ -35,6 +35,10 @@
 
 // #define BLADERF_HOSTED_C_DEBUG
 
+/* no_os_axi_io has no context parameter; bind it to the device whose RFIC
+ * callback is running on this thread. */
+extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
+
 
 /******************************************************************************/
 /* Initialization */
@@ -59,6 +63,7 @@ static bool _rfic_host_is_initialized(struct bladerf *dev)
 static int _rfic_host_get_init_state(struct bladerf *dev,
                                      bladerf_rfic_init_state *state)
 {
+    bladerf2_axi_io_set_dev(dev);
     if (_rfic_host_is_initialized(dev)) {
         *state = BLADERF_RFIC_INIT_STATE_ON;
     } else {
@@ -133,8 +138,6 @@ static int _rfic_host_initialize(struct bladerf *dev)
         AD9361_InitParam init_params =
             *(AD9361_InitParam *)board_data->rfic_init_params;
         int32_t init_status;
-        extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
-
         /* The no_os_axi_io accessors (FPGA AXI AD9361 core over NIOS) have no
          * context argument, so bind this thread to the device for init. */
         bladerf2_axi_io_set_dev(dev);
@@ -146,11 +149,8 @@ static int _rfic_host_initialize(struct bladerf *dev)
         init_params.gpio_cal_sw2.extra = dev;
 
         init_status = ad9361_init(&phy, &init_params);
-        /* no_os_axi_io has no context parameter. Clear its thread-local
-         * binding on both success and failure so later unrelated calls on
-         * this thread cannot retain a closed device handle. */
-        bladerf2_axi_io_set_dev(NULL);
         if (init_status < 0) {
+            bladerf2_axi_io_set_dev(NULL);
             RETURN_ERROR_AD9361("ad9361_init(&phy, &init_params)",
                                 init_status);
         }
@@ -160,6 +160,7 @@ static int _rfic_host_initialize(struct bladerf *dev)
         if (NULL != phy) {
             (void)ad9361_remove(phy);
         }
+        bladerf2_axi_io_set_dev(NULL);
         RETURN_ERROR_STATUS("ad9361_init struct initialization",
                             BLADERF_ERR_UNEXPECTED);
     }
@@ -224,6 +225,7 @@ static int _rfic_host_initialize(struct bladerf *dev)
 
     log_debug("%s: initialization complete\n", __FUNCTION__);
 
+    bladerf2_axi_io_set_dev(NULL);
     return 0;
 
 init_fail:
@@ -238,12 +240,15 @@ init_fail:
     }
     board_data->rxfir_known = false;
     board_data->txfir_known = false;
+    bladerf2_axi_io_set_dev(NULL);
     return status;
 }
 
 static int _rfic_host_deinitialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    bladerf2_axi_io_set_dev(dev);
 
     log_debug("%s: deinitializing\n", __FUNCTION__);
 
@@ -259,6 +264,7 @@ static int _rfic_host_deinitialize(struct bladerf *dev)
         board_data->phy = NULL;
     }
 
+    bladerf2_axi_io_set_dev(NULL);
     return 0;
 }
 
@@ -276,6 +282,7 @@ static int _rfic_host_enable_module(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bool enable)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
@@ -478,6 +485,7 @@ static int _rfic_host_get_sample_rate(struct bladerf *dev,
                                       bladerf_channel ch,
                                       bladerf_sample_rate *rate)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -494,6 +502,7 @@ static int _rfic_host_set_sample_rate(struct bladerf *dev,
                                       bladerf_channel ch,
                                       bladerf_sample_rate rate)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -515,6 +524,7 @@ static int _rfic_host_get_frequency(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_frequency *frequency)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     bladerf_frequency lo_frequency;
@@ -534,6 +544,7 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_frequency frequency)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
@@ -605,6 +616,7 @@ static int _rfic_host_select_band(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_frequency frequency)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     bladerf_channel port_ch                = ch;
@@ -677,6 +689,7 @@ static int _rfic_host_get_bandwidth(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_bandwidth *bandwidth)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -694,6 +707,7 @@ static int _rfic_host_set_bandwidth(struct bladerf *dev,
                                     bladerf_bandwidth bandwidth,
                                     bladerf_bandwidth *actual)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
@@ -725,6 +739,7 @@ static int _rfic_host_get_gain_mode(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_gain_mode *mode)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     uint8_t const rfic_ch                  = ch >> 1;
@@ -756,6 +771,7 @@ static int _rfic_host_set_gain_mode(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_gain_mode mode)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     uint8_t const rfic_ch                  = ch >> 1;
@@ -807,6 +823,7 @@ static int _rfic_host_get_gain(struct bladerf *dev,
                                bladerf_channel ch,
                                int *gain)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
@@ -843,6 +860,7 @@ static int _rfic_host_set_gain(struct bladerf *dev,
                                bladerf_channel ch,
                                int gain)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;
@@ -886,6 +904,7 @@ static int _rfic_host_get_gain_stage(struct bladerf *dev,
                                      char const *stage,
                                      int *gain)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct bladerf_range const *range      = NULL;
@@ -933,6 +952,7 @@ static int _rfic_host_set_gain_stage(struct bladerf *dev,
                                      char const *stage,
                                      int gain)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct bladerf_range const *range      = NULL;
@@ -977,6 +997,7 @@ static int _rfic_host_get_rssi(struct bladerf *dev,
                                int *pre_rssi,
                                int *sym_rssi)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     uint8_t const rfic_ch                  = ch >> 1;
@@ -1029,6 +1050,7 @@ static int _rfic_host_get_filter(struct bladerf *dev,
                                  bladerf_rfic_rxfir *rxfir,
                                  bladerf_rfic_txfir *txfir)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
 
     if (rxfir != NULL && !board_data->rxfir_known) {
@@ -1058,6 +1080,7 @@ static int _rfic_host_set_filter(struct bladerf *dev,
                                  bladerf_rfic_rxfir rxfir,
                                  bladerf_rfic_txfir txfir)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -1157,6 +1180,7 @@ static int _rfic_host_get_txmute(struct bladerf *dev,
                                  bladerf_channel ch,
                                  bool *state)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -1171,6 +1195,7 @@ static int _rfic_host_set_txmute(struct bladerf *dev,
                                  bladerf_channel ch,
                                  bool state)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -1190,6 +1215,7 @@ static int _rfic_host_store_fastlock_profile(struct bladerf *dev,
                                              bladerf_channel ch,
                                              uint32_t profile)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 
@@ -1207,6 +1233,7 @@ static int _rfic_host_save_fastlock_profile(struct bladerf *dev,
                                              uint32_t profile,
                                              uint8_t *values)
 {
+    bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
 

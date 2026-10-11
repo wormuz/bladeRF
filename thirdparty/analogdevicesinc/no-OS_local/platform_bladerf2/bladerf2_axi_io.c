@@ -5,11 +5,11 @@
  * through no_os_axi_io_read/write(base, offset, ...). On this board the ADI
  * AXI interface core lives behind the NIOS (NIOS_PKT_32x32_TARGET_ADI_AXI),
  * so the accessors forward to the backend adi_axi_read/write. The API has no
- * context argument, so the device handle is thread-local and set by
- * bladerf2_axi_io_set_dev() around ad9361_init() (mirrors how the SPI and
- * GPIO descriptors receive the handle through .extra). AD9361 init can run
- * concurrently for separate bladeRF handles, so a process-global pointer
- * would route one device's AXI traffic through another device's backend.
+ * context argument, so the device handle is thread-local and rebound by each
+ * host RFIC callback that can reach AXI (including init, FIR reconfiguration,
+ * rate changes and digital tuning). Separate handles may operate concurrently,
+ * so a process-global pointer would route one device's traffic through
+ * another device's backend.
  */
 #include <errno.h>
 #include <stdint.h>
