@@ -95,6 +95,8 @@ architecture arch of rx_epoch_gate is
     constant STATE_ERROR      : unsigned(3 downto 0) := "0100";
 
     signal state            : unsigned(3 downto 0) := STATE_ACTIVE;
+    -- Reset/unarmed identity. Host epoch allocation reserves zero so an
+    -- FPGA reset cannot reproduce a certified epoch tag after 8-bit wrap.
     signal active_epoch_id  : unsigned(7 downto 0)  := (others => '0');
 
 begin

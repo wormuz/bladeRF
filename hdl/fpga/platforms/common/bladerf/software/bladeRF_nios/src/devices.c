@@ -1075,6 +1075,8 @@ bool adi_rfport_select(fastlock_profile *p)
     static const uint8_t tx_port_mask   = 0x40;
     uint16_t addr;
     uint64_t data;
+    uint8_t verify_mask;
+    uint8_t expected;
 
     /* Get current port selection */
     addr = (0x0 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
@@ -1085,16 +1087,28 @@ bool adi_rfport_select(fastlock_profile *p)
 
     if (p->port >> 7) {
         /* RX bit is set, only modify RX port selection */
-        data = (data & ~rx_port_mask) | (p->port & rx_port_mask);
+        verify_mask = rx_port_mask;
+        data = (data & ~verify_mask) | (p->port & verify_mask);
     } else {
         /* RX bit is clear, only modify TX port selection */
-        data = (data & ~tx_port_mask) | (p->port & tx_port_mask);
+        verify_mask = tx_port_mask;
+        data = (data & ~verify_mask) | (p->port & verify_mask);
+    }
+    expected = (uint8_t)data;
+
+    /* Write and read the selected side back. The other direction shares this
+     * register and may be independently configured, so verify only our mask. */
+    addr = (0x1 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
+    if (!adi_spi_write(addr, data << 56)) {
+        return false;
+    }
+    addr = (0x0 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
+    if (!adi_spi_read_checked(addr, &data)) {
+        return false;
     }
 
-    /* Write the new port selection to AD9361 */
-    addr = (0x1 << 15) | (0x0 << 12) | (input_sel_reg & 0x3ff);
-    data = data << 56;
-    return adi_spi_write(addr, data);
+    return (((uint8_t)(data >> 56)) & verify_mask) ==
+           (expected & verify_mask);
 }
 #endif  // BOARD_BLADERF_MICRO
 

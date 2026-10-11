@@ -140,6 +140,9 @@ void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz);
 
+/* Check that the peer LO needed for dependent-FDD VCO selection is known. */
+bool rfic_frequency_peer_unknown(bladerf_module target);
+
 
 /******************************************************************************/
 /* Helpers */

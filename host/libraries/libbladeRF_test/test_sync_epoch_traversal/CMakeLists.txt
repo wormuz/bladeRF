@@ -17,6 +17,7 @@ add_executable(libbladeRF_test_sync_epoch_traversal
     ${SRC_ROOT}/streaming/sync.c
     ${SRC_ROOT}/streaming/sync_worker.c
     ${SRC_ROOT}/helpers/wallclock.c
+    ${SRC_ROOT}/helpers/timeout.c
     ${SRC_ROOT}/board/bladerf2/rx_event_history.c
     ${SRC_ROOT}/board/bladerf2/rx_transition_lifecycle.c
     ${BLADERF_HOST_COMMON_SOURCE_DIR}/log.c

@@ -103,6 +103,19 @@ static inline bool bladerf2_rf_link_rx_epoch_valid(uint32_t status)
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
 
+/* AD9361 fastlock readback is the decoded synthesizer frequency, which can
+ * differ slightly from the requested integer-Hz target due to PLL steps. */
+static inline bool bladerf2_rfic_frequency_matches(
+    uint64_t expected_frequency_hz, uint64_t actual_frequency_hz)
+{
+    const uint64_t frequency_delta =
+        expected_frequency_hz > actual_frequency_hz
+            ? expected_frequency_hz - actual_frequency_hz
+            : actual_frequency_hz - expected_frequency_hz;
+
+    return frequency_delta <= 1000;
+}
+
 /* A completion batch is usable only while every reported success still has
  * a retained request. Counter wrap is intentional unsigned sequence math. */
 static inline bool bladerf2_retune_completion_batch_valid(
@@ -117,7 +130,8 @@ static inline bool bladerf2_retune_completion_matches(
     uint64_t readback_frequency_hz, uint16_t completed_profile)
 {
     return requested_timestamp == completed_timestamp &&
-           requested_frequency_hz == readback_frequency_hz &&
+           bladerf2_rfic_frequency_matches(requested_frequency_hz,
+                                           readback_frequency_hz) &&
            requested_profile == completed_profile;
 }
 
@@ -132,6 +146,66 @@ static inline bool bladerf2_rx_retune_watch_generation_current(
     uint64_t current_generation)
 {
     return watch_active && observed_generation == current_generation;
+}
+
+/* A future RX retune changes the shared AD9361 LO without a synchronous host
+ * completion. Keep both RFPLL setters fenced until its completion record is
+ * reconciled or the queue is explicitly cleared. */
+static inline bool bladerf2_rx_retune_blocks_rf_tune(
+    uint8_t pending_count, bool outcome_unknown)
+{
+    return pending_count != 0 || outcome_unknown;
+}
+
+/* Block a new legacy setter during a transition or after an ambiguous outcome.
+ * Known queued NIOS retunes are checked by each board mutator; the common
+ * invalidation callback also runs when appending another ordered queue item. */
+static inline bool bladerf2_rx_config_invalidation_blocked(
+    bool transition_pending, bool setter_active, bool retune_outcome_unknown)
+{
+    return transition_pending || setter_active || retune_outcome_unknown;
+}
+
+/* RFIC tuning-owner changes must not strand an RX fastlock request in NIOS.
+ * A live failure watch also needs retirement at the acknowledged queue-clear
+ * boundary before its counters can be interpreted by the next owner. */
+static inline bool bladerf2_tuning_mode_change_requires_rx_queue_clear(
+    uint8_t pending_count, bool outcome_unknown, bool failure_watch_active)
+{
+    return pending_count != 0 || outcome_unknown || failure_watch_active;
+}
+
+/* Scheduled RX requests may queue behind known RX requests. Immediate tunes
+ * and either direction's tunes must wait until that queue is reconciled. An
+ * ambiguous queue outcome always requires an acknowledged queue clear. */
+static inline bool bladerf2_retune2_blocks_schedule(
+    uint8_t rx_pending_count, bool outcome_unknown, bool tx_target,
+    bool immediate)
+{
+    return outcome_unknown ||
+           (rx_pending_count != 0 && (tx_target || immediate));
+}
+
+/* A fastlock slot remains leased while a timestamped request can still use
+ * it. NIOS and AD9361 keep separate profile banks, so either index colliding
+ * is enough to make reuse unsafe. */
+static inline bool bladerf2_retune_profile_slot_conflicts(
+    uint16_t requested_nios_profile, uint8_t requested_rffe_profile,
+    uint16_t queued_nios_profile, uint8_t queued_rffe_profile)
+{
+    return requested_nios_profile == queued_nios_profile ||
+           requested_rffe_profile == queued_rffe_profile;
+}
+
+/* Dependent FDD VCO-table selection requires the peer synthesizer's known LO.
+ * The target side itself may be recovered by an explicit host tune. */
+static inline bool bladerf2_rf_tune_peer_lo_unknown(
+    bool tx_target, bool dependent_fdd, bool rx_lo_known, bool tx_lo_known)
+{
+    if (!dependent_fdd) {
+        return false;
+    }
+    return tx_target ? !rx_lo_known : !tx_lo_known;
 }
 
 /* Each queued scheduled retune starts a fresh notification-deduplication
@@ -502,6 +576,16 @@ static inline uint32_t bladerf2_rx_transition_next_transaction_id(
     uint32_t previous_id)
 {
     return previous_id == UINT32_MAX ? 1u : previous_id + 1u;
+}
+
+/* Epoch zero is the FPGA gate's reset/unarmed identity. Never certify it:
+ * after 256 transitions, a reset gate must not emit an ID that aliases the
+ * currently certified epoch before the host fault monitor observes reset. */
+static inline uint8_t bladerf2_rx_transition_next_epoch_id(
+    uint8_t previous_epoch_id)
+{
+    return previous_epoch_id == UINT8_MAX ? 1u :
+           (uint8_t)(previous_epoch_id + 1u);
 }
 
 /* A cursor beyond the current tail cannot be treated as an empty, complete

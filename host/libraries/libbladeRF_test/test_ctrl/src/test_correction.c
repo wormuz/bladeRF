@@ -179,7 +179,7 @@ static failure_count random_vals(struct bladerf *dev,
  * the other; a simple set/get round trip cannot catch two API fields aliased
  * to the same register. */
 static failure_count test_rx_bc_gain_phase_independence(
-    struct bladerf *dev, bladerf_channel ch)
+    struct bladerf *dev, bladerf_channel ch, bool quiet)
 {
     const char *ports[16];
     const char *original_port = NULL;
@@ -382,9 +382,9 @@ failure_count test_correction(struct bladerf *dev,
 
     if (0 == strcmp(board_name, "bladerf2")) {
         failures += test_rx_bc_gain_phase_independence(
-            dev, BLADERF_CHANNEL_RX(0));
+            dev, BLADERF_CHANNEL_RX(0), quiet);
         failures += test_rx_bc_gain_phase_independence(
-            dev, BLADERF_CHANNEL_RX(1));
+            dev, BLADERF_CHANNEL_RX(1), quiet);
         return failures;
     }
 

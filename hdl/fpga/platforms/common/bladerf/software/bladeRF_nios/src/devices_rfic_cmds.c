@@ -94,6 +94,11 @@ extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config_int2;
 extern AD9361_RXFIRConfig bladerf2_rfic_rx_fir_config_dec4;
 extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config_int4;
 
+static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
+                                            bladerf_channel channel,
+                                            uint64_t frequency,
+                                            bool init_sequence);
+
 
 /******************************************************************************/
 /* Helpers */
@@ -157,6 +162,8 @@ static bool _reset_rfic(bool state)
  */
 static bool _rfic_deinitialize(struct rfic_state *state)
 {
+    state->frequency_invalid[BLADERF_RX] = true;
+    state->frequency_invalid[BLADERF_TX] = true;
     state->samplerate_invalid[BLADERF_RX] = true;
     state->samplerate_invalid[BLADERF_TX] = true;
     state->filter_invalid[BLADERF_RX] = true;
@@ -220,6 +227,10 @@ static bool _rfic_initialize(struct rfic_state *state)
      * previous instance's frequency when deciding whether a retune needs
      * calibration. */
     if (!restore_standby_state) {
+        /* A new PHY starts with no trusted LO readback. The per-module init
+         * sequence establishes both directions before normal retunes resume. */
+        state->frequency_invalid[BLADERF_RX] = true;
+        state->frequency_invalid[BLADERF_TX] = true;
         rfic_rfdc_calibration_history_reset(
             &state->last_rfdc_calib_freq[BLADERF_RX]);
         rfic_rfdc_calibration_history_reset(
@@ -339,7 +350,8 @@ static bool _rfic_initialize(struct rfic_state *state)
 
             /* Switching the frequency twice seems essential for calibration
              * to be successful. */
-            CHECK_TRUE(_rfic_cmd_wr_frequency(state, ch, RESET_FREQUENCY));
+            CHECK_TRUE(_rfic_cmd_wr_frequency_internal(
+                state, ch, RESET_FREQUENCY, true));
 
             CHECK_TRUE(_rfic_cmd_wr_filter(state, ch,
                                            (BLADERF_TX == dir)
@@ -348,7 +360,8 @@ static bool _rfic_initialize(struct rfic_state *state)
 
             CHECK_TRUE(_rfic_cmd_wr_samplerate(state, ch, init_samprate));
 
-            CHECK_TRUE(_rfic_cmd_wr_frequency(state, ch, init_freq));
+            CHECK_TRUE(_rfic_cmd_wr_frequency_internal(
+                state, ch, init_freq, true));
         }
     }
 
@@ -755,9 +768,10 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
  *
  * @return     true if successful, false if not
  */
-bool _rfic_cmd_wr_frequency(struct rfic_state *state,
-                            bladerf_channel channel,
-                            uint64_t frequency)
+static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
+                                            bladerf_channel channel,
+                                            uint64_t frequency,
+                                            bool init_sequence)
 {
     bladerf_direction dir =
         BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
@@ -769,7 +783,25 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
     /* A failed port, LO, or calibration step must not leave the cached RFIC
      * frequency readable as a successful transition. Publish validity only
      * after the complete direction-specific operation below succeeds. */
+    /* During cold initialization ADI starts without cached LO rates; the
+     * explicit init sequence establishes both starting synthesizers. No
+     * runtime command may opt out of the peer-frequency check. */
+    if (rfic_frequency_change_blocked(
+            init_sequence,
+            rfic_frequency_peer_unknown(
+                BLADERF_CHANNEL_IS_TX(channel)
+                    ? BLADERF_MODULE_TX : BLADERF_MODULE_RX))) {
+        return false;
+    }
     state->frequency_invalid[dir] = true;
+
+    /* Scheduled fastlock recalls bypass ADI's recall API. Exit that external
+     * mode explicitly before the ordinary LO setter relies on current_profile
+     * to run its ALC/VCO cleanup sequence. */
+    if (ad9361_fastlock_exit_foreign(
+            state->phy, BLADERF_CHANNEL_IS_TX(channel)) < 0) {
+        return false;
+    }
 
     if (!rffe_csr_read_checked(&reg)) {
         return false;
@@ -822,6 +854,13 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
 
     state->frequency_invalid[dir] = false;
     return true;
+}
+
+bool _rfic_cmd_wr_frequency(struct rfic_state *state,
+                            bladerf_channel channel,
+                            uint64_t frequency)
+{
+    return _rfic_cmd_wr_frequency_internal(state, channel, frequency, false);
 }
 
 /**

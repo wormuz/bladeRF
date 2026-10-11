@@ -4,8 +4,10 @@
 
 #include "channel_policy.h"
 #include "rf_transition_policy.h"
+#include "../libraries/libbladeRF/src/backend/usb/nios_completion_policy.h"
 #include "../libraries/libbladeRF/src/board/bladerf2/rfic_fir_policy.h"
 #include "../libraries/libbladeRF/src/board/bladerf2/rfic_rssi_policy.h"
+#include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/rfic_frequency_policy.h"
 
 int main(void)
 {
@@ -40,6 +42,22 @@ int main(void)
     assert(!bladerf2_rfic_frequency_model_valid(false, true));
     assert(!bladerf2_rfic_frequency_model_valid(true, false));
     assert(!bladerf2_rfic_frequency_model_valid(false, false));
+
+    /* Epoch zero is the FPGA reset/unarmed identity and must never receive a
+     * host certificate, including when the short epoch counter wraps. */
+    assert(bladerf2_rx_transition_next_epoch_id(0) == 1);
+    assert(bladerf2_rx_transition_next_epoch_id(1) == 2);
+    assert(bladerf2_rx_transition_next_epoch_id(254) == 255);
+    assert(bladerf2_rx_transition_next_epoch_id(255) == 1);
+
+    assert(!bladerf2_tuning_mode_change_requires_rx_queue_clear(0, false,
+                                                                 false));
+    assert(bladerf2_tuning_mode_change_requires_rx_queue_clear(1, false,
+                                                                false));
+    assert(bladerf2_tuning_mode_change_requires_rx_queue_clear(0, true,
+                                                                false));
+    assert(bladerf2_tuning_mode_change_requires_rx_queue_clear(0, false,
+                                                                true));
 
     assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(0)));
     assert(bladerf_public_channel_valid(BLADERF_CHANNEL_RX(1)));
@@ -233,8 +251,8 @@ int main(void)
         rf_link_tx_ack | rf_link_rx_ack,
         rf_link_tx_active | rf_link_rx_active,
         rf_link_tx_fault | rf_link_rx_fault));
-    assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 9);
-    assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 3);
+    assert(bladerf2_rf_link_epoch_id(rf_link_both_ack, 3) == 3);
+    assert(bladerf2_rf_link_epoch_id(0x20000000u | (10u << 20), 3) == 10);
     assert(bladerf2_rf_link_stop_required(true, false, false));
     assert(!bladerf2_rf_link_stop_required(false, false, false));
     assert(!bladerf2_rf_link_stop_required(true, true, false));
@@ -319,14 +337,62 @@ int main(void)
     assert(bladerf2_retune_completion_batch_valid(16, 16, 16));
     assert(!bladerf2_retune_completion_batch_valid(17, 17, 16));
     assert(!bladerf2_retune_completion_batch_valid(2, 1, 16));
+    assert(bladerf2_retune_profile_slot_conflicts(4, 4, 4, 1));
+    assert(bladerf2_retune_profile_slot_conflicts(4, 4, 9, 4));
+    assert(!bladerf2_retune_profile_slot_conflicts(4, 4, 9, 1));
     assert(bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1234, 1840000000ULL, 3));
     assert(!bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1235, 1840000000ULL, 3));
-    assert(!bladerf2_retune_completion_matches(
+    assert(bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1234, 1840000001ULL, 3));
+    assert(bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840001000ULL, 3));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 1234, 1840001001ULL, 3));
     assert(!bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1234, 1840000000ULL, 4));
+    assert(bladerf2_rfic_frequency_matches(1840000000ULL, 1840001000ULL));
+    assert(!bladerf2_rfic_frequency_matches(1840000000ULL, 1840001001ULL));
+    assert(nios_retune_profile_word_valid(UINT16_MAX));
+    assert(!nios_retune_profile_word_valid((uint32_t)UINT16_MAX + 1u));
+    assert(bladerf2_rfic_frequency_matches(1840001000ULL, 1840000000ULL));
+    /* The common legacy RX invalidation gate and RF tune setters both use
+     * this policy, so loopback/mux/correction cannot race a queued NIOS LO. */
+    assert(!bladerf2_rx_retune_blocks_rf_tune(0, false));
+    assert(bladerf2_rx_retune_blocks_rf_tune(1, false));
+    assert(bladerf2_rx_retune_blocks_rf_tune(16, false));
+    assert(bladerf2_rx_retune_blocks_rf_tune(0, true));
+    assert(!bladerf2_rx_config_invalidation_blocked(false, false, false));
+    assert(bladerf2_rx_config_invalidation_blocked(false, false, true));
+    assert(bladerf2_rx_config_invalidation_blocked(true, false, false));
+    assert(bladerf2_rx_config_invalidation_blocked(false, true, false));
+    assert(!bladerf2_retune2_blocks_schedule(0, false, false, false));
+    assert(!bladerf2_retune2_blocks_schedule(3, false, false, false));
+    assert(bladerf2_retune2_blocks_schedule(3, false, false, true));
+    assert(bladerf2_retune2_blocks_schedule(3, false, true, false));
+    assert(bladerf2_retune2_blocks_schedule(0, true, false, false));
+    assert(!bladerf2_rf_tune_peer_lo_unknown(true, false, false, false));
+    assert(!bladerf2_rf_tune_peer_lo_unknown(false, false, false, false));
+    assert(bladerf2_rf_tune_peer_lo_unknown(true, true, false, true));
+    assert(!bladerf2_rf_tune_peer_lo_unknown(true, true, true, false));
+    assert(bladerf2_rf_tune_peer_lo_unknown(false, true, true, false));
+    assert(!bladerf2_rf_tune_peer_lo_unknown(false, true, false, true));
+    assert(!rfic_dependent_fdd_peer_frequency_unknown(
+        false, true, false, false));
+    assert(!rfic_dependent_fdd_peer_frequency_unknown(
+        true, true, true, true));
+    assert(rfic_dependent_fdd_peer_frequency_unknown(
+        true, true, false, true));
+    assert(!rfic_dependent_fdd_peer_frequency_unknown(
+        true, true, true, false));
+    assert(rfic_dependent_fdd_peer_frequency_unknown(
+        true, false, true, false));
+    assert(!rfic_dependent_fdd_peer_frequency_unknown(
+        true, false, false, true));
+    assert(rfic_frequency_change_blocked(false, true));
+    assert(!rfic_frequency_change_blocked(false, false));
+    assert(!rfic_frequency_change_blocked(true, true));
 
     /* A TX error arriving during a shared START must not be overwritten by
      * the subsequently observed link acknowledgement. */

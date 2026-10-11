@@ -1454,7 +1454,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
             transfer->status == LIBUSB_TRANSFER_COMPLETED &&
             (transfer->actual_length < 0 ||
-             (unsigned int)transfer->actual_length != transfer->length)) {
+             transfer->actual_length != transfer->length)) {
             log_error("Short TX transfer: %d of %d bytes\n",
                       transfer->actual_length, transfer->length);
             stream->error_code = BLADERF_ERR_IO;

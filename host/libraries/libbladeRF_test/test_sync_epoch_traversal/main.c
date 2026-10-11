@@ -19,6 +19,10 @@
 #include "board/bladerf2/common.h"
 #include "board/bladerf2/rf_transition_policy.h"
 
+/* The test exercises internal RX/TX helpers without linking the full board
+ * backend; only the board identity token is needed by transition guards. */
+const struct board_fns bladerf2_board_fns = { .name = "bladerf2" };
+
 #define MSG_BYTES 8192u
 #define MSG_SAMPLES ((MSG_BYTES - METADATA_HEADER_SIZE) / 4u)
 #define MSGS_PER_BUFFER 2u
@@ -53,6 +57,9 @@ static unsigned int rx_overrun_events;
 static uint32_t last_rx_overrun_source_flags;
 static uint8_t last_rx_overrun_epoch_id;
 static uint64_t last_rx_overrun_timestamp;
+
+static void assert_marker(const int16_t *iq, unsigned int count,
+                          int16_t marker, unsigned int start);
 static bool last_rx_overrun_timestamp_valid;
 static unsigned int rx_worker_overrun_events;
 static uint32_t last_rx_worker_overrun_source_flags;
@@ -510,6 +517,7 @@ static void test_sync_tx_does_not_replay_rejected_samples(void)
     int16_t rejected_samples[8] = {111, 0, 111, 0, 111, 0, 111, 0};
     int16_t accepted_samples[8] = {222, 0, 222, 0, 222, 0, 222, 0};
 
+    dev.board = &bladerf2_board_fns;
     dev.backend = &test_tx_backend;
     sync.dev = &dev;
     sync.initialized = true;
@@ -518,6 +526,7 @@ static void test_sync_tx_does_not_replay_rejected_samples(void)
     sync.stream_config.layout = BLADERF_TX_X1;
     sync.stream_config.samples_per_buffer = 4;
     sync.stream_config.bytes_per_sample = 4;
+    sync.meta.samples_per_ts = 1;
     sync.buf_mgmt.buffers = buffer_ptrs;
     sync.buf_mgmt.status = buffer_states;
     sync.buf_mgmt.num_buffers = 2;
@@ -1161,7 +1170,8 @@ static void test_sync_timeout_certifies_only_returned_valid_prefix(void)
 
     fixture_init(&f);
     write_msg(f.buffers[0], 1000, 7, 1911);
-    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 2011);
+    write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7,
+              (int16_t)(1911 + MSG_SAMPLES));
     f.states[1] = SYNC_BUFFER_EMPTY;
     meta.flags = BLADERF_META_FLAG_RX_NOW;
 
@@ -1257,6 +1267,8 @@ static void test_unsupported_format_event(void)
     board_data->rf_transition_epoch_contract_enabled = true;
     board_data->rf_transition_first_host_data_required = true;
     board_data->rf_transition_epoch_id = 7;
+    board_data->rf_transition_current_channel = BLADERF_CHANNEL_RX(0);
+    board_data->rf_transition_current_channel_valid = true;
 
     /* Callback-side publication must not wait for dev->lock. */
     MUTEX_LOCK(&dev.lock);
@@ -1553,7 +1565,8 @@ static void test_async_data_withheld_event(void)
     event = &board_data->rf_transition_events[4];
     assert(event->event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD);
     assert((event->flags &
-            ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+            ~(BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN |
+              BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
               BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
            BLADERF_RF_WITHHELD_SHORT_TRANSFER);
     bladerf2_rx_data_withheld(
@@ -3294,9 +3307,11 @@ int main(void)
     write_msg(f.buffers[0], UINT64_MAX - 5, 7, 711);
     write_msg(f.buffers[0] + MSG_BYTES,
               UINT64_MAX - 5 + MSG_SAMPLES, 7, 712);
+    f.sync.meta.rx_epoch_boundary_enabled = false;
     memset(&meta, 0, sizeof(meta));
     meta.timestamp = 2;
-    assert(sync_rx(&f.sync, out, 10, &meta, 0) == 0);
+    const int wrap_status = sync_rx(&f.sync, out, 10, &meta, 0);
+    assert(wrap_status == 0);
     assert(meta.actual_count == 10);
     assert(meta.timestamp == 2);
     assert_marker(out, 10, 711, 8);

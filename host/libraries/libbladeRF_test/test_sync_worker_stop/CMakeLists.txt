@@ -11,13 +11,21 @@ set(SRC_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../libbladeRF/src)
 
 add_executable(libbladeRF_test_sync_worker_stop
     main.c
+    ${SRC_ROOT}/streaming/async.c
     ${SRC_ROOT}/streaming/sync_worker.c
+    ${SRC_ROOT}/helpers/wallclock.c
+    ${SRC_ROOT}/helpers/timeout.c
+    ${BLADERF_HOST_COMMON_SOURCE_DIR}/log.c
 )
 target_include_directories(libbladeRF_test_sync_worker_stop PRIVATE
     ${SRC_ROOT}
     ${CMAKE_CURRENT_LIST_DIR}/../../libbladeRF/include
     ${CMAKE_BINARY_DIR}/libraries/libbladeRF/src
     ${BLADERF_HOST_COMMON_INCLUDE_DIRS}
+    ${BLADERF_FW_COMMON_INCLUDE_DIR}
+)
+target_compile_definitions(libbladeRF_test_sync_worker_stop PRIVATE
+    LOGGING_ENABLED
 )
 target_compile_options(libbladeRF_test_sync_worker_stop PRIVATE
     -ffunction-sections -fdata-sections -UNDEBUG

@@ -15,11 +15,127 @@
 #include "streaming/metadata.h"
 #include "helpers/timeout.h"
 
+int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
+                                struct bladerf_rf_event *events,
+                                uint32_t capacity, uint32_t *event_count,
+                                uint64_t *next_sequence,
+                                bool *history_complete)
+{
+    struct bladerf2_board_data *board_data;
+    uint32_t copied = 0;
+    bool complete = true;
+    int status = 0;
+
+    if (dev == NULL || event_count == NULL || next_sequence == NULL ||
+        history_complete == NULL || (capacity != 0 && events == NULL)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_BOARD_IS_BLADERF2(dev);
+    board_data = dev->board_data;
+    if (board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    *next_sequence = after_sequence;
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    {
+        uint32_t retained = board_data->rf_transition_event_count;
+        uint64_t current_sequence = board_data->rf_transition_event_sequence;
+        uint32_t oldest = (board_data->rf_transition_event_head +
+                           BLADERF2_RF_EVENT_HISTORY_SIZE - retained) %
+                          BLADERF2_RF_EVENT_HISTORY_SIZE;
+        uint64_t oldest_sequence = retained != 0 ?
+            board_data->rf_transition_event_sequences[oldest] :
+            board_data->rf_transition_event_sequence + 1;
+
+        if (!bladerf2_rf_event_cursor_is_valid(after_sequence,
+                                               current_sequence)) {
+            complete = false;
+            *next_sequence = current_sequence;
+            status = BLADERF_ERR_INVAL;
+        } else if (retained != 0 && after_sequence < oldest_sequence - 1) {
+            complete = false;
+            *next_sequence = current_sequence;
+        }
+
+        for (uint32_t i = 0; complete && i < retained; ++i) {
+            uint32_t slot = (oldest + i) % BLADERF2_RF_EVENT_HISTORY_SIZE;
+            uint64_t sequence =
+                board_data->rf_transition_event_sequences[slot];
+            if (sequence <= after_sequence) {
+                continue;
+            }
+            if (copied < capacity) {
+                events[copied++] = board_data->rf_transition_events[slot];
+                *next_sequence = sequence;
+            } else {
+                complete = false;
+                break;
+            }
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+
+    *event_count = copied;
+    *history_complete = complete;
+    return status != 0 ? status : (complete ? 0 : BLADERF_ERR_MEM);
+}
+
 static uint64_t monotonic_ns(void)
 {
     uint64_t now_ns = 0;
     (void)bladerf_monotonic_now_ns(&now_ns);
     return now_ns;
+}
+
+/* USB callback paths cannot take dev->lock. Revoke TX admission under the
+ * callback-safe lock, then publish the durable RF event through the normal
+ * history path. A prior FPGA fault already supplied its invalidation event. */
+void bladerf2_tx_async_transport_failure(struct bladerf *dev,
+                                         int error_code)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rf_event event = {0};
+    uint8_t epoch_id;
+    bool report;
+    bool new_gate_abort;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    /* An RF configuration fault can already have closed stream admission.
+     * Deduplicate this event against the transport latch itself so the first
+     * independent USB error remains visible in the durable history. */
+    report = !board_data->tx_async_transport_faulted;
+    new_gate_abort = !board_data->tx_gate_abort_pending;
+    board_data->tx_async_transport_faulted = true;
+    board_data->tx_stream_faulted_async = true;
+    board_data->tx_async_link_certified = false;
+    board_data->tx_async_rfic_state_certified = false;
+    board_data->tx_gate_abort_pending = true;
+    if (new_gate_abort) {
+        board_data->tx_gate_abort_failure_reported = false;
+    }
+    board_data->tx_async_transport_failure_generation++;
+    epoch_id = board_data->tx_async_link_epoch_id;
+    /* The pending flag remains authoritative if monitor teardown races this
+     * wakeup and the periodic wait starts after the signal. */
+    if (board_data->rx_fault_monitor_sync_initialized) {
+        COND_SIGNAL(&board_data->rx_fault_monitor_cond);
+    }
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    if (report) {
+        event.host_monotonic_ns = monotonic_ns();
+        event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
+        event.epoch_id = epoch_id;
+        event.fpga_state = BLADERF_RF_STATE_ERROR;
+        event.error_code = error_code;
+        bladerf2_rf_event_append(board_data, &event);
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 void bladerf2_rx_report_clipping(
@@ -735,11 +851,12 @@ static void _rx_data_withheld(struct bladerf *dev, uint32_t reason,
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return;
     }
-    if (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
-        reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
-        reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
-        reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
-        reason == BLADERF_RF_WITHHELD_DEVICE_LOST) {
+    if (!explicit_source &&
+        (reason == BLADERF_RF_WITHHELD_SHORT_TRANSFER ||
+         reason == BLADERF_RF_WITHHELD_USB_OVERFLOW ||
+         reason == BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR ||
+         reason == BLADERF_RF_WITHHELD_USB_TIMEOUT ||
+         reason == BLADERF_RF_WITHHELD_DEVICE_LOST)) {
         /* A failed USB transfer may contain only a partial META header. Do
          * not label the diagnostic with the epoch that happens to be current
          * when this callback runs. The consumer still fails closed, but the
@@ -1062,11 +1179,6 @@ void bladerf2_rx_async_timestamp_discontinuity(
      * diagnostic is published; labeling it with that newer epoch would let a
      * delayed old-packet error revoke the wrong capture. */
     epoch_id = expected_epoch_id;
-
-    if (!should_report) {
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        return;
-    }
 
     event.host_monotonic_ns = monotonic_ns();
     event.fpga_timestamp = first_unvalidated_timestamp;

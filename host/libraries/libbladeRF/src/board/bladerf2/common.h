@@ -241,6 +241,17 @@ struct bladerf2_board_data {
     bool rx_retune2_failure_watch_active;
     uint64_t rx_retune2_failure_watch_generation;
     bool rx_retune2_status_unavailable_reported;
+    uint32_t rx_retune2_success_count_last;
+    bool rx_retune2_success_count_valid;
+    uint8_t rx_retune2_pending_count;
+    bool rx_retune2_outcome_unknown;
+    struct {
+        uint64_t timestamp;
+        uint64_t requested_frequency_hz;
+        uint16_t nios_profile;
+        uint16_t rffe_profile;
+        bool valid;
+    } rx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
     uint32_t tx_retune2_success_count_last;
     bool tx_retune2_success_count_valid;
     uint8_t tx_retune2_pending_count;

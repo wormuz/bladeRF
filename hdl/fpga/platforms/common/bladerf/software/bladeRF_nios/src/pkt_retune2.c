@@ -340,6 +340,12 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     }
 
 #ifdef BLADERF_NIOS_LIBAD936X
+    /* Dependent-FDD PLL programming chooses a VCO table using the peer LO.
+     * Do not activate a saved profile while that frequency is invalidated by
+     * an earlier partial/failed tune. */
+    if (rfic_frequency_peer_unknown(module)) {
+        return false;
+    }
     /* Invalidate current frequency knowledge */
     rfic_invalidate_frequency(module);
 #endif  // BLADERF_NIOS_LIBAD936X
@@ -637,6 +643,7 @@ void pkt_retune2(struct pkt_buf *b)
             requested_profile.spdt = spdt;
             if (timestamp == NIOS_PKT_RETUNE2_NOW) {
                 /* Fire off this retune operation now */
+                uint64_t readback_frequency_hz = 0;
                 switch (module) {
                     case BLADERF_MODULE_RX:
                     case BLADERF_MODULE_TX:
@@ -654,7 +661,8 @@ void pkt_retune2(struct pkt_buf *b)
                         *profile = requested_profile;
 
                         /* Activate the fast lock profile for this retune */
-                        if (profile_activate(module, profile, NULL)) {
+                        if (profile_activate(module, profile,
+                                             &readback_frequency_hz)) {
                             flags |=
                                 NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
                             status = 0;

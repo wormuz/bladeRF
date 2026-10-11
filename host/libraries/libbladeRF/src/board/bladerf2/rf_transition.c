@@ -190,58 +190,6 @@ void bladerf2_tx_stream_set_epoch_id(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-/* USB callback paths cannot take dev->lock. Revoke TX admission under the
- * callback-safe lock, then publish the durable RF event through the normal
- * history path. A prior FPGA fault already supplied its invalidation event. */
-void bladerf2_tx_async_transport_failure(struct bladerf *dev,
-                                         int error_code)
-{
-    struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event event = {0};
-    uint8_t epoch_id;
-    bool report;
-    bool new_gate_abort;
-
-    if (dev == NULL || dev->board_data == NULL) {
-        return;
-    }
-
-    board_data = dev->board_data;
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    /* Stream admission may already be closed for an RF retune/configuration.
-     * That must not suppress the first distinct USB/host transport error;
-     * deduplicate against the transport latch itself, not aggregate TX state. */
-    report = !board_data->tx_async_transport_faulted;
-    new_gate_abort = !board_data->tx_gate_abort_pending;
-    board_data->tx_async_transport_faulted = true;
-    board_data->tx_stream_faulted_async = true;
-    board_data->tx_async_link_certified = false;
-    board_data->tx_async_rfic_state_certified = false;
-    board_data->tx_gate_abort_pending = true;
-    if (new_gate_abort) {
-        board_data->tx_gate_abort_failure_reported = false;
-    }
-    board_data->tx_async_transport_failure_generation++;
-    epoch_id = board_data->tx_async_link_epoch_id;
-    /* Keep callback wakeup lifetime ordered with monitor teardown through
-     * this callback-safe lock. The pending flag remains authoritative if the
-     * periodic wait begins after this signal. */
-    if (board_data->rx_fault_monitor_sync_initialized) {
-        COND_SIGNAL(&board_data->rx_fault_monitor_cond);
-    }
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
-    if (report) {
-        event.host_monotonic_ns = _monotonic_ns();
-        event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
-        event.epoch_id = epoch_id;
-        event.fpga_state = BLADERF_RF_STATE_ERROR;
-        event.error_code = error_code;
-        bladerf2_rf_event_append(board_data, &event);
-    }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
-}
-
 bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
                                        uint32_t link_status)
 {
@@ -462,8 +410,12 @@ static int _wait_rx_epoch_fenced(struct bladerf *dev, uint8_t expected_epoch,
             /* Bit 18 is the FPGA capability/arm acknowledgement for
              * sample-META epoch identity. Fail before LO programming on
              * older images that only provide the timestamp boundary. */
-            if ((value & (1u << 18)) == 0) {
+            if ((value & NIOS_PKT_8x32_RX_EPOCH_STATUS_META_ENABLED) == 0) {
                 return BLADERF_ERR_UNSUPPORTED;
+            }
+            if (!nios_pkt_8x32_rx_epoch_status_is_fenced(
+                    value, expected_epoch)) {
+                return BLADERF_ERR_UNEXPECTED;
             }
             return 0;
         }
@@ -569,7 +521,7 @@ static int _prepare_rx_epoch_id(struct bladerf *dev, uint64_t deadline_ns,
     if (_deadline_expired(deadline_ns)) {
         return BLADERF_ERR_TIMEOUT;
     }
-    *epoch_id = (uint8_t)(current_epoch + 1u);
+    *epoch_id = bladerf2_rx_transition_next_epoch_id(current_epoch);
     return 0;
 }
 
@@ -1047,12 +999,14 @@ static void *rx_fault_monitor_task(void *arg)
         uint32_t tx_retune2_failure_count = 0;
         uint32_t tx_retune2_success_count = 0;
         uint32_t rx_retune2_failure_count = 0;
+        uint32_t rx_retune2_success_count = 0;
         int status = 0;
         int loss_count_status = 0;
         int tx_loss_count_status = 0;
         int tx_retune2_status = 0;
         int tx_retune2_success_status = 0;
         int rx_retune2_status = 0;
+        int rx_retune2_success_status = 0;
         int rfic_status = 0;
         int tx_rfic_status = 0;
         int rx_fault_causes_status = 0;
@@ -1202,6 +1156,17 @@ static void *rx_fault_monitor_task(void *arg)
                     rx_retune2_status = nios_retune2_failure_count_read(
                         dev, BLADERF_MODULE_RX,
                         &rx_retune2_failure_count);
+                    if (rx_retune2_status == 0) {
+                        _rx_fault_monitor_stage(
+                            board_data, "NIOS RX retune completions");
+                        rx_retune2_success_status =
+                            nios_retune2_success_count_read(
+                                dev, BLADERF_MODULE_RX,
+                                &rx_retune2_success_count);
+                        if (rx_retune2_success_status != 0) {
+                            rx_retune2_status = rx_retune2_success_status;
+                        }
+                    }
                 }
                 if (status == 0 && should_poll &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
@@ -1277,6 +1242,150 @@ static void *rx_fault_monitor_task(void *arg)
                 rx_retune2_failure_count = rx_retune_failure_test_count;
             }
         }
+        if (should_poll_rx_retune && rx_retune2_status == 0 &&
+            rx_retune2_success_status == 0) {
+            bool completion_lost = false;
+            uint32_t completed = 0;
+            uint32_t baseline = 0;
+            bool baseline_valid = false;
+            uint8_t pending_snapshot = 0;
+
+            WITH_MUTEX(&dev->lock, {
+                if (bladerf2_rx_retune_watch_generation_current(
+                        board_data->rx_retune2_failure_watch_active,
+                        rx_retune2_watch_generation,
+                        board_data->rx_retune2_failure_watch_generation)) {
+                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                    baseline = board_data->rx_retune2_success_count_last;
+                    baseline_valid = board_data->rx_retune2_success_count_valid;
+                    pending_snapshot = board_data->rx_retune2_pending_count;
+                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+                    if (!baseline_valid) {
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->rx_retune2_success_count_last =
+                            rx_retune2_success_count;
+                        board_data->rx_retune2_success_count_valid = true;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    } else {
+                        completed = rx_retune2_success_count - baseline;
+                        if (!bladerf2_retune_completion_batch_valid(
+                                completed, pending_snapshot,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH)) {
+                            completion_lost = completed != 0;
+                        } else {
+                            uint32_t sequence = baseline;
+                            uint32_t completion_index;
+
+                            for (completion_index = 0;
+                                 completion_index < completed;
+                                 ++completion_index) {
+                                uint64_t readback_frequency_hz = 0;
+                                uint64_t scheduled_timestamp = 0;
+                                uint16_t nios_profile = 0;
+                                uint16_t rffe_profile = 0;
+                                uint64_t requested_frequency_hz = 0;
+                                uint32_t i;
+                                bool request_found = false;
+                                int completion_status;
+
+                                sequence++;
+                                _rx_fault_monitor_stage(
+                                    board_data, "NIOS RX completion record");
+                                completion_status =
+                                    nios_retune2_completion_read(
+                                        dev, BLADERF_MODULE_RX, sequence,
+                                        &readback_frequency_hz,
+                                        &scheduled_timestamp, &nios_profile);
+                                if (completion_status != 0) {
+                                    completion_lost = true;
+                                    break;
+                                }
+
+                                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                                for (i = 0; i <
+                                     NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+                                     ++i) {
+                                    if (board_data->rx_retune2_pending[i].valid &&
+                                        board_data->rx_retune2_pending[i].timestamp ==
+                                            scheduled_timestamp &&
+                                        board_data->rx_retune2_pending[i].nios_profile ==
+                                            nios_profile) {
+                                        request_found = true;
+                                        if (!bladerf2_retune_completion_matches(
+                                                board_data->rx_retune2_pending[i].
+                                                    timestamp,
+                                                board_data->rx_retune2_pending[i].
+                                                    requested_frequency_hz,
+                                                board_data->rx_retune2_pending[i].
+                                                    nios_profile,
+                                                scheduled_timestamp,
+                                                readback_frequency_hz,
+                                                nios_profile)) {
+                                            completion_lost = true;
+                                        } else {
+                                            requested_frequency_hz =
+                                                board_data->rx_retune2_pending[i].
+                                                    requested_frequency_hz;
+                                            rffe_profile =
+                                                board_data->rx_retune2_pending[i].
+                                                    rffe_profile;
+                                            board_data->rx_retune2_pending[i].valid =
+                                                false;
+                                            board_data->rx_retune2_pending_count--;
+                                        }
+                                        break;
+                                    }
+                                }
+                                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                                if (!request_found || completion_lost) {
+                                    completion_lost = true;
+                                    break;
+                                }
+
+                                uint64_t profile_frequency_hz = 0;
+                                completion_status =
+                                    ad9361_fastlock_sync_current_lo(
+                                        board_data->phy, false, rffe_profile,
+                                        requested_frequency_hz,
+                                        &profile_frequency_hz);
+                                if (completion_status != 0 ||
+                                    !bladerf2_rfic_frequency_matches(
+                                        profile_frequency_hz,
+                                        readback_frequency_hz)) {
+                                    completion_lost = true;
+                                    break;
+                                }
+                            }
+                        }
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->rx_retune2_success_count_last =
+                            rx_retune2_success_count;
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    }
+
+                    if (completion_lost) {
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                        board_data->rx_retune2_pending_count = 0;
+                        board_data->rx_retune2_outcome_unknown = true;
+                        for (unsigned int i = 0; i <
+                             NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                            board_data->rx_retune2_pending[i].valid = false;
+                        }
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        ad9361_fastlock_invalidate_current_lo(
+                            board_data->phy, false);
+                        struct bladerf_rf_event event = {0};
+                        event.host_monotonic_ns = _monotonic_ns();
+                        event.event_type = BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                        event.fpga_state = BLADERF_RF_STATE_ERROR;
+                        event.flags = rx_retune2_success_count;
+                        event.error_code = BLADERF_ERR_UNEXPECTED;
+                        bladerf2_rf_event_append(board_data, &event);
+                    }
+                }
+            });
+        }
         if (should_poll_rx_retune) {
             bool report_rx_retune_failure = false;
             bool report_rx_retune_status_unavailable = false;
@@ -1329,6 +1438,18 @@ static void *rx_fault_monitor_task(void *arg)
                         event.flags = rx_retune2_failure_count;
                         event.error_code = rx_retune_event_error;
                         bladerf2_rf_event_append(board_data, &event);
+                        if (report_rx_retune_failure) {
+                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                            board_data->rx_retune2_pending_count = 0;
+                            board_data->rx_retune2_outcome_unknown = true;
+                            for (unsigned int i = 0; i <
+                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                board_data->rx_retune2_pending[i].valid = false;
+                            }
+                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                            ad9361_fastlock_invalidate_current_lo(
+                                board_data->phy, false);
+                        }
                     }
                 }
             });
@@ -1647,12 +1768,9 @@ static void *rx_fault_monitor_task(void *arg)
                                             requested_frequency_hz,
                                             &profile_frequency_hz);
                                     if (completion_read_status != 0 ||
-                                        (profile_frequency_hz >
-                                             readback_frequency_hz
-                                         ? profile_frequency_hz -
-                                               readback_frequency_hz > 1000
-                                         : readback_frequency_hz -
-                                               profile_frequency_hz > 1000)) {
+                                        !bladerf2_rfic_frequency_matches(
+                                            profile_frequency_hz,
+                                            readback_frequency_hz)) {
                                         completion_lost = true;
                                     } else {
                                         bladerf2_tx_retune_event(
@@ -1913,7 +2031,7 @@ static void *rx_fault_monitor_task(void *arg)
                                        tx_retune2_success_status :
                                       (report_tx_retune_counter_reset ?
                                        BLADERF_ERR_UNEXPECTED :
-                                       BLADERF_ERR_WOULD_BLOCK)))));
+                                       BLADERF_ERR_WOULD_BLOCK))))));
                     }
                     if (!tx_fir_config_valid &&
                         !board_data->tx_fir_configuration_invalid_reported) {
@@ -2472,6 +2590,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     struct bladerf2_board_data *board_data;
     struct bladerf_rf_event event = {0};
     bool data_epoch_enabled;
+    bool rx_retune_outcome_unknown;
     struct bladerf2_rx_invalidation_policy invalidation_policy = {0};
     int status;
 
@@ -2483,12 +2602,19 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     /* Serialize the entire public setter, not just this notification. A
      * transition begin must not slip between invalidation and the RFIC write. */
     WITH_MUTEX(&dev->lock, {
-        if (board_data->rf_transition_pending ||
-            board_data->rf_transition_setter_active) {
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        rx_retune_outcome_unknown = board_data->rx_retune2_outcome_unknown;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (bladerf2_rx_config_invalidation_blocked(
+                board_data->rf_transition_pending,
+                board_data->rf_transition_setter_active,
+                rx_retune_outcome_unknown)) {
             log_debug("%s: invalidation blocked (transition_pending=%u "
-                      "setter_active=%u state=%u transaction=%u)\n",
+                      "setter_active=%u rx_unknown=%u state=%u "
+                      "transaction=%u)\n",
                       __FUNCTION__, board_data->rf_transition_pending,
                       board_data->rf_transition_setter_active,
+                      rx_retune_outcome_unknown,
                       board_data->rf_transition_state,
                       board_data->rf_transition_current_id);
             status = BLADERF_ERR_WOULD_BLOCK;
@@ -3416,9 +3542,8 @@ static int _bladerf_rx_transition_begin(
      * synthesizer quantization can differ slightly from the requested
      * integer-Hz value; use the same 1 kHz tolerance as the scanner's
      * quick-profile validation. */
-    if (readback_hz > request->target_frequency_hz
-            ? readback_hz - request->target_frequency_hz > 1000
-            : request->target_frequency_hz - readback_hz > 1000) {
+    if (!bladerf2_rfic_frequency_matches(request->target_frequency_hz,
+                                         readback_hz)) {
         log_error("%s: LO readback mismatch: transaction=%u target=%" PRIu64
                   " readback=%" PRIu64 " quick_tune=%s\n", __FUNCTION__,
                   board_data->rf_transition_current_id,
@@ -4475,79 +4600,6 @@ int bladerf_rx_transition_get_events(struct bladerf *dev,
         return 0;
     }
     return found > capacity ? BLADERF_ERR_MEM : 0;
-}
-
-int bladerf_rf_events_get_since(struct bladerf *dev, uint64_t after_sequence,
-                                struct bladerf_rf_event *events,
-                                uint32_t capacity, uint32_t *event_count,
-                                uint64_t *next_sequence,
-                                bool *history_complete)
-{
-    struct bladerf2_board_data *board_data;
-    uint32_t copied = 0;
-    bool complete = true;
-    int status = 0;
-
-    if (dev == NULL || event_count == NULL || next_sequence == NULL ||
-        history_complete == NULL || (capacity != 0 && events == NULL)) {
-        return BLADERF_ERR_INVAL;
-    }
-    CHECK_BOARD_IS_BLADERF2(dev);
-    board_data = dev->board_data;
-    if (board_data == NULL) {
-        return BLADERF_ERR_INVAL;
-    }
-
-    *next_sequence = after_sequence;
-    MUTEX_LOCK(&board_data->rf_transition_event_lock);
-    {
-        uint32_t retained = board_data->rf_transition_event_count;
-        uint64_t current_sequence = board_data->rf_transition_event_sequence;
-        uint32_t oldest = (board_data->rf_transition_event_head +
-                           BLADERF2_RF_EVENT_HISTORY_SIZE - retained) %
-                          BLADERF2_RF_EVENT_HISTORY_SIZE;
-        uint64_t oldest_sequence = retained != 0 ?
-            board_data->rf_transition_event_sequences[oldest] :
-            board_data->rf_transition_event_sequence + 1;
-
-        if (!bladerf2_rf_event_cursor_is_valid(after_sequence,
-                                               current_sequence)) {
-            /* Resynchronize to the current tail and explicitly report an
-             * incomplete history. Never let a fabricated future cursor
-             * suppress later invalidation events while appearing complete. */
-            complete = false;
-            *next_sequence = current_sequence;
-            status = BLADERF_ERR_INVAL;
-        } else if (retained != 0 && after_sequence < oldest_sequence - 1) {
-            /* The caller has already lost the intervening validity history.
-             * Resynchronize to the current tail so repeated polls do not
-             * report the same gap forever. The incomplete result tells the
-             * caller to revoke any state derived from earlier events. */
-            complete = false;
-            *next_sequence = current_sequence;
-        }
-
-        for (uint32_t i = 0; complete && i < retained; ++i) {
-            uint32_t slot = (oldest + i) % BLADERF2_RF_EVENT_HISTORY_SIZE;
-            uint64_t sequence =
-                board_data->rf_transition_event_sequences[slot];
-            if (sequence <= after_sequence) {
-                continue;
-            }
-            if (copied < capacity) {
-                events[copied++] = board_data->rf_transition_events[slot];
-                *next_sequence = sequence;
-            } else {
-                complete = false;
-                break;
-            }
-        }
-    }
-    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-
-    *event_count = copied;
-    *history_complete = complete;
-    return status != 0 ? status : (complete ? 0 : BLADERF_ERR_MEM);
 }
 
 int bladerf_rx_transition_get_nios_timing(

@@ -1,0 +1,27 @@
+/* Pure policy shared by the NIOS RFIC path and host-side regression source. */
+#ifndef BLADERF_NIOS_RFIC_FREQUENCY_POLICY_H_
+#define BLADERF_NIOS_RFIC_FREQUENCY_POLICY_H_
+
+#include <stdbool.h>
+
+static inline bool rfic_dependent_fdd_peer_frequency_unknown(
+    bool dependent_fdd, bool tx_target, bool rx_frequency_known,
+    bool tx_frequency_known)
+{
+    if (!dependent_fdd) {
+        return false;
+    }
+
+    return tx_target ? !rx_frequency_known : !tx_frequency_known;
+}
+
+/* Only the two explicit LO writes during cold initialization may establish
+ * a first peer frequency without a prior known peer; stale INIT state alone
+ * never grants this exception to runtime commands. */
+static inline bool rfic_frequency_change_blocked(bool init_sequence,
+                                                 bool peer_unknown)
+{
+    return !init_sequence && peer_unknown;
+}
+
+#endif

@@ -137,11 +137,50 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
 }
 
 void *no_os_malloc(size_t size) { return malloc(size); }
+void *no_os_calloc(size_t nitems, size_t size) { return calloc(nitems, size); }
 void no_os_free(void *ptr) { free(ptr); }
+int32_t no_os_gpio_get(struct no_os_gpio_desc **desc,
+                       const struct no_os_gpio_init_param *param)
+{
+    (void)desc;
+    (void)param;
+    return -ENOSYS;
+}
+int32_t no_os_gpio_get_optional(struct no_os_gpio_desc **desc,
+                                const struct no_os_gpio_init_param *param)
+{
+    (void)desc;
+    (void)param;
+    return -ENOSYS;
+}
+int32_t no_os_gpio_remove(struct no_os_gpio_desc *desc)
+{
+    (void)desc;
+    return 0;
+}
+int32_t no_os_gpio_direction_output(struct no_os_gpio_desc *desc,
+                                    uint8_t value)
+{
+    (void)desc;
+    (void)value;
+    return -ENOSYS;
+}
 int32_t no_os_gpio_set_value(struct no_os_gpio_desc *desc, uint8_t value)
 {
     (void)desc;
     (void)value;
+    return 0;
+}
+int32_t no_os_spi_init(struct no_os_spi_desc **desc,
+                       const struct no_os_spi_init_param *param)
+{
+    (void)desc;
+    (void)param;
+    return -ENOSYS;
+}
+int32_t no_os_spi_remove(struct no_os_spi_desc *desc)
+{
+    (void)desc;
     return 0;
 }
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
@@ -203,6 +242,7 @@ int main(void)
     struct ad9361_rf_phy phy = {0};
     struct ad9361_rf_phy phy_without_spi = {0};
     struct ad9361_phy_platform_data pdata = {0};
+    struct gain_control gain = {0};
     struct no_os_spi_desc spi = {0};
     int32_t ret;
     struct axi_adc calibration_adc = { .num_channels = 2 };
@@ -217,6 +257,7 @@ int main(void)
     struct ad9361_rf_phy loopback_phy = {
         .adc_conv = &loopback_conv,
         .rx_adc = &loopback_adc,
+        .pdata = &pdata,
         .bist_loopback_valid = true,
     };
     int32_t calib_integer = INT32_MIN;
@@ -830,8 +871,8 @@ int main(void)
         fail_write_reg = REG_RX_VCO_OUTPUT;
         ret = ad9361_rfpll_vco_init(&phy, false, 8500000000ULL, 40000000,
                                     true, &selected_tdd_table);
-        if (ret != -EIO || !phy.current_rx_use_tdd_table ||
-            phy.current_tx_use_tdd_table || !selected_tdd_table) {
+        if (ret != -EIO || phy.current_rx_use_tdd_table ||
+            !phy.current_tx_use_tdd_table || !selected_tdd_table) {
             fprintf(stderr, "Failed RFPLL VCO setup published table cache\n");
             return EXIT_FAILURE;
         }
@@ -840,9 +881,9 @@ int main(void)
         ret = ad9361_rfpll_vco_init(&phy, false, 8500000000ULL, 40000000,
                                     true, &selected_tdd_table);
         if (ret != 0 || selected_tdd_table ||
-            !phy.current_rx_use_tdd_table ||
-            phy.current_tx_use_tdd_table) {
-            fprintf(stderr, "Successful RFPLL VCO setup changed cache early\n");
+            phy.current_rx_use_tdd_table ||
+            !phy.current_tx_use_tdd_table) {
+            fprintf(stderr, "RFPLL VCO helper changed published cache\n");
             return EXIT_FAILURE;
         }
 
@@ -953,8 +994,11 @@ int main(void)
     {
         const uint8_t tracking_mask = ENABLE_BB_DC_OFFSET_TRACKING |
                                      ENABLE_RF_OFFSET_TRACKING;
+        struct no_os_clk rxpll_clock = { .rate = 2400000000U };
+        struct no_os_clk *saved_rxpll_clock = phy.clks[RX_RFPLL];
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
+        phy.clks[RX_RFPLL] = &rxpll_clock;
         phy.bbdc_track_en = true;
         phy.rfdc_track_en = true;
         phy.quad_track_en = true;
@@ -971,6 +1015,7 @@ int main(void)
                     fake_regs[REG_DC_OFFSET_CONFIG2]);
             return EXIT_FAILURE;
         }
+        phy.clks[RX_RFPLL] = saved_rxpll_clock;
         register_map_enabled = false;
         read_count = write_count = 0;
     }
@@ -1059,11 +1104,12 @@ int main(void)
         memset(fake_regs, 0, sizeof(fake_regs));
         phy.clks[ADC_CLK] = &rx_clock;
         phy.clks[DAC_CLK] = &tx_clock;
+        pdata.rx2tx2 = true;
         phy.ref_clk_scale[CLKRF_CLK] = &clkrf;
         phy.ref_clk_scale[CLKTF_CLK] = &clktf;
         pdata.rx1rx2_phase_inversion_en = true;
         fail_write_once_reg = REG_PARALLEL_PORT_CONF_2;
-        ret = ad9361_tx_quad_calib(&phy, 10000000, 10000000, -1);
+        ret = ad9361_tx_quad_calib(&phy, 20000000, 20000000, -1);
         if (ret != -EIO || fail_write_once_reg != -1 ||
             (fake_regs[REG_PARALLEL_PORT_CONF_2] & INVERT_RX2) == 0) {
             fprintf(stderr,
@@ -1073,6 +1119,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         pdata.rx1rx2_phase_inversion_en = false;
+        pdata.rx2tx2 = false;
         phy.ref_clk_scale[CLKRF_CLK] = NULL;
         phy.ref_clk_scale[CLKTF_CLK] = NULL;
         phy.clks[ADC_CLK] = NULL;
@@ -1129,7 +1176,15 @@ int main(void)
         loopback_conv.scratch_reg[0] != 0 ||
         loopback_conv.scratch_reg[1] != 0 ||
         !loopback_phy.bist_loopback_valid) {
-        fprintf(stderr, "HDL loopback failed to roll back partial lane update\n");
+        fprintf(stderr,
+                "HDL loopback rollback failed: ret=%" PRId32
+                " lane0=0x%08" PRIx32 " lane1=0x%08" PRIx32
+                " scratch0=0x%08" PRIx32 " scratch1=0x%08" PRIx32
+                " valid=%d\n",
+                ret, fake_axi_regs[0x4418 / sizeof(uint32_t)],
+                fake_axi_regs[0x4458 / sizeof(uint32_t)],
+                loopback_conv.scratch_reg[0], loopback_conv.scratch_reg[1],
+                loopback_phy.bist_loopback_valid);
         return EXIT_FAILURE;
     }
     fake_axi_fail_write_offset = 0x4458;
@@ -1415,6 +1470,7 @@ int main(void)
 #endif
         phy.pdata->split_gt = true;
         phy.current_table = TBL_200_1300_MHZ + RXGAIN_TBLS_END;
+        rx_gain.gain_db = 0x1234;
         fail_read_reg = REG_GAIN_TABLE_ADDRESS;
         ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
         if (ret != -EIO || rx_gain.gain_db != 0x1234) {
@@ -1423,6 +1479,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+        rx_gain.gain_db = 0x1234;
         fail_write_reg = REG_GAIN_TABLE_ADDRESS;
         ret = ad9361_get_rx_gain(&phy, 1, &rx_gain);
         if (ret != -EIO || rx_gain.gain_db != 0x1234) {
@@ -1825,6 +1882,21 @@ int main(void)
         AD9361_RXFIRConfig rx_fir = {0};
         AD9361_TXFIRConfig tx_fir = {0};
         unsigned tx_atten_write_count;
+        struct no_os_clk agc_rf_clock = { .rate = 30720000U };
+        struct no_os_clk agc_sample_clock = { .rate = 1000000U };
+        struct no_os_clk *saved_agc_rf_clock = phy.clks[CLKRF_CLK];
+        struct no_os_clk *saved_agc_sample_clock = phy.clks[RX_SAMPL_CLK];
+        struct gain_control saved_gain_ctrl = pdata.gain_ctrl;
+
+        gain.lmt_overload_high_thresh = 16;
+        gain.lmt_overload_low_thresh = 16;
+        gain.dec_pow_measuremnt_duration = 16;
+        gain.f_agc_dec_pow_measuremnt_duration = 16;
+        gain.f_agc_power_measurement_duration_in_state5 = 16;
+        gain.gain_update_interval_us = 1000;
+        phy.clks[CLKRF_CLK] = &agc_rf_clock;
+        phy.clks[RX_SAMPL_CLK] = &agc_sample_clock;
+        pdata.gain_ctrl = gain;
 
         fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
         ret = ad9361_auxdac_setup(&phy, &auxdac);
@@ -2053,6 +2125,9 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+        phy.clks[CLKRF_CLK] = saved_agc_rf_clock;
+        phy.clks[RX_SAMPL_CLK] = saved_agc_sample_clock;
+        pdata.gain_ctrl = saved_gain_ctrl;
     }
     fail_write_reg = -1;
 
@@ -2345,7 +2420,10 @@ int main(void)
         if (ret != -EIO || fake_regs[REG_SDM_CTRL_1] != BBPLL_RESET_BAR ||
             fake_write_counts[REG_SDM_CTRL_1] != 2) {
             fprintf(stderr,
-                    "BBPLL failed calibration-start write skipped cleanup\n");
+                    "BBPLL start cleanup mismatch: ret=%" PRId32
+                    " reg=0x%02x writes=%u\n", ret,
+                    fake_regs[REG_SDM_CTRL_1],
+                    fake_write_counts[REG_SDM_CTRL_1]);
             return EXIT_FAILURE;
         }
 
@@ -2523,6 +2601,14 @@ int main(void)
 
     /* BIST must propagate both writes and update cached state only after the
      * complete register transaction succeeds. */
+    /* BIST loopback now includes the FPGA HDL path; provide a minimally valid
+     * converter/AXI fixture so these checks reach the injected RFIC writes. */
+    phy.adc_conv = &loopback_conv;
+    phy.rx_adc = &loopback_adc;
+    loopback_chip.num_channels = 2;
+    fake_axi_regs[0x4000 / sizeof(uint32_t)] = UINT32_C(8) << 16;
+    fake_axi_regs[0x4418 / sizeof(uint32_t)] = 0x11;
+    fake_axi_regs[0x4458 / sizeof(uint32_t)] = 0x22;
     phy.bist_prbs_mode = BIST_INJ_TX;
     phy.bist_config = 0x55;
     phy.bist_config_valid = true;
@@ -2638,7 +2724,7 @@ int main(void)
     fail_write_reg = -1;
 	phy.bist_config = 0x1234;
 	fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
-	ret = ad9361_write_bist_reg(&phy, 0x5678);
+	ret = ad9361_write_bist_reg(&phy, 0x78);
 	if (ret != -EIO || phy.bist_config != 0x1234) {
 		fprintf(stderr, "BIST register API committed cache after SPI error\n");
 		return EXIT_FAILURE;
@@ -2713,6 +2799,7 @@ int main(void)
 		return EXIT_FAILURE;
 	}
 	phy_without_spi.pdata = &pdata;
+	tx_rf_port = UINT32_MAX;
 	if (ad9361_set_tx_rf_port_output(NULL, 0) != -EINVAL ||
 	    ad9361_set_tx_rf_port_output(&phy_without_spi, 0) != -EINVAL ||
 	    ad9361_get_tx_rf_port_output(NULL, &tx_rf_port) != -EINVAL ||
@@ -2839,6 +2926,10 @@ int main(void)
         struct no_os_spi_desc *saved_spi = phy.spi;
         uint32_t saved_rx_profile_flags = phy.fastlock.entry[0][0].flags;
         uint32_t saved_tx_profile_flags = phy.fastlock.entry[1][0].flags;
+        uint64_t saved_current_rx_lo = phy.current_rx_lo_freq;
+        uint8_t saved_cached_rx_div = phy.cached_rx_rfpll_div;
+        uint8_t saved_current_rx_profile = phy.fastlock.current_profile[0];
+        bool saved_rx_request_valid = phy.rfpll_requested_valid[0];
 
         /* Force the getter through its SPI fallback rather than an already
          * cached profile image. */
@@ -2860,8 +2951,6 @@ int main(void)
             return EXIT_FAILURE;
         }
         phy.spi = saved_spi;
-        phy.fastlock.entry[0][0].flags = saved_rx_profile_flags;
-        phy.fastlock.entry[1][0].flags = saved_tx_profile_flags;
 
         fail_read_reg = REG_RX_FAST_LOCK_PROGRAM_READ;
         ret = ad9361_rx_fastlock_get_freq(&phy, 0, &frequency);
@@ -2871,17 +2960,31 @@ int main(void)
             return EXIT_FAILURE;
         }
         phy.current_rx_lo_freq = 1800000000;
+        phy.cached_rx_rfpll_div = 2;
+        phy.rfpll_requested_valid[0] = true;
         phy.fastlock.entry[0][0].flags = 0;
         ret = ad9361_fastlock_sync_current_lo(&phy, false, 0,
                                                1800000000, &frequency);
-        if (ret != -EIO || phy.current_rx_lo_freq != 0) {
+        if (ret != -EIO || phy.current_rx_lo_freq != 0 ||
+            phy.cached_rx_rfpll_div != 0 || phy.rfpll_requested_valid[0]) {
             fprintf(stderr,
-                    "Failed fastlock sync retained stale RX LO cache: "
-                    "ret=%" PRId32 " cached=%" PRIu64 "\n",
-                    ret, phy.current_rx_lo_freq);
+                    "Failed fastlock sync retained stale RX RFPLL cache: "
+                    "ret=%" PRId32 " cached=%" PRIu64 " div=%u valid=%u\n",
+                    ret, phy.current_rx_lo_freq, phy.cached_rx_rfpll_div,
+                    phy.rfpll_requested_valid[0]);
+            return EXIT_FAILURE;
+        }
+        if (phy.fastlock.current_profile[0] != 0xffu) {
+            fprintf(stderr,
+                    "Failed fastlock sync did not mark RX profile unknown: %u\n",
+                    phy.fastlock.current_profile[0]);
             return EXIT_FAILURE;
         }
         phy.fastlock.entry[0][0].flags = saved_rx_profile_flags;
+        phy.current_rx_lo_freq = saved_current_rx_lo;
+        phy.cached_rx_rfpll_div = saved_cached_rx_div;
+        phy.fastlock.current_profile[0] = saved_current_rx_profile;
+        phy.rfpll_requested_valid[0] = saved_rx_request_valid;
         fail_read_reg = -1;
 
         reads_before = read_count;
@@ -2902,6 +3005,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_read_reg = -1;
+        phy.fastlock.entry[1][0].flags = saved_tx_profile_flags;
     }
 
     /* An out-of-band profile-bank write invalidates only the corresponding
@@ -2949,6 +3053,7 @@ int main(void)
         uint8_t saved_profile_data[RX_FAST_LOCK_CONFIG_WORD_NUM];
         uint64_t saved_lo = phy.current_rx_lo_freq;
         uint8_t saved_div = phy.cached_rx_rfpll_div;
+        uint8_t saved_current_profile = phy.fastlock.current_profile[0];
         bool saved_requested_valid = phy.rfpll_requested_valid[0];
         bool saved_register_map_enabled = register_map_enabled;
         struct no_os_clk *saved_refclk = phy.clk_refin;
@@ -2976,12 +3081,15 @@ int main(void)
         if (ret != 0 || frequency != 1900000000 ||
             phy.current_rx_lo_freq != ad9361_to_clk(1900000000) ||
             phy.cached_rx_rfpll_div != 1 ||
+            phy.fastlock.current_profile[0] != 1 ||
             phy.rfpll_requested_valid[0]) {
             fprintf(stderr,
                     "Fastlock sync did not publish profile state: ret=%" PRId32
-                    " freq=%" PRIu64 " cached=%" PRIu64 " div=%u valid=%u\n",
+                    " freq=%" PRIu64 " cached=%" PRIu64 " div=%u "
+                    "profile=%u valid=%u\n",
                     ret, frequency, phy.current_rx_lo_freq,
                     phy.cached_rx_rfpll_div,
+                    phy.fastlock.current_profile[0],
                     phy.rfpll_requested_valid[0]);
             return EXIT_FAILURE;
         }
@@ -2989,6 +3097,7 @@ int main(void)
         phy.fastlock.entry[0][0].flags = saved_profile_flags;
         phy.current_rx_lo_freq = saved_lo;
         phy.cached_rx_rfpll_div = saved_div;
+        phy.fastlock.current_profile[0] = saved_current_profile;
         phy.rfpll_requested_valid[0] = saved_requested_valid;
         phy.clk_refin = saved_refclk;
         phy.clks[RX_RFPLL] = saved_rxpll;
@@ -3090,6 +3199,7 @@ int main(void)
                     "AGC update counter underflow/overflow policy failed\n");
             return EXIT_FAILURE;
         }
+		agc_pdata.gain_ctrl.gain_update_interval_us = 0;
         writes_before = write_count;
         ret = ad9361_gc_update(&agc_phy);
         if (ret != -EINVAL || write_count != writes_before) {
@@ -3127,6 +3237,7 @@ int main(void)
         agc_rf_clock.rate = 30720000;
         agc_pdata.elna_ctrl.settling_delay_ns = UINT32_MAX;
         agc_pdata.gain_ctrl.f_agc_state_wait_time_ns = UINT32_MAX;
+        register_map_enabled = true;
         ret = ad9361_gc_update(&agc_phy);
         if (ret != 0 || fake_regs[REG_AGC_ATTACK_DELAY] != 31 ||
             fake_regs[REG_PEAK_WAIT_TIME] != 31 ||
@@ -3280,28 +3391,28 @@ int main(void)
         register_map_enabled = false;
     }
 
-    /* A failed FIR/clock transition invalidates the optimization cache. A
-     * retry with the pre-failure bypass value must rerun validation instead
-     * of returning through the old no-op path. */
+    /* A rejected FIR transition must invalidate the cache. Retrying with the
+     * same cached bypass state must rerun validation instead of returning
+     * through the old no-op path. */
     {
-        unsigned bandwidth_updates = fake_bandwidth_update_count;
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
         phy.bypass_rx_fir = true;
         phy.bypass_tx_fir = true;
-        phy.rx_fir_dec = 1;
+        phy.rx_fir_dec = 0;
         phy.filt_valid = false;
         phy.fir_config_valid = true;
-        fake_clock_chain_status = -EIO;
-        ret = ad9361_set_rx_fir_en_dis(&phy, 0);
-        if (ret != -EIO || !phy.bypass_rx_fir || phy.fir_config_valid) {
-            fprintf(stderr, "Failed FIR transition retained a valid cache\n");
+        ret = ad9361_set_rx_fir_en_dis(&phy, 1);
+        if (ret != -EINVAL || !phy.bypass_rx_fir || phy.fir_config_valid ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr, "Rejected FIR transition retained a valid cache\n");
             return EXIT_FAILURE;
         }
 
-        fake_clock_chain_status = 0;
-        ret = ad9361_set_rx_fir_en_dis(&phy, 0);
-        if (ret != 0 || phy.bypass_rx_fir || !phy.fir_config_valid ||
-            fake_bandwidth_update_count != bandwidth_updates + 1) {
-            fprintf(stderr, "FIR retry with cached bypass state was skipped\n");
+        ret = ad9361_set_rx_fir_en_dis(&phy, 1);
+        if (ret != -EINVAL || !phy.bypass_rx_fir || phy.fir_config_valid ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr, "FIR retry with stale cache was skipped\n");
             return EXIT_FAILURE;
         }
     }

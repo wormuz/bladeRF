@@ -78,6 +78,16 @@
 #include "rf_transition_policy.h"
 #include "rfic_rssi_policy.h"
 
+static uint64_t bladerf2_monotonic_ns(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
 
 /******************************************************************************/
 /* Forward declarations */
@@ -93,6 +103,8 @@ static int bladerf2_tx_config_change_begin(struct bladerf *dev);
 static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
                                                uint16_t address,
                                                uint8_t val);
+static bool bladerf2_rx_retune_blocks_rf_config(
+    struct bladerf2_board_data *board_data);
 
 
 /******************************************************************************/
@@ -1390,6 +1402,14 @@ static int bladerf2_enable_module(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     int status;
 
+    /* ENSM/module transitions can invalidate a queued fastlock's assumption
+     * that the requested RF path remains active until its timestamp. Require
+     * queue reconciliation (or an explicit queue clear) before either RX or
+     * TX module state changes. */
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     if (enable) {
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         bool frequency_model_known = bladerf2_rfic_frequency_model_valid(
@@ -1918,6 +1938,9 @@ static int bladerf2_set_gain_mode(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     return board_data->rfic->set_gain_mode(dev, ch, mode);
 }
@@ -1938,6 +1961,10 @@ static int bladerf2_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_range const *range      = NULL;
+
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     CHECK_STATUS(dev->board->get_gain_range(dev, ch, &range));
 
@@ -1968,6 +1995,10 @@ static int bladerf2_set_gain_stage(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_range const *range      = NULL;
+
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     CHECK_STATUS(dev->board->get_gain_stage_range(dev, ch, stage, &range));
 
@@ -2065,6 +2096,9 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const *range      = NULL;
     bladerf_sample_rate current;
@@ -2254,6 +2288,10 @@ static int bladerf2_set_bandwidth(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     return board_data->rfic->set_bandwidth(dev, ch, bandwidth, actual);
 }
 
@@ -2277,6 +2315,20 @@ static int bladerf2_get_frequency_range(struct bladerf *dev,
     return 0;
 }
 
+static bool bladerf2_rx_retune_blocks_rf_config(
+    struct bladerf2_board_data *board_data)
+{
+    uint8_t pending_count;
+    bool outcome_unknown;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    pending_count = board_data->rx_retune2_pending_count;
+    outcome_unknown = board_data->rx_retune2_outcome_unknown;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    return bladerf2_rx_retune_blocks_rf_tune(pending_count, outcome_unknown);
+}
+
 static int bladerf2_select_band(struct bladerf *dev,
                                 bladerf_channel ch,
                                 bladerf_frequency frequency)
@@ -2284,6 +2336,10 @@ static int bladerf2_select_band(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     return board_data->rfic->select_band(dev, ch, frequency);
 }
@@ -2355,6 +2411,18 @@ static int bladerf2_set_frequency(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+
+    /* A queued NIOS RX fastlock can change the shared RFIC state independently
+     * of the selected tuning owner. Fence both host- and FPGA-tuning setters
+     * until its completion record is reconciled or the queue is cleared. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    uint8_t rx_retune_pending_count = board_data->rx_retune2_pending_count;
+    bool rx_retune_outcome_unknown = board_data->rx_retune2_outcome_unknown;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (bladerf2_rx_retune_blocks_rf_tune(rx_retune_pending_count,
+                                         rx_retune_outcome_unknown)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     bool model_known = bladerf2_rfic_frequency_model_valid(
@@ -2554,7 +2622,8 @@ static void bladerf2_tx_frequency_reconfigure_complete(
         pending_count = board_data->tx_retune2_pending_count;
         board_data->tx_retune2_completion_faulted = true;
         board_data->tx_retune2_applied_waiting_rf_valid =
-            tune_status == 0 && readback_status == 0 && readback_hz == target_hz &&
+            tune_status == 0 && readback_status == 0 &&
+            bladerf2_rfic_frequency_matches(target_hz, readback_hz) &&
             pending_count == 0;
         board_data->tx_retune2_applied_frequency_hz = readback_hz;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -2563,7 +2632,8 @@ static void bladerf2_tx_frequency_reconfigure_complete(
             (void)bladerf2_tx_gate_abort_fail_closed(
                 dev, board_data, 0);
         }
-        if (tune_status == 0 && readback_status == 0 && readback_hz == target_hz) {
+        if (tune_status == 0 && readback_status == 0 &&
+            bladerf2_rfic_frequency_matches(target_hz, readback_hz)) {
             bladerf2_tx_retune_event(
                 dev, BLADERF_RF_EVT_TX_RETUNE_APPLIED, target_hz,
                 readback_hz, pending_count, tune_status);
@@ -2943,6 +3013,10 @@ static int bladerf2_set_rf_port(struct bladerf *dev,
     uint32_t port_id                            = UINT32_MAX;
     size_t i;
 
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
         log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
         return BLADERF_ERR_UNSUPPORTED;
@@ -3089,6 +3163,13 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
 
     struct controller_fns const *rfic      = board_data->rfic;
     struct band_port_map const *pm         = NULL;
+    const bool tx = BLADERF_CHANNEL_IS_TX(ch);
+    uint16_t candidate_nios_profile;
+    uint8_t candidate_rffe_profile;
+    uint8_t pending_count;
+    bool outcome_unknown;
+    bool profile_slot_busy = false;
+    unsigned int i;
 
     bladerf_frequency freq;
 
@@ -3101,7 +3182,45 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
 
     pm = _get_band_port_map_by_freq(ch, freq);
 
-    if (BLADERF_CHANNEL_IS_TX(ch)) {
+    /* A queued NIOS retune snapshots its NIOS profile, but the AD9361
+     * fastlock profile remains in a small mutable bank until activation.
+     * Do not let another quick-tune request overwrite either bank slot while
+     * a queued operation can still consume it. */
+    candidate_nios_profile = tx
+        ? board_data->quick_tune_tx_profile % NUM_BBP_FASTLOCK_PROFILES
+        : board_data->quick_tune_rx_profile % NUM_BBP_FASTLOCK_PROFILES;
+    candidate_rffe_profile = candidate_nios_profile % NUM_RFFE_FASTLOCK_PROFILES;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    pending_count = tx ? board_data->tx_retune2_pending_count
+                       : board_data->rx_retune2_pending_count;
+    outcome_unknown = tx
+        ? pending_count == 0 && board_data->tx_retune2_completion_faulted
+        : board_data->rx_retune2_outcome_unknown;
+    for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+        if (tx) {
+            if (board_data->tx_retune2_pending[i].valid &&
+                bladerf2_retune_profile_slot_conflicts(
+                    candidate_nios_profile, candidate_rffe_profile,
+                    board_data->tx_retune2_pending[i].nios_profile,
+                    board_data->tx_retune2_pending[i].rffe_profile)) {
+                profile_slot_busy = true;
+                break;
+            }
+        } else if (board_data->rx_retune2_pending[i].valid &&
+                   bladerf2_retune_profile_slot_conflicts(
+                       candidate_nios_profile, candidate_rffe_profile,
+                       board_data->rx_retune2_pending[i].nios_profile,
+                       board_data->rx_retune2_pending[i].rffe_profile)) {
+            profile_slot_busy = true;
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (outcome_unknown || profile_slot_busy) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    if (tx) {
         /* Profile indices wrap instead of running out.
          *
          * The counter only ever incremented, and was reset in exactly one
@@ -3122,8 +3241,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
          * 4700 stops: the counter reached 256 after roughly 165-229 s and
          * every subsequent retune to a new frequency failed.
          */
-        quick_tune->nios_profile =
-            board_data->quick_tune_tx_profile++ % NUM_BBP_FASTLOCK_PROFILES;
+        quick_tune->nios_profile = candidate_nios_profile;
+        board_data->quick_tune_tx_profile++;
         log_verbose("Quick tune assigned Nios TX fast lock index: %u\n",
                     quick_tune->nios_profile);
         quick_tune->rffe_profile =
@@ -3151,8 +3270,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
 
     } else {
         /* Profile indices wrap instead of running out; see the TX branch. */
-        quick_tune->nios_profile =
-            board_data->quick_tune_rx_profile++ % NUM_BBP_FASTLOCK_PROFILES;
+        quick_tune->nios_profile = candidate_nios_profile;
+        board_data->quick_tune_rx_profile++;
         log_verbose("Quick tune assigned Nios RX fast lock index: %u\n",
                     quick_tune->nios_profile);
         quick_tune->rffe_profile =
@@ -3203,11 +3322,27 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    uint8_t rx_retune_pending_count = board_data->rx_retune2_pending_count;
+    bool rx_retune_outcome_unknown = board_data->rx_retune2_outcome_unknown;
     bool frequency_model_known = bladerf2_rfic_frequency_model_valid(
         board_data->rfic_reference_clock_known,
         board_data->rfic_frequency_model_known);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (bladerf2_retune2_blocks_schedule(
+            rx_retune_pending_count, rx_retune_outcome_unknown,
+            BLADERF_CHANNEL_IS_TX(ch), timestamp == BLADERF_RETUNE_NOW)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     if (!frequency_model_known) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    if (board_data->phy != NULL && board_data->phy->pdata != NULL &&
+        bladerf2_rf_tune_peer_lo_unknown(
+            BLADERF_CHANNEL_IS_TX(ch),
+            board_data->phy->pdata->fdd &&
+                !board_data->phy->pdata->fdd_independent_mode,
+            board_data->phy->current_rx_lo_freq != 0,
+            board_data->phy->current_tx_lo_freq != 0)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
     if (bladerf2_rfic_reference_clock_status(dev) != 0) {
@@ -3218,9 +3353,11 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     }
     uint32_t success_count;
     uint32_t rx_retune_failure_baseline = 0;
+    uint32_t rx_retune_success_baseline = 0;
     bool watch_rx_retune_failure =
         !BLADERF_CHANNEL_IS_TX(ch) && timestamp != BLADERF_RETUNE_NOW;
     uint8_t pending_slot = UINT8_MAX;
+    uint8_t rx_pending_slot = UINT8_MAX;
     unsigned int i;
 
     if (board_data->tx_frequency_reconfigure_active ||
@@ -3257,6 +3394,49 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     if (watch_rx_retune_failure) {
         CHECK_STATUS(nios_retune2_failure_count_read(
             dev, BLADERF_MODULE_RX, &rx_retune_failure_baseline));
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        bool rx_success_count_valid =
+            board_data->rx_retune2_success_count_valid;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!rx_success_count_valid) {
+            CHECK_STATUS(nios_retune2_success_count_read(
+                dev, BLADERF_MODULE_RX, &rx_retune_success_baseline));
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (!board_data->rx_retune2_success_count_valid) {
+                board_data->rx_retune2_success_count_last =
+                    rx_retune_success_baseline;
+                board_data->rx_retune2_success_count_valid = true;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        }
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        if (board_data->rx_retune2_pending_count >=
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            if (!board_data->rx_retune2_pending[i].valid) {
+                rx_pending_slot = (uint8_t)i;
+                break;
+            }
+        }
+        if (rx_pending_slot == UINT8_MAX) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        board_data->rx_retune2_pending[rx_pending_slot].timestamp = timestamp;
+        board_data->rx_retune2_pending[rx_pending_slot].requested_frequency_hz =
+            frequency;
+        board_data->rx_retune2_pending[rx_pending_slot].nios_profile =
+            quick_tune->nios_profile;
+        board_data->rx_retune2_pending[rx_pending_slot].rffe_profile =
+            quick_tune->rffe_profile;
+        board_data->rx_retune2_pending[rx_pending_slot].valid = true;
+        board_data->rx_retune2_pending_count++;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
@@ -3354,19 +3534,41 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt);
     if (status != 0) {
-        if (watch_rx_retune_failure) {
-            if (!board_data->rx_retune2_failure_count_valid) {
-                board_data->rx_retune2_failure_count_last =
-                    rx_retune_failure_baseline;
-                board_data->rx_retune2_failure_count_valid = true;
+        if (!BLADERF_CHANNEL_IS_TX(ch)) {
+            if (watch_rx_retune_failure) {
+                if (!board_data->rx_retune2_failure_count_valid) {
+                    board_data->rx_retune2_failure_count_last =
+                        rx_retune_failure_baseline;
+                    board_data->rx_retune2_failure_count_valid = true;
+                }
+                /* The USB response can fail after the NIOS accepted the
+                 * command. Keep observing scheduled work and retain its
+                 * ledger until completion or an acknowledged queue clear. */
+                bladerf2_rx_retune_watch_begin(
+                    &board_data->rx_retune2_failure_watch_active,
+                    &board_data->rx_retune2_failure_watch_generation,
+                    &board_data->rx_retune2_status_unavailable_reported);
+            } else {
+                /* NOW has no deferred completion record. If its response was
+                 * lost, only a successful queue clear can prove that no
+                 * delayed command remains capable of changing the LO. */
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rx_retune2_outcome_unknown = true;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             }
-            /* USB response failure can be ambiguous after OUT completion.
-             * Keep watching because NIOS may still have accepted the queue
-             * request and fail asynchronously. */
-            bladerf2_rx_retune_watch_begin(
-                &board_data->rx_retune2_failure_watch_active,
-                &board_data->rx_retune2_failure_watch_generation,
-                &board_data->rx_retune2_status_unavailable_reported);
+
+            /* A returned transport error does not prove the RFIC stayed at
+             * its previous tune. Revoke all cached evidence and report the
+             * unresolved command outcome to event consumers. */
+            ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+            struct bladerf_rf_event event = {0};
+            event.host_monotonic_ns = bladerf2_monotonic_ns();
+            event.event_type = BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+            event.fpga_state = BLADERF_RF_STATE_ERROR;
+            event.requested_rx_lo_hz = frequency;
+            event.error_code = status;
+            bladerf2_rf_event_append(board_data, &event);
+            board_data->rx_retune2_status_unavailable_reported = true;
         }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
@@ -3418,11 +3620,15 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             pending_count = board_data->tx_retune2_pending_count;
             board_data->tx_retune2_completion_faulted = true;
             board_data->tx_retune2_applied_waiting_rf_valid =
-                readback_status == 0 && readback_frequency == frequency &&
+                readback_status == 0 &&
+                bladerf2_rfic_frequency_matches(frequency,
+                                                readback_frequency) &&
                 pending_count == 0;
             board_data->tx_retune2_applied_frequency_hz = readback_frequency;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            if (readback_status != 0 || readback_frequency != frequency) {
+            if (readback_status != 0 ||
+                !bladerf2_rfic_frequency_matches(frequency,
+                                                readback_frequency)) {
                 bladerf2_tx_retune_event(
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                     frequency, readback_status == 0 ? readback_frequency : 0,
@@ -3442,6 +3648,29 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
          * the remainder of this handle, even if the queue is later cleared:
          * an execution error may already have occurred before cancellation. */
         board_data->tx_retune2_failure_watch_active = true;
+    }
+
+    if (!BLADERF_CHANNEL_IS_TX(ch) && timestamp == BLADERF_RETUNE_NOW) {
+        bladerf_frequency readback_frequency = 0;
+        int readback_status = ad9361_fastlock_sync_current_lo(
+            board_data->phy, false, quick_tune->rffe_profile,
+            frequency, &readback_frequency);
+        if (readback_status != 0 ||
+            !bladerf2_rfic_frequency_matches(frequency,
+                                            readback_frequency)) {
+            struct bladerf_rf_event event = {0};
+            event.host_monotonic_ns = bladerf2_monotonic_ns();
+            event.event_type = BLADERF_RF_EVT_RX_RETUNE_FAILED;
+            event.fpga_state = BLADERF_RF_STATE_ERROR;
+            event.requested_rx_lo_hz = frequency;
+            event.readback_rx_lo_hz = readback_status == 0
+                ? readback_frequency : 0;
+            event.error_code = readback_status != 0
+                ? readback_status : BLADERF_ERR_UNEXPECTED;
+            bladerf2_rf_event_append(board_data, &event);
+            ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+            return event.error_code;
+        }
     }
 
     /* Leave the RFIC in fastlock mode across fastlock-to-fastlock hops.
@@ -3495,6 +3724,49 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
 
     int status = dev->backend->retune2(
         dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch)) {
+        uint8_t pending_count;
+        bool outcome_unknown;
+        uint32_t success_count = 0;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        pending_count = board_data->rx_retune2_pending_count;
+        outcome_unknown = board_data->rx_retune2_outcome_unknown;
+        board_data->rx_retune2_pending_count = 0;
+        board_data->rx_retune2_outcome_unknown = false;
+        for (unsigned int i = 0;
+             i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            board_data->rx_retune2_pending[i].valid = false;
+        }
+        board_data->rx_retune2_status_unavailable_reported = false;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (pending_count != 0 || outcome_unknown) {
+            /* Queue clear is a safe scheduling boundary, but it does not tell
+             * us whether a just-due profile ran before the clear. */
+            ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+        }
+        int success_count_status = nios_retune2_success_count_read(
+            dev, BLADERF_MODULE_RX, &success_count);
+        if (success_count_status == 0) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rx_retune2_success_count_last = success_count;
+            board_data->rx_retune2_success_count_valid = true;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        } else {
+            ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            board_data->rx_retune2_success_count_valid = false;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            if (!board_data->rx_retune2_status_unavailable_reported) {
+                struct bladerf_rf_event event = {0};
+                event.host_monotonic_ns = bladerf2_monotonic_ns();
+                event.event_type = BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+                event.fpga_state = BLADERF_RF_STATE_ERROR;
+                event.error_code = success_count_status;
+                bladerf2_rf_event_append(board_data, &event);
+                board_data->rx_retune2_status_unavailable_reported = true;
+            }
+        }
+    }
     if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch) &&
         board_data->rx_retune2_failure_watch_active) {
         uint32_t failure_count = 0;
@@ -3519,6 +3791,16 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
          * validity failures. */
         if (watch_event ==
             BLADERF2_RX_RETUNE_WATCH_STATUS_UNAVAILABLE) {
+            if (count_status == 0) {
+                /* The counter reset or wrapped. Use the observed value as a
+                 * fresh baseline so this retired queue cannot contaminate
+                 * the next request's failure delta. */
+                board_data->rx_retune2_failure_count_last = failure_count;
+                board_data->rx_retune2_failure_count_valid = true;
+            } else {
+                /* Re-seed from the next request's pre-enqueue snapshot. */
+                board_data->rx_retune2_failure_count_valid = false;
+            }
             if (!board_data->rx_retune2_status_unavailable_reported) {
                 event.event_type =
                     BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
@@ -3894,6 +4176,12 @@ static int bladerf2_set_correction(struct bladerf *dev,
     unsigned int shift;
     int32_t val;
     int status;
+
+    /* Correction writes use the shared AD9361 SPI path. Keep them out of the
+     * way of a timestamped NIOS RX fastlock operation. */
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
         log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
@@ -4771,6 +5059,33 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
     }
 
     if (board_data->tuning_mode != mode) {
+        uint8_t rx_pending_count;
+        bool rx_outcome_unknown;
+        bool rx_failure_watch_active;
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        rx_pending_count = board_data->rx_retune2_pending_count;
+        rx_outcome_unknown = board_data->rx_retune2_outcome_unknown;
+        rx_failure_watch_active =
+            board_data->rx_retune2_failure_watch_active;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+        if (bladerf2_tuning_mode_change_requires_rx_queue_clear(
+                rx_pending_count, rx_outcome_unknown,
+                rx_failure_watch_active)) {
+            /* NIOS may still apply a queued RX profile after RFIC ownership
+             * changes. Clear it through the same acknowledged path used by
+             * event-driven transitions, which also reconciles completion and
+             * failure counters and invalidates uncertain LO state. */
+            board_data->rf_transition_cancelling_scheduled_retunes = true;
+            status = bladerf2_cancel_scheduled_retunes(
+                dev, BLADERF_CHANNEL_RX(0));
+            board_data->rf_transition_cancelling_scheduled_retunes = false;
+            if (status != 0) {
+                return status;
+            }
+        }
+
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         board_data->rfic_frequency_model_known = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -4956,7 +5271,12 @@ static int bladerf2_set_rx_mux(struct bladerf *dev, bladerf_rx_mux mode)
 {
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     uint32_t rx_mux_val, config_gpio;
+
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     /* Validate desired mux mode */
     switch (mode) {
@@ -5304,6 +5624,9 @@ static int bladerf2_config_gpio_write(struct bladerf *dev, uint32_t val)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rfic_reference_clock_known = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -5548,7 +5871,10 @@ int bladerf_set_bias_tee(struct bladerf *dev, bladerf_channel ch, bool enable)
         uint32_t reg;
         uint32_t shift;
 
-        if (BLADERF_CHANNEL_IS_TX(ch)) {
+        if (!BLADERF_CHANNEL_IS_TX(ch) &&
+            bladerf2_rx_retune_blocks_rf_config(dev->board_data)) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else if (BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_tx_rf_config_change_begin(
                 dev, dev->board_data);
         }
@@ -5743,17 +6069,23 @@ static int bladerf2_tx_rf_config_change_begin(
         board_data->tx_retune2_failure_watch_active;
     const bool recovery_was_blocked = board_data->tx_recovery_blocked;
     uint8_t pending_count;
+    uint8_t rx_pending_count;
     bool gate_abort_pending;
+    bool rx_outcome_unknown;
     int status = 0;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     gate_abort_pending = board_data->tx_gate_abort_pending;
     pending_count = board_data->tx_retune2_pending_count;
+    rx_pending_count = board_data->rx_retune2_pending_count;
+    rx_outcome_unknown = board_data->rx_retune2_outcome_unknown;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (board_data->rf_transition_pending ||
         board_data->tx_frequency_reconfigure_active ||
         board_data->tx_rf_config_operation_active || recovery_was_blocked ||
-        gate_abort_pending) {
+        gate_abort_pending ||
+        bladerf2_rx_retune_blocks_rf_tune(rx_pending_count,
+                                          rx_outcome_unknown)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -5887,6 +6219,9 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
     if (status != 0) {
@@ -6429,19 +6764,19 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
     }
     status = bladerf2_tx_rf_config_operation_begin(dev);
     if (status == 0) {
-        MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-        dev->board_data->rfic_reference_clock_known = false;
-        MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+        MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+        ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = false;
+        MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
         status = bladerf2_set_pll_enable_hw(dev, enable);
         if (status == 0) {
             bladerf_clock_select clock_select;
             status = bladerf_get_clock_select(dev, &clock_select);
             if (status == 0 &&
                 (!enable || clock_select == CLOCK_SELECT_EXTERNAL)) {
-                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                dev->board_data->rfic_reference_clock_known = true;
-                dev->board_data->tx_rf_configuration_invalid_reported = false;
-                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+                ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+                ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+                MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             } else if (status == 0 &&
                        bladerf2_reference_clock_requires_pll_lock(
                            clock_select, enable)) {
@@ -6451,10 +6786,10 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
         if (status == 0 && wait_for_pll_lock) {
             status = bladerf2_wait_for_pll_lock(dev);
             if (status == 0) {
-                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                dev->board_data->rfic_reference_clock_known = true;
-                dev->board_data->tx_rf_configuration_invalid_reported = false;
-                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+                ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+                ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+                MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             }
         }
         bladerf2_tx_rf_config_operation_complete(dev);
@@ -6540,9 +6875,9 @@ static int bladerf2_set_pll_refclk_internal(
         tx_config_reserved = true;
     }
 
-    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-    dev->board_data->rfic_reference_clock_known = false;
-    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+    MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+    ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = false;
+    MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
 
     status = bladerf_pll_configure(dev, R, N);
     if (status == 0) {
@@ -6551,27 +6886,27 @@ static int bladerf2_set_pll_refclk_internal(
         if (status == 0 && clock_select == CLOCK_SELECT_EXTERNAL) {
             /* CLKIN is the specified 38.4 MHz direct RFIC reference; the
              * ADF400x lock detector only describes the onboard VCTCXO path. */
-            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-            dev->board_data->rfic_reference_clock_known = true;
-            dev->board_data->tx_rf_configuration_invalid_reported = false;
-            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+            ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+            ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+            MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
         } else if (status == 0) {
             bool pll_enabled = false;
             status = bladerf_get_pll_enable(dev, &pll_enabled);
             if (status == 0 && !pll_enabled) {
                 /* With the disciplining PLL disabled, the selected onboard
                  * VCTCXO still supplies the nominal 38.4 MHz reference. */
-                MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                dev->board_data->rfic_reference_clock_known = true;
-                dev->board_data->tx_rf_configuration_invalid_reported = false;
-                MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+                ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+                ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+                MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             } else if (status == 0) {
                 status = bladerf2_wait_for_pll_lock(dev);
                 if (status == 0) {
-                    MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                    dev->board_data->rfic_reference_clock_known = true;
-                    dev->board_data->tx_rf_configuration_invalid_reported = false;
-                    MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                    MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+                    ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+                    ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+                    MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
                 }
             }
         }
@@ -6633,9 +6968,9 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
             /* Arbitrary ADF400x latch writes can change the VCTCXO control
              * ratio. Divider-based AD9361 LO readback is no longer in hertz
              * until the caller re-establishes a known reference frequency. */
-            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-            dev->board_data->rfic_reference_clock_known = false;
-            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+            ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             address &= 0x03;
             status = dev->backend->adf400x_write(dev, address, val);
         }
@@ -6739,9 +7074,9 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
 
             // A failed GPIO write can still be ambiguous at the USB boundary.
             // Invalidate the reference model before issuing it.
-            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-            dev->board_data->rfic_reference_clock_known = false;
-            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+            ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = false;
+            MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             status = dev->backend->config_gpio_write(dev, gpio);
             if (status == 0) {
                 uint32_t gpio_readback;
@@ -6761,10 +7096,10 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
                         /* External CLKIN is specified at 38.4 MHz; with the
                          * onboard source, the free-running VCTCXO remains a
                          * nominal reference when its disciplining PLL is off. */
-                        MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-                        dev->board_data->rfic_reference_clock_known = true;
-                        dev->board_data->tx_rf_configuration_invalid_reported = false;
-                        MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+                        MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+                        ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+                        ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+                        MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
                     } else {
                         wait_for_pll_lock = true;
                     }
@@ -6777,10 +7112,10 @@ int bladerf_set_clock_select(struct bladerf *dev, bladerf_clock_select sel)
     if (status == 0 && wait_for_pll_lock) {
         status = bladerf2_wait_for_pll_lock(dev);
         if (status == 0) {
-            MUTEX_LOCK(&dev->board_data->rx_async_epoch_lock);
-            dev->board_data->rfic_reference_clock_known = true;
-            dev->board_data->tx_rf_configuration_invalid_reported = false;
-            MUTEX_UNLOCK(&dev->board_data->rx_async_epoch_lock);
+            MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
+            ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = true;
+            ((struct bladerf2_board_data *)dev->board_data)->tx_rf_configuration_invalid_reported = false;
+            MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
         }
     }
 

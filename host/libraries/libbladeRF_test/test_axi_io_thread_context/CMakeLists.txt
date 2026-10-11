@@ -26,6 +26,7 @@ target_include_directories(libbladeRF_test_axi_io_thread_context PRIVATE
     ${BLADERF_FPGA_COMMON_INCLUDE_DIR}
     ${CMAKE_BINARY_DIR}/libraries/libbladeRF/src
     ${REPO_ROOT}/thirdparty/analogdevicesinc/no-OS_local/platform_bladerf2
+    ${REPO_ROOT}/thirdparty/analogdevicesinc/no-OS/include
 )
 
 target_compile_options(libbladeRF_test_axi_io_thread_context PRIVATE -UNDEBUG)

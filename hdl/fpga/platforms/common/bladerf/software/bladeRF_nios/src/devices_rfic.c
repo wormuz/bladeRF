@@ -28,6 +28,7 @@
 
 #include "devices_rfic.h"
 #include "ad936x_helpers.h"
+#include "rfic_frequency_policy.h"
 
 
 /******************************************************************************/
@@ -35,6 +36,29 @@
 /******************************************************************************/
 
 static struct rfic_state state;
+
+bool rfic_frequency_peer_unknown(bladerf_module target)
+{
+    bool tx_target;
+    bool dependent_fdd;
+
+    if (target != BLADERF_MODULE_RX && target != BLADERF_MODULE_TX) {
+        return true;
+    }
+
+    if (state.phy == NULL || state.phy->pdata == NULL) {
+        return true;
+    }
+
+    tx_target = target == BLADERF_MODULE_TX;
+    dependent_fdd = state.phy->pdata->fdd &&
+                    !state.phy->pdata->fdd_independent_mode;
+
+    return rfic_dependent_fdd_peer_frequency_unknown(
+        dependent_fdd, tx_target,
+        !state.frequency_invalid[BLADERF_MODULE_RX],
+        !state.frequency_invalid[BLADERF_MODULE_TX]);
+}
 
 
 /******************************************************************************/
@@ -44,28 +68,37 @@ static struct rfic_state state;
 void rfic_invalidate_frequency(bladerf_module module)
 {
     state.frequency_invalid[module] = true;
+    if (state.phy != NULL &&
+        (module == BLADERF_MODULE_RX || module == BLADERF_MODULE_TX)) {
+        ad9361_fastlock_invalidate_current_lo(
+            state.phy, module == BLADERF_MODULE_TX);
+    }
 }
 
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz)
 {
     int32_t status;
+    bool tx;
 
-    if (frequency_hz == NULL || state.phy == NULL) {
+    if (frequency_hz == NULL || state.phy == NULL ||
+        (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
         return false;
     }
 
-    if (module == BLADERF_MODULE_RX) {
-        status = ad9361_rx_fastlock_get_freq(state.phy, profile,
+    tx = module == BLADERF_MODULE_TX;
+    status = ad9361_fastlock_sync_current_lo(state.phy, tx, profile, 0,
                                              frequency_hz);
-    } else if (module == BLADERF_MODULE_TX) {
-        status = ad9361_tx_fastlock_get_freq(state.phy, profile,
-                                             frequency_hz);
-    } else {
+    if (status != 0) {
+        state.frequency_invalid[module] = true;
         return false;
     }
 
-    return status == 0;
+    /* profile_activate() calls this only after the RFPLL lock, AD9361 port,
+     * and RFFE SPDT operations have all succeeded. This is the commit point
+     * for the FPGA tuning owner's cached LO state. */
+    state.frequency_invalid[module] = false;
+    return true;
 }
 
 

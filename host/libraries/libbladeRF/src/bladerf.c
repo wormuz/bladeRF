@@ -47,6 +47,7 @@
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
                                                 uint32_t reason);
+static int invalidate_tx_data_before_reconfigure(struct bladerf *dev);
 static void rx_reconfigure_complete(struct bladerf *dev,
                                    bladerf_channel ch);
 
@@ -99,7 +100,7 @@ static bool valid_correction(bladerf_correction corr)
 
 #define CHECK_NULL(...) do { \
     const void* _args[] = { __VA_ARGS__, NULL }; \
-    for (size_t _i = 0; _args[_i] != NULL; ++_i) { \
+    for (size_t _i = 0; _i < ARRAY_SIZE(_args) - 1; ++_i) { \
         if (_args[_i] == NULL) { \
             log_error("%s:%d: Argument %zu is a NULL pointer\n", __FILE__, __LINE__, _i + 1); \
             return BLADERF_ERR_INVAL; \

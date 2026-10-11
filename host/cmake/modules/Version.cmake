@@ -92,9 +92,11 @@ if(GIT_FOUND)
             # snapshots made from the same checkout. That let downstream
             # wrapper checks accept a library built before the latest edit.
             # Include a deterministic fingerprint of all tracked staged and
-            # unstaged changes so consumers can reject stale local binaries.
+            # unstaged changes, including working-tree edits inside active
+            # submodules (not just their recorded gitlink), so consumers can
+            # reject stale local binaries after no-OS source changes.
             execute_process(
-                COMMAND ${GIT_EXECUTABLE} diff --binary HEAD --
+                COMMAND ${GIT_EXECUTABLE} diff --binary --submodule=diff HEAD --
                 OUTPUT_VARIABLE GIT_DIFF
                 RESULT_VARIABLE GIT_DIFF_RESULT
                 WORKING_DIRECTORY ${GIT_TOPLEVEL}

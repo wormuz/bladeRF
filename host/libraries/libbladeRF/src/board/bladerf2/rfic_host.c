@@ -31,6 +31,7 @@
 #include "iterators.h"
 #include "log.h"
 #include "rfic_fir_policy.h"
+#include "rf_transition_policy.h"
 
 // #define BLADERF_HOSTED_C_DEBUG
 
@@ -541,6 +542,30 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
 
     if (!BLADERF_CHANNEL_IS_TX(ch) && board_data->rf_transition_pending &&
         !board_data->rf_transition_setter_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    uint8_t rx_retune_pending_count = board_data->rx_retune2_pending_count;
+    bool rx_retune_outcome_unknown = board_data->rx_retune2_outcome_unknown;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (bladerf2_rx_retune_blocks_rf_tune(
+            rx_retune_pending_count, rx_retune_outcome_unknown)) {
+        /* A timestamped RX fastlock may have executed while its completion
+         * record is still unread. Do not tune either RFPLL using a stale
+         * peer-LO cache during that interval. */
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    /* In dependent FDD mode the peer LO selects which VCO table is valid.
+     * An ambiguous/out-of-band fastlock result leaves that peer unknown;
+     * allow an explicit tune of the unknown side to recover it, but block
+     * tuning the opposite synthesizer until then. */
+    if (bladerf2_rf_tune_peer_lo_unknown(
+            BLADERF_CHANNEL_IS_TX(ch),
+            phy->pdata->fdd && !phy->pdata->fdd_independent_mode,
+            phy->current_rx_lo_freq != 0,
+            phy->current_tx_lo_freq != 0)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 

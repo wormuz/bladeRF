@@ -33,6 +33,11 @@
 
 #include "async.h"
 #include "sync.h"
+
+static bool size_multiplication_overflows(size_t count, size_t element_size)
+{
+    return count != 0 && element_size > SIZE_MAX / count;
+}
 #include "sync_worker.h"
 #include "metadata.h"
 
@@ -206,7 +211,7 @@ int sync_init(struct bladerf_sync *sync,
     if (dev == NULL || num_buffers == 0 || num_transfers == 0 ||
         num_transfers >= num_buffers || buffer_size == 0 ||
         buffer_size > UINT_MAX || buffer_size > SIZE_MAX / 4 ||
-        num_buffers > SIZE_MAX / sizeof(size_t)) {
+        size_multiplication_overflows(num_buffers, sizeof(size_t))) {
         return BLADERF_ERR_INVAL;
     }
 
