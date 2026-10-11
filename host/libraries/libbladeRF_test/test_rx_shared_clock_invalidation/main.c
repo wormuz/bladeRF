@@ -463,6 +463,8 @@ int main(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_set_correction(&dev, tx0, BLADERF_CORR_PHASE, -4097) ==
            BLADERF_ERR_INVAL);
+    assert(bladerf_set_gain_stage(&dev, rx0, "digital", 0) ==
+           BLADERF_ERR_INVAL);
     assert(state.frequency_range_calls == 2);
     assert(state.sample_rate_range_calls == 1);
     assert(state.invalidate_calls == 0);

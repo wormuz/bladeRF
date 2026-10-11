@@ -894,6 +894,14 @@ int bladerf_set_gain_stage(struct bladerf *dev,
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
+    /* bladeRF2 exposes the digital RX gain stage for reads, but its AD9361
+     * setter only programs the aggregate "full" stage. Reject this known
+     * unsupported write before invalidating a certified RX stream. */
+    if (dev->board != NULL && dev->board->name != NULL &&
+        strcmp(dev->board->name, "bladerf2") == 0 &&
+        !BLADERF_CHANNEL_IS_TX(ch) && strcmp(stage, "digital") == 0) {
+        return BLADERF_ERR_INVAL;
+    }
     status = dev->board->get_gain_stage_range(dev, ch, stage, &range);
     if (status != 0) {
         return status;
