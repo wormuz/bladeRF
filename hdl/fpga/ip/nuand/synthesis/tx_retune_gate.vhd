@@ -55,23 +55,38 @@ architecture rtl of tx_retune_gate is
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
 
     -- Equivalent to signed(current_ts - target_ts) >= 0 for the modulo
-    -- half-range contract, but limits the subtract carry chain to 32 bits.
+    -- half-range contract. Compute the lower 48-bit borrow as a prefix over
+    -- three parallel 16-bit comparisons, then subtract only the upper word.
     function timestamp_reached(
         current_ts : unsigned(63 downto 0);
         target_ts  : unsigned(63 downto 0)
     ) return boolean is
-        variable low_borrow : unsigned(0 downto 0);
-        variable high_delta : unsigned(32 downto 0);
+        variable borrow_16 : std_logic;
+        variable borrow_32 : std_logic;
+        variable borrow_48 : std_logic;
+        variable high_delta : unsigned(15 downto 0);
     begin
-        if current_ts(31 downto 0) < target_ts(31 downto 0) then
-            low_borrow := to_unsigned(1, low_borrow'length);
+        if current_ts(15 downto 0) < target_ts(15 downto 0) then
+            borrow_16 := '1';
         else
-            low_borrow := to_unsigned(0, low_borrow'length);
+            borrow_16 := '0';
         end if;
-        high_delta := ('0' & current_ts(63 downto 32)) -
-                      ('0' & target_ts(63 downto 32)) -
-                      resize(low_borrow, high_delta'length);
-        return high_delta(31) = '0';
+        borrow_32 := '0';
+        if current_ts(31 downto 16) < target_ts(31 downto 16) or
+           (current_ts(31 downto 16) = target_ts(31 downto 16) and
+            borrow_16 = '1') then
+            borrow_32 := '1';
+        end if;
+        borrow_48 := '0';
+        if current_ts(47 downto 32) < target_ts(47 downto 32) or
+           (current_ts(47 downto 32) = target_ts(47 downto 32) and
+            borrow_32 = '1') then
+            borrow_48 := '1';
+        end if;
+        high_delta := current_ts(63 downto 48) -
+                      target_ts(63 downto 48) -
+                      resize(unsigned'(0 => borrow_48), high_delta'length);
+        return high_delta(15) = '0';
     end function;
 begin
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather

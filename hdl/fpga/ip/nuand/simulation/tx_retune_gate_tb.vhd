@@ -168,6 +168,33 @@ begin
         assert state = "00" and muted = '0'
             report "TX gate failed to re-arm after carry-boundary test"
             severity failure;
+        timestamp <= unsigned'(x"0000ffffffffffff");
+        target_timestamp <= unsigned'(x"0001000000000000");
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        assert state = "01" and muted = '0'
+            report "split comparator muted early across 48-bit carry"
+            severity failure;
+        timestamp <= unsigned'(x"0001000000000000");
+        wait for 1 ns;
+        assert muted = '1'
+            report "split comparator missed 48-bit carry boundary"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and
+               mute_start_timestamp = unsigned'(x"0001000000000000")
+            report "48-bit carry changed the TX mute timestamp"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to re-arm after 48-bit carry test"
+            severity failure;
         timestamp <= unsigned'(x"fffffffffffffffe");
         target_timestamp <= to_unsigned(1, 64);
         arm <= '1';
