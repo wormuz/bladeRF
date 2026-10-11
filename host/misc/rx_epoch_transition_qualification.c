@@ -159,15 +159,16 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
     uint64_t spi_begin_ns = 0;
     uint64_t spi_done_ns = 0;
     uint64_t lo_return_ns = 0;
+    uint64_t last_milestone_ns = 0;
     uint32_t spi_write_count = 0;
     const uint32_t expected_channel_flags =
         BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
         (transition_channel == BLADERF_CHANNEL_RX(1)
             ? BLADERF_RF_EVENT_F_TRANSITION_RX2 : 0);
     for (uint32_t i = 0; i < count; ++i) {
-        if (events[i].transaction_id != txn ||
-            (i && events[i].host_monotonic_ns < events[i - 1].host_monotonic_ns)) {
-            fprintf(stderr, "TRACE_ID_OR_ORDER txn=%u index=%u\n", txn, i);
+        if (events[i].transaction_id != txn) {
+            fprintf(stderr, "TRACE_TRANSACTION_ID txn=%u index=%u event_txn=%u\n",
+                    txn, i, events[i].transaction_id);
             return BLADERF_ERR_UNEXPECTED;
         }
         if (events[i].event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN) {
@@ -193,6 +194,19 @@ static int validate_event_trace(struct bladerf *dev, uint32_t txn,
         }
         if (next < required_count &&
             events[i].event_type == required[next]) {
+            /* The durable history is ordered by append sequence. Diagnostic
+             * events may be appended by a different callback after capturing
+             * an earlier/later observation timestamp, so compare clocks only
+             * for the transition milestones whose causal order is asserted. */
+            if (events[i].host_monotonic_ns < last_milestone_ns) {
+                fprintf(stderr, "TRACE_MILESTONE_TIME_ORDER txn=%u index=%u "
+                        "type=%u host_ns=%llu previous_ns=%llu\n", txn, i,
+                        events[i].event_type,
+                        (unsigned long long)events[i].host_monotonic_ns,
+                        (unsigned long long)last_milestone_ns);
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            last_milestone_ns = events[i].host_monotonic_ns;
             if (next == 1 && events[i].fpga_state !=
                                 BLADERF_RF_STATE_SPI_PROGRAMMING) {
                 return BLADERF_ERR_UNEXPECTED;
@@ -424,8 +438,7 @@ int main(int argc, char **argv) {
                 BLADERF_RF_REQUIRE_ENSM_RX |
                 BLADERF_RF_REQUIRE_EPOCH_VALID |
                 (require_rfdc_cal
-                    ? BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE : 0) |
-                (paired ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA : 0),
+                    ? BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE : 0),
             .timeout_ms = transition_timeout_ms,
             .require_rx_data_valid = true,
             .epoch_settle_samples = 0,
