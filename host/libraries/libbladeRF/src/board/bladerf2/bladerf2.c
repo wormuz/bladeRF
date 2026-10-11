@@ -3863,8 +3863,15 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
                 status = gate_status;
             }
         }
+        /* Preserve an in-flight COMPLETE/RESUME handshake when the queue was
+         * already empty. Clearing this flag without aborting the gate loses
+         * the FPGA's one-shot RESUME event and can leave an otherwise valid
+         * TX path muted indefinitely. */
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        board_data->tx_retune_gate_release_requested = false;
+        board_data->tx_retune_gate_release_requested =
+            bladerf2_tx_retune_release_request_after_cancel(
+                board_data->tx_retune_gate_release_requested,
+                pending_count);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         board_data->tx_channel_state_generation++;
         if (pending_count != 0) {

@@ -133,6 +133,15 @@ static inline bool bladerf2_retune_completion_unresolved(
     return pending_after_match != 0;
 }
 
+/* Queue cancellation must preserve an in-flight gate release when the queue
+ * is already empty; only an actual pending retune forces release tracking
+ * back to the muted/abort path. */
+static inline bool bladerf2_tx_retune_release_request_after_cancel(
+    bool release_requested, uint8_t pending_before_clear)
+{
+    return release_requested && pending_before_clear == 0;
+}
+
 static inline bool bladerf2_retune_completion_matches(
     uint64_t requested_timestamp, uint64_t requested_frequency_hz,
     uint16_t requested_profile, uint64_t completed_timestamp,
