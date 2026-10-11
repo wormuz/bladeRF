@@ -155,8 +155,6 @@ add_interface_port conduit_end wb_ack_i wb_ack_i Input 1
 add_interface_port conduit_end wb_cyc_o wb_cyc_o Output 1
 
 add_interface timeout_status conduit end
-set_interface_property timeout_status associatedClock clock_sink
-set_interface_property timeout_status associatedReset reset
 add_interface_port timeout_status wb_timeout_status export Output 1
 
 add_interface timeout_clear conduit end
