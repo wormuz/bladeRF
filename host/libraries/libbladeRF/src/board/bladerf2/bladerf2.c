@@ -42,6 +42,7 @@
 #include "rel_assert.h"
 
 #include "backend/usb/nios_access.h"
+#include "nios_pkt_retune2.h"
 #include "nios_pkt_8x32.h"
 #include "../bladerf1/flash.h"
 #include "board/board.h"
@@ -3335,7 +3336,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     NULL_CHECK(quick_tune);
 
     if (quick_tune->nios_profile >= NUM_BBP_FASTLOCK_PROFILES ||
-        quick_tune->rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES) {
+        quick_tune->rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES ||
+        !nios_pkt_retune2_route_valid(
+            BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_MODULE_TX : BLADERF_MODULE_RX,
+            quick_tune->port, quick_tune->spdt)) {
         return BLADERF_ERR_INVAL;
     }
 

@@ -43,6 +43,7 @@
 #include "backend/usb/usb.h"
 #include "board/board.h"
 #include "channel_policy.h"
+#include "nios_pkt_retune2.h"
 
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
@@ -1510,6 +1511,12 @@ int bladerf_schedule_retune(struct bladerf *dev,
         return BLADERF_ERR_INVAL;
     }
     if (quick_tune == NULL && strcmp(dev->board->name, "bladerf2") == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (quick_tune != NULL && strcmp(dev->board->name, "bladerf2") == 0 &&
+        !nios_pkt_retune2_route_valid(
+            BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_MODULE_TX : BLADERF_MODULE_RX,
+            quick_tune->port, quick_tune->spdt)) {
         return BLADERF_ERR_INVAL;
     }
 

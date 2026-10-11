@@ -804,6 +804,19 @@ static int check_completion_ring_overwrite_is_visible(void)
 
 int main(void)
 {
+    if (!nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x80, 0x00) ||
+        !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x8c, 0x0a) ||
+        !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x05) ||
+        !nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x00, 0x00) ||
+        !nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x40, 0xa0) ||
+        nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x84, 0x05) ||
+        nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x0a) ||
+        nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x80, 0x50) ||
+        nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x40, 0x60)) {
+        fputs("retune2 route validation accepted an invalid RF path\n", stderr);
+        return 1;
+    }
+
     fastlock_profile profile = { 0 };
     struct queue q = { 0 };
     struct queue ordered = { 0 };

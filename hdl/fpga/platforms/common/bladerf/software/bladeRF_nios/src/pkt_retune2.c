@@ -661,6 +661,11 @@ void pkt_retune2(struct pkt_buf *b)
                 INCREMENT_ERROR_COUNT();
                 status = -1;
         }
+    } else if (!nios_pkt_retune2_route_valid(module, port, spdt)) {
+        /* Do not let malformed route selectors be truncated by the RFIC
+         * register helpers into a different, apparently successful path. */
+        INCREMENT_ERROR_COUNT();
+        status = -1;
     } else if (!retune2_profile_indices_valid(nios_profile, rffe_profile)) {
         /* Do not index the per-direction profile arrays or shift a
          * caller-controlled RFFE slot into the preload bitmask unchecked. */

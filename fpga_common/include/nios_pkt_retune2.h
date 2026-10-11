@@ -100,6 +100,26 @@
 /* The IS_RX bit embedded in the 'port' parameter of the retune2 packet */
 #define NIOS_PKT_RETUNE2_PORT_IS_RX_MASK  (0x1 << 7)
 
+/* bladeRF2 quick-tune route fields are generated from the band map. Accept
+ * only those complete encodings: masking a malformed value in the RFIC
+ * helpers can otherwise silently select a different route. */
+static inline bool nios_pkt_retune2_route_valid(bladerf_module module,
+                                                uint8_t port,
+                                                uint8_t spdt)
+{
+    if (module == BLADERF_MODULE_RX) {
+        return (port == 0x80 && spdt == 0x00) ||
+               (port == 0x8c && spdt == 0x0a) ||
+               (port == 0x83 && spdt == 0x05);
+    }
+    if (module == BLADERF_MODULE_TX) {
+        return (port == 0x00 && spdt == 0x00) ||
+               (port == 0x40 && spdt == 0xa0) ||
+               (port == 0x00 && spdt == 0x50);
+    }
+    return false;
+}
+
 /* Pack the retune2 request buffer with the provided parameters */
 static inline void nios_pkt_retune2_pack(uint8_t *buf,
                                          bladerf_module module,

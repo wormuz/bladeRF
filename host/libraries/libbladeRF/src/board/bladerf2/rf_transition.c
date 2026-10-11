@@ -71,6 +71,7 @@ static void _test_rx_transition_late_observation(const char *stage)
 #include <ad9361.h>
 #include "log.h"
 #include "nios_pkt_8x32.h"
+#include "nios_pkt_retune2.h"
 #include "rf_transition_policy.h"
 #include "streaming/metadata.h"
 #include "streaming/sync.h"
@@ -3180,6 +3181,12 @@ static int _bladerf_rx_transition_begin(
         return BLADERF_ERR_INVAL;
     }
     if (!bladerf2_rx_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (quick_tune != NULL &&
+        !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX,
+                                      quick_tune->port,
+                                      quick_tune->spdt)) {
         return BLADERF_ERR_INVAL;
     }
     CHECK_BOARD_IS_BLADERF2(dev);
