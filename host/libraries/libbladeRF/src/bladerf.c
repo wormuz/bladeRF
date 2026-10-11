@@ -44,6 +44,7 @@
 #include "board/board.h"
 #include "channel_policy.h"
 #include "nios_pkt_retune2.h"
+#include "range.h"
 
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
@@ -1276,8 +1277,29 @@ int bladerf_set_frequency(struct bladerf *dev,
                           bladerf_channel ch,
                           bladerf_frequency frequency)
 {
+    const struct bladerf_range *range = NULL;
     bool tx_frequency_reserved = false;
     int status;
+
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (dev->board == NULL || dev->board->get_frequency_range == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    WITH_MUTEX(&dev->lock, {
+        status = dev->board->get_frequency_range(dev, ch, &range);
+    });
+    if (status != 0) {
+        return status;
+    }
+    if (range == NULL) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    if (frequency > INT64_MAX || !is_within_range(range, (int64_t)frequency)) {
+        return BLADERF_ERR_RANGE;
+    }
 
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_FREQUENCY);

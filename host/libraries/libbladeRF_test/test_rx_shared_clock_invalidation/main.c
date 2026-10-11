@@ -14,6 +14,7 @@ struct mock_state {
     int rational_rate_status;
     int bandwidth_status;
     unsigned int invalidate_calls;
+    unsigned int frequency_range_calls;
     unsigned int sample_rate_calls;
     unsigned int rational_rate_calls;
     unsigned int bandwidth_calls;
@@ -326,9 +327,27 @@ static size_t mock_get_channel_count(struct bladerf *dev,
     return 1;
 }
 
+static int mock_get_frequency_range(
+    struct bladerf *dev, bladerf_channel ch,
+    const struct bladerf_range **range)
+{
+    static const struct bladerf_range frequency_range = {
+        .min = 100,
+        .max = 6000000000LL,
+        .step = 1,
+        .scale = 1,
+    };
+    struct mock_state *state = dev->board_data;
+    (void)ch;
+    state->frequency_range_calls++;
+    *range = &frequency_range;
+    return 0;
+}
+
 static const struct board_fns mock_board = {
     .name = "bladerf2",
     .get_channel_count = mock_get_channel_count,
+    .get_frequency_range = mock_get_frequency_range,
     .invalidate_rx_data = mock_invalidate_rx,
     .rx_reconfigure_complete = mock_reconfigure_complete,
     .set_sample_rate = mock_set_sample_rate,
@@ -392,6 +411,14 @@ int main(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_set_frequency(NULL, rx0, 915000000) ==
            BLADERF_ERR_INVAL);
+
+    /* A request known to be outside the RF range must be rejected before
+     * revoking the current RX data certificate or reserving TX recovery. */
+    assert(bladerf_set_frequency(&dev, rx0, 1) == BLADERF_ERR_RANGE);
+    assert(bladerf_set_frequency(&dev, tx0, UINT64_MAX) == BLADERF_ERR_RANGE);
+    assert(state.frequency_range_calls == 2);
+    assert(state.invalidate_calls == 0);
+    assert(state.tx_fence_calls == 0);
 
     /* Invalid stream/capability requests fail before RX invalidation or any
      * board operation. */
