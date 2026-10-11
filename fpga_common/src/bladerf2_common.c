@@ -43,6 +43,9 @@ int errno_ad9361_to_bladerf(int err)
     }
 
     switch (err) {
+        case -ERANGE:
+        case -ENOSPC:
+            return BLADERF_ERR_RANGE;
         case -EIO:
             return BLADERF_ERR_IO;
         case -EAGAIN:
@@ -59,6 +62,10 @@ int errno_ad9361_to_bladerf(int err)
             return BLADERF_ERR_TIMEOUT;
 #ifdef ENOTSUP
         case -ENOTSUP:
+            return BLADERF_ERR_UNSUPPORTED;
+#endif
+#if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || EOPNOTSUPP != ENOTSUP)
+        case -EOPNOTSUPP:
             return BLADERF_ERR_UNSUPPORTED;
 #endif
     }

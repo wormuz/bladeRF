@@ -73,6 +73,14 @@ int main(void)
     assert(errno_ad9361_to_bladerf(-ETIMEDOUT) == BLADERF_ERR_TIMEOUT);
     assert(errno_ad9361_to_bladerf(-EINVAL) == BLADERF_ERR_INVAL);
     assert(errno_ad9361_to_bladerf(-EAGAIN) == BLADERF_ERR_WOULD_BLOCK);
+    assert(errno_ad9361_to_bladerf(-ERANGE) == BLADERF_ERR_RANGE);
+    assert(errno_ad9361_to_bladerf(-ENOSPC) == BLADERF_ERR_RANGE);
+#ifdef ENOTSUP
+    assert(errno_ad9361_to_bladerf(-ENOTSUP) == BLADERF_ERR_UNSUPPORTED);
+#endif
+#if defined(EOPNOTSUPP) && (!defined(ENOTSUP) || EOPNOTSUPP != ENOTSUP)
+    assert(errno_ad9361_to_bladerf(-EOPNOTSUPP) == BLADERF_ERR_UNSUPPORTED);
+#endif
     assert(errno_ad9361_to_bladerf(0) == 0);
     first.tx1_atten_cached = 20000;
     second.tx1_atten_cached = 30000;
