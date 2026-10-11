@@ -1876,6 +1876,8 @@ int main(void)
                 .mult = INT_LO,
             };
             uint64_t lo_readback = UINT64_MAX;
+            uint8_t old_ensm_state = fake_regs[REG_STATE];
+            int32_t old_state_after_ensm_write = state_after_ensm_write;
 
             fake_regs[REG_STATE] = ENSM_STATE_ALERT;
             state_after_ensm_write = ENSM_STATE_ALERT;
@@ -1917,6 +1919,8 @@ int main(void)
                         "Successful LO mux recovery did not restore validity\n");
                 return EXIT_FAILURE;
             }
+            fake_regs[REG_STATE] = old_ensm_state;
+            state_after_ensm_write = old_state_after_ensm_write;
         }
         register_map_enabled = false;
     }
