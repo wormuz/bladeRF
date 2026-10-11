@@ -25,6 +25,7 @@
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
 #include "devices.h"
+#include "i2c_status_policy.h"
 #include "spi_arbiter_policy.h"
 #include "nios_axi_address_policy.h"
 #include "debug.h"
@@ -387,6 +388,7 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
      * legitimate transfer takes. */
     uint32_t const TRIES = 100000;
     uint32_t count;
+    uint8_t status;
 
     if ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
         count = 0;
@@ -399,20 +401,21 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     }
 
     count = 0;
-    while (IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) {
+    status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
+    while (status & OC_I2C_TIP) {
         if (++count >= TRIES) {
             DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
             return false;
         }
+        status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
     }
 
-    count = 0;
-    while (check_rxack &&
-           (IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_RXACK)) {
-        if (++count >= TRIES) {
-            DBG("%s: timed out waiting for RXACK\n", __FUNCTION__);
-            return false;
+    if (!bladerf_i2c_status_success(status, OC_I2C_TIP, OC_I2C_RXACK,
+                                    check_rxack)) {
+        if (check_rxack && (status & OC_I2C_RXACK)) {
+            DBG("%s: I2C slave returned NACK\n", __FUNCTION__);
         }
+        return false;
     }
 
     return true;
