@@ -585,6 +585,7 @@ static int check_failed_schedule_retains_timer_ownership(void)
     simulated_tamer_clock_stalled = true;
     cancel_count = 0;
     schedule_count = 0;
+    recall_count = 0;
     if (enqueue_retune(&rx_queue, &profile, 3, 10) != 1 ||
         enqueue_retune(&rx_queue, &profile, 3, 20) != 2) {
         fputs("failed to enqueue schedule/cancel ownership cases\n", stderr);
