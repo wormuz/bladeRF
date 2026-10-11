@@ -2903,6 +2903,22 @@ int main(void)
         phy.clk_refin = &clock_nodes[BB_REFCLK];
         phy.bbpll_initialized = true;
 
+        /* Legacy round-rate returns the high-band encoded rate through a
+         * signed type. Preserve its valid bit pattern above INT32_MAX. */
+        {
+            uint32_t high_lo_rate = ad9361_to_clk(5500000000ULL);
+            int32_t signed_round_rate = ad9361_rfpll_round_rate(
+                &clock_scales[RX_RFPLL], high_lo_rate);
+
+            if ((uint32_t)signed_round_rate != high_lo_rate) {
+                fprintf(stderr,
+                        "Valid high-band RX LO rate was not preserved: "
+                        "rate=%" PRIu32 " rounded=%" PRId32 "\n",
+                        high_lo_rate, signed_round_rate);
+                return EXIT_FAILURE;
+            }
+        }
+
         /* An out-of-range RFPLL round-rate error must remain an error; it
          * must not become an unsigned LO rate and reach the SPI writer. */
         {
@@ -2927,6 +2943,26 @@ int main(void)
             if (ret != -EINVAL || write_count != writes_before) {
                 fprintf(stderr,
                         "Out-of-range internal RX PLL request reached SPI: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_rfpll_int_set_rate(
+                &clock_scales[RX_RFPLL_INT],
+                ad9361_to_clk(7000000000ULL),
+                clock_nodes[RX_REFCLK].rate);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Out-of-range low-level RX PLL request reached SPI: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_rfpll_set_rate(
+                &clock_scales[RX_RFPLL], ad9361_to_clk(7000000000ULL));
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Out-of-range RX RFPLL request reached SPI: "
                         "ret=%" PRId32 " writes=%u->%u\n",
                         ret, writes_before, write_count);
                 return EXIT_FAILURE;
