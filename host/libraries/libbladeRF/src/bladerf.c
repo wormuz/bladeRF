@@ -84,6 +84,21 @@ static bool valid_correction(bladerf_correction corr)
             return false;
     }
 }
+
+static bool valid_correction_value(bladerf_correction corr,
+                                   bladerf_correction_value value)
+{
+    switch (corr) {
+        case BLADERF_CORR_DCOFF_I:
+        case BLADERF_CORR_DCOFF_Q:
+            return value >= -2048 && value <= 2048;
+        case BLADERF_CORR_PHASE:
+        case BLADERF_CORR_GAIN:
+            return value >= -4096 && value <= 4096;
+        default:
+            return false;
+    }
+}
 #include "conversions.h"
 #include "driver/fx3_fw.h"
 #include "device_calibration.h"
@@ -1667,6 +1682,9 @@ int bladerf_set_correction(struct bladerf *dev,
         return BLADERF_ERR_INVAL;
     }
     if (!valid_correction(corr)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!valid_correction_value(corr, value)) {
         return BLADERF_ERR_INVAL;
     }
     status = invalidate_rx_data_before_reconfigure(

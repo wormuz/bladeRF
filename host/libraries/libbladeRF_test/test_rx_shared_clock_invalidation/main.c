@@ -459,6 +459,10 @@ int main(void)
     assert(bladerf_set_sample_rate(&dev, rx0, 1, NULL) == BLADERF_ERR_RANGE);
     assert(bladerf_set_rf_port(&dev, tx0, "not-a-port") ==
            BLADERF_ERR_INVAL);
+    assert(bladerf_set_correction(&dev, rx0, BLADERF_CORR_DCOFF_I, 2049) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_set_correction(&dev, tx0, BLADERF_CORR_PHASE, -4097) ==
+           BLADERF_ERR_INVAL);
     assert(state.frequency_range_calls == 2);
     assert(state.sample_rate_range_calls == 1);
     assert(state.invalidate_calls == 0);
