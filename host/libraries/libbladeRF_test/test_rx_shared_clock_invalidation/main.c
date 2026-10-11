@@ -564,7 +564,7 @@ int main(void)
     state.expansion_gpio_value |= 0x0800;
     assert(bladerf_xb200_set_path(
                &dev, rx0, BLADERF_XB200_MIX) == 0);
-    assert(state.invalidate_calls == 17 && state.complete_calls == 12);
+    assert(state.invalidate_calls == 19 && state.complete_calls == 14);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(state.lms_write_calls == 1 &&
@@ -577,7 +577,7 @@ int main(void)
     const unsigned int gpio_writes_before = state.expansion_gpio_write_calls;
     assert(bladerf_xb200_set_path(
                &dev, rx0, BLADERF_XB200_MIX) == BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 18 && state.complete_calls == 12);
+    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
     assert(state.lms_write_calls == lms_writes_before &&
            state.expansion_gpio_write_calls == gpio_writes_before);
 
@@ -585,25 +585,25 @@ int main(void)
     state.invalidate_status = 0;
     assert(bladerf_xb200_set_filterbank(
                &dev, tx0, BLADERF_XB200_144M) == 0);
-    assert(state.invalidate_calls == 18 && state.complete_calls == 12);
+    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
 
     /* XB-300 TRX antenna routing affects RX regardless of the selected mode. */
     assert(bladerf_xb300_set_trx(&dev, BLADERF_XB300_TRX_RX) == 0);
-    assert(state.invalidate_calls == 19 && state.complete_calls == 13);
+    assert(state.invalidate_calls == 21 && state.complete_calls == 15);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
 
     /* Its LNA affects RX gain; PA/AUX controls are TX-only and preserve RX. */
     assert(bladerf_xb300_set_amplifier_enable(
                &dev, BLADERF_XB300_AMP_LNA, true) == 0);
-    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
+    assert(state.invalidate_calls == 22 && state.complete_calls == 16);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_GAIN &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(bladerf_xb300_set_amplifier_enable(
                &dev, BLADERF_XB300_AMP_PA, true) == 0);
     assert(bladerf_xb300_set_amplifier_enable(
                &dev, BLADERF_XB300_AMP_PA_AUX, true) == 0);
-    assert(state.invalidate_calls == 20 && state.complete_calls == 14);
+    assert(state.invalidate_calls == 22 && state.complete_calls == 16);
 
     /* A failed LNA fence prevents the GPIO write and releases no reservation. */
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
@@ -612,26 +612,26 @@ int main(void)
     assert(bladerf_xb300_set_amplifier_enable(
                &dev, BLADERF_XB300_AMP_LNA, false) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 21 && state.complete_calls == 14);
+    assert(state.invalidate_calls == 23 && state.complete_calls == 16);
     assert(state.expansion_gpio_write_calls == gpio_writes_before_xb300);
 
     /* Raw expansion GPIO is an opaque external path control. Its public
      * write/direction APIs must revoke RX validity before changing pins. */
     state.invalidate_status = 0;
     assert(bladerf_expansion_gpio_masked_write(&dev, 0x10, 0x10) == 0);
-    assert(state.invalidate_calls == 22 && state.complete_calls == 15);
+    assert(state.invalidate_calls == 24 && state.complete_calls == 17);
     assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(bladerf_expansion_gpio_dir_masked_write(&dev, 0x10, 0x10) == 0);
-    assert(state.invalidate_calls == 23 && state.complete_calls == 16 &&
+    assert(state.invalidate_calls == 25 && state.complete_calls == 18 &&
            state.expansion_gpio_dir_write_calls == 1);
     assert(bladerf_expansion_gpio_write(&dev, 0x1234) == 0);
-    assert(state.invalidate_calls == 24 && state.complete_calls == 17);
+    assert(state.invalidate_calls == 26 && state.complete_calls == 19);
     assert(bladerf_expansion_gpio_dir_write(&dev, 0x1234) == 0);
-    assert(state.invalidate_calls == 25 && state.complete_calls == 18 &&
+    assert(state.invalidate_calls == 27 && state.complete_calls == 20 &&
            state.expansion_gpio_dir_write_calls == 2);
     assert(bladerf_expansion_gpio_masked_write(&dev, 0, 0) == 0);
-    assert(state.invalidate_calls == 25 && state.complete_calls == 18);
+    assert(state.invalidate_calls == 27 && state.complete_calls == 20);
 
     /* A rejected fence must stop the opaque GPIO mutation as well. */
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
@@ -639,20 +639,20 @@ int main(void)
         state.expansion_gpio_write_calls;
     assert(bladerf_expansion_gpio_masked_write(&dev, 0x20, 0x20) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 26 && state.complete_calls == 18 &&
+    assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
            state.expansion_gpio_write_calls == expansion_writes_before_raw_gpio);
 
     /* Trigger controls invalidate the matching direction. RX2 uses its RX
      * epoch fence; TX controls use the separate TX configuration fence. */
     state.invalidate_status = 0;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
-    assert(state.invalidate_calls == 27 && state.complete_calls == 19 &&
+    assert(state.invalidate_calls == 29 && state.complete_calls == 21 &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
            state.invalidated_channel == rx0 &&
            state.trigger_arm_channel == rx0 && state.trigger_arm_calls == 1);
     assert(bladerf_write_trigger(&dev, rx0, BLADERF_TRIGGER_J51_1,
                                  BLADERF_TRIGGER_REG_ARM) == 0);
-    assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
+    assert(state.invalidate_calls == 30 && state.complete_calls == 22 &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_TRIGGER &&
            state.invalidated_channel == rx0 &&
            state.trigger_write_channel == rx0 &&
@@ -662,9 +662,9 @@ int main(void)
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) == 0);
     assert(bladerf_write_trigger(&dev, tx0, BLADERF_TRIGGER_J51_1,
                                  BLADERF_TRIGGER_REG_ARM) == 0);
-    assert(state.invalidate_calls == 28 && state.complete_calls == 20 &&
+    assert(state.invalidate_calls == 30 && state.complete_calls == 22 &&
            state.trigger_arm_calls == 2 && state.trigger_write_calls == 2 &&
-           state.tx_fence_calls == 8);
+           state.tx_fence_calls == 26);
 
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     trigger.channel = rx0;
@@ -672,7 +672,7 @@ int main(void)
            BLADERF_ERR_WOULD_BLOCK);
     assert(bladerf_write_trigger(&dev, rx0, BLADERF_TRIGGER_J51_1, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 30 && state.complete_calls == 20 &&
+    assert(state.invalidate_calls == 32 && state.complete_calls == 22 &&
            state.trigger_arm_calls == 2 && state.trigger_write_calls == 2);
 
     /* RX scheduled retunes have no completion boundary. Revoke first and
@@ -681,7 +681,7 @@ int main(void)
     state.invalidate_status = 0;
     assert(bladerf_schedule_retune(&dev, rx2, 0x12345678, 900000000,
                                    &quick_tune) == 0);
-    assert(state.invalidate_calls == 31 && state.complete_calls == 21 &&
+    assert(state.invalidate_calls == 33 && state.complete_calls == 23 &&
            state.invalidate_reason == BLADERF_RF_INVALIDATE_FREQUENCY &&
            state.invalidated_channel == rx2 && state.completed_channel == rx2 &&
            state.schedule_retune_calls == 1 &&
@@ -692,13 +692,13 @@ int main(void)
     state.invalidate_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_schedule_retune(&dev, rx2, 0x23456789, 901000000,
                                    &quick_tune) == BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+    assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
            state.schedule_retune_calls == 1);
 
     state.invalidate_status = 0;
     assert(bladerf_schedule_retune(&dev, tx0, 0x3456789a, 902000000,
                                    &quick_tune) == 0);
-    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+    assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
            state.schedule_retune_calls == 2 &&
            state.scheduled_channel == tx0);
 
@@ -707,28 +707,28 @@ int main(void)
     assert(bladerf_schedule_retune(&dev, BLADERF_CHANNEL_INVALID,
                                    BLADERF_RETUNE_NOW, 904000000,
                                    &quick_tune) == BLADERF_ERR_INVAL);
-    assert(state.invalidate_calls == 32 && state.complete_calls == 21 &&
+    assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
            state.schedule_retune_calls == 2);
 
     trigger.channel = rx0;
     assert(bladerf_trigger_fire(&dev, &trigger) == 0);
-    assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
-           state.trigger_fire_calls == 1 && state.tx_fence_calls == 8);
+    assert(state.invalidate_calls == 35 && state.complete_calls == 24 &&
+           state.trigger_fire_calls == 1 && state.tx_fence_calls == 26);
 
     trigger.channel = tx0;
     assert(bladerf_trigger_fire(&dev, &trigger) == 0);
-    assert(state.invalidate_calls == 33 && state.complete_calls == 22 &&
-           state.trigger_fire_calls == 2 && state.tx_fence_calls == 9);
+    assert(state.invalidate_calls == 35 && state.complete_calls == 24 &&
+           state.trigger_fire_calls == 2 && state.tx_fence_calls == 27);
 
     state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.trigger_arm_calls == 2 && state.tx_fence_calls == 10);
+    assert(state.trigger_arm_calls == 2 && state.tx_fence_calls == 28);
 
     trigger.signal = BLADERF_TRIGGER_INVALID;
     assert(bladerf_trigger_arm(&dev, &trigger, true, 0, 0) ==
            BLADERF_ERR_INVAL);
-    assert(state.tx_fence_calls == 10 && state.trigger_arm_calls == 2);
+    assert(state.tx_fence_calls == 28 && state.trigger_arm_calls == 2);
 
     /* Stream format GPIOs are shared by RX and TX, so either layout fences
      * both directions before the board reconfigures the shared datapath. */
@@ -736,14 +736,14 @@ int main(void)
     assert(bladerf_sync_config(&dev, BLADERF_RX_X1,
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) == 0);
-    assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
-           state.tx_fence_calls == 11 && state.sync_config_calls == 1 &&
+    assert(state.invalidate_calls == 36 && state.complete_calls == 25 &&
+           state.tx_fence_calls == 29 && state.sync_config_calls == 1 &&
            state.sync_config_layout == BLADERF_RX_X1);
     assert(bladerf_sync_config(&dev, BLADERF_TX_X1,
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) == 0);
-    assert(state.invalidate_calls == 35 && state.complete_calls == 24 &&
-           state.tx_fence_calls == 12 && state.sync_config_calls == 2 &&
+    assert(state.invalidate_calls == 37 && state.complete_calls == 26 &&
+           state.tx_fence_calls == 30 && state.sync_config_calls == 2 &&
            state.sync_config_layout == BLADERF_TX_X1);
 
     state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
@@ -751,31 +751,31 @@ int main(void)
                                BLADERF_FORMAT_SC16_Q11,
                                8, 1024, 4, 1000) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(state.invalidate_calls == 36 && state.complete_calls == 25 &&
-           state.tx_fence_calls == 13 && state.sync_config_calls == 2);
+    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+           state.tx_fence_calls == 31 && state.sync_config_calls == 2);
 
     state.tx_fence_status = 0;
     assert(bladerf_stream(&async_stream, BLADERF_RX_X1) == 0);
-    assert(state.invalidate_calls == 37 && state.complete_calls == 26 &&
+    assert(state.invalidate_calls == 39 && state.complete_calls == 28 &&
            state.stream_calls == 1 &&
            state.stream_layout == BLADERF_RX_X1);
     assert(bladerf_stream(&async_stream, BLADERF_TX_X1) == 0);
-    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+    assert(state.invalidate_calls == 40 && state.complete_calls == 29 &&
            state.stream_calls == 2 &&
            state.stream_layout == BLADERF_TX_X1);
     assert(bladerf_stream(&async_stream, (bladerf_channel_layout)99) ==
            BLADERF_ERR_INVAL);
-    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+    assert(state.invalidate_calls == 40 && state.complete_calls == 29 &&
            state.stream_calls == 2);
     assert(bladerf_stream(&async_stream, BLADERF_RX_X2) ==
            BLADERF_ERR_UNSUPPORTED);
-    assert(state.invalidate_calls == 38 && state.complete_calls == 27 &&
+    assert(state.invalidate_calls == 40 && state.complete_calls == 29 &&
            state.stream_calls == 2);
 
     state.stream_status = BLADERF_ERR_UNEXPECTED;
     assert(bladerf_stream(&async_stream, BLADERF_TX_X1) ==
            BLADERF_ERR_UNEXPECTED);
-    assert(state.invalidate_calls == 39 && state.complete_calls == 28 &&
+    assert(state.invalidate_calls == 41 && state.complete_calls == 30 &&
            state.stream_calls == 3);
 
     struct bladerf_stream *stream_out = &async_stream;
