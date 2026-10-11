@@ -2938,6 +2938,7 @@ void bladerf_set_usb_reset_on_open(bool enabled)
 int bladerf_expansion_attach(struct bladerf *dev, bladerf_xb xb)
 {
     int status;
+    CHECK_NULL(dev);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->expansion_attach(dev, xb);
@@ -3003,6 +3004,7 @@ int bladerf_expansion_gpio_masked_write(struct bladerf *dev,
                                         uint32_t val)
 {
     int status;
+    CHECK_NULL(dev);
     if (mask != 0) {
         status = invalidate_rx_data_before_reconfigure(
             dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
@@ -3072,6 +3074,7 @@ int bladerf_expansion_gpio_dir_masked_write(struct bladerf *dev,
                                             uint32_t val)
 {
     int status;
+    CHECK_NULL(dev);
     if (mask != 0) {
         status = invalidate_rx_data_before_reconfigure(
             dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
