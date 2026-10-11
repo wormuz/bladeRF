@@ -187,9 +187,21 @@ static bool nios_response_matches_request(const uint8_t *request,
                req_addr == resp_addr &&
                (!req_write || req_data == resp_data);
     }
+    case NIOS_PKT_RETUNE_MAGIC:
+        /* Retune responses define only three flag bits and zero the tail. */
+        return (response[NIOS_PKT_RETUNERESP_IDX_FLAGS] & 0xf8u) == 0 &&
+               nios_response_has_zero_tail(
+                   response, NIOS_PKT_RETUNERESP_IDX_RESV);
+
+    case NIOS_PKT_RETUNE2_MAGIC:
+        /* Retune2 responses define four flag bits and zero the tail. */
+        return (response[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] & 0xf0u) == 0 &&
+               nios_response_has_zero_tail(
+                   response, NIOS_PKT_RETUNE2_RESP_IDX_RESV);
+
     default:
-        /* Legacy and fastlock packets have distinct response contracts and
-         * are validated by their format-specific callers. */
+        /* Legacy packets have distinct, variable-length response contracts
+         * and are validated by their format-specific callers. */
         return true;
     }
 }
