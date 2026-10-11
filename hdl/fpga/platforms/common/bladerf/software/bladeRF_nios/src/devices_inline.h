@@ -655,9 +655,10 @@ INLINE uint32_t expansion_port_get_direction()
     return IORD_ALTERA_AVALON_PIO_DATA(XB_GPIO_DIR_BASE);
 }
 
-INLINE void expansion_port_set_direction(uint32_t dir)
+INLINE bool expansion_port_set_direction(uint32_t dir)
 {
     IOWR_ALTERA_AVALON_PIO_DATA(XB_GPIO_DIR_BASE, dir);
+    return expansion_port_get_direction() == dir;
 }
 
 INLINE void time_tamer_reset(bladerf_module m)

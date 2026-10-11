@@ -370,8 +370,7 @@ static inline bool perform_config_write(enum config_param p,
             return true;
 
         case CONFIG_EXPANSION_DIR:
-            expansion_port_set_direction(payload);
-            return true;
+            return expansion_port_set_direction(payload);
 
         default:
             DBG("Invalid config param write: 0x%x\n", p);

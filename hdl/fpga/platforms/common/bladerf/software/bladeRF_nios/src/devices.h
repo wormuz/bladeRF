@@ -475,7 +475,7 @@ INLINE uint32_t expansion_port_get_direction();
  *
  * @param   dir     Bit map of pin directions
  */
-INLINE void expansion_port_set_direction(uint32_t dir);
+INLINE bool expansion_port_set_direction(uint32_t dir);
 
 /**
  * Read a coherent time-tamer snapshot.

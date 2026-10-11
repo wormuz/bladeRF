@@ -329,9 +329,10 @@ uint32_t expansion_port_get_direction()
     return ret;
 }
 
-void expansion_port_set_direction(uint32_t dir)
+bool expansion_port_set_direction(uint32_t dir)
 {
     DBG("%s: dir=0x%08x\n", __FUNCTION__, dir);
+    return true;
 }
 
 bool time_tamer_read(bladerf_module m, uint64_t *time)

@@ -49,11 +49,10 @@ static inline bool perform_write(uint8_t id, uint32_t addr, uint32_t data)
                 uint32_t tmp = expansion_port_get_direction();
                 tmp &= ~(addr);
                 tmp |= (data & addr);
-                expansion_port_set_direction(tmp);
+                return expansion_port_set_direction(tmp);
             } else {
-                expansion_port_set_direction(data);
+                return expansion_port_set_direction(data);
             }
-            break;
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_32x32_TARGET_ADI_AXI:
