@@ -408,9 +408,10 @@ INLINE bool control_reg_write(uint32_t value);
  * Get IQ balance gain value
  *
  * @param m         Which module to query
- * @return RX IQ gain correction value
+ * @param value     Receives the gain correction value
+ * @return true if the hardware register is available and was read
  */
-uint16_t iqbal_get_gain(bladerf_module m);
+bool iqbal_get_gain(bladerf_module m, uint16_t *value);
 
 /**
  * Set IQ balance gain correction value
@@ -418,15 +419,16 @@ uint16_t iqbal_get_gain(bladerf_module m);
  * @param m         Which module to configure
  * @param value     Gain correction value
  */
-void iqbal_set_gain(bladerf_module m, uint16_t value);
+bool iqbal_set_gain(bladerf_module m, uint16_t value);
 
 /**
  * Get IQ balance phase value
  *
  * @param m         Which module to query
- * @return IQ phase correction value
+ * @param value     Receives the phase correction value
+ * @return true if the hardware register is available and was read
  */
-uint16_t iqbal_get_phase(bladerf_module m);
+bool iqbal_get_phase(bladerf_module m, uint16_t *value);
 
 /**
  * Set IQ balance phase correction value
@@ -434,7 +436,7 @@ uint16_t iqbal_get_phase(bladerf_module m);
  * @param m         Which module to configure
  * @param value     Phase correction value
  */
-void iqbal_set_phase(bladerf_module m, uint16_t value);
+bool iqbal_set_phase(bladerf_module m, uint16_t value);
 
 /**
  * Read from GPIO expansion port

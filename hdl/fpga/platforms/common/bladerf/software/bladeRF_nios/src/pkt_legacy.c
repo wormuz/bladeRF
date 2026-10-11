@@ -130,79 +130,87 @@ static inline enum config_param lookup_param(uint8_t addr)
     return CONFIG_UNKNOWN;
 }
 
-static uint64_t perform_config_read(enum config_param param)
+static bool perform_config_read(enum config_param param, uint64_t *payload)
 {
-    uint64_t payload;
+    uint16_t value;
+
+    if (payload == NULL) {
+        return false;
+    }
 
     switch (param) {
         case CONFIG_CONTROL_REG:
             DBG("%s: Performing control reg read.\n", __FUNCTION__);
-            payload = control_reg_read();
+            *payload = control_reg_read();
             break;
 
         case CONFIG_IQ_CORR_RX_GAIN:
             DBG("%s: Performing RX IQ gain read.\n", __FUNCTION__);
-            payload = iqbal_get_gain(BLADERF_MODULE_RX);
+            if (!iqbal_get_gain(BLADERF_MODULE_RX, &value)) return false;
+            *payload = value;
             break;
 
         case CONFIG_IQ_CORR_RX_PHASE:
             DBG("%s: Performing RX IQ phase read.\n", __FUNCTION__);
-            payload = iqbal_get_phase(BLADERF_MODULE_RX);
+            if (!iqbal_get_phase(BLADERF_MODULE_RX, &value)) return false;
+            *payload = value;
             break;
 
         case CONFIG_IQ_CORR_TX_GAIN:
             DBG("%s: Performing TX IQ gain read.\n", __FUNCTION__);
-            payload = iqbal_get_gain(BLADERF_MODULE_TX);
+            if (!iqbal_get_gain(BLADERF_MODULE_TX, &value)) return false;
+            *payload = value;
             break;
 
         case CONFIG_IQ_CORR_TX_PHASE:
             DBG("%s: Performing TX IQ phase read.\n", __FUNCTION__);
-            payload = iqbal_get_phase(BLADERF_MODULE_TX);
+            if (!iqbal_get_phase(BLADERF_MODULE_TX, &value)) return false;
+            *payload = value;
             break;
 
         case CONFIG_FPGA_VERSION:
             DBG("%s: Performing FPGA version read.\n", __FUNCTION__);
-            payload = fpga_version();
+            *payload = fpga_version();
             break;
 
         case CONFIG_RX_TIMESTAMP:
             DBG("%s: Performing RX timestamp read.\n", __FUNCTION__);
-            payload = UINT64_MAX;
+            *payload = UINT64_MAX;
             break;
 
         case CONFIG_TX_TIMESTAMP:
             DBG("%s: Performing TX timestamp read.\n", __FUNCTION__);
-            payload = UINT64_MAX;
+            *payload = UINT64_MAX;
             break;
 
         case CONFIG_VCTXCO:
             /* TODO Implement VCTCXO trim DAC read */
             DBG("%s: Attempted VCTCXO read.\n", __FUNCTION__);
-            payload = 0x00;
+            *payload = 0x00;
             break;
 
         case CONFIG_XB200_SYNTH:
             DBG("%s: Attempted XB-200 synth read from write-only device.\n",
                 __FUNCTION__);
-            payload = 0x00;
+            *payload = 0x00;
             break;
 
         case CONFIG_EXPANSION:
             DBG("%s: Performing expansion port read.\n", __FUNCTION__);
-            payload = expansion_port_read();
+            *payload = expansion_port_read();
             break;
 
         case CONFIG_EXPANSION_DIR:
             DBG("%s: Performing expansion port direction read.\n", __FUNCTION__);
-            payload = expansion_port_get_direction();
+            *payload = expansion_port_get_direction();
             break;
 
         default:
             DBG("Invalid config read parameter: 0x%x\n", param);
-            payload = (uint64_t) -1;
+            return false;
     }
 
-    return payload;
+    return true;
 }
 
 /* Perform read on first request and return a byte from the payload
@@ -253,7 +261,12 @@ static inline void legacy_config_read(uint8_t count, struct pkt_buf *b)
                     return;
                 }
             } else {
-                payload = perform_config_read(param);
+                if (!perform_config_read(param, &payload)) {
+                    b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+                    last_param = CONFIG_UNKNOWN;
+                    n = 0;
+                    return;
+                }
             }
             last_param = param;
         }
@@ -318,20 +331,16 @@ static inline bool perform_config_write(enum config_param p,
             return control_reg_write((uint32_t) payload);
 
         case CONFIG_IQ_CORR_RX_GAIN:
-            iqbal_set_gain(BLADERF_MODULE_RX, (uint16_t) payload);
-            return true;
+            return iqbal_set_gain(BLADERF_MODULE_RX, (uint16_t) payload);
 
         case CONFIG_IQ_CORR_RX_PHASE:
-            iqbal_set_phase(BLADERF_MODULE_RX, (uint16_t) payload);
-            return true;
+            return iqbal_set_phase(BLADERF_MODULE_RX, (uint16_t) payload);
 
         case CONFIG_IQ_CORR_TX_GAIN:
-            iqbal_set_gain(BLADERF_MODULE_TX, (uint16_t) payload);
-            return true;
+            return iqbal_set_gain(BLADERF_MODULE_TX, (uint16_t) payload);
 
         case CONFIG_IQ_CORR_TX_PHASE:
-            iqbal_set_phase(BLADERF_MODULE_TX, (uint16_t) payload);
-            return true;
+            return iqbal_set_phase(BLADERF_MODULE_TX, (uint16_t) payload);
 
         case CONFIG_FPGA_VERSION:
             DBG("Error: attempted to write to FPGA version parameter.\n");

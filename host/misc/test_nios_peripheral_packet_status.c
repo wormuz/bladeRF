@@ -16,6 +16,7 @@ static bool peripheral_success;
 static bool lms_success;
 static bool tamer_mode_success;
 static bool agc_dc_success;
+static bool iqcorr_success;
 static bladerf_vctcxo_tamer_mode tamer_mode_readback =
     BLADERF_VCTCXO_TAMER_DISABLED;
 
@@ -96,28 +97,34 @@ bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *value)
     return peripheral_success;
 }
 
-uint16_t iqbal_get_gain(bladerf_module module)
+bool iqbal_get_gain(bladerf_module module, uint16_t *value)
 {
     (void)module;
-    return 0;
+    if (!iqcorr_success || value == NULL) return false;
+    *value = 0;
+    return true;
 }
 
-void iqbal_set_gain(bladerf_module module, uint16_t value)
+bool iqbal_set_gain(bladerf_module module, uint16_t value)
 {
     (void)module;
     (void)value;
+    return iqcorr_success;
 }
 
-uint16_t iqbal_get_phase(bladerf_module module)
+bool iqbal_get_phase(bladerf_module module, uint16_t *value)
 {
     (void)module;
-    return 0;
+    if (!iqcorr_success || value == NULL) return false;
+    *value = 0;
+    return iqcorr_success;
 }
 
-void iqbal_set_phase(bladerf_module module, uint16_t value)
+bool iqbal_set_phase(bladerf_module module, uint16_t value)
 {
     (void)module;
     (void)value;
+    return iqcorr_success;
 }
 
 bool agc_dc_corr_write(uint16_t addr, uint16_t value)
@@ -431,6 +438,38 @@ static int check_8x16_agc_write_status(void)
     return target == NIOS_PKT_8x16_TARGET_AGC_CORR && write && !success ? 0 : 1;
 }
 
+static int check_8x16_iq_correction_status(void)
+{
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    uint8_t target, addr;
+    uint16_t data;
+    bool write, success;
+
+    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_IQ_CORR,
+                       false, NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN, 0);
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    if (target != NIOS_PKT_8x16_TARGET_IQ_CORR || write || success) {
+        return 1;
+    }
+
+    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_IQ_CORR,
+                       true, NIOS_PKT_8x16_ADDR_IQ_CORR_RX_PHASE, 0x1234);
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    if (target != NIOS_PKT_8x16_TARGET_IQ_CORR || !write || success) {
+        return 1;
+    }
+
+    iqcorr_success = true;
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    return target == NIOS_PKT_8x16_TARGET_IQ_CORR && write && success ? 0 : 1;
+}
+
 static int check_8x32_diagnostic_address_bounds(void)
 {
     static const struct {
@@ -466,6 +505,7 @@ int main(void)
         check_8x8_tamer_set_success() || check_8x8_tamer_invalid_readback() ||
         check_8x8_tamer_invalid_subaddress() ||
         check_8x8_trigger_subaddresses() || check_8x16_agc_write_status() ||
+        check_8x16_iq_correction_status() ||
         check_8x32_diagnostic_address_bounds()) {
         fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;

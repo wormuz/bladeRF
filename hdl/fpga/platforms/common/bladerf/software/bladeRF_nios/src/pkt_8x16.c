@@ -32,20 +32,16 @@ static inline bool iq_corr_read(uint8_t addr, uint16_t *data)
 {
     switch (addr) {
         case NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN:
-            *data = iqbal_get_gain(BLADERF_MODULE_RX);
-            break;
+            return iqbal_get_gain(BLADERF_MODULE_RX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_RX_PHASE:
-            *data = iqbal_get_phase(BLADERF_MODULE_RX);
-            break;
+            return iqbal_get_phase(BLADERF_MODULE_RX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_TX_GAIN:
-            *data = iqbal_get_gain(BLADERF_MODULE_TX);
-            break;
+            return iqbal_get_gain(BLADERF_MODULE_TX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_TX_PHASE:
-            *data = iqbal_get_phase(BLADERF_MODULE_TX);
-            break;
+            return iqbal_get_phase(BLADERF_MODULE_TX, data);
 
         default:
             DBG("%s: Invalid IQ corr addr: 0x%x\n", __FUNCTION__, addr);
@@ -59,20 +55,16 @@ static inline bool iq_corr_write(uint8_t addr, uint16_t data)
 {
     switch (addr) {
         case NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN:
-            iqbal_set_gain(BLADERF_MODULE_RX, data);
-            break;
+            return iqbal_set_gain(BLADERF_MODULE_RX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_RX_PHASE:
-            iqbal_set_phase(BLADERF_MODULE_RX, data);
-            break;
+            return iqbal_set_phase(BLADERF_MODULE_RX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_TX_GAIN:
-            iqbal_set_gain(BLADERF_MODULE_TX, data);
-            break;
+            return iqbal_set_gain(BLADERF_MODULE_TX, data);
 
         case NIOS_PKT_8x16_ADDR_IQ_CORR_TX_PHASE:
-            iqbal_set_phase(BLADERF_MODULE_TX, data);
-            break;
+            return iqbal_set_phase(BLADERF_MODULE_TX, data);
 
         default:
             DBG("%s: Invalid IQ corr addr: 0x%x\n", __FUNCTION__, addr);

@@ -28,10 +28,24 @@ bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
 { (void)cmd; *val = 0; return true; }
 bool ad56x1_vctcxo_trim_dac_write(uint16_t val) { (void)val; return true; }
 void ad56x1_vctcxo_trim_dac_read(uint16_t *val) { *val = 0; }
-uint16_t iqbal_get_gain(bladerf_module m) { (void)m; return 0; }
-void iqbal_set_gain(bladerf_module m, uint16_t v) { (void)m; (void)v; }
-uint16_t iqbal_get_phase(bladerf_module m) { (void)m; return 0; }
-void iqbal_set_phase(bladerf_module m, uint16_t v) { (void)m; (void)v; }
+bool iqbal_get_gain(bladerf_module m, uint16_t *v)
+{
+    (void)m;
+    if (v == NULL) return false;
+    *v = 0;
+    return true;
+}
+bool iqbal_set_gain(bladerf_module m, uint16_t v)
+{ (void)m; (void)v; return true; }
+bool iqbal_get_phase(bladerf_module m, uint16_t *v)
+{
+    (void)m;
+    if (v == NULL) return false;
+    *v = 0;
+    return true;
+}
+bool iqbal_set_phase(bladerf_module m, uint16_t v)
+{ (void)m; (void)v; return true; }
 bool agc_dc_corr_write(uint16_t a, uint16_t v) { (void)a; (void)v; return false; }
 uint32_t rffe_csr_read(void) { return 0; }
 void rffe_csr_write(uint32_t v) { (void)v; }

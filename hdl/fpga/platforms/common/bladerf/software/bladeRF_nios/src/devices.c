@@ -1421,65 +1421,88 @@ static inline uint32_t module_to_iqcorr_base(bladerf_module m)
 {
     if (m == BLADERF_MODULE_RX) {
         return IQ_CORR_RX_PHASE_GAIN_BASE;
-    } else {
+    } else if (m == BLADERF_MODULE_TX) {
         return IQ_CORR_TX_PHASE_GAIN_BASE;
     }
+    return 0;
 }
 
-uint16_t iqbal_get_gain(bladerf_module m)
-{
-    const uint32_t base   = module_to_iqcorr_base(m);
-    const uint32_t regval = IORD_ALTERA_AVALON_PIO_DATA(base);
-    return (uint16_t)regval;
-}
-
-void iqbal_set_gain(bladerf_module m, uint16_t value)
+bool iqbal_get_gain(bladerf_module m, uint16_t *value)
 {
     const uint32_t base = module_to_iqcorr_base(m);
+    if (base == 0 || value == NULL) {
+        return false;
+    }
+    *value = (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(base);
+    return true;
+}
+
+bool iqbal_set_gain(bladerf_module m, uint16_t value)
+{
+    const uint32_t base = module_to_iqcorr_base(m);
+    if (base == 0) {
+        return false;
+    }
     uint32_t regval     = IORD_ALTERA_AVALON_PIO_DATA(base);
 
     regval &= 0xffff0000;
     regval |= value;
 
     IOWR_ALTERA_AVALON_PIO_DATA(base, regval);
+    return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(base) == value;
 }
 
-uint16_t iqbal_get_phase(bladerf_module m)
-{
-    uint32_t regval;
-
-    if (m == BLADERF_MODULE_RX) {
-        regval = IORD_ALTERA_AVALON_PIO_DATA(IQ_CORR_RX_PHASE_GAIN_BASE);
-    } else {
-        regval = IORD_ALTERA_AVALON_PIO_DATA(IQ_CORR_TX_PHASE_GAIN_BASE);
-    }
-
-    return (uint16_t)(regval >> 16);
-}
-
-void iqbal_set_phase(bladerf_module m, uint16_t value)
+bool iqbal_get_phase(bladerf_module m, uint16_t *value)
 {
     const uint32_t base = module_to_iqcorr_base(m);
+    if (base == 0 || value == NULL) {
+        return false;
+    }
+    *value = (uint16_t)(IORD_ALTERA_AVALON_PIO_DATA(base) >> 16);
+    return true;
+}
+
+bool iqbal_set_phase(bladerf_module m, uint16_t value)
+{
+    const uint32_t base = module_to_iqcorr_base(m);
+    if (base == 0) {
+        return false;
+    }
     uint32_t regval     = IORD_ALTERA_AVALON_PIO_DATA(base);
 
     regval &= 0x0000ffff;
     regval |= ((uint32_t)value) << 16;
 
     IOWR_ALTERA_AVALON_PIO_DATA(base, regval);
+    return (uint16_t)(IORD_ALTERA_AVALON_PIO_DATA(base) >> 16) == value;
 }
 
 #endif
 #else
-uint16_t iqbal_get_gain(bladerf_module m)
+bool iqbal_get_gain(bladerf_module m, uint16_t *value)
 {
-    return 0;
+    (void)m;
+    (void)value;
+    return false;
 }
-void iqbal_set_gain(bladerf_module m, uint16_t value) {}
-uint16_t iqbal_get_phase(bladerf_module m)
+bool iqbal_set_gain(bladerf_module m, uint16_t value)
 {
-    return 0;
+    (void)m;
+    (void)value;
+    return false;
 }
-void iqbal_set_phase(bladerf_module m, uint16_t value) {}
+bool iqbal_get_phase(bladerf_module m, uint16_t *value)
+{
+    (void)m;
+    (void)value;
+    return false;
+}
+bool iqbal_set_phase(bladerf_module m, uint16_t value)
+{
+    (void)m;
+    (void)value;
+    return false;
+}
 #endif
 
 void tx_trigger_ctl_write(uint8_t data)

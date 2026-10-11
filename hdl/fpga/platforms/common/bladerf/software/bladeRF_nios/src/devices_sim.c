@@ -217,90 +217,96 @@ bool control_reg_write(uint32_t value)
     return true;
 }
 
-uint16_t iqbal_get_gain(bladerf_module m)
+bool iqbal_get_gain(bladerf_module m, uint16_t *value)
 {
-    uint16_t ret = 0xffff;
+    if (value == NULL) {
+        return false;
+    }
 
     switch (m) {
         case BLADERF_MODULE_RX:
-            ret = 0x14d2;
+            *value = 0x14d2;
             break;
 
         case BLADERF_MODULE_TX:
-            ret = 0x0812;
+            *value = 0x0812;
             break;
 
         default:
             DBG("%s: Invalid module %u\n", __FUNCTION__, m);
-            ASSERT(0);
+            return false;
     }
 
     DBG("%s: module=%s, returning 0x%04x\n",
-        __FUNCTION__, module2str(m), ret);
+        __FUNCTION__, module2str(m), *value);
 
-    return ret;
+    return true;
 }
 
-void iqbal_set_gain(bladerf_module m, uint16_t value)
+bool iqbal_set_gain(bladerf_module m, uint16_t value)
 {
     switch (m) {
         case BLADERF_MODULE_RX:
-            ASSERT(value == 0x14d2);
+            if (value != 0x14d2) return false;
             break;
 
         case BLADERF_MODULE_TX:
-            ASSERT(value == 0x0812);
+            if (value != 0x0812) return false;
             break;
 
         default:
             DBG("%s: Invalid module %u\n", __FUNCTION__, m);
-            ASSERT(0);
+            return false;
     }
 
     DBG("%s: module=%s, value=0x%04x\n", __FUNCTION__, module2str(m), value);
+    return true;
 }
 
-uint16_t iqbal_get_phase(bladerf_module m)
+bool iqbal_get_phase(bladerf_module m, uint16_t *value)
 {
-    uint16_t ret = 0xffff;
+    if (value == NULL) {
+        return false;
+    }
 
     switch (m) {
         case BLADERF_MODULE_RX:
-            ret = 0x101c;
+            *value = 0x101c;
             break;
 
         case BLADERF_MODULE_TX:
-            ret = 0x021f;
+            *value = 0x021f;
             break;
 
         default:
             DBG("%s: Invalid module %u\n", __FUNCTION__, m);
-            ASSERT(0);
+            return false;
     }
 
     DBG("%s: module=%s, returning 0x%04x\n",
-        __FUNCTION__, module2str(m), ret);
+        __FUNCTION__, module2str(m), *value);
 
-    return ret;
+    return true;
 }
 
-void iqbal_set_phase(bladerf_module m, uint16_t value)
+bool iqbal_set_phase(bladerf_module m, uint16_t value)
 {
     switch (m) {
         case BLADERF_MODULE_RX:
-            ASSERT(value == 0x101c);
+            if (value != 0x101c) return false;
             break;
 
         case BLADERF_MODULE_TX:
-            ASSERT(value == 0x021f);
+            if (value != 0x021f) return false;
             break;
 
         default:
             DBG("%s: Invalid module %u\n", __FUNCTION__, m);
-            ASSERT(0);
+            return false;
     }
 
     DBG("%s: module=%s, value=0x%04x\n", __FUNCTION__, module2str(m), value);
+    return true;
 }
 
 uint32_t expansion_port_read(void)
