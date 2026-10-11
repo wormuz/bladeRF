@@ -89,6 +89,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint16_t *data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_AD56X1_DAC:
+            if (addr != 0) {
+                *data = 0;
+                return false;
+            }
             ad56x1_vctcxo_trim_dac_read(data);
             break;
 #endif  // BOARD_BLADERF_MICRO
@@ -136,10 +140,10 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_AD56X1_DAC:
-            if (!ad56x1_vctcxo_trim_dac_write(data)) {
+            if (addr != 0) {
                 return false;
             }
-            break;
+            return ad56x1_vctcxo_trim_dac_write(data);
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO

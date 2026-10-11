@@ -7,6 +7,7 @@
 #include "nios_pkt_8x16.h"
 
 static bool ina_ok;
+static bool ad56_ok;
 
 bool ina219_read(uint8_t addr, uint16_t *value)
 {
@@ -26,7 +27,7 @@ bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
 { (void)cmd; (void)val; return true; }
 bool vctcxo_trim_dac_read(uint8_t cmd, uint16_t *val)
 { (void)cmd; *val = 0; return true; }
-bool ad56x1_vctcxo_trim_dac_write(uint16_t val) { (void)val; return true; }
+bool ad56x1_vctcxo_trim_dac_write(uint16_t val) { (void)val; return ad56_ok; }
 void ad56x1_vctcxo_trim_dac_read(uint16_t *val) { *val = 0; }
 bool iqbal_get_gain(bladerf_module m, uint16_t *v)
 {
@@ -70,10 +71,33 @@ static bool run(bool write, bool success)
            response_write == write && response_success == success;
 }
 
+static bool run_ad56x1(bool write, uint8_t addr, bool success)
+{
+    struct pkt_buf packet = {
+        .req = { NIOS_PKT_8x16_MAGIC, NIOS_PKT_8x16_TARGET_AD56X1_DAC,
+                 write ? NIOS_PKT_8x16_FLAG_WRITE : 0, 0, addr,
+                 write ? 0x12 : 0, write ? 0x34 : 0 },
+        .resp = { 0 }, .ready = false,
+    };
+    uint8_t target, response_addr;
+    uint16_t data;
+    bool response_write, response_success;
+
+    ad56_ok = success;
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &response_write,
+                              &response_addr, &data, &response_success);
+    return target == NIOS_PKT_8x16_TARGET_AD56X1_DAC &&
+           response_addr == addr && response_write == write &&
+           response_success == success;
+}
+
 int main(void)
 {
     if (!run(false, false) || !run(true, false) ||
-        !run(false, true) || !run(true, true)) {
+        !run(false, true) || !run(true, true) ||
+        !run_ad56x1(true, 0, false) || !run_ad56x1(true, 0, true) ||
+        !run_ad56x1(false, 1, false) || !run_ad56x1(true, 1, false)) {
         fputs("INA219 failure/success packet status mismatch\n", stderr);
         return 1;
     }
