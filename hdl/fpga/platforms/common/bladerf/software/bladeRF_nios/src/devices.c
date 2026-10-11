@@ -204,14 +204,19 @@ int32_t vctcxo_tamer_read_count(uint8_t addr)
 {
     uint32_t base  = VCTCXO_TAMER_0_BASE;
     uint8_t offset = addr;
-    int32_t value  = 0;
+    uint32_t value = 0;
 
+    /* Assemble the signed counter bit pattern unsigned to avoid shifting a
+     * promoted signed byte into bit 31. */
     value = IORD_8DIRECT(base, offset++);
-    value |= ((int32_t)IORD_8DIRECT(base, offset++)) << 8;
-    value |= ((int32_t)IORD_8DIRECT(base, offset++)) << 16;
-    value |= ((int32_t)IORD_8DIRECT(base, offset++)) << 24;
+    value |= ((uint32_t)IORD_8DIRECT(base, offset++)) << 8;
+    value |= ((uint32_t)IORD_8DIRECT(base, offset++)) << 16;
+    value |= ((uint32_t)IORD_8DIRECT(base, offset++)) << 24;
 
-    return value;
+    if (value & 0x80000000u) {
+        return -1 - (int32_t)~value;
+    }
+    return (int32_t)value;
 }
 
 uint8_t vctcxo_tamer_read(uint8_t addr)
