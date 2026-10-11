@@ -93,6 +93,17 @@ static const struct pkt_handler pkt_handlers[] = {
     PKT_LEGACY,
 };
 
+static void run_deferred_packet_work(void)
+{
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
+        if (pkt_handlers[i].do_work != NULL) {
+            pkt_handlers[i].do_work();
+        }
+    }
+}
+
 /* A structure that represents a point on a line. Used for calibrating
  * the VCTCXO */
 typedef struct point {
@@ -333,6 +344,7 @@ int main(void)
                 /* We somehow got out of sync. Throw away request data until
                  * we hit a magic value */
                 DBG("Got invalid magic value: 0x%x\n", pkt.req[PKT_MAGIC_IDX]);
+                run_deferred_packet_work();
                 continue;
             }
 
@@ -439,12 +451,12 @@ int main(void)
 
             } /* VCTCXO Tamer interrupt */
 
-            for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
-                if (pkt_handlers[i].do_work != NULL) {
-                    pkt_handlers[i].do_work();
-                }
-            }
         }
+
+        /* A sustained command stream must not starve deferred RFIC/retune
+         * work. Service one bounded handler step after each request response
+         * as well as on idle iterations; response ordering remains unchanged. */
+        run_deferred_packet_work();
     }
 
     return 0;
