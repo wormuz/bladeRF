@@ -53,6 +53,26 @@ architecture rtl of tx_retune_gate is
     signal abort_i : std_logic;
     signal mute_start_timestamp_i : unsigned(63 downto 0) := (others => '0');
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
+
+    -- Equivalent to signed(current_ts - target_ts) >= 0 for the modulo
+    -- half-range contract, but limits the subtract carry chain to 32 bits.
+    function timestamp_reached(
+        current_ts : unsigned(63 downto 0);
+        target_ts  : unsigned(63 downto 0)
+    ) return boolean is
+        variable low_borrow : unsigned(0 downto 0);
+        variable high_delta : unsigned(32 downto 0);
+    begin
+        if current_ts(31 downto 0) < target_ts(31 downto 0) then
+            low_borrow := to_unsigned(1, low_borrow'length);
+        else
+            low_borrow := to_unsigned(0, low_borrow'length);
+        end if;
+        high_delta := ('0' & current_ts(63 downto 32)) -
+                      ('0' & target_ts(63 downto 32)) -
+                      resize(low_borrow, high_delta'length);
+        return high_delta(31) = '0';
+    end function;
 begin
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
@@ -64,10 +84,10 @@ begin
     begin
         if abort_i = '1' or
            (arm = '1' and (arm_immediate = '1' or
-                           signed(timestamp - target_timestamp) >= 0)) or
+                           timestamp_reached(timestamp, target_timestamp))) or
            state_i = STATE_MUTED or state_i = STATE_ERROR or
            (state_i = STATE_ARMED and
-            (immediate_i = '1' or signed(timestamp - target_i) >= 0)) then
+            (immediate_i = '1' or timestamp_reached(timestamp, target_i))) then
             muted_i <= '1';
         else
             muted_i <= '0';
@@ -120,7 +140,7 @@ begin
         elsif rising_edge(clock) then
             mute_start_event <= '0';
             resume_event <= '0';
-            due_now := signed(timestamp - target_i) >= 0;
+            due_now := timestamp_reached(timestamp, target_i);
 
             if abort_i = '1' then
                 state_i <= STATE_ERROR;
@@ -133,7 +153,7 @@ begin
                     target_i <= target_timestamp;
                     immediate_i <= arm_immediate;
                     if arm_immediate = '1' or
-                       signed(timestamp - target_timestamp) >= 0 then
+                       timestamp_reached(timestamp, target_timestamp) then
                         state_i <= STATE_MUTED;
                         mute_start_timestamp_i <= timestamp;
                         mute_start_event <= '1';

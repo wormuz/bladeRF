@@ -137,6 +137,30 @@ begin
             report "TX gate did not resume after recovery completion"
             severity failure;
 
+        -- The split comparator must preserve the exact modulo boundary
+        -- across a low-half carry, without muting one tick early.
+        timestamp <= unsigned'(x"00000000ffffffff");
+        target_timestamp <= unsigned'(x"0000000100000000");
+        immediate <= '0';
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        assert state = "01" and muted = '0'
+            report "split comparator released one tick before low-half carry"
+            severity failure;
+        timestamp <= unsigned'(x"0000000100000000");
+        wait for 1 ns;
+        assert muted = '1'
+            report "split comparator missed exact low-half carry boundary"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_event = '1' and
+               mute_start_timestamp = unsigned'(x"0000000100000000")
+            report "split comparator changed the scheduled mute timestamp"
+            severity failure;
+
         report "tx_retune_gate_tb: PASS" severity note;
         stop;
         wait;
