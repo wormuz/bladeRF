@@ -32,6 +32,20 @@ static unsigned int out_count;
 static unsigned int in_count;
 static unsigned int timeout_on_in_count;
 
+static int check_8x32_packet_round_trip(void)
+{
+    uint8_t packed[NIOS_PKT_LEN];
+    uint8_t target = 0, addr = 0;
+    uint32_t data = 0;
+    bool write = false;
+
+    nios_pkt_8x32_pack(packed, NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, true,
+                       0xa5, UINT32_C(0xfedcba98));
+    nios_pkt_8x32_unpack(packed, &target, &write, &addr, &data);
+    return target == NIOS_PKT_8x32_TARGET_RF_LINK_STATUS && write &&
+           addr == 0xa5 && data == UINT32_C(0xfedcba98) ? 0 : 1;
+}
+
 static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
                               uint32_t length, uint32_t timeout_ms)
 {
@@ -337,7 +351,8 @@ static int expect_partial_dwell_summary_timeout_is_atomic(void)
 
 int main(void)
 {
-    if (expect(RESPONSE_SUCCESS, 0) ||
+    if (check_8x32_packet_round_trip() ||
+        expect(RESPONSE_SUCCESS, 0) ||
         expect(RESPONSE_OLD_FIRMWARE_ECHO, BLADERF_ERR_UNSUPPORTED) ||
         expect(RESPONSE_PARTIAL_FAILURE, BLADERF_ERR_FPGA_OP) ||
         expect_update(RESPONSE_UPDATE_SUCCESS, 0) ||

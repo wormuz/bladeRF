@@ -13,6 +13,21 @@ static uint32_t expansion_direction;
 static bool expansion_write_success;
 static uint32_t expansion_output;
 
+static int check_32bit_packet_round_trip(void)
+{
+    uint8_t packed[NIOS_PKT_LEN];
+    uint8_t id = 0;
+    uint32_t addr = 0, data = 0;
+    bool write = false;
+
+    nios_pkt_32x32_pack(packed, NIOS_PKT_32x32_TARGET_WB_MSTR, true,
+                        UINT32_C(0x87654321), UINT32_C(0xfedcba98));
+    nios_pkt_32x32_unpack(packed, &id, &write, &addr, &data);
+    return id == NIOS_PKT_32x32_TARGET_WB_MSTR && write &&
+           addr == UINT32_C(0x87654321) &&
+           data == UINT32_C(0xfedcba98) ? 0 : 1;
+}
+
 uint32_t expansion_port_read(void) { return expansion_output; }
 bool expansion_port_write(uint32_t data)
 {
@@ -165,7 +180,8 @@ static int check_expansion_data_failure(void)
 
 int main(void)
 {
-    if (check_read_failure() || check_write_failure() ||
+    if (check_32bit_packet_round_trip() || check_read_failure() ||
+        check_write_failure() ||
         check_expansion_direction_failure() ||
         check_expansion_data_failure()) {
         fputs("NIOS operation failure was reported as packet success\n", stderr);

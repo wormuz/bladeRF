@@ -620,10 +620,10 @@ static inline void nios_pkt_8x32_unpack(const uint8_t *buf, uint8_t *target,
     }
 
     if (data != NULL) {
-        *data   = (buf[NIOS_PKT_8x32_IDX_DATA + 0] << 0)  |
-                  (buf[NIOS_PKT_8x32_IDX_DATA + 1] << 8)  |
-                  (buf[NIOS_PKT_8x32_IDX_DATA + 2] << 16) |
-                  (buf[NIOS_PKT_8x32_IDX_DATA + 3] << 24);
+        *data   = ((uint32_t) buf[NIOS_PKT_8x32_IDX_DATA + 0] << 0)  |
+                  ((uint32_t) buf[NIOS_PKT_8x32_IDX_DATA + 1] << 8)  |
+                  ((uint32_t) buf[NIOS_PKT_8x32_IDX_DATA + 2] << 16) |
+                  ((uint32_t) buf[NIOS_PKT_8x32_IDX_DATA + 3] << 24);
     }
 }
 
