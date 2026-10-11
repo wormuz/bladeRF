@@ -160,8 +160,6 @@ set_interface_property timeout_status associatedReset reset
 add_interface_port timeout_status wb_timeout_status export Output 1
 
 add_interface timeout_clear conduit end
-set_interface_property timeout_clear associatedClock clock_sink
-set_interface_property timeout_clear associatedReset reset
 add_interface_port timeout_clear wb_timeout_clear_toggle export Input 1
 
 

@@ -1279,6 +1279,10 @@ def check_wishbone_timeout_qsys_wiring():
         "wb_timeout_status.external_connection",
         "add_connection wb_timeout_clear.external_connection "
         "wishbone_master_0.timeout_clear",
+        "set_connection_parameter_value "
+        "nios2.data_master/wb_timeout_status.s1 baseAddress {0x9800}",
+        "set_connection_parameter_value "
+        "nios2.data_master/wb_timeout_clear.s1 baseAddress {0x9820}",
     )
     declared = (
         "add_interface timeout_status conduit end",
@@ -1293,6 +1297,11 @@ def check_wishbone_timeout_qsys_wiring():
         fail("nios-wishbone-timeout-qsys-wiring",
              "NIOS Qsys does not connect the Wishbone timeout PIOs to the component's declared interfaces",
              "the watchdog status and clear acknowledgement must reach NIOS or an external no-ACK can remain unreported")
+    if ("set_interface_property timeout_clear associatedClock" in component_text or
+            "set_interface_property timeout_clear associatedReset" in component_text):
+        fail("nios-wishbone-timeout-qsys-clock-domain",
+             "the exported clear-toggle conduit has an unavailable association at its PIO boundary",
+             "the toggle is consumed by the component's system-clock synchronizer and must not be constrained to an unclocked external conduit")
 
 
 def check_full_flow_runs_design_assistant():

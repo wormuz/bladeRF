@@ -850,12 +850,12 @@ set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 defau
 
 add_connection nios2.data_master wb_timeout_status.s1
 set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 baseAddress {0x9780}
+set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 baseAddress {0x9800}
 set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 defaultConnection {0}
 
 add_connection nios2.data_master wb_timeout_clear.s1
 set_connection_parameter_value nios2.data_master/wb_timeout_clear.s1 arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/wb_timeout_clear.s1 baseAddress {0x97a0}
+set_connection_parameter_value nios2.data_master/wb_timeout_clear.s1 baseAddress {0x9820}
 set_connection_parameter_value nios2.data_master/wb_timeout_clear.s1 defaultConnection {0}
 
 add_connection nios2.data_master command_uart.avalon_slave
