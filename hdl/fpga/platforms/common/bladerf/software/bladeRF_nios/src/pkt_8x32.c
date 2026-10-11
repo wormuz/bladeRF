@@ -285,6 +285,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x32_TARGET_ADF400X:
+            if (data > 0x00ffffffu) {
+                return false;
+            }
             if (!adf400x_spi_write(data)) {
                 return false;
             }

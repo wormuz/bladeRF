@@ -1401,6 +1401,10 @@ void ad56x1_vctcxo_trim_dac_read(uint16_t *val)
 #ifdef BOARD_BLADERF_MICRO
 bool adf400x_spi_write(uint32_t val)
 {
+    if (val > 0x00ffffffu) {
+        return false;
+    }
+
     uint8_t data[3] = { (val >> 16) & 0xff, (val >> 8) & 0xff,
                         (val >> 0) & 0xff };
 

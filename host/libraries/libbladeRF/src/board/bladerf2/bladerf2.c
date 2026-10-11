@@ -7050,7 +7050,7 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
-    if (address > 0x03) {
+    if (address > 0x03 || val > 0x00ffffffu) {
         return BLADERF_ERR_INVAL;
     }
 
