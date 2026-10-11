@@ -32,7 +32,7 @@ uint16_t iqbal_get_gain(bladerf_module m) { (void)m; return 0; }
 void iqbal_set_gain(bladerf_module m, uint16_t v) { (void)m; (void)v; }
 uint16_t iqbal_get_phase(bladerf_module m) { (void)m; return 0; }
 void iqbal_set_phase(bladerf_module m, uint16_t v) { (void)m; (void)v; }
-void agc_dc_corr_write(uint16_t a, uint16_t v) { (void)a; (void)v; }
+bool agc_dc_corr_write(uint16_t a, uint16_t v) { (void)a; (void)v; return false; }
 uint32_t rffe_csr_read(void) { return 0; }
 void rffe_csr_write(uint32_t v) { (void)v; }
 

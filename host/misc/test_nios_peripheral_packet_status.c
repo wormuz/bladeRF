@@ -15,6 +15,7 @@
 static bool peripheral_success;
 static bool lms_success;
 static bool tamer_mode_success;
+static bool agc_dc_success;
 static bladerf_vctcxo_tamer_mode tamer_mode_readback =
     BLADERF_VCTCXO_TAMER_DISABLED;
 
@@ -119,10 +120,10 @@ void iqbal_set_phase(bladerf_module module, uint16_t value)
     (void)value;
 }
 
-void agc_dc_corr_write(uint16_t addr, uint16_t value)
+bool agc_dc_corr_write(uint16_t addr, uint16_t value)
 {
-    (void)addr;
     (void)value;
+    return agc_dc_success && addr <= NIOS_PKT_8x16_ADDR_AGC_DC_I_MIN;
 }
 
 uint32_t control_reg_read(void) { return 0; }
@@ -364,6 +365,72 @@ static int check_8x8_tamer_invalid_subaddress(void)
            addr == 0x01 && !success ? 0 : 1;
 }
 
+static int check_8x8_trigger_subaddresses(void)
+{
+    static const uint8_t targets[] = {
+        NIOS_PKT_8x8_TX_TRIGGER_CTL, NIOS_PKT_8x8_RX_TRIGGER_CTL,
+    };
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    uint8_t target, addr, data;
+    bool write, success;
+    unsigned int i;
+
+    for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
+        nios_pkt_8x8_pack(packet.req, targets[i], false, 1, 0);
+        pkt_8x8(&packet);
+        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                                 &success);
+        if (target != targets[i] || write || addr != 1 || success) {
+            return 1;
+        }
+
+        nios_pkt_8x8_pack(packet.req, targets[i], true, 1, 0x5a);
+        pkt_8x8(&packet);
+        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                                 &success);
+        if (target != targets[i] || !write || addr != 1 || success) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int check_8x16_agc_write_status(void)
+{
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    uint8_t target, addr;
+    uint16_t data;
+    bool write, success;
+
+    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
+                       true, NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
+    agc_dc_success = false;
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    if (target != NIOS_PKT_8x16_TARGET_AGC_CORR || !write || success) {
+        return 1;
+    }
+
+    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
+                       true, NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
+    agc_dc_success = true;
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    if (target != NIOS_PKT_8x16_TARGET_AGC_CORR || !write || !success) {
+        return 1;
+    }
+
+    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
+                       true, 0xff, 0x1234);
+    pkt_8x16(&packet);
+    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+                              &success);
+    return target == NIOS_PKT_8x16_TARGET_AGC_CORR && write && !success ? 0 : 1;
+}
+
 static int check_8x32_diagnostic_address_bounds(void)
 {
     static const struct {
@@ -398,6 +465,7 @@ int main(void)
         check_8x8_tamer_set_failure() || check_8x8_tamer_invalid_mode() ||
         check_8x8_tamer_set_success() || check_8x8_tamer_invalid_readback() ||
         check_8x8_tamer_invalid_subaddress() ||
+        check_8x8_trigger_subaddresses() || check_8x16_agc_write_status() ||
         check_8x32_diagnostic_address_bounds()) {
         fputs("peripheral failure was reported as packet success\n", stderr);
         return 1;

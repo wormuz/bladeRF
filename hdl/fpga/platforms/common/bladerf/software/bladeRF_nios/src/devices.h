@@ -630,7 +630,7 @@ uint8_t rx_trigger_ctl_read(void);
  * @param   addr    Address
  * @param   value   Value to write
  */
-void agc_dc_corr_write(uint16_t addr, uint16_t value);
+bool agc_dc_corr_write(uint16_t addr, uint16_t value);
 
 #ifdef BLADERF_NIOS_LIBAD936X
 /**

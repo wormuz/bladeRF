@@ -61,10 +61,18 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint8_t *data)
             break;
 
         case NIOS_PKT_8x8_TX_TRIGGER_CTL:
+            if (addr != 0) {
+                *data = 0;
+                return false;
+            }
             *data = tx_trigger_ctl_read();
             break;
 
         case NIOS_PKT_8x8_RX_TRIGGER_CTL:
+            if (addr != 0) {
+                *data = 0;
+                return false;
+            }
             *data = rx_trigger_ctl_read();
             break;
 
@@ -109,10 +117,16 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint8_t data)
                 (bladerf_vctcxo_tamer_mode)data);
 
         case NIOS_PKT_8x8_TX_TRIGGER_CTL:
+            if (addr != 0) {
+                return false;
+            }
             tx_trigger_ctl_write(data);
             break;
 
         case NIOS_PKT_8x8_RX_TRIGGER_CTL:
+            if (addr != 0) {
+                return false;
+            }
             rx_trigger_ctl_write(data);
             break;
 

@@ -140,8 +140,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint16_t data)
             break;
 
         case NIOS_PKT_8x16_TARGET_AGC_CORR:
-            agc_dc_corr_write(addr, data);
-            break;
+            return agc_dc_corr_write(addr, data);
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x16_TARGET_AD56X1_DAC:
