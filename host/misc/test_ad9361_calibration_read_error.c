@@ -11,6 +11,8 @@
 
 static int32_t fake_clock_chain_status;
 static unsigned fake_bandwidth_update_count;
+static bool fake_mux_commit_parent;
+static int32_t fake_mux_parent_status;
 
 static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t tx_sample_rate,
@@ -22,14 +24,26 @@ static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
                                         uint32_t *tx_path_clks);
 static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
                                         uint32_t rx_bw, uint32_t tx_bw);
+static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
+                                       uint8_t index);
+
+static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
+                                       uint8_t index)
+{
+    if (fake_mux_commit_parent)
+        clk_priv->mult = index;
+    return fake_mux_parent_status;
+}
 
 #define ad9361_calculate_rf_clock_chain test_calculate_rf_clock_chain
 #define ad9361_set_trx_clock_chain test_set_trx_clock_chain
 #define ad9361_update_rf_bandwidth test_update_rf_bandwidth
+#define ad9361_clk_mux_set_parent test_clk_mux_set_parent
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
 #undef ad9361_calculate_rf_clock_chain
 #undef ad9361_set_trx_clock_chain
 #undef ad9361_update_rf_bandwidth
+#undef ad9361_clk_mux_set_parent
 
 static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t tx_sample_rate,
@@ -381,6 +395,61 @@ int main(void)
     phy.spi = &spi;
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
+
+    /* A mux may commit its new source and then fail while restoring ENSM or
+     * relocking the internal PLL. Keep the software source aligned only when
+     * the mux confirms that commit; roll it back when the mux stayed put. */
+    {
+        struct refclk_scale rx_mux = { .phy = &phy, .source = RX_RFPLL };
+        struct refclk_scale tx_mux = { .phy = &phy, .source = TX_RFPLL };
+        struct refclk_scale *old_rx_mux = phy.ref_clk_scale[RX_RFPLL];
+        struct refclk_scale *old_tx_mux = phy.ref_clk_scale[TX_RFPLL];
+        enum dev_id old_dev_sel = phy.dev_sel;
+        phy.ref_clk_scale[RX_RFPLL] = &rx_mux;
+        phy.ref_clk_scale[TX_RFPLL] = &tx_mux;
+        phy.dev_sel = ID_AD9361;
+        fake_mux_parent_status = -EIO;
+        fake_mux_commit_parent = true;
+        pdata.use_ext_rx_lo = INT_LO;
+        if (ad9361_set_rx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+            pdata.use_ext_rx_lo != EXT_LO) {
+            fprintf(stderr,
+                    "RX LO source cache rolled back after mux commit\n");
+            return EXIT_FAILURE;
+        }
+        pdata.use_ext_tx_lo = INT_LO;
+        if (ad9361_set_tx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+            pdata.use_ext_tx_lo != EXT_LO) {
+            fprintf(stderr,
+                    "TX LO source cache rolled back after mux commit\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_mux_commit_parent = false;
+        rx_mux.mult = INT_LO;
+        pdata.use_ext_rx_lo = INT_LO;
+        if (ad9361_set_rx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+            pdata.use_ext_rx_lo != INT_LO) {
+            fprintf(stderr,
+                    "RX LO source cache changed without mux commit\n");
+            return EXIT_FAILURE;
+        }
+        tx_mux.mult = INT_LO;
+        pdata.use_ext_tx_lo = INT_LO;
+        if (ad9361_set_tx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+            pdata.use_ext_tx_lo != INT_LO) {
+            fprintf(stderr,
+                    "TX LO source cache changed without mux commit\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_mux_parent_status = 0;
+        phy.ref_clk_scale[RX_RFPLL] = old_rx_mux;
+        phy.ref_clk_scale[TX_RFPLL] = old_tx_mux;
+        phy.dev_sel = old_dev_sel;
+        pdata.use_ext_rx_lo = INT_LO;
+        pdata.use_ext_tx_lo = INT_LO;
+    }
 
     /* Channel selectors and enable masks must not silently truncate bits. */
     {
