@@ -41,21 +41,40 @@ bool dwell_cfg_write(uint32_t value)
     return dwell_cfg_success;
 }
 uint32_t pretrig_read(uint16_t index) { return index; }
-void rf_link_cfg_set_speed(bool high_speed) { (void)high_speed; }
-void rf_link_cfg_set_epoch_tag(uint8_t tag) { (void)tag; }
-void rf_link_cfg_start(void) {}
-void rf_link_cfg_stop(void) {}
-void rf_link_cfg_clear_faults(void) {}
-void rx_epoch_arm(uint8_t epoch_id) { (void)epoch_id; }
-void rx_epoch_complete(void) {}
-void rx_epoch_abort(void) {}
+static bool gate_command_success;
+static bool pio_write_success = true;
+static uint32_t pio_values[10];
+uint32_t xa4_test_pio_read(uint32_t base)
+{
+    return base < sizeof(pio_values) / sizeof(pio_values[0])
+               ? pio_values[base]
+               : 0;
+}
+void xa4_test_pio_write(uint32_t base, uint32_t value)
+{
+    if (pio_write_success &&
+        base < sizeof(pio_values) / sizeof(pio_values[0])) {
+        pio_values[base] = value;
+    }
+}
+bool rf_link_cfg_set_speed(bool high_speed)
+{ (void)high_speed; return gate_command_success; }
+bool rf_link_cfg_set_epoch_tag(uint8_t tag)
+{ (void)tag; return gate_command_success; }
+bool rf_link_cfg_start(void) { return gate_command_success; }
+bool rf_link_cfg_stop(void) { return gate_command_success; }
+bool rf_link_cfg_clear_faults(void) { return gate_command_success; }
+bool rx_epoch_arm(uint8_t epoch_id)
+{ (void)epoch_id; return gate_command_success; }
+bool rx_epoch_complete(void) { return gate_command_success; }
+bool rx_epoch_abort(void) { return gate_command_success; }
 uint32_t rx_epoch_status_read(void) { return 0; }
 uint32_t rx_epoch_ts_lo_read(void) { return 0; }
 uint32_t rx_epoch_ts_hi_read(void) { return 0; }
-void tx_retune_gate_arm(uint64_t timestamp, bool immediate)
-{ (void)timestamp; (void)immediate; }
-void tx_retune_gate_complete(void) {}
-void tx_retune_gate_abort(void) {}
+bool tx_retune_gate_arm(uint64_t timestamp, bool immediate)
+{ (void)timestamp; (void)immediate; return gate_command_success; }
+bool tx_retune_gate_complete(void) { return gate_command_success; }
+bool tx_retune_gate_abort(void) { return gate_command_success; }
 uint32_t tx_retune_gate_status_read(void) { return 0; }
 
 #define CHECK_READ(target_value, addr_value, expected_success, expected_data) \
@@ -130,15 +149,48 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 15, true,
                UINT32_C(0xd000000f));
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 16, false, 0);
-    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0, false, 0);
-    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO, 0, false, 0);
-    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI, 0, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0, true, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO, 0, true, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI, 0, true, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
-               NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, false, 0);
+               NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, true, 0);
+    gate_command_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
+                NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, 7, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
+                NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
+                NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_START, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED, 1, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG, 7, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_STOP, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
+                NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS, 0, true);
+    gate_command_success = false;
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL,
                 NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, 7, false);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
                 NIOS_PKT_8x32_RF_LINK_CMD_START, 0, false);
+    pio_write_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO,
+                UINT32_C(0x12345678), true);
+    pio_write_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI,
+                UINT32_C(0xabcdef01), false);
+    pio_write_success = true;
+    gate_command_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, 1, true);
+    gate_command_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, 0, false);
     dwell_cfg_success = false;
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
                 UINT32_C(0x12345678), false);
@@ -147,6 +199,10 @@ int main(void)
                 UINT32_C(0x12345678), true);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                 NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, false);
+    gate_command_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0, 0, false);
 
     puts("xA4 NIOS 8x32 diagnostic packet address status: PASS");
     return 0;

@@ -9,6 +9,22 @@
 
 #define PRETRIG_DEPTH 4096u
 
+#define RF_LINK_CFG_BASE 1u
+#define RX_EPOCH_CTRL_BASE 2u
+#define RX_EPOCH_STATUS_BASE 3u
+#define RX_EPOCH_TS_LO_BASE 4u
+#define RX_EPOCH_TS_HI_BASE 5u
+#define TX_RETUNE_GATE_CTRL_BASE 6u
+#define TX_RETUNE_GATE_TARGET_LO_BASE 7u
+#define TX_RETUNE_GATE_TARGET_HI_BASE 8u
+#define TX_RETUNE_GATE_STATUS_BASE 9u
+
+uint32_t xa4_test_pio_read(uint32_t base);
+void xa4_test_pio_write(uint32_t base, uint32_t value);
+#define IORD_ALTERA_AVALON_PIO_DATA(base) xa4_test_pio_read(base)
+#define IOWR_ALTERA_AVALON_PIO_DATA(base, value) \
+    xa4_test_pio_write((base), (value))
+
 typedef enum {
     LOSS_CNT_RX_LO = 0,
     LOSS_CNT_RX_HI = 1,
@@ -25,20 +41,20 @@ uint32_t dwell_status_read(void);
 uint32_t dwell_word_read(uint8_t word);
 bool dwell_cfg_write(uint32_t value);
 uint32_t pretrig_read(uint16_t index);
-void rf_link_cfg_set_speed(bool high_speed);
-void rf_link_cfg_set_epoch_tag(uint8_t tag);
-void rf_link_cfg_start(void);
-void rf_link_cfg_stop(void);
-void rf_link_cfg_clear_faults(void);
-void rx_epoch_arm(uint8_t epoch_id);
-void rx_epoch_complete(void);
-void rx_epoch_abort(void);
+bool rf_link_cfg_set_speed(bool high_speed);
+bool rf_link_cfg_set_epoch_tag(uint8_t tag);
+bool rf_link_cfg_start(void);
+bool rf_link_cfg_stop(void);
+bool rf_link_cfg_clear_faults(void);
+bool rx_epoch_arm(uint8_t epoch_id);
+bool rx_epoch_complete(void);
+bool rx_epoch_abort(void);
 uint32_t rx_epoch_status_read(void);
 uint32_t rx_epoch_ts_lo_read(void);
 uint32_t rx_epoch_ts_hi_read(void);
-void tx_retune_gate_arm(uint64_t timestamp, bool immediate);
-void tx_retune_gate_complete(void);
-void tx_retune_gate_abort(void);
+bool tx_retune_gate_arm(uint64_t timestamp, bool immediate);
+bool tx_retune_gate_complete(void);
+bool tx_retune_gate_abort(void);
 uint32_t tx_retune_gate_status_read(void);
 
 #endif
