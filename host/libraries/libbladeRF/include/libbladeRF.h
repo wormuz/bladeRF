@@ -2410,9 +2410,10 @@ const char * CALL_CONV bladerf_format_to_string(bladerf_format format);
  * This generally only occurs on the TX channel when the FPGA is starved of
  * samples.
  *
- * @note libbladeRF does not set this bit in `bladerf_metadata.status`.
- * On bladeRF 2 devices with RF-link event support, TX FIFO underflow is
- * reported through `BLADERF_RF_EVT_TX_UNDERRUN` in the RF event history.
+ * On bladeRF 2 devices, `bladerf_sync_rx()` maps the FPGA's RX metadata
+ * underflow flag to this status bit. The flag reports TX FIFO starvation; it
+ * does not indicate an RX sample discontinuity. Devices with RF-link event
+ * support also report it through `BLADERF_RF_EVT_TX_UNDERRUN` in event history.
  */
 #define BLADERF_META_STATUS_UNDERRUN (1 << 1)
 
@@ -2505,11 +2506,10 @@ const char * CALL_CONV bladerf_format_to_string(bladerf_format format);
 #define BLADERF_META_FLAG_RX_NOW (1 << 31)
 
 /**
- * This flag is asserted in bladerf_metadata.status by the hardware when a
- * TX sample-buffer underrun has been latched. The FPGA reports this status
- * in RX metadata; it does not indicate an RX sample discontinuity. RX
- * continuity must be determined from RX timestamps (and the corresponding
- * RX stream-overrun event when a discontinuity is detected).
+ * The FPGA asserts this bit in RX metadata when TX sample-buffer underrun is
+ * latched. `bladerf_sync_rx()` translates it to
+ * ::BLADERF_META_STATUS_UNDERRUN; it does not indicate an RX sample
+ * discontinuity. RX continuity is reported separately.
  */
 #define BLADERF_META_FLAG_RX_HW_UNDERFLOW (1 << 0)
 

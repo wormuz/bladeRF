@@ -29,6 +29,23 @@ const struct board_fns bladerf2_board_fns = { .name = "bladerf2" };
 #define SAMPLES_PER_BUFFER (2048u * MSGS_PER_BUFFER)
 #define BYTES_PER_BUFFER (MSG_BYTES * MSGS_PER_BUFFER)
 
+static void test_rx_metadata_status_flag_translation(void)
+{
+    const uint32_t status = metadata_flags_to_sync_status(
+        BLADERF_META_FLAG_RX_HW_UNDERFLOW |
+        BLADERF_META_FLAG_RX_HW_MINIEXP1 |
+        BLADERF_META_FLAG_RX_HW_MINIEXP2);
+
+    /* FPGA bit 0 denotes TX underflow here, while public status bit 0 is RX
+     * overrun. Translation must preserve meaning, not the overlapping bit. */
+    assert(status & BLADERF_META_STATUS_UNDERRUN);
+    assert(!(status & BLADERF_META_STATUS_OVERRUN));
+    assert(status & BLADERF_META_FLAG_RX_HW_MINIEXP1);
+    assert(status & BLADERF_META_FLAG_RX_HW_MINIEXP2);
+
+    assert(metadata_flags_to_sync_status(0) == 0);
+}
+
 static void write_msg(uint8_t *msg, uint64_t timestamp, uint8_t epoch_id,
                       int16_t marker)
 {
@@ -3147,6 +3164,7 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 int main(void)
 {
+    test_rx_metadata_status_flag_translation();
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
     test_sync_packet_meta_tx_length_includes_header();

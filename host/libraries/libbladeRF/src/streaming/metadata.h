@@ -440,6 +440,23 @@ static inline uint32_t metadata_get_flags(const uint8_t *header)
     return LE32_TO_HOST(ret);
 }
 
+/* Convert FPGA RX metadata status flags to the public synchronous API status
+ * namespace. The FPGA's RX_HW_UNDERFLOW bit is reported in RX metadata when
+ * the TX sample FIFO starves; its bit position overlaps META_STATUS_OVERRUN,
+ * so it must be translated explicitly rather than copied verbatim. */
+static inline uint32_t metadata_flags_to_sync_status(uint32_t flags)
+{
+    uint32_t status = flags &
+        (BLADERF_META_FLAG_RX_HW_MINIEXP1 |
+         BLADERF_META_FLAG_RX_HW_MINIEXP2);
+
+    if (flags & BLADERF_META_FLAG_RX_HW_UNDERFLOW) {
+        status |= BLADERF_META_STATUS_UNDERRUN;
+    }
+
+    return status;
+}
+
 static inline uint16_t metadata_get_packet_len(const uint8_t *header)
 {
     uint16_t ret;

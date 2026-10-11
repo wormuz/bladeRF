@@ -1674,10 +1674,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             metadata_timestamp_at_or_after(
                                 s->meta.msg_timestamp,
                                 s->meta.rx_epoch_min_timestamp)) {
-                            user_meta->status |= s->meta.msg_flags &
-                               (BLADERF_META_FLAG_RX_HW_UNDERFLOW |
-                                  BLADERF_META_FLAG_RX_HW_MINIEXP1 |
-                                  BLADERF_META_FLAG_RX_HW_MINIEXP2);
+                            user_meta->status |= metadata_flags_to_sync_status(
+                                s->meta.msg_flags);
                         }
 
                         s->meta.curr_msg_off = 0;
