@@ -20,6 +20,7 @@ static bool update_success = true;
 static unsigned int read_calls;
 static bool read_success = true;
 static unsigned int gain_row_calls;
+static unsigned int epoch_snapshot_calls;
 
 bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
                             uint8_t data3, uint8_t config,
@@ -90,6 +91,7 @@ static int run_invalid_ad9361_read(uint16_t request_addr)
 
 uint64_t rx_epoch_status_snapshot_read(void)
 {
+    epoch_snapshot_calls++;
     return UINT64_C(0x123456789abcdef0);
 }
 
@@ -196,11 +198,15 @@ static int run_update_bits_case(bool requested_success,
     return 0;
 }
 
-static int run_epoch_snapshot_case(void)
+static int run_epoch_snapshot_case(uint16_t request_addr,
+                                   bool expected_success,
+                                   unsigned int expected_calls)
 {
     struct pkt_buf packet = {
         .req = { 0x45, NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT,
-                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+                 0, 0, (uint8_t)request_addr,
+                 (uint8_t)(request_addr >> 8),
+                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
         .ready = false,
     };
     uint8_t target = 0;
@@ -212,7 +218,11 @@ static int run_epoch_snapshot_case(void)
     nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
                                &response, &success);
     if (target != NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT || write ||
-        addr != 0 || response != UINT64_C(0x123456789abcdef0) || !success) {
+        addr != request_addr || success != expected_success ||
+        epoch_snapshot_calls != expected_calls ||
+        (expected_success &&
+         response != UINT64_C(0x123456789abcdef0)) ||
+        (!expected_success && response != 0)) {
         fprintf(stderr, "epoch snapshot response mismatch: target=%u "
                         "write=%u addr=0x%x data=0x%016llx success=%u\n",
                 target, write, addr, (unsigned long long)response, success);
@@ -257,7 +267,8 @@ int main(void)
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
-        run_epoch_snapshot_case() ||
+        run_epoch_snapshot_case(0, true, 1) ||
+        run_epoch_snapshot_case(1, false, 1) ||
         run_read_case(true, true) ||
         run_read_case(false, false) || read_calls != 2 ||
         run_invalid_ad9361_read(0x8247) ||
