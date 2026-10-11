@@ -173,6 +173,7 @@ architecture arch of rx is
     signal gated_timestamp          : unsigned(63 downto 0) := (others => '0');
     signal rx_epoch_id_local        : unsigned(7 downto 0) := (others => '0');
     signal rx_epoch_discard_active_local : std_logic := '0';
+    signal rx_epoch_fault_local          : std_logic := '0';
 
     signal trigger_signal_out       : std_logic;
     signal trigger_signal_out_sync  : std_logic;
@@ -279,8 +280,10 @@ begin
     -- ADR-0207 §6.2: gate between the mux and the sample bridge. It suppresses
     -- new IQ on ARM; a sample already registered before ARM can still pass
     -- through fifo_writer/rx_fifo with the old epoch identity. Host epoch
-    -- filtering drops that in-flight data. During the fence, zero-IQ
-    -- keepalives retain transport liveness.
+    -- filtering drops that in-flight data. During a normal transition fence,
+    -- zero-IQ keepalives retain transport liveness. A terminal gate fault is
+    -- separately wired to fifo_writer so it stops appending keepalives to
+    -- any packet whose META header was emitted before the fault.
     U_rx_epoch_gate : entity work.rx_epoch_gate
         generic map (
             NUM_STREAMS             => NUM_STREAMS
@@ -305,6 +308,7 @@ begin
             out_epoch_id            => rx_epoch_id_local,
             out_state               => rx_epoch_state,
             out_discard_active      => rx_epoch_discard_active_local,
+            out_fault               => rx_epoch_fault_local,
             epoch_start_event       => rx_epoch_start_event,
             first_valid_timestamp   => rx_epoch_first_valid_ts
         );
@@ -332,6 +336,7 @@ begin
             rx_epoch_meta_enable => rx_epoch_meta_enable,
             rx_epoch_id          => rx_epoch_id_local,
             rx_epoch_discard_active => rx_epoch_discard_active_local,
+            rx_epoch_gate_fault     => rx_epoch_fault_local,
 
             link_start_toggle          =>  link_start_toggle,
             link_stop_toggle           =>  link_stop_toggle,

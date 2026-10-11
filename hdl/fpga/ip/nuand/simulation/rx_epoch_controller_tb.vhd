@@ -67,6 +67,7 @@ begin
             out_epoch_id => gate_epoch_id,
             out_state => gate_state,
             out_discard_active => discard_active,
+            out_fault => open,
             epoch_start_event => start_event,
             first_valid_timestamp => first_valid_timestamp
         );

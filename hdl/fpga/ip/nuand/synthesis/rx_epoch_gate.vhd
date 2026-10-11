@@ -79,6 +79,11 @@ entity rx_epoch_gate is
         out_epoch_id         : out unsigned(7 downto 0)  := (others => '0');
         out_state            : out unsigned(3 downto 0)  := (others => '0');
         out_discard_active   : out std_logic := '0';
+        -- Immediate sample-domain indication that the certified epoch has
+        -- entered the terminal ERROR state. The RX FIFO writer uses this to
+        -- abort an in-flight USB buffer before zero-IQ keepalives can inherit
+        -- the old epoch's packet metadata.
+        out_fault             : out std_logic := '0';
         epoch_start_event    : out std_logic := '0';
         first_valid_timestamp : out unsigned(63 downto 0) := (others => '0')
     );
@@ -341,5 +346,7 @@ begin
                   state = STATE_ERROR or
                   epoch_arm = '1' or epoch_abort = '1') else
         '0';
+
+    out_fault <= '1' when state = STATE_ERROR else '0';
 
 end architecture;

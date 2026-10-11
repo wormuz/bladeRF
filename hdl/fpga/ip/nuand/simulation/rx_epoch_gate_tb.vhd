@@ -23,6 +23,7 @@ architecture test of rx_epoch_gate_tb is
     signal epoch_id : unsigned(7 downto 0);
     signal state : unsigned(3 downto 0);
     signal discard_active, start_event : std_logic;
+    signal gate_fault : std_logic;
     signal first_valid_timestamp : unsigned(63 downto 0);
     -- RX1 configuration uses only lane 0; lane 1 remains disabled even when
     -- the paired RX_X2 test below deliberately withholds its valid sample.
@@ -50,6 +51,7 @@ begin
             out_timestamp => out_timestamp,
             out_epoch_id => epoch_id, out_state => state,
             out_discard_active => discard_active,
+            out_fault => gate_fault,
             epoch_start_event => start_event,
             first_valid_timestamp => first_valid_timestamp
         );
@@ -69,6 +71,7 @@ begin
             out_epoch_id => rx1_epoch_id,
             out_state => rx1_state,
             out_discard_active => rx1_discard_active,
+            out_fault => open,
             epoch_start_event => rx1_start_event,
             first_valid_timestamp => rx1_first_valid_timestamp
         );
@@ -533,7 +536,7 @@ begin
             severity failure;
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert state = "0100" and
+        assert state = "0100" and gate_fault = '1' and
                out_samples(0).data_i = to_signed(0, 16) and
                out_samples(1).data_i = to_signed(0, 16)
             report "RX_X2 lane-valid mismatch did not remain fail-closed"

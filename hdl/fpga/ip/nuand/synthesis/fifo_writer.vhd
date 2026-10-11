@@ -53,6 +53,10 @@ entity fifo_writer is
         -- A retune intentionally withholds IQ while RF events are pending.
         -- Do not diagnose that fence as a no-progress transport failure.
         rx_epoch_discard_active : in   std_logic := '0';
+        -- A terminal RX epoch-gate fault stops the writer from appending
+        -- zero-IQ keepalives to a packet whose META header already carries
+        -- the formerly certified epoch.
+        rx_epoch_gate_fault  : in      std_logic := '0';
 
         in_sample_controls  :   in      sample_controls_t(0 to NUM_STREAMS-1) := (others => SAMPLE_CONTROL_DISABLE);
         in_samples          :   in      sample_streams_t(0 to NUM_STREAMS-1)  := (others => ZERO_SAMPLE);
@@ -195,6 +199,7 @@ architecture simple of fifo_writer is
                                     := (others => '0');
     signal wrote_this_epoch    : std_logic := '0';
     signal abort_active_i      : std_logic := '0';
+    signal abort_active_out    : std_logic := '0';
     signal epoch_ack_i         : std_logic := '0';
     signal epoch_valid_i       : std_logic := '0';
     signal stop_toggle_prev    : std_logic := '0';
@@ -592,7 +597,8 @@ begin
     link_epoch_counter        <= epoch_counter;
     fault_sticky              <= fault_sticky_i;
     fault_context             <= fault_context_i;
-    abort_active              <= abort_active_i;
+    abort_active_out          <= abort_active_i or rx_epoch_gate_fault;
+    abort_active              <= abort_active_out;
     epoch_ack                 <= epoch_ack_i;
     epoch_valid               <= epoch_valid_i;
 
@@ -821,7 +827,7 @@ begin
                 -- clause below reads to enter this state -- symmetric.
                 meta_future.meta_write   <= '0';
                 meta_future.meta_written <= '0';
-                if( abort_active_i = '0' ) then
+                if( abort_active_out = '0' ) then
                     meta_future.state <= IDLE;
                 end if;
 
@@ -832,12 +838,9 @@ begin
         end case;
 
         -- Abort?
-        -- abort_active_i is itself a registered signal (see latch_usb_speed
-        -- process): reading it here to steer the next FSM state is the same
-        -- class of dependency as reading `enable` below, and only reaches
-        -- the FIFO interface through meta_current.state on the FOLLOWING
-        -- clock -- meta_fifo_write/meta_fifo_data stay driven solely by
-        -- meta_current.meta_write / meta_current.meta_data, unchanged.
+        -- abort_active_out steers the next FSM state; the output write
+        -- enable also has an immediate gate-fault mask. Metadata data remains
+        -- driven by meta_current.meta_data.
         -- One priority chain, not two sequential overrides. Written as two
         -- separate if statements this cost -0.164 ns on the setup path
         -- meta_current.meta_written -> meta_current.state.IDLE (measured,
@@ -848,7 +851,7 @@ begin
         -- second it overrode the abort, so dropping enable walked the FSM
         -- out of ABORTED into IDLE without a new epoch -- exactly the sticky
         -- halt the abort exists to provide. Abort wins now.
-        if( abort_active_i = '1' ) then
+        if( abort_active_out = '1' ) then
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
             meta_future.state         <= ABORTED;
@@ -861,7 +864,7 @@ begin
         end if;
 
         -- Output assignments
-        meta_fifo_write <= meta_current.meta_write;
+        meta_fifo_write <= meta_current.meta_write and not abort_active_out;
         meta_fifo_data  <= meta_current.meta_data;
 
     end process;
@@ -1244,14 +1247,13 @@ begin
         end case;
 
         -- Abort?
-        -- abort_active_i is registered (latch_usb_speed process); reading it
-        -- here only steers fifo_future.state, which reaches fifo_write on
-        -- the FOLLOWING clock through fifo_current -- the output assignment
-        -- below stays a plain mirror of fifo_current.fifo_write, unchanged.
+        -- abort_active_out steers fifo_future.state and masks the registered
+        -- fifo_write output immediately, so a gate fault cannot commit a
+        -- keepalive on the same edge that it is observed.
         -- ARMED (enable high, no epoch yet) holds the FIFO in clear too, so
         -- the first sample written belongs to the epoch, not to the interval
         -- before it.
-        if( enable = '0' or abort_active_i = '1' or link_active_i = '0' ) then
+        if( enable = '0' or abort_active_out = '1' or link_active_i = '0' ) then
             fifo_future.fifo_clear <= '1';
             fifo_future.fifo_write <= '0';
             fifo_future.state      <= CLEAR;
@@ -1259,7 +1261,10 @@ begin
 
         -- Output assignments
         fifo_clear <= fifo_current.fifo_clear;
-        fifo_write <= fifo_current.fifo_write;
+        -- Gate faults can arrive between the writer FSM's clock edges. Mask
+        -- both sides of the sample/META pair immediately so a previously
+        -- registered keepalive write cannot cross the fault boundary alone.
+        fifo_write <= fifo_current.fifo_write and not abort_active_out;
         fifo_data  <= std_logic_vector(fifo_current.fifo_data);
 
     end process;

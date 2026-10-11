@@ -19,6 +19,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal done : boolean := false;
     signal enable : std_logic := '1';
     signal discard_active : std_logic := '0';
+    signal epoch_gate_fault : std_logic := '0';
     signal epoch_meta_enable : std_logic := '0';
     signal epoch_id : unsigned(7 downto 0) := (others => '0');
     signal link_start_toggle : std_logic := '0';
@@ -67,6 +68,7 @@ begin
             rx_epoch_meta_enable => epoch_meta_enable,
             rx_epoch_id => epoch_id,
             rx_epoch_discard_active => discard_active,
+            rx_epoch_gate_fault => epoch_gate_fault,
             in_sample_controls => sample_ctrls,
             in_samples => samples,
             fifo_usedw => fifo_usedw,
@@ -106,6 +108,34 @@ begin
         link_start_toggle <= '1';
         wait until rising_edge(clock);
         wait until link_active = '1';
+
+        -- A terminal gate fault stops the writer from appending zero-IQ
+        -- keepalives to the packet whose META header already names the
+        -- certified epoch.
+        for i in 0 to 1 loop
+            samples(i).data_v <= '1';
+            samples(i).data_i <= (others => '0');
+            samples(i).data_q <= (others => '0');
+        end loop;
+        wait until fifo_write = '1';
+        wait until falling_edge(clock);
+        epoch_gate_fault <= '1';
+        wait for 1 ns;
+        assert abort_active = '1' and fifo_write = '0' and meta_write = '0'
+            report "RX epoch gate fault did not immediately fence sample/META writes"
+            severity failure;
+        wait until rising_edge(clock);
+        assert fifo_write = '0'
+            report "RX epoch gate fault allowed another sample FIFO write"
+            severity failure;
+        wait until falling_edge(clock);
+        samples <= (others => ZERO_SAMPLE);
+        epoch_gate_fault <= '0';
+        wait for 1 ns;
+        assert abort_active = '0'
+            report "RX epoch gate fault abort did not release for recovery"
+            severity failure;
+        for i in 1 to 3 loop wait until rising_edge(clock); end loop;
 
         -- With no sample writes, advance the watchdog to its terminal
         -- count. The next edge would latch START_NO_PROGRESS. Assert the
