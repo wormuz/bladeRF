@@ -108,7 +108,9 @@ static inline bool nios_pkt_retune2_route_valid(bladerf_module module,
                                                 uint8_t spdt)
 {
     if (module == BLADERF_MODULE_RX) {
-        return (port == 0x80 && spdt == 0x00) ||
+        /* RX shutdown and high-band both select the A input port; their
+         * distinct switch settings distinguish the generated profiles. */
+        return (port == 0x83 && spdt == 0x00) ||
                (port == 0x8c && spdt == 0x0a) ||
                (port == 0x83 && spdt == 0x05);
     }

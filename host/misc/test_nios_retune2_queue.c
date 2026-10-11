@@ -815,11 +815,12 @@ int main(void)
         return 1;
     }
 
-    if (!nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x80, 0x00) ||
+    if (!nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x00) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x8c, 0x0a) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x05) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x00, 0x00) ||
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x40, 0xa0) ||
+        nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x80, 0x00) ||
         nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x84, 0x05) ||
         nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, 0x83, 0x0a) ||
         nios_pkt_retune2_route_valid(BLADERF_MODULE_TX, 0x80, 0x50) ||
