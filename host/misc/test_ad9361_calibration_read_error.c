@@ -2903,6 +2903,30 @@ int main(void)
         phy.clk_refin = &clock_nodes[BB_REFCLK];
         phy.bbpll_initialized = true;
 
+        /* An out-of-range RFPLL round-rate error must remain an error; it
+         * must not become an unsigned LO rate and reach the SPI writer. */
+        {
+            uint32_t saved_rxpll_rate = clock_nodes[RX_RFPLL].rate;
+            uint32_t saved_rxpll_request = phy.rfpll_requested[0];
+            bool saved_rxpll_request_valid = phy.rfpll_requested_valid[0];
+            bool saved_rx_source_valid = phy.rfpll_source_valid[0];
+            unsigned writes_before = write_count;
+
+            phy.rfpll_source_valid[0] = true;
+            ret = ad9361_set_rx_lo_freq(&phy, 7000000000ULL);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Out-of-range RX LO request reached RFPLL programming: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            clock_nodes[RX_RFPLL].rate = saved_rxpll_rate;
+            phy.rfpll_requested[0] = saved_rxpll_request;
+            phy.rfpll_requested_valid[0] = saved_rxpll_request_valid;
+            phy.rfpll_source_valid[0] = saved_rx_source_valid;
+        }
+
         fail_write_reg = REG_CP_CURRENT;
         ret = clk_set_rate(&phy, bbpll, 960000000);
         if (ret != -EIO || clock_nodes[BBPLL_CLK].rate != 0 ||
