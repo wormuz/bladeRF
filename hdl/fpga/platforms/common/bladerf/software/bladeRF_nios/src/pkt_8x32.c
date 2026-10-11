@@ -349,14 +349,29 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 #ifdef RF_LINK_CFG_BASE
             switch (addr) {
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_SPEED:
+                    if (data > 1) {
+                        return false;
+                    }
                     return rf_link_cfg_set_speed(data != 0);
                 case NIOS_PKT_8x32_RF_LINK_CMD_SET_TAG:
+                    if (data > UINT8_MAX) {
+                        return false;
+                    }
                     return rf_link_cfg_set_epoch_tag((uint8_t)data);
                 case NIOS_PKT_8x32_RF_LINK_CMD_START:
+                    if (data != 0) {
+                        return false;
+                    }
                     return rf_link_cfg_start();
                 case NIOS_PKT_8x32_RF_LINK_CMD_STOP:
+                    if (data != 0) {
+                        return false;
+                    }
                     return rf_link_cfg_stop();
                 case NIOS_PKT_8x32_RF_LINK_CMD_CLEAR_FAULTS:
+                    if (data != 0) {
+                        return false;
+                    }
                     return rf_link_cfg_clear_faults();
                 default:
                     DBG("Invalid RF link command: 0x%x\n", addr);
@@ -378,10 +393,19 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
     defined(RX_EPOCH_TS_LO_BASE) && defined(RX_EPOCH_TS_HI_BASE)
             switch (addr) {
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_ARM:
+                    if (data > UINT8_MAX) {
+                        return false;
+                    }
                     return rx_epoch_arm((uint8_t)data);
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE:
+                    if (data != 0) {
+                        return false;
+                    }
                     return rx_epoch_complete();
                 case NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT:
+                    if (data != 0) {
+                        return false;
+                    }
                     return rx_epoch_abort();
                 default:
                     DBG("Invalid RX epoch command: 0x%x\n", addr);
@@ -418,6 +442,9 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     return false;
 #endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ARM:
+                    if (data > 1) {
+                        return false;
+                    }
 #if defined(TX_RETUNE_GATE_TARGET_LO_BASE) && defined(TX_RETUNE_GATE_TARGET_HI_BASE)
                     return tx_retune_gate_arm(
                         ((uint64_t)IORD_ALTERA_AVALON_PIO_DATA(
@@ -428,12 +455,18 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     return false;
 #endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE:
+                    if (data != 0) {
+                        return false;
+                    }
 #ifdef TX_RETUNE_GATE_CTRL_BASE
                     return tx_retune_gate_complete();
 #else
                     return false;
 #endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT:
+                    if (data != 0) {
+                        return false;
+                    }
 #ifdef TX_RETUNE_GATE_CTRL_BASE
                     return tx_retune_gate_abort();
 #else
