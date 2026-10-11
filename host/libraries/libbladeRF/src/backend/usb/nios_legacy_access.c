@@ -191,7 +191,7 @@ int nios_legacy_config_read(struct bladerf *dev, uint32_t *val)
 
     status = nios_legacy_pio_read(dev, NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, val);
     if (status == 0) {
-        log_verbose("%s: 0x%08x\n", __FUNCTION__, val);
+        log_verbose("%s: 0x%08x\n", __FUNCTION__, *val);
     }
 
     return status;
@@ -677,7 +677,7 @@ int nios_legacy_expansion_gpio_read(struct bladerf *dev, uint32_t *val)
     int status = nios_legacy_pio_read(dev, NIOS_PKT_LEGACY_PIO_ADDR_EXP, val);
 
     if (status == 0) {
-        log_verbose("%s: 0x%08x\n", __FUNCTION__, val);
+        log_verbose("%s: 0x%08x\n", __FUNCTION__, *val);
     }
 
     return status;
@@ -710,7 +710,7 @@ int nios_legacy_expansion_gpio_dir_read(struct bladerf *dev, uint32_t *val)
                                       NIOS_PKT_LEGACY_PIO_ADDR_EXP_DIR, val);
 
     if (status == 0) {
-        log_verbose("%s: 0x%08x\n", __FUNCTION__, val);
+        log_verbose("%s: 0x%08x\n", __FUNCTION__, *val);
     }
 
     return status;
