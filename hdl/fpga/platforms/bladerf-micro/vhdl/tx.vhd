@@ -340,6 +340,11 @@ begin
                 retune_gate_resume_seen <= '0';
                 retune_gate_arm_ack_seen <= retune_gate_arm_ack_toggle;
             else
+                -- The gate controller re-baselines its retained NIOS ARM
+                -- toggle after TX reset. Keep this status level aligned even
+                -- before the next ARM pulse, so a fresh 1->0 command is still
+                -- observable to the host's before/after toggle comparison.
+                retune_gate_arm_ack_seen <= retune_gate_arm_ack_toggle;
                 if retune_gate_mute_event = '1' then
                     retune_gate_mute_seen <= '1';
                 end if;
