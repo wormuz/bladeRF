@@ -1747,7 +1747,8 @@ static void *rx_fault_monitor_task(void *arg)
                                                 valid = false;
                                             board_data->tx_retune2_pending_count--;
                                             board_data->tx_retune2_completion_faulted =
-                                                true;
+                                                bladerf2_retune_completion_unresolved(
+                                                    board_data->tx_retune2_pending_count);
                                             board_data->tx_retune2_applied_frequency_hz =
                                                 readback_frequency_hz;
                                             board_data->tx_retune2_applied_waiting_rf_valid =

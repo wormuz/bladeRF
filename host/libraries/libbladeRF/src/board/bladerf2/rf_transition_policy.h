@@ -124,6 +124,15 @@ static inline bool bladerf2_retune_completion_batch_valid(
     return completed <= ring_depth && completed <= pending;
 }
 
+/* A matched completion batch remains unresolved while any accepted request
+ * is still pending. Once the final record is matched, the caller may proceed
+ * to RFIC-valid checks and gate release. */
+static inline bool bladerf2_retune_completion_unresolved(
+    uint8_t pending_after_match)
+{
+    return pending_after_match != 0;
+}
+
 static inline bool bladerf2_retune_completion_matches(
     uint64_t requested_timestamp, uint64_t requested_frequency_hz,
     uint16_t requested_profile, uint64_t completed_timestamp,
