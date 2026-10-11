@@ -10,9 +10,12 @@ static bool nios_response_matches_request(const uint8_t *request,
 {
     if (request[0] == NIOS_PKT_LEGACY_MAGIC) {
         /* Legacy peripheral failures are valid completed responses with a
-         * distinct marker; nios_legacy_access maps that marker to FPGA_OP. */
-        return response[0] == NIOS_PKT_LEGACY_MAGIC ||
-               response[0] == NIOS_PKT_LEGACY_ERROR_MAGIC;
+         * distinct marker; nios_legacy_access maps that marker to FPGA_OP.
+         * The configuration byte is echoed and identifies direction,
+         * peripheral, and pair count. */
+        return (response[0] == NIOS_PKT_LEGACY_MAGIC ||
+                response[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) &&
+               response[1] == request[1];
     }
 
     if (request[0] != response[0]) {
