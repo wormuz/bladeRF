@@ -99,6 +99,8 @@ static void test_sync_tx_x2_timestamp_units(void)
     assert(sync_timestamp_delta_to_samples(UINT64_MAX, 2, 11) == 11);
     assert(sync_samples_to_timestamp_delta(6, 2) == 3);
     assert(sync_samples_to_timestamp_delta(6, 1) == 6);
+    assert(sync_format_count_aligned(BLADERF_FORMAT_PACKET_META, 5, 2));
+    assert(!sync_format_count_aligned(BLADERF_FORMAT_SC16_Q11_META, 5, 2));
 }
 
 static void test_async_packet_meta_tx_length_is_bounded(void)
@@ -127,6 +129,35 @@ static void test_async_packet_meta_tx_length_is_bounded(void)
     metadata.actual_count = METADATA_HEADER_SIZE / sizeof(uint32_t) - 1;
     assert(async_tx_packet_meta_transfer_length(
                &stream, &metadata, &length_bytes) == BLADERF_ERR_CALLBACK);
+}
+
+static void test_sync_packet_meta_tx_length_includes_header(void)
+{
+    struct bladerf_sync sync = {0};
+    uint32_t payload[5] = {0};
+    size_t length_bytes = 0;
+
+    assert(metadata_tx_packet_payload_length_bytes(32, 4, &length_bytes));
+    assert(length_bytes == 32);
+    assert(!metadata_tx_packet_payload_length_bytes(32, 5, &length_bytes));
+    assert(metadata_tx_packet_payload_length_bytes(
+        (size_t)(UINT16_MAX + 4u) * sizeof(uint32_t), UINT16_MAX,
+        &length_bytes));
+    assert(length_bytes == (size_t)(UINT16_MAX + 4u) * sizeof(uint32_t));
+    assert(!metadata_tx_packet_payload_length_bytes(
+        (size_t)(UINT16_MAX + 5u) * sizeof(uint32_t), UINT16_MAX + 1u,
+        &length_bytes));
+
+    /* Five DWORDs are a valid opaque packet length for X2. The API must
+     * reject it for exceeding the allocated buffer, before taking locks or
+     * writing the 16-byte packet header and payload. */
+    sync.initialized = true;
+    sync.stream_config.format = BLADERF_FORMAT_PACKET_META;
+    sync.stream_config.layout = BLADERF_TX_X2;
+    sync.stream_config.samples_per_buffer = 8;
+    sync.stream_config.bytes_per_sample = sizeof(uint32_t);
+    sync.meta.samples_per_ts = 2;
+    assert(sync_tx(&sync, payload, 5, NULL, 0) == BLADERF_ERR_MEM);
 }
 
 static void test_rx_packet_meta_length_is_bounded_by_transfer(void)
@@ -3021,6 +3052,7 @@ int main(void)
 {
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
+    test_sync_packet_meta_tx_length_includes_header();
     test_rx_packet_meta_length_is_bounded_by_transfer();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();

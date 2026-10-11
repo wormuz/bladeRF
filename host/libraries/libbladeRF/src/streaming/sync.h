@@ -219,6 +219,16 @@ static inline bool sync_sample_count_aligned(unsigned int num_samples,
     return samples_per_ts != 0 && num_samples % samples_per_ts == 0;
 }
 
+/* PACKET_META lengths count DWORDs, not lane samples; X2 does not impose a
+ * pair boundary on an opaque digital packet payload. */
+static inline bool sync_format_count_aligned(bladerf_format format,
+                                             unsigned int num_samples,
+                                             unsigned int samples_per_ts)
+{
+    return format == BLADERF_FORMAT_PACKET_META ||
+           sync_sample_count_aligned(num_samples, samples_per_ts);
+}
+
 /* Convert a timestamp delta to an available number of lane samples without
  * overflowing the multiplication when the requested gap is very large. */
 static inline unsigned int sync_timestamp_delta_to_samples(

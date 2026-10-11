@@ -1165,7 +1165,8 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
         return BLADERF_ERR_INVAL;
     }
 
-    if (!sync_sample_count_aligned(num_samples, s->meta.samples_per_ts)) {
+    if (!sync_format_count_aligned(s->stream_config.format, num_samples,
+                                   s->meta.samples_per_ts)) {
         log_debug("%s: %u samples %% %u channels != 0\n",
                   __FUNCTION__, num_samples, s->meta.samples_per_ts);
         return BLADERF_ERR_INVAL;
@@ -2630,6 +2631,7 @@ int sync_tx(struct bladerf_sync *s,
         FIELD_INIT(.flush, false), FIELD_INIT(.zero_pad, false),
     };
     uint64_t call_start_ns = 0;
+    size_t packet_length_bytes = 0;
 
     log_verbose("%s: called for %u samples.\n", __FUNCTION__, num_samples);
 
@@ -2638,12 +2640,28 @@ int sync_tx(struct bladerf_sync *s,
         return BLADERF_ERR_INVAL;
     }
 
-    /* TX_X2 data is interleaved as paired lane samples. In META formats the
-     * timestamp advances once per pair, so accepting an odd count would
-     * truncate timestamp advancement and leave the next call on the wrong
-     * lane boundary. Reject it before changing burst state or copying IQ. */
-    if (!sync_sample_count_aligned(num_samples, s->meta.samples_per_ts)) {
+    /* TX_X2 data is interleaved as paired lane samples. In sample-META
+     * formats the timestamp advances once per pair, so accepting an odd count
+     * would truncate timestamp advancement. PACKET_META counts opaque DWORDs
+     * and has no lane-pair alignment requirement. */
+    if (!sync_format_count_aligned(s->stream_config.format, num_samples,
+                                   s->meta.samples_per_ts)) {
         return BLADERF_ERR_INVAL;
+    }
+
+    if (s->stream_config.format == BLADERF_FORMAT_PACKET_META) {
+        size_t buffer_bytes;
+        if (size_multiplication_overflows(
+                s->stream_config.samples_per_buffer,
+                s->stream_config.bytes_per_sample)) {
+            return BLADERF_ERR_INVAL;
+        }
+        buffer_bytes = (size_t)s->stream_config.samples_per_buffer *
+                       s->stream_config.bytes_per_sample;
+        if (!metadata_tx_packet_payload_length_bytes(
+                buffer_bytes, num_samples, &packet_length_bytes)) {
+            return BLADERF_ERR_MEM;
+        }
     }
 
     if (timeout_ms != 0) {
@@ -3071,9 +3089,10 @@ int sync_tx(struct bladerf_sync *s,
 
                 buf_dest = (uint8_t *)b->buffers[b->prod_i];
 
-                memcpy(buf_dest + METADATA_HEADER_SIZE, samples_src, num_samples*4);
+                memcpy(buf_dest + METADATA_HEADER_SIZE, samples_src,
+                       packet_length_bytes - METADATA_HEADER_SIZE);
 
-                b->actual_lengths[b->prod_i] = samples2bytes(s, num_samples) + METADATA_HEADER_SIZE;
+                b->actual_lengths[b->prod_i] = packet_length_bytes;
 
                 metadata_set_packet(buf_dest, 0, 0, num_samples, 0, 0);
 

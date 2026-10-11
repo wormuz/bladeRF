@@ -19,6 +19,7 @@
 #ifndef STREAMING_METADATA_H_
 #define STREAMING_METADATA_H_
 
+#include <limits.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -122,6 +123,24 @@ static inline bool metadata_tx_packet_length_bytes(
 
     *length_bytes = (size_t)actual_count * sizeof(uint32_t);
     return true;
+}
+
+/* Synchronous PACKET_META takes a payload length in DWORDs and creates the
+ * four-DWORD header itself. Bound the complete packet against its allocated
+ * transfer buffer and the payload's uint16_t header field before writing. */
+static inline bool metadata_tx_packet_payload_length_bytes(
+    size_t buffer_bytes, unsigned int payload_dwords, size_t *length_bytes)
+{
+    const size_t header_dwords = METADATA_HEADER_SIZE / sizeof(uint32_t);
+
+    if (header_dwords > UINT_MAX || payload_dwords > UINT16_MAX ||
+        payload_dwords > UINT_MAX - header_dwords) {
+        return false;
+    }
+
+    return metadata_tx_packet_length_bytes(
+        buffer_bytes, payload_dwords + (unsigned int)header_dwords,
+        length_bytes);
 }
 
 /* RX sample-META epoch tag occupies the otherwise unused first dword.
