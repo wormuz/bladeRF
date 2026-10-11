@@ -18,6 +18,17 @@ static uint32_t fenced_status_word(uint8_t state, uint8_t epoch_id)
 
 int main(void)
 {
+    assert(nios_pkt_8x32_rx_epoch_status_is_fenced(
+        status_word(NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING, 0x18) |
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE,
+        0x18));
+    assert(!nios_pkt_8x32_rx_epoch_status_is_fenced(
+        status_word(NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING, 0x18), 0x18));
+    assert(!nios_pkt_8x32_rx_epoch_status_is_fenced(
+        status_word(NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING, 0x17) |
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE,
+        0x18));
+
     assert(nios_pkt_8x32_rx_epoch_status_is_active(
         status_word(NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW, 0), 0));
     assert(nios_pkt_8x32_rx_epoch_status_is_active(

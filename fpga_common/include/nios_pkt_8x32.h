@@ -463,6 +463,7 @@
 #define NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK  0xFFu
 #define NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT    20
 #define NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK     0xFu
+#define NIOS_PKT_8x32_RX_EPOCH_STATUS_META_ENABLED   (1u << 18)
 #define NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE (1u << 19)
 
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE      0x0u
@@ -474,6 +475,24 @@
     NIOS_PKT_8x32_RX_EPOCH_STATE_WAIT_FIRST_SAMPLE
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW  0x3u
 #define NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR       0x4u
+
+/* RFIC writes may start only after the matching epoch is actually fenced.
+ * PENDING reports controller state; DISCARD_ACTIVE is the independent
+ * data-path acknowledgement that the gate is suppressing ADC IQ. */
+static inline bool nios_pkt_8x32_rx_epoch_status_is_fenced(
+    uint32_t status, uint8_t expected_epoch_id)
+{
+    const uint8_t state = (uint8_t)((status >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_STATE_MASK);
+    const uint8_t epoch_id = (uint8_t)((status >>
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+        NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+
+    return state == NIOS_PKT_8x32_RX_EPOCH_STATE_PENDING &&
+        epoch_id == expected_epoch_id &&
+        (status & NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE) != 0;
+}
 
 /* A transition is complete only when the gate is open for the exact epoch
  * armed by the host. ACTIVE alone is insufficient: it can describe a prior
