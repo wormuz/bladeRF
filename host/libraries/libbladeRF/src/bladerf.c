@@ -1431,6 +1431,34 @@ int bladerf_set_rf_port(struct bladerf *dev,
     if (!valid_public_channel(ch) || port == NULL) {
         return BLADERF_ERR_INVAL;
     }
+    if (dev->board != NULL && dev->board->get_rf_ports != NULL) {
+        const char *ports[8] = { NULL };
+        bool found = false;
+        int port_count;
+        unsigned int i;
+
+        WITH_MUTEX(&dev->lock, {
+            port_count = dev->board->get_rf_ports(
+                dev, ch, ports, sizeof(ports) / sizeof(ports[0]));
+        });
+        if (port_count < 0) {
+            return port_count;
+        }
+        /* The current bladeRF boards expose at most three names. If a future
+         * board reports a larger list, leave its validation to its setter. */
+        if (port_count > 0 && port_count <=
+                (int)(sizeof(ports) / sizeof(ports[0]))) {
+            for (i = 0; i < (unsigned int)port_count; i++) {
+                if (ports[i] != NULL && strcmp(ports[i], port) == 0) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                return BLADERF_ERR_INVAL;
+            }
+        }
+    }
     status = invalidate_rx_data_before_reconfigure(
         dev, ch, BLADERF_RF_INVALIDATE_RF_PORT);
     if (status != 0) {

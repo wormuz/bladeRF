@@ -362,11 +362,32 @@ static int mock_get_sample_rate_range(
     return 0;
 }
 
+static int mock_get_rf_ports(struct bladerf *dev, bladerf_channel ch,
+                             const char **ports, unsigned int count)
+{
+    static const char *const rx_ports[] = { "RXA", "RXB" };
+    static const char *const tx_ports[] = { "TXA", "TXB" };
+    const char *const *available = BLADERF_CHANNEL_IS_TX(ch)
+        ? tx_ports : rx_ports;
+    unsigned int i;
+    (void)dev;
+    if (ports != NULL) {
+        if (count > 2) {
+            count = 2;
+        }
+        for (i = 0; i < count; i++) {
+            ports[i] = available[i];
+        }
+    }
+    return 2;
+}
+
 static const struct board_fns mock_board = {
     .name = "bladerf2",
     .get_channel_count = mock_get_channel_count,
     .get_frequency_range = mock_get_frequency_range,
     .get_sample_rate_range = mock_get_sample_rate_range,
+    .get_rf_ports = mock_get_rf_ports,
     .invalidate_rx_data = mock_invalidate_rx,
     .rx_reconfigure_complete = mock_reconfigure_complete,
     .set_sample_rate = mock_set_sample_rate,
@@ -436,6 +457,8 @@ int main(void)
     assert(bladerf_set_frequency(&dev, rx0, 1) == BLADERF_ERR_RANGE);
     assert(bladerf_set_frequency(&dev, tx0, UINT64_MAX) == BLADERF_ERR_RANGE);
     assert(bladerf_set_sample_rate(&dev, rx0, 1, NULL) == BLADERF_ERR_RANGE);
+    assert(bladerf_set_rf_port(&dev, tx0, "not-a-port") ==
+           BLADERF_ERR_INVAL);
     assert(state.frequency_range_calls == 2);
     assert(state.sample_rate_range_calls == 1);
     assert(state.invalidate_calls == 0);
