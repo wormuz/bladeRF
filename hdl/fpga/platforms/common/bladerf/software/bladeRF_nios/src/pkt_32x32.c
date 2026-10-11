@@ -38,11 +38,10 @@ static inline bool perform_write(uint8_t id, uint32_t addr, uint32_t data)
                 uint32_t tmp = expansion_port_read();
                 tmp &= ~(addr);
                 tmp |= (data & addr);
-                expansion_port_write(tmp);
+                return expansion_port_write(tmp);
             } else {
-                expansion_port_write(data);
+                return expansion_port_write(data);
             }
-            break;
 
         case NIOS_PKT_32x32_TARGET_EXP_DIR:
             if (addr != 0xffffffff) {

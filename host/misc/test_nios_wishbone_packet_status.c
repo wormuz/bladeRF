@@ -10,10 +10,19 @@
 static bool wishbone_success;
 static bool expansion_direction_success;
 static uint32_t expansion_direction;
+static bool expansion_write_success;
+static uint32_t expansion_output;
 
-uint32_t expansion_port_read(void) { return 0; }
-void expansion_port_write(uint32_t data) { (void)data; }
-uint32_t expansion_port_get_direction(void) { return 0; }
+uint32_t expansion_port_read(void) { return expansion_output; }
+bool expansion_port_write(uint32_t data)
+{
+    if (expansion_write_success) {
+        expansion_output = data;
+    }
+    return (expansion_output & expansion_direction) ==
+           (data & expansion_direction);
+}
+uint32_t expansion_port_get_direction(void) { return expansion_direction; }
 bool expansion_port_set_direction(uint32_t data)
 {
     if (expansion_direction_success) {
@@ -128,10 +137,37 @@ static int check_expansion_direction_failure(void)
     return id == NIOS_PKT_32x32_TARGET_EXP_DIR && write && success ? 0 : 1;
 }
 
+static int check_expansion_data_failure(void)
+{
+    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    uint8_t id = 0;
+    uint32_t addr = 0, data = 0;
+    bool write = false, success = true;
+
+    expansion_direction = UINT32_MAX;
+    expansion_output = 0;
+    nios_pkt_32x32_pack(packet.req, NIOS_PKT_32x32_TARGET_EXP,
+                        true, UINT32_MAX, UINT32_C(0x87654321));
+    expansion_write_success = false;
+    pkt_32x32(&packet);
+    nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,
+                               &success);
+    if (id != NIOS_PKT_32x32_TARGET_EXP || !write || success) {
+        return 1;
+    }
+
+    expansion_write_success = true;
+    pkt_32x32(&packet);
+    nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,
+                               &success);
+    return id == NIOS_PKT_32x32_TARGET_EXP && write && success ? 0 : 1;
+}
+
 int main(void)
 {
     if (check_read_failure() || check_write_failure() ||
-        check_expansion_direction_failure()) {
+        check_expansion_direction_failure() ||
+        check_expansion_data_failure()) {
         fputs("NIOS operation failure was reported as packet success\n", stderr);
         return 1;
     }

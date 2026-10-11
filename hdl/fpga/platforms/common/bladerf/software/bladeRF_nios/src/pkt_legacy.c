@@ -366,8 +366,7 @@ static inline bool perform_config_write(enum config_param p,
             return adf4351_write((uint32_t) payload);
 
         case CONFIG_EXPANSION:
-            expansion_port_write(payload);
-            return true;
+            return expansion_port_write(payload);
 
         case CONFIG_EXPANSION_DIR:
             return expansion_port_set_direction(payload);

@@ -316,10 +316,10 @@ uint32_t expansion_port_read(void)
     return ret;
 }
 
-void expansion_port_write(uint32_t value)
+bool expansion_port_write(uint32_t value)
 {
     DBG("%s: value=0x%08x\n", __FUNCTION__, value);
-    ASSERT(value == 0x3c000800);
+    return value == 0x3c000800;
 }
 
 uint32_t expansion_port_get_direction()

@@ -208,11 +208,11 @@ void pkt_retune_init()
 #define BLADERF_XB_RX_ENABLE 0x2000
 #endif
 
-static void xb_config_write(uint8_t xb_gpio) {
+static bool xb_config_write(uint8_t xb_gpio) {
    uint32_t val;
    val = expansion_port_read();
    if (!(xb_gpio & LMS_FREQ_XB_200_ENABLE)) {
-      return;
+      return true;
    }
    if (xb_gpio & LMS_FREQ_XB_200_MODULE_RX) {
       val &= ~(0x30000000 | 0x30);
@@ -229,11 +229,15 @@ static void xb_config_write(uint8_t xb_gpio) {
                            >> LMS_FREQ_XB_200_PATH_SHIFT) & 3 ) << 2;
       val |= BLADERF_XB_TX_ENABLE;
    }
-   expansion_port_write(val);
+   if (!expansion_port_write(val)) {
+      return false;
+   }
 
    uint8_t reg;
    uint8_t lreg;
-   LMS_READ(NULL, 0x5A, &reg);
+   if (LMS_READ(NULL, 0x5A, &reg) != 0) {
+      return false;
+   }
 
 #define LMS_RX_SWAP 0x40
 #define LMS_TX_SWAP 0x08
@@ -245,9 +249,11 @@ static void xb_config_write(uint8_t xb_gpio) {
       lreg &= ~((xb_gpio & LMS_FREQ_XB_200_MODULE_RX) ? LMS_RX_SWAP : LMS_TX_SWAP);
    }
 
-   LMS_WRITE(NULL, 0x5A, lreg);
+   if (LMS_WRITE(NULL, 0x5A, lreg) != 0) {
+      return false;
+   }
 
-
+   return true;
 }
 
 static inline void perform_work(struct queue *q, bladerf_module module)
@@ -286,7 +292,9 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                     INCREMENT_ERROR_COUNT();
                 }
 
-                xb_config_write(e->freq.xb_gpio);
+                if (!xb_config_write(e->freq.xb_gpio)) {
+                    INCREMENT_ERROR_COUNT();
+                }
             }
 
             /* Drop the item from the queue */
@@ -364,7 +372,10 @@ void pkt_retune(struct pkt_buf *b)
                     goto out;
                 }
 
-                xb_config_write(xb_gpio);
+                if (!xb_config_write(xb_gpio)) {
+                    status = -1;
+                    goto out;
+                }
 
                 status = 0;
                 break;

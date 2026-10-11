@@ -455,7 +455,7 @@ INLINE uint32_t expansion_port_read(void);
  * @param   value   Port value to write. Writing to pins configured as input
  *                  does not affect their state.
  */
-INLINE void expansion_port_write(uint32_t value);
+INLINE bool expansion_port_write(uint32_t value);
 
 /**
  * Get the direction settings of the expansion port GPIOs

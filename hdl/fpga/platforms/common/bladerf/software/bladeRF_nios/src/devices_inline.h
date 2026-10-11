@@ -647,9 +647,11 @@ static inline uint32_t expansion_port_read(void)
     return IORD_ALTERA_AVALON_PIO_DATA(XB_GPIO_BASE);
 }
 
-INLINE void expansion_port_write(uint32_t value)
+INLINE bool expansion_port_write(uint32_t value)
 {
+    uint32_t output_mask = expansion_port_get_direction();
     IOWR_ALTERA_AVALON_PIO_DATA(XB_GPIO_BASE, value);
+    return (expansion_port_read() & output_mask) == (value & output_mask);
 }
 
 INLINE uint32_t expansion_port_get_direction()
