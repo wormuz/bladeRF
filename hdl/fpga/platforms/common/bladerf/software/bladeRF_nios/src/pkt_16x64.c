@@ -33,17 +33,23 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data)
     bool success = true;
 
     switch (id) {
-#ifdef BOARD_BLADERF_MICRO
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         case NIOS_PKT_16x64_TARGET_AD9361:
             return adi_spi_write(addr, data);
         case NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW:
+            /* The command payload encodes exactly four bytes. Reject a
+             * non-zero upper word instead of silently programming the row
+             * with a truncated payload. */
+            if ((data >> 32) != 0) {
+                return false;
+            }
             success = adi_spi_gain_table_row(
                 addr, (uint8_t)(data & 0xff),
                 (uint8_t)((data >> 8) & 0xff),
                 (uint8_t)((data >> 16) & 0xff),
                 (uint8_t)((data >> 24) & 0xff), 2);
             break;
-#endif  // BOARD_BLADERF_MICRO
+#endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
 
 #ifdef BLADERF_NIOS_LIBAD936X
         case NIOS_PKT_16x64_TARGET_RFIC:

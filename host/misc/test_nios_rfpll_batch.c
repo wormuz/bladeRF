@@ -19,6 +19,42 @@ static unsigned int update_calls;
 static bool update_success = true;
 static unsigned int read_calls;
 static bool read_success = true;
+static unsigned int gain_row_calls;
+
+bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
+                            uint8_t data3, uint8_t config,
+                            uint32_t delay_us)
+{
+    gain_row_calls++;
+    return row == 7 && data1 == 0x11 && data2 == 0x22 &&
+           data3 == 0x33 && config == 0x44 && delay_us == 2;
+}
+
+static int run_gain_row_case(uint64_t payload, bool expected_success,
+                             unsigned int expected_calls)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW,
+                 NIOS_PKT_16x64_FLAG_WRITE, 0, 7, 0,
+                 (uint8_t)payload, (uint8_t)(payload >> 8),
+                 (uint8_t)(payload >> 16), (uint8_t)(payload >> 24),
+                 (uint8_t)(payload >> 32), (uint8_t)(payload >> 40),
+                 (uint8_t)(payload >> 48), (uint8_t)(payload >> 56),
+                 0, 0 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false, success = false;
+
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW && write &&
+           addr == 7 && success == expected_success &&
+           gain_row_calls == expected_calls ? 0 : 1;
+}
 
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
 {
@@ -217,6 +253,8 @@ int main(void)
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
+        run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
+        run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
         run_epoch_snapshot_case() ||
