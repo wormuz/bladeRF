@@ -35,6 +35,7 @@
 
 #include "usb.h"
 #include "nios_access.h"
+#include "nios_completion_policy.h"
 #include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 
@@ -1152,6 +1153,12 @@ int nios_retune2_completion_read(struct bladerf *dev,
     }
     if (first_sequence != sequence || last_sequence != sequence) {
         return BLADERF_ERR_WOULD_BLOCK;
+    }
+    /* The completion record stores this field as uint16_t. Reject corrupt
+     * peripheral data instead of silently narrowing it to a plausible saved
+     * profile ID that could update the AD9361 fastlock cache incorrectly. */
+    if (!nios_retune_profile_word_valid(profile)) {
+        return BLADERF_ERR_UNEXPECTED;
     }
 
     *frequency_hz = ((uint64_t)hi << 32) | lo;
