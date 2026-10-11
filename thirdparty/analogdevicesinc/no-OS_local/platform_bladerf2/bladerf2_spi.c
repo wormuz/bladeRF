@@ -264,11 +264,18 @@ static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
             return 0;
         }
 
-        /* Old Nios images reject this packet target. Disable batching for
-         * this device session and replay the same row as ordinary ordered
-         * SPI writes so FPGA loading and legacy images keep working. A
-         * transport failure after partial execution is also safe: writing
-         * the same indexed table row again is idempotent. */
+        if (status != BLADERF_ERR_UNSUPPORTED) {
+            /* A timeout or transport failure makes command execution
+             * uncertain and may desynchronize the NIOS endpoint. Do not
+             * disguise it as lack of batch support or issue fallback writes;
+             * preserve the original failure for the caller. */
+            no_os_mutex_unlock(desc->bus->mutex);
+            return bladerf2_status_to_errno(status);
+        }
+
+        /* Only an explicit unsupported response means this image lacks the
+         * batch command. Remember that capability result and use the legacy
+         * ordered SPI sequence for the rest of this device session. */
         ctx->gain_table_batch = GAIN_TABLE_BATCH_UNSUPPORTED;
         log_debug("Gain-table row batching unavailable (%s); using SPI fallback\n",
                   bladerf_strerror(status));
