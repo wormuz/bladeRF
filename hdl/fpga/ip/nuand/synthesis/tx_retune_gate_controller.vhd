@@ -29,6 +29,7 @@ architecture rtl of tx_retune_gate_controller is
     signal control_wire_tx : std_logic_vector(95 downto 0);
     signal control_tx     : std_logic_vector(95 downto 0) := (others => '0');
     signal previous_toggles : std_logic_vector(2 downto 0) := (others => '0');
+    signal control_initialized : std_logic := '0';
 begin
     transfer : entity work.handshake
         generic map (DATA_WIDTH => 96)
@@ -72,6 +73,7 @@ begin
     begin
         if tx_reset = '1' then
             previous_toggles <= (others => '0');
+            control_initialized <= '0';
             arm <= '0';
             arm_immediate <= '0';
             arm_ack_toggle <= '0';
@@ -82,22 +84,34 @@ begin
             arm <= '0';
             complete <= '0';
             abort <= '0';
-            -- control_tx[95:64] is the PIO control word; [63:0] is
-            -- the timestamp mailbox. Decode command toggles from the
-            -- control word, never from low timestamp bits.
-            if control_tx(64) /= previous_toggles(0) then
-                arm <= '1';
-                arm_ack_toggle <= control_tx(64);
+            if acknowledge_tx = '1' and control_initialized = '0' then
+                -- FX3 SYS_RST resets the TX-clock decoder but leaves the
+                -- NIOS system and command PIOs running. Adopt the surviving
+                -- toggle levels as baseline; do not execute a command from
+                -- before reset recovery.
+                previous_toggles <= control_wire_tx(66 downto 64);
+                arm_ack_toggle <= control_wire_tx(64);
+                arm_immediate <= control_wire_tx(67);
+                target_timestamp <= unsigned(control_wire_tx(63 downto 0));
+                control_initialized <= '1';
+            else
+                -- control_tx[95:64] is the PIO control word; [63:0] is
+                -- the timestamp mailbox. Decode toggles from the control
+                -- word, never from low timestamp bits.
+                if control_tx(64) /= previous_toggles(0) then
+                    arm <= '1';
+                    arm_ack_toggle <= control_tx(64);
+                end if;
+                if control_tx(65) /= previous_toggles(1) then
+                    complete <= '1';
+                end if;
+                if control_tx(66) /= previous_toggles(2) then
+                    abort <= '1';
+                end if;
+                previous_toggles <= control_tx(66 downto 64);
+                arm_immediate <= control_tx(67);
+                target_timestamp <= unsigned(control_tx(63 downto 0));
             end if;
-            if control_tx(65) /= previous_toggles(1) then
-                complete <= '1';
-            end if;
-            if control_tx(66) /= previous_toggles(2) then
-                abort <= '1';
-            end if;
-            previous_toggles <= control_tx(66 downto 64);
-            arm_immediate <= control_tx(67);
-            target_timestamp <= unsigned(control_tx(63 downto 0));
         end if;
     end process;
 end architecture;

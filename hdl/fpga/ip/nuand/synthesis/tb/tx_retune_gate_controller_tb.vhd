@@ -55,15 +55,21 @@ begin
             assert found report "TX gate CDC command was lost" severity failure;
         end procedure;
     begin
+        -- Model the NIOS PIO retaining command toggles across FX3 SYS_RST.
+        control(2 downto 0) <= "111";
         wait for 50 ns;
         source_reset <= '0';
         tx_reset <= '0';
         wait for 200 ns;
+        assert arm = '0' and complete = '0' and abort = '0' and
+               arm_ack_toggle = '1'
+            report "stale TX command toggle replayed after reset"
+            severity failure;
 
         target_lo <= x"89abcdef";
         target_hi <= x"01234567";
         control(3) <= '0';
-        control(0) <= '1';
+        control(0) <= '0';
         wait_for(arm, '1');
         assert std_logic_vector(target) = x"0123456789abcdef"
             report "TX gate target was torn across CDC" severity failure;
@@ -71,17 +77,17 @@ begin
         assert complete = '0' and abort = '0'
             report "target timestamp bits generated control commands"
             severity failure;
-        assert arm_ack_toggle = '1'
+        assert arm_ack_toggle = '0'
             report "ARM acknowledgement did not match the captured toggle"
             severity failure;
         wait_for(arm, '0');
 
         target_lo <= x"00000002";
         target_hi <= x"00000003";
-        control(0) <= '0';
+        control(0) <= '1';
         wait_for(arm, '1');
         assert std_logic_vector(target) = x"0000000300000002" and
-               arm_ack_toggle = '0'
+               arm_ack_toggle = '1'
             report "back-to-back ARM acknowledgement was stale"
             severity failure;
         assert immediate = '0' and complete = '0' and abort = '0'
@@ -89,10 +95,10 @@ begin
             severity failure;
         wait_for(arm, '0');
 
-        control(1) <= '1';
+        control(1) <= '0';
         wait_for(complete, '1');
         wait_for(complete, '0');
-        control(2) <= '1';
+        control(2) <= '0';
         wait_for(abort, '1');
         report "TX gate controller CDC checks complete" severity note;
         wait;

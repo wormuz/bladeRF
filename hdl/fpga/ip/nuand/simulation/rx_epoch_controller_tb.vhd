@@ -95,14 +95,26 @@ begin
 
         variable command_word : std_logic_vector(31 downto 0) := (others => '0');
     begin
+        -- NIOS and its PIO survive FX3 SYS_RST. Preserve all command toggles
+        -- high across reset and make sure initialization adopts them as a
+        -- baseline instead of replaying stale requests.
+        command_word(2 downto 0) := "111";
+        command_word(15 downto 8) := x"7f";
+        command_word(16) := '1';
+        source_control <= command_word;
         wait for 50 ns;
         wait until falling_edge(rx_clock);
         source_reset <= '0';
         rx_reset <= '0';
+        wait for 200 ns;
+        assert arm = '0' and complete = '0' and abort = '0' and
+               gate_state = "0000" and discard_active = '0'
+            report "stale RX command toggle replayed after reset"
+            severity failure;
 
-        -- Arm epoch 0x31 through the actual asynchronous bundled handshake.
+        -- The fresh ARM toggles from the surviving high baseline to low.
         -- The ID and toggles must arrive together at the gate.
-        command_word(0) := '1';
+        command_word(0) := '0';
         command_word(15 downto 8) := x"31";
         command_word(16) := '1';
         issue(command_word, '1', '0', '0');
@@ -190,6 +202,27 @@ begin
                samples_out(1).data_i = to_signed(0, 16)
             report "bundled re-arm admitted IQ or retained the superseded ID"
             severity failure;
+
+        -- Reset while ABORT's PIO toggle remains high. Recovery must treat
+        -- the persistent word as baseline, then accept a genuinely new ARM.
+        source_reset <= '1';
+        rx_reset <= '1';
+        wait for 50 ns;
+        assert arm = '0' and complete = '0' and abort = '0'
+            report "RX command pulse remained asserted during reset"
+            severity failure;
+        wait until falling_edge(rx_clock);
+        source_reset <= '0';
+        rx_reset <= '0';
+        wait for 200 ns;
+        assert arm = '0' and complete = '0' and abort = '0' and
+               gate_state = "0000"
+            report "stale RX command toggle replayed after second reset"
+            severity failure;
+        command_word(0) := '1';
+        command_word(15 downto 8) := x"35";
+        issue(command_word, '1', '0', '0');
+        wait until gate_state = "0001" and gate_epoch_id = x"35";
 
         report "rx_epoch_controller_tb: PASS" severity note;
         stop;
