@@ -148,6 +148,13 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
+        -- A later queued request must not replace the already selected 65
+        -- tick boundary when it is written into the other target bank.
+        target_timestamp <= to_unsigned(70, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
         timestamp <= to_unsigned(64, 64);
         wait for 1 ns;
         assert state = "01" and muted = '0'
@@ -169,6 +176,47 @@ begin
         complete <= '0';
         assert state = "00" and muted = '0'
             report "TX gate failed to resume after earlier-target test"
+            severity failure;
+
+        -- After selecting one replacement bank, a still earlier request in
+        -- the now-inactive bank must become active and retain its boundary.
+        timestamp <= to_unsigned(50, 64);
+        target_timestamp <= to_unsigned(80, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= to_unsigned(65, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= to_unsigned(60, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        timestamp <= to_unsigned(59, 64);
+        wait for 1 ns;
+        assert state = "01" and muted = '0'
+            report "second earlier replacement muted before its boundary"
+            severity failure;
+        timestamp <= to_unsigned(60, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "second earlier replacement did not select its target bank"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(60, 64)
+            report "second earlier replacement boundary was not exact"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after repeated replacement test"
             severity failure;
 
         -- Modulo ordering must also choose the earlier boundary across the

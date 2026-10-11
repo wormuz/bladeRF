@@ -47,7 +47,15 @@ architecture rtl of tx_retune_gate is
     constant STATE_ERROR  : unsigned(1 downto 0) := "11";
 
     signal state_i : unsigned(1 downto 0) := STATE_ACTIVE;
-    signal target_i : unsigned(63 downto 0) := (others => '0');
+    signal target_bank0_i : unsigned(63 downto 0) := (others => '0');
+    signal target_bank1_i : unsigned(63 downto 0) := (others => '0');
+    signal target_bank_select_i : std_logic := '0';
+    signal target_reached_bank0_i : std_logic;
+    signal target_reached_bank1_i : std_logic;
+    signal target_reached_i : std_logic;
+    signal target_after_bank0_i : std_logic;
+    signal target_after_bank1_i : std_logic;
+    signal target_after_i : std_logic;
     signal immediate_i : std_logic := '0';
     signal muted_i : std_logic := '0';
     signal abort_i : std_logic;
@@ -55,25 +63,38 @@ architecture rtl of tx_retune_gate is
     signal muted_sample_count_i : unsigned(63 downto 0) := (others => '0');
 
     -- Equivalent to signed(current_ts - target_ts) >= 0 for the modulo
-    -- half-range contract. Compare 16-bit segments lexicographically instead
-    -- of subtracting timestamps; the subtract/sign implementation became a
-    -- routed carry chain on the path from the live counter to DAC data.
+    -- half-range contract. Compute the lower 48-bit borrow as a prefix over
+    -- three parallel 16-bit comparisons, then subtract only the upper word.
     function timestamp_reached(
         current_ts : unsigned(63 downto 0);
         target_ts  : unsigned(63 downto 0)
     ) return boolean is
+        variable borrow_16 : std_logic;
+        variable borrow_32 : std_logic;
+        variable borrow_48 : std_logic;
+        variable high_delta : unsigned(15 downto 0);
     begin
-        if current_ts(63) /= target_ts(63) then
-            return current_ts(63) = '0';
+        if current_ts(15 downto 0) < target_ts(15 downto 0) then
+            borrow_16 := '1';
+        else
+            borrow_16 := '0';
         end if;
-
-        return (current_ts(62 downto 48) > target_ts(62 downto 48)) or
-               ((current_ts(62 downto 48) = target_ts(62 downto 48)) and
-                ((current_ts(47 downto 32) > target_ts(47 downto 32)) or
-                 ((current_ts(47 downto 32) = target_ts(47 downto 32)) and
-                  ((current_ts(31 downto 16) > target_ts(31 downto 16)) or
-                   ((current_ts(31 downto 16) = target_ts(31 downto 16)) and
-                    (current_ts(15 downto 0) >= target_ts(15 downto 0)))))));
+        borrow_32 := '0';
+        if current_ts(31 downto 16) < target_ts(31 downto 16) or
+           (current_ts(31 downto 16) = target_ts(31 downto 16) and
+            borrow_16 = '1') then
+            borrow_32 := '1';
+        end if;
+        borrow_48 := '0';
+        if current_ts(47 downto 32) < target_ts(47 downto 32) or
+           (current_ts(47 downto 32) = target_ts(47 downto 32) and
+            borrow_32 = '1') then
+            borrow_48 := '1';
+        end if;
+        high_delta := current_ts(63 downto 48) -
+                      target_ts(63 downto 48) -
+                      resize(unsigned'(0 => borrow_48), high_delta'length);
+        return high_delta(15) = '0';
     end function;
 
     -- Strict modulo ordering for two scheduled timestamps. The caller's
@@ -98,6 +119,21 @@ architecture rtl of tx_retune_gate is
                     (left_ts(15 downto 0) > right_ts(15 downto 0)))))));
     end function;
 begin
+    -- Compare each target bank in parallel and select the one-bit result.
+    -- This keeps the bank selector out of the 64-bit timestamp comparator.
+    target_reached_bank0_i <= '1' when timestamp_reached(timestamp, target_bank0_i)
+                              else '0';
+    target_reached_bank1_i <= '1' when timestamp_reached(timestamp, target_bank1_i)
+                              else '0';
+    target_reached_i <= target_reached_bank1_i when target_bank_select_i = '1'
+                        else target_reached_bank0_i;
+    target_after_bank0_i <= '1' when timestamp_after(target_bank0_i, target_timestamp)
+                            else '0';
+    target_after_bank1_i <= '1' when timestamp_after(target_bank1_i, target_timestamp)
+                            else '0';
+    target_after_i <= target_after_bank1_i when target_bank_select_i = '1'
+                      else target_after_bank0_i;
+
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
     abort_i <= abort or underflow;
@@ -111,7 +147,7 @@ begin
                            timestamp_reached(timestamp, target_timestamp))) or
            state_i = STATE_MUTED or state_i = STATE_ERROR or
            (state_i = STATE_ARMED and
-            (immediate_i = '1' or timestamp_reached(timestamp, target_i))) then
+            (immediate_i = '1' or target_reached_i = '1')) then
             muted_i <= '1';
         else
             muted_i <= '0';
@@ -156,7 +192,9 @@ begin
     begin
         if reset = '1' then
             state_i <= STATE_ACTIVE;
-            target_i <= (others => '0');
+            target_bank0_i <= (others => '0');
+            target_bank1_i <= (others => '0');
+            target_bank_select_i <= '0';
             immediate_i <= '0';
             mute_start_timestamp_i <= (others => '0');
             mute_start_event <= '0';
@@ -164,7 +202,7 @@ begin
         elsif rising_edge(clock) then
             mute_start_event <= '0';
             resume_event <= '0';
-            due_now := timestamp_reached(timestamp, target_i);
+            due_now := target_reached_i = '1';
 
             if abort_i = '1' then
                 state_i <= STATE_ERROR;
@@ -174,7 +212,8 @@ begin
                 end if;
             elsif arm = '1' then
                 if state_i = STATE_ACTIVE then
-                    target_i <= target_timestamp;
+                    target_bank0_i <= target_timestamp;
+                    target_bank_select_i <= '0';
                     immediate_i <= arm_immediate;
                     if arm_immediate = '1' or
                        timestamp_reached(timestamp, target_timestamp) then
@@ -190,17 +229,23 @@ begin
                     -- briefly replay stale IQ while RFIC state is unknown.
                     -- A fresh ARM and later COMPLETE are both required to
                     -- resume the stream.
-                    target_i <= target_timestamp;
+                    target_bank0_i <= target_timestamp;
+                    target_bank_select_i <= '0';
                     immediate_i <= arm_immediate;
                     state_i <= STATE_MUTED;
                 elsif state_i = STATE_ARMED then
                     -- Requests are ordered by NIOS; retain the earliest
                     -- boundary so queued transitions cannot reopen a gap.
                     -- Keep the earliest requested boundary while a retune
-                    -- is already armed. Strict modulo ordering avoids a
-                    -- subtract-and-sign chain on the target-register mux.
-                    if timestamp_after(target_i, target_timestamp) then
-                        target_i <= target_timestamp;
+                    -- is already armed. Write data to the inactive bank so
+                    -- this comparator controls only the bank selector.
+                    if target_bank_select_i = '0' then
+                        target_bank1_i <= target_timestamp;
+                    else
+                        target_bank0_i <= target_timestamp;
+                    end if;
+                    if target_after_i = '1' then
+                        target_bank_select_i <= not target_bank_select_i;
                     end if;
                     if arm_immediate = '1' or due_now then
                         state_i <= STATE_MUTED;
