@@ -89,13 +89,39 @@ static bool nios_response_matches_request(const uint8_t *request,
     case NIOS_PKT_16x64_MAGIC: {
         uint8_t req_target, resp_target;
         uint16_t req_addr, resp_addr;
+        uint64_t req_data, resp_data;
         bool req_write, resp_write;
+
+        /* These fields are reserved by the packet ABI and are always zero in
+         * firmware-generated responses. Reject malformed or stale framing
+         * before trusting the echoed request identity. */
+        if ((response[NIOS_PKT_16x64_IDX_FLAGS] & 0xfcu) != 0 ||
+            response[NIOS_PKT_16x64_IDX_RESV1] != 0 ||
+            response[NIOS_PKT_16x64_IDX_RESV2] != 0 ||
+            response[NIOS_PKT_16x64_IDX_RESV2 + 1] != 0) {
+            return false;
+        }
+
         nios_pkt_16x64_unpack(request, &req_target, &req_write, &req_addr,
-                              NULL);
+                              &req_data);
         nios_pkt_16x64_unpack(response, &resp_target, &resp_write, &resp_addr,
-                              NULL);
-        return req_target == resp_target && req_write == resp_write &&
-               req_addr == resp_addr;
+                              &resp_data);
+        if (req_target != resp_target || req_write != resp_write ||
+            req_addr != resp_addr) {
+            return false;
+        }
+
+        /* Standard register and RFIC writes echo the complete payload. The
+         * batch and atomic-update commands return completion/result data in
+         * that field, so their payloads are validated by their callers. */
+        if (req_write &&
+            (req_target == NIOS_PKT_16x64_TARGET_AD9361 ||
+             req_target == NIOS_PKT_16x64_TARGET_RFIC ||
+             req_target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW)) {
+            return req_data == resp_data;
+        }
+
+        return true;
     }
     case NIOS_PKT_32x32_MAGIC: {
         uint8_t req_target, resp_target;
