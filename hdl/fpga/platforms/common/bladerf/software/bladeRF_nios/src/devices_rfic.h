@@ -77,6 +77,8 @@ struct rfic_state {
      * readback ambiguous. Keep getters fail-closed until a full setter
      * operation commits successfully. */
     bool samplerate_invalid[NUM_MODULES];
+    /* ADI bandwidth updates program RX and TX filter chains together. */
+    bool bandwidth_invalid[NUM_MODULES];
     bool filter_invalid[NUM_MODULES];
 
     /* LO frequency at the last RFDC_CAL run for this direction. ADI

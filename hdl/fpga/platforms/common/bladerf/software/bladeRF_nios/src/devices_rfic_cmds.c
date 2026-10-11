@@ -31,6 +31,7 @@
 
 #include "ad936x_helpers.h"
 #include "devices_rfic.h"
+#include "rfic_cache_validity.h"
 #include "rfic_calibration_policy.h"
 #include "rfic_frequency_policy.h"
 #include "rfic_init_policy.h"
@@ -163,10 +164,9 @@ static bool _rfic_deinitialize(struct rfic_state *state)
 {
     state->frequency_invalid[BLADERF_RX] = true;
     state->frequency_invalid[BLADERF_TX] = true;
-    state->samplerate_invalid[BLADERF_RX] = true;
-    state->samplerate_invalid[BLADERF_TX] = true;
-    state->filter_invalid[BLADERF_RX] = true;
-    state->filter_invalid[BLADERF_TX] = true;
+    rfic_cache_invalidate_all(state->samplerate_invalid, NUM_MODULES);
+    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+    rfic_cache_invalidate_all(state->filter_invalid, NUM_MODULES);
 
     /* Unset RFFE bits controlling RFIC */
     const bool rffe_cleared = _clear_rffe_ctrl();
@@ -230,6 +230,9 @@ static bool _rfic_initialize(struct rfic_state *state)
          * sequence establishes both directions before normal retunes resume. */
         state->frequency_invalid[BLADERF_RX] = true;
         state->frequency_invalid[BLADERF_TX] = true;
+        rfic_cache_invalidate_all(state->samplerate_invalid, NUM_MODULES);
+        rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+        rfic_cache_invalidate_all(state->filter_invalid, NUM_MODULES);
         rfic_rfdc_calibration_history_reset(
             &state->last_rfdc_calib_freq[BLADERF_RX]);
         rfic_rfdc_calibration_history_reset(
@@ -389,6 +392,11 @@ static bool _rfic_initialize(struct rfic_state *state)
 
     /* Update state */
     state->init_state = BLADERF_RFIC_INIT_STATE_ON;
+    if (!restore_standby_state) {
+        rfic_cache_validate_all(state->samplerate_invalid, NUM_MODULES);
+        rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
+        rfic_cache_validate_all(state->filter_invalid, NUM_MODULES);
+    }
     state->init_stage = BLADERF_RFIC_INIT_STAGE_DONE;
 
     DBG("*** RFIC Control Initialized ***\n");
@@ -697,11 +705,13 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
                              bladerf_channel channel,
                              uint32_t rate)
 {
-    bladerf_direction direction =
-        BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
     bool converter_available = false;
 
-    state->samplerate_invalid[direction] = true;
+    /* Either ADI setter regenerates both clock chains and reapplies both
+     * bandwidth filters. An interrupted transaction makes both readbacks
+     * uncertain until a subsequent complete setter commits. */
+    rfic_cache_invalidate_all(state->samplerate_invalid, NUM_MODULES);
+    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
 
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_set_tx_sampling_freq(state->phy, rate));
@@ -727,7 +737,8 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
         }
     }
 
-    state->samplerate_invalid[direction] = false;
+    rfic_cache_validate_all(state->samplerate_invalid, NUM_MODULES);
+    rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
     return true;
 }
 
@@ -746,7 +757,8 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
     bladerf_direction direction =
         BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
 
-    if (state->samplerate_invalid[direction]) {
+    if (!rfic_cache_read_is_valid(state->samplerate_invalid, NUM_MODULES,
+                                  direction)) {
         return false;
     }
 
@@ -903,11 +915,38 @@ bool _rfic_cmd_wr_bandwidth(struct rfic_state *state,
                             bladerf_channel channel,
                             uint32_t bandwidth)
 {
-    if (BLADERF_CHANNEL_IS_TX(channel)) {
+    bool bandwidth_cache_invalid =
+        state->bandwidth_invalid[BLADERF_RX] ||
+        state->bandwidth_invalid[BLADERF_TX];
+
+    /* The ADI bandwidth transaction updates RX and TX analog filters and
+     * may also run TX quadrature calibration. On any failed SPI step, neither
+     * direction has a trustworthy readback until a complete update succeeds. */
+    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+
+    if (bandwidth_cache_invalid) {
+        /* Public per-direction setters short-circuit when their requested
+         * value matches the last committed cache. After a failed partial
+         * write that cache is not proof of hardware state, so force the full
+         * two-direction filter/calibration transaction to recover it. */
+        uint32_t rx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
+                                    ? state->phy->current_rx_bw_Hz
+                                    : ad9361_validate_rf_bw(state->phy,
+                                                            bandwidth);
+        uint32_t tx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
+                                    ? ad9361_validate_rf_bw(state->phy,
+                                                            bandwidth)
+                                    : state->phy->current_tx_bw_Hz;
+
+        CHECK_BOOL(ad9361_update_rf_bandwidth(state->phy, rx_bandwidth,
+                                              tx_bandwidth));
+    } else if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_set_tx_rf_bandwidth(state->phy, bandwidth));
     } else {
         CHECK_BOOL(ad9361_set_rx_rf_bandwidth(state->phy, bandwidth));
     }
+
+    rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
 
     return true;
 }
@@ -924,6 +963,14 @@ bool _rfic_cmd_rd_bandwidth(struct rfic_state *state,
                             bladerf_channel channel,
                             uint32_t *bandwidth)
 {
+    bladerf_direction direction =
+        BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
+
+    if (!rfic_cache_read_is_valid(state->bandwidth_invalid, NUM_MODULES,
+                                  direction)) {
+        return false;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         CHECK_BOOL(ad9361_get_tx_rf_bandwidth(state->phy, bandwidth));
     } else {
