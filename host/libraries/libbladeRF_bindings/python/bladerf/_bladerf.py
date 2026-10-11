@@ -66,6 +66,8 @@ class ReturnCode(enum.Enum):
     PermissionError = -17
     WouldBlockError = -18
     NotInitError = -19
+    CallbackError = -20
+    AbortedError = -21
 
     def __str__(self):
         return self.name
@@ -660,6 +662,14 @@ class WouldBlockError(BladeRFError):
 
 class NotInitError(BladeRFError):
     """Device insufficiently initialized for operation"""
+
+
+class CallbackError(BladeRFError):
+    """An application stream callback failed"""
+
+
+class AbortedError(BladeRFError):
+    """An operation was aborted by device close"""
 
 
 class RFTransitionError(BladeRFError):

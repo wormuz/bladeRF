@@ -36,6 +36,8 @@ from bladerf import _bladerf
 from bladerf import _tool
 
 BladeRF = _bladerf.BladeRF
+AbortedError = _bladerf.AbortedError
+CallbackError = _bladerf.CallbackError
 Format = _bladerf.Format
 Metadata = _bladerf.Metadata
 QuickTune = _bladerf.QuickTune
@@ -63,7 +65,8 @@ CHANNEL_TX = _bladerf.CHANNEL_TX
 
 main = _tool.main
 
-__all__ = ['BladeRF', 'get_bootloader_list', 'get_device_list',
+__all__ = ['BladeRF', 'AbortedError', 'CallbackError',
+           'get_bootloader_list', 'get_device_list',
            'load_fw_from_bootloader', 'set_verbosity', 'version', 'RX', 'TX',
            'CHANNEL_RX', 'CHANNEL_TX', 'Format', 'Metadata', 'QuickTune',
            'RFEvent', 'RFEventType',
