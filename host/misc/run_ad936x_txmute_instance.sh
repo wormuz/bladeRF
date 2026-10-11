@@ -20,6 +20,7 @@ cc -std=gnu11 -DNUAND_MODIFICATIONS=1 -DLOG_INCLUDE_FILE_INFO \
   -I"$build_dir/host/common/include" \
   -I"$build_dir/common/include" \
   "$script_dir/test_ad936x_txmute_instance.c" \
+  "$bladerf_root/fpga_common/src/bladerf2_common.c" \
   -Wl,--gc-sections -o "$test_bin"
 
 "$test_bin"

@@ -39,11 +39,6 @@ int32_t ad9361_set_tx_attenuation(struct ad9361_rf_phy *phy, uint8_t ch,
     return 0;
 }
 
-int errno_ad9361_to_bladerf(int err)
-{
-    return err < 0 ? BLADERF_ERR_IO : 0;
-}
-
 struct band_port_map const *_get_band_port_map_by_freq(bladerf_channel ch,
                                                        bladerf_frequency freq)
 {
@@ -74,6 +69,11 @@ int main(void)
 
     fake_phys[0] = &first;
     fake_phys[1] = &second;
+    assert(errno_ad9361_to_bladerf(-EIO) == BLADERF_ERR_IO);
+    assert(errno_ad9361_to_bladerf(-ETIMEDOUT) == BLADERF_ERR_TIMEOUT);
+    assert(errno_ad9361_to_bladerf(-EINVAL) == BLADERF_ERR_INVAL);
+    assert(errno_ad9361_to_bladerf(-EAGAIN) == BLADERF_ERR_WOULD_BLOCK);
+    assert(errno_ad9361_to_bladerf(0) == 0);
     first.tx1_atten_cached = 20000;
     second.tx1_atten_cached = 30000;
     fake_attenuation[0][0] = 20000;

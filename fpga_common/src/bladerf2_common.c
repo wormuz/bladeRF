@@ -43,19 +43,19 @@ int errno_ad9361_to_bladerf(int err)
     }
 
     switch (err) {
-        case EIO:
+        case -EIO:
             return BLADERF_ERR_IO;
-        case EAGAIN:
+        case -EAGAIN:
             return BLADERF_ERR_WOULD_BLOCK;
-        case ENOMEM:
+        case -ENOMEM:
             return BLADERF_ERR_MEM;
-        case EFAULT:
+        case -EFAULT:
             return BLADERF_ERR_UNEXPECTED;
-        case ENODEV:
+        case -ENODEV:
             return BLADERF_ERR_NODEV;
-        case EINVAL:
+        case -EINVAL:
             return BLADERF_ERR_INVAL;
-        case ETIMEDOUT:
+        case -ETIMEDOUT:
             return BLADERF_ERR_TIMEOUT;
     }
 
