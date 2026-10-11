@@ -2585,6 +2585,8 @@ int bladerf_write_trigger(struct bladerf *dev,
 int bladerf_wishbone_master_read(struct bladerf *dev, uint32_t addr, uint32_t *data)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(data);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->wishbone_master_read(dev, addr, data);
@@ -2624,6 +2626,8 @@ int bladerf_wishbone_master_write(struct bladerf *dev, uint32_t addr, uint32_t d
 int bladerf_config_gpio_read(struct bladerf *dev, uint32_t *val)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(val);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->config_gpio_read(dev, val);
