@@ -352,20 +352,17 @@ class RFInvalidationReason(enum.IntEnum):
 
 class RFTransitionRequest(collections.namedtuple(
         "RFTransitionRequest", ["target_frequency_hz", "required_events_mask",
-                                 "timeout_ms", "require_rx_data_valid",
-                                 "epoch_settle_samples"])):
+                                 "timeout_ms", "require_rx_data_valid"])):
     __slots__ = ()
 
     def __new__(cls, target_frequency_hz,
                 required_events_mask=(RFTransitionRequirement.PLL_LOCKED |
                                       RFTransitionRequirement.ENSM_RX |
                                       RFTransitionRequirement.EPOCH_VALID),
-                timeout_ms=0, require_rx_data_valid=True,
-                epoch_settle_samples=0):
+                timeout_ms=0, require_rx_data_valid=True):
         return super(RFTransitionRequest, cls).__new__(
             cls, int(target_frequency_hz), int(required_events_mask),
-            int(timeout_ms), bool(require_rx_data_valid),
-            int(epoch_settle_samples))
+            int(timeout_ms), bool(require_rx_data_valid))
 
     def to_struct(self):
         request = ffi.new("struct bladerf_rx_transition_request *")
@@ -373,7 +370,9 @@ class RFTransitionRequest(collections.namedtuple(
         request.required_events_mask = self.required_events_mask
         request.timeout_ms = self.timeout_ms
         request.require_rx_data_valid = self.require_rx_data_valid
-        request.epoch_settle_samples = self.epoch_settle_samples
+        # Kept in the native struct for ABI compatibility; it is deprecated
+        # and has no validity semantics.
+        request.epoch_settle_samples = 0
         return request
 
 
