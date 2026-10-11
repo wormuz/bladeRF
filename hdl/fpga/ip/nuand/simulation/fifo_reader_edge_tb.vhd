@@ -30,8 +30,8 @@
 -- covers:
 --
 --   * counter started near all-ones, so timestamp + 2 wraps through zero
---   * a header of all-ones, which the OLD encoding used as the "now" sentinel
---     and the new one must treat as the furthest possible future
+--   * a header of all-ones, which is one tick before timestamp zero under the
+--     modulo half-range contract (only raw zero is the explicit TX_NOW code)
 --   * a header of zero, which must release immediately and must not depend on
 --     arithmetic overflow to do so
 --   * reset asserted while a scheduled burst is pending

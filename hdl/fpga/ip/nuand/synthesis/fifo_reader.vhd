@@ -179,6 +179,7 @@ architecture simple of fifo_reader is
 
     type meta_state_t is (
         META_LOAD,
+        META_EVAL,
         META_WAIT,
         META_DOWNCOUNT,
         ABORTED
@@ -197,6 +198,8 @@ architecture simple of fifo_reader is
         meta_time_go    : std_logic;
         meta_fifo_empty : std_logic;
         meta_fifo_data  : std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
+        meta_header     : unsigned(63 downto 0);
+        meta_header_valid : std_logic;
         -- Sign of the modulo-2^64 timestamp delta, split at 32 bits so the
         -- subtract carry chain stays short. Registered one cycle ahead using
         -- timestamp+2 and the raw header. Scheduled targets must be within
@@ -220,6 +223,8 @@ architecture simple of fifo_reader is
         meta_time_go    => '0',
         meta_fifo_empty => '1',
         meta_fifo_data  => (others => '0'),
+        meta_header     => (others => '0'),
+        meta_header_valid => '0',
         due_time        => '0',
         due_sentinel    => '0',
         due_combined    => '0'
@@ -531,43 +536,34 @@ begin
         -- timestamp" (2045 reads before the target instead of 0). This is the
         -- same defect commit 441b90a9 fixed. The subtraction must consume the
         -- header the FIFO is presenting now.
-        meta_time := unsigned(meta_fifo_data(95 downto 32)) - 1;
+        meta_time := meta_current.meta_header - 1;
         meta_future.meta_p_time_r <= meta_time;
 
         -- Precompute the modulo timestamp-due condition one cycle early.
         --
-        -- timestamp is a free-running counter incremented by exactly 1 each
-        -- clock (time_tamer.vhd), so the value it will hold when these
-        -- registered results are consumed is timestamp + 1. Comparing against
-        -- timestamp + 1 here therefore yields exactly the same answer the
-        -- unpipelined 64-bit compare would produce on that later cycle -- the
-        -- release cycle is unchanged, not delayed.
+        -- The FIFO header is captured in META_LOAD. In META_EVAL the result
+        -- is registered one cycle before META_WAIT consumes it, so compare
+        -- against timestamp + 1 to preserve the original release edge.
         --
         -- meta_p_time is constant for the whole of META_WAIT, and equals
         -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
         -- one cycle ahead of that capture is consistent for both states.
         -- Compare against the RAW header, not against (header - 1).
         --
-        -- The released condition is evaluated one cycle before it is used, so
-        -- the timestamp in force when the registered result is consumed is
-        -- timestamp + 1. Substituting that into the original test gives the
-        -- modulo delta (timestamp + 2) - header. Hence ts_next is timestamp
-        -- + 2 here, not + 1. Using + 1 releases one
-        -- cycle late: the bench reported 2000 reads instead of 2001, which is
-        -- the same signature as the deliberate off-by-one negative control.
-        ts_next := timestamp + 2;
+        ts_next := timestamp + 1;
         -- Compare the raw header using a low-half borrow and a 33-bit high-half
         -- delta. The sign bit is the sign of the full modulo-2^64 delta,
         -- without one 64-bit subtract/comparator carry chain. Keep reading the
-        -- header presented now; see the warning above the meta_time subtract.
+        -- registered header, keeping the M10K output off this path.
         --
         -- Sentinel: a raw header of 0 means "transmit now". Under the old form
         -- 0 - 1 wrapped to all ones and META_WAIT matched MAX_TIMESTAMP; under
         -- this form the explicit sentinel opens the gate independently of the
         -- modulo comparison. Both encodings remain covered by the testbench.
-        cmp_tgt := unsigned(meta_fifo_data(95 downto 32));
+        cmp_tgt := meta_current.meta_header;
 
-        if( ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
+        if( meta_current.meta_header_valid = '1' and
+            ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
             v_low_borrow := to_unsigned(1, v_low_borrow'length);
         else
             v_low_borrow := to_unsigned(0, v_low_borrow'length);
@@ -575,7 +571,8 @@ begin
         v_high_delta := ('0' & ts_next(63 downto 32)) -
                         ('0' & cmp_tgt(63 downto 32)) -
                         resize(v_low_borrow, v_high_delta'length);
-        if( v_high_delta(31) = '0' ) then
+        if( meta_current.meta_header_valid = '1' and
+            v_high_delta(31) = '0' ) then
             v_due_time := '1';
         else
             v_due_time := '0';
@@ -586,7 +583,7 @@ begin
         -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
         -- a header of zero here, not MAX_TIMESTAMP -- MAX_TIMESTAMP is what
         -- zero becomes after the -1 that produces meta_p_time.
-        if( cmp_tgt = 0 ) then
+        if( meta_current.meta_header_valid = '1' and cmp_tgt = 0 ) then
             v_due_sentinel := '1';
         else
             v_due_sentinel := '0';
@@ -612,27 +609,26 @@ begin
                     if( meta_current.meta_fifo_empty = '0' and (packet_en = '0' or
                                (packet_en = '1' and packet_ready = '1') ) ) then
                        meta_future.meta_read <= '1';
-                       meta_future.state     <= META_WAIT;
-                       -- "not due yet" reuses the registered halves instead of
-                       -- a second 64-bit compare. With H the raw header,
-                       --   meta_p_time_r > timestamp and /= META_NOW
-                       -- is H - 1 > ts and H /= 0, i.e. H >= ts + 2, which is
-                       -- exactly the negation of the due_* result computed
-                       -- against timestamp + 2. Checked against the old form
-                       -- over H in {0,1,2,4000} and ts around the boundary.
-                       --
-                       -- This matters because the old form started its borrow
-                       -- chain at the meta FIFO's M10K output: on seed 7 the
-                       -- worst path was memory -> Add1 -> LessThan2 -> the
-                       -- fifo_read / data_v enables, at -0.502 ns.
-                       if( packet_en = '1' or not (meta_current.due_combined = '1') ) then
-                             meta_future.meta_time_go  <= '0';
-                          else
-                             meta_future.meta_time_go  <= '1';
-                       end if;
+                       meta_future.meta_header <= unsigned(meta_current.meta_fifo_data(95 downto 32));
+                       meta_future.meta_header_valid <= '1';
+                       meta_future.state     <= META_EVAL;
+                       meta_future.meta_time_go <= '0';
                     else
                        meta_future.meta_time_go  <= '0';
                     end if;
+                end if;
+
+            when META_EVAL =>
+
+                -- The registered header is stable for this complete cycle;
+                -- due_combined is registered at the META_EVAL -> META_WAIT
+                -- edge and is consumed by META_WAIT.
+                meta_future.state <= META_WAIT;
+                if( packet_en = '1' or
+                    not (v_due_time = '1' or v_due_sentinel = '1') ) then
+                    meta_future.meta_time_go <= '0';
+                else
+                    meta_future.meta_time_go <= '1';
                 end if;
 
             when META_WAIT =>
@@ -645,7 +641,7 @@ begin
                 end if;
 
                 -- Consume the registered modulo-time decision and NOW
-                -- sentinel, computed a cycle earlier against timestamp + 2.
+                -- sentinel computed in META_EVAL.
                 if( meta_current.due_combined = '1'
                         and ( packet_en = '0' or ( packet_en = '1' and packet_ready = '1' ) ) ) then
                     meta_future.meta_time_go <= '1';

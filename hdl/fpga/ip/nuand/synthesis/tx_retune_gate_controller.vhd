@@ -82,18 +82,21 @@ begin
             arm <= '0';
             complete <= '0';
             abort <= '0';
-            if control_tx(0) /= previous_toggles(0) then
+            -- control_tx[95:64] is the PIO control word; [63:0] is
+            -- the timestamp mailbox. Decode command toggles from the
+            -- control word, never from low timestamp bits.
+            if control_tx(64) /= previous_toggles(0) then
                 arm <= '1';
-                arm_ack_toggle <= control_tx(0);
+                arm_ack_toggle <= control_tx(64);
             end if;
-            if control_tx(1) /= previous_toggles(1) then
+            if control_tx(65) /= previous_toggles(1) then
                 complete <= '1';
             end if;
-            if control_tx(2) /= previous_toggles(2) then
+            if control_tx(66) /= previous_toggles(2) then
                 abort <= '1';
             end if;
-            previous_toggles <= control_tx(2 downto 0);
-            arm_immediate <= control_tx(3);
+            previous_toggles <= control_tx(66 downto 64);
+            arm_immediate <= control_tx(67);
             target_timestamp <= unsigned(control_tx(63 downto 0));
         end if;
     end process;

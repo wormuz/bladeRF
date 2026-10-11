@@ -68,6 +68,9 @@ begin
         assert std_logic_vector(target) = x"0123456789abcdef"
             report "TX gate target was torn across CDC" severity failure;
         assert immediate = '0' report "future ARM became immediate" severity failure;
+        assert complete = '0' and abort = '0'
+            report "target timestamp bits generated control commands"
+            severity failure;
         assert arm_ack_toggle = '1'
             report "ARM acknowledgement did not match the captured toggle"
             severity failure;
@@ -80,6 +83,9 @@ begin
         assert std_logic_vector(target) = x"0000000300000002" and
                arm_ack_toggle = '0'
             report "back-to-back ARM acknowledgement was stale"
+            severity failure;
+        assert immediate = '0' and complete = '0' and abort = '0'
+            report "second target timestamp corrupted control state"
             severity failure;
         wait_for(arm, '0');
 

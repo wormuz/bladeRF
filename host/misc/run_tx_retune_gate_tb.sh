@@ -8,6 +8,7 @@ cd "${build_dir}"
 
 ghdl -a --std=08 \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/fifo_readwrite_p.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/synchronizer_model.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/handshake.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate_controller.vhd" \
@@ -24,9 +25,30 @@ ghdl -r --std=08 tx_retune_gate_controller_tb --assert-level=error \
 ghdl -a --std=08 \
     "${repo_root}/hdl/fpga/platforms/common/bladerf/vhdl/fx3_gpif_p.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/fifo_reader.vhd" \
-    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_reader_tb.vhd"
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_reader_tb.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_reader_edge_tb.vhd"
 
 ghdl -e --std=08 fifo_reader_tb
 ghdl -r --std=08 fifo_reader_tb --assert-level=error --stop-time=70us
 ghdl -r --std=08 fifo_reader_tb -gTGT=0 --assert-level=error \
     --stop-time=70us
+
+ghdl -e --std=08 fifo_reader_edge_tb
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=1 \
+    -gTS_START=1111111111111111111111111111111111111111111111111111111111110000 \
+    -gHDR_TIME=0000000000000000000000000000000000000000000000000000000000010000 \
+    -gEXPECT_RELEASE=false -gSTOP_AFTER_CYCLES=8
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=2 \
+    -gTS_START=1111111111111111111111111111111111111111111111111111111111110000 \
+    -gHDR_TIME=0000000000000000000000000000000000000000000000000000000000010000 \
+    -gEXPECT_RELEASE=true -gSTOP_AFTER_CYCLES=64
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=3 \
+    -gHDR_TIME=0000000000000000000000000000000000000000000000000000000000000000 \
+    -gEXPECT_RELEASE=true -gSTOP_AFTER_CYCLES=30
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=4 \
+    -gHDR_TIME=1111111111111111111111111111111111111111111111111111111111111111 \
+    -gEXPECT_RELEASE=true -gSTOP_AFTER_CYCLES=64
