@@ -271,8 +271,37 @@ static int check_legacy_malformed_packet_resets_config_write(void)
     packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 3;
     packet.req[3] = 0x05;
     pkt_legacy(&packet);
-    return control_reg_write_calls == initial_calls + 1 &&
-           control_reg_write_value == 0x05040302u ? 0 : 1;
+    if (control_reg_write_calls != initial_calls + 1 ||
+        control_reg_write_value != 0x05040302u) {
+        return 1;
+    }
+
+    /* A valid packet for another peripheral also interrupts a split config
+     * write; later config bytes must begin a fresh accumulation. */
+    packet.req[1] = write_cfg | 1;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
+    packet.req[3] = 0xaa;
+    pkt_legacy(&packet);
+    packet.req[1] = NIOS_PKT_LEGACY_MODE_DIR_READ |
+                    NIOS_PKT_LEGACY_DEV_LMS | 1;
+    packet.req[2] = 0x12;
+    lms_success = true;
+    pkt_legacy(&packet);
+    if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+
+    packet.req[1] = write_cfg | 3;
+    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
+    packet.req[3] = 0x02;
+    packet.req[4] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1;
+    packet.req[5] = 0x03;
+    packet.req[6] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2;
+    packet.req[7] = 0x04;
+    pkt_legacy(&packet);
+    if (control_reg_write_calls != initial_calls + 1) return 1;
+
+    packet.req[1] = write_cfg;
+    pkt_legacy(&packet);
+    return packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC ? 0 : 1;
 }
 
 static int check_8x16_write_failure(void)

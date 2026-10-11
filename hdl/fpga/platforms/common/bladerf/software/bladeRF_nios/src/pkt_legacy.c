@@ -128,16 +128,26 @@ static struct legacy_config_state config_write_state = {
     .last_param = CONFIG_UNKNOWN,
 };
 
-static void legacy_config_reset(void)
+static void legacy_config_read_reset(void)
 {
     config_read_state.payload = 0;
     config_read_state.n = 0;
     config_read_state.param = CONFIG_UNKNOWN;
     config_read_state.last_param = CONFIG_UNKNOWN;
+}
+
+static void legacy_config_write_reset(void)
+{
     config_write_state.payload = 0;
     config_write_state.n = 0;
     config_write_state.param = CONFIG_UNKNOWN;
     config_write_state.last_param = CONFIG_UNKNOWN;
+}
+
+static void legacy_config_reset(void)
+{
+    legacy_config_read_reset();
+    legacy_config_write_reset();
 }
 
 static inline enum config_param lookup_param(uint8_t addr)
@@ -514,6 +524,16 @@ void pkt_legacy(struct pkt_buf *b)
 
     DBG("%s: read=%s, write=%s, dev_id=0x%x, cfg=0x%x, count=0x%x\n", __FUNCTION__,
         is_read ? "true" : "false", is_write ? "true" : "false", dev_id, cfg, count);
+
+    /* A split config access is contiguous protocol state. Any intervening
+     * operation or direction change aborts it instead of allowing stale
+     * bytes to be combined with a later request. */
+    if (!is_read || dev_id != NIOS_PKT_LEGACY_DEV_CONFIG) {
+        legacy_config_read_reset();
+    }
+    if (!is_write || dev_id != NIOS_PKT_LEGACY_DEV_CONFIG) {
+        legacy_config_write_reset();
+    }
 
     if (count == 0) {
         /* The count is the number of address/data pairs. A zero-pair packet
