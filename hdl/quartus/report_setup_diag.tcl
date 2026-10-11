@@ -2,9 +2,9 @@
 #
 #   quartus_sta --64bit -t report_setup_diag.tcl -projname bladerf -rev sweep
 #
-# This report is intentionally path-level: aggregate slack changes alone do
-# not identify whether a new CDC register, memory placement, or an unrelated
-# high-fanout system path caused a regression.
+# Pair the compact endpoint summary with Quartus' full path detail: aggregate
+# slack changes alone do not identify whether a new CDC register, memory
+# placement, or an unrelated high-fanout system path caused a regression.
 
 set project_name "bladerf"
 set revision "sweep"
@@ -17,6 +17,9 @@ project_open -revision $revision $project_name
 create_timing_netlist -model slow -temperature 85 -voltage 1100
 read_sdc
 update_timing_netlist
+
+report_timing -setup -npaths 20 -detail full_path \
+    -file "${revision}.setup_paths.rpt"
 
 set index 0
 foreach_in_collection path [get_timing_paths -setup -npaths 20 -detail path_only] {
