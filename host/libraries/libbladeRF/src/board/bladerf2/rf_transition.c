@@ -4201,14 +4201,6 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                         epoch_status_word, status, 0);
             return _fail_transition(dev, board_data, status, final_event);
         }
-        _emit_event_with_timestamp(
-                   dev, board_data, BLADERF_RF_EVT_RX_EPOCH_VALID,
-                   BLADERF_RF_STATE_RX_DATA_VALID, 0, 0, epoch_status_word, 0,
-                   (epoch_status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT)
-                   & NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK,
-                   0, ((uint64_t)timestamp_hi << 32) | timestamp_lo,
-                   BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID);
-        _test_rx_transition_late_observation("LATE_HOST_ACTIVATE");
         struct rx_epoch_admission_context admission = {0};
         admission.board_data = board_data;
         admission.event.host_monotonic_ns = _monotonic_ns();
@@ -4227,6 +4219,7 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
             bladerf2_rx_epoch_admission_event_flags(
                 board_data->rf_transition_current_channel,
                 board_data->rf_transition_current_channel_valid);
+        _test_rx_transition_late_observation("LATE_HOST_ACTIVATE");
         status = sync_rx_epoch_activate_with_admission_before_deadline(
             &board_data->sync[BLADERF_RX], deadline_ns,
             _prepare_async_rx_epoch_admission,
@@ -4238,6 +4231,20 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                         epoch_status_word, status, expected_epoch_id);
             return _fail_transition(dev, board_data, status, final_event);
         }
+        /* Admission prepare appended RX_EPOCH_VALID while the async
+         * admission lock was held and, for sync RX, before releasing the
+         * parser latch. Keep the legacy state query in step after that
+         * atomic commit without emitting a second event. */
+        WITH_MUTEX(&dev->lock, {
+            if (board_data->rf_transition_current_id == transaction_id) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rf_transition_state =
+                    BLADERF_RF_STATE_RX_DATA_VALID;
+                board_data->rf_transition_last_event =
+                    board_data->rf_transition_certified_epoch_event;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
+        });
         log_debug("%s: epoch handoff transaction=%u complete_us=%.3f "
                   "status_reads=%u status_total_us=%.3f timestamp_lo_us=%.3f "
                   "timestamp_hi_us=%.3f sync_fence_us=%.3f\n",

@@ -75,6 +75,26 @@ static int transition(struct bladerf *dev,
                     event->error_code, elapsed_ns / 1e6);
             return BLADERF_ERR_UNEXPECTED;
         }
+        struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+        uint32_t event_count = 0;
+        bool history_complete = false;
+        status = bladerf_rx_transition_get_events(
+            dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+            &event_count, &history_complete);
+        if (status != 0 || !history_complete) {
+            fprintf(stderr, "%s timeout event history unavailable: %s "
+                    "complete=%d count=%u\n", stage,
+                    bladerf_strerror(status), history_complete, event_count);
+            return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+        }
+        for (uint32_t i = 0; i < event_count; ++i) {
+            if (events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
+                fprintf(stderr, "%s timeout exposed RX_EPOCH_VALID "
+                        "before host admission (txn=%u)\n", stage,
+                        transaction_id);
+                return BLADERF_ERR_UNEXPECTED;
+            }
+        }
         printf("%s positive timeout: PASS txn=%u elapsed_ms=%.3f\n",
                stage, transaction_id, elapsed_ns / 1e6);
         status = 0;

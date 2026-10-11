@@ -187,9 +187,24 @@ int bladerf2_rx_epoch_admission_prepare(
         board_data->rf_transition_first_valid_timestamp =
             epoch_event->fpga_timestamp;
         board_data->rf_transition_certified_epoch_event = *epoch_event;
+        board_data->rf_transition_certified_epoch_event.host_monotonic_ns =
+            monotonic_ns();
         board_data->rf_transition_rx_clipping_reported = 0;
         board_data->rf_transition_first_host_data_reported = false;
+        memset(&board_data->rf_transition_first_host_data_event, 0,
+               sizeof(board_data->rf_transition_first_host_data_event));
         board_data->rx_async_have_expected_timestamp = false;
+
+        /* Publish the positive certificate while the async admission lock
+         * is held. For sync RX, this callback runs under sync->lock and the
+         * generation lock, immediately before the parser latch is released.
+         * A timeout or admission failure therefore cannot expose a transient
+         * RX_EPOCH_VALID event for IQ that the host never admitted. */
+        MUTEX_LOCK(&board_data->rf_transition_event_lock);
+        bladerf2_rf_event_append_locked(
+            board_data, &board_data->rf_transition_certified_epoch_event);
+        MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+        COND_SIGNAL(&board_data->rx_async_epoch_cond);
     } else {
         *admission_lock_held = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
