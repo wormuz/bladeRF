@@ -1834,6 +1834,11 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_retune_counter_reset && !counter_reset &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
+                        /* bladerf_schedule_retune() holds dev->lock for its
+                         * complete reserve/ARM/enqueue sequence. Use the
+                         * same lock so a new schedule cannot land between
+                         * the release check and COMPLETE/RESUME processing. */
+                        MUTEX_LOCK(&dev->lock);
                         bool release_still_valid;
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         release_still_valid =
@@ -1917,11 +1922,30 @@ static void *rx_fault_monitor_task(void *arg)
                                 } else
 #endif
                                 {
-                                    release_status = nios_tx_retune_gate_cmd(
-                                        dev,
-                                        NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
+                                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                                    release_still_valid =
+                                        board_data->tx_retune2_applied_waiting_rf_valid &&
+                                        board_data->tx_retune2_pending_count == 0 &&
+                                        !board_data->tx_retune2_completion_faulted &&
+                                        !board_data->tx_gate_abort_pending &&
+                                        !board_data->tx_async_transport_faulted;
+                                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                                    if (release_still_valid &&
+                                        !gate_release_requested) {
+                                        release_status = nios_tx_retune_gate_cmd(
+                                            dev,
+                                            NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE);
+                                        if (release_status == 0) {
+                                            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                                            board_data->tx_retune_gate_release_requested = true;
+                                            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                                        }
+                                    } else {
+                                        release_status = BLADERF_ERR_WOULD_BLOCK;
+                                    }
                                 }
-                                if (release_status != 0) {
+                                if (release_status != 0 &&
+                                    release_status != BLADERF_ERR_WOULD_BLOCK) {
                                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                                     board_data->tx_retune2_applied_waiting_rf_valid = false;
                                     applied_frequency_hz =
@@ -1936,10 +1960,6 @@ static void *rx_fault_monitor_task(void *arg)
                                         dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                                         applied_frequency_hz,
                                         0, 0, release_status);
-                                } else {
-                                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                                    board_data->tx_retune_gate_release_requested = true;
-                                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 }
                             }
                         } else if (gate_state ==
@@ -1950,15 +1970,25 @@ static void *rx_fault_monitor_task(void *arg)
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             applied_frequency_hz =
                                 board_data->tx_retune2_applied_frequency_hz;
-                            board_data->tx_retune2_applied_waiting_rf_valid = false;
-                            board_data->tx_retune_gate_release_requested = false;
-                            resume_is_valid = !board_data->tx_gate_abort_pending &&
+                            /* A new schedule may have reserved a TX request
+                             * after COMPLETE but before this RESUME poll.
+                             * Its pending ledger invalidates this old resume
+                             * observation even if the FPGA status is ACTIVE. */
+                            resume_is_valid =
+                                board_data->tx_retune2_pending_count == 0 &&
+                                board_data->tx_retune2_applied_waiting_rf_valid &&
+                                !board_data->tx_gate_abort_pending &&
                                 !board_data->tx_async_transport_faulted &&
                                 bladerf2_rfic_frequency_model_valid(
                                     board_data->rfic_reference_clock_known,
                                     board_data->rfic_frequency_model_known);
                             if (resume_is_valid) {
+                                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                                board_data->tx_retune_gate_release_requested = false;
                                 board_data->tx_retune2_completion_faulted = false;
+                            } else if (board_data->tx_retune2_pending_count == 0) {
+                                board_data->tx_retune2_applied_waiting_rf_valid = false;
+                                board_data->tx_retune_gate_release_requested = false;
                             }
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             /* A successful RF configuration change closes
@@ -1977,6 +2007,7 @@ static void *rx_fault_monitor_task(void *arg)
                             }
                         }
                         }
+                        MUTEX_UNLOCK(&dev->lock);
                     }
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     tx_pending_after_completions =
