@@ -290,6 +290,26 @@ begin
         report "fifo_data port width too narrow to support " & integer'image(NUM_STREAMS) & " MIMO streams."
         severity failure;
 
+    -- This classifier is observed only while a link epoch is active. A
+    -- synchronous reset is sufficient because link_active_i is asynchronously
+    -- cleared by the main state process and START clears this bit before the
+    -- new epoch becomes active. Keeping reset off both the async clear and
+    -- this register's data cone avoids the fitted S102 same-source violation.
+    wrote_this_epoch_proc : process(clock)
+    begin
+        if rising_edge(clock) then
+            if reset = '1' then
+                wrote_this_epoch <= '0';
+            elsif link_start_toggle /= link_toggle_prev and enable = '1' and
+                  settle_count = 0 then
+                wrote_this_epoch <= '0';
+            elsif link_active_i = '1' and enable = '1' and
+                  rx_epoch_discard_active = '0' and fifo_write = '1' then
+                wrote_this_epoch <= '1';
+            end if;
+        end if;
+    end process;
+
     -- Speed Latch & Monitor: fix the USB speed used for buffer-size math
     -- on each new link epoch (toggle on link_start_toggle, not a level),
     -- hold it for the duration of the epoch, and sticky-flag any observed
@@ -317,7 +337,6 @@ begin
             fault_sticky_i     <= (others => '0');
             fault_context_i    <= (others => '0');
             progress_count     <= (others => '0');
-            wrote_this_epoch   <= '0';
             abort_active_i     <= '0';
             stop_toggle_prev   <= '0';
             clear_toggle_prev  <= '0';
@@ -374,7 +393,6 @@ begin
                 epoch_counter     <= epoch_counter + 1;
                 -- A new epoch restarts both watchdogs from nothing-seen.
                 progress_count    <= (others => '0');
-                wrote_this_epoch  <= '0';
                 fault_context_i   <= (others => '0');
             elsif( link_active_i = '1' ) then
                 if( usb_speed /= latched_usb_speed ) then
@@ -400,7 +418,6 @@ begin
                     progress_count   <= (others => '0');
                 elsif( fifo_write = '1' ) then
                     progress_count   <= (others => '0');
-                    wrote_this_epoch <= '1';
                 elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
                     -- Saturates instead of wrapping: once the top bit is
                     -- set the fault is latched, and a wrap would clear the

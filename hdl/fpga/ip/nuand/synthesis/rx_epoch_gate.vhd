@@ -360,8 +360,11 @@ begin
     -- waiting for the registered FSM state to advance one clock later.
     -- fifo_writer samples this signal on the edge, so a progress timeout
     -- coincident with ARM cannot be misreported as a transport stall.
-    out_discard_active <= '0' when reset = '1' else
-        '1' when (state = STATE_PENDING or
+    -- STATE_ACTIVE is asynchronously restored on reset, so this decode is
+    -- already low during reset. Avoid feeding reset directly into a CDC
+    -- snapshot data bit: that made Quartus flag the source register's D and
+    -- asynchronous clear as the same signal (Design Assistant S102).
+    out_discard_active <= '1' when (state = STATE_PENDING or
                   state = STATE_WAIT_FIRST_SAMPLE or
                   state = STATE_ERROR or
                   epoch_arm = '1' or epoch_abort = '1') else
