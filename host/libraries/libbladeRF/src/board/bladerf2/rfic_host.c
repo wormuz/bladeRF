@@ -247,25 +247,32 @@ init_fail:
 static int _rfic_host_deinitialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
+    int status;
 
     bladerf2_axi_io_set_dev(dev);
 
     log_debug("%s: deinitializing\n", __FUNCTION__);
 
-    CHECK_STATUS(_rfic_host_clear_rffe_control(dev));
+    status = _rfic_host_clear_rffe_control(dev);
 
-    if (NULL != board_data->phy) {
+    /* Keep the PHY alive if the RF path could not be disconnected. */
+    if (status >= 0 && NULL != board_data->phy) {
+        struct ad9361_rf_phy *phy = board_data->phy;
+
         /* ad9361_deinit() was a local addition; upstream provides
          * ad9361_remove(), which frees more: the clocks, the SPI and all four
          * GPIO descriptors on top of the data. It does not drive the part into
          * reset, but _rfic_host_clear_rffe_control() above already cleared the
-         * reset bit. */
-        CHECK_STATUS(ad9361_remove(board_data->phy));
+         * reset bit. The object is consumed even if a descriptor teardown
+         * reports an error, so clear its owner before propagating that error. */
         board_data->phy = NULL;
+        status = ad9361_remove(phy);
     }
 
+    board_data->rxfir_known = false;
+    board_data->txfir_known = false;
     bladerf2_axi_io_set_dev(NULL);
-    return 0;
+    return status;
 }
 
 static int _rfic_host_standby(struct bladerf *dev)
