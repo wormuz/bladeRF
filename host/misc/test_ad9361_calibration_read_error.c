@@ -1866,6 +1866,58 @@ int main(void)
 			return EXIT_FAILURE;
 		}
 	}
+        {
+            struct refclk_scale rx_mux = {
+                .spi = &spi, .phy = &phy, .source = RX_RFPLL,
+                .mult = INT_LO,
+            };
+            struct refclk_scale tx_mux = {
+                .spi = &spi, .phy = &phy, .source = TX_RFPLL,
+                .mult = INT_LO,
+            };
+            uint64_t lo_readback = UINT64_MAX;
+
+            fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+            state_after_ensm_write = ENSM_STATE_ALERT;
+            phy.rfpll_source_valid[0] = true;
+            phy.rfpll_source_valid[1] = true;
+            fail_write_once_reg = REG_ENSM_CONFIG_2;
+            fail_write_once_reg_occurrence = 2;
+            apply_failed_write_once = true;
+            ret = ad9361_clk_mux_set_parent(&rx_mux, EXT_LO);
+            fail_write_once_reg = -1;
+            if (ret != -EIO || phy.rfpll_source_valid[0] ||
+                rx_mux.mult != INT_LO ||
+                ad9361_get_rx_lo_freq(&phy, &lo_readback) != -EIO ||
+                lo_readback != UINT64_MAX) {
+                fprintf(stderr,
+                        "Partial RX LO mux update was exposed as valid\n");
+                return EXIT_FAILURE;
+            }
+
+            fail_write_once_reg = REG_ENSM_CONFIG_2;
+            fail_write_once_reg_occurrence = 2;
+            apply_failed_write_once = true;
+            ret = ad9361_clk_mux_set_parent(&tx_mux, EXT_LO);
+            fail_write_once_reg = -1;
+            if (ret != -EIO || phy.rfpll_source_valid[1] ||
+                tx_mux.mult != INT_LO ||
+                ad9361_get_tx_lo_freq(&phy, &lo_readback) != -EIO ||
+                lo_readback != UINT64_MAX) {
+                fprintf(stderr,
+                        "Partial TX LO mux update was exposed as valid\n");
+                return EXIT_FAILURE;
+            }
+
+            if (ad9361_clk_mux_set_parent(&rx_mux, EXT_LO) != 0 ||
+                ad9361_clk_mux_set_parent(&tx_mux, EXT_LO) != 0 ||
+                !phy.rfpll_source_valid[0] || !phy.rfpll_source_valid[1] ||
+                rx_mux.mult != EXT_LO || tx_mux.mult != EXT_LO) {
+                fprintf(stderr,
+                        "Successful LO mux recovery did not restore validity\n");
+                return EXIT_FAILURE;
+            }
+        }
         register_map_enabled = false;
     }
     /* Measurement and multi-register helpers must return transport errors
@@ -2817,6 +2869,7 @@ int main(void)
 
         phy.clks[RX_REFCLK] = &rx_refclk;
         phy.ref_clk_scale[RX_RFPLL_INT] = &rxpll;
+        phy.rfpll_source_valid[0] = true;
         phy.pdata->use_ext_rx_lo = false;
         phy.fastlock.current_profile[0] = 0;
         fail_read_reg = REG_RX_FRACT_BYTE_2;
