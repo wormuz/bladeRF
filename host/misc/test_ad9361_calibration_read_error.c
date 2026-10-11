@@ -605,32 +605,49 @@ int main(void)
         }
     }
 
-    /* A failed filter/calibration/tracking/ENSM step must leave the last
-     * fully accepted bandwidth in the software cache so a retry of the same
-     * request is not mistaken for a no-op. */
+    /* A failed filter/calibration/tracking/ENSM step preserves the last
+     * requested values for recovery, but marks them untrusted so a request
+     * matching those values cannot be mistaken for a hardware no-op. */
     {
         const uint32_t old_rx_bw = 18000000;
         const uint32_t old_tx_bw = 16000000;
+        uint32_t queried_bw = UINT32_C(0xdeadbeef);
         phy.current_rx_bw_Hz = old_rx_bw;
         phy.current_tx_bw_Hz = old_tx_bw;
+        phy.current_bw_valid = true;
         if (ad9361_commit_rf_bandwidth_cache_if_complete(
                 &phy, 20000000, 18000000, -EIO, 0, 0) != -EIO ||
             phy.current_rx_bw_Hz != old_rx_bw ||
             phy.current_tx_bw_Hz != old_tx_bw ||
+            phy.current_bw_valid ||
             ad9361_commit_rf_bandwidth_cache_if_complete(
                 &phy, 20000000, 18000000, 0, -EIO, 0) != -EIO ||
             phy.current_rx_bw_Hz != old_rx_bw ||
             phy.current_tx_bw_Hz != old_tx_bw ||
+            phy.current_bw_valid ||
             ad9361_commit_rf_bandwidth_cache_if_complete(
                 &phy, 20000000, 18000000, 0, 0, -EIO) != -EIO ||
             phy.current_rx_bw_Hz != old_rx_bw ||
             phy.current_tx_bw_Hz != old_tx_bw ||
+            phy.current_bw_valid ||
             ad9361_commit_rf_bandwidth_cache_if_complete(
                 &phy, 20000000, 18000000, 0, 0, 0) != 0 ||
             phy.current_rx_bw_Hz != 20000000 ||
-            phy.current_tx_bw_Hz != 18000000) {
+            phy.current_tx_bw_Hz != 18000000 ||
+            !phy.current_bw_valid) {
             fprintf(stderr,
                     "Bandwidth cache changed before full RF recovery success\n");
+            return EXIT_FAILURE;
+        }
+
+        phy.current_bw_valid = false;
+        queried_bw = UINT32_C(0xdeadbeef);
+        if (ad9361_get_rx_rf_bandwidth(&phy, &queried_bw) != -EIO ||
+            queried_bw != UINT32_C(0xdeadbeef) ||
+            ad9361_get_tx_rf_bandwidth(&phy, &queried_bw) != -EIO ||
+            queried_bw != UINT32_C(0xdeadbeef)) {
+            fprintf(stderr,
+                    "Untrusted bandwidth cache was exposed as hardware state\n");
             return EXIT_FAILURE;
         }
     }
