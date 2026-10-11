@@ -171,6 +171,43 @@ begin
             report "TX gate failed to resume after earlier-target test"
             severity failure;
 
+        -- Modulo ordering must also choose the earlier boundary across the
+        -- 64-bit wrap: FFFF...FFF0 precedes 0000...0010.
+        timestamp <= unsigned'(x"ffffffffffffff00");
+        target_timestamp <= to_unsigned(16, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= unsigned'(x"fffffffffffffff0");
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        timestamp <= unsigned'(x"ffffffffffffffef");
+        wait for 1 ns;
+        assert state = "01" and muted = '0'
+            report "wraparound replacement muted before the earlier target"
+            severity failure;
+        timestamp <= unsigned'(x"fffffffffffffff0");
+        wait for 1 ns;
+        assert muted = '1'
+            report "wraparound replacement failed to select earlier target"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and
+               mute_start_timestamp = unsigned'(x"fffffffffffffff0")
+            report "wraparound replacement boundary was not exact"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after wraparound test"
+            severity failure;
+
         -- The TX integration ORs FIFO underflow into ABORT so DAC muting
         -- does not wait for the host's periodic status monitor.
         underflow_event <= '1';

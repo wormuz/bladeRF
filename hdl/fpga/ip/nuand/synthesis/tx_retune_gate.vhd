@@ -88,6 +88,28 @@ architecture rtl of tx_retune_gate is
                       resize(unsigned'(0 => borrow_48), high_delta'length);
         return high_delta(15) = '0';
     end function;
+
+    -- Strict modulo ordering for two scheduled timestamps. The caller's
+    -- contract limits their separation to less than 2^63 ticks. This avoids
+    -- forming a 64-bit difference merely to decide which queued mute
+    -- boundary is earlier.
+    function timestamp_after(
+        left_ts  : unsigned(63 downto 0);
+        right_ts : unsigned(63 downto 0)
+    ) return boolean is
+    begin
+        if left_ts(63) /= right_ts(63) then
+            return left_ts(63) = '0';
+        end if;
+
+        return (left_ts(62 downto 48) > right_ts(62 downto 48)) or
+               ((left_ts(62 downto 48) = right_ts(62 downto 48)) and
+                ((left_ts(47 downto 32) > right_ts(47 downto 32)) or
+                 ((left_ts(47 downto 32) = right_ts(47 downto 32)) and
+                  ((left_ts(31 downto 16) > right_ts(31 downto 16)) or
+                   ((left_ts(31 downto 16) = right_ts(31 downto 16)) and
+                    (left_ts(15 downto 0) > right_ts(15 downto 0)))))));
+    end function;
 begin
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
@@ -188,12 +210,9 @@ begin
                     -- Requests are ordered by NIOS; retain the earliest
                     -- boundary so queued transitions cannot reopen a gap.
                     -- Keep the earliest requested boundary while a retune
-                    -- is already armed.  A 64-bit subtract here fed the
-                    -- target register mux and became the fitted critical
-                    -- path.  Reuse the segmented modulo comparator instead
-                    --; equality must retain the existing target.
-                    if timestamp_reached(target_i, target_timestamp) and
-                       target_i /= target_timestamp then
+                    -- is already armed. Strict modulo ordering avoids a
+                    -- subtract-and-sign chain on the target-register mux.
+                    if timestamp_after(target_i, target_timestamp) then
                         target_i <= target_timestamp;
                     end if;
                     if arm_immediate = '1' or due_now then
