@@ -1367,12 +1367,10 @@ int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data)
 
     status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, cmd,
                              data);
-    /* The NIOS packet handler reports an absent RX epoch PIO as a failed
-     * command. Preserve that capability distinction at the public API edge;
-     * a transport failure still keeps its original error. */
-    if (status == BLADERF_ERR_FPGA_OP) {
-        status = BLADERF_ERR_UNSUPPORTED;
-    }
+    /* Capability is established by the preceding status read. Preserve
+     * FPGA_OP here: the packet handler also uses it for a rejected control
+     * PIO readback, which must remain a transition failure, not be relabeled
+     * as missing hardware support. */
 
 #ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
     if (status == 0) {

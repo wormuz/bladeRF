@@ -1017,6 +1017,12 @@ static int announce_rf_link_epoch(struct bladerf *dev, bladerf_channel ch,
          * Transport failures (especially NIOS timeout) must never be
          * reinterpreted as old firmware and followed by a successful enable. */
         return status;
+    } else {
+        /* Without the status target this is legacy gateware. Do not probe
+         * control writes: their FPGA_OP response cannot distinguish an
+         * absent target from a rejected PIO readback. The old path has no
+         * epoch contract to announce, so continue without touching it. */
+        return 0;
     }
 
     status = dev->backend->get_device_speed(dev, &speed);
