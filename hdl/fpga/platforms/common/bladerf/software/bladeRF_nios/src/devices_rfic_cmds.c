@@ -32,6 +32,7 @@
 #include "ad936x_helpers.h"
 #include "devices_rfic.h"
 #include "rfic_calibration_policy.h"
+#include "rfic_frequency_policy.h"
 #include "rfic_init_policy.h"
 
 /* REG_CALIBRATION_CTRL mask bit for RF DC offset calibration

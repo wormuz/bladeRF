@@ -844,6 +844,16 @@ def check_nios():
                  "toggle commands replayed by parity after every FX3 reset; "
                  "1 in 12 captures dead (rf_link_cfg_shadow, 2026-09-11)")
 
+    cmds = NIOS_SRC / "devices_rfic_cmds.c"
+    if cmds.exists():
+        text = code_only(cmds.read_text(), comment="//")
+        if ("rfic_frequency_change_blocked(" in text and
+                '#include "rfic_frequency_policy.h"' not in text):
+            fail("nios-frequency-policy-include",
+                 "devices_rfic_cmds.c calls rfic_frequency_change_blocked "
+                 "without including its declaration",
+                 "the NIOS -Werror build fails with an implicit declaration")
+
 
 def check_rfpll_errors_propagate():
     """Keep RFPLL SPI/lock failures visible to the host frequency API.
@@ -1730,6 +1740,7 @@ vhdl-raw-cdc-in-status     rx_/tx_ signals in a word read by another domain
 vhdl-cross-domain-or       an OR of two domains has no owning domain
 header-wildcard-ends-comment  '*/' in prose ends the comment, prose becomes code
 nios-pio-shadow-without-readback  C copy of a PIO outlives the fabric reset that clears the PIO
+nios-frequency-policy-include    NIOS frequency policy call must include its declaration
 adi-rfpll-errors-propagated  SPI/VCO-lock failure must reach the host retune result
 rx-epoch-event-boundary      FPGA epoch opens on an observed event/sample boundary, not a guessed discard count
 rx-epoch-gate-in-rx-projects every QIP compiling rx.vhd must include rx_epoch_gate.vhd
