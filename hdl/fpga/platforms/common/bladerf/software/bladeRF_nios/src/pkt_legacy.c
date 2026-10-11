@@ -186,14 +186,12 @@ static bool perform_config_read(enum config_param param, uint64_t *payload)
         case CONFIG_VCTXCO:
             /* TODO Implement VCTCXO trim DAC read */
             DBG("%s: Attempted VCTCXO read.\n", __FUNCTION__);
-            *payload = 0x00;
-            break;
+            return false;
 
         case CONFIG_XB200_SYNTH:
             DBG("%s: Attempted XB-200 synth read from write-only device.\n",
                 __FUNCTION__);
-            *payload = 0x00;
-            break;
+            return false;
 
         case CONFIG_EXPANSION:
             DBG("%s: Performing expansion port read.\n", __FUNCTION__);
