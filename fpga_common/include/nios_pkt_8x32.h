@@ -477,7 +477,9 @@
 
 /* A transition is complete only when the gate is open for the exact epoch
  * armed by the host. ACTIVE alone is insufficient: it can describe a prior
- * epoch if status is stale or a control command was lost. */
+ * epoch if status is stale or a control command was lost. DISCARD_ACTIVE is
+ * checked separately because ARM/ABORT fences the sample path immediately,
+ * while the registered state field can still report ACTIVE for one cycle. */
 static inline bool nios_pkt_8x32_rx_epoch_status_is_active(
     uint32_t status, uint8_t expected_epoch_id)
 {
@@ -488,7 +490,8 @@ static inline bool nios_pkt_8x32_rx_epoch_status_is_active(
         NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
         NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
 
-    return epoch_id == expected_epoch_id &&
+    return (status & NIOS_PKT_8x32_RX_EPOCH_STATUS_DISCARD_ACTIVE) == 0 &&
+        epoch_id == expected_epoch_id &&
         (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE_NEW ||
          state == NIOS_PKT_8x32_RX_EPOCH_STATE_ACTIVE);
 }
