@@ -34,7 +34,12 @@ uint32_t loss_counter_half_read(loss_counter_half_t which)
 uint32_t dwell_status_read(void) { return 0; }
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
-void dwell_cfg_write(uint32_t value) { (void)value; }
+static bool dwell_cfg_success;
+bool dwell_cfg_write(uint32_t value)
+{
+    (void)value;
+    return dwell_cfg_success;
+}
 uint32_t pretrig_read(uint16_t index) { return index; }
 void rf_link_cfg_set_speed(bool high_speed) { (void)high_speed; }
 void rf_link_cfg_set_epoch_tag(uint8_t tag) { (void)tag; }
@@ -134,6 +139,12 @@ int main(void)
                 NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, 7, false);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RF_LINK_CFG,
                 NIOS_PKT_8x32_RF_LINK_CMD_START, 0, false);
+    dwell_cfg_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
+                UINT32_C(0x12345678), false);
+    dwell_cfg_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_DWELL_READOUT, 0,
+                UINT32_C(0x12345678), true);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                 NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0, false);
 

@@ -23,7 +23,7 @@ uint32_t rx_fault_causes_read(void);
 uint32_t loss_counter_half_read(loss_counter_half_t which);
 uint32_t dwell_status_read(void);
 uint32_t dwell_word_read(uint8_t word);
-void dwell_cfg_write(uint32_t value);
+bool dwell_cfg_write(uint32_t value);
 uint32_t pretrig_read(uint16_t index);
 void rf_link_cfg_set_speed(bool high_speed);
 void rf_link_cfg_set_epoch_tag(uint8_t tag);

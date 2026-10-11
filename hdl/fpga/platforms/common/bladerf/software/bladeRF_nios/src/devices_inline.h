@@ -295,12 +295,14 @@ static inline uint32_t dwell_status_read(void)
 #define DWELL_CFG_SETTLE_SHIFT      30
 #define DWELL_CFG_SETTLE_MASK       0x3u
 
-static inline void dwell_cfg_write(uint32_t value)
+static inline bool dwell_cfg_write(uint32_t value)
 {
     #ifdef DWELL_CFG_BASE
     IOWR_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE, value);
+    return IORD_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE) == value;
     #else
-    (void) value;
+    (void)value;
+    return false;
     #endif
 }
 

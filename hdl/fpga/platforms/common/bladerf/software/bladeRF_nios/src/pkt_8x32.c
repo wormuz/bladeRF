@@ -329,8 +329,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
          * selects the settling interval from two bits, so no value here can
          * produce an out-of-range setting. */
         case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
-            dwell_cfg_write(data);
-            break;
+            return dwell_cfg_write(data);
 
         case NIOS_PKT_8x32_TARGET_RF_LINK_CFG:
 #ifdef RF_LINK_CFG_BASE
