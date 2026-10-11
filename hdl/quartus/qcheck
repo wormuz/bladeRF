@@ -1007,6 +1007,7 @@ def check_tx_retune_gate_port_map():
     if qbind.exists():
         bind_text = code_only(qbind.read_text(errors="replace"), comment="#")
         for marker in ("handshake TX retune control",
+                       "handshake TX retune status",
                        "handshake RX epoch snapshot",
                        "handshake RX fault causes"):
             if marker not in bind_text:
@@ -1665,7 +1666,8 @@ def check_qgate_sta_resolution():
         host_fit.write_text(
             "bladerf_core:U_core|handshake:U_rx_fault_causes_handshake|grab_source~0\n"
             "bladerf_core:U_core|handshake:U_rx_epoch_snapshot_handshake|grab_source~0\n"
-            "bladerf_core:U_core|tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|grab_source~0\n")
+            "bladerf_core:U_core|tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|grab_source~0\n"
+            "bladerf_core:U_core|handshake:U_tx_retune_gate_status_handshake|grab_source~0\n")
         host_sources = (
             (356, "bladerf_core:U_core|handshake:U_test|source_holding[0]"),
             (128, "bladerf_core:U_core|nios_system:U_nios_system|time_tamer:rx_tamer|compare_payload[0]"),

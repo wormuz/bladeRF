@@ -58,7 +58,9 @@ set crossings [list \
     "handshake RX fault causes" {*U_rx_fault_causes_handshake|source_holding[*]} \
                            {*bladerf_core:*|rx_fault_causes_sys[*]} \
     "handshake TX retune control" {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} \
-                           {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} ]
+                           {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} \
+    "handshake TX retune status" {*U_tx_retune_gate_status_handshake|source_holding[*]} \
+                           {*bladerf_core:*|tx_retune_gate_status_sys[*]} ]
 
 foreach { label src_pat dst_pat } $crossings {
     set src [get_keepers -nowarn $src_pat]

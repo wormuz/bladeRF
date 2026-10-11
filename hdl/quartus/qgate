@@ -331,7 +331,8 @@ else
                          [ -r "$fit_report" ] &&
                          grep -Fq 'U_rx_fault_causes_handshake|grab_source' "$fit_report" &&
                          grep -Fq 'U_rx_epoch_snapshot_handshake|grab_source' "$fit_report" &&
-                         grep -Fq 'U_tx_retune_gate_controller|handshake:transfer|grab_source' "$fit_report"; then
+                         grep -Fq 'U_tx_retune_gate_controller|handshake:transfer|grab_source' "$fit_report" &&
+                         grep -Fq 'U_tx_retune_gate_status_handshake|grab_source' "$fit_report"; then
                         d101_dispositioned=1
                         note ok "Design Assistant D101: all $d101_expect current-source findings classified; fitted CDC bounds required above"
                         note ok "RX status, epoch snapshot, and TX retune bundles present in fitted handshake evidence"

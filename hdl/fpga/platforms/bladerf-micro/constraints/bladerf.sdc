@@ -340,6 +340,7 @@ set hs_pairs [list \
     {*U_rx_epoch_snapshot_handshake|source_holding[*]}              {*bladerf_core:*|rx_epoch_snapshot_sys[*]} \
     {*U_rx_fault_causes_handshake|source_holding[*]}                {*bladerf_core:*|rx_fault_causes_sys[*]} \
     {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} \
+    {*U_tx_retune_gate_status_handshake|source_holding[*]}          {*bladerf_core:*|tx_retune_gate_status_sys[*]} \
 ]
 
 # The dwell_cfg pair exists only in the sweep revision, and it is a genuine
