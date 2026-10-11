@@ -166,7 +166,7 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
     return 0;
 }
 
-static int run_batch_reserved_bits_case(uint16_t count, uint64_t data)
+static int run_malformed_batch_case(uint16_t count, uint64_t data)
 {
     struct pkt_buf packet = { .ready = false };
     uint8_t target = 0;
@@ -284,8 +284,10 @@ int main(void)
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
-        run_batch_reserved_bits_case(1, UINT64_C(1) << 18) ||
-        run_batch_reserved_bits_case(3, UINT64_C(1) << 54) ||
+        run_malformed_batch_case(0, 0) ||
+        run_malformed_batch_case(4, 0) ||
+        run_malformed_batch_case(1, UINT64_C(1) << 18) ||
+        run_malformed_batch_case(3, UINT64_C(1) << 54) ||
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||
