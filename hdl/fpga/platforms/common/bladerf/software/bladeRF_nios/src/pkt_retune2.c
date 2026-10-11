@@ -520,6 +520,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                  * fire and interfere with the next queued request. */
                 record_retune2_failure(module);
                 e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = false;
                 if (tamer_cancel(module)) {
                     dequeue_retune(q, NULL);
                 }
