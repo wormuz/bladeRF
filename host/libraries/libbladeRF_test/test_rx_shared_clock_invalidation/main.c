@@ -1,4 +1,6 @@
 #include <assert.h>
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "host_config.h"
@@ -416,6 +418,18 @@ int main(void)
                &dev, BLADERF_VCTCXO_TAMER_DISABLED) ==
            BLADERF_ERR_UNSUPPORTED);
     assert(state.invalidate_calls == 0);
+
+    /* A rational rate wider than the board callbacks' unsigned-int rate
+     * aliases to a low valid value if it is narrowed before range checking.
+     * Reject it before changing RF configuration or RX validity. */
+    struct bladerf_rational_rate oversized_rate = {
+        .integer = (uint64_t)UINT_MAX + UINT64_C(10000000),
+        .num = 0,
+        .den = 1,
+    };
+    assert(bladerf_set_rational_sample_rate(
+               &dev, rx0, &oversized_rate, NULL) == BLADERF_ERR_RANGE);
+    assert(state.invalidate_calls == 0 && state.rational_rate_calls == 0);
 
     /* AD9361 sample-rate APIs update both clock chains. Fence RX and TX
      * before calling either channel's setter. */

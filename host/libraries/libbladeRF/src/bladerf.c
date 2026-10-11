@@ -1098,9 +1098,17 @@ int bladerf_set_rational_sample_rate(struct bladerf *dev,
 
     /* Validate the public rational representation before invalidating RX
      * state or forwarding it to a board implementation. Some implementations
-     * divide by den while reducing/programming the requested rate. */
+     * divide by den while reducing/programming the requested rate. The board
+     * callbacks ultimately take an unsigned-int sample rate; reject an
+     * unrepresentable integral part here so narrowing cannot wrap a huge
+     * request into a valid low sample rate. */
     if (rate == NULL || rate->den == 0) {
         return BLADERF_ERR_INVAL;
+    }
+    const uint64_t fractional_integer = rate->num / rate->den;
+    if (rate->integer > UINT_MAX ||
+        fractional_integer > UINT_MAX - rate->integer) {
+        return BLADERF_ERR_RANGE;
     }
 
     const bladerf_channel rx_clock_channel =
