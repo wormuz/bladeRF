@@ -9,6 +9,7 @@
 static struct ad9361_rf_phy *fake_phys[2];
 static uint32_t fake_attenuation[2][2];
 static int fail_next_write;
+static int apply_then_fail_next_write;
 
 static unsigned phy_index(struct ad9361_rf_phy *phy)
 {
@@ -31,6 +32,10 @@ int32_t ad9361_set_tx_attenuation(struct ad9361_rf_phy *phy, uint8_t ch,
         return -EIO;
     }
     fake_attenuation[phy_index(phy)][ch] = attenuation_mdb;
+    if (apply_then_fail_next_write) {
+        apply_then_fail_next_write = 0;
+        return -EIO;
+    }
     return 0;
 }
 
@@ -88,11 +93,27 @@ int main(void)
 
     fail_next_write = 1;
     assert(txmute_set(&first, BLADERF_CHANNEL_TX(1), true) != 0);
-    assert(txmute_get(&first, BLADERF_CHANNEL_TX(1), &muted) == 0);
-    assert(!muted);
+    assert(txmute_get(&first, BLADERF_CHANNEL_TX(1), &muted) ==
+           BLADERF_ERR_UNEXPECTED);
     assert(txmute_set(&first, BLADERF_CHANNEL_TX(1), true) == 0);
     assert(txmute_get(&first, BLADERF_CHANNEL_TX(1), &muted) == 0);
     assert(muted);
+
+    /* The SPI write may reach the RFIC even when its completion is lost.
+     * Do not report the old mute state; reconcile from RFIC readback and
+     * restore the saved attenuation on the retry. */
+    fake_attenuation[1][1] = 45000;
+    assert(txmute_set_cached(&second, BLADERF_CHANNEL_TX(1), 45000) == 0);
+    apply_then_fail_next_write = 1;
+    assert(txmute_set(&second, BLADERF_CHANNEL_TX(1), true) != 0);
+    assert(fake_attenuation[1][1] == 89750);
+    assert(txmute_get(&second, BLADERF_CHANNEL_TX(1), &muted) ==
+           BLADERF_ERR_UNEXPECTED);
+    assert(txmute_set(&second, BLADERF_CHANNEL_TX(1), true) == 0);
+    assert(txmute_get(&second, BLADERF_CHANNEL_TX(1), &muted) == 0);
+    assert(muted);
+    assert(txmute_set(&second, BLADERF_CHANNEL_TX(1), false) == 0);
+    assert(fake_attenuation[1][1] == 45000);
 
     assert(txmute_get(&first, BLADERF_CHANNEL_RX(0), &muted) ==
            BLADERF_ERR_INVAL);

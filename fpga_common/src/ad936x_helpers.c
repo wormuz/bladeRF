@@ -50,6 +50,40 @@ static bool *txmute_state_for_channel(struct ad9361_rf_phy *phy,
     }
 }
 
+static bool *txmute_state_valid_for_channel(struct ad9361_rf_phy *phy,
+                                            bladerf_channel ch)
+{
+    if (phy == NULL) {
+        return NULL;
+    }
+
+    switch (ch) {
+        case BLADERF_CHANNEL_TX(0):
+            return &phy->tx1_muted_valid;
+        case BLADERF_CHANNEL_TX(1):
+            return &phy->tx2_muted_valid;
+        default:
+            return NULL;
+    }
+}
+
+static bool *txmute_attenuation_valid_for_channel(struct ad9361_rf_phy *phy,
+                                                  bladerf_channel ch)
+{
+    if (phy == NULL) {
+        return NULL;
+    }
+
+    switch (ch) {
+        case BLADERF_CHANNEL_TX(0):
+            return &phy->tx1_atten_cached_valid;
+        case BLADERF_CHANNEL_TX(1):
+            return &phy->tx2_atten_cached_valid;
+        default:
+            return NULL;
+    }
+}
+
 uint32_t txmute_get_cached(struct ad9361_rf_phy *phy, bladerf_channel ch)
 {
     if (phy == NULL) {
@@ -70,6 +104,8 @@ int txmute_set_cached(struct ad9361_rf_phy *phy,
                       bladerf_channel ch,
                       uint32_t atten)
 {
+    bool *valid;
+
     if (phy == NULL) {
         return BLADERF_ERR_INVAL;
     }
@@ -77,21 +113,29 @@ int txmute_set_cached(struct ad9361_rf_phy *phy,
     switch (ch) {
         case BLADERF_CHANNEL_TX(0):
             phy->tx1_atten_cached = atten;
-            return 0;
+            break;
         case BLADERF_CHANNEL_TX(1):
             phy->tx2_atten_cached = atten;
-            return 0;
+            break;
         default:
             return BLADERF_ERR_INVAL;
     }
+
+    valid = txmute_attenuation_valid_for_channel(phy, ch);
+    *valid = true;
+    return 0;
 }
 
 int txmute_get(struct ad9361_rf_phy *phy, bladerf_channel ch, bool *state)
 {
     bool *muted = txmute_state_for_channel(phy, ch);
+    bool *valid = txmute_state_valid_for_channel(phy, ch);
 
-    if (muted == NULL || state == NULL) {
+    if (muted == NULL || valid == NULL || state == NULL) {
         return BLADERF_ERR_INVAL;
+    }
+    if (!*valid) {
+        return BLADERF_ERR_UNEXPECTED;
     }
 
     *state = *muted;
@@ -101,17 +145,19 @@ int txmute_get(struct ad9361_rf_phy *phy, bladerf_channel ch, bool *state)
 
 int txmute_set(struct ad9361_rf_phy *phy, bladerf_channel ch, bool state)
 {
-    bool *muted                = txmute_state_for_channel(phy, ch);
-    int rfic_ch                = ch >> 1;
+    bool *muted = txmute_state_for_channel(phy, ch);
+    bool *muted_valid = txmute_state_valid_for_channel(phy, ch);
+    bool *attenuation_valid = txmute_attenuation_valid_for_channel(phy, ch);
+    int rfic_ch = ch >> 1;
     uint32_t const MUTED_ATTEN = 89750;
     uint32_t atten, cached;
     int status;
 
-    if (muted == NULL) {
+    if (muted == NULL || muted_valid == NULL || attenuation_valid == NULL) {
         return BLADERF_ERR_INVAL;
     }
 
-    if (*muted == state) {
+    if (*muted_valid && *muted == state) {
         // short circuit if there's no change
         return 0;
     }
@@ -125,16 +171,37 @@ int txmute_set(struct ad9361_rf_phy *phy, bladerf_channel ch, bool state)
             return errno_ad9361_to_bladerf(status);
         }
 
-        cached = readval;
+        if (readval == MUTED_ATTEN) {
+            if (!*attenuation_valid) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            cached = txmute_get_cached(phy, ch);
+        } else {
+            cached = readval;
+        }
         atten  = MUTED_ATTEN;
     } else {
         // unmute: restore the saved value
-        cached = txmute_get_cached(phy, ch);
+        if (*attenuation_valid) {
+            cached = txmute_get_cached(phy, ch);
+        } else {
+            uint32_t readval;
+
+            status = ad9361_get_tx_attenuation(phy, rfic_ch, &readval);
+            if (status < 0) {
+                return errno_ad9361_to_bladerf(status);
+            }
+            if (readval == MUTED_ATTEN) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            cached = readval;
+        }
         atten  = cached;
     }
 
     status = ad9361_set_tx_attenuation(phy, rfic_ch, atten);
     if (status < 0) {
+        *muted_valid = false;
         return errno_ad9361_to_bladerf(status);
     }
 
@@ -144,6 +211,7 @@ int txmute_set(struct ad9361_rf_phy *phy, bladerf_channel ch, bool state)
     }
 
     *muted = state;
+    *muted_valid = true;
 
     return 0;
 }

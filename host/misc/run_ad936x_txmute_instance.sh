@@ -10,6 +10,7 @@ trap 'rm -f "$test_bin"' EXIT
 cc -std=gnu11 -DNUAND_MODIFICATIONS=1 -DLOG_INCLUDE_FILE_INFO \
   -ffunction-sections -fdata-sections -O0 -g \
   -I"$bladerf_root/thirdparty/analogdevicesinc/no-OS_local/platform_bladerf2" \
+  -I"$bladerf_root/thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361" \
   -I"$build_dir/common/thirdparty/ad936x" \
   -I"$bladerf_root/host/libraries/libbladeRF/src" \
   -I"$bladerf_root/host/libraries/libbladeRF/include" \
