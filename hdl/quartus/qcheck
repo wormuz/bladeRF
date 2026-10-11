@@ -1266,6 +1266,35 @@ def check_qsys_regenerated_on_reused_workdir():
              "a stale generated system can omit newly connected hardware status and control ports while Quartus still reports a successful fit")
 
 
+def check_wishbone_timeout_qsys_wiring():
+    """Keep the NIOS timeout PIOs connected to the component's actual ports."""
+    system = ROOT / "hdl/fpga/platforms/bladerf-micro/build/nios_system.tcl"
+    component = ROOT / "hdl/fpga/ip/nuand/wishbone_master/qsys/wishbone_master_hw.tcl"
+    if not system.exists() or not component.exists():
+        return
+    system_text = code_only(system.read_text(errors="replace"), comment="#")
+    component_text = code_only(component.read_text(errors="replace"), comment="#")
+    required = (
+        "add_connection wishbone_master_0.timeout_status "
+        "wb_timeout_status.external_connection",
+        "add_connection wb_timeout_clear.external_connection "
+        "wishbone_master_0.timeout_clear",
+    )
+    declared = (
+        "add_interface timeout_status conduit end",
+        "add_interface timeout_clear conduit end",
+        "add_interface_port timeout_status wb_timeout_status export Output 1",
+        "add_interface_port timeout_clear wb_timeout_clear_toggle export Input 1",
+    )
+    if (any(token not in system_text for token in required) or
+            any(token not in component_text for token in declared) or
+            "wishbone_master_0.wb_timeout_status" in system_text or
+            "wishbone_master_0.wb_timeout_clear_toggle" in system_text):
+        fail("nios-wishbone-timeout-qsys-wiring",
+             "NIOS Qsys does not connect the Wishbone timeout PIOs to the component's declared interfaces",
+             "the watchdog status and clear acknowledgement must reach NIOS or an external no-ACK can remain unreported")
+
+
 def check_full_flow_runs_design_assistant():
     """The custom full flow must produce the DRC report consumed by qgate."""
     build_tcl = ROOT / "hdl/quartus/build.tcl"
@@ -1697,6 +1726,7 @@ qgate-revision-cdc-inventory  qgate expects the separate hosted and sweep fitted
 quartus-full-flow-design-assistant full flow emits the DRC report required by qgate
 quartus-full-flow-rx-max-skew sweep full flow appends fitted RX max-skew evidence for qgate
 nios-qsys-stale-workdir-cache reused Quartus workdirs regenerate Nios RTL and BSP from current Qsys/IP sources
+nios-wishbone-timeout-qsys-wiring NIOS timeout PIOs must connect to declared Wishbone component interfaces
 sdc-ad9361-rx-control-bundle  each RX up_xfer_cntrl channel is separately bundled and physically bounded
 gpif-timestamp-bundle-capture raw timestamp must be captured before GPIF arithmetic
 vhdl-non-short-circuit-array-index optional stream arrays must be iterated within their range
@@ -1727,6 +1757,7 @@ def main():
     check_qgate_sweep_handshake_count()
     check_build_project_close_state()
     check_qsys_regenerated_on_reused_workdir()
+    check_wishbone_timeout_qsys_wiring()
     check_full_flow_runs_design_assistant()
     check_full_flow_runs_rx_max_skew_report()
     check_qgate_sta_resolution()
