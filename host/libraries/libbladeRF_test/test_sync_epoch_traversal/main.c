@@ -80,6 +80,9 @@ static int test_tx_backend_stream_error_code;
 static int test_tx_submit_status;
 static unsigned int test_tx_submit_calls;
 static int16_t test_tx_submitted_markers[4];
+static uint8_t test_tx_submitted_bytes[64];
+static size_t test_tx_submitted_length;
+static const struct backend_fns test_tx_backend;
 static bool test_tx_buffer_valid = true;
 static unsigned int test_tx_validity_checks;
 static unsigned int test_tx_invalidate_at_check;
@@ -158,6 +161,72 @@ static void test_sync_packet_meta_tx_length_includes_header(void)
     sync.stream_config.bytes_per_sample = sizeof(uint32_t);
     sync.meta.samples_per_ts = 2;
     assert(sync_tx(&sync, payload, 5, NULL, 0) == BLADERF_ERR_MEM);
+}
+
+static void test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity(void)
+{
+    struct bladerf_sync sync = {0};
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+    struct sync_worker worker = {0};
+    uint32_t buffer[9];
+    void *buffer_ptrs[1] = {buffer};
+    size_t actual_lengths[1] = {0};
+    sync_buffer_status buffer_states[1] = {SYNC_BUFFER_EMPTY};
+    const uint32_t payload[3] = {0x11223344, 0x55667788, 0x99aabbcc};
+
+    memset(buffer, 0xa5, sizeof(buffer));
+    dev.board = &bladerf2_board_fns;
+    dev.backend = &test_tx_backend;
+    sync.dev = &dev;
+    sync.initialized = true;
+    sync.state = SYNC_STATE_USING_PACKET_META;
+    sync.stream_config.format = BLADERF_FORMAT_PACKET_META;
+    sync.stream_config.layout = BLADERF_TX_X2;
+    sync.stream_config.samples_per_buffer = 8;
+    sync.stream_config.bytes_per_sample = sizeof(uint32_t);
+    sync.meta.samples_per_ts = 2;
+    sync.buf_mgmt.buffers = buffer_ptrs;
+    sync.buf_mgmt.actual_lengths = actual_lengths;
+    sync.buf_mgmt.status = buffer_states;
+    sync.buf_mgmt.num_buffers = 1;
+    sync.buf_mgmt.submitter = SYNC_TX_SUBMITTER_FN;
+    sync.buf_mgmt.cons_i = BUFFER_MGMT_INVALID_INDEX;
+    sync.worker = &worker;
+    worker.stream = &stream;
+
+    stream.dev = &dev;
+    stream.layout = BLADERF_TX_X2;
+    stream.format = BLADERF_FORMAT_PACKET_META;
+    stream.samples_per_buffer = 8;
+    stream.state = STREAM_RUNNING;
+
+    assert(MUTEX_INIT(&sync.lock) == 0);
+    assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+    assert(MUTEX_INIT(&stream.lock) == 0);
+    assert(COND_INIT(&stream.stream_started) == 0);
+    assert(COND_INIT(&stream.can_submit_buffer) == 0);
+
+    test_tx_submit_calls = 0;
+    test_tx_submitted_length = 0;
+    test_tx_submit_status = 0;
+    test_tx_buffer_valid = true;
+    test_tx_validity_checks = 0;
+    test_tx_invalidate_at_check = 0;
+    assert(sync_tx(&sync, payload, 3, NULL, 0) == 0);
+    assert(test_tx_submit_calls == 1);
+    assert(test_tx_submitted_length == METADATA_HEADER_SIZE + sizeof(payload));
+    assert(metadata_get_packet_len(test_tx_submitted_bytes) == 3);
+    assert(memcmp(test_tx_submitted_bytes + METADATA_HEADER_SIZE, payload,
+                  sizeof(payload)) == 0);
+    assert(actual_lengths[0] == test_tx_submitted_length);
+    assert(buffer[8] == UINT32_C(0xa5a5a5a5));
+
+    assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
+    assert(COND_DESTROY(&stream.stream_started) == 0);
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
+    assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+    assert(MUTEX_DESTROY(&sync.lock) == 0);
 }
 
 static void test_rx_packet_meta_length_is_bounded_by_transfer(void)
@@ -295,15 +364,17 @@ static int test_tx_backend_submit(struct bladerf_stream *stream, void *buffer,
                                   size_t *length, unsigned int timeout_ms,
                                   bool nonblock)
 {
-    (void)length;
     (void)timeout_ms;
     (void)nonblock;
     assert(stream != NULL);
     assert(buffer != NULL);
     assert((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX);
     assert(test_tx_submit_calls < ARRAY_SIZE(test_tx_submitted_markers));
+    assert(length != NULL && *length <= sizeof(test_tx_submitted_bytes));
     test_tx_submitted_markers[test_tx_submit_calls++] =
         ((int16_t *)buffer)[0];
+    memcpy(test_tx_submitted_bytes, buffer, *length);
+    test_tx_submitted_length = *length;
     return test_tx_submit_status;
 }
 
@@ -3053,6 +3124,7 @@ int main(void)
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
     test_sync_packet_meta_tx_length_includes_header();
+    test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity();
     test_rx_packet_meta_length_is_bounded_by_transfer();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
