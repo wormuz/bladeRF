@@ -6097,6 +6097,9 @@ int bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (settle_sel > 3) {
+        return BLADERF_ERR_INVAL;
+    }
 
     WITH_MUTEX(&dev->lock, {
         CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));

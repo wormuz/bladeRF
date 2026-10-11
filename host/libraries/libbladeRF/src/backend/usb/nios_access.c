@@ -1192,6 +1192,10 @@ int nios_dwell_cfg_write(struct bladerf *dev, uint64_t threshold,
     uint32_t mantissa = 0;
     uint32_t shift    = 0;
 
+    if (dev == NULL || settle_sel > 3) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Encode as mantissa << shift. The loop stops at 24 because that is
      * where the fabric saturates; going further would encode a value the
      * hardware cannot represent and the two sides would disagree about what
