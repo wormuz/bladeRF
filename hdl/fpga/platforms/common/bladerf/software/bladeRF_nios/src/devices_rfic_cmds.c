@@ -185,8 +185,14 @@ static bool _rfic_deinitialize(struct rfic_state *state)
      * frees more (clocks, SPI and all GPIO descriptors on top of the data).
      * Mirrors the host side fix in rfic_host.c. */
     if (NULL != state->phy) {
-        CHECK_BOOL(ad9361_remove(state->phy));
+        struct ad9361_rf_phy *phy = state->phy;
+
+        /* ad9361_remove() releases the PHY even when a platform descriptor
+         * reports a teardown error. Clear ownership before calling it so a
+         * reported failure cannot leave a dangling pointer for the next OFF
+         * or recovery command. The RFIC state is already fail-closed above. */
         state->phy = NULL;
+        CHECK_BOOL(ad9361_remove(phy));
     }
 
     /* The chip is deliberately left out of hardware reset, matching

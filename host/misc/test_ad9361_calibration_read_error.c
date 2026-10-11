@@ -86,6 +86,10 @@ static unsigned read_count;
 static unsigned write_count;
 static unsigned delay_count;
 static int32_t spi_status;
+static int32_t fake_spi_remove_status;
+static int32_t fake_gpio_remove_status[4];
+static unsigned fake_spi_remove_count;
+static unsigned fake_gpio_remove_count;
 static bool register_map_enabled;
 static int32_t fail_read_reg = -1;
 static int32_t fail_write_reg = -1;
@@ -158,7 +162,10 @@ int32_t no_os_gpio_get_optional(struct no_os_gpio_desc **desc,
 int32_t no_os_gpio_remove(struct no_os_gpio_desc *desc)
 {
     (void)desc;
-    return 0;
+    if (fake_gpio_remove_count >=
+        sizeof(fake_gpio_remove_status) / sizeof(fake_gpio_remove_status[0]))
+        return -EINVAL;
+    return fake_gpio_remove_status[fake_gpio_remove_count++];
 }
 int32_t no_os_gpio_direction_output(struct no_os_gpio_desc *desc,
                                     uint8_t value)
@@ -183,7 +190,8 @@ int32_t no_os_spi_init(struct no_os_spi_desc **desc,
 int32_t no_os_spi_remove(struct no_os_spi_desc *desc)
 {
     (void)desc;
-    return 0;
+    ++fake_spi_remove_count;
+    return fake_spi_remove_status;
 }
 uint64_t no_os_do_div(uint64_t *n, uint64_t base)
 {
@@ -404,6 +412,46 @@ int main(void)
             fprintf(stderr,
                     "AD9361 lifecycle API accepted missing state or touched SPI\n");
             return EXIT_FAILURE;
+        }
+    }
+
+    /* Teardown must attempt every platform cleanup and report the first
+     * failure. ad9361_remove() consumes/frees the PHY even on failure, which
+     * the NIOS owner must account for before propagating the status. */
+    {
+        unsigned failure_site;
+
+        for (failure_site = 0; failure_site <= 4; ++failure_site) {
+            struct ad9361_rf_phy *remove_phy = calloc(1, sizeof(*remove_phy));
+
+            if (!remove_phy) {
+                fprintf(stderr, "failed to allocate teardown test PHY\n");
+                return EXIT_FAILURE;
+            }
+            remove_phy->spi = (struct no_os_spi_desc *)(uintptr_t)1;
+            remove_phy->gpio_desc_resetb =
+                (struct no_os_gpio_desc *)(uintptr_t)1;
+            remove_phy->gpio_desc_sync =
+                (struct no_os_gpio_desc *)(uintptr_t)1;
+            remove_phy->gpio_desc_cal_sw1 =
+                (struct no_os_gpio_desc *)(uintptr_t)1;
+            remove_phy->gpio_desc_cal_sw2 =
+                (struct no_os_gpio_desc *)(uintptr_t)1;
+            fake_spi_remove_status = failure_site == 0 ? -EIO : 0;
+            memset(fake_gpio_remove_status, 0,
+                   sizeof(fake_gpio_remove_status));
+            if (failure_site != 0)
+                fake_gpio_remove_status[failure_site - 1] = -EIO;
+            fake_spi_remove_count = 0;
+            fake_gpio_remove_count = 0;
+
+            if (ad9361_remove(remove_phy) != -EIO ||
+                fake_spi_remove_count != 1 || fake_gpio_remove_count != 4) {
+                fprintf(stderr,
+                        "AD9361 teardown hid a cleanup error or skipped cleanup %u\n",
+                        failure_site);
+                return EXIT_FAILURE;
+            }
         }
     }
 
