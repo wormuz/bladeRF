@@ -62,6 +62,16 @@ static void write_msg(uint8_t *msg, uint64_t timestamp, uint8_t epoch_id,
     }
 }
 
+static void write_msg_with_flags(uint8_t *msg, uint64_t timestamp,
+                                 uint8_t epoch_id, int16_t marker,
+                                 uint32_t flags)
+{
+    const uint32_t encoded_flags = HOST_TO_LE32(flags);
+    write_msg(msg, timestamp, epoch_id, marker);
+    memcpy(msg + METADATA_FLAGS_OFFSET, &encoded_flags,
+           sizeof(encoded_flags));
+}
+
 struct fixture {
     struct bladerf_sync sync;
     struct bladerf dev;
@@ -1305,6 +1315,28 @@ static void receive(struct fixture *f, int16_t *out, unsigned int count,
     for (size_t i = 0; i < sizeof(meta->reserved); ++i) {
         assert(meta->reserved[i] == 0);
     }
+}
+
+static void test_sync_rx_reports_tx_underrun_without_rx_overrun(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta = {0};
+    int16_t out[128] = {0};
+
+    fixture_init(&f);
+    write_msg_with_flags(f.buffers[0], 1000, 7, 211,
+                         BLADERF_META_FLAG_RX_HW_UNDERFLOW);
+    meta.flags = BLADERF_META_FLAG_RX_NOW;
+
+    assert(sync_rx(&f.sync, out, 64, &meta, 0) == 0);
+    assert(meta.actual_count == 64);
+    assert(meta.status & BLADERF_META_STATUS_UNDERRUN);
+    assert(!(meta.status & BLADERF_META_STATUS_OVERRUN));
+    assert(sync_host_data_events == 1);
+    assert(rx_overrun_events == 0);
+    assert_marker(out, 64, 211, 0);
+
+    fixture_destroy(&f);
 }
 
 static void test_sync_timeout_certifies_only_returned_valid_prefix(void)
@@ -3167,6 +3199,7 @@ int main(void)
     test_rx_metadata_status_flag_translation();
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
+    test_sync_rx_reports_tx_underrun_without_rx_overrun();
     test_sync_packet_meta_tx_length_includes_header();
     test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity();
     test_rx_packet_meta_length_is_bounded_by_transfer();
