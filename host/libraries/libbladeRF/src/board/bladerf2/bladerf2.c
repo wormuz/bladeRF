@@ -7024,11 +7024,12 @@ int bladerf_get_pll_register(struct bladerf *dev,
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(val);
+    if (address > 0x03) {
+        return BLADERF_ERR_INVAL;
+    }
 
     WITH_MUTEX(&dev->lock, {
         uint32_t data;
-
-        address &= 0x03;
 
         CHECK_STATUS_LOCKED(dev->backend->adf400x_read(dev, address, &data));
 
@@ -7042,6 +7043,9 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (address > 0x03) {
+        return BLADERF_ERR_INVAL;
+    }
 
     int status = bladerf2_rx_data_invalidate(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CLOCK);
@@ -7059,7 +7063,6 @@ int bladerf_set_pll_register(struct bladerf *dev, uint8_t address, uint32_t val)
             MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
             ((struct bladerf2_board_data *)dev->board_data)->rfic_reference_clock_known = false;
             MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
-            address &= 0x03;
             status = dev->backend->adf400x_write(dev, address, val);
         }
     });
