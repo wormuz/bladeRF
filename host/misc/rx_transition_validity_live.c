@@ -1,5 +1,6 @@
 /* Live xA4 check: request policy must control whether IQ can be valid. */
 #include <libbladeRF.h>
+#include <bladeRF2.h>
 #include "timestamp_order.h"
 
 #include <stdbool.h>
@@ -51,8 +52,43 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
     int status = bladerf_rx_transition_begin(dev, rx_channel,
                                              &request, txn);
     if (status != 0) {
+        uint32_t config_gpio = 0;
+        bool pll_enabled = false;
+        bool pll_locked = false;
+        bladerf_clock_select clock_select = CLOCK_SELECT_ONBOARD;
+        int gpio_status = bladerf_config_gpio_read(dev, &config_gpio);
+        int pll_enable_status = bladerf_get_pll_enable(dev, &pll_enabled);
+        int pll_lock_status = bladerf_get_pll_lock_state(dev, &pll_locked);
+        int clock_status = bladerf_get_clock_select(dev, &clock_select);
+        struct bladerf_rf_event recent[16];
+        uint32_t recent_count = 0;
+        uint64_t recent_cursor = 0;
+        bool recent_complete = false;
+        int cursor_status = bladerf_rf_events_get_since(
+            dev, 0, NULL, 0, &recent_count, &recent_cursor,
+            &recent_complete);
+        uint64_t recent_start = recent_cursor > 16
+            ? recent_cursor - 16 : 0;
+        int recent_status = bladerf_rf_events_get_since(
+            dev, recent_start, recent, 16, &recent_count, &recent_cursor,
+            &recent_complete);
         fprintf(stderr, "recovery transition begin: %s\n",
                 bladerf_strerror(status));
+        fprintf(stderr, "reference diagnostics: gpio=0x%08x(status=%d) "
+                "clock=%d(status=%d) pll_enable=%u(status=%d) "
+                "pll_lock=%u(status=%d)\n", config_gpio, gpio_status,
+                (int)clock_select, clock_status, pll_enabled,
+                pll_enable_status, pll_locked, pll_lock_status);
+        fprintf(stderr, "recent events: cursor_status=%d status=%d "
+                "count=%u complete=%u cursor=%llu\n", cursor_status,
+                recent_status, recent_count,
+                recent_complete, (unsigned long long)recent_cursor);
+        for (uint32_t i = 0; i < recent_count; ++i) {
+            fprintf(stderr, "  seq? type=%u txn=%u flags=0x%x err=%d "
+                    "state=%u\n", recent[i].event_type,
+                    recent[i].transaction_id, recent[i].flags,
+                    recent[i].error_code, recent[i].fpga_state);
+        }
     }
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, *txn, event, 2000);
@@ -258,7 +294,6 @@ int main(int argc, char **argv)
     } else {
         puts("using device default RX rate/bandwidth for transition test");
     }
-    CHECK(bladerf_set_gain(dev, rx_channel, 30));
     /* This test deliberately pauses consumption during transition/event
      * checks. Retain enough host ring capacity for those bounded pauses so
      * unrelated queue overrun does not invalidate the epoch under test. */
@@ -268,6 +303,7 @@ int main(int argc, char **argv)
     if (paired) {
         CHECK(bladerf_enable_module(dev, rx2_channel, true));
     }
+    CHECK(bladerf_set_gain(dev, rx_channel, 30));
 
     const struct bladerf_rx_transition_request control_only = {
         .target_frequency_hz = 1835000000ULL,

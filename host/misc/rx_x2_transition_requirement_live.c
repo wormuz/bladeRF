@@ -112,8 +112,6 @@ int main(void)
     }
 
     status = bladerf_set_tuning_mode(dev, BLADERF_TUNING_MODE_HOST);
-    if (status == 0) status = bladerf_enable_module(dev, RX1, true);
-    if (status == 0) status = bladerf_enable_module(dev, RX2, true);
     if (status == 0 && getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") == NULL)
         status = prepare_channel(dev, RX1);
     if (status == 0 && getenv("BLADERF_TEST_KEEP_DEFAULT_RATE") == NULL)
@@ -129,6 +127,13 @@ int main(void)
         fprintf(stderr, "RX_X1 sync config: %s\n", bladerf_strerror(status));
         goto fail;
     }
+    /* Do not start the FPGA RX writer until its paired host stream is armed.
+     * Otherwise the unconsumed setup stream can correctly trip the sticky
+     * FIFO-full watchdog before the transition under test begins. */
+    status = bladerf_enable_module(dev, RX1, true);
+    if (status == 0) status = bladerf_enable_module(dev, RX2, true);
+    if (status != 0) goto fail;
+
     status = bladerf_get_frequency(dev, RX1, &before);
     if (status != 0) goto fail;
 

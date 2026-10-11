@@ -2146,6 +2146,7 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
 
         if (rxfir != BLADERF_RFIC_RXFIR_DEC4 ||
             txfir != BLADERF_RFIC_TXFIR_INT4) {
+            bool tx_quad_was_manual = board_data->phy->manual_tx_quad_cal_en;
             log_debug("%s: enabling 4x decimation/interpolation filters\n",
                       __FUNCTION__);
 
@@ -2154,8 +2155,15 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
                 CHECK_STATUS(rfic->set_sample_rate(dev, ch, 30e6));
             }
 
+            /* The RX and TX FIRs form one sample-rate configuration. During
+             * the RX half, the clock domains are temporarily 4:1; TX QUAD
+             * calibration has no supported NCO mapping for that transient
+             * ratio. Defer its automatic run until the matching TX FIR is
+             * installed below. Preserve an explicit manual-calibration mode. */
+            board_data->phy->manual_tx_quad_cal_en = true;
             status = rfic->set_filter(dev, BLADERF_CHANNEL_RX(0),
                                       BLADERF_RFIC_RXFIR_DEC4, 0);
+            board_data->phy->manual_tx_quad_cal_en = tx_quad_was_manual;
             if (status < 0) {
                 log_error("%s: could not set RX filter mode: %s\n",
                           __FUNCTION__, bladerf_strerror(status));
@@ -5652,13 +5660,41 @@ static int bladerf2_config_gpio_write(struct bladerf *dev, uint32_t val)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t readback = 0;
+    int status;
+
     if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rfic_reference_clock_known = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    return dev->backend->config_gpio_write(dev, val);
+
+    status = dev->backend->config_gpio_write(dev, val);
+    if (status != 0) {
+        return status;
+    }
+
+    /* A full-register write temporarily invalidates the cached reference
+     * model. Re-establish it only after exact GPIO readback and the hardware
+     * reference-lock check succeed; this keeps benign writeback operations
+     * from permanently disabling later event-driven RX transitions. */
+    status = dev->backend->config_gpio_read(dev, &readback);
+    if (status != 0) {
+        return status;
+    }
+    if (readback != val) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    status = bladerf2_rfic_reference_clock_status(dev);
+    if (status != 0) {
+        return status;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rfic_reference_clock_known = true;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return 0;
 }
 
 
