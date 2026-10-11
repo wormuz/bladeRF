@@ -157,7 +157,7 @@ int nios_legacy_pio_read(struct bladerf *dev, uint8_t addr, uint32_t *data)
             return status;
         }
 
-        *data |= (cmd.data << (i * 8));
+        *data |= ((uint32_t) cmd.data << (i * 8));
     }
 
     return 0;
@@ -525,18 +525,21 @@ static int get_iq_correction(struct bladerf *dev, uint8_t addr, int16_t *value)
 {
     int i;
     int status;
+    uint16_t raw = 0;
     struct uart_cmd cmd;
 
-    *value = 0;
     for (i = status = 0; status == 0 && i < 2; i++) {
         cmd.addr = i + addr;
         cmd.data = 0xff;
         status = nios_access(dev, NIOS_PKT_LEGACY_DEV_CONFIG,
                              USB_DIR_DEVICE_TO_HOST, &cmd, 1);
 
-        *value |= (cmd.data << (i * 8));
+        if (status == 0) {
+            raw |= (uint16_t) cmd.data << (i * 8);
+        }
     }
 
+    *value = status == 0 ? (int16_t) raw : 0;
     return status;
 }
 
@@ -544,12 +547,13 @@ static int set_iq_correction(struct bladerf *dev, uint8_t addr, int16_t value)
 {
     int i;
     int status;
+    const uint16_t raw = (uint16_t) value;
     struct uart_cmd cmd;
 
     for (i = status = 0; status == 0 && i < 2; i++) {
         cmd.addr = i + addr;
 
-        cmd.data = (value >> (i * 8)) & 0xff;
+        cmd.data = (raw >> (i * 8)) & 0xff;
         status = nios_access(dev, NIOS_PKT_LEGACY_DEV_CONFIG,
                              USB_DIR_HOST_TO_DEVICE, &cmd, 1);
     }
