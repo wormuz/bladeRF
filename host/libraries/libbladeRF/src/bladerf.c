@@ -2536,7 +2536,8 @@ int bladerf_read_trigger(struct bladerf *dev,
 {
     int status;
     CHECK_NULL(dev);
-    if (!valid_public_channel(ch)) {
+    CHECK_NULL(val);
+    if (!valid_trigger_channel_signal(ch, trigger)) {
         return BLADERF_ERR_INVAL;
     }
     MUTEX_LOCK(&dev->lock);
@@ -2948,6 +2949,8 @@ int bladerf_expansion_attach(struct bladerf *dev, bladerf_xb xb)
 int bladerf_expansion_get_attached(struct bladerf *dev, bladerf_xb *xb)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(xb);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->expansion_get_attached(dev, xb);
@@ -2961,6 +2964,8 @@ int bladerf_expansion_get_attached(struct bladerf *dev, bladerf_xb *xb)
 int bladerf_expansion_gpio_read(struct bladerf *dev, uint32_t *val)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(val);
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_read(dev, val);
@@ -3028,6 +3033,8 @@ int bladerf_expansion_gpio_masked_write(struct bladerf *dev,
 int bladerf_expansion_gpio_dir_read(struct bladerf *dev, uint32_t *val)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(val);
     MUTEX_LOCK(&dev->lock);
 
     status = xb100_gpio_dir_read(dev, val);
