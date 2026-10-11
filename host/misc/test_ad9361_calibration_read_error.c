@@ -1051,15 +1051,21 @@ int main(void)
         bool old_rx_source_valid = phy.rfpll_source_valid[0];
         bool old_tx_source_valid = phy.rfpll_source_valid[1];
         bool old_bw_valid = phy.current_bw_valid;
+        uint64_t lo_readback = UINT64_MAX;
         unsigned reads_before = read_count;
         unsigned writes_before = write_count;
 
         phy.clks[RX_RFPLL] = &rxpll;
         phy.rfpll_source_valid[0] = false;
         if (ad9361_do_calib(&phy, RFDC_CAL, -1) != -EIO ||
-            ad9361_do_calib_timeout(&phy, RFDC_CAL, -1, 1000) != -EIO) {
+            ad9361_do_calib_timeout(&phy, RFDC_CAL, -1, 1000) != -EIO ||
+            ad9361_set_rx_lo_freq(&phy, 1000000000) != -EIO ||
+            ad9361_set_tx_lo_freq(&phy, 1000000000) != -EIO ||
+            ad9361_get_rx_lo_freq(&phy, &lo_readback) != -EIO ||
+            lo_readback != UINT64_MAX || read_count != reads_before ||
+            write_count != writes_before) {
             fprintf(stderr,
-                    "RFDC calibration accepted an unconfirmed RX LO source\n");
+                    "LO operation accepted an unconfirmed source\n");
             return EXIT_FAILURE;
         }
 
