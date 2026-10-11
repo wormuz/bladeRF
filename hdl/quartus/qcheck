@@ -982,7 +982,13 @@ def check_public_rf_lifecycle_calls_invalidate_rx():
         start = text.find("int " + name + "(")
         end = text.find("\nint ", start + 1) if start >= 0 else -1
         body = text[start:end if end >= 0 else None]
-        positions = [body.find(token) for token in ordered_tokens]
+        mutation = body.find(ordered_tokens[1])
+        positions = [
+            body.find("invalidate_rx_data_before_reconfigure("),
+            body.find(ordered_tokens[0]),
+            mutation,
+            body.find(ordered_tokens[2], mutation + 1),
+        ]
         if (start < 0 or any(pos < 0 for pos in positions) or
                 positions != sorted(positions)):
             fail("rx-epoch-lifecycle-invalidation",
@@ -1076,7 +1082,8 @@ def check_rx_epoch_host_timestamp_fence():
                  default=-1)
     fence = transition_text.find(
         "sync_rx_epoch_stage_min_timestamp_before_deadline(")
-    valid = transition_text.find("BLADERF_RF_EVT_RX_EPOCH_VALID,")
+    valid = transition_text.find(
+        "admission.event.event_type = BLADERF_RF_EVT_RX_EPOCH_VALID;")
     activate = transition_text.find(
         "sync_rx_epoch_activate_with_admission_before_deadline(")
     if (begin < 0 or fence_ack < 0 or retune < 0 or fence < 0 or
@@ -1115,11 +1122,11 @@ def check_rx_epoch_host_timestamp_fence():
         fail("rx-epoch-host-timestamp-fence",
              "RX_EPOCH_VALID publication can certify async IQ before the deadline-checked host admission commit",
              "publish the event while async IQ remains uncertified, then hold the admission lock across certificate commit and sync parser activation")
-    event_cursor_start = transition_text.find(
+    event_cursor_start = history_text.find(
         "int bladerf_rf_events_get_since(")
-    event_cursor_end = transition_text.find("int bladerf_rx_transition_get_nios_timing(",
-                                            event_cursor_start)
-    event_cursor_body = transition_text[event_cursor_start:event_cursor_end]
+    event_cursor_end = history_text.find("static uint64_t monotonic_ns(",
+                                         event_cursor_start)
+    event_cursor_body = history_text[event_cursor_start:event_cursor_end]
     if ("bladerf2_rf_event_cursor_is_valid(after_sequence" not in
             event_cursor_body or
             "*next_sequence = current_sequence" not in event_cursor_body or
