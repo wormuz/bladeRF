@@ -528,6 +528,35 @@ int main(void)
         }
     }
 
+    /* An init failure must still attempt every acquired-resource teardown,
+     * and a failed teardown must be returned instead of hiding behind the
+     * original GPIO-init error. */
+    {
+        AD9361_InitParam init_param = {0};
+        unsigned failure_site;
+
+        for (failure_site = 0; failure_site <= 4; ++failure_site) {
+            struct ad9361_rf_phy *init_result = NULL;
+            int32_t expected = failure_site == 0 ? -ENOSYS : -EIO;
+
+            memset(fake_gpio_remove_status, 0,
+                   sizeof(fake_gpio_remove_status));
+            if (failure_site != 0)
+                fake_gpio_remove_status[failure_site - 1] = -EIO;
+            fake_gpio_remove_count = 0;
+            fake_spi_remove_count = 0;
+
+            if (ad9361_init(&init_result, &init_param) != expected ||
+                init_result != NULL || fake_gpio_remove_count != 4 ||
+                fake_spi_remove_count != 0) {
+                fprintf(stderr,
+                        "AD9361 init cleanup hid or skipped failure %u\n",
+                        failure_site);
+                return EXIT_FAILURE;
+            }
+        }
+    }
+
     /* Teardown must attempt every platform cleanup and report the first
      * failure. ad9361_remove() consumes/frees the PHY even on failure, which
      * the NIOS owner must account for before propagating the status. */
