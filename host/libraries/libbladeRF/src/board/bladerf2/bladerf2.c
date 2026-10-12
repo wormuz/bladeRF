@@ -729,6 +729,16 @@ static void bladerf2_close(struct bladerf *dev)
                               board_data->rfic_reset_on_close
                                   ? "deinitialization" : "standby",
                               bladerf_strerror(standby_status));
+                    /* A failed standby/deinitialize leaves the RFFE state
+                     * uncertain. Retry the stronger shutdown before
+                     * releasing the board handle so a failed first control
+                     * write does not leave RF activity enabled after close. */
+                    int cleanup_status = rfic->deinitialize(dev);
+                    if (cleanup_status != 0) {
+                        log_error("%s: RFIC deinitialization retry also "
+                                  "failed: %s\n", __FUNCTION__,
+                                  bladerf_strerror(cleanup_status));
+                    }
                 }
                 log_debug("bladerf2_close: RFIC standby complete\n");
             }
@@ -5173,6 +5183,16 @@ static int bladerf2_load_fpga(struct bladerf *dev,
                         log_error("Failed to place RFIC in standby after RX "
                                   "fault monitor restart failure: %s\n",
                                   bladerf_strerror(standby_status));
+                        /* The board is about to be blocked from normal RF
+                         * use. Retry the stronger shutdown because standby
+                         * failure can leave RFFE enable state uncertain. */
+                        int cleanup_status = rfic->deinitialize(dev);
+                        if (cleanup_status != 0) {
+                            log_error("RFIC deinitialization retry after "
+                                      "fault monitor failure also failed: "
+                                      "%s\n",
+                                      bladerf_strerror(cleanup_status));
+                        }
                     }
                 }
                 board_data->state = STATE_FIRMWARE_LOADED;
