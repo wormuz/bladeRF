@@ -402,16 +402,28 @@ CyBool_t NuandHandleVendorRequest(
         apiRetStatus = CY_U3P_SUCCESS;
         use_feature = wValue;
 
-        CyU3PGpioGetValue(GPIO_TX_EN, &txen) ;
-        CyU3PGpioGetValue(GPIO_RX_EN, &rxen) ;
-        if (txen == CyFalse && rxen == CyFalse) {
-            CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue) ;
-            CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+        apiRetStatus = CyU3PGpioGetValue(GPIO_TX_EN, &txen);
+        if (apiRetStatus == CY_U3P_SUCCESS) {
+            apiRetStatus = CyU3PGpioGetValue(GPIO_RX_EN, &rxen);
         }
 
-        CyU3PGpioSetValue(GPIO_RX_EN, use_feature ? CyTrue : CyFalse);
+        /* Never infer that both RF directions are disabled from a failed
+         * GPIO read: pulsing SYS_RST while TX is active resets the sample
+         * gate and can invalidate the TX mute boundary. */
+        if (apiRetStatus == CY_U3P_SUCCESS &&
+            txen == CyFalse && rxen == CyFalse) {
+            apiRetStatus = CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
+            if (apiRetStatus == CY_U3P_SUCCESS) {
+                apiRetStatus = CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+            }
+        }
 
-        if (!use_feature) {
+        if (apiRetStatus == CY_U3P_SUCCESS) {
+            apiRetStatus = CyU3PGpioSetValue(
+                GPIO_RX_EN, use_feature ? CyTrue : CyFalse);
+        }
+
+        if (apiRetStatus == CY_U3P_SUCCESS && !use_feature) {
             const uint8_t ep = BLADE_RF_SAMPLE_EP_CONSUMER;
             apiRetStatus = NuandRFLink.reset_endpoint(ep);
             if(apiRetStatus != CY_U3P_SUCCESS) {
@@ -426,16 +438,28 @@ CyBool_t NuandHandleVendorRequest(
         apiRetStatus = CY_U3P_SUCCESS;
         use_feature = wValue;
 
-        CyU3PGpioGetValue(GPIO_TX_EN, &txen) ;
-        CyU3PGpioGetValue(GPIO_RX_EN, &rxen) ;
-        if (txen == CyFalse && rxen == CyFalse) {
-            CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue) ;
-            CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+        apiRetStatus = CyU3PGpioGetValue(GPIO_TX_EN, &txen);
+        if (apiRetStatus == CY_U3P_SUCCESS) {
+            apiRetStatus = CyU3PGpioGetValue(GPIO_RX_EN, &rxen);
         }
 
-        CyU3PGpioSetValue(GPIO_TX_EN, use_feature ? CyTrue : CyFalse);
+        /* The TX handler shares the same reset rule as RX. Require both
+         * direction reads and each reset write to succeed before changing
+         * the requested enable state. */
+        if (apiRetStatus == CY_U3P_SUCCESS &&
+            txen == CyFalse && rxen == CyFalse) {
+            apiRetStatus = CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
+            if (apiRetStatus == CY_U3P_SUCCESS) {
+                apiRetStatus = CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+            }
+        }
 
-        if (!use_feature) {
+        if (apiRetStatus == CY_U3P_SUCCESS) {
+            apiRetStatus = CyU3PGpioSetValue(
+                GPIO_TX_EN, use_feature ? CyTrue : CyFalse);
+        }
+
+        if (apiRetStatus == CY_U3P_SUCCESS && !use_feature) {
             const uint8_t ep = BLADE_RF_SAMPLE_EP_PRODUCER;
             apiRetStatus = NuandRFLink.reset_endpoint(ep);
             if(apiRetStatus != CY_U3P_SUCCESS) {
