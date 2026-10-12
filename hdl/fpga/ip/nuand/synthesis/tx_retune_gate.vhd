@@ -220,9 +220,11 @@ begin
                     -- active boundary is later than the new request. Express
                     -- both active-bank cases directly so the current selector
                     -- does not feed a comparator-result mux and then a second
-                    -- selector mux on this 8 ns path.
+                    -- selector mux on this 8 ns path. In either bank case,
+                    -- select the new bank exactly when the active boundary
+                    -- compares later than the new request.
                     target_bank_select_i <=
-                        (target_bank_select_i and not target_after_bank1_i) or
+                        (target_bank_select_i and target_after_bank1_i) or
                         (not target_bank_select_i and target_after_bank0_i);
                     if arm_immediate = '1' or due_now then
                         state_i <= STATE_MUTED;
