@@ -221,8 +221,7 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
  * +----------------+---------------------------------------------------------+
  * |        9       | Status Flags (Note 2)                                   |
  * +----------------+---------------------------------------------------------+
- * |      10        | Retune failure stage (0 on success)                      |
- * |      11-15     | Reserved. All bits set to 0.                            |
+ * |      10-15     | Reserved. All bits set to 0.                            |
  * +----------------+---------------------------------------------------------+
  *
  * (Note 1) This value will be zero if timestamps are not running for the
@@ -271,9 +270,9 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
 #define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED  (1 << 3)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING (1 << 4)
 
-/* Detailed device-side cause for a failed RETUNE2 NOW request. The response
- * is still backward compatible: older hosts ignore byte 10 and newer hosts
- * treat zero as an older firmware that did not provide the detail. */
+/* Detailed device-side cause for a failed RETUNE2 NOW request. It is encoded
+ * in the otherwise unused duration field for an immediate failure, preserving
+ * the legacy requirement that response bytes 10-15 remain zero. */
 typedef enum {
     NIOS_PKT_RETUNE2_FAILURE_NONE = 0,
     NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST,
@@ -291,11 +290,18 @@ typedef enum {
     NIOS_PKT_RETUNE2_FAILURE_LO_READBACK,
 } nios_pkt_retune2_failure;
 
+#define NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG UINT64_C(0xa75c000000000000)
+#define NIOS_PKT_RETUNE2_FAILURE_DURATION_MASK UINT64_C(0xffffffffffff0000)
+
 static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
                                               uint64_t duration,
                                               uint8_t flags,
                                               uint8_t failure)
 {
+    if (failure != NIOS_PKT_RETUNE2_FAILURE_NONE &&
+        (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
+        duration = NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG | failure;
+    }
     buf[NIOS_PKT_RETUNE2_RESP_IDX_MAGIC] = NIOS_PKT_RETUNE2_MAGIC;
 
     buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 0] =  duration        & 0xff;
@@ -309,7 +315,7 @@ static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
 
     buf[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] = flags;
 
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 0] = failure;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 0] = 0x00;
     buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 1] = 0x00;
     buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 2] = 0x00;
     buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 3] = 0x00;
@@ -335,7 +341,24 @@ static inline void nios_pkt_retune2_resp_unpack(const uint8_t *buf,
 
 static inline uint8_t nios_pkt_retune2_resp_failure(const uint8_t *buf)
 {
-    return buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV];
+    uint64_t duration;
+    uint8_t failure;
+
+    duration  = buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 0];
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 1]) << 8;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 2]) << 16;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 3]) << 24;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 4]) << 32;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 5]) << 40;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 6]) << 48;
+    duration |= ((uint64_t) buf[NIOS_PKT_RETUNE2_RESP_IDX_TIME + 7]) << 56;
+    if ((duration & NIOS_PKT_RETUNE2_FAILURE_DURATION_MASK) !=
+        NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG) {
+        return NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
+    failure = (uint8_t)duration;
+    return failure <= NIOS_PKT_RETUNE2_FAILURE_LO_READBACK
+        ? failure : NIOS_PKT_RETUNE2_FAILURE_NONE;
 }
 
 #endif

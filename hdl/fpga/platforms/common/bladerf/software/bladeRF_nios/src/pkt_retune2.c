@@ -922,7 +922,9 @@ void pkt_retune2(struct pkt_buf *b)
      * retune or queue-clear path. */
     if (!nios_pkt_retune2_reserved_valid(b->req)) {
         INCREMENT_ERROR_COUNT();
-        failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
+        failure_stage = timestamp == NIOS_PKT_RETUNE2_NOW
+            ? NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST
+            : NIOS_PKT_RETUNE2_FAILURE_NONE;
         flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
         nios_pkt_retune2_resp_pack(b->resp, 0, flags, failure_stage);
         return;
@@ -932,7 +934,9 @@ void pkt_retune2(struct pkt_buf *b)
         timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         if (!time_tamer_read(module, &start_time)) {
             INCREMENT_ERROR_COUNT();
-            failure_stage = NIOS_PKT_RETUNE2_FAILURE_TIMER_READ;
+            failure_stage = timestamp == NIOS_PKT_RETUNE2_NOW
+                ? NIOS_PKT_RETUNE2_FAILURE_TIMER_READ
+                : NIOS_PKT_RETUNE2_FAILURE_NONE;
             flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
             nios_pkt_retune2_resp_pack(b->resp, 0, flags, failure_stage);
             return;
@@ -1116,6 +1120,10 @@ void pkt_retune2(struct pkt_buf *b)
 
     if (status != 0) {
         flags &= ~(NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS);
+    }
+
+    if (timestamp != NIOS_PKT_RETUNE2_NOW) {
+        failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
     }
 
     nios_pkt_retune2_resp_pack(b->resp, duration, flags, failure_stage);

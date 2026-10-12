@@ -2069,6 +2069,9 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
 
     nios_pkt_retune2_resp_unpack(buf, &duration, &resp_flags);
     failure_stage = nios_pkt_retune2_resp_failure(buf);
+    if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+        duration = 0;
+    }
 
     if (dev->nios_retune_trace.valid) {
         dev->nios_retune_trace.device_duration_ticks = duration;

@@ -322,13 +322,7 @@ static bool nios_response_matches_request(const uint8_t *request,
          * request. The other response flags are similarly request-scoped. */
         if ((flags & 0xe0u) != 0 ||
             !nios_response_has_zero_tail(
-                response, NIOS_PKT_RETUNE2_RESP_IDX_RESV + 1) ||
-            (response[NIOS_PKT_RETUNE2_RESP_IDX_RESV] !=
-                 NIOS_PKT_RETUNE2_FAILURE_NONE &&
-             (timestamp != NIOS_PKT_RETUNE2_NOW ||
-              (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
-              response[NIOS_PKT_RETUNE2_RESP_IDX_RESV] >
-                  NIOS_PKT_RETUNE2_FAILURE_LO_READBACK)) ||
+                response, NIOS_PKT_RETUNE2_RESP_IDX_RESV) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0 &&
              timestamp != NIOS_PKT_RETUNE2_NOW) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) != 0 &&

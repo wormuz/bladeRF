@@ -341,6 +341,7 @@ static int expect_retune2_failure_stage(void)
                           1, 1, 0x83, 0);
     if (status != BLADERF_ERR_UNEXPECTED || !dev.nios_retune_trace.valid ||
         dev.nios_retune_trace.status != 0 ||
+        dev.nios_retune_trace.device_duration_ticks != 0 ||
         dev.nios_retune_trace.device_failure_stage !=
             NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT) {
         fprintf(stderr, "RETUNE2 failure-stage mapping mismatch: status=%d "

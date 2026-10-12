@@ -293,7 +293,7 @@ static int check_immediate_failure_stage_response(void)
                     failures[i].expected_stage);
             return 1;
         }
-        for (size_t reserved = NIOS_PKT_RETUNE2_RESP_IDX_RESV + 1;
+        for (size_t reserved = NIOS_PKT_RETUNE2_RESP_IDX_RESV;
              reserved < NIOS_PKT_LEN; ++reserved) {
             if (request.resp[reserved] != 0) {
                 fprintf(stderr, "%s failure dirtied reserved response byte %zu\n",
