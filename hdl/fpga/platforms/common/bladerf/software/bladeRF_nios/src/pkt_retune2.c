@@ -309,6 +309,27 @@ static inline struct queue_entry* peek_next_retune_offset(struct queue *q,
     }
 }
 
+static bool profile_slot_armed(const struct queue *q, uint8_t profile_num)
+{
+    uint32_t i;
+
+    if (q == NULL) {
+        return false;
+    }
+
+    for (i = 0; i < q->count; i++) {
+        const struct queue_entry *e =
+            &q->entries[(q->rem_idx + i) & (RETUNE2_QUEUE_MAX - 1)];
+        if ((e->state == ENTRY_STATE_SCHEDULED ||
+             e->state == ENTRY_STATE_READY) &&
+            e->profile.profile_num == profile_num) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 /* The retune interrupt may fire while this call is occuring, so we should
  * perform these operations in an order that minimizes the race window, and
  * does not cause the race to be problematic. It's fine if the last retune
@@ -346,24 +367,32 @@ static inline void profile_load_scheduled(struct queue *q,
         return;
     }
 
-    /* Check the contents of the retune queue and load all the profiles we can
-     * without causing them to step on each other. This should reduce retune
-     * times in most scenarios because the profile will have already been
-     * loaded into the RFFE when it becomes time to retune. */
+    /* Slots named by armed or fired entries are live hardware state: their
+     * compare may still activate them before the queue head is retired. Keep
+     * those slots reserved while preloading later requests, otherwise a new
+     * request using the same RFFE slot overwrites the profile of an already
+     * scheduled retune. */
     for (i = 0; i < q->count; i++) {
         e = peek_next_retune_offset(q, i);
-        if( e != NULL ) {
-            if (e->state == ENTRY_STATE_NEW) {
-                if (!(used & (1 << e->profile.profile_num))) {
-                    /* Profile slot is available in RFFE, fill it */
-                    if (profile_load(module, &e->profile)) {
-                        /* Mark profile slot used */
-                        used |= 1 << e->profile.profile_num;
-                    }
-                    /* Preload is opportunistic. ENTRY_STATE_NEW retries the
-                     * load before arming this entry, and only that terminal
-                     * failure should be published to the host. */
+        if (e != NULL && (e->state == ENTRY_STATE_SCHEDULED ||
+                          e->state == ENTRY_STATE_READY)) {
+            used |= 1u << e->profile.profile_num;
+        }
+    }
+
+    /* Load each available profile slot at most once. Requests that collide
+     * with a live slot remain NEW and are loaded when they reach the head. */
+    for (i = 0; i < q->count; i++) {
+        e = peek_next_retune_offset(q, i);
+        if (e != NULL && e->state == ENTRY_STATE_NEW) {
+            if (!(used & (1u << e->profile.profile_num))) {
+                /* Profile slot is available in RFFE, fill it. */
+                if (profile_load(module, &e->profile)) {
+                    used |= 1u << e->profile.profile_num;
                 }
+                /* Preload is opportunistic. ENTRY_STATE_NEW retries the
+                 * load before arming this entry, and only that terminal
+                 * failure should be published to the host. */
             }
         }
     }
@@ -733,44 +762,67 @@ void pkt_retune2(struct pkt_buf *b)
             INCREMENT_ERROR_COUNT();
             status = -1;
         } else {
+            const bool profile_already_in_target_slot =
+                profile->profile_num == rffe_profile &&
+                profile->state == FASTLOCK_STATE_BBP_RFFE;
             requested_profile = *profile;
             requested_profile.profile_num = rffe_profile;
             requested_profile.port = port;
             requested_profile.spdt = spdt;
+            /* The residency state belongs to the source NIOS cache entry.
+             * Retune2 can target a different physical RFFE slot, so do not
+             * let adi_fastlock_load() mistake that old residency for the
+             * requested slot already containing these profile bytes. Keep
+             * it only when the cache proves this exact profile is still in
+             * the requested slot; devices.c invalidates cache residency on
+             * every successful slot replacement. */
+            requested_profile.state = profile_already_in_target_slot
+                ? FASTLOCK_STATE_BBP_RFFE : FASTLOCK_STATE_BBP;
             if (timestamp == NIOS_PKT_RETUNE2_NOW) {
                 /* Fire off this retune operation now */
                 uint64_t readback_frequency_hz = 0;
-                switch (module) {
-                    case BLADERF_MODULE_RX:
-                    case BLADERF_MODULE_TX:
-                        /* Load the profile data into RFFE memory */
-                        /* Do not publish the new BBP profile cache entry
-                         * until every SPI write needed to load it has
-                         * succeeded. A failed upload must leave the prior
-                         * NIOS profile usable for a later retune. */
-                        if (!profile_load(module, &requested_profile)) {
-                            INCREMENT_ERROR_COUNT();
-                            status = -1;
+                struct queue *q = module == BLADERF_MODULE_TX
+                    ? &tx_queue : &rx_queue;
+
+                /* An armed compare can recall its physical RFFE slot
+                 * asynchronously. A NOW request must not replace that
+                 * profile while the queued transaction still owns it. */
+                if (profile_slot_armed(q, requested_profile.profile_num)) {
+                    INCREMENT_ERROR_COUNT();
+                    status = -1;
+                } else {
+                    switch (module) {
+                        case BLADERF_MODULE_RX:
+                        case BLADERF_MODULE_TX:
+                            /* Load the profile data into RFFE memory */
+                            /* Do not publish the new BBP profile cache entry
+                             * until every SPI write needed to load it has
+                             * succeeded. A failed upload must leave the prior
+                             * NIOS profile usable for a later retune. */
+                            if (!profile_load(module, &requested_profile)) {
+                                INCREMENT_ERROR_COUNT();
+                                status = -1;
+                                break;
+                            }
+
+                            *profile = requested_profile;
+
+                            /* Activate the fast lock profile for this retune */
+                            if (profile_activate(module, profile,
+                                                 &readback_frequency_hz)) {
+                                flags |=
+                                    NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
+                                status = 0;
+                            } else {
+                                INCREMENT_ERROR_COUNT();
+                                status = -1;
+                            }
                             break;
-                        }
 
-                        *profile = requested_profile;
-
-                        /* Activate the fast lock profile for this retune */
-                        if (profile_activate(module, profile,
-                                             &readback_frequency_hz)) {
-                            flags |=
-                                NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
-                            status = 0;
-                        } else {
+                        default:
                             INCREMENT_ERROR_COUNT();
                             status = -1;
-                        }
-                        break;
-
-                    default:
-                        INCREMENT_ERROR_COUNT();
-                        status = -1;
+                    }
                 }
             } else if (!timestamp_is_strictly_after(timestamp, start_time)) {
                 flags |= NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP;

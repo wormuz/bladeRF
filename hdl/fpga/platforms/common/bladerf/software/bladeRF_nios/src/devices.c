@@ -1004,6 +1004,15 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
         /* Already loaded! */
         return true;
     } else {
+        /* The first SPI write may already alter this physical slot, even if
+         * a later write fails. Invalidate every cached residency before
+         * starting the upload so a partial transfer cannot leave another
+         * profile falsely marked as resident. Its BBP copy remains intact
+         * and can be uploaded again on the next request. */
+        fastlock_cache_invalidate_slot(fastlocks,
+                                       NUM_BBP_FASTLOCK_PROFILES,
+                                       p->profile_num);
+
         /* Write 2 bytes to fast lock program data register */
         addr = (0x1 << 15) | (0x1 << 12) | (fl_prog_data_reg & 0x3ff);
         i = 0;
@@ -1038,15 +1047,6 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
         if (!adi_spi_write(addr, 0)) {
             return false;
         }
-
-        /* Only evict another cached profile after this load has succeeded. */
-        for (i = 0; i < NUM_BBP_FASTLOCK_PROFILES; i++) {
-            if ((fastlocks[i].profile_num == p->profile_num) &&
-                (fastlocks[i].state == FASTLOCK_STATE_BBP_RFFE)) {
-                fastlocks[i].state = FASTLOCK_STATE_BBP;
-            }
-        }
-
         /* Update profile state */
         p->state = FASTLOCK_STATE_BBP_RFFE;
         return true;

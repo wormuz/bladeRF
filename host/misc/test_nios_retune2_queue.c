@@ -21,6 +21,7 @@ static uint8_t recalled_profile_num;
 static uint8_t recalled_port;
 static uint8_t recalled_spdt;
 static bool fail_profile_load;
+static bool fail_profile_load_after_slot_write;
 static bool fail_profile_recall;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
@@ -30,13 +31,45 @@ static unsigned cancel_count;
 static bool compare_fired_rx;
 static bool compare_fired_tx;
 static bool simulated_tamer_clock_stalled;
+static bool track_rffe_fastlock_slots;
+static fastlock_profile simulated_rffe_rx[NUM_RFFE_FASTLOCK_PROFILES];
+static fastlock_profile simulated_rffe_tx[NUM_RFFE_FASTLOCK_PROFILES];
+static bool simulated_rffe_rx_valid[NUM_RFFE_FASTLOCK_PROFILES];
+static bool simulated_rffe_tx_valid[NUM_RFFE_FASTLOCK_PROFILES];
 
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
-    (void)module;
-    (void)profile;
+    fastlock_profile *cache;
     load_count++;
-    return !fail_profile_load;
+    if (profile == NULL) {
+        return false;
+    }
+    if (track_rffe_fastlock_slots) {
+        if (profile->profile_num >= NUM_RFFE_FASTLOCK_PROFILES) {
+            return false;
+        }
+        if (profile->state == FASTLOCK_STATE_RFFE ||
+            profile->state == FASTLOCK_STATE_BBP_RFFE) {
+            return true;
+        }
+        fastlock_profile *slots = module == BLADERF_MODULE_TX
+            ? simulated_rffe_tx : simulated_rffe_rx;
+        bool *valid = module == BLADERF_MODULE_TX
+            ? simulated_rffe_tx_valid : simulated_rffe_rx_valid;
+        cache = module == BLADERF_MODULE_TX ? fastlocks_tx : fastlocks_rx;
+        fastlock_cache_invalidate_slot(cache, NUM_BBP_FASTLOCK_PROFILES,
+                                       profile->profile_num);
+        valid[profile->profile_num] = false;
+        if (fail_profile_load || fail_profile_load_after_slot_write) {
+            return false;
+        }
+        slots[profile->profile_num] = *profile;
+        valid[profile->profile_num] = true;
+        profile->state = FASTLOCK_STATE_BBP_RFFE;
+    } else if (fail_profile_load) {
+        return false;
+    }
+    return true;
 }
 
 bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
@@ -47,6 +80,19 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
     recalled_profile_num = profile->profile_num;
     recalled_port = profile->port;
     recalled_spdt = profile->spdt;
+    if (track_rffe_fastlock_slots) {
+        fastlock_profile *slots = module == BLADERF_MODULE_TX
+            ? simulated_rffe_tx : simulated_rffe_rx;
+        bool *valid = module == BLADERF_MODULE_TX
+            ? simulated_rffe_tx_valid : simulated_rffe_rx_valid;
+        if (profile->profile_num >= NUM_RFFE_FASTLOCK_PROFILES ||
+            !valid[profile->profile_num] ||
+            memcmp(slots[profile->profile_num].profile_data,
+                   profile->profile_data,
+                   sizeof(profile->profile_data)) != 0) {
+            return false;
+        }
+    }
     return !fail_profile_recall;
 }
 
@@ -131,7 +177,7 @@ static int check_immediate_upload_failure_preserves_profile(void)
             [NIOS_PKT_RETUNE2_IDX_NIOS_PROFILE] = 0,
             [NIOS_PKT_RETUNE2_IDX_RFFE_PROFILE] = 3,
             [NIOS_PKT_RETUNE2_IDX_RFFE_PORT] = 0x40,
-            [NIOS_PKT_RETUNE2_IDX_SPDT] = 0x20,
+            [NIOS_PKT_RETUNE2_IDX_SPDT] = 0xa0,
         },
     };
 
@@ -155,6 +201,214 @@ static int check_immediate_upload_failure_preserves_profile(void)
         return 1;
     }
     return 0;
+}
+
+static int check_immediate_retune_reloads_reassigned_rffe_slot(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile *profile;
+
+    pkt_retune2_init();
+    memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
+    memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
+    profile = &fastlocks_tx[0];
+    profile->profile_num = 1;
+    profile->profile_data[0] = 0xa5;
+    profile->state = FASTLOCK_STATE_BBP_RFFE;
+
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    track_rffe_fastlock_slots = false;
+
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        load_count != 1 || recall_count != 1 ||
+        !simulated_rffe_tx_valid[3] ||
+        simulated_rffe_tx[3].profile_data[0] != 0xa5 ||
+        profile->profile_num != 3 ||
+        profile->state != FASTLOCK_STATE_BBP_RFFE) {
+        fputs("immediate retune reused stale RFFE residency after slot reassignment\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_immediate_retune_reuses_matching_rffe_slot(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile *profile;
+
+    pkt_retune2_init();
+    memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
+    profile = &fastlocks_tx[0];
+    profile->profile_num = 3;
+    profile->profile_data[0] = 0xa5;
+    profile->state = FASTLOCK_STATE_BBP_RFFE;
+    simulated_rffe_tx[3] = *profile;
+    simulated_rffe_tx_valid[3] = true;
+
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    track_rffe_fastlock_slots = false;
+
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        load_count != 0 || recall_count != 1 ||
+        profile->state != FASTLOCK_STATE_BBP_RFFE) {
+        fputs("immediate retune reloaded a profile already resident in its RFFE slot\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_partial_upload_invalidates_slot_residency(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile *old_profile;
+
+    pkt_retune2_init();
+    memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
+    memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
+    old_profile = &fastlocks_tx[1];
+    old_profile->profile_num = 3;
+    old_profile->profile_data[0] = 0xa5;
+    old_profile->state = FASTLOCK_STATE_BBP_RFFE;
+    simulated_rffe_tx[3] = *old_profile;
+    simulated_rffe_tx_valid[3] = true;
+
+    track_rffe_fastlock_slots = true;
+    fail_profile_load = false;
+    fail_profile_load_after_slot_write = true;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        old_profile->state != FASTLOCK_STATE_BBP ||
+        simulated_rffe_tx_valid[3]) {
+        fputs("partial fastlock upload left a stale RFFE residency cache\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        fail_profile_load_after_slot_write = false;
+        return 1;
+    }
+
+    fail_profile_load_after_slot_write = false;
+    memset(&request, 0, sizeof(request));
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 1, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    track_rffe_fastlock_slots = false;
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        load_count != 2 || recall_count != 1 ||
+        !simulated_rffe_tx_valid[3] ||
+        simulated_rffe_tx[3].profile_data[0] != 0xa5) {
+        fputs("profile was not reloaded after partial slot corruption\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_immediate_retune_cannot_clobber_armed_slot(
+    bladerf_module module)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile armed = { 0 };
+    struct queue *queue = module == BLADERF_MODULE_TX ? &tx_queue : &rx_queue;
+    fastlock_profile *profiles = module == BLADERF_MODULE_TX
+        ? fastlocks_tx : fastlocks_rx;
+    fastlock_profile *simulated_slots = module == BLADERF_MODULE_TX
+        ? simulated_rffe_tx : simulated_rffe_rx;
+    bool *simulated_valid = module == BLADERF_MODULE_TX
+        ? simulated_rffe_tx_valid : simulated_rffe_rx_valid;
+    uint8_t port = module == BLADERF_MODULE_TX ? 0x40 : 0x83;
+    uint8_t spdt = module == BLADERF_MODULE_TX ? 0xa0 : 0x05;
+
+    pkt_retune2_init();
+    memset(profiles, 0,
+           NUM_BBP_FASTLOCK_PROFILES * sizeof(*profiles));
+    memset(simulated_valid, 0,
+           NUM_RFFE_FASTLOCK_PROFILES * sizeof(*simulated_valid));
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    fail_tamer_read = false;
+    fail_tamer_schedule = false;
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = false;
+    compare_fired_rx = false;
+    tamer_timestamp = 0;
+
+    armed.profile_num = 3;
+    armed.state = FASTLOCK_STATE_BBP;
+    armed.profile_data[0] = 0xa5;
+    if (enqueue_retune(queue, &armed, 1, 100) != 1) {
+        fputs("failed to enqueue armed-slot collision case\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    profile_load_scheduled(queue, module);
+    pkt_retune2_work();
+    if (queue->entries[queue->rem_idx].state != ENTRY_STATE_SCHEDULED) {
+        fputs("failed to arm scheduled profile for collision case\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    profiles[0].profile_num = 0;
+    profiles[0].profile_data[0] = 0x5a;
+    profiles[0].state = FASTLOCK_STATE_BBP;
+    nios_pkt_retune2_pack(request.req, module, NIOS_PKT_RETUNE2_NOW,
+                          0, 3, port, spdt);
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        load_count != 2 || recall_count != 0 ||
+        simulated_slots[3].profile_data[0] != 0xa5) {
+        fputs("immediate retune overwrote a slot owned by an armed compare\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    if (module == BLADERF_MODULE_TX) {
+        compare_fired_tx = true;
+    } else {
+        compare_fired_rx = true;
+    }
+    pkt_retune2_work();
+    pkt_retune2_work();
+    compare_fired_rx = false;
+    compare_fired_tx = false;
+    track_rffe_fastlock_slots = false;
+    if (queue->count != 0 || pkt_retune2_success_count(module) != 1 ||
+        pkt_retune2_failure_count(module) != 0 ||
+        recall_count != 1 || recalled_profile->profile_data[0] != 0xa5) {
+        fputs("armed retune failed after conflicting NOW request\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_immediate_retune_cannot_clobber_armed_slot_rx_tx(void)
+{
+    return check_immediate_retune_cannot_clobber_armed_slot(
+               BLADERF_MODULE_RX) == 0 &&
+           check_immediate_retune_cannot_clobber_armed_slot(
+               BLADERF_MODULE_TX) == 0 ? 0 : 1;
 }
 
 static int check_schedule_ready_lifecycle(void)
@@ -286,6 +540,87 @@ static int check_schedule_ready_lifecycle(void)
         return 1;
     }
 
+    return 0;
+}
+
+static int check_preload_preserves_scheduled_profile_slot(void)
+{
+    fastlock_profile first = { 0 };
+    fastlock_profile later = { 0 };
+    unsigned int loads_after_first_arm;
+
+    pkt_retune2_init();
+    memset(simulated_rffe_rx_valid, 0, sizeof(simulated_rffe_rx_valid));
+    memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    compare_fired_rx = false;
+
+    first.profile_num = 3;
+    first.state = FASTLOCK_STATE_BBP;
+    first.profile_data[0] = 0xa5;
+    later.profile_num = 3;
+    later.state = FASTLOCK_STATE_BBP;
+    later.profile_data[0] = 0x5a;
+
+    if (enqueue_retune(&rx_queue, &first, 1, 100) != 1) {
+        fputs("failed to enqueue first shared-slot retune\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    profile_load_scheduled(&rx_queue, BLADERF_MODULE_RX);
+    pkt_retune2_work();
+    loads_after_first_arm = load_count;
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        !simulated_rffe_rx_valid[first.profile_num] ||
+        simulated_rffe_rx[first.profile_num].profile_data[0] != 0xa5) {
+        fputs("first retune did not retain its loaded RFFE profile\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    if (enqueue_retune(&rx_queue, &later, 2, 200) != 2) {
+        fputs("failed to enqueue later shared-slot retune\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    profile_load_scheduled(&rx_queue, BLADERF_MODULE_RX);
+    if (load_count != loads_after_first_arm ||
+        simulated_rffe_rx[first.profile_num].profile_data[0] != 0xa5) {
+        fputs("preload overwrote an armed retune's RFFE profile slot\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    compare_fired_rx = true;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    compare_fired_rx = false;
+    if (rx_queue.count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
+        recall_count != 1 || recalled_profile->profile_data[0] != 0xa5) {
+        fputs("armed retune recalled a different profile than requested\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+        load_count != loads_after_first_arm + 1 ||
+        simulated_rffe_rx[first.profile_num].profile_data[0] != 0x5a) {
+        fputs("deferred colliding profile did not load at queue head\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    track_rffe_fastlock_slots = false;
     return 0;
 }
 
@@ -891,6 +1226,21 @@ int main(void)
     }
 
     if (check_schedule_ready_lifecycle() != 0) {
+        return 1;
+    }
+    if (check_immediate_retune_reloads_reassigned_rffe_slot() != 0) {
+        return 1;
+    }
+    if (check_immediate_retune_reuses_matching_rffe_slot() != 0) {
+        return 1;
+    }
+    if (check_partial_upload_invalidates_slot_residency() != 0) {
+        return 1;
+    }
+    if (check_immediate_retune_cannot_clobber_armed_slot_rx_tx() != 0) {
+        return 1;
+    }
+    if (check_preload_preserves_scheduled_profile_slot() != 0) {
         return 1;
     }
     if (check_lost_irq_recovers_from_fpga_event() != 0) {

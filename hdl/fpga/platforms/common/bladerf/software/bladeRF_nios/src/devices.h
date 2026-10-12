@@ -160,6 +160,25 @@ typedef struct {
     volatile enum fastlock_state state;
 } fastlock_profile;
 
+/* A failed upload can leave its target RFFE slot partially overwritten.
+ * Keep the BBP profile bytes, but revoke every cache claim that the slot
+ * still contains a complete profile. */
+static inline void fastlock_cache_invalidate_slot(
+    fastlock_profile *profiles, unsigned int count, uint8_t profile_num)
+{
+    unsigned int i;
+
+    if (profiles == 0) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        if (profiles[i].profile_num == profile_num &&
+            profiles[i].state == FASTLOCK_STATE_BBP_RFFE) {
+            profiles[i].state = FASTLOCK_STATE_BBP;
+        }
+    }
+}
+
 /* Define the fast lock profile storage arrays */
 extern fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
 extern fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
