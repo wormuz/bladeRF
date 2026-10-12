@@ -51,6 +51,11 @@ bool rfic_frequency_peer_unknown(bladerf_module target);
 #define QUEUE_EMPTY         0xfe
 #define QUEUE_INVALID_TIMESTAMP 0xfd
 
+#if RETUNE2_QUEUE_MAX < 2 || \
+    (RETUNE2_QUEUE_MAX & (RETUNE2_QUEUE_MAX - 1)) != 0
+#error "RETUNE2_QUEUE_MAX must be an even power of two"
+#endif
+
 /* State of items in the retune queue */
 enum entry_state {
     ENTRY_STATE_INVALID = 0,  /* Marks entry invalid and not in use */
@@ -100,6 +105,31 @@ struct retune2_completion {
     uint64_t scheduled_timestamp;
     uint16_t nios_profile;
 };
+
+/* Mark a slot unavailable before replacing its multiword payload. The
+ * complement cannot alias a valid sequence for this slot: the ring depth is
+ * an even power of two, so sequences selecting the same slot differ by an
+ * even multiple of that depth, while `~sequence` differs by an odd value
+ * modulo 2^32. The compiler barriers keep payload stores between the marker
+ * and final sequence publication on the single-core NIOS reader path. */
+static inline void retune2_completion_begin_write(
+    struct retune2_completion *completion, uint32_t sequence)
+{
+    completion->sequence = ~sequence;
+    __asm__ __volatile__("" ::: "memory");
+}
+
+static inline void retune2_completion_publish(
+    struct retune2_completion *completion, uint32_t sequence,
+    uint64_t frequency_hz, uint64_t scheduled_timestamp,
+    uint16_t nios_profile)
+{
+    completion->frequency_hz = frequency_hz;
+    completion->scheduled_timestamp = scheduled_timestamp;
+    completion->nios_profile = nios_profile;
+    __asm__ __volatile__("" ::: "memory");
+    completion->sequence = sequence;
+}
 
 static struct retune2_completion
     rx_retune2_completions[RETUNE2_QUEUE_MAX];
@@ -565,12 +595,15 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                                               (RETUNE2_QUEUE_MAX - 1u)]
                     : &tx_retune2_completions[(completion_sequence - 1u) &
                                               (RETUNE2_QUEUE_MAX - 1u)];
-                completion->frequency_hz = readback_frequency_hz;
-                completion->scheduled_timestamp = e->timestamp;
-                completion->nios_profile = e->nios_profile;
-                /* Publish the slot sequence last, then advance the public
-                 * count. A reader verifies sequence before trusting fields. */
-                completion->sequence = completion_sequence;
+                /* A reader may still request this ring slot's previous
+                 * sequence while the payload is replaced. Invalidate the
+                 * slot first, publish all payload words, then publish the
+                 * new sequence before advancing the public success count. */
+                retune2_completion_begin_write(completion,
+                                               completion_sequence);
+                retune2_completion_publish(
+                    completion, completion_sequence, readback_frequency_hz,
+                    e->timestamp, e->nios_profile);
                 if (module == BLADERF_MODULE_RX) {
                     rx_retune2_success_count = completion_sequence;
                 } else {

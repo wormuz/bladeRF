@@ -784,12 +784,26 @@ static int check_completion_ring_overwrite_is_visible(void)
     const uint32_t requested_sequence = 1;
     const uint32_t overwritten_sequence =
         requested_sequence + NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+    struct retune2_completion *record =
+        &tx_retune2_completions[(requested_sequence - 1u) &
+            (NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH - 1u)];
 
-    /* Model a full ring lap after the reader fell behind. The host compares
-     * this word to its requested sequence and must reject the stale record. */
-    tx_retune2_completions[(requested_sequence - 1u) &
-        (NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH - 1u)].sequence =
-            overwritten_sequence;
+    /* Model a full ring lap while the reader still requests the old slot.
+     * It must reject during the payload write and after the new publish. */
+    record->sequence = requested_sequence;
+    retune2_completion_begin_write(record, overwritten_sequence);
+    if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
+                                       requested_sequence) ||
+        pkt_retune2_completion_word(
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE) ==
+                requested_sequence) {
+        fputs("completion reader accepted an in-progress ring slot\n",
+              stderr);
+        return 1;
+    }
+
+    retune2_completion_publish(record, overwritten_sequence,
+                               1800000000u, 0x100000002ull, 5);
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
                                        requested_sequence) ||
         pkt_retune2_completion_word(
