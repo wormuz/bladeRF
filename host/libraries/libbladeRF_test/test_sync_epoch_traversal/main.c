@@ -322,8 +322,8 @@ static void test_sync_rx_packet_meta_returns_one_complete_packet(void)
     f.sync.stream_config.format = BLADERF_FORMAT_PACKET_META;
     f.sync.stream_config.bytes_per_sample = sizeof(uint32_t);
     f.sync.stream_config.samples_per_buffer = SAMPLES_PER_BUFFER;
-    metadata_set_packet(f.buffers[0], 17, 0x11, 2, 0, 0);
-    metadata_set_packet(f.buffers[1], 29, 0x22, 2, 0, 0);
+    metadata_set_packet(f.buffers[0], 17, 0, 2, 0, 0x11);
+    metadata_set_packet(f.buffers[1], 29, 0, 2, 0, 0x22);
     memcpy(f.buffers[0] + METADATA_HEADER_SIZE, first_packet,
            sizeof(first_packet));
     memcpy(f.buffers[1] + METADATA_HEADER_SIZE, second_packet,
