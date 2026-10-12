@@ -475,31 +475,40 @@ static uint8_t spi_arbiter_read_grant(void *context)
 }
 #endif
 
+#define BLADERF_SPI_ARBITER_WAIT_ATTEMPTS 100000
+
 bool spi_arbiter_lock()
 {
 #ifdef ARBITER_0_BASE
     /* Arbitrary but bounded: a grant that has not arrived after this many
      * reads is not arriving. */
-    uint32_t const TRIES = 100000;
-    if (bladerf_spi_arbiter_acquire(TRIES, NULL,
+    if (bladerf_spi_arbiter_acquire(
+                                    BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
                                     spi_arbiter_set_request,
                                     spi_arbiter_read_grant)) {
         return true;
     }
 
-    DBG("%s: no SPI arbiter grant after %u tries\n", __FUNCTION__, TRIES);
+    DBG("%s: no SPI arbiter grant/release after %u tries\n", __FUNCTION__,
+        BLADERF_SPI_ARBITER_WAIT_ATTEMPTS);
     return false;
 #else
     return true;
 #endif  // ARBITER_0_BASE
 }
 
-void spi_arbiter_unlock()
+bool spi_arbiter_unlock()
 {
 // Built only when this board exposes the shared SPI arbiter.
 #ifdef ARBITER_0_BASE
-    IOWR_32DIRECT(ARBITER_0_BASE, 0, 2);
+    if (!bladerf_spi_arbiter_release(
+            BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
+            spi_arbiter_set_request, spi_arbiter_read_grant)) {
+        DBG("%s: SPI arbiter did not confirm release\n", __FUNCTION__);
+        return false;
+    }
 #endif  // ARBITER_0_BASE
+    return true;
 }
 
 bool lms6_read(uint8_t addr, uint8_t *data)
@@ -509,9 +518,7 @@ bool lms6_read(uint8_t addr, uint8_t *data)
     }
 
     *data = IORD_8DIRECT(RFFE_SPI_BASE, addr);
-    spi_arbiter_unlock();
-
-    return true;
+    return spi_arbiter_unlock();
 }
 
 bool lms6_write(uint8_t addr, uint8_t data)
@@ -521,8 +528,7 @@ bool lms6_write(uint8_t addr, uint8_t data)
     }
 
     IOWR_8DIRECT(RFFE_SPI_BASE, addr, data);
-    spi_arbiter_unlock();
-    return true;
+    return spi_arbiter_unlock();
 }
 
 /* The vendor alt_avalon_spi_command() polls TRDY/RRDY and TMT forever. A
@@ -652,7 +658,7 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     status = bladerf_spi_command_bounded(RFFE_SPI_BASE, 0, 2, &addr8[0],
                                          bytes, &data8[0], 0);
     if (status < 0) {
-        spi_arbiter_unlock();
+        (void)spi_arbiter_unlock();
         return false;
     }
 
@@ -661,7 +667,9 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     for (i = 0; i < 8; i++) {
         rv |= (((uint64_t)data8[i]) << 8 * (7 - i));
     }
-    spi_arbiter_unlock();
+    if (!spi_arbiter_unlock()) {
+        return false;
+    }
 
     *value = rv;
     return true;
@@ -709,8 +717,7 @@ bool adi_spi_write(uint16_t addr, uint64_t data)
     }
 
     success = adi_spi_write_unlocked(addr, data);
-    spi_arbiter_unlock();
-    return success;
+    return spi_arbiter_unlock() && success;
 }
 
 /* Atomic single-byte RMW used by the host no-OS transport to avoid a
@@ -748,8 +755,7 @@ bool adi_spi_update_bits(uint16_t addr, uint8_t mask, uint8_t value,
     success = status >= 0;
 
 done:
-    spi_arbiter_unlock();
-    return success;
+    return spi_arbiter_unlock() && success;
 }
 
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
@@ -779,8 +785,7 @@ bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
     success = true;
 
 done_batch:
-    spi_arbiter_unlock();
-    return success;
+    return spi_arbiter_unlock() && success;
 }
 
 bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
@@ -808,8 +813,7 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
     success = true;
 
 done:
-    spi_arbiter_unlock();
-    return success;
+    return spi_arbiter_unlock() && success;
 }
 #endif  // BOARD_BLADERF_MICRO
 
