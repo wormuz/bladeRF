@@ -2719,9 +2719,25 @@ int sync_tx(struct bladerf_sync *s,
                          * skipped here. */
                         s->state = SYNC_STATE_START_WORKER;
                     } else {
-                        /* Worker is running - continue onto checking for and
-                         * potentially waiting for an available buffer */
-                        s->state = SYNC_STATE_WAIT_FOR_BUFFER;
+                        bladerf_stream_state stream_state;
+
+                        MUTEX_LOCK(&s->worker->stream->lock);
+                        stream_state = s->worker->stream->state;
+                        MUTEX_UNLOCK(&s->worker->stream->lock);
+
+                        if (stream_state == STREAM_DONE ||
+                            stream_state == STREAM_SHUTTING_DOWN) {
+                            /* The worker publishes IDLE immediately after
+                             * async_run_stream() returns. During that short
+                             * handoff, do not treat its completed backend as
+                             * a live stream and wait for a callback that can
+                             * no longer arrive. */
+                            status = BLADERF_ERR_WOULD_BLOCK;
+                        } else {
+                            /* Worker and backend are active - continue onto
+                             * checking for an available buffer. */
+                            s->state = SYNC_STATE_WAIT_FOR_BUFFER;
+                        }
                     }
                 }
                 break;

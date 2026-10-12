@@ -766,6 +766,43 @@ static void test_sync_tx_worker_error_wakeup_is_retryable(void)
     assert(MUTEX_DESTROY(&worker.state_lock) == 0);
 }
 
+static void test_sync_tx_does_not_wait_on_terminal_backend_handoff(void)
+{
+    struct bladerf_sync sync = {0};
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+    struct sync_worker worker = {0};
+    int16_t sample[2] = {0};
+
+    dev.board = &bladerf2_board_fns;
+    sync.dev = &dev;
+    sync.initialized = true;
+    sync.state = SYNC_STATE_CHECK_WORKER;
+    sync.stream_config.format = BLADERF_FORMAT_SC16_Q11;
+    sync.stream_config.layout = BLADERF_TX_X1;
+    sync.stream_config.samples_per_buffer = 4;
+    sync.stream_config.bytes_per_sample = 4;
+    sync.meta.samples_per_ts = 1;
+    sync.worker = &worker;
+    worker.stream = &stream;
+    worker.state = SYNC_WORKER_STATE_RUNNING;
+
+    stream.dev = &dev;
+    stream.layout = BLADERF_TX_X1;
+    stream.state = STREAM_DONE;
+
+    assert(MUTEX_INIT(&sync.lock) == 0);
+    assert(MUTEX_INIT(&worker.state_lock) == 0);
+    assert(MUTEX_INIT(&stream.lock) == 0);
+
+    assert(sync_tx(&sync, sample, 1, NULL, 0) == BLADERF_ERR_WOULD_BLOCK);
+    assert(sync.state == SYNC_STATE_CHECK_WORKER);
+
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
+    assert(MUTEX_DESTROY(&worker.state_lock) == 0);
+    assert(MUTEX_DESTROY(&sync.lock) == 0);
+}
+
 static void test_sync_tx_does_not_replay_rejected_samples(void)
 {
     struct bladerf_sync sync = {0};
@@ -3358,6 +3395,7 @@ int main(void)
     test_async_tx_nonblocking_submit_does_not_wait_for_worker();
     test_sync_tx_requeues_backend_rejected_callback_buffer();
     test_sync_tx_worker_error_wakeup_is_retryable();
+    test_sync_tx_does_not_wait_on_terminal_backend_handoff();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();
