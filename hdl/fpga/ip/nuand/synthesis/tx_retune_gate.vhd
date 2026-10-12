@@ -84,13 +84,19 @@ architecture rtl of tx_retune_gate is
         left_ts  : unsigned(63 downto 0);
         right_ts : unsigned(63 downto 0)
     ) return boolean is
-        variable delta : unsigned(63 downto 0);
     begin
         -- Timestamp ordering is modulo 2^64, with a separation below 2^63.
-        -- Subtraction handles both the counter wrap and the signed-bit
-        -- boundary; comparing the operands' sign bits directly does not.
-        delta := left_ts - right_ts;
-        return delta(63) = '0' and delta /= 0;
+        -- The sign bit partitions the ring into two halves. Within one half,
+        -- ordinary low-bit ordering is the modulo ordering; across halves,
+        -- that ordering reverses. This is equivalent to testing the sign and
+        -- nonzero bits of a 64-bit subtraction, while avoiding a full-width
+        -- subtract followed by a separate zero-detect on the
+        -- target_timestamp-to-bank-select path.
+        if left_ts(63) = right_ts(63) then
+            return left_ts(62 downto 0) > right_ts(62 downto 0);
+        else
+            return left_ts(62 downto 0) < right_ts(62 downto 0);
+        end if;
     end function;
 begin
     -- Compare each target bank in parallel and select the one-bit result.
