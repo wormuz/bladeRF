@@ -3701,9 +3701,34 @@ int main(void)
             return EXIT_FAILURE;
         }
 
+        /* NIOS can replace the RFIC fastlock bank without updating this
+         * driver's cached profile image. Invalidate the direction before
+         * syncing a NIOS-owned recall so readback comes from the bank. */
+        {
+            unsigned reads_before_invalidation = read_count;
+
+            fake_regs[REG_RX_FAST_LOCK_PROGRAM_READ] = 0;
+            ad9361_fastlock_invalidate_cache(&phy, false);
+            frequency = UINT64_C(0xfeedface);
+            ret = ad9361_fastlock_sync_current_lo(
+                &phy, false, 0, 0, &frequency);
+            if (ret != -EINVAL ||
+                frequency != UINT64_C(0xfeedface) ||
+                read_count <= reads_before_invalidation ||
+                phy.fastlock.entry[0][0].flags != 0) {
+                fprintf(stderr,
+                        "Fastlock sync trusted stale bytes after out-of-band overwrite: "
+                        "ret=%" PRId32 " freq=%" PRIu64 " reads=%u/%u flags=%" PRIu32 "\n",
+                        ret, frequency, read_count, reads_before_invalidation,
+                        phy.fastlock.entry[0][0].flags);
+                return EXIT_FAILURE;
+            }
+        }
+
         /* A cached profile can still be malformed or externally modified.
          * With no expected host frequency, sync must reject an out-of-band
          * decoded LO instead of publishing its truncated cache value. */
+        phy.fastlock.entry[0][0].flags = FASTLOOK_INIT;
         profile_data[0] = 0x36; /* Integer 310 with profile_data[1]. */
         profile_data[1] = 0x01;
         profile_data[12] = 0; /* 12.4 GHz VCO / 2 = 6.2 GHz LO. */

@@ -87,6 +87,11 @@ bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
     }
 
     tx = module == BLADERF_MODULE_TX;
+    /* NIOS loads fastlock banks directly over RFFE SPI, outside the ADI
+     * fastlock cache. A previous RFIC FASTLOCK_STORE can therefore leave
+     * cached bytes for this slot that no longer match hardware. Force the
+     * readback below to decode the profile that was actually recalled. */
+    ad9361_fastlock_invalidate_cache(state.phy, tx);
     status = ad9361_fastlock_sync_current_lo(state.phy, tx, profile, 0,
                                              frequency_hz);
     if (status != 0) {
