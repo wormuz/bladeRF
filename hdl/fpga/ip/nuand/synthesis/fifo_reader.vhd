@@ -736,13 +736,24 @@ begin
         end if;
     end process;
 
+    -- In highly packed SC12 mode, the next 64-bit FIFO word is needed while
+    -- assembling the sample that spans the current word boundary. Present
+    -- the already-decided read request before the edge that registers the
+    -- current sample, so the show-ahead FIFO advances on that edge. The
+    -- registered request is one cycle too late for the packed carry. Keep
+    -- the established registered timing for all other formats.
+    fifo_read <= fifo_future.fifo_read
+        when highly_packed_mode_en = '1' and NUM_STREAMS = 2
+        else fifo_current.fifo_read;
+
     -- Keep the wide SC12 carry buffer out of the aggregate FSM record. A
     -- dedicated enabled register avoids the record-wide next-state mux on
     -- this datapath while preserving the original update edge. Do not gate
-    -- this prefetch with meta_time_go: while a scheduled packet is waiting,
-    -- the FIFO head is held because no read is issued. Capturing that stable
-    -- head early keeps the metadata due signal off the 48-bit buffer-enable
-    -- path and does not make any sample visible before its timestamp.
+    -- this prefetch with meta_time_go: the FIFO head remains stable while a
+    -- scheduled packet waits, then the packed read request advances it one
+    -- clock before the first output sample. Capturing each stable head early
+    -- keeps the metadata due signal off the 48-bit buffer-enable path and
+    -- does not make any sample visible before its timestamp.
     packed_buffer_write_comb : process(all)
         variable read_req_v : std_logic;
     begin
@@ -1176,7 +1187,6 @@ begin
         end if;
 
         -- Output assignments
-        fifo_read   <= fifo_current.fifo_read;
         out_samples <= fifo_current.out_samples;
 
         packet_control <= fifo_current.packet_control;

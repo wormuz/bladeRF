@@ -21,8 +21,9 @@
 -- Does the TX feed gate hold a burst until its timestamp arrives?
 --
 -- Two cases, both required:
---   scheduled  a burst timestamped in the future must produce NO sample
---              reads before that timestamp, and all of them after
+--   scheduled  a burst timestamped in the future must produce NO valid
+--              samples before that timestamp. Packed mode may prefetch one
+--              FIFO word one clock early to align samples across word edges.
 --   now        a burst with timestamp 0 (the host's TX_NOW encoding, which
 --              the reader turns into all ones by subtracting 1) must start
 --              immediately
@@ -56,8 +57,37 @@ end entity;
 
 architecture sim of fifo_reader_tb is
 
-    constant PACKED_TEST_WORD : std_logic_vector(63 downto 0) :=
-        x"0BAD0BAD0BAD0BAD";
+    function test_fifo_word(word_index : natural)
+        return std_logic_vector is
+        variable rv : std_logic_vector(63 downto 0);
+    begin
+        for bit_index in rv'range loop
+            if ((word_index * 37 + bit_index * 13 + bit_index / 4) mod 7) < 3 then
+                rv(bit_index) := '1';
+            else
+                rv(bit_index) := '0';
+            end if;
+        end loop;
+        return rv;
+    end function;
+
+    -- Interpret each FIFO word as the next 64 bits in the packed SC12Q11
+    -- stream. Each sample is I[11:0] followed by Q[11:0].
+    function expected_packed_sample(sample_index : natural)
+        return std_logic_vector is
+        variable rv         : std_logic_vector(23 downto 0);
+        variable stream_bit : natural;
+        variable word_index : natural;
+        variable bit_index  : natural;
+    begin
+        for sample_bit in rv'range loop
+            stream_bit := sample_index * 24 + sample_bit;
+            word_index := stream_bit / 64;
+            bit_index := stream_bit mod 64;
+            rv(sample_bit) := test_fifo_word(word_index)(bit_index);
+        end loop;
+        return rv;
+    end function;
 
     function sample12(v : std_logic_vector(11 downto 0)) return signed is
     begin
@@ -77,7 +107,8 @@ architecture sim of fifo_reader_tb is
     signal fifo_usedw : std_logic_vector(11 downto 0) := (others => '1');
     signal fifo_read  : std_logic;
     signal fifo_empty : std_logic := '0';
-    signal fifo_data  : std_logic_vector(63 downto 0) := PACKED_TEST_WORD;
+    signal fifo_data  : std_logic_vector(63 downto 0) := test_fifo_word(0);
+    signal fifo_word_index : natural := 0;
     signal fifo_hold  : std_logic := '0';
 
     signal pkt_ctrl   : packet_control_t;
@@ -102,6 +133,7 @@ architecture sim of fifo_reader_tb is
     signal samples_before : natural := 0;
     signal samples_after  : natural := 0;
     signal first_read_timestamp : unsigned(63 downto 0) := (others => '0');
+    signal first_valid_timestamp : unsigned(63 downto 0) := (others => '0');
     signal done         : boolean := false;
 
     -- Link epoch stimulus: real firmware signals a new epoch via
@@ -145,9 +177,26 @@ begin
         end if;
     end process;
 
+    -- Model a show-ahead FIFO: data advances only on an accepted read. This
+    -- keeps the head stable while a timestamp gate holds the TX stream.
+    fifo_data_model : process(clock)
+    begin
+        if rising_edge(clock) then
+            if reset = '1' then
+                fifo_word_index <= 0;
+                fifo_data <= test_fifo_word(0);
+            elsif fifo_read = '1' and fifo_empty = '0' then
+                fifo_word_index <= fifo_word_index + 1;
+                fifo_data <= test_fifo_word(fifo_word_index + 1);
+            end if;
+        end if;
+    end process;
+
     counters : process(clock)
         variable valid_samples : natural;
-        variable packed_cycle_check : natural range 0 to 3 := 0;
+        variable packed_samples_checked : natural := 0;
+        variable expected_sample : std_logic_vector(23 downto 0);
+        variable first_valid_seen : boolean := false;
     begin
         if rising_edge(clock) and reset = '0' and fifo_read = '1' then
             if reads_before = 0 and reads_after = 0 then
@@ -167,6 +216,10 @@ begin
                     valid_samples := valid_samples + 1;
                 end if;
             end loop;
+            if out_smp(0).data_v = '1' and not first_valid_seen then
+                first_valid_timestamp <= timestamp;
+                first_valid_seen := true;
+            end if;
             if timestamp < to_unsigned(TGT, 64) then
                 samples_before <= samples_before + valid_samples;
             else
@@ -178,37 +231,25 @@ begin
                 assert out_smp(1).data_v = '1'
                     report "packed TX streams became valid on different cycles"
                     severity failure;
-                case packed_cycle_check is
-                    when 0 =>
-                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(11 downto 0)) and
-                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(23 downto 12)) and
-                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(35 downto 24)) and
-                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(47 downto 36))
-                            report "packed TX cycle 0 payload mismatch"
-                            severity failure;
-                    when 1 =>
-                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(59 downto 48)) and
-                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(7 downto 0) & PACKED_TEST_WORD(63 downto 60)) and
-                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(19 downto 8)) and
-                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(31 downto 20))
-                            report "packed TX cycle 1 payload mismatch (saved-word carry)"
-                            severity failure;
-                    when 2 =>
-                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(43 downto 32)) and
-                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(55 downto 44)) and
-                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(3 downto 0) & PACKED_TEST_WORD(63 downto 56)) and
-                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(15 downto 4))
-                            report "packed TX cycle 2 payload mismatch (saved-word carry)"
-                            severity failure;
-                    when 3 =>
-                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(27 downto 16)) and
-                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(39 downto 28)) and
-                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(51 downto 40)) and
-                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(63 downto 52))
-                            report "packed TX cycle 3 payload mismatch (saved-word carry)"
-                            severity failure;
-                end case;
-                packed_cycle_check := (packed_cycle_check + 1) mod 4;
+                if packed_samples_checked < 16 then
+                    expected_sample := expected_packed_sample(packed_samples_checked);
+                    assert out_smp(0).data_i = sample12(expected_sample(11 downto 0)) and
+                           out_smp(0).data_q = sample12(expected_sample(23 downto 12))
+                        report "packed TX channel 0 payload mismatch at sample " &
+                               integer'image(packed_samples_checked) &
+                               " expected=" & to_hstring(expected_sample) &
+                               " actual=" & to_hstring(std_logic_vector(out_smp(0).data_q) &
+                                                        std_logic_vector(out_smp(0).data_i))
+                        severity failure;
+
+                    expected_sample := expected_packed_sample(packed_samples_checked + 1);
+                    assert out_smp(1).data_i = sample12(expected_sample(11 downto 0)) and
+                           out_smp(1).data_q = sample12(expected_sample(23 downto 12))
+                        report "packed TX channel 1 payload mismatch at sample " &
+                               integer'image(packed_samples_checked + 1)
+                        severity failure;
+                    packed_samples_checked := packed_samples_checked + 2;
+                end if;
             end if;
         end if;
     end process;
@@ -294,16 +335,30 @@ begin
                 severity failure;
             report "TX_NOW: feed started";
         else
-            assert reads_before = 0
-                report "gate leaked: feed ran before its timestamp"
-                severity failure;
+            if not PACKED then
+                assert reads_before = 0
+                    report "gate leaked: feed ran before its timestamp"
+                    severity failure;
+                assert first_read_timestamp = to_unsigned(TGT, 64)
+                    report "scheduled TX feed opened at " &
+                           to_hstring(std_logic_vector(first_read_timestamp)) &
+                           ", expected " & integer'image(TGT)
+                    severity failure;
+            else
+                -- Packed mode prefetches one FIFO word so the sample that
+                -- straddles a word boundary is ready at the scheduled edge.
+                -- The application-visible sample boundary must still be exact.
+                assert reads_before = 1
+                    report "packed TX did not limit early read to one prefetch word"
+                    severity failure;
+                assert first_valid_timestamp = to_unsigned(TGT, 64)
+                    report "scheduled packed samples opened at " &
+                           to_hstring(std_logic_vector(first_valid_timestamp)) &
+                           ", expected " & integer'image(TGT)
+                    severity failure;
+            end if;
             assert reads_after > 0
                 report "gate never opened at its timestamp"
-                severity failure;
-            assert first_read_timestamp = to_unsigned(TGT, 64)
-                report "scheduled TX feed opened at " &
-                       to_hstring(std_logic_vector(first_read_timestamp)) &
-                       ", expected " & integer'image(TGT)
                 severity failure;
             report "scheduled: gate held until the timestamp";
         end if;
