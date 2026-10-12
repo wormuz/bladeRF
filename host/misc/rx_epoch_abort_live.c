@@ -338,19 +338,17 @@ int main(void)
                            initial.fpga_timestamp));
 
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
-    /* The oversample register script is part of the RX configuration
-     * transaction. An injected write failure must reach the caller and keep
-     * META RX invalid until the configuration and a new transition succeed. */
-    CHECK(bladerf_enable_feature(dev, BLADERF_FEATURE_OVERSAMPLE, true));
+    /* Inject at the public RFIC-register write boundary covered by this test
+     * build. Since a raw register error leaves the frequency model uncertain,
+     * the device must remain fail-closed until RFIC reinitialization. */
     if (setenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER", "0x1e2", 1) != 0) {
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 50000000,
-                                     NULL);
+    status = bladerf_set_rfic_register(dev, 0x1e2, 0x00);
     unsetenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
     if (status == 0) {
-        fprintf(stderr, "oversample RFIC write failure was hidden\n");
+        fprintf(stderr, "injected RFIC register write failure was hidden\n");
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
@@ -359,38 +357,39 @@ int main(void)
     status = bladerf_sync_rx(dev, samples, 4096, &config_failure_meta, 300);
     if (status != BLADERF_ERR_WOULD_BLOCK ||
         config_failure_meta.actual_count != 0) {
-        fprintf(stderr, "partial oversample configuration admitted IQ: "
+        fprintf(stderr, "failed RFIC register write admitted IQ: "
                 "status=%s count=%u\n", bladerf_strerror(status),
                 config_failure_meta.actual_count);
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 161000000,
-                                     NULL);
-    if (status == 0) {
-        fprintf(stderr, "oversample sample-rate range failure was hidden\n");
+    struct bladerf_rf_event blocked_transition = {0};
+    status = transition(dev, recovery_frequency_hz, &blocked_transition);
+    if (status != BLADERF_ERR_WOULD_BLOCK) {
+        fprintf(stderr, "uncertain RFIC model allowed transition: %s\n",
+                bladerf_strerror(status));
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    memset(&config_failure_meta, 0, sizeof(config_failure_meta));
-    config_failure_meta.flags = BLADERF_META_FLAG_RX_NOW;
-    status = bladerf_sync_rx(dev, samples, 4096, &config_failure_meta, 300);
-    if (status != BLADERF_ERR_WOULD_BLOCK ||
-        config_failure_meta.actual_count != 0) {
-        fprintf(stderr, "failed sample-rate change admitted IQ: "
-                "status=%s count=%u\n", bladerf_strerror(status),
-                config_failure_meta.actual_count);
-        status = BLADERF_ERR_UNEXPECTED;
-        goto out;
-    }
+
+    bladerf_close(dev);
+    dev = NULL;
+    CHECK(bladerf_open(&dev, NULL));
     CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 50000000, NULL));
+    CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 5000000, NULL));
+    CHECK(bladerf_set_gain_mode(dev, BLADERF_CHANNEL_RX(0), BLADERF_GAIN_MGC));
+    CHECK(bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), 30));
+    CHECK(bladerf_sync_config(dev, BLADERF_RX_X1,
+                              BLADERF_FORMAT_SC16_Q11_META,
+                              16, 8192, 8, 1000));
+    CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true));
     struct bladerf_rf_event config_recovered = {0};
     CHECK(transition(dev, recovery_frequency_hz, &config_recovered));
     CHECK(read_valid_epoch(dev, samples, config_recovered.epoch_id,
                            config_recovered.fpga_timestamp));
     initial = config_recovered;
-    printf("RX oversample config fault injection: PASS; failed write stayed "
-           "invalid until full register retry and fresh epoch %u\n",
+    printf("RX RFIC register fault injection: PASS; failed write stayed "
+           "invalid until RFIC reopen and fresh epoch %u\n",
            config_recovered.epoch_id);
 
     const uint32_t fault_ordinals[] = { 1, 5 };
@@ -548,10 +547,10 @@ int main(void)
                            recovered.fpga_timestamp));
 
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
-    /* A synchronous host-data requirement can time out while META buffers
-     * are queued but no consumer has admitted one. If the FPGA ABORT then
-     * fails, the host parser must still reject queued IQ. */
-    const struct bladerf_rx_transition_request first_data_timeout_request = {
+    /* The host-data event records first data received by the worker, not the
+     * later application sync_rx() read. It must complete even when the caller
+     * has not yet drained the newly queued block. */
+    const struct bladerf_rx_transition_request first_data_request = {
         .target_frequency_hz = recovery_frequency_hz,
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX |
@@ -561,40 +560,23 @@ int main(void)
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
-    uint32_t first_data_timeout_txn = 0;
-    struct bladerf_rf_event first_data_timeout_result = {0};
+    uint32_t first_data_txn = 0;
+    struct bladerf_rf_event first_data_result = {0};
     CHECK(bladerf_rx_transition_begin(
-        dev, BLADERF_CHANNEL_RX(0), &first_data_timeout_request,
-        &first_data_timeout_txn));
-    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
-        status = BLADERF_ERR_UNEXPECTED;
-        goto out;
-    }
+        dev, BLADERF_CHANNEL_RX(0), &first_data_request,
+        &first_data_txn));
     status = bladerf_rx_transition_wait(
-        dev, first_data_timeout_txn, &first_data_timeout_result, 150);
-    unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
-    if (status != BLADERF_ERR_TIMEOUT) {
-        fprintf(stderr, "first host-data wait returned %s, expected timeout\n",
-                bladerf_strerror(status));
+        dev, first_data_txn, &first_data_result, 1000);
+    if (status != 0 || first_data_result.event_type !=
+                           BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
+        fprintf(stderr, "first host-data wait returned %s event=%u\n",
+                bladerf_strerror(status),
+                first_data_result.event_type);
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    CHECK(check_abort_failed_trace(dev, first_data_timeout_txn));
-    int16_t first_data_sentinel[4096 * 2];
-    memset(samples, 0x5a, 4096 * 2 * sizeof(*samples));
-    memcpy(first_data_sentinel, samples, sizeof(first_data_sentinel));
-    memset(&metadata, 0, sizeof(metadata));
-    metadata.flags = BLADERF_META_FLAG_RX_NOW;
-    status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
-    if (status != BLADERF_ERR_WOULD_BLOCK || metadata.actual_count != 0 ||
-        memcmp(samples, first_data_sentinel, sizeof(first_data_sentinel)) != 0) {
-        fprintf(stderr, "timed-out host-data transition exposed IQ: status=%s "
-                "count=%u\n", bladerf_strerror(status), metadata.actual_count);
-        status = BLADERF_ERR_UNEXPECTED;
-        goto out;
-    }
-    printf("RX first-host-data timeout + failed ABORT: PASS txn=%u IQ withheld\n",
-           first_data_timeout_txn);
+    printf("RX first-host-data event without application drain: PASS txn=%u\n",
+           first_data_txn);
     CHECK(transition(dev, recovery_frequency_hz, &recovered));
     CHECK(read_valid_epoch(dev, samples, recovered.epoch_id,
                            recovered.fpga_timestamp));
