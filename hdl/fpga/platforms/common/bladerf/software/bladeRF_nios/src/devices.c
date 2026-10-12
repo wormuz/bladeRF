@@ -239,18 +239,22 @@ void vctcxo_tamer_write(uint8_t addr, uint8_t data)
 #define TAMER_STATUS_SCHEDULE_ACK     (1u << 3)
 #define TAMER_STATUS_COMPARE_FIRED    (1u << 4)
 #define TAMER_STATUS_TS_CLOCK_STALLED (1u << 5)
-#define TAMER_SCHEDULE_WAIT_ATTEMPTS  100000u
+#define TAMER_STATUS_SCHEDULE_FAILED  (1u << 6)
+#define TAMER_STATUS_CANCEL_FAILED    (1u << 7)
 
-bool tamer_schedule(bladerf_module m, uint64_t time)
+bool tamer_schedule_request(bladerf_module m, uint64_t time)
 {
     uint32_t base;
-    uint32_t attempt;
 
     if (m == BLADERF_MODULE_RX) {
         base = RX_TAMER_BASE;
     } else if (m == BLADERF_MODULE_TX) {
         base = TX_TAMER_BASE;
     } else {
+        return false;
+    }
+
+    if ((IORD_8DIRECT(base, 9) & TAMER_STATUS_TS_CLOCK_STALLED) != 0) {
         return false;
     }
 
@@ -266,21 +270,52 @@ bool tamer_schedule(bladerf_module m, uint64_t time)
 
     /* Commit it and arm the comparison */
     IOWR_8DIRECT(base, 8, 0);
+    return true;
+}
 
-    /* A successful MMIO write only means the command reached the system
-     * clock domain. Require the timestamp-domain comparator to acknowledge
-     * the payload (or classify it as already due) before accepting the
-     * schedule. Expiry is a failure watchdog, never proof of success. */
-    for (attempt = 0; attempt < TAMER_SCHEDULE_WAIT_ATTEMPTS; ++attempt) {
-        if ((IORD_8DIRECT(base, 9) & TAMER_STATUS_SCHEDULE_ACK) != 0) {
-            return true;
-        }
+bool tamer_schedule_acknowledged(bladerf_module m)
+{
+    uint32_t base;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return false;
     }
 
-    /* The compare state is uncertain on timeout. The queue owner must keep
-     * this request until tamer_cancel() confirms disarm; releasing it here
-     * would let a later request share a still-armed comparator. */
-    return false;
+    return (IORD_8DIRECT(base, 9) & TAMER_STATUS_SCHEDULE_ACK) != 0;
+}
+
+bool tamer_schedule_failed(bladerf_module m)
+{
+    uint32_t base;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return true;
+    }
+
+    return (IORD_8DIRECT(base, 9) & TAMER_STATUS_SCHEDULE_FAILED) != 0;
+}
+
+bool tamer_cancel_failed(bladerf_module m)
+{
+    uint32_t base;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return true;
+    }
+
+    return (IORD_8DIRECT(base, 9) & TAMER_STATUS_CANCEL_FAILED) != 0;
 }
 
 bool tamer_compare_fired(bladerf_module m)
@@ -313,11 +348,10 @@ bool tamer_clock_stalled(bladerf_module m)
     return (IORD_8DIRECT(base, 9) & TAMER_STATUS_TS_CLOCK_STALLED) != 0;
 }
 
-bool tamer_cancel(bladerf_module m)
+bool tamer_cancel_request(bladerf_module m, uint8_t *ack_before)
 {
     uint32_t base;
-    uint8_t before;
-    uint32_t i;
+    uint8_t status;
 
     switch (m) {
         case BLADERF_MODULE_RX:
@@ -330,18 +364,32 @@ bool tamer_cancel(bladerf_module m)
             return false;
     }
 
-    before = IORD_8DIRECT(base, 9) & (1 << 1);
+    status = IORD_8DIRECT(base, 9);
+    /* A cancel acknowledgement is generated in the timestamp domain. If
+     * its watchdog says that domain is stopped, issuing a request cannot
+     * make progress. */
+    if (ack_before == NULL ||
+        (status & TAMER_STATUS_TS_CLOCK_STALLED) != 0) {
+        return false;
+    }
+    *ack_before = status & (1 << 1);
     IOWR_8DIRECT(base, 8, 4);
+    return true;
+}
 
-    /* The FPGA crosses cancellation into the timestamp clock domain and
-     * acknowledges only after the compare FSM is back in its load state. */
-    for (i = 0; i < 1000000; i++) {
-        if ((IORD_8DIRECT(base, 9) & (1 << 1)) != before) {
-            return true;
-        }
+bool tamer_cancel_acknowledged(bladerf_module m, uint8_t ack_before)
+{
+    uint32_t base;
+
+    if (m == BLADERF_MODULE_RX) {
+        base = RX_TAMER_BASE;
+    } else if (m == BLADERF_MODULE_TX) {
+        base = TX_TAMER_BASE;
+    } else {
+        return false;
     }
 
-    return false;
+    return (IORD_8DIRECT(base, 9) & (1 << 1)) != ack_before;
 }
 
 void bladerf_nios_init(struct pkt_buf *pkt,

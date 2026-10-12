@@ -254,8 +254,9 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
  *
  *      flags[3]: 1 = Queue clear failed because the time-tamer did not
  *                    acknowledge cancellation of its armed compare.
+ *      flags[4]: 1 = Queue clear is pending its timestamp-domain cancel ACK.
  *
- *      flags[7:4]    Reserved. Set to 0.
+ *      flags[7:5]    Reserved. Set to 0.
  */
 
 #define NIOS_PKT_RETUNE2_RESP_IDX_MAGIC   0
@@ -267,6 +268,7 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
 #define NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS       (1 << 1)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP (1 << 2)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED  (1 << 3)
+#define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING (1 << 4)
 
 static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
                                               uint64_t duration,

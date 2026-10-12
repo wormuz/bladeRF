@@ -405,15 +405,41 @@ void time_tamer_clear_interrupt(bladerf_module m)
     DBG("%s: module=%s\n", __FUNCTION__, module2str(m));
 }
 
-bool tamer_schedule(bladerf_module m, uint64_t time) {
+bool tamer_schedule_request(bladerf_module m, uint64_t time) {
     DBG("%s: module=%s, time=%"PRIu64"\n", __FUNCTION__, module2str(m), time);
     return m == BLADERF_MODULE_RX || m == BLADERF_MODULE_TX;
 }
 
-bool tamer_cancel(bladerf_module m)
+bool tamer_schedule_acknowledged(bladerf_module m)
+{
+    return m == BLADERF_MODULE_RX || m == BLADERF_MODULE_TX;
+}
+
+bool tamer_schedule_failed(bladerf_module m)
+{
+    return m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX;
+}
+
+bool tamer_cancel_failed(bladerf_module m)
+{
+    return m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX;
+}
+
+bool tamer_cancel_request(bladerf_module m, uint8_t *ack_before)
 {
     DBG("%s: module=%s\n", __FUNCTION__, module2str(m));
+    if (ack_before == NULL ||
+        (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
+        return false;
+    }
+    *ack_before = 0;
     return true;
+}
+
+bool tamer_cancel_acknowledged(bladerf_module m, uint8_t ack_before)
+{
+    (void)ack_before;
+    return m == BLADERF_MODULE_RX || m == BLADERF_MODULE_TX;
 }
 
 int lms_set_precalculated_frequency(struct bladerf *dev, bladerf_module mod,

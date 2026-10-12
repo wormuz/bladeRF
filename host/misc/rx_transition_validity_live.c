@@ -403,6 +403,29 @@ int main(int argc, char **argv)
     CHECK(assert_rx_iq_withheld(dev, samples, "sample-rate change"));
     CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
 
+    /* Rational-rate entry must share bladeRF2's FIR/clock-chain transition
+     * logic instead of calling the raw AD9361 rate setter. Exercise native to
+     * 4x-decimated mode through this public API. */
+    CHECK(bladerf_set_sample_rate(dev, rx_channel, 30720000, NULL));
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+    struct bladerf_rational_rate rational_rate = {
+        .integer = 3840000,
+        .num = 0,
+        .den = 1,
+    };
+    CHECK(bladerf_set_rational_sample_rate(dev, rx_channel, &rational_rate,
+                                           NULL));
+    CHECK(assert_rx_iq_withheld(dev, samples, "rational sample-rate change"));
+    bladerf_sample_rate actual_rate = 0;
+    CHECK(bladerf_get_sample_rate(dev, rx_channel, &actual_rate));
+    if (actual_rate != 3840000) {
+        fprintf(stderr, "rational sample-rate request applied %u, expected 3840000\n",
+                actual_rate);
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    CHECK(transition_and_check_iq(dev, 1835300000ULL, samples, &event, &txn));
+
     /* ADI documents TX FIR programming as potentially data-path changing.
      * It must revoke shared RX validity and publish a specific reason. */
     CHECK(latest_rf_event_cursor(dev, &tx_fir_event_cursor));

@@ -111,6 +111,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
      * independent USB error remains visible in the durable history. */
     report = !board_data->tx_async_transport_faulted;
     new_gate_abort = !board_data->tx_gate_abort_pending;
+    board_data->tx_async_admission_generation++;
     board_data->tx_async_transport_faulted = true;
     board_data->tx_stream_faulted_async = true;
     board_data->tx_async_link_certified = false;
@@ -395,6 +396,8 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     event.event_type = event_type;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     const uint8_t current_epoch_id = board_data->tx_async_link_epoch_id;
+    const bool tx_rfic_certified_before =
+        board_data->tx_async_rfic_state_certified;
     event.epoch_id = bladerf2_rf_link_epoch_id(link_status, current_epoch_id);
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :
                                          BLADERF_RF_STATE_ERROR;
@@ -430,6 +433,10 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
             break;
         default:
             break;
+    }
+    if (tx_rfic_certified_before !=
+        board_data->tx_async_rfic_state_certified) {
+        board_data->tx_async_admission_generation++;
     }
     /* Make the certificate event durable before waiters can observe the
      * positive RFIC state and submit TX samples. The shared lock order is
@@ -469,6 +476,9 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     event.epoch_id = board_data->tx_async_link_epoch_id;
     if (event_type != BLADERF_RF_EVT_TX_RETUNE_VALID) {
+        if (board_data->tx_async_rfic_state_certified) {
+            board_data->tx_async_admission_generation++;
+        }
         board_data->tx_async_rfic_state_certified = false;
     }
     event.fpga_state = error_code == 0 ? BLADERF_RF_STATE_IDLE :

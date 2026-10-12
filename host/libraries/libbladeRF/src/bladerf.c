@@ -3149,7 +3149,7 @@ int bladerf_expansion_gpio_write(struct bladerf *dev, uint32_t val)
 {
     int status;
     status = invalidate_rx_data_before_reconfigure(
-        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_SHARED_PATH);
     if (status != 0) {
         return status;
     }
@@ -3177,7 +3177,7 @@ int bladerf_expansion_gpio_masked_write(struct bladerf *dev,
     CHECK_NULL(dev);
     if (mask != 0) {
         status = invalidate_rx_data_before_reconfigure(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_SHARED_PATH);
         if (status != 0) {
             return status;
         }
@@ -3219,7 +3219,7 @@ int bladerf_expansion_gpio_dir_write(struct bladerf *dev, uint32_t val)
 {
     int status;
     status = invalidate_rx_data_before_reconfigure(
-        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_SHARED_PATH);
     if (status != 0) {
         return status;
     }
@@ -3247,7 +3247,7 @@ int bladerf_expansion_gpio_dir_masked_write(struct bladerf *dev,
     CHECK_NULL(dev);
     if (mask != 0) {
         status = invalidate_rx_data_before_reconfigure(
-            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_SHARED_PATH);
         if (status != 0) {
             return status;
         }
@@ -3421,7 +3421,7 @@ int bladerf_xb300_set_trx(struct bladerf *dev, bladerf_xb300_trx trx)
         return BLADERF_ERR_INVAL;
     }
     status = invalidate_rx_data_before_reconfigure(
-        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RF_PORT);
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_SHARED_PATH);
     if (status != 0) {
         return status;
     }

@@ -251,6 +251,105 @@ bool async_tx_buffer_valid_now(struct bladerf_stream *stream)
     return async_tx_buffer_valid(stream);
 }
 
+int async_tx_buffer_validate(struct bladerf_stream *stream,
+                             const struct bladerf_metadata *metadata,
+                             const void *buffer, size_t length)
+{
+    bladerf_stream_state state_before;
+    uint64_t generation_before;
+    int status;
+
+    if (stream == NULL || stream->dev == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    if (!async_tx_buffer_valid(stream)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    if (stream->dev->board == NULL ||
+        stream->dev->board->tx_async_buffer_timestamp_check == NULL) {
+        return 0;
+    }
+
+    state_before = stream->state;
+    generation_before = stream->tx_admission_generation;
+    MUTEX_UNLOCK(&stream->lock);
+    status = stream->dev->board->tx_async_buffer_timestamp_check(
+        stream->dev, stream->format, metadata, buffer, length);
+    MUTEX_LOCK(&stream->lock);
+
+    if (stream->state != state_before) {
+        return BLADERF_ERR_ABORTED;
+    }
+    if (stream->dev->board->tx_async_buffer_generation != NULL &&
+        generation_before != stream->dev->board->tx_async_buffer_generation(
+            stream->dev)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    return status;
+}
+
+void async_tx_buffer_generation_snapshot(struct bladerf_stream *stream)
+{
+    if (stream == NULL) {
+        return;
+    }
+    stream->tx_admission_generation = 0;
+    if (stream->dev != NULL &&
+        stream->dev->board != NULL &&
+        stream->dev->board->tx_async_buffer_generation != NULL) {
+        stream->tx_admission_generation =
+            stream->dev->board->tx_async_buffer_generation(stream->dev);
+    }
+}
+
+bool async_tx_buffer_generation_matches(struct bladerf_stream *stream)
+{
+    if (stream == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX ||
+        stream->dev == NULL || stream->dev->board == NULL ||
+        stream->dev->board->tx_async_buffer_generation == NULL) {
+        return true;
+    }
+
+    return stream->tx_admission_generation ==
+        stream->dev->board->tx_async_buffer_generation(stream->dev);
+}
+
+bool async_tx_buffer_generation_is_current(struct bladerf_stream *stream,
+                                           uint64_t generation)
+{
+    if (stream == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX ||
+        stream->dev == NULL || stream->dev->board == NULL ||
+        stream->dev->board->tx_async_buffer_generation == NULL) {
+        return true;
+    }
+    return generation ==
+        stream->dev->board->tx_async_buffer_generation(stream->dev);
+}
+
+void async_tx_buffer_submission_cancelled(struct bladerf_stream *stream)
+{
+    if (stream != NULL) {
+        stream->tx_admission_generation = 0;
+    }
+}
+
+void async_tx_buffer_submitted(struct bladerf_stream *stream,
+                               uint64_t generation)
+{
+    if (stream == NULL) {
+        return;
+    }
+    if (stream->dev != NULL && stream->dev->board != NULL &&
+        stream->dev->board->tx_async_buffer_submitted != NULL) {
+        stream->dev->board->tx_async_buffer_submitted(
+            stream->dev, generation);
+    }
+}
+
 int async_request_stream_shutdown(struct bladerf_stream *stream)
 {
     int status = 0;
@@ -625,7 +724,8 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
     if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
         int tx_status = status == 0 ? stream_error : status;
         if (tx_status != 0 && tx_status != BLADERF_ERR_WOULD_BLOCK &&
-            tx_status != BLADERF_ERR_CALLBACK) {
+            tx_status != BLADERF_ERR_CALLBACK &&
+            tx_status != BLADERF_ERR_TIME_PAST) {
             async_notify_tx_transport_failure(stream, tx_status);
         }
     }
@@ -644,7 +744,12 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 {
     int status = 0;
     uint64_t start_ns = 0;
+    uint64_t tx_admission_generation = 0;
     unsigned int backend_timeout_ms = timeout_ms;
+
+    if (stream == NULL || length == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
 
     if (timeout_ms != 0 &&
         bladerf_monotonic_now_ns(&start_ns) != 0) {
@@ -654,10 +759,19 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
     MUTEX_LOCK(&stream->lock);
 
     if (buffer != BLADERF_STREAM_SHUTDOWN &&
-        !(nonblock ? async_tx_buffer_valid_now(stream)
-                   : async_tx_buffer_valid(stream))) {
-        status = BLADERF_ERR_WOULD_BLOCK;
-        goto error;
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        async_tx_buffer_generation_snapshot(stream);
+        tx_admission_generation = stream->tx_admission_generation;
+    }
+
+    if (buffer != BLADERF_STREAM_SHUTDOWN) {
+        const bool tx_validity_waited = !async_tx_buffer_valid_now(stream);
+        status = nonblock
+            ? (tx_validity_waited ? BLADERF_ERR_WOULD_BLOCK : 0)
+            : async_tx_buffer_validate(stream, NULL, buffer, *length);
+        if (status != 0) {
+            goto error;
+        }
     }
 
     if (buffer != BLADERF_STREAM_SHUTDOWN) {
@@ -704,11 +818,19 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
         }
     }
 
-    if (buffer != BLADERF_STREAM_SHUTDOWN &&
-        !(nonblock ? async_tx_buffer_valid_now(stream)
-                   : async_tx_buffer_valid(stream))) {
-        status = BLADERF_ERR_WOULD_BLOCK;
-        goto error;
+    if (buffer != BLADERF_STREAM_SHUTDOWN) {
+        if (nonblock) {
+            if (!async_tx_buffer_valid_now(stream)) {
+                status = BLADERF_ERR_WOULD_BLOCK;
+                goto error;
+            }
+        } else {
+            status = async_tx_buffer_validate(
+                stream, NULL, buffer, *length);
+            if (status != 0) {
+                goto error;
+            }
+        }
     }
 
     if (buffer != BLADERF_STREAM_SHUTDOWN && timeout_ms != 0) {
@@ -719,15 +841,31 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
         }
     }
 
+    if (buffer != BLADERF_STREAM_SHUTDOWN &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+        stream->dev->board != NULL &&
+        stream->dev->board->tx_async_buffer_generation != NULL &&
+        tx_admission_generation !=
+            stream->dev->board->tx_async_buffer_generation(stream->dev)) {
+        status = BLADERF_ERR_WOULD_BLOCK;
+        goto error;
+    }
+
     status = stream->dev->backend->submit_stream_buffer(stream, buffer,
                                            length, backend_timeout_ms,
-                                           nonblock);
+                                           nonblock,
+                                           tx_admission_generation);
+    async_tx_buffer_submission_cancelled(stream);
     if (status != 0 && status != BLADERF_ERR_WOULD_BLOCK &&
         status != BLADERF_ERR_TIMEOUT && status != BLADERF_ERR_ABORTED) {
         async_notify_tx_transport_failure(stream, status);
     }
 
 error:
+    if (stream != NULL &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        async_tx_buffer_submission_cancelled(stream);
+    }
     MUTEX_UNLOCK(&stream->lock);
     return status;
 }

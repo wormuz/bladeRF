@@ -4,6 +4,9 @@ library ieee ;
     use work.time_tamer_timestamp_p.all;
 
 entity time_tamer is
+  generic (
+    CANCEL_TIMEOUT_CYCLES : positive := 4095
+  );
   port (
     -- Control signals
     clock       :   in  std_logic ;
@@ -43,6 +46,14 @@ architecture arch of time_tamer is
     -- runs on the independent Avalon clock and reports clock loss as an
     -- error; it never treats elapsed system-clock time as compare success.
     constant TS_CLOCK_TIMEOUT_CYCLES : positive := 4095;
+    -- A schedule request only acknowledges after the current-time CDC and
+    -- compare-load CDC complete; the requested target may be arbitrarily far
+    -- in the future. Bound that control-plane handshake independently of the
+    -- target time, and report failure rather than treating it as a retune.
+    constant SCHEDULE_TIMEOUT_CYCLES : positive := 4095;
+    -- Cancellation is also a CDC transaction. Bound a missing cancel ACK on
+    -- the independent Avalon clock so a live timestamp heartbeat cannot
+    -- leave Nios waiting forever for the compare gate to disarm.
 
     signal ack          : std_logic ;
 
@@ -53,6 +64,13 @@ architecture arch of time_tamer is
     signal snap_ack  : std_logic ;
     signal snapshot_invalid : std_logic := '0';
     signal schedule_ack : std_logic := '0';
+    signal schedule_failed : std_logic := '0';
+    signal schedule_wait_active : std_logic := '0';
+    signal schedule_wait_count : natural range 0 to SCHEDULE_TIMEOUT_CYCLES := 0;
+    signal cancel_failed : std_logic := '0';
+    signal cancel_wait_active : std_logic := '0';
+    signal cancel_wait_count : natural range 0 to CANCEL_TIMEOUT_CYCLES := 0;
+    signal cancel_toggle_before : std_logic := '0';
     signal compare_fired : std_logic := '0';
     signal snapshot_wait_count : natural range 0 to SNAPSHOT_TIMEOUT_CYCLES := 0;
     signal snap_read_active : std_logic := '0';
@@ -124,7 +142,8 @@ begin
 
     ts_sync_out <= '0' ;
 
-    status <= (4 => compare_fired, 3 => schedule_ack, 2 => snapshot_invalid,
+    status <= (7 => cancel_failed, 6 => schedule_failed, 4 => compare_fired,
+               3 => schedule_ack, 2 => snapshot_invalid,
                1 => cancel_toggle, 0 => status_past,
                5 => ts_clock_stalled, others =>'0') ;
 
@@ -181,6 +200,69 @@ begin
                     ts_clock_stalled <= '1';
                 else
                     ts_clock_wait_count <= ts_clock_wait_count + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    schedule_watchdog : process(clock, reset)
+    begin
+        if reset = '1' then
+            schedule_failed <= '0';
+            schedule_wait_active <= '0';
+            schedule_wait_count <= 0;
+        elsif rising_edge(clock) then
+            if mm_ts_reset = '1' or intr_cancel = '1' then
+                schedule_failed <= '0';
+                schedule_wait_active <= '0';
+                schedule_wait_count <= 0;
+            elsif intr_set = '1' then
+                schedule_failed <= '0';
+                schedule_wait_active <= '1';
+                schedule_wait_count <= 0;
+            elsif schedule_ack = '1' then
+                schedule_wait_active <= '0';
+                schedule_wait_count <= 0;
+            elsif schedule_wait_active = '1' and schedule_failed = '0' then
+                if schedule_wait_count = SCHEDULE_TIMEOUT_CYCLES then
+                    schedule_failed <= '1';
+                    schedule_wait_active <= '0';
+                else
+                    schedule_wait_count <= schedule_wait_count + 1;
+                end if;
+            end if;
+        end if;
+    end process;
+
+    cancel_watchdog : process(clock, reset)
+    begin
+        if reset = '1' then
+            cancel_failed <= '0';
+            cancel_wait_active <= '0';
+            cancel_wait_count <= 0;
+            cancel_toggle_before <= '0';
+        elsif rising_edge(clock) then
+            if mm_ts_reset = '1' then
+                -- Reset itself removes the compare from service. The
+                -- interrupt FSM separately acknowledges an explicit clear.
+                cancel_failed <= '0';
+                cancel_wait_active <= '0';
+                cancel_wait_count <= 0;
+            elsif intr_cancel = '1' then
+                cancel_failed <= '0';
+                cancel_wait_active <= '1';
+                cancel_wait_count <= 0;
+                cancel_toggle_before <= cancel_toggle;
+            elsif cancel_wait_active = '1' and
+                  cancel_toggle /= cancel_toggle_before then
+                cancel_wait_active <= '0';
+                cancel_wait_count <= 0;
+            elsif cancel_wait_active = '1' and cancel_failed = '0' then
+                if cancel_wait_count = CANCEL_TIMEOUT_CYCLES then
+                    cancel_failed <= '1';
+                    cancel_wait_active <= '0';
+                else
+                    cancel_wait_count <= cancel_wait_count + 1;
                 end if;
             end if;
         end if;

@@ -213,6 +213,17 @@ static inline bool metadata_timestamp_at_or_after(uint64_t timestamp,
     return (timestamp - boundary) < (UINT64_C(1) << 63);
 }
 
+/* A scheduled TX start remains valid only while it is at or ahead of the
+ * current FPGA timestamp. TX_NOW is intentionally exempt. */
+static inline bool metadata_tx_start_timestamp_valid(uint32_t flags,
+                                                     uint64_t timestamp,
+                                                     uint64_t current)
+{
+    return (flags & BLADERF_META_FLAG_TX_BURST_START) == 0 ||
+           (flags & BLADERF_META_FLAG_TX_NOW) != 0 ||
+           metadata_timestamp_at_or_after(timestamp, current);
+}
+
 /* Validate every sample-META message in an async RX transfer against the
  * certified epoch and first-valid timestamp. Reject partial message buffers
  * and missing tags rather than guessing where valid IQ begins. */

@@ -233,6 +233,10 @@ struct bladerf2_board_data {
     bool rx_fpga_loss_count_valid;
     uint64_t tx_fpga_loss_count_last;
     bool tx_fpga_loss_count_valid;
+    uint64_t tx_fpga_loss_count_observation_sequence;
+    uint64_t tx_loss_counter_sequence;
+    MUTEX tx_loss_counter_lock;
+    bool tx_loss_counter_lock_initialized;
     /* Empty TX FIFO before the first certified host buffer is startup, not
      * loss of an application waveform. Once first data is admitted, all
      * subsequent loss-counter increments are faults. */
@@ -292,6 +296,8 @@ struct bladerf2_board_data {
     bool tx_async_link_certified;
     bool tx_async_transport_faulted;
     uint64_t tx_async_transport_failure_generation;
+    /* Invalidates TX buffers that crossed a RF/link transition in flight. */
+    uint64_t tx_async_admission_generation;
     uint8_t tx_async_link_epoch_id;
     bool tx_recovery_blocked;
     bool tx_status_unavailable_reported;
@@ -477,9 +483,12 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
                                   uint64_t failure_generation_baseline);
 void bladerf2_tx_async_transport_failure(struct bladerf *dev,
                                          int error_code);
+int bladerf2_get_loss_event_count_with_sequence(
+    struct bladerf *dev, bladerf_direction dir, uint64_t *count,
+    uint64_t *observation_sequence);
 bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
                                        uint32_t link_status);
-int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
+int bladerf2_tx_wait_for_validity(struct bladerf *dev,
                                          uint32_t timeout_ms);
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status);

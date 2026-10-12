@@ -154,6 +154,9 @@ void bladerf2_tx_stream_set_faulted(
     }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->tx_stream_faulted_async != faulted) {
+        board_data->tx_async_admission_generation++;
+    }
     if (faulted || !board_data->tx_async_transport_faulted) {
         board_data->tx_stream_faulted_async = faulted;
         board_data->tx_async_link_certified = !faulted;
@@ -191,42 +194,7 @@ void bladerf2_tx_stream_set_epoch_id(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
-                                       uint32_t link_status)
-{
-    struct bladerf2_board_data *board_data;
-    struct bladerf_rf_event event = {0};
-
-    if (dev == NULL || dev->board_data == NULL) {
-        return false;
-    }
-
-    board_data = dev->board_data;
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->tx_async_transport_faulted ||
-        board_data->tx_gate_abort_pending) {
-        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        return false;
-    }
-
-    board_data->tx_stream_faulted_async = false;
-    board_data->tx_async_link_certified = true;
-    board_data->tx_async_rfic_state_certified = true;
-    /* Start a new deduplication window only after the monitor has observed
-     * a healthy RFIC and acknowledged TX link epoch. Configuration changes
-     * are not recovery evidence on their own. */
-    board_data->tx_rf_configuration_invalid_reported = false;
-    event.host_monotonic_ns = _monotonic_ns();
-    event.event_type = BLADERF_RF_EVT_TX_STATUS_RECOVERED;
-    event.epoch_id = (uint8_t)(link_status >> 20);
-    event.fpga_state = BLADERF_RF_STATE_IDLE;
-    bladerf2_rf_event_append(board_data, &event);
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    return true;
-}
-
-int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
+int bladerf2_tx_wait_for_validity(struct bladerf *dev,
                                          uint32_t timeout_ms)
 {
     struct bladerf2_board_data *board_data;
@@ -260,6 +228,8 @@ int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
             board_data->tx_stream_faulted_async,
             board_data->tx_async_transport_faulted,
             board_data->tx_gate_abort_pending,
+            board_data->tx_retune2_applied_waiting_rf_valid ||
+                board_data->tx_retune_gate_release_requested,
             board_data->tx_retune2_pending_count,
             board_data->tx_retune2_completion_faulted,
             frequency_model_valid);
@@ -274,6 +244,8 @@ int bladerf2_tx_wait_for_rfic_certificate(struct bladerf *dev,
                 board_data->tx_stream_faulted_async,
                 board_data->tx_async_transport_faulted,
                 board_data->tx_gate_abort_pending,
+                board_data->tx_retune2_applied_waiting_rf_valid ||
+                    board_data->tx_retune_gate_release_requested,
                 board_data->tx_retune2_pending_count,
                 board_data->tx_retune2_completion_faulted,
                 frequency_model_valid)) {
@@ -325,6 +297,7 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
     board_data->tx_async_link_epoch_id = (uint8_t)(link_status >> 20);
     board_data->tx_async_rfic_state_certified = false;
     board_data->tx_first_data_admitted = false;
+    board_data->tx_async_admission_generation++;
     if (!bladerf2_tx_epoch_generation_unchanged(
             board_data->tx_async_transport_failure_generation,
             failure_generation_baseline)) {
@@ -1060,6 +1033,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t rx_epoch_gate_id = 0;
         uint64_t rx_loss_count = 0;
         uint64_t tx_loss_count = 0;
+        uint64_t tx_loss_count_observation_sequence = 0;
         uint32_t tx_retune2_failure_count = 0;
         uint32_t tx_retune2_success_count = 0;
         uint32_t rx_retune2_failure_count = 0;
@@ -1127,6 +1101,8 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->rf_transition_setter_active &&
                 !board_data->tx_frequency_reconfigure_active &&
                 !board_data->tx_rf_config_operation_active;
+            tx_fir_config_valid = board_data->phy != NULL &&
+                board_data->phy->fir_config_valid;
             should_poll_tx_retune = board_data->state == STATE_INITIALIZED &&
                 tx_retune2_watch_active &&
                 !board_data->rf_transition_pending &&
@@ -1136,8 +1112,6 @@ static void *rx_fault_monitor_task(void *arg)
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
                 rx_retune2_watch_active &&
                 !board_data->rf_transition_setter_active;
-            tx_fir_config_valid = board_data->phy != NULL &&
-                board_data->phy->fir_config_valid;
             if (should_poll || should_poll_tx || should_poll_tx_retune ||
                 should_poll_rx_retune) {
                 if (should_poll || should_poll_tx) {
@@ -1194,8 +1168,10 @@ static void *rx_fault_monitor_task(void *arg)
                 if (status == 0 && should_poll_tx &&
                     dev->board->get_loss_event_count != NULL) {
                     _rx_fault_monitor_stage(board_data, "NIOS TX loss count");
-                    tx_loss_count_status = dev->board->get_loss_event_count(
-                        dev, BLADERF_TX, &tx_loss_count);
+                    tx_loss_count_status =
+                        bladerf2_get_loss_event_count_with_sequence(
+                            dev, BLADERF_TX, &tx_loss_count,
+                            &tx_loss_count_observation_sequence);
                 } else if (status == 0 && should_poll_tx) {
                     tx_loss_count_status = BLADERF_ERR_UNSUPPORTED;
                 }
@@ -1587,7 +1563,9 @@ static void *rx_fault_monitor_task(void *arg)
                 ((rf_link_status & RF_LINK_STATUS_VERSION_MASK) !=
                  RF_LINK_STATUS_VERSION_2 ? BLADERF_ERR_UNEXPECTED : 0);
 
+            _rx_fault_monitor_stage(board_data, "TX state commit");
             WITH_MUTEX(&dev->lock, {
+                _rx_fault_monitor_stage(board_data, "TX state commit locked");
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 abort_tx_gate_pending = board_data->tx_gate_abort_pending;
                 tx_transport_failure_generation =
@@ -1658,32 +1636,66 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (tx_link_status_error == 0 &&
                         tx_loss_count_status == 0) {
+                        bool mark_tx_loss_fault = false;
+                        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         tx_counter_baseline_was_valid =
                             board_data->tx_fpga_loss_count_valid;
-                        if (!board_data->tx_first_data_admitted) {
+                        if (tx_loss_count_observation_sequence >
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence &&
+                            !board_data->tx_first_data_admitted) {
                             /* TX is enabled before the first application
                              * buffer can be submitted. Empty-FIFO counts in
                              * this interval are startup, so keep advancing
                              * the baseline while admission remains closed. */
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_fpga_loss_count_valid = true;
-                        } else if (!board_data->tx_fpga_loss_count_valid) {
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence =
+                                tx_loss_count_observation_sequence;
+                        } else if (tx_loss_count_observation_sequence >
+                                       board_data->
+                                           tx_fpga_loss_count_observation_sequence &&
+                                   !board_data->tx_fpga_loss_count_valid) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_fpga_loss_count_valid = true;
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence =
+                                tx_loss_count_observation_sequence;
                         } else if (tx_loss_count <
-                                   board_data->tx_fpga_loss_count_last) {
+                                       board_data->tx_fpga_loss_count_last &&
+                                   tx_loss_count_observation_sequence >
+                                       board_data->
+                                           tx_fpga_loss_count_observation_sequence) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
-                            bladerf2_tx_stream_set_faulted(board_data, true);
-                            board_data->tx_recovery_blocked = true;
-                            abort_tx_retune_gate = true;
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence =
+                                tx_loss_count_observation_sequence;
+                            mark_tx_loss_fault = true;
                             counter_reset = true;
                         } else if (tx_loss_count >
-                                   board_data->tx_fpga_loss_count_last) {
+                                       board_data->tx_fpga_loss_count_last &&
+                                   tx_loss_count_observation_sequence >
+                                       board_data->
+                                           tx_fpga_loss_count_observation_sequence) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence =
+                                tx_loss_count_observation_sequence;
+                            mark_tx_loss_fault = true;
+                            report_tx_underrun = true;
+                        } else if (tx_loss_count_observation_sequence >
+                                   board_data->
+                                       tx_fpga_loss_count_observation_sequence) {
+                            board_data->
+                                tx_fpga_loss_count_observation_sequence =
+                                tx_loss_count_observation_sequence;
+                        }
+                        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        if (mark_tx_loss_fault) {
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
                             abort_tx_retune_gate = true;
-                            report_tx_underrun = true;
                         }
                     }
                     if (tx_retune2_watch_active &&
@@ -1902,6 +1914,28 @@ static void *rx_fault_monitor_task(void *arg)
                     tx_pending_after_completions =
                         board_data->tx_retune2_pending_count;
                     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                    if (tx_waiting_rf_valid) {
+                        log_debug("TX gate release prerequisites: pending=%u "
+                                  "link_status=%d loss_status=%d retune_status=%d "
+                                  "success_status=%d counter_baseline=%u "
+                                  "link_epoch=%u recovery_blocked=%u "
+                                  "fault=%u epoch_invalid=%u underrun=%u "
+                                  "retune_failure=%u counter_reset=%u "
+                                  "rfic_observation=%u\n",
+                                  tx_pending_after_completions,
+                                  tx_link_status_error, tx_loss_count_status,
+                                  tx_retune2_status,
+                                  tx_retune2_success_status,
+                                  tx_counter_baseline_was_valid,
+                                  bladerf2_rf_link_tx_epoch_valid(
+                                      rf_link_status,
+                                      board_data->tx_link_epoch_id),
+                                  board_data->tx_recovery_blocked,
+                                  report_tx_fault, report_tx_epoch_invalid,
+                                  report_tx_underrun,
+                                  report_tx_retune_failure,
+                                  counter_reset, tx_rfic_observation);
+                    }
                     if (tx_waiting_rf_valid &&
                         tx_pending_after_completions == 0 &&
                         tx_link_status_error == 0 &&
@@ -1917,11 +1951,10 @@ static void *rx_fault_monitor_task(void *arg)
                         !report_tx_retune_counter_reset && !counter_reset &&
                         tx_rfic_observation ==
                             BLADERF2_TX_RFIC_OBSERVATION_VALID) {
-                        /* bladerf_schedule_retune() holds dev->lock for its
-                         * complete reserve/ARM/enqueue sequence. Use the
-                         * same lock so a new schedule cannot land between
-                         * the release check and COMPLETE/RESUME processing. */
-                        MUTEX_LOCK(&dev->lock);
+                        /* The surrounding TX state-commit section already
+                         * holds dev->lock. Keep it across this release check
+                         * so a new schedule cannot land between the check
+                         * and COMPLETE/RESUME processing. */
                         bool release_still_valid;
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         release_still_valid =
@@ -1975,6 +2008,10 @@ static void *rx_fault_monitor_task(void *arg)
                         applied_frequency_hz =
                             board_data->tx_retune2_applied_frequency_hz;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                        log_debug("TX gate status observation: read=%d "
+                                  "status=0x%08x release_requested=%u\n",
+                                  gate_read_status, gate_status,
+                                  gate_release_requested);
                         if (gate_read_status != 0 ||
                             gate_state == NIOS_PKT_8x32_TX_RETUNE_STATE_ERROR) {
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
@@ -2090,7 +2127,6 @@ static void *rx_fault_monitor_task(void *arg)
                             }
                         }
                         }
-                        MUTEX_UNLOCK(&dev->lock);
                     }
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     tx_pending_after_completions =
@@ -2263,6 +2299,8 @@ static void *rx_fault_monitor_task(void *arg)
             if (abort_tx_retune_gate) {
                 int gate_status;
 
+                _rx_fault_monitor_stage(board_data, "TX gate abort");
+
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->tx_retune2_completion_faulted = true;
                 board_data->tx_retune2_applied_waiting_rf_valid = false;
@@ -2312,6 +2350,7 @@ static void *rx_fault_monitor_task(void *arg)
                     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                 }
             }
+            _rx_fault_monitor_stage(board_data, "idle");
         }
 
         /* Scheduled TX retunes can execute while TX is disabled. Keep their

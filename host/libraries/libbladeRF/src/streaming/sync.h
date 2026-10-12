@@ -112,6 +112,11 @@ struct buffer_mgmt {
      * the stale prefix is indistinguishable from live data. */
     bool stale_pending;
 
+    /* Ring saturation persists until the consumer catches up. Publish one
+     * detailed snapshot per configured RX stream instead of formatting a
+     * warning for every USB completion while the ring remains full. */
+    bool rx_ring_full_warning_published;
+
     /* Applicable to TX only. Denotes which context is responsible for
      * submitting full buffers to the underlying async system */
     sync_tx_submitter submitter;

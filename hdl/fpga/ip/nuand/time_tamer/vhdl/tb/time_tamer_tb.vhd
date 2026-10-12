@@ -157,6 +157,9 @@ begin
     ts_reset <= ts_reset_hold;
 
     U_tamer : entity work.time_tamer
+      generic map (
+        CANCEL_TIMEOUT_CYCLES => 63
+      )
       port map (
         clock           =>  clock,
         reset           =>  reset,
@@ -256,6 +259,9 @@ begin
         assert dout(3) = '1'
             report "time-tamer did not publish comparator arm acknowledgement"
             severity failure;
+        assert dout(6) = '0'
+            report "healthy comparator arm was reported as a failed handshake"
+            severity failure;
         read <= '0';
         wait until rising_edge(clock);
 
@@ -354,6 +360,10 @@ begin
         set_intr( clock, addr, din, write ) ;
         cancel_compare( clock, addr, din, write ) ;
         nop( clock, 1000 ) ;
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(7) = '0'
+            report "healthy compare cancellation reported a failure"
+            severity failure;
         assert intr = '0'
             report "cancelled compare generated an interrupt"
             severity failure ;
@@ -364,6 +374,33 @@ begin
             report "time-tamer did not re-arm after compare cancellation"
             severity failure ;
         clear_intr( clock, addr, din, write ) ;
+
+        -- A cancel CDC which receives no timestamp-domain response must
+        -- fail on the independent system clock. Recovery plus a new cancel
+        -- request can still obtain the real ACK and clear the diagnostic.
+        write_time(clock, addr, din, write,
+                   x"0000_0000_0010_0000");
+        set_intr(clock, addr, din, write);
+        nop(clock, 100);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(3) = '1'
+            report "cancel-watchdog compare did not arm"
+            severity failure;
+        ts_clock_enable <= '0';
+        cancel_compare(clock, addr, din, write);
+        nop(clock, 100);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(7) = '1' and intr = '0'
+            report "missing cancel ACK was not reported fail-closed"
+            severity failure;
+        ts_clock_enable <= '1';
+        nop(clock, 100);
+        cancel_compare(clock, addr, din, write);
+        nop(clock, 100);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(7) = '0' and intr = '0'
+            report "cancel recovery did not clear the failure diagnostic"
+            severity failure;
 
         -- A one-tick lead can expire while the MM-to-ts-clock arm handshake
         -- is in flight. It must still fire promptly instead of wrapping.
@@ -412,6 +449,28 @@ begin
         read <= '0';
         wait until rising_edge(clock);
 
+        -- The timestamp clock may stop while the host-to-ts compare handshake
+        -- is still in flight. The independent schedule watchdog must report
+        -- that missing ACK as failure, never as an accepted compare.
+        ts_clock_enable <= '0';
+        write_time(clock, addr, din, write,
+                   x"0000_0000_0010_0000");
+        set_intr(clock, addr, din, write);
+        nop(clock, 5000);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(3) = '0' and status_after(4) = '0' and
+               status_after(5) = '1' and status_after(6) = '1'
+            report "missing compare-arm ACK was not reported as failure"
+            severity failure;
+        ts_clock_enable <= '1';
+        nop(clock, 100);
+        cancel_compare(clock, addr, din, write);
+        nop(clock, 100);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(6) = '0' and status_after(7) = '0'
+            report "cancel did not clear the failed-arm diagnostic"
+            severity failure;
+
         nop( clock, 1000 ) ;
 
         -- Read the time back
@@ -433,8 +492,16 @@ begin
         assert dout(3) = '1'
             report "running timestamp clock did not acknowledge compare arm"
             severity failure;
+        assert dout(6) = '0'
+            report "far-future compare was reported as a schedule failure"
+            severity failure;
         read <= '0';
         wait until rising_edge(clock);
+        nop(clock, 5000);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(3) = '1' and status_after(6) = '0' and intr = '0'
+            report "schedule watchdog treated a far-future target as a timeout"
+            severity failure;
         ts_clock_enable <= '0';
         nop(clock, 5000);
         addr <= std_logic_vector(to_unsigned(9, addr'length));

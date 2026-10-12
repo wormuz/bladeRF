@@ -294,17 +294,20 @@ static bool nios_response_matches_request(const uint8_t *request,
         const uint64_t timestamp =
             nios_read_le64(request, NIOS_PKT_RETUNE_IDX_TIME);
 
-        /* Retune responses define three flag bits. Hardware reports a valid
-         * completion timestamp only for NOW, and cancel failure only for a
-         * queue-clear request that did not succeed. */
-        if ((flags & 0xf8u) != 0 ||
+        /* Valid tune time is NOW-only. Cancel failed/pending flags are valid
+         * only on a queue-clear request and cannot accompany success. */
+        if ((flags & 0xf0u) != 0 ||
             !nios_response_has_zero_tail(
                 response, NIOS_PKT_RETUNERESP_IDX_RESV) ||
             ((flags & NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID) != 0 &&
              timestamp != NIOS_PKT_RETUNE_NOW) ||
             ((flags & NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED) != 0 &&
              (timestamp != NIOS_PKT_RETUNE_CLEAR_QUEUE ||
-              (flags & NIOS_PKT_RETUNERESP_FLAG_SUCCESS) != 0))) {
+              (flags & NIOS_PKT_RETUNERESP_FLAG_SUCCESS) != 0)) ||
+            ((flags & NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING) != 0 &&
+             (timestamp != NIOS_PKT_RETUNE_CLEAR_QUEUE ||
+              (flags & (NIOS_PKT_RETUNERESP_FLAG_SUCCESS |
+                        NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED)) != 0))) {
             return false;
         }
         return true;
@@ -317,7 +320,7 @@ static bool nios_response_matches_request(const uint8_t *request,
 
         /* Retune2's invalid-time bit only accompanies a failed scheduled
          * request. The other response flags are similarly request-scoped. */
-        if ((flags & 0xf0u) != 0 ||
+        if ((flags & 0xe0u) != 0 ||
             !nios_response_has_zero_tail(
                 response, NIOS_PKT_RETUNE2_RESP_IDX_RESV) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0 &&
@@ -325,11 +328,16 @@ static bool nios_response_matches_request(const uint8_t *request,
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) != 0 &&
              (timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
               (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0)) ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) != 0 &&
+             (timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
+              (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED)) != 0)) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP) != 0 &&
              (timestamp == NIOS_PKT_RETUNE2_NOW ||
               timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
               (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
-                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED)) != 0))) {
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)) != 0))) {
             return false;
         }
         return true;

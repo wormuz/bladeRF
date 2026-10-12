@@ -5099,8 +5099,11 @@ typedef enum {
 #define BLADERF_RF_INVALIDATE_RFIC_BBPLL_UNLOCKED (1U << 23)
 /** TX FIR configuration may alter the shared RFIC datapath used by RX. */
 #define BLADERF_RF_INVALIDATE_TX_FIR (1U << 25)
-/** Opaque low-level configuration GPIO write may change RX mux/clock inputs. */
+/** Opaque configuration GPIO write or shared external RF-path change may
+ * alter the RX path, mux, or clock inputs. */
 #define BLADERF_RF_INVALIDATE_CONFIG_GPIO (1U << 26)
+/** Alias for a shared external RF-path operation. */
+#define BLADERF_RF_INVALIDATE_SHARED_PATH BLADERF_RF_INVALIDATE_CONFIG_GPIO
 /** Opaque Wishbone write may change FPGA RX sample admission or metadata. */
 #define BLADERF_RF_INVALIDATE_WISHBONE (1U << 27)
 /** Feature mode changes sample-rate/format interpretation for RX. */

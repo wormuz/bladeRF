@@ -475,6 +475,7 @@ static void *rx_callback(struct bladerf *dev,
                 log_verbose("%s worker: delaying submission while reorder "
                             "queue drains\n", worker2str(s));
             } else {
+                if (!b->rx_ring_full_warning_published) {
                 unsigned int full_slots = 0, partial_slots = 0;
                 unsigned int in_flight_slots = 0, empty_slots = 0;
                 unsigned int dropped_slots = 0;
@@ -512,6 +513,8 @@ static void *rx_callback(struct bladerf *dev,
                             empty_slots, dropped_slots, b->cons_i,
                             b->partial_off, b->expected_seq, b->next_seq,
                             b->reorder_len);
+                    b->rx_ring_full_warning_published = true;
+                }
 
                 /* This completed transfer is withheld. Retire its sequence
                  * and recycle the same transport buffer; stale FULL slots

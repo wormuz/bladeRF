@@ -435,6 +435,7 @@ int sync_init(struct bladerf_sync *sync,
             sync->buf_mgmt.overrun_event_published = false;
             sync->buf_mgmt.rx_data_withheld_pending = false;
             sync->buf_mgmt.stale_pending = false;
+            sync->buf_mgmt.rx_ring_full_warning_published = false;
 
             sync_reset_sequence_tracking(&sync->buf_mgmt, num_transfers);
 

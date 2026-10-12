@@ -60,6 +60,7 @@ bool rfic_frequency_peer_unknown(bladerf_module target);
 enum entry_state {
     ENTRY_STATE_INVALID = 0,  /* Marks entry invalid and not in use */
     ENTRY_STATE_NEW,          /* We have a new retune request to satisfy */
+    ENTRY_STATE_SCHEDULE_PENDING, /* Arm issued; await FPGA schedule ACK */
     ENTRY_STATE_SCHEDULED,    /* We've scheduled the timer interrupt for
                                * this entry and are awaiting the ISR */
     ENTRY_STATE_CANCEL_PENDING, /* Timer failure reported; await cancel ACK */
@@ -77,6 +78,8 @@ struct queue_entry {
     uint16_t nios_profile;
     uint64_t timestamp;
     bool cancel_recovery_seen;
+    bool cancel_request_pending;
+    uint8_t cancel_ack_before;
 };
 
 static struct queue {
@@ -86,6 +89,11 @@ static struct queue {
     volatile uint8_t count; /* Total number of items in the queue */
     uint8_t ins_idx;    /* Insertion index */
     volatile uint8_t rem_idx; /* Removal index, also read by the ISR */
+    volatile bool clear_requested;
+    bool clear_complete;
+    bool clear_cancel_pending;
+    bool clear_cancel_recovery_seen;
+    uint8_t clear_cancel_ack_before;
 
     struct queue_entry entries[RETUNE2_QUEUE_MAX];
 } rx_queue, tx_queue;
@@ -231,6 +239,10 @@ static inline uint8_t enqueue_retune(struct queue *q,
 {
     uint8_t ret;
 
+    if (q->clear_requested) {
+        return QUEUE_FULL;
+    }
+    q->clear_complete = false;
     if (q->count >= RETUNE2_QUEUE_MAX) {
         return QUEUE_FULL;
     }
@@ -252,6 +264,7 @@ static inline uint8_t enqueue_retune(struct queue *q,
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].timestamp = timestamp;
     q->entries[q->ins_idx].cancel_recovery_seen = false;
+    q->entries[q->ins_idx].cancel_request_pending = false;
 
     q->ins_idx = (q->ins_idx + 1) & (RETUNE2_QUEUE_MAX - 1);
 
@@ -312,7 +325,8 @@ static inline struct queue_entry* peek_next_retune_offset(struct queue *q,
 static bool profile_slot_compare_owned(const struct queue_entry *entry)
 {
     return entry != NULL &&
-           (entry->state == ENTRY_STATE_SCHEDULED ||
+           (entry->state == ENTRY_STATE_SCHEDULE_PENDING ||
+            entry->state == ENTRY_STATE_SCHEDULED ||
             entry->state == ENTRY_STATE_CANCEL_PENDING ||
             entry->state == ENTRY_STATE_READY);
 }
@@ -352,6 +366,104 @@ static void reset_queue(struct queue *q)
     }
 
     q->rem_idx = q->ins_idx = 0;
+    q->clear_requested = false;
+    q->clear_complete = false;
+    q->clear_cancel_pending = false;
+    q->clear_cancel_recovery_seen = false;
+}
+
+/* Queue clearing may need a timestamp-domain cancellation. Start it
+ * asynchronously and report pending/failure to the caller; the worker owns
+ * the queue until the matching cancel toggle arrives. */
+static bool clear_queue_async(struct queue *q, bladerf_module module,
+                              bool *cancel_failed)
+{
+    struct queue_entry *e = peek_next_retune(q);
+
+    *cancel_failed = false;
+
+    if (q->clear_complete) {
+        q->clear_complete = false;
+        return true;
+    }
+    if (q->clear_requested) {
+        if (tamer_clock_stalled(module)) {
+            *cancel_failed = true;
+        } else if (tamer_cancel_failed(module)) {
+            *cancel_failed = true;
+            if (e == NULL &&
+                tamer_cancel_request(module, &q->clear_cancel_ack_before)) {
+                q->clear_cancel_pending = true;
+                q->clear_cancel_recovery_seen = true;
+            } else if (e != NULL &&
+                       tamer_cancel_request(module, &e->cancel_ack_before)) {
+                e->cancel_request_pending = true;
+                e->cancel_recovery_seen = true;
+            }
+        } else if (e == NULL && !q->clear_cancel_pending &&
+                   q->clear_cancel_recovery_seen &&
+                   tamer_cancel_request(
+                       module, &q->clear_cancel_ack_before)) {
+            q->clear_cancel_pending = true;
+        } else if (e != NULL && e->state == ENTRY_STATE_CANCEL_PENDING &&
+                   !e->cancel_request_pending && e->cancel_recovery_seen &&
+                   tamer_cancel_request(module, &e->cancel_ack_before)) {
+            e->cancel_request_pending = true;
+        }
+        return false;
+    }
+
+    q->clear_requested = true;
+    if (e == NULL) {
+        q->clear_cancel_pending = false;
+        q->clear_cancel_recovery_seen = false;
+        if (tamer_clock_stalled(module)) {
+            *cancel_failed = true;
+        } else if (tamer_cancel_failed(module)) {
+            *cancel_failed = true;
+            if (tamer_cancel_request(module, &q->clear_cancel_ack_before)) {
+                q->clear_cancel_pending = true;
+                q->clear_cancel_recovery_seen = true;
+            }
+        } else if (tamer_cancel_request(
+                       module, &q->clear_cancel_ack_before)) {
+            q->clear_cancel_pending = true;
+            q->clear_cancel_recovery_seen = true;
+        }
+        return false;
+    }
+
+    if (e->state != ENTRY_STATE_CANCEL_PENDING) {
+        e->state = ENTRY_STATE_CANCEL_PENDING;
+        e->cancel_recovery_seen = false;
+        e->cancel_request_pending = false;
+    }
+
+    if (tamer_clock_stalled(module)) {
+        *cancel_failed = true;
+        return false;
+    }
+    if (tamer_cancel_failed(module)) {
+        *cancel_failed = true;
+        if (tamer_cancel_request(module, &e->cancel_ack_before)) {
+            e->cancel_request_pending = true;
+            e->cancel_recovery_seen = true;
+        }
+        return false;
+    }
+
+    if (e->cancel_request_pending) {
+        return false;
+    }
+
+    e->cancel_recovery_seen = true;
+    if (tamer_cancel_request(module, &e->cancel_ack_before)) {
+        e->cancel_request_pending = true;
+    } else {
+        e->cancel_recovery_seen = false;
+    }
+
+    return false;
 }
 
 static inline bool profile_load(bladerf_module module, fastlock_profile *p)
@@ -452,9 +564,21 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
 
 static inline void retune_isr(struct queue *q, bladerf_module module)
 {
-    struct queue_entry *e = peek_next_retune(q);
+    struct queue_entry *e;
+
+    /* Queue clear owns the active comparator until its timestamp-domain
+     * cancel ACK arrives; do not turn a racing IRQ into a READY head. */
+    if (q->clear_requested) {
+        return;
+    }
+
+    e = peek_next_retune(q);
     if (e != NULL) {
-        if (e->state == ENTRY_STATE_SCHEDULED) {
+        if (e->state == ENTRY_STATE_SCHEDULE_PENDING) {
+            if (tamer_compare_fired(module)) {
+                e->state = ENTRY_STATE_READY;
+            }
+        } else if (e->state == ENTRY_STATE_SCHEDULED) {
             /* An IRQ can be left pending across a failed cancel and a later
              * queue replacement. Only the sticky FPGA compare event tied to
              * the currently armed schedule may release this entry. */
@@ -531,6 +655,35 @@ static inline void perform_work(struct queue *q, bladerf_module module)
     struct queue_entry *e = peek_next_retune(q);
 
     if (e == NULL) {
+        if (q->clear_requested) {
+            if (q->clear_cancel_pending) {
+                if (tamer_clock_stalled(module)) {
+                    /* The tamer can reset its cancel FSM on a clock-domain
+                     * reset before the toggle is observed. Reissue after
+                     * recovery instead of waiting forever on a lost ACK. */
+                    q->clear_cancel_pending = false;
+                    q->clear_cancel_recovery_seen = false;
+                } else if (tamer_cancel_acknowledged(
+                               module, q->clear_cancel_ack_before)) {
+                    q->clear_cancel_pending = false;
+                    q->clear_requested = false;
+                    q->clear_complete = true;
+                } else if (tamer_cancel_failed(module)) {
+                    q->clear_cancel_pending = false;
+                    q->clear_cancel_recovery_seen = true;
+                }
+            } else if (tamer_clock_stalled(module)) {
+                q->clear_cancel_recovery_seen = false;
+            } else if (!q->clear_cancel_recovery_seen) {
+                q->clear_cancel_recovery_seen = true;
+                if (tamer_cancel_request(
+                        module, &q->clear_cancel_ack_before)) {
+                    q->clear_cancel_pending = true;
+                } else {
+                    q->clear_cancel_recovery_seen = false;
+                }
+            }
+        }
         return;
     }
 
@@ -555,23 +708,57 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                 break;
             }
 
-            /* Schedule the retune */
-            e->state = ENTRY_STATE_SCHEDULED;
-            if (!tamer_schedule(module, e->timestamp)) {
-                record_retune2_failure(module);
-                /* A schedule timeout is ambiguous: the compare payload may
-                 * already be crossing into ts_clock. Keep the queue head
-                 * until cancellation is acknowledged so a later request
-                 * cannot inherit a late compare event. */
-                e->state = ENTRY_STATE_CANCEL_PENDING;
-                e->cancel_recovery_seen = !tamer_clock_stalled(module);
-                if (e->cancel_recovery_seen && tamer_cancel(module)) {
-                    dequeue_retune(q, NULL);
+            /* Request the compare; the worker observes its FPGA ACK without
+             * blocking the NIOS command loop. Publish the ISR-recognizable
+             * state before the MMIO arm can trigger a near-immediate compare. */
+            e->state = ENTRY_STATE_SCHEDULE_PENDING;
+            if (tamer_schedule_request(module, e->timestamp)) {
+                if (tamer_schedule_failed(module)) {
+                    record_retune2_failure(module);
+                    e->state = ENTRY_STATE_CANCEL_PENDING;
+                    e->cancel_recovery_seen = false;
+                    e->cancel_request_pending = false;
+                } else if (e->state == ENTRY_STATE_SCHEDULE_PENDING &&
+                    tamer_schedule_acknowledged(module)) {
+                    e->state = ENTRY_STATE_SCHEDULED;
+                    /* The ISR can preempt between the state check and the
+                     * assignment above. The FPGA event is sticky, so
+                     * recheck it after publishing SCHEDULED to avoid
+                     * overwriting an IRQ-delivered READY state. */
+                    if (tamer_compare_fired(module)) {
+                        e->state = ENTRY_STATE_READY;
+                    }
                 }
+            } else {
+                record_retune2_failure(module);
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = false;
+                e->cancel_request_pending = false;
             }
 
             break;
         }
+
+        case ENTRY_STATE_SCHEDULE_PENDING:
+            if (tamer_schedule_failed(module)) {
+                record_retune2_failure(module);
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = false;
+                e->cancel_request_pending = false;
+            } else if (tamer_schedule_acknowledged(module)) {
+                if (e->state == ENTRY_STATE_SCHEDULE_PENDING) {
+                    e->state = ENTRY_STATE_SCHEDULED;
+                    if (tamer_compare_fired(module)) {
+                        e->state = ENTRY_STATE_READY;
+                    }
+                }
+            } else if (tamer_clock_stalled(module)) {
+                record_retune2_failure(module);
+                e->state = ENTRY_STATE_CANCEL_PENDING;
+                e->cancel_recovery_seen = false;
+                e->cancel_request_pending = false;
+            }
+            break;
 
         case ENTRY_STATE_SCHEDULED:
             /* The IRQ is the fast path. Recover from a lost IRQ by polling
@@ -589,26 +776,41 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                 record_retune2_failure(module);
                 e->state = ENTRY_STATE_CANCEL_PENDING;
                 e->cancel_recovery_seen = false;
-                if (tamer_cancel(module)) {
-                    dequeue_retune(q, NULL);
-                }
+                e->cancel_request_pending = false;
+                /* The watchdog has already proved the timestamp clock is
+                 * stopped. Cancellation cannot cross into that domain yet;
+                 * retain ownership and issue an asynchronous request after
+                 * clock recovery. */
             }
             break;
 
         case ENTRY_STATE_CANCEL_PENDING:
-            /* The failure was already published on entry. Retry only the
-             * hardware cancellation; never activate or discard this entry
-             * until the time-tamer confirms that its compare is disarmed.
-             * Do not spin through the million-read cancel watchdog on every
-             * worker pass: make one retry after the FPGA reports clock
-             * recovery, then wait for another observed stall/recovery cycle
-             * if that retry also fails. */
+            /* The failure was already published on entry. Never activate or
+             * discard this entry until the time-tamer confirms disarm. Start
+             * cancellation once, then poll its toggle acknowledgement on
+             * later worker passes without blocking NIOS command servicing. */
             if (tamer_clock_stalled(module)) {
                 e->cancel_recovery_seen = false;
+                e->cancel_request_pending = false;
+            } else if (e->cancel_request_pending) {
+                if (tamer_cancel_acknowledged(module,
+                                              e->cancel_ack_before)) {
+                    if (q->clear_requested) {
+                        reset_queue(q);
+                        q->clear_complete = true;
+                    } else {
+                        dequeue_retune(q, NULL);
+                    }
+                } else if (tamer_cancel_failed(module)) {
+                    e->cancel_request_pending = false;
+                    e->cancel_recovery_seen = true;
+                }
             } else if (!e->cancel_recovery_seen) {
                 e->cancel_recovery_seen = true;
-                if (tamer_cancel(module)) {
-                    dequeue_retune(q, NULL);
+                if (tamer_cancel_request(module, &e->cancel_ack_before)) {
+                    e->cancel_request_pending = true;
+                } else {
+                    e->cancel_recovery_seen = false;
                 }
             }
             break;
@@ -659,10 +861,8 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * and never tells the host that it failed. */
             record_retune2_failure(module);
             e->state = ENTRY_STATE_CANCEL_PENDING;
-            e->cancel_recovery_seen = !tamer_clock_stalled(module);
-            if (e->cancel_recovery_seen && tamer_cancel(module)) {
-                dequeue_retune(q, NULL);
-            }
+            e->cancel_recovery_seen = false;
+            e->cancel_request_pending = false;
             break;
     }
 }
@@ -683,6 +883,7 @@ void pkt_retune2(struct pkt_buf *b)
     uint64_t end_time;
     uint64_t duration = 0;
     bool start_time_valid = false;
+    bool cancel_failed = false;
     uint16_t nios_profile;
     uint8_t rffe_profile;
     uint8_t port;
@@ -719,21 +920,25 @@ void pkt_retune2(struct pkt_buf *b)
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         switch (module) {
             case BLADERF_MODULE_RX:
-                if (tamer_cancel(module)) {
-                    reset_queue(&rx_queue);
+                if (clear_queue_async(&rx_queue, module, &cancel_failed)) {
                     status = 0;
-                } else {
+                } else if (cancel_failed) {
                     flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED;
+                    status = -1;
+                } else {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING;
                     status = -1;
                 }
                 break;
 
             case BLADERF_MODULE_TX:
-                if (tamer_cancel(module)) {
-                    reset_queue(&tx_queue);
+                if (clear_queue_async(&tx_queue, module, &cancel_failed)) {
                     status = 0;
-                } else {
+                } else if (cancel_failed) {
                     flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED;
+                    status = -1;
+                } else {
+                    flags |= NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING;
                     status = -1;
                 }
                 break;

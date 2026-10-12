@@ -521,24 +521,22 @@ INLINE void time_tamer_reset(bladerf_module m);
  */
 INLINE void timer_tamer_clear_interrupt(bladerf_module m);
 
-/**
- * Schedule a timer interrupt on the specified module and wait for the FPGA
- * comparator to acknowledge the arm (or report that the target is already
- * due). A false return is a failed schedule, not a delay-based success.
- *
- * @param   m       Module to schedule interrupt for
- * @param   time    Timestamp to schedule interrupt to occur at.
- *                  If this is in the past, the interrupt fires immediately.
- *
- * @return true after comparator acknowledgement, false on invalid module or
- *         arm timeout.
- */
-/* False means the schedule was not acknowledged; caller must retain ownership
- * of the time-tamer until tamer_cancel() confirms disarm. */
-bool tamer_schedule(bladerf_module m, uint64_t time);
+/** Request a timer compare without blocking; false means no request was sent. */
+bool tamer_schedule_request(bladerf_module m, uint64_t time);
 
-/** Cancel an armed timer compare and wait until the time-tamer acknowledges. */
-bool tamer_cancel(bladerf_module m);
+/** Read the FPGA's sticky acknowledgement for the outstanding schedule. */
+bool tamer_schedule_acknowledged(bladerf_module m);
+
+/** Read the FPGA's sticky failure for a schedule handshake that did not
+ * complete. This is a failure indication, never a successful retune event. */
+bool tamer_schedule_failed(bladerf_module m);
+bool tamer_cancel_failed(bladerf_module m);
+
+/** Start cancellation of an armed compare without blocking the NIOS loop. */
+bool tamer_cancel_request(bladerf_module m, uint8_t *ack_before);
+
+/** Check whether a previously requested cancellation was acknowledged. */
+bool tamer_cancel_acknowledged(bladerf_module m, uint8_t ack_before);
 
 /**
  * Read the command UART request buffer

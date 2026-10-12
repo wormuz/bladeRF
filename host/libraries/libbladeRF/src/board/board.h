@@ -394,6 +394,18 @@ struct board_fns {
     bool (*tx_async_buffer_valid)(struct bladerf *dev);
     /* Non-blocking TX certificate query used by non-blocking host submits. */
     bool (*tx_async_buffer_valid_now)(struct bladerf *dev);
+    /* Validate scheduled timestamps after a blocking RFIC/gate-validity wait.
+     * Called with stream->lock released. */
+    int (*tx_async_buffer_timestamp_check)(
+        struct bladerf *dev, bladerf_format format,
+        const struct bladerf_metadata *metadata,
+        const void *buffer, size_t length);
+    /* Snapshot the TX admission generation for revalidation after a backend
+     * waits for transfer capacity. */
+    uint64_t (*tx_async_buffer_generation)(struct bladerf *dev);
+    /* Called only after the backend accepted a TX buffer for submission. */
+    void (*tx_async_buffer_submitted)(struct bladerf *dev,
+                                      uint64_t admission_generation);
     /* Revoke TX transport validity after a terminal asynchronous stream error.
      * Called without dev->lock, including from USB callbacks. */
     void (*tx_async_transport_failure)(struct bladerf *dev, int error_code);

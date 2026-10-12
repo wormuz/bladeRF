@@ -315,6 +315,7 @@ set(LIBBLADERF_SOURCE_BLADERF2
         src/board/bladerf2/rfic_host.c
         src/board/bladerf2/rx_event_history.c
         src/board/bladerf2/rx_transition_lifecycle.c
+        src/board/bladerf2/tx_status_event.c
         src/board/bladerf2/rf_transition.c
 )
 

@@ -173,7 +173,8 @@ struct usb_fns {
                                 void *buffer,
                                 size_t *length,
                                 unsigned int timeout_ms,
-                                bool nonblock);
+                                bool nonblock,
+                                uint64_t tx_generation);
 
     int (*deinit_stream)(void *driver, struct bladerf_stream *stream);
 

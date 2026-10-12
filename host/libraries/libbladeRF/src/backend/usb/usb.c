@@ -981,11 +981,12 @@ static int usb_shutdown_stream(struct bladerf_stream *stream)
 }
 
 int usb_submit_stream_buffer(struct bladerf_stream *stream, void *buffer,
-                             size_t *length, unsigned int timeout_ms, bool nonblock)
+                             size_t *length, unsigned int timeout_ms,
+                             bool nonblock, uint64_t tx_generation)
 {
     struct bladerf_usb *usb = stream->dev->backend_data;
     return usb->fn->submit_stream_buffer(usb->driver, stream, buffer,
-                                 length, timeout_ms, nonblock);
+                                 length, timeout_ms, nonblock, tx_generation);
 }
 
 static void usb_deinit_stream(struct bladerf_stream *stream)

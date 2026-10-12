@@ -255,7 +255,8 @@ struct backend_fns {
                                 void *buffer,
                                 size_t *length,
                                 unsigned int timeout_ms,
-                                bool nonblock);
+                                bool nonblock,
+                                uint64_t tx_generation);
     void (*deinit_stream)(struct bladerf_stream *stream);
 
     /* Schedule a frequency retune operation */

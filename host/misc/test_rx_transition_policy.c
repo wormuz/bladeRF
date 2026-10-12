@@ -141,6 +141,10 @@ int main(void)
         BLADERF_RF_INVALIDATE_FREQUENCY));
     assert(bladerf2_rx_invalidation_reason_is_shared(
         BLADERF_RF_INVALIDATE_RFIC_REG));
+    assert(bladerf2_rx_invalidation_reason_is_shared(
+        BLADERF_RF_INVALIDATE_SHARED_PATH));
+    assert(BLADERF_RF_INVALIDATE_SHARED_PATH ==
+           BLADERF_RF_INVALIDATE_CONFIG_GPIO);
     assert(!bladerf2_rx_invalidation_reason_is_shared(
         BLADERF_RF_INVALIDATE_GAIN));
 
@@ -627,40 +631,44 @@ int main(void)
     assert(bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, true));
     assert(!bladerf2_rx_x1_consumer_blocks_x2_transition(true, 0, false));
     assert(bladerf2_tx_admission_allowed(
-        true, true, false, false, false, 0, false, true));
+        true, true, false, false, false, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, false, false, true, 0, false, true));
+        true, true, false, false, true, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, false, true, false, 0, false, true));
+        true, true, false, true, false, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, true, false, false, 0, false, true));
+        true, true, true, false, false, false, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, false, false, false, 1, false, true));
+        true, true, false, false, false, true, 0, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, false, false, false, 0, true, true));
+        true, true, false, false, false, false, 1, false, true));
     assert(!bladerf2_tx_admission_allowed(
-        true, true, false, false, false, 0, false, false));
+        true, true, false, false, false, false, 0, true, true));
     assert(!bladerf2_tx_admission_allowed(
-        false, true, false, false, false, 0, false, true));
+        true, true, false, false, false, false, 0, false, false));
+    assert(!bladerf2_tx_admission_allowed(
+        false, true, false, false, false, false, 0, false, true));
     /* A fresh FPGA transport epoch is not enough to admit TX IQ before the
      * monitor certifies the AD9361 TX RFPLL, ENSM, and BBPLL state. */
     assert(!bladerf2_tx_admission_allowed(
-        true, false, false, false, false, 0, false, true));
+        true, false, false, false, false, false, 0, false, true));
     assert(bladerf2_tx_rfic_certificate_pending(
-        true, false, false, false, false, 0, false, true));
+        true, true, false, false, false, true, 0, false, true));
+    assert(bladerf2_tx_rfic_certificate_pending(
+        true, false, false, false, false, false, 0, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        false, false, false, false, false, 0, false, true));
+        false, false, false, false, false, false, 0, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, true, false, false, 0, false, true));
+        true, false, true, false, false, false, 0, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, false, true, false, 0, false, true));
+        true, false, false, true, false, false, 0, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, false, false, true, 0, false, true));
+        true, false, false, false, true, false, 0, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, false, false, false, 1, false, true));
+        true, false, false, false, false, false, 1, false, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, false, false, false, 0, true, true));
+        true, false, false, false, false, false, 0, true, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
-        true, false, false, false, false, 0, false, false));
+        true, false, false, false, false, false, 0, false, false));
     return 0;
 }

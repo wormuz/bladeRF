@@ -79,6 +79,7 @@ struct lusb_stream_data {
     size_t i;                           /* Index to next transfer */
     struct libusb_transfer **transfers; /* Array of transfer metadata */
     transfer_status *transfer_status;   /* Status of each transfer */
+    uint64_t *tx_generation;             /* TX admission generation per slot */
 
    /* Warn the first time we get a transfer callback out of order.
     * This shouldn't happen normally, but we've seen it intermittently on
@@ -1150,7 +1151,8 @@ static inline size_t transfer_idx(struct lusb_stream_data *stream_data,
     return UINT_MAX;
 }
 
-static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t len);
+static int submit_transfer(struct bladerf_stream *stream, void *buffer,
+                          size_t len, uint64_t tx_generation);
 
 static void notify_rx_terminal_failure_once(
     struct bladerf_stream *stream, struct lusb_stream_data *stream_data,
@@ -1207,6 +1209,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     struct lusb_stream_data *stream_data = stream->backend_data;
     size_t transfer_i;
     bool unexpected_cancel;
+    bool stale_tx_generation = false;
 
     /* Currently unused - zero out for out own debugging sanity... */
     memset(&metadata, 0, sizeof(metadata));
@@ -1347,23 +1350,36 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         stream->state == STREAM_RUNNING) {
         int resubmit;
 
-        log_verbose("TX transfer %p timed out with nothing sent; device not "
-                    "ready for scheduled samples yet. Requeueing.\n",
-                    transfer->buffer);
-
-        /* submit_transfer() takes a fresh transfer from the pool - this one
-         * was returned to it a few lines above - so nothing is reused from
-         * under libusb. Nothing of the buffer reached the device, so this
-         * neither drops nor duplicates samples; it simply waits again. */
-        resubmit = submit_transfer(stream, transfer->buffer,
-                                   async_stream_buf_bytes(stream));
-        if (resubmit == 0) {
-            MUTEX_UNLOCK(&stream->lock);
-            return;
+        if (!async_tx_buffer_generation_is_current(
+                stream, stream_data->tx_generation[transfer_i])) {
+            /* This buffer never reached USB, but it belongs to the old RF
+             * configuration. Do not replay it after a retune/recovery. */
+            stale_tx_generation = true;
+            stream->tx_buffer_rejected = transfer->buffer;
+            stream->error_code = BLADERF_ERR_WOULD_BLOCK;
+            stream->state = STREAM_SHUTTING_DOWN;
         }
 
-        log_debug("Could not requeue stalled TX transfer: %s\n",
-                  bladerf_strerror(resubmit));
+        if (!stale_tx_generation) {
+            log_verbose("TX transfer %p timed out with nothing sent; device "
+                        "not ready for scheduled samples yet. Requeueing.\n",
+                        transfer->buffer);
+
+            /* submit_transfer() takes a fresh transfer from the pool - this
+             * one was returned to it a few lines above - so nothing is reused
+             * from under libusb. Nothing reached the device, so retrying in
+             * the same RF generation neither drops nor duplicates samples. */
+            resubmit = submit_transfer(stream, transfer->buffer,
+                                       async_stream_buf_bytes(stream),
+                                       stream_data->tx_generation[transfer_i]);
+            if (resubmit == 0) {
+                MUTEX_UNLOCK(&stream->lock);
+                return;
+            }
+
+            log_debug("Could not requeue stalled TX transfer: %s\n",
+                      bladerf_strerror(resubmit));
+        }
     }
 
     /* Check to see if the transfer has been cancelled or errored */
@@ -1412,6 +1428,9 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 break;
 
             case LIBUSB_TRANSFER_TIMED_OUT:
+                if (stale_tx_generation) {
+                    break;
+                }
                 if (stream->shutdown_requested) {
                     /* A concurrent timeout may be the wakeup caused by a
                      * requested shutdown. Do not turn normal teardown into
@@ -1465,6 +1484,9 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     }
 
     if (stream->state == STREAM_RUNNING) {
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            async_tx_buffer_generation_snapshot(stream);
+        }
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
             next_buffer = async_rx_process_buffer(
                 stream, &metadata, transfer->buffer,
@@ -1488,14 +1510,21 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
             next_buffer != BLADERF_STREAM_SHUTDOWN &&
-            next_buffer != BLADERF_STREAM_NO_DATA &&
-            !async_tx_buffer_valid(stream)) {
-            stream->error_code = BLADERF_ERR_WOULD_BLOCK;
-            stream->tx_buffer_rejected = next_buffer;
-            next_buffer = BLADERF_STREAM_SHUTDOWN;
+            next_buffer != BLADERF_STREAM_NO_DATA) {
+            int validation_status = async_tx_buffer_validate(
+                stream, &metadata, next_buffer,
+                async_stream_buf_bytes(stream));
+            if (validation_status != 0 ||
+                !async_tx_buffer_generation_matches(stream)) {
+                stream->error_code = validation_status != 0
+                    ? validation_status : BLADERF_ERR_WOULD_BLOCK;
+                stream->tx_buffer_rejected = next_buffer;
+                next_buffer = BLADERF_STREAM_SHUTDOWN;
+            }
         }
 
         if (next_buffer == BLADERF_STREAM_SHUTDOWN) {
+            async_tx_buffer_submission_cancelled(stream);
             stream->state = STREAM_SHUTTING_DOWN;
         } else if (next_buffer != BLADERF_STREAM_NO_DATA) {
             int status;
@@ -1506,15 +1535,19 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                    stream, &metadata, &packet_length);
                if (status == 0) {
                    status = submit_transfer(stream, next_buffer,
-                                            packet_length);
+                                            packet_length,
+                                            stream->tx_admission_generation);
                } else {
                    stream->error_code = status;
                    stream->state = STREAM_SHUTTING_DOWN;
                }
             } else {
-               status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
+               status = submit_transfer(stream, next_buffer,
+                                        async_stream_buf_bytes(stream),
+                                        stream->tx_admission_generation);
             }
             if (status != 0) {
+                async_tx_buffer_submission_cancelled(stream);
                 /* If this fails, we probably have a serious problem...so just
                  * shut it down. */
                 fail_rx_stream(stream, stream_data, status,
@@ -1524,6 +1557,8 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                     stream->error_code = status;
                 }
             }
+        } else {
+            async_tx_buffer_submission_cancelled(stream);
         }
     }
 
@@ -1575,7 +1610,8 @@ get_next_available_transfer(struct lusb_stream_data *stream_data)
 }
 
 /* Precondition: A transfer is available. */
-static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t len)
+static int submit_transfer(struct bladerf_stream *stream, void *buffer,
+                           size_t len, uint64_t tx_generation)
 {
     int status;
     struct bladerf_lusb *lusb = lusb_backend(stream->dev);
@@ -1601,6 +1637,10 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
 
     prev_idx = stream_data->i;
     stream_data->transfer_status[stream_data->i] = TRANSFER_IN_FLIGHT;
+    stream_data->tx_generation[stream_data->i] = tx_generation;
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        stream->tx_admission_generation = tx_generation;
+    }
     stream_data->i = (stream_data->i + 1) % stream_data->num_transfers;
     assert(stream_data->num_avail != 0);
     stream_data->num_avail--;
@@ -1644,9 +1684,8 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
 #else
     status = libusb_submit_transfer(transfer);
 #endif
-    MUTEX_LOCK(&stream->lock);
-
     if (status != 0) {
+        MUTEX_LOCK(&stream->lock);
         log_error("Failed to submit transfer in %s: %s\n",
                   __FUNCTION__, libusb_error_name(status));
 
@@ -1660,7 +1699,21 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
          * get_next_available_transfer() had already pointed stream_data->i at
          * it, so this restores exactly what we found. */
         stream_data->i = prev_idx;
+        MUTEX_UNLOCK(&stream->lock);
+    } else if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        /* This hook samples the NIOS loss counter over the peripheral USB
+         * endpoint. Do not hold stream->lock across that synchronous control
+         * transfer: the RX/TX libusb event loops share this context and their
+         * completion callbacks need stream->lock to keep the endpoint/event
+         * pump making progress while the NIOS response is in flight. */
+        async_tx_buffer_submitted(stream, tx_generation);
     }
+
+    /* The backend submit contract returns with stream->lock held, as required
+     * by async_submit_stream_buffer(). The transfer metadata is already
+     * committed before libusb_submit_transfer(), so it is safe for a callback
+     * to run while the TX admission observation is read above. */
+    MUTEX_LOCK(&stream->lock);
 
     return error_conv(status);
 }
@@ -1682,6 +1735,7 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream->backend_data = stream_data;
     stream_data->transfers = NULL;
     stream_data->transfer_status = NULL;
+    stream_data->tx_generation = NULL;
     stream_data->num_transfers = num_transfers;
     stream_data->num_avail = 0;
     stream_data->i = 0;
@@ -1716,6 +1770,13 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
         goto error;
     }
 
+    stream_data->tx_generation = calloc(num_transfers, sizeof(uint64_t));
+    if (stream_data->tx_generation == NULL) {
+        log_error("Failed to allocate libusb TX generation array\n");
+        status = BLADERF_ERR_MEM;
+        goto error;
+    }
+
     /* Create the libusb transfers */
     for (i = 0; i < stream_data->num_transfers; i++) {
         stream_data->transfers[i] = libusb_alloc_transfer(0);
@@ -1741,6 +1802,7 @@ error:
             }
         }
         free(stream_data->transfer_status);
+        free(stream_data->tx_generation);
         free(stream_data->transfers);
         free(stream_data);
         stream->backend_data = NULL;
@@ -1791,6 +1853,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            async_tx_buffer_generation_snapshot(stream);
             metadata.actual_count = 0;
             buffer = stream->cb(dev,
                                 stream,
@@ -1800,19 +1863,27 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                                 stream->user_data);
 
             if (buffer != BLADERF_STREAM_SHUTDOWN &&
-                buffer != BLADERF_STREAM_NO_DATA &&
-                !async_tx_buffer_valid(stream)) {
-                stream->error_code = BLADERF_ERR_WOULD_BLOCK;
-                stream->tx_buffer_rejected = buffer;
-                if (stream_data->num_avail == stream_data->num_transfers) {
-                    mark_stream_done(stream);
-                } else {
-                    stream->state = STREAM_SHUTTING_DOWN;
+                buffer != BLADERF_STREAM_NO_DATA) {
+                int validation_status = async_tx_buffer_validate(
+                    stream, &metadata, buffer,
+                    async_stream_buf_bytes(stream));
+                if (validation_status != 0 ||
+                    !async_tx_buffer_generation_matches(stream)) {
+                    async_tx_buffer_submission_cancelled(stream);
+                    stream->error_code = validation_status != 0
+                        ? validation_status : BLADERF_ERR_WOULD_BLOCK;
+                    stream->tx_buffer_rejected = buffer;
+                    if (stream_data->num_avail == stream_data->num_transfers) {
+                        mark_stream_done(stream);
+                    } else {
+                        stream->state = STREAM_SHUTTING_DOWN;
+                    }
+                    break;
                 }
-                break;
             }
 
             if (buffer == BLADERF_STREAM_SHUTDOWN) {
+                async_tx_buffer_submission_cancelled(stream);
                 /* If we have transfers in flight and the user prematurely
                  * cancels the stream, we'll start shutting down */
                 if (stream_data->num_avail != stream_data->num_transfers) {
@@ -1828,6 +1899,10 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                 break;
             }
 
+            if (buffer == BLADERF_STREAM_NO_DATA) {
+                async_tx_buffer_submission_cancelled(stream);
+            }
+
             if (buffer != BLADERF_STREAM_NO_DATA &&
                 (layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
                 stream->format == BLADERF_FORMAT_PACKET_META) {
@@ -1835,6 +1910,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                 status = async_tx_packet_meta_transfer_length(
                     stream, &metadata, &packet_length);
                 if (status != 0) {
+                    async_tx_buffer_submission_cancelled(stream);
                     stream->error_code = status;
                     stream->state = STREAM_SHUTTING_DOWN;
                     break;
@@ -1851,16 +1927,20 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                status = async_tx_packet_meta_transfer_length(
                    stream, &metadata, &packet_length);
                if (status == 0) {
-                   status = submit_transfer(stream, buffer, packet_length);
+                   status = submit_transfer(stream, buffer, packet_length,
+                                            stream->tx_admission_generation);
                }
             } else {
-               status = submit_transfer(stream, buffer, async_stream_buf_bytes(stream));
+               status = submit_transfer(stream, buffer,
+                                        async_stream_buf_bytes(stream),
+                                        stream->tx_admission_generation);
             }
 
             /* If we failed to submit any transfers, cancel everything in
              * flight.  We'll leave the stream in the running state so we can
              * have libusb fire off callbacks with the cancelled status*/
             if (status < 0) {
+                async_tx_buffer_submission_cancelled(stream);
                 stream->error_code = status;
                 fail_rx_stream(stream, stream_data, status,
                                BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
@@ -1955,7 +2035,8 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
 /* The top-level code will have aquired the stream->lock for us */
 int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
                               void *buffer, size_t *length,
-                              unsigned int timeout_ms, bool nonblock)
+                              unsigned int timeout_ms, bool nonblock,
+                              uint64_t tx_generation)
 {
     int status = 0;
     struct lusb_stream_data *stream_data = stream->backend_data;
@@ -2025,17 +2106,27 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
          * configuration change revokes admission. Recheck after that wait,
          * immediately before handing the buffer to USB, rather than relying
          * only on async_submit_stream_buffer()'s pre-wait snapshot. */
-        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
-            !(nonblock ? async_tx_buffer_valid_now(stream)
-                       : async_tx_buffer_valid(stream))) {
-            /* The board-level admission may be revoked while this caller
-             * waits for USB capacity. This is a retryable RF gate closure,
-             * not a USB transport fault; sync TX returns WOULD_BLOCK to its
-             * buffer policy and the board's RF event reports the cause. */
-            return BLADERF_ERR_WOULD_BLOCK;
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            if (nonblock) {
+                if (!async_tx_buffer_valid_now(stream) ||
+                    !async_tx_buffer_generation_is_current(
+                        stream, tx_generation)) {
+                    return BLADERF_ERR_WOULD_BLOCK;
+                }
+            } else {
+                const int validation_status = async_tx_buffer_validate(
+                    stream, NULL, buffer, *length);
+                if (validation_status != 0) {
+                    return validation_status;
+                }
+                if (!async_tx_buffer_generation_is_current(
+                        stream, tx_generation)) {
+                    return BLADERF_ERR_WOULD_BLOCK;
+                }
+            }
         }
 
-        status = submit_transfer(stream, buffer, *length);
+        status = submit_transfer(stream, buffer, *length, tx_generation);
         if (status != 0 &&
             (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
             fail_rx_stream(stream, stream_data, status,
@@ -2071,6 +2162,7 @@ static int lusb_deinit_stream(void *driver, struct bladerf_stream *stream)
 
     free(stream_data->transfers);
     free(stream_data->transfer_status);
+    free(stream_data->tx_generation);
     free(stream->backend_data);
 
     stream->backend_data = NULL;

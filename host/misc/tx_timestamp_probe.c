@@ -28,6 +28,7 @@
  */
 
 #include <libbladeRF.h>
+#include <bladeRF2.h>
 #include "timestamp_order.h"
 #include <math.h>
 #include <stdbool.h>
@@ -42,7 +43,14 @@
 #define DEFAULT_RX_GAIN_DB     30
 #define DEFAULT_TX_GAIN_DB     20
 
-#define NUM_BUFFERS 32u
+/* Keep the RX observer's pre-burst history until the main thread can consume
+ * it after sync_tx returns. At 10 Msps, 32 x 8192 buffers retain only 26 ms,
+ * shorter than the RF transition/setup plus scheduled-burst window observed
+ * on hardware; ring overflow would make a healthy transmitted burst invisible
+ * to this probe. */
+#ifndef NUM_BUFFERS
+#define NUM_BUFFERS 256u
+#endif
 #define BUFFER_SIZE 8192u
 #define NUM_XFERS   8u
 #define TIMEOUT_MS  2000u
@@ -104,6 +112,34 @@ static int cmp_double(const void *a, const void *b)
     double da = *(const double *)a;
     double db = *(const double *)b;
     return (da > db) - (da < db);
+}
+
+static void dump_recent_rf_events(struct bladerf *dev)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next = 0;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next, &complete);
+    if (status == BLADERF_ERR_MEM && !complete) {
+        const uint64_t oldest_possible = next > BLADERF_RF_EVENT_HISTORY_SIZE
+            ? next - BLADERF_RF_EVENT_HISTORY_SIZE : 0;
+        status = bladerf_rf_events_get_since(
+            dev, oldest_possible, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+            &count, &next, &complete);
+    }
+
+    printf("rf_event_history_status=%d count=%u next=%llu complete=%u\n",
+           status, count, (unsigned long long)next, complete ? 1u : 0u);
+    for (uint32_t i = 0; i < count; i++) {
+        printf("rf_event[%u]=type:%u epoch:%u state:%u error:%d rfic:0x%x flags:0x%x\n",
+               i, (unsigned int)events[i].event_type, events[i].epoch_id,
+               (unsigned int)events[i].fpga_state, events[i].error_code,
+               events[i].rfic_status, events[i].flags);
+    }
+    fflush(stdout);
 }
 
 int main(int argc, char *argv[])
@@ -168,20 +204,41 @@ int main(int argc, char *argv[])
         memcpy(tx_buf, tone_buf, (size_t)BURST_SAMPLES * 2u * sizeof(int16_t));
     }
 
+    if (getenv("TX_PROBE_DEBUG") != NULL) {
+        bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
+    }
+
     status = bladerf_open(&dev, NULL);
     if (status != 0) {
         fprintf(stderr, "open: %s\n", bladerf_strerror(status));
         goto out_free;
     }
 
-    /* Second argument "lb": route TX back to RX inside the AD9361 (BIST
-     * loopback). Over-the-air leakage on one board was too weak to find
-     * the burst (max block power ~2x the median); the digital loopback
-     * still exercises the FPGA TX release path, which is what is being
-     * timed here. */
+    /* A prior diagnostic may have left the RX mux in a loopback mode. The
+     * event-driven LTE observer contract requires the AD9361 baseband source. */
+    status = bladerf_set_rx_mux(dev, BLADERF_RX_MUX_BASEBAND);
+    if (status != 0) {
+        fprintf(stderr, "set_rx_mux baseband: %s\n",
+                bladerf_strerror(status));
+        goto out_close;
+    }
+
+    /* "lb" observes TX through AD9361 BIST. */
     if (argc > 2 && strcmp(argv[2], "lb") == 0) {
+        bladerf_loopback loopback_readback = BLADERF_LB_NONE;
         status = bladerf_set_loopback(dev, BLADERF_LB_RFIC_BIST);
         printf("loopback=rfic_bist status=%d\n", status);
+        if (status == 0) {
+            int loopback_status = bladerf_get_loopback(dev,
+                                                       &loopback_readback);
+            uint8_t observe_config = 0;
+            int bist_read_status = bladerf_get_rfic_register(
+                dev, 0x3f5, &observe_config);
+            printf("loopback_readback_status=%d mode=%d "
+                   "bist_reg_status=%d observe_config=0x%02x\n",
+                   loopback_status, (int)loopback_readback,
+                   bist_read_status, observe_config);
+        }
     }
 
     status = bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(ch), FREQ_HZ);
@@ -320,6 +377,57 @@ int main(int argc, char *argv[])
         goto out_disable_rx;
     }
 
+    /* TX configuration and module-enable operations revoke the RFIC/frequency
+     * certificate. Establish a final confirmed tune after all of them, before
+     * submitting the first TX sample. */
+    if (mimo) {
+        status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), FREQ_HZ);
+        if (status != 0) {
+            fprintf(stderr, "final set_frequency tx0: %s\n",
+                    bladerf_strerror(status));
+            goto out_disable_tx;
+        }
+    }
+    status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(ch), FREQ_HZ);
+    if (status != 0) {
+        fprintf(stderr, "final set_frequency tx: %s\n",
+                bladerf_strerror(status));
+        goto out_disable_tx;
+    }
+
+    /* The RX stream uses epoch META, so legacy configuration setters leave
+     * its IQ fenced. Certify RX after all shared RF setup before using it as
+     * the TX loopback observer. */
+    {
+        const struct bladerf_rx_transition_request request = {
+            .target_frequency_hz = FREQ_HZ,
+            .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                BLADERF_RF_REQUIRE_ENSM_RX |
+                BLADERF_RF_REQUIRE_BBPLL_LOCKED |
+                BLADERF_RF_REQUIRE_EPOCH_VALID |
+                (mimo ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA :
+                        BLADERF_RF_REQUIRE_FIRST_HOST_DATA),
+            .timeout_ms = 1000,
+            .require_rx_data_valid = true,
+        };
+        struct bladerf_rf_event final_event = {0};
+        uint32_t transaction_id = 0;
+        status = bladerf_rx_transition_begin(
+            dev, BLADERF_CHANNEL_RX(ch), &request, &transaction_id);
+        if (status == 0) {
+            status = bladerf_rx_transition_wait(
+                dev, transaction_id, &final_event, 2000);
+        }
+        if (status != 0) {
+            fprintf(stderr, "certify RX observer epoch: %s\n",
+                    bladerf_strerror(status));
+            goto out_disable_tx;
+        }
+        printf("rx_observer_epoch=%u first_valid_timestamp=%llu\n",
+               final_event.epoch_id,
+               (unsigned long long)final_event.fpga_timestamp);
+    }
+
     status = bladerf_get_timestamp(dev, BLADERF_RX, &ts_rx0);
     if (status != 0) {
         fprintf(stderr, "get_timestamp rx: %s\n", bladerf_strerror(status));
@@ -353,17 +461,38 @@ int main(int argc, char *argv[])
     printf("tx_scheduled_timestamp=%llu\n", (unsigned long long)tx_meta[0].timestamp);
 
     {
+        static const uint16_t regs[] = {
+            0x287, 0x017, 0x05e, 0x016, 0x3f5
+        };
+        static const char *names[] = {
+            "tx_pll", "ensm", "bbpll", "calibration", "bist_loopback"
+        };
+        for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+            uint8_t value = 0;
+            int read_status = bladerf_get_rfic_register(dev, regs[i], &value);
+            printf("pre_tx_rfic_%s status=%d value=0x%02x\n",
+                   names[i], read_status, value);
+        }
+        fflush(stdout);
+    }
+
+    {
         unsigned int k;
 
         for (k = 0; k < nbursts; k++) {
+            fprintf(stderr, "TX_PROBE before sync_tx burst=%u\n", k);
             status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES, &tx_meta[k], 5000);
+            fprintf(stderr, "TX_PROBE after sync_tx burst=%u status=%d\n",
+                    k, status);
             if (status != 0) {
                 fprintf(stderr, "sync_tx burst_k=%u: %s\n", k, bladerf_strerror(status));
+                dump_recent_rf_events(dev);
                 goto out_disable_tx;
             }
         }
     }
     printf("tx_status=0x%x\n", tx_meta[0].status);
+    dump_recent_rf_events(dev);
 
     /* Search window is anchored to the scheduled TX timestamps (not to
      * whatever rx_meta.timestamp the first RX chunk happens to report),
@@ -407,7 +536,10 @@ int main(int argc, char *argv[])
         }
 
         while (!all_done) {
+            fprintf(stderr, "TX_PROBE before sync_rx\n");
             status = bladerf_sync_rx(dev, rx_buf, BUFFER_SIZE, &rx_meta, TIMEOUT_MS);
+            fprintf(stderr, "TX_PROBE after sync_rx status=%d ts=%llu\n",
+                    status, (unsigned long long)rx_meta.timestamp);
             if (status != 0) {
                 fprintf(stderr, "sync_rx: %s\n", bladerf_strerror(status));
                 break;
@@ -680,6 +812,9 @@ int main(int argc, char *argv[])
         free(prev_rx_buf);
     }
 
+    /* Capture post-stream state too: RFIC validity may precede the FPGA TX
+     * gate's RESUME acknowledgement by one monitor pass. */
+    dump_recent_rf_events(dev);
     printf("overrun_seen=%d\n", (int)overrun_seen);
     ret = (burst_found && (nbursts == 1u || bursts_found_count == nbursts)) ? 0 : 1;
 

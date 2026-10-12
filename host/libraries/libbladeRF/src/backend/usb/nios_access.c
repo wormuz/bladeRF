@@ -1935,6 +1935,44 @@ int nios_expansion_gpio_dir_write(struct bladerf *dev,
     return status;
 }
 
+/* Queue clear is completed by a timestamp-domain ACK. Let NIOS keep servicing
+ * commands between polls, and use a host deadline only as a failure watchdog. */
+static int nios_retune_clear_wait(struct bladerf *dev, uint8_t *buf,
+                                  size_t flags_index, uint8_t pending_flag)
+{
+    uint8_t request[NIOS_PKT_LEN];
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
+    int status;
+
+    memcpy(request, buf, sizeof(request));
+    status = bladerf_monotonic_now_ns(&now_ns);
+    if (!nios_deadline_start(status, now_ns, 1000000000ULL, &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    while (true) {
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (expired) {
+            break;
+        }
+
+        memcpy(buf, request, sizeof(request));
+        status = nios_access(dev, buf);
+        if (status != 0 || (buf[flags_index] & pending_flag) == 0) {
+            return status;
+        }
+
+        usleep(120);
+    }
+
+    return BLADERF_ERR_TIMEOUT;
+}
+
 int nios_retune(struct bladerf *dev, bladerf_channel ch,
                 uint64_t timestamp, uint16_t nint, uint32_t nfrac,
                 uint8_t freqsel, uint8_t vcocap, bool low_band,
@@ -1959,7 +1997,10 @@ int nios_retune(struct bladerf *dev, bladerf_channel ch,
                          nint, nfrac, freqsel, vcocap, low_band,
                          xb_gpio, quick_tune);
 
-    status = nios_access(dev, buf);
+    status = timestamp == NIOS_PKT_RETUNE_CLEAR_QUEUE
+        ? nios_retune_clear_wait(dev, buf, NIOS_PKT_RETUNERESP_IDX_FLAGS,
+                                 NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING)
+        : nios_access(dev, buf);
     if (status != 0) {
         return status;
     }
@@ -2015,7 +2056,10 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     nios_pkt_retune2_pack(buf, ch, timestamp, nios_profile, rffe_profile,
                           port, spdt);
 
-    status = nios_access(dev, buf);
+    status = timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE
+        ? nios_retune_clear_wait(dev, buf, NIOS_PKT_RETUNE2_RESP_IDX_FLAGS,
+                                 NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)
+        : nios_access(dev, buf);
     if (status != 0) {
         return status;
     }

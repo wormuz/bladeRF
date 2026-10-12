@@ -15,12 +15,13 @@ struct fake_submit_state {
 
 static int fake_submit(struct bladerf_stream *stream, void *buffer,
                        size_t *length, unsigned int timeout_ms,
-                       bool nonblock)
+                       bool nonblock, uint64_t tx_generation)
 {
     struct fake_submit_state *state = stream->backend_data;
     (void)length;
     (void)timeout_ms;
     (void)nonblock;
+    (void)tx_generation;
 
     if (buffer == BLADERF_STREAM_SHUTDOWN) {
         stream->state = STREAM_SHUTTING_DOWN;

@@ -71,6 +71,8 @@ struct bladerf_stream {
     /* Protected by lock; coalesces event-only callbacks while continuous RX
      * data is withheld. */
     bool rx_withheld_notice_active;
+    /* TX admission generation captured for revalidation by USB submission. */
+    uint64_t tx_admission_generation;
     COND can_submit_buffer;
     COND stream_started;
     void *backend_data;
@@ -116,6 +118,19 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 bool async_tx_buffer_valid(struct bladerf_stream *stream);
 /* Query TX admission without waiting for RF certificate publication. */
 bool async_tx_buffer_valid_now(struct bladerf_stream *stream);
+/* Check TX admission and, after a blocking validity wait, reject scheduled
+ * metadata whose timestamp passed while the FPGA output gate was muted.
+ * Called with stream->lock held; the timestamp read releases that lock. */
+int async_tx_buffer_validate(struct bladerf_stream *stream,
+                             const struct bladerf_metadata *metadata,
+                             const void *buffer, size_t length);
+void async_tx_buffer_generation_snapshot(struct bladerf_stream *stream);
+bool async_tx_buffer_generation_matches(struct bladerf_stream *stream);
+bool async_tx_buffer_generation_is_current(struct bladerf_stream *stream,
+                                           uint64_t generation);
+void async_tx_buffer_submission_cancelled(struct bladerf_stream *stream);
+void async_tx_buffer_submitted(struct bladerf_stream *stream,
+                               uint64_t generation);
 
 /* Request backend-aware termination of an active stream. */
 int async_request_stream_shutdown(struct bladerf_stream *stream);

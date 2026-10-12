@@ -25,8 +25,12 @@ static bool fail_profile_load_after_slot_write;
 static bool fail_profile_recall;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
+static bool fail_tamer_schedule_ack;
+static bool fail_tamer_schedule_status;
+static bool fire_during_schedule;
 static bool fail_tamer_read;
 static bool fail_tamer_cancel;
+static bool fail_tamer_cancel_status;
 static unsigned cancel_count;
 static bool compare_fired_rx;
 static bool compare_fired_tx;
@@ -40,7 +44,6 @@ static bool simulated_rffe_tx_valid[NUM_RFFE_FASTLOCK_PROFILES];
 bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
 {
     fastlock_profile *cache;
-    load_count++;
     if (profile == NULL) {
         return false;
     }
@@ -52,6 +55,7 @@ bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
             profile->state == FASTLOCK_STATE_BBP_RFFE) {
             return true;
         }
+        load_count++;
         fastlock_profile *slots = module == BLADERF_MODULE_TX
             ? simulated_rffe_tx : simulated_rffe_rx;
         bool *valid = module == BLADERF_MODULE_TX
@@ -67,7 +71,10 @@ bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
         valid[profile->profile_num] = true;
         profile->state = FASTLOCK_STATE_BBP_RFFE;
     } else if (fail_profile_load) {
+        load_count++;
         return false;
+    } else {
+        load_count++;
     }
     return true;
 }
@@ -111,7 +118,7 @@ bool adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)
     return !fail_spdt_select;
 }
 
-bool tamer_schedule(bladerf_module module, uint64_t timestamp)
+bool tamer_schedule_request(bladerf_module module, uint64_t timestamp)
 {
     schedule_count++;
     scheduled_module = module;
@@ -121,7 +128,28 @@ bool tamer_schedule(bladerf_module module, uint64_t timestamp)
     } else if (module == BLADERF_MODULE_TX) {
         compare_fired_tx = false;
     }
+    if (fire_during_schedule) {
+        if (module == BLADERF_MODULE_RX) {
+            compare_fired_rx = true;
+            retune_isr(&rx_queue, module);
+        } else if (module == BLADERF_MODULE_TX) {
+            compare_fired_tx = true;
+            retune_isr(&tx_queue, module);
+        }
+    }
     return !fail_tamer_schedule;
+}
+
+bool tamer_schedule_acknowledged(bladerf_module module)
+{
+    return (module == BLADERF_MODULE_RX || module == BLADERF_MODULE_TX) &&
+           !fail_tamer_schedule_ack && !fail_tamer_schedule_status;
+}
+
+bool tamer_schedule_failed(bladerf_module module)
+{
+    return (module == BLADERF_MODULE_RX || module == BLADERF_MODULE_TX) &&
+           fail_tamer_schedule_status;
 }
 
 bool time_tamer_read(bladerf_module module, uint64_t *timestamp)
@@ -146,17 +174,28 @@ bool tamer_clock_stalled(bladerf_module module)
     return simulated_tamer_clock_stalled;
 }
 
-bool tamer_cancel(bladerf_module module)
+bool tamer_cancel_failed(bladerf_module module)
 {
-    cancel_count++;
-    if (!fail_tamer_cancel) {
-        if (module == BLADERF_MODULE_RX) {
-            compare_fired_rx = false;
-        } else if (module == BLADERF_MODULE_TX) {
-            compare_fired_tx = false;
-        }
+    return (module == BLADERF_MODULE_RX || module == BLADERF_MODULE_TX) &&
+           fail_tamer_cancel_status;
+}
+
+bool tamer_cancel_request(bladerf_module module, uint8_t *ack_before)
+{
+    if ((module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX) ||
+        ack_before == NULL || simulated_tamer_clock_stalled) {
+        return false;
     }
-    return !fail_tamer_cancel;
+    cancel_count++;
+    *ack_before = 0;
+    return true;
+}
+
+bool tamer_cancel_acknowledged(bladerf_module module, uint8_t ack_before)
+{
+    (void)ack_before;
+    return (module == BLADERF_MODULE_RX || module == BLADERF_MODULE_TX) &&
+           !fail_tamer_cancel && !simulated_tamer_clock_stalled;
 }
 
 static void simulate_tamer_irq(struct queue *queue, bladerf_module module)
@@ -282,6 +321,9 @@ static int check_partial_upload_invalidates_slot_residency(void)
     memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
     memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
     old_profile = &fastlocks_tx[1];
+    fastlocks_tx[0].profile_num = 1;
+    fastlocks_tx[0].profile_data[0] = 0xa5;
+    fastlocks_tx[0].state = FASTLOCK_STATE_BBP;
     old_profile->profile_num = 3;
     old_profile->profile_data[0] = 0xa5;
     old_profile->state = FASTLOCK_STATE_BBP_RFFE;
@@ -289,6 +331,8 @@ static int check_partial_upload_invalidates_slot_residency(void)
     simulated_rffe_tx_valid[3] = true;
 
     track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
     fail_profile_load = false;
     fail_profile_load_after_slot_write = true;
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
@@ -307,15 +351,18 @@ static int check_partial_upload_invalidates_slot_residency(void)
     fail_profile_load_after_slot_write = false;
     memset(&request, 0, sizeof(request));
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
-                          NIOS_PKT_RETUNE2_NOW, 1, 3, 0x40, 0xa0);
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
     pkt_retune2(&request);
     track_rffe_fastlock_slots = false;
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
         load_count != 2 || recall_count != 1 ||
         !simulated_rffe_tx_valid[3] ||
         simulated_rffe_tx[3].profile_data[0] != 0xa5) {
-        fputs("profile was not reloaded after partial slot corruption\n",
-              stderr);
+        fprintf(stderr, "profile reload after partial corruption failed: "
+                "flags=0x%02x loads=%u recalls=%u valid=%u data=0x%02x\n",
+                request.resp[9], load_count, recall_count,
+                simulated_rffe_tx_valid[3],
+                simulated_rffe_tx[3].profile_data[0]);
         return 1;
     }
     return 0;
@@ -376,7 +423,7 @@ static int check_immediate_retune_cannot_clobber_armed_slot(
                           0, 3, port, spdt);
     pkt_retune2(&request);
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
-        load_count != 2 || recall_count != 0 ||
+        load_count != 1 || recall_count != 0 ||
         simulated_slots[3].profile_data[0] != 0xa5) {
         fputs("immediate retune overwrote a slot owned by an armed compare\n",
               stderr);
@@ -823,9 +870,9 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
         return 1;
     }
 
-    /* The independent FPGA watchdog reports loss for each tamer. If the
-     * cancel ACK is missing, report failure once but keep ownership of the
-     * armed compare and do not activate another queued request. */
+    /* The independent FPGA watchdog reports loss for each tamer. While the
+     * timestamp clock is stopped, report failure once, retain ownership of
+     * the armed compare, and avoid a blocking cancel-ACK poll. */
     fail_tamer_cancel = true;
     cancel_count = 0;
     simulated_tamer_clock_stalled = true;
@@ -835,7 +882,7 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
             ENTRY_STATE_CANCEL_PENDING ||
         tx_queue.entries[tx_queue.rem_idx].state !=
             ENTRY_STATE_CANCEL_PENDING ||
-        cancel_count != 2 ||
+        cancel_count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
@@ -848,7 +895,7 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
      * million-read cancellation watchdog. */
     pkt_retune2_work();
     if (rx_queue.count != 1 || tx_queue.count != 1 ||
-        cancel_count != 2 ||
+        cancel_count != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
         fputs("stalled cancel-pending path retried or duplicated failure\n",
@@ -856,13 +903,13 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
         return 1;
     }
 
-    /* A recovered clock permits one bounded retry. If that retry still
-     * fails, later worker passes wait until another stall/recovery cycle. */
+    /* Recovery starts cancellation once; subsequent worker passes poll the
+     * FPGA acknowledgement without blocking or issuing duplicate requests. */
     simulated_tamer_clock_stalled = false;
     pkt_retune2_work();
     pkt_retune2_work();
     if (rx_queue.count != 1 || tx_queue.count != 1 ||
-        cancel_count != 4 ||
+        cancel_count != 2 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1) {
         fputs("cancel recovery retry was not bounded\n", stderr);
@@ -874,11 +921,411 @@ static int check_stopped_tamer_clock_fails_queued_retunes(void)
     simulated_tamer_clock_stalled = false;
     fail_tamer_cancel = false;
     pkt_retune2_work();
-    if (rx_queue.count != 0 || tx_queue.count != 0 || cancel_count != 6 ||
+    pkt_retune2_work();
+    if (rx_queue.count != 0 || tx_queue.count != 0 || cancel_count != 4 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 0) {
-        fputs("acknowledged cancel did not retire failed RX/TX entries\n",
+        fprintf(stderr, "acknowledged cancel left entries: rx=%u tx=%u "
+                "cancels=%u rx_fail=%u tx_fail=%u\n",
+                rx_queue.count, tx_queue.count, cancel_count,
+                pkt_retune2_failure_count(BLADERF_MODULE_RX),
+                pkt_retune2_failure_count(BLADERF_MODULE_TX));
+        return 1;
+    }
+    return 0;
+}
+
+static int check_clear_queue_does_not_poll_a_stopped_tamer(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 2;
+    if (enqueue_retune(&rx_queue, &profile, 2, 100) != 1) {
+        fputs("failed to set up stopped-tamer queue-clear case\n", stderr);
+        return 1;
+    }
+
+    cancel_count = 0;
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = true;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) == 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) != 0 ||
+        rx_queue.count != 1 || cancel_count != 0) {
+        fputs("stopped-tamer queue clear did not report failure fail-closed\n",
               stderr);
+        return 1;
+    }
+    if (enqueue_retune(&rx_queue, &profile, 2, 200) !=
+            QUEUE_FULL || rx_queue.count != 1) {
+        fputs("queue accepted a retune while asynchronous clear was pending\n",
+              stderr);
+        return 1;
+    }
+
+    simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) == 0 ||
+        rx_queue.count != 1 || cancel_count != 1) {
+        fputs("recovered queue clear did not report pending cancellation\n",
+              stderr);
+        return 1;
+    }
+
+    /* A timestamp-domain reset can erase the in-flight cancel FSM before its
+     * ACK toggle reaches NIOS. The worker must retry after clock recovery. */
+    simulated_tamer_clock_stalled = true;
+    fail_tamer_cancel = true;
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].cancel_request_pending) {
+        fputs("clock stall did not release the lost queue-clear ACK wait\n",
+              stderr);
+        return 1;
+    }
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_cancel = false;
+    pkt_retune2_work();
+    if (!rx_queue.entries[rx_queue.rem_idx].cancel_request_pending ||
+        cancel_count != 2) {
+        fputs("queue clear did not retry cancellation after clock recovery\n",
+              stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        rx_queue.count != 0 || cancel_count != 2) {
+        fputs("queue clear did not complete after cancel-ACK retry\n",
+              stderr);
+        return 1;
+    }
+
+    /* Even an empty software queue may follow a NIOS restart with a compare
+     * still armed in FPGA. Queue clear must obtain a hardware cancel ACK. */
+    pkt_retune2_init();
+    cancel_count = 0;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) == 0 ||
+        rx_queue.count != 0 || cancel_count != 1) {
+        fputs("empty queue clear skipped FPGA comparator cancellation\n",
+              stderr);
+        return 1;
+    }
+    simulated_tamer_clock_stalled = true;
+    fail_tamer_cancel = true;
+    pkt_retune2_work();
+    if (!rx_queue.clear_requested || rx_queue.clear_cancel_pending) {
+        fputs("empty queue clear retained a lost cancel ACK across reset\n",
+              stderr);
+        return 1;
+    }
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) == 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) != 0) {
+        fputs("empty queue clear did not report the stopped cancel domain\n",
+              stderr);
+        return 1;
+    }
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_cancel = false;
+    pkt_retune2_work();
+    if (!rx_queue.clear_cancel_pending || cancel_count != 2) {
+        fputs("empty queue clear did not retry cancel after reset\n",
+              stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        cancel_count != 2) {
+        fputs("empty queue clear did not complete after FPGA cancel ACK\n",
+              stderr);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int check_clear_queue_fences_compare_irq(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 3;
+    tamer_timestamp = 0;
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = false;
+    fail_tamer_schedule_status = false;
+    fail_tamer_cancel = false;
+    compare_fired_rx = false;
+    recall_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 3, 100) != 1) {
+        fputs("failed to enqueue clear/IRQ race case\n", stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_READY) {
+        fputs("compare IRQ did not prepare the clear/IRQ race\n", stderr);
+        return 1;
+    }
+
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    pkt_retune2(&request);
+    if (!rx_queue.clear_requested ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_CANCEL_PENDING) {
+        fputs("queue clear did not take ownership of the ready compare\n",
+              stderr);
+        return 1;
+    }
+
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_CANCEL_PENDING ||
+        recall_count != 0) {
+        fputs("compare IRQ resurrected a head after queue clear\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        rx_queue.count != 0 || recall_count != 0) {
+        fputs("queue clear failed to retire the raced compare\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_cancel_ack_wait_is_nonblocking(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 5;
+    fail_tamer_schedule = true;
+    fail_tamer_cancel = true;
+    simulated_tamer_clock_stalled = false;
+    cancel_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 5, 100) != 1) {
+        fputs("failed to set up asynchronous cancel-ACK case\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING || cancel_count != 0) {
+        fputs("schedule failure did not enter cancel-pending state\n",
+              stderr);
+        return 1;
+    }
+
+    /* Start cancellation once, then let the worker poll the FPGA toggle on
+     * subsequent passes. A missing ACK must not trap the command loop in a
+     * million-read synchronous wait or cause duplicate cancel commands. */
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || cancel_count != 1 ||
+        !rx_queue.entries[rx_queue.rem_idx].cancel_request_pending) {
+        fputs("missing cancel ACK blocked or duplicated cancellation\n",
+              stderr);
+        return 1;
+    }
+
+    fail_tamer_cancel = false;
+    pkt_retune2_work();
+    fail_tamer_schedule = false;
+    if (rx_queue.count != 0 || cancel_count != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1) {
+        fputs("asynchronous cancel ACK did not retire failed request\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_schedule_ack_wait_is_nonblocking(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 6;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = true;
+    simulated_tamer_clock_stalled = false;
+    cancel_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 6, 100) != 1) {
+        fputs("failed to set up asynchronous schedule-ACK case\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_SCHEDULE_PENDING || cancel_count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("missing schedule ACK blocked or failed the request\n",
+              stderr);
+        return 1;
+    }
+
+    fail_tamer_schedule_ack = false;
+    pkt_retune2_work();
+    if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED) {
+        fputs("schedule ACK did not advance the pending request\n", stderr);
+        return 1;
+    }
+    compare_fired_rx = true;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    compare_fired_rx = false;
+    if (rx_queue.count != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0) {
+        fputs("acknowledged scheduled request did not complete\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_schedule_no_response_is_reported(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 8;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = false;
+    fail_tamer_schedule_status = true;
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_cancel = false;
+    cancel_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 8, 100) != 1) {
+        fputs("failed to set up schedule no-response case\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING || cancel_count != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1) {
+        fprintf(stderr, "schedule no-response state mismatch: count=%u "
+                "state=%d cancels=%u failures=%u\n", rx_queue.count,
+                rx_queue.count != 0
+                    ? (int)rx_queue.entries[rx_queue.rem_idx].state : -1,
+                cancel_count,
+                pkt_retune2_failure_count(BLADERF_MODULE_RX));
+        return 1;
+    }
+
+    fail_tamer_schedule_status = false;
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 0 || cancel_count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1) {
+        fputs("schedule no-response was not cancelled as a failure\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_cancel_no_response_is_reported_fail_closed(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile profile = { 0 };
+    struct queue_entry *entry;
+
+    pkt_retune2_init();
+    profile.profile_num = 4;
+    if (enqueue_retune(&rx_queue, &profile, 4, 100) != 1) {
+        fputs("failed to set up cancel no-response case\n", stderr);
+        return 1;
+    }
+    entry = &rx_queue.entries[rx_queue.rem_idx];
+    entry->state = ENTRY_STATE_CANCEL_PENDING;
+    entry->cancel_request_pending = true;
+    entry->cancel_recovery_seen = true;
+    rx_queue.clear_requested = true;
+    cancel_count = 0;
+    fail_tamer_cancel = true;
+    fail_tamer_cancel_status = true;
+
+    pkt_retune2_work();
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) == 0 ||
+        (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) != 0 ||
+        rx_queue.count != 1 || entry->state != ENTRY_STATE_CANCEL_PENDING ||
+        !entry->cancel_request_pending || cancel_count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
+        fputs("cancel no-response was not surfaced fail-closed\n", stderr);
+        return 1;
+    }
+
+    fail_tamer_cancel = false;
+    fail_tamer_cancel_status = false;
+    pkt_retune2_work();
+    pkt_retune2(&request);
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        rx_queue.count != 0 || pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
+        fputs("explicit retry did not complete the pending queue clear\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_compare_irq_during_schedule_ack(void)
+{
+    fastlock_profile profile = { 0 };
+
+    pkt_retune2_init();
+    profile.profile_num = 7;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = false;
+    fire_during_schedule = true;
+    tamer_timestamp = 0;
+    compare_fired_rx = false;
+    recall_count = 0;
+    if (enqueue_retune(&rx_queue, &profile, 7, 1) != 1) {
+        fire_during_schedule = false;
+        fputs("failed to enqueue compare-during-arm case\n", stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    fire_during_schedule = false;
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_READY ||
+        recall_count != 0) {
+        fputs("schedule ACK overwrote a compare IRQ received during ARM\n",
+              stderr);
+        return 1;
+    }
+
+    pkt_retune2_work();
+    if (rx_queue.count != 0 || recall_count != 1 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1) {
+        fputs("compare received during ARM was not activated\n", stderr);
         return 1;
     }
     return 0;
@@ -996,13 +1443,34 @@ static int check_tamer_read_and_arm_fail_closed(void)
         fputs("failed to enqueue tamer arm failure case\n", stderr);
         return 1;
     }
+    schedule_count = 0;
+    cancel_count = 0;
+    fail_tamer_cancel = false;
+    fail_tamer_cancel_status = false;
+    simulated_tamer_clock_stalled = false;
     fail_tamer_schedule = true;
     pkt_retune2_work();
     fail_tamer_schedule = false;
-    if (rx_queue.count != 0 ||
+    if (rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         schedule_count == 0) {
-        fputs("tamer arm timeout did not fail closed\n", stderr);
+        fprintf(stderr, "tamer arm timeout mismatch: count=%u failures=%u "
+                "schedules=%u\n", rx_queue.count,
+                pkt_retune2_failure_count(BLADERF_MODULE_RX),
+                schedule_count);
+        return 1;
+    }
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (rx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1) {
+        fprintf(stderr, "tamer arm cancel ACK pending: count=%u state=%d "
+                "failures=%u cancels=%u\n", rx_queue.count,
+                rx_queue.count != 0
+                    ? (int)rx_queue.entries[rx_queue.rem_idx].state : -1,
+                pkt_retune2_failure_count(BLADERF_MODULE_RX), cancel_count);
         return 1;
     }
 
@@ -1070,6 +1538,7 @@ static int check_failed_schedule_retains_timer_ownership(void)
     pkt_retune2_work();
     fail_tamer_cancel = false;
     simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
     pkt_retune2_work();
     if (rx_queue.count != 1 || schedule_count != 1 || cancel_count != 2 ||
         rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_NEW) {
@@ -1158,8 +1627,24 @@ static int check_invalid_queue_state_fails_closed(void)
     pkt_retune2_work();
     if (pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
-        rx_queue.count != 0 || cancel_count != 1) {
-        fputs("invalid retune state was not reported/cancelled\n", stderr);
+        rx_queue.count != 1 || cancel_count != 0 ||
+        rx_queue.entries[0].state != ENTRY_STATE_CANCEL_PENDING) {
+        fprintf(stderr, "invalid state mismatch: failures=%u successes=%u "
+                "count=%u cancels=%u state=%d\n",
+                pkt_retune2_failure_count(BLADERF_MODULE_RX),
+                pkt_retune2_success_count(BLADERF_MODULE_RX),
+                rx_queue.count, cancel_count,
+                (int)rx_queue.entries[0].state);
+        return 1;
+    }
+    pkt_retune2_work();
+    if (rx_queue.count != 1 || cancel_count != 1) {
+        fputs("invalid retune did not issue cancel request\n", stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    if (rx_queue.count != 0) {
+        fputs("invalid retune state survived acknowledged cancel\n", stderr);
         return 1;
     }
 
@@ -1187,6 +1672,7 @@ static int check_invalid_queue_state_fails_closed(void)
     simulated_tamer_clock_stalled = true;
     pkt_retune2_work();
     simulated_tamer_clock_stalled = false;
+    pkt_retune2_work();
     pkt_retune2_work();
     if (rx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
@@ -1352,6 +1838,27 @@ int main(void)
         return 1;
     }
     if (check_stopped_tamer_clock_fails_queued_retunes() != 0) {
+        return 1;
+    }
+    if (check_clear_queue_does_not_poll_a_stopped_tamer() != 0) {
+        return 1;
+    }
+    if (check_clear_queue_fences_compare_irq() != 0) {
+        return 1;
+    }
+    if (check_cancel_ack_wait_is_nonblocking() != 0) {
+        return 1;
+    }
+    if (check_schedule_ack_wait_is_nonblocking() != 0) {
+        return 1;
+    }
+    if (check_schedule_no_response_is_reported() != 0) {
+        return 1;
+    }
+    if (check_cancel_no_response_is_reported_fail_closed() != 0) {
+        return 1;
+    }
+    if (check_compare_irq_during_schedule_ack() != 0) {
         return 1;
     }
     if (check_immediate_upload_failure_preserves_profile() != 0) {

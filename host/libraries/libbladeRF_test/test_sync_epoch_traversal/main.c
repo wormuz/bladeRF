@@ -497,10 +497,11 @@ static int test_tx_backend_stream(struct bladerf_stream *stream,
 
 static int test_tx_backend_submit(struct bladerf_stream *stream, void *buffer,
                                   size_t *length, unsigned int timeout_ms,
-                                  bool nonblock)
+                                  bool nonblock, uint64_t tx_generation)
 {
     (void)timeout_ms;
     (void)nonblock;
+    (void)tx_generation;
     assert(stream != NULL);
     assert(buffer != NULL);
     assert((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX);
@@ -1385,11 +1386,9 @@ static void *replace_rejected_async_buffer(void *user_data, void *buffer)
 static bool validate_async_rx_buffer(struct bladerf *dev,
                                      bladerf_channel_layout layout,
                                      bladerf_format format,
-                                     bool sync_consumer,
                                      const void *buffer, size_t length,
                                      struct bladerf_metadata *metadata)
 {
-    (void)sync_consumer;
     assert(dev != NULL && buffer != NULL && length > 0);
     assert((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX);
     assert(metadata != NULL);

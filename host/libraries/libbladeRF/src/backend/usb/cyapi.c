@@ -587,7 +587,8 @@ static inline size_t next_idx(struct stream_data *data, size_t i)
 }
 
 /* Assumes a transfer is available and the stream lock is being held */
-static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t len)
+static int submit_transfer(struct bladerf_stream *stream, void *buffer,
+                          size_t len, uint64_t tx_generation)
 {
     int status = 0;
     PUCHAR xfer;
@@ -616,6 +617,11 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer, size_t l
         status = BLADERF_ERR_UNEXPECTED;
         log_debug("Failed to submit buffer %p in transfer slot %u.\n",
                   buffer, (unsigned int) data->avail_i);
+    }
+
+    if (status == 0 &&
+        (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        async_tx_buffer_submitted(stream, tx_generation);
     }
 
     return status;
@@ -716,24 +722,34 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
     for (unsigned int i = 0; i < data->num_transfers && status == 0 &&
          stream->state == STREAM_RUNNING; i++) {
         if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            async_tx_buffer_generation_snapshot(stream);
             meta.actual_count = 0;
             next_buffer = stream->cb(stream->dev, stream, &meta, NULL,
                                      stream->samples_per_buffer,
                                      stream->user_data);
 
             if (next_buffer != BLADERF_STREAM_SHUTDOWN &&
-                next_buffer != BLADERF_STREAM_NO_DATA &&
-                !async_tx_buffer_valid(stream)) {
-                stream->tx_buffer_rejected = next_buffer;
-                status = BLADERF_ERR_WOULD_BLOCK;
-                done = true;
-                break;
+                next_buffer != BLADERF_STREAM_NO_DATA) {
+                int validation_status = async_tx_buffer_validate(
+                    stream, &meta, next_buffer,
+                    async_stream_buf_bytes(stream));
+                if (validation_status != 0 ||
+                    !async_tx_buffer_generation_matches(stream)) {
+                    async_tx_buffer_submission_cancelled(stream);
+                    stream->tx_buffer_rejected = next_buffer;
+                    status = validation_status != 0
+                        ? validation_status : BLADERF_ERR_WOULD_BLOCK;
+                    done = true;
+                    break;
+                }
             }
 
             if (next_buffer == BLADERF_STREAM_SHUTDOWN) {
+                async_tx_buffer_submission_cancelled(stream);
                 done = true;
                 break;
             } else if (next_buffer == BLADERF_STREAM_NO_DATA) {
+                async_tx_buffer_submission_cancelled(stream);
                 continue;
             }
 
@@ -742,6 +758,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                 status = async_tx_packet_meta_transfer_length(
                     stream, &meta, &packet_length);
                 if (status != 0) {
+                    async_tx_buffer_submission_cancelled(stream);
                     done = true;
                     break;
                 }
@@ -756,10 +773,18 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             status = async_tx_packet_meta_transfer_length(
                 stream, &meta, &packet_length);
             if (status == 0) {
-                status = submit_transfer(stream, next_buffer, packet_length);
+                status = submit_transfer(stream, next_buffer, packet_length,
+                                         stream->tx_admission_generation);
             }
         } else {
-            status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
+            status = submit_transfer(stream, next_buffer,
+                                     async_stream_buf_bytes(stream),
+                                     stream->tx_admission_generation);
+        }
+        if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            if (status != 0) {
+                async_tx_buffer_submission_cancelled(stream);
+            }
         }
     }
     if (stream->state != STREAM_RUNNING) {
@@ -835,6 +860,9 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                 next_buffer = BLADERF_STREAM_SHUTDOWN;
             } else {
                 meta.actual_count = 0;
+                if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+                    async_tx_buffer_generation_snapshot(stream);
+                }
                 next_buffer = stream->cb(stream->dev, stream, &meta,
                                          data->transfers[i].buffer,
                                          bytes_to_samples(stream->format, (LONG &)len),
@@ -854,12 +882,19 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
 
         if (success && (layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
             next_buffer != BLADERF_STREAM_SHUTDOWN &&
-            next_buffer != BLADERF_STREAM_NO_DATA &&
-            !async_tx_buffer_valid(stream)) {
-            stream->tx_buffer_rejected = next_buffer;
-            next_buffer = BLADERF_STREAM_SHUTDOWN;
-            status = BLADERF_ERR_WOULD_BLOCK;
-            done = true;
+            next_buffer != BLADERF_STREAM_NO_DATA) {
+            int validation_status = async_tx_buffer_validate(
+                stream, &meta, next_buffer,
+                async_stream_buf_bytes(stream));
+            if (validation_status != 0 ||
+                !async_tx_buffer_generation_matches(stream)) {
+                async_tx_buffer_submission_cancelled(stream);
+                stream->tx_buffer_rejected = next_buffer;
+                next_buffer = BLADERF_STREAM_SHUTDOWN;
+                status = validation_status != 0
+                    ? validation_status : BLADERF_ERR_WOULD_BLOCK;
+                done = true;
+            }
         }
 
         data->transfers[i].buffer = NULL;
@@ -868,6 +903,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         COND_SIGNAL(&stream->can_submit_buffer);
 
         if (next_buffer == BLADERF_STREAM_SHUTDOWN) {
+            async_tx_buffer_submission_cancelled(stream);
             done = true;
         } else if (next_buffer != BLADERF_STREAM_NO_DATA) {
             if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
@@ -877,17 +913,27 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                     stream, &meta, &packet_length);
                 if (status == 0) {
                     status = submit_transfer(stream, next_buffer,
-                                             packet_length);
+                                             packet_length,
+                                             stream->tx_admission_generation);
                 }
             } else {
-                status = submit_transfer(stream, next_buffer, async_stream_buf_bytes(stream));
+                status = submit_transfer(stream, next_buffer,
+                                         async_stream_buf_bytes(stream),
+                                         stream->tx_admission_generation);
             }
 
             done = (status != 0);
+            if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+                if (status != 0) {
+                    async_tx_buffer_submission_cancelled(stream);
+                }
+            }
             if (status != 0 && stream->state == STREAM_RUNNING &&
                 (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
                 rx_transport_fault = true;
             }
+        } else {
+            async_tx_buffer_submission_cancelled(stream);
         }
 
         data->inflight_i = next_idx(data, data->inflight_i);
@@ -940,7 +986,8 @@ out:
 /* The top-level code will have acquired the stream->lock for us */
 int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
                                void *buffer, size_t *length,
-                               unsigned int timeout_ms, bool nonblock)
+                               unsigned int timeout_ms, bool nonblock,
+                               uint64_t tx_generation)
 {
     int status = 0;
     struct stream_data *data = get_stream_data(stream);
@@ -993,13 +1040,27 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
          * configuration change revokes admission. Recheck after that wait,
          * immediately before handing the buffer to USB, rather than relying
          * only on async_submit_stream_buffer()'s pre-wait snapshot. */
-        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
-            !(nonblock ? async_tx_buffer_valid_now(stream)
-                       : async_tx_buffer_valid(stream))) {
-            return BLADERF_ERR_WOULD_BLOCK;
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            if (nonblock) {
+                if (!async_tx_buffer_valid_now(stream) ||
+                    !async_tx_buffer_generation_is_current(
+                        stream, tx_generation)) {
+                    return BLADERF_ERR_WOULD_BLOCK;
+                }
+            } else {
+                const int validation_status = async_tx_buffer_validate(
+                    stream, NULL, buffer, *length);
+                if (validation_status != 0) {
+                    return validation_status;
+                }
+                if (!async_tx_buffer_generation_is_current(
+                        stream, tx_generation)) {
+                    return BLADERF_ERR_WOULD_BLOCK;
+                }
+            }
         }
 
-        status = submit_transfer(stream, buffer, *length);
+        status = submit_transfer(stream, buffer, *length, tx_generation);
         if (status != 0 &&
             (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
             stream->error_code = status;

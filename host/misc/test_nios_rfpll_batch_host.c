@@ -10,6 +10,8 @@
 #include "nios_pkt_16x64.h"
 #include "nios_pkt_8x32.h"
 #include "nios_pkt_formats.h"
+#include "nios_pkt_retune.h"
+#include "nios_pkt_retune2.h"
 
 enum response_mode {
     RESPONSE_SUCCESS,
@@ -27,6 +29,8 @@ enum response_mode {
     RESPONSE_SNAPSHOT_TIMEOUT,
     RESPONSE_WRONG_8X32_TARGET,
     RESPONSE_LEGACY_ERROR_MARKER,
+    RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS,
+    RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS,
 };
 
 static enum response_mode response_mode;
@@ -34,6 +38,7 @@ static uint8_t request[NIOS_PKT_LEN];
 static unsigned int out_count;
 static unsigned int in_count;
 static unsigned int timeout_on_in_count;
+static unsigned int pending_replies_remaining;
 
 static int check_8x32_packet_round_trip(void)
 {
@@ -84,6 +89,28 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     if (request[0] == NIOS_PKT_LEGACY_MAGIC &&
         response_mode == RESPONSE_LEGACY_ERROR_MARKER) {
         bytes[0] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+        return 0;
+    }
+    if (request[0] == NIOS_PKT_RETUNE_MAGIC &&
+        response_mode == RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS) {
+        const uint8_t flags = pending_replies_remaining != 0
+            ? NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING
+            : NIOS_PKT_RETUNERESP_FLAG_SUCCESS;
+        if (pending_replies_remaining != 0) {
+            pending_replies_remaining--;
+        }
+        nios_pkt_retune_resp_pack(bytes, 0, 0, flags);
+        return 0;
+    }
+    if (request[0] == NIOS_PKT_RETUNE2_MAGIC &&
+        response_mode == RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS) {
+        const uint8_t flags = pending_replies_remaining != 0
+            ? NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING
+            : NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
+        if (pending_replies_remaining != 0) {
+            pending_replies_remaining--;
+        }
+        nios_pkt_retune2_resp_pack(bytes, 0, flags);
         return 0;
     }
     if (request[0] == NIOS_PKT_8x32_MAGIC) {
@@ -263,6 +290,37 @@ static int expect_spi_read(enum response_mode mode, int expected_status)
     return 0;
 }
 
+static int expect_retune_clear_pending(enum response_mode mode, bool retune2)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = mode;
+    pending_replies_remaining = 2;
+    out_count = 0;
+    in_count = 0;
+    if (retune2) {
+        status = nios_retune2(&dev, BLADERF_CHANNEL_RX(0),
+                              NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+    } else {
+        status = nios_retune(&dev, BLADERF_CHANNEL_RX(0),
+                             NIOS_PKT_RETUNE_CLEAR_QUEUE, 0, 0, 0, 0,
+                             false, 0, false);
+    }
+
+    if (status != 0 || out_count != 3 || in_count != 3) {
+        fprintf(stderr, "retune clear pending mapping mismatch: mode=%d "
+                        "status=%d out=%u in=%u\n",
+                mode, status, out_count, in_count);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 static int expect_rfic_read_timeout_clears_output(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
@@ -433,13 +491,21 @@ int main(void)
                         BLADERF_ERR_UNSUPPORTED) ||
         expect_spi_read(RESPONSE_SPI_READ_SUCCESS, 0) ||
         expect_spi_read(RESPONSE_SPI_READ_FAILURE, BLADERF_ERR_FPGA_OP) ||
+        expect_retune_clear_pending(
+            RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS, false) ||
+        expect_retune_clear_pending(
+            RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS, true) ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_mismatched_response_poisoned_channel() ||
         expect_legacy_error_marker_is_completed_response() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
         expect_partial_dwell_summary_timeout_is_atomic() ||
-        out_count != 20 || in_count != 20) {
+        out_count != 13 || in_count != 13) {
+        if (out_count != 13 || in_count != 13) {
+            fprintf(stderr, "NIOS transaction count mismatch: out=%u in=%u\n",
+                    out_count, in_count);
+        }
         return 1;
     }
 
