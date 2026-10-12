@@ -75,9 +75,12 @@ struct queue_entry {
 };
 
 static struct queue {
-    uint8_t count;      /* Total number of items in the queue */
+    /* The timestamp ISR reads count/rem_idx while the main loop enqueues,
+     * dequeues, and clears this queue. Keep both accesses observable across
+     * the asynchronous interrupt boundary. */
+    volatile uint8_t count; /* Total number of items in the queue */
     uint8_t ins_idx;    /* Insertion index */
-    uint8_t rem_idx;    /* Removal index */
+    volatile uint8_t rem_idx; /* Removal index, also read by the ISR */
 
     struct queue_entry entries[RETUNE2_QUEUE_MAX];
 } rx_queue, tx_queue;
