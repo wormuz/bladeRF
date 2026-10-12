@@ -20,6 +20,7 @@
  * THE SOFTWARE.
  */
 #include <string.h>
+#include "cyu3os.h"
 #include "cyu3spi.h"
 #include "cyu3error.h"
 #include "bladeRF.h"
@@ -29,16 +30,39 @@
 
 #define THIS_FILE LOGGER_ID_FLASH_C
 
+static CyU3PReturnStatus_t FlashTransfer(uint8_t *tx, uint16_t tx_len,
+                                        uint8_t *rx, uint16_t rx_len)
+{
+    CyU3PReturnStatus_t status = CY_U3P_SUCCESS;
+    CyU3PReturnStatus_t ssn_status;
+
+    if ((tx_len != 0 && tx == NULL) || (rx_len != 0 && rx == NULL)) {
+        return CY_U3P_ERROR_BAD_ARGUMENT;
+    }
+
+    status = CyU3PSpiSetSsnLine(CyFalse);
+    if (status != CY_U3P_SUCCESS) {
+        return status;
+    }
+
+    if (tx_len != 0) {
+        status = CyU3PSpiTransmitWords(tx, tx_len);
+    }
+    if (status == CY_U3P_SUCCESS && rx_len != 0) {
+        status = CyU3PSpiReceiveWords(rx, rx_len);
+    }
+
+    ssn_status = CyU3PSpiSetSsnLine(CyTrue);
+    return status != CY_U3P_SUCCESS ? status : ssn_status;
+}
+
 static CyU3PReturnStatus_t FlashReadStatus(uint8_t *val)
 {
-    int status;
     uint8_t read_status = 0x05; /* RDSTATUS */
-    status = CyU3PSpiSetSsnLine (CyFalse);
-    status = CyU3PSpiTransmitWords (&read_status, 1);
-    status = CyU3PSpiReceiveWords(val, 1);
-    status = CyU3PSpiSetSsnLine (CyTrue);
-
-    return status;
+    if (val == NULL) {
+        return CY_U3P_ERROR_BAD_ARGUMENT;
+    }
+    return FlashTransfer(&read_status, 1, val, 1);
 }
 
 static CyU3PReturnStatus_t FlashWriteEnable(void)
@@ -46,10 +70,7 @@ static CyU3PReturnStatus_t FlashWriteEnable(void)
     CyU3PReturnStatus_t status;
     uint8_t cmd = 0x06; /* Write Enable */
 
-    status = CyU3PSpiSetSsnLine(CyFalse);
-    status = CyU3PSpiTransmitWords(&cmd, 1);
-    status = CyU3PSpiSetSsnLine(CyTrue);
-
+    status = FlashTransfer(&cmd, 1, NULL, 0);
     return status;
 }
 
@@ -57,11 +78,15 @@ static CyU3PReturnStatus_t FlashWaitUntilReady(void)
 {
     CyU3PReturnStatus_t status;
     uint8_t read_status;
+    uint32_t start = CyU3PGetTime();
 
     do {
         status = FlashReadStatus(&read_status);
         if (status != CY_U3P_SUCCESS) {
             return status;
+        }
+        if ((uint32_t)(CyU3PGetTime() - start) >= 30000) {
+            return CY_U3P_ERROR_FAILURE;
         }
     } while (read_status & 0x01);
 
@@ -213,7 +238,7 @@ void NuandEraseWBSec() {
 
 static uint8_t spi_mfn[2];
 static CyBool_t cached_spi_mfn = CyFalse;
-void cacheSPIManufacturer() {
+CyU3PReturnStatus_t cacheSPIManufacturer(void) {
     uint8_t location[4];
 
     location[0] = 0x90; // RD Manu
@@ -221,23 +246,30 @@ void cacheSPIManufacturer() {
     location[2] = 0x0;
     location[3] = 0x0;
 
-    CyU3PSpiSetSsnLine (CyFalse);
-    CyU3PSpiTransmitWords (location, 4);
-    CyU3PSpiReceiveWords(spi_mfn, 2);
-    CyU3PSpiSetSsnLine (CyTrue);
+    CyU3PReturnStatus_t status = FlashTransfer(location, 4, spi_mfn, 2);
+    if (status != CY_U3P_SUCCESS) {
+        cached_spi_mfn = CyFalse;
+        return status;
+    }
+
     cached_spi_mfn = CyTrue;
+    return CY_U3P_SUCCESS;
 }
 
 uint8_t NuandGetSPIManufacturer() {
     if (!cached_spi_mfn) {
-        cacheSPIManufacturer();
+        if (cacheSPIManufacturer() != CY_U3P_SUCCESS) {
+            return 0;
+        }
     }
     return spi_mfn[0];
 }
 
 uint8_t NuandGetSPIDeviceID() {
     if (!cached_spi_mfn) {
-        cacheSPIManufacturer();
+        if (cacheSPIManufacturer() != CY_U3P_SUCCESS) {
+            return 0;
+        }
     }
     return spi_mfn[1];
 }
@@ -337,24 +369,37 @@ CyU3PReturnStatus_t NuandFlashInit() {
         return status;
     }
 
+    status = cacheSPIManufacturer();
+    if (status != CY_U3P_SUCCESS) {
+        CyFxSpiDeInit();
+        return status;
+    }
+
     mfn = NuandGetSPIManufacturer();
 
     if (mfn == 0xEF || mfn == 0x1F) {
-        CyU3PSpiSetClock(30000000);
+        status = CyU3PSpiSetClock(30000000);
+        if (status != CY_U3P_SUCCESS) {
+            CyFxSpiDeInit();
+            return status;
+        }
     }
 
     if (mfn == 0x1F) {
         uint8_t location[1];
 
-        location[0] = 0x06; /* Write Enable */
-        CyU3PSpiSetSsnLine(CyFalse);
-        CyU3PSpiTransmitWords(location, 1);
-        CyU3PSpiSetSsnLine(CyTrue);
+        status = FlashWriteEnable();
+        if (status != CY_U3P_SUCCESS) {
+            CyFxSpiDeInit();
+            return status;
+        }
 
         location[0] = 0x98; /* Global Block Unlock */
-        CyU3PSpiSetSsnLine(CyFalse);
-        status = CyU3PSpiTransmitWords(location, 1);
-        CyU3PSpiSetSsnLine(CyTrue);
+        status = FlashTransfer(location, 1, NULL, 0);
+        if (status != CY_U3P_SUCCESS) {
+            CyFxSpiDeInit();
+            return status;
+        }
     }
 
     glAppMode = MODE_FW_CONFIG;

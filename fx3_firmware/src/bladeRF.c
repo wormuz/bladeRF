@@ -895,9 +895,6 @@ static CyU3PReturnStatus_t extractSerialAndCal(void)
 
     status = NuandReadOtp(0, 0x100, otp_buf);
 
-    /* Call this here while flash chip is init'd */
-    cacheSPIManufacturer();
-
     if (!NuandExtractField((void*)otp_buf, 0x100, "S", serial_buf, 32)) {
         for (i = 0; i < 32; i++) {
             CyFxUSBSerial[2+i*2] = serial_buf[i];
