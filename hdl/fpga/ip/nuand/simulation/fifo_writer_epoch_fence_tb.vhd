@@ -23,6 +23,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal epoch_meta_enable : std_logic := '0';
     signal epoch_id : unsigned(7 downto 0) := (others => '0');
     signal link_start_toggle : std_logic := '0';
+    signal clear_fault_toggle : std_logic := '0';
     signal sample_ctrls : sample_controls_t(0 to 1) :=
         (others => SAMPLE_CONTROL_DISABLE);
     signal samples : sample_streams_t(0 to 1) := (others => ZERO_SAMPLE);
@@ -86,6 +87,7 @@ begin
             overflow_count => overflow_count,
             overflow_duration => (others => '0'),
             link_start_toggle => link_start_toggle,
+            clear_fault_toggle => clear_fault_toggle,
             link_active => link_active,
             link_epoch_counter => epoch_counter,
             fault_sticky => fault_sticky,
@@ -142,15 +144,24 @@ begin
         for i in 1 to 3 loop wait until rising_edge(clock); end loop;
 
         -- With no sample writes, advance through threshold detection so the
-        -- watchdog has staged a pending event. Assert the fence before the
-        -- following publication edge; a staged event must be cancelled.
-        -- Three cycles above plus fourteen reaches the pending-event stage.
+        -- watchdog has staged a pending event. A fence on the following edge
+        -- must not erase a fault already detected before the fence.
         for i in 1 to 14 loop wait until rising_edge(clock); end loop;
         wait until falling_edge(clock);
         discard_active <= '1';
         wait until rising_edge(clock);
+        wait for 1 ns;
+        assert fault_sticky(1) = '1'
+            report "epoch fence erased a watchdog fault detected before the fence"
+            severity failure;
+
+        clear_fault_toggle <= '1';
+        wait until rising_edge(clock);
+        clear_fault_toggle <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
         assert fault_sticky = "000000"
-            report "epoch fence failed to cancel a pending watchdog fault"
+            report "explicit fault clear failed during epoch fence"
             severity failure;
 
         discard_active <= '1';
@@ -160,7 +171,31 @@ begin
             severity failure;
 
         discard_active <= '0';
+
+        -- A terminal RX gate fault must not erase a transport watchdog event
+        -- that matured immediately before the gate fault was observed.
+        for i in 1 to 17 loop wait until rising_edge(clock); end loop;
+        wait until falling_edge(clock);
+        epoch_gate_fault <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert fault_sticky(1) = '1'
+            report "RX gate fault erased a watchdog event detected beforehand"
+            severity failure;
+        epoch_gate_fault <= '0';
+        clear_fault_toggle <= '0';
+        wait until rising_edge(clock);
+        clear_fault_toggle <= '1';
+        wait until rising_edge(clock);
+        clear_fault_toggle <= '0';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert fault_sticky = "000000"
+            report "explicit fault clear failed after RX gate fault"
+            severity failure;
+
         for i in 1 to 24 loop wait until rising_edge(clock); end loop;
+        wait for 1 ns;
         assert fault_sticky(1) = '1'
             report "progress watchdog did not resume after epoch fence"
             severity failure;

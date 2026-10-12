@@ -310,7 +310,10 @@ architecture simple of fifo_reader is
     signal packed_input_enable_i : std_logic;
     signal packed_refill_i : std_logic;
     signal packed_pop_i : std_logic;
+    signal packed_pop_valid_i : std_logic;
     signal packed_data_i : std_logic_vector(63 downto 0);
+    signal packed_loopback_data_i : std_logic_vector(63 downto 0) := (others => '0');
+    signal packed_loopback_valid_i : std_logic := '0';
     signal sample_fifo_empty_i : std_logic;
     signal sample_fifo_starved_i : std_logic;
 
@@ -342,6 +345,11 @@ begin
                                 fifo_empty = '0' and packed_count_i < 2
                        else '0';
     packed_pop_i <= fifo_future.fifo_read when packed_active_i = '1' else '0';
+    packed_pop_valid_i <= '1' when packed_pop_i = '1' and
+                                   packed_count_i /= 0 and enable = '1' and
+                                   link_active_i = '1' and abort_active_i = '0' and
+                                   link_start_event_i = '0' and fifo_holdoff = '0'
+                          else '0';
     packed_data_i <= packed_word0_i when packed_head_i = '0' else packed_word1_i;
     sample_fifo_empty_i <= '1' when packed_active_i = '1' and packed_count_i = 0
                            else '0' when packed_active_i = '1'
@@ -357,8 +365,26 @@ begin
     fifo_read <= packed_refill_i when packed_active_i = '1'
                  else fifo_current.fifo_read;
 
-    loopback_data <= packed_data_i when packed_active_i = '1' else fifo_data;
-    loopback_data_valid <= packed_pop_i when packed_active_i = '1'
+    -- The local queue is popped on fifo_future.fifo_read, one cycle before
+    -- fifo_current.fifo_read reaches the logical-consumption boundary. Keep
+    -- that early control for queue management, but publish loopback data and
+    -- valid together on the registered logical-read cycle.
+    packed_loopback_tap : process(clock, reset)
+    begin
+        if reset = '1' then
+            packed_loopback_data_i <= (others => '0');
+            packed_loopback_valid_i <= '0';
+        elsif rising_edge(clock) then
+            packed_loopback_valid_i <= '0';
+            if packed_pop_valid_i = '1' then
+                packed_loopback_data_i <= packed_data_i;
+                packed_loopback_valid_i <= '1';
+            end if;
+        end if;
+    end process;
+
+    loopback_data <= packed_loopback_data_i when packed_active_i = '1' else fifo_data;
+    loopback_data_valid <= packed_loopback_valid_i when packed_active_i = '1'
                            else fifo_current.fifo_read;
 
     packed_word_queue : process(clock, reset)
@@ -380,7 +406,7 @@ begin
                 packed_count_i <= 0;
             elsif enable = '1' then
                 refill_v := packed_refill_i = '1';
-                pop_v := packed_pop_i = '1' and packed_count_i /= 0;
+                pop_v := packed_pop_valid_i = '1';
                 count_v := packed_count_i;
 
                 if refill_v then
