@@ -17,6 +17,8 @@
 #include "streaming/metadata.h"
 
 #define LIVE_RX_META_MESSAGE_SIZE 8192u
+#define LIVE_RX_META_MESSAGE_SAMPLES \
+    (LIVE_RX_META_MESSAGE_SIZE / sizeof(int32_t))
 #define LIVE_RX_X2_SAMPLES_PER_TIMESTAMP 2u
 
 enum live_rx_active_mode {
@@ -310,7 +312,10 @@ int main(void)
     pthread_t stream_thread;
     struct bladerf_rf_event event = {0};
     unsigned int cross_band_cycles = 70;
+    unsigned int async_buffer_samples = 8192;
     const char *cycles_env = getenv("BLADERF_ASYNC_EPOCH_CYCLES");
+    const char *buffer_samples_env =
+        getenv("BLADERF_ASYNC_RX_BUFFER_SAMPLES");
     const char *active_env = getenv("BLADERF_ASYNC_RX_ACTIVE");
     const char *metadata_fault =
         getenv("BLADERF_TEST_RX_EPOCH_METADATA_FAULT");
@@ -330,6 +335,21 @@ int main(void)
             return 2;
         }
         cross_band_cycles = (unsigned int)requested;
+    }
+    if (buffer_samples_env != NULL && buffer_samples_env[0] != '\0') {
+        char *end = NULL;
+        unsigned long requested = strtoul(buffer_samples_env, &end, 10);
+        if (end == buffer_samples_env || *end != '\0' ||
+            requested < LIVE_RX_META_MESSAGE_SAMPLES ||
+            requested > 131072 ||
+            requested % LIVE_RX_META_MESSAGE_SAMPLES != 0) {
+            fprintf(stderr, "BLADERF_ASYNC_RX_BUFFER_SAMPLES must be a "
+                    "multiple of %zu in range %zu..131072\n",
+                    LIVE_RX_META_MESSAGE_SAMPLES,
+                    LIVE_RX_META_MESSAGE_SAMPLES);
+            return 2;
+        }
+        async_buffer_samples = (unsigned int)requested;
     }
     live.active_mode = LIVE_RX_ACTIVE_BOTH;
     live.transition_channel = BLADERF_CHANNEL_RX(1);
@@ -376,7 +396,7 @@ int main(void)
         status = bladerf_init_stream(&live.stream, live.dev, rx_callback,
                                      &live.buffers, 16,
                                      BLADERF_FORMAT_SC16_Q11_META,
-                                     8192, 8, &live);
+                                     async_buffer_samples, 8, &live);
     }
     if (status == 0 && live.active_mode != LIVE_RX_ACTIVE_RX2) {
         status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(0), true);
@@ -395,7 +415,9 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto cleanup;
     }
-    fprintf(stderr, "async stream started\n");
+    fprintf(stderr, "async stream started: buffer_samples=%u "
+            "buffer_bytes=%u\n", async_buffer_samples,
+            async_buffer_samples * (unsigned int)sizeof(int32_t));
     /* Start the async RX worker before certifying the epoch. Stream startup
      * applies shared format GPIOs and invalidates any earlier RX certificate;
      * keep the worker running so the transition can observe first valid host
