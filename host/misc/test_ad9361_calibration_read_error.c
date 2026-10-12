@@ -3631,6 +3631,30 @@ int main(void)
                     phy.rfpll_requested_valid[0]);
             return EXIT_FAILURE;
         }
+
+        /* A cached profile can still be malformed or externally modified.
+         * With no expected host frequency, sync must reject an out-of-band
+         * decoded LO instead of publishing its truncated cache value. */
+        profile_data[0] = 0x36; /* Integer 310 with profile_data[1]. */
+        profile_data[1] = 0x01;
+        profile_data[12] = 0; /* 12.4 GHz VCO / 2 = 6.2 GHz LO. */
+        frequency = UINT64_C(0xfeedface);
+        ret = ad9361_fastlock_sync_current_lo(
+            &phy, false, 0, 0, &frequency);
+        if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
+            phy.current_rx_lo_freq != 0 ||
+            phy.fastlock.current_profile[0] != 0xffu ||
+            phy.rfpll_requested_valid[0]) {
+            fprintf(stderr,
+                    "Out-of-range fastlock profile certified RX LO: "
+                    "ret=%" PRId32 " freq=%" PRIu64 " cached=%" PRIu64
+                    " profile=%u request_valid=%u\n",
+                    ret, frequency, phy.current_rx_lo_freq,
+                    phy.fastlock.current_profile[0],
+                    phy.rfpll_requested_valid[0]);
+            return EXIT_FAILURE;
+        }
+
         memcpy(profile_data, saved_profile_data, sizeof(saved_profile_data));
         phy.fastlock.entry[0][0].flags = saved_profile_flags;
         phy.current_rx_lo_freq = saved_lo;
