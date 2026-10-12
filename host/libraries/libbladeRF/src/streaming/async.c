@@ -723,7 +723,7 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
                                            length, backend_timeout_ms,
                                            nonblock);
     if (status != 0 && status != BLADERF_ERR_WOULD_BLOCK &&
-        status != BLADERF_ERR_TIMEOUT) {
+        status != BLADERF_ERR_TIMEOUT && status != BLADERF_ERR_ABORTED) {
         async_notify_tx_transport_failure(stream, status);
     }
 

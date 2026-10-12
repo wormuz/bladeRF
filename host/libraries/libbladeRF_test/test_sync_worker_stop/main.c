@@ -1,9 +1,113 @@
 #include <assert.h>
+#include <pthread.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "host_config.h"
+#include "backend/backend.h"
+#include "board/board.h"
 #include "streaming/async.h"
 #include "streaming/sync_worker.h"
+
+struct fake_submit_state {
+    unsigned int waiting;
+};
+
+static int fake_submit(struct bladerf_stream *stream, void *buffer,
+                       size_t *length, unsigned int timeout_ms,
+                       bool nonblock)
+{
+    struct fake_submit_state *state = stream->backend_data;
+    (void)length;
+    (void)timeout_ms;
+    (void)nonblock;
+
+    if (buffer == BLADERF_STREAM_SHUTDOWN) {
+        stream->state = STREAM_SHUTTING_DOWN;
+        COND_BROADCAST(&stream->can_submit_buffer);
+        return 0;
+    }
+
+    state->waiting++;
+    while (stream->state == STREAM_RUNNING) {
+        COND_WAIT(&stream->can_submit_buffer, &stream->lock);
+    }
+    state->waiting--;
+    return BLADERF_ERR_ABORTED;
+}
+
+static const struct backend_fns fake_backend = {
+    .submit_stream_buffer = fake_submit,
+};
+
+struct blocked_submit_result {
+    struct bladerf_stream *stream;
+    int status;
+};
+
+static void *blocked_submitter(void *arg)
+{
+    struct blocked_submit_result *result = arg;
+    size_t length = 0;
+    result->status = async_submit_stream_buffer(
+        result->stream, (void *)1, &length, 0, false);
+    return NULL;
+}
+
+static void test_shutdown_wakes_blocked_submitters(void)
+{
+    enum { NUM_WAITERS = 3 };
+    struct bladerf dev = {0};
+    struct bladerf_stream *stream = calloc(1, sizeof(*stream));
+    struct fake_submit_state state = {0};
+    struct blocked_submit_result results[NUM_WAITERS];
+    pthread_t threads[NUM_WAITERS];
+
+    assert(stream != NULL);
+    dev.backend = &fake_backend;
+    stream->dev = &dev;
+    stream->state = STREAM_RUNNING;
+    stream->layout = BLADERF_TX_X1;
+    stream->backend_data = &state;
+    assert(MUTEX_INIT(&stream->lock) == 0);
+    assert(COND_INIT(&stream->can_submit_buffer) == 0);
+    assert(COND_INIT(&stream->stream_started) == 0);
+
+    for (unsigned int i = 0; i < NUM_WAITERS; ++i) {
+        results[i].stream = stream;
+        results[i].status = 0;
+        assert(pthread_create(&threads[i], NULL, blocked_submitter,
+                              &results[i]) == 0);
+    }
+
+    {
+        unsigned int active = 0;
+        for (unsigned int i = 0; i < 5000; ++i) {
+            MUTEX_LOCK(&stream->lock);
+            active = state.waiting;
+            MUTEX_UNLOCK(&stream->lock);
+            if (active == NUM_WAITERS) {
+                break;
+            }
+            usleep(1000);
+        }
+        assert(active == NUM_WAITERS);
+    }
+
+    size_t length = 0;
+    assert(async_submit_stream_buffer(stream, BLADERF_STREAM_SHUTDOWN,
+                                      &length, 0, false) == 0);
+    for (unsigned int i = 0; i < NUM_WAITERS; ++i) {
+        assert(pthread_join(threads[i], NULL) == 0);
+        assert(results[i].status == BLADERF_ERR_ABORTED);
+    }
+    assert(state.waiting == 0);
+
+    assert(COND_DESTROY(&stream->stream_started) == 0);
+    assert(COND_DESTROY(&stream->can_submit_buffer) == 0);
+    assert(MUTEX_DESTROY(&stream->lock) == 0);
+    free(stream);
+}
 
 static void *startup_waiting_worker(void *arg)
 {
@@ -26,6 +130,8 @@ int main(void)
 {
     struct bladerf_stream stream = {0};
     struct sync_worker worker = {0};
+
+    test_shutdown_wakes_blocked_submitters();
 
     assert(sync_worker_transfer_timeout_ms(BLADERF_RX,
                BLADERF_FORMAT_SC16_Q11_META, 1000) ==

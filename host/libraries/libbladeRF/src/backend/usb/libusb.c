@@ -126,6 +126,7 @@ static inline void mark_stream_done(struct bladerf_stream *stream)
     struct lusb_stream_data *stream_data = stream->backend_data;
 
     stream->state = STREAM_DONE;
+    COND_BROADCAST(&stream->can_submit_buffer);
     if (stream_data != NULL) {
         stream_data->done_flag = 1;
     }
@@ -1122,11 +1123,12 @@ static int lusb_shutdown_stream(void *driver, struct bladerf_stream *stream)
     (void)driver;
 
     if (stream_data == NULL) {
-        stream->state = STREAM_DONE;
+        mark_stream_done(stream);
         return 0;
     }
 
     stream->state = STREAM_SHUTTING_DOWN;
+    COND_BROADCAST(&stream->can_submit_buffer);
     if (stream_data->num_avail == stream_data->num_transfers) {
         mark_stream_done(stream);
     } else {
@@ -1963,6 +1965,7 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
             mark_stream_done(stream);
         } else {
             stream->state = STREAM_SHUTTING_DOWN;
+            COND_BROADCAST(&stream->can_submit_buffer);
         }
 
         return 0;
@@ -2002,6 +2005,13 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
                         &stream->lock);
             }
         }
+    }
+
+    /* Cancellation may return a transfer slot and wake this waiter after
+     * async_deinit_stream() has already moved the stream out of RUNNING.
+     * Never refill the backend queue once shutdown has started. */
+    if (stream->state != STREAM_RUNNING || stream->deinit_requested) {
+        return BLADERF_ERR_ABORTED;
     }
 
     if (status == THREAD_TIMEOUT) {

@@ -502,10 +502,12 @@ static int cyapi_shutdown_stream(void *driver, struct bladerf_stream *stream)
 
     if (data == NULL || data->ep == NULL) {
         stream->state = STREAM_DONE;
+        COND_BROADCAST(&stream->can_submit_buffer);
         return 0;
     }
 
     stream->state = STREAM_SHUTTING_DOWN;
+    COND_BROADCAST(&stream->can_submit_buffer);
     data->ep->Abort();
     return 0;
 }
@@ -671,6 +673,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         /* Shutdown may win the short interval between async_run_stream()
          * publishing RUNNING and this backend acquiring its endpoint. */
         stream->state = STREAM_DONE;
+        COND_BROADCAST(&stream->can_submit_buffer);
         MUTEX_UNLOCK(&stream->lock);
         return 0;
     }
@@ -689,6 +692,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         notify_rx_terminal_failure_once(stream, data, BLADERF_ERR_IO);
         stream->error_code = BLADERF_ERR_UNEXPECTED;
         stream->state = STREAM_DONE;
+        COND_BROADCAST(&stream->can_submit_buffer);
         MUTEX_UNLOCK(&stream->lock);
         return BLADERF_ERR_UNEXPECTED;
     }
@@ -922,6 +926,7 @@ out:
     assert(data->num_avail == data->num_transfers);
 
     stream->state = STREAM_DONE;
+    COND_BROADCAST(&stream->can_submit_buffer);
     log_verbose("Stream done (error_code = %d)\n", stream->error_code);
     MUTEX_UNLOCK(&stream->lock);
 
@@ -942,6 +947,7 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
         } else {
             stream->state = STREAM_SHUTTING_DOWN;
         }
+        COND_BROADCAST(&stream->can_submit_buffer);
 
         return 0;
     }
@@ -966,6 +972,12 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
                                            &stream->lock);
             }
         }
+    }
+
+    /* Abort/cancel can wake a submitter waiting for an endpoint slot. Do not
+     * queue a fresh transfer after the stream has entered shutdown. */
+    if (stream->state != STREAM_RUNNING || stream->deinit_requested) {
+        return BLADERF_ERR_ABORTED;
     }
 
     if (status == THREAD_TIMEOUT) {

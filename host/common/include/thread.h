@@ -148,6 +148,7 @@ static inline int bladerf_thread_cond_init(COND *cond)
 }
 #   define COND_INIT(m) bladerf_thread_cond_init(m)
 #   define COND_SIGNAL(m) pthread_cond_signal(m)
+#   define COND_BROADCAST(m) pthread_cond_broadcast(m)
 #   define COND_DESTROY(m) pthread_cond_destroy(m)
 // POSIX implementation as a function
 static inline int posix_cond_timedwait(pthread_cond_t *c,
@@ -237,6 +238,7 @@ static inline int bladerf_thread_mutex_init(MUTEX *mutex)
 
 #   define COND_INIT(m) (InitializeConditionVariable(m), 0)
 #   define COND_SIGNAL(m) WakeConditionVariable(m)
+#   define COND_BROADCAST(m) WakeAllConditionVariable(m)
 #   define COND_DESTROY(m) ((void)(m))
 #   define COND_TIMED_WAIT(c, m, t) \
         (SleepConditionVariableCS(c, m, t) ? 0 : GetLastError())
