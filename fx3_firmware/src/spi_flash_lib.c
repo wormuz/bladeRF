@@ -65,6 +65,9 @@ CyU3PReturnStatus_t CyFxSpiInit(void)
     spiConfig.wordLen    = 8;
 
     status = CyU3PSpiSetConfig(&spiConfig, NULL);
+    if (status != CY_U3P_SUCCESS) {
+        CyU3PSpiDeInit();
+    }
 
     return status;
 }
