@@ -625,8 +625,18 @@ static void bladerf2_close(struct bladerf *dev)
 {
     if (dev != NULL) {
         struct bladerf2_board_data *board_data = dev->board_data;
-        struct controller_fns const *rfic      = board_data->rfic;
-        struct bladerf_flash_arch *flash_arch  = dev->flash_arch;
+        struct controller_fns const *rfic;
+        struct bladerf_flash_arch *flash_arch = dev->flash_arch;
+
+        /* bladerf2_open() can fail while initializing its synchronization
+         * primitives. Those paths clear board_data before returning, and the
+         * generic open wrapper still calls board->close() during cleanup. */
+        if (board_data == NULL) {
+            free(flash_arch);
+            dev->flash_arch = NULL;
+            return;
+        }
+        rfic = board_data->rfic;
 
         if (board_data != NULL) {
             bladerf_direction dir;
