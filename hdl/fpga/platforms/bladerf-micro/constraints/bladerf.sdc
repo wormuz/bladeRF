@@ -340,8 +340,22 @@ set hs_pairs [list \
     {*U_rx_epoch_snapshot_handshake|source_holding[*]}              {*bladerf_core:*|rx_epoch_snapshot_sys[*]} \
     {*U_rx_fault_causes_handshake|source_holding[*]}                {*bladerf_core:*|rx_fault_causes_sys[*]} \
     {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} \
+    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|target_timestamp[*]} \
+    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|previous_toggles[*]} \
+    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|arm_ack_toggle} \
+    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|arm_immediate} \
+    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|epoch_id_rx[*]} \
+    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|previous_toggles[*]} \
+    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|meta_enable_rx} \
     {*U_tx_retune_gate_status_handshake|source_holding[*]}          {*bladerf_core:*|tx_retune_gate_status_sys[*]} \
 ]
+
+# On reset recovery each controller establishes its surviving command levels
+# directly from control_wire_* before the regular control_* capture stage is
+# active. Those first-sample destination registers are separate bundled-data
+# captures and must receive the same bounded-skew/net-delay treatment. Without
+# these pairs STA times the asynchronous source_holding -> initialization
+# captures as one-cycle paths (the normal control_* pairs do not cover them).
 
 # The dwell_cfg pair exists only in the sweep revision, and it is a genuine
 # bundled-data crossing: dwell_cfg_rx[29:24] selects a shift and [23:0] is
@@ -369,6 +383,7 @@ set hs_pairs [list \
 # U_handshake_tune_mode's into tune_ref_mode.
 
 set hs_done 0
+set hs_covered_names [list]
 set hs_optional_absent_patterns [list \
     {*U_dwell_cfg_handshake|source_holding[*]} \
     {*U_dwell_readout_handshake|source_holding[*]} \
@@ -423,6 +438,17 @@ foreach { src_pat dst_pat } $hs_pairs {
 -> $dst_pat ([get_collection_size $dst]) -- destination pattern reaches past \
 the crossing; anchor it to the instance"
         }
+        # Count source handshakes covered by at least one successfully
+        # matched endpoint pair. One bundled transfer can have several
+        # capture registers, so endpoint-pair count is not an instance count.
+        foreach_in_collection hs_source_item $src {
+            set hs_source_name [get_node_info -name $hs_source_item]
+            regsub {~DUPLICATE[0-9]*$} $hs_source_name {} hs_source_name
+            regsub {\|source_holding\[[0-9]+\]$} $hs_source_name {} hs_source_name
+            if { [lsearch -exact $hs_covered_names $hs_source_name] < 0 } {
+                lappend hs_covered_names $hs_source_name
+            }
+        }
         incr hs_done
     } elseif { [get_collection_size $src] == 0 &&
                [get_collection_size $dst] == 0 &&
@@ -435,10 +461,12 @@ the crossing; anchor it to the instance"
         post_message -type critical_warning "handshake crossing not matched: $src_pat -> $dst_pat"
     }
 }
+set hs_covered [llength $hs_covered_names]
 if { $hs_done == 0 } {
     post_message -type critical_warning "no handshake crossing constrained: bundled-data transfers would be timed as single-cycle"
 } else {
-    post_message -type info "handshake crossings constrained: $hs_done"
+    post_message -type info "handshake crossings constrained: $hs_covered"
+    post_message -type info "handshake endpoint pairs constrained: $hs_done"
 }
 
 # AD9361 RX/TX control words cross from the NIOS up_clk domain into device
@@ -614,17 +642,24 @@ foreach_in_collection hs_item $hs_all {
     # is already included by the paired source collection above. Do not count
     # the physical replica as a second crossing in this completeness guard.
     regsub {~DUPLICATE[0-9]*$} $hs_name {} hs_name
+    regsub {\|source_holding\[[0-9]+\]$} $hs_name {} hs_name
     if { [lsearch -exact $hs_unique_names $hs_name] < 0 } {
         lappend hs_unique_names $hs_name
     }
 }
 set hs_inst [llength $hs_unique_names]
-if { $hs_inst != $hs_done } {
+set hs_uncovered_names [list]
+foreach hs_name $hs_unique_names {
+    if { [lsearch -exact $hs_covered_names $hs_name] < 0 } {
+        lappend hs_uncovered_names $hs_name
+    }
+}
+if { [llength $hs_uncovered_names] > 0 || $hs_covered != $hs_inst } {
     post_message -type critical_warning \
-        "unique handshake instances: $hs_inst, endpoint pairs written: $hs_done -- some crossing has no capture endpoint named"
+        "unique handshake instances: $hs_inst, covered instances: $hs_covered, endpoint pairs written: $hs_done, uncovered: $hs_uncovered_names -- some crossing has no capture endpoint named"
 } else {
     post_message -type info \
-        "handshake instances: $hs_inst (from $hs_physical physical keepers), endpoint pairs written: $hs_done"
+        "handshake instances: $hs_inst covered (from $hs_physical physical keepers), endpoint pairs written: $hs_done"
 }
 
 if { $hs_inst == 0 } {

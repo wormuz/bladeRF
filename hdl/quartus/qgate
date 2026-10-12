@@ -149,21 +149,22 @@ expect_count() {
 # crossings exist. If one of these ever differs between sizes, that means the
 # revision instantiates something conditionally and the difference is the news.
 #
-# The handshake count differs by revision. Sweep currently has 13 constrained
-# pairs: the hosted crossings plus dwell config, RX epoch control, the bundled
-# RX epoch status+timestamp snapshot, pre-trigger address, and RX status
-# monitor. The three previously independent status/timestamp crossings are
-# now one coherent 96-bit CDC transfer. Keep this count exact so added or
-# dropped CDC pairs remain visible to qgate.
+# The handshake count differs by revision and counts covered source instances,
+# not endpoint pairs. A bundled transfer can feed multiple capture registers.
+# The sweep netlist currently has 14 unique sources; its SDC emits 22 pairs.
 if grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*sweep|revision sweep' "$f" 2>/dev/null; then
-    hs_expect=13
+    hs_expect=14
+    hs_pairs_expect=22
 elif grep -qiE 'revision([[:space:]]+name)?[[:space:]]*[:=][[:space:]]*hosted|revision hosted' "$f" 2>/dev/null; then
     hs_expect=12
+    hs_pairs_expect=19
 else
     hs_expect=5
+    hs_pairs_expect=5
 fi
 expect_count "cdc tamer compare payload"  'tamer compare payload crossing constrained on [0-9]+' 2
 expect_count "cdc handshake"        'handshake crossings constrained: [0-9]+'        "$hs_expect"
+expect_count "cdc handshake endpoint pairs" 'handshake endpoint pairs constrained: [0-9]+' "$hs_pairs_expect"
 expect_count "ADI up_xfer bundled data" 'ADI up_xfer bundled crossings constrained: [0-9]+' 9
 expect_count "cdc dcfifo pointers"  'dcfifo pointer crossings constrained on [0-9]+' 10
 
