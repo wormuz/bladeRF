@@ -306,6 +306,41 @@ static void test_sync_rx_packet_meta_capacity_rejection_preserves_output(void)
     fixture_destroy(&f);
 }
 
+static void test_sync_rx_packet_meta_returns_one_complete_packet(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta = {0};
+    const uint32_t first_packet[2] = {
+        UINT32_C(0x11223344), UINT32_C(0x55667788),
+    };
+    const uint32_t second_packet[2] = {
+        UINT32_C(0x99aabbcc), UINT32_C(0xddeeff00),
+    };
+    uint32_t output[4] = {0};
+
+    fixture_init(&f);
+    f.sync.stream_config.format = BLADERF_FORMAT_PACKET_META;
+    f.sync.stream_config.bytes_per_sample = sizeof(uint32_t);
+    f.sync.stream_config.samples_per_buffer = SAMPLES_PER_BUFFER;
+    metadata_set_packet(f.buffers[0], 17, 0x11, 2, 0, 0);
+    metadata_set_packet(f.buffers[1], 29, 0x22, 2, 0, 0);
+    memcpy(f.buffers[0] + METADATA_HEADER_SIZE, first_packet,
+           sizeof(first_packet));
+    memcpy(f.buffers[1] + METADATA_HEADER_SIZE, second_packet,
+           sizeof(second_packet));
+
+    /* The requested value is output capacity. A short packet is still a
+     * complete packet and must retain its own header and payload. */
+    assert(sync_rx(&f.sync, output, 4, &meta, 100) == 0);
+    assert(meta.actual_count == 2);
+    assert(meta.timestamp == 17);
+    assert(meta.flags == 0x11);
+    assert(memcmp(output, first_packet, sizeof(first_packet)) == 0);
+    assert(output[2] == 0 && output[3] == 0);
+
+    fixture_destroy(&f);
+}
+
 static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
 {
     struct bladerf_sync sync = {0};
@@ -3435,6 +3470,7 @@ int main(void)
     test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity();
     test_rx_packet_meta_length_is_bounded_by_transfer();
     test_sync_rx_packet_meta_capacity_rejection_preserves_output();
+    test_sync_rx_packet_meta_returns_one_complete_packet();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_sync_tx_rejects_timestamp_before_wrapped_counter();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();

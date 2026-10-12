@@ -2126,6 +2126,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                     samples_written_bytes += bytes_to_copy;
                 }
 
+                /* PACKET_META carries one timestamp and flag set for one
+                 * packet. Do not keep reading to fill num_samples: a later
+                 * packet would overwrite both the payload and provenance of
+                 * this packet, and variable packet lengths cannot be
+                 * concatenated into one metadata result. */
+                exit_early = true;
+
                 advance_rx_buffer(b);
                 s->state = SYNC_STATE_WAIT_FOR_BUFFER;
                 MUTEX_UNLOCK(&b->lock);
