@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-build_dir="${repo_root}/host/build/tx_retune_gate_tb"
+build_dir="${BLADERF_TEST_BUILD_DIR:-${repo_root}/host/build/tx_retune_gate_tb}"
 mkdir -p "${build_dir}"
 cd "${build_dir}"
 
@@ -32,6 +32,8 @@ ghdl -e --std=08 fifo_reader_tb
 ghdl -r --std=08 fifo_reader_tb --assert-level=error --stop-time=70us
 ghdl -r --std=08 fifo_reader_tb -gTGT=0 --assert-level=error \
     --stop-time=70us
+ghdl -r --std=08 fifo_reader_tb -gTGT=4000 -gNSTREAMS=2 -gPACKED=true \
+    --assert-level=error --stop-time=70us
 
 ghdl -e --std=08 fifo_reader_edge_tb
 ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \

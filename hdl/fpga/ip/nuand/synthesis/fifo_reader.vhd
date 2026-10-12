@@ -749,7 +749,11 @@ begin
 
     -- Keep the wide SC12 carry buffer out of the aggregate FSM record. A
     -- dedicated enabled register avoids the record-wide next-state mux on
-    -- this datapath while preserving the original update edge.
+    -- this datapath while preserving the original update edge. Do not gate
+    -- this prefetch with meta_time_go: while a scheduled packet is waiting,
+    -- the FIFO head is held because no read is issued. Capturing that stable
+    -- head early keeps the metadata due signal off the 48-bit buffer-enable
+    -- path and does not make any sample visible before its timestamp.
     packed_buffer_write_comb : process(all)
         variable read_req_v : std_logic;
     begin
@@ -765,10 +769,8 @@ begin
         packed_buffer_write_i <= '0';
         if( highly_packed_mode_en = '1' and NUM_STREAMS = 2 and
             fifo_current.state = READ_SAMPLES and fifo_holdoff = '0' and
-            fifo_empty = '0' and
-            (meta_en = '0' or
-             (meta_en = '1' and meta_current.meta_time_go = '1')) and
-            fifo_current.samples_left = 0 and read_req_v = '1' ) then
+            fifo_empty = '0' and fifo_current.samples_left = 0 and
+            read_req_v = '1' ) then
             -- This predicate is the exact write condition from the READ_SAMPLES
             -- branch. It intentionally does not depend on packed_cycle: cycle
             -- 3 advances the carry buffer without consuming a FIFO word.

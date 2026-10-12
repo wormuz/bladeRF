@@ -48,13 +48,13 @@ library work;
 entity fifo_reader_tb is
     generic (
         -- Sample timestamp for the burst. 0 means "transmit now".
-        TGT : natural := 4000
+        TGT      : natural := 4000;
+        NSTREAMS : natural := 1;
+        PACKED   : boolean := false
     );
 end entity;
 
 architecture sim of fifo_reader_tb is
-
-    constant NSTREAMS : natural := 1;
 
     signal clock      : std_logic := '0';
     signal reset      : std_logic := '1';
@@ -91,6 +91,8 @@ architecture sim of fifo_reader_tb is
 
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
+    signal samples_before : natural := 0;
+    signal samples_after  : natural := 0;
     signal first_read_timestamp : unsigned(63 downto 0) := (others => '0');
     signal done         : boolean := false;
 
@@ -136,6 +138,7 @@ begin
     end process;
 
     counters : process(clock)
+        variable valid_samples : natural;
     begin
         if rising_edge(clock) and reset = '0' and fifo_read = '1' then
             if reads_before = 0 and reads_after = 0 then
@@ -145,6 +148,20 @@ begin
                 reads_before <= reads_before + 1;
             else
                 reads_after <= reads_after + 1;
+            end if;
+        end if;
+
+        if rising_edge(clock) and reset = '0' and PACKED then
+            valid_samples := 0;
+            for i in out_smp'range loop
+                if out_smp(i).data_v = '1' then
+                    valid_samples := valid_samples + 1;
+                end if;
+            end loop;
+            if timestamp < to_unsigned(TGT, 64) then
+                samples_before <= samples_before + valid_samples;
+            else
+                samples_after <= samples_after + valid_samples;
             end if;
         end if;
     end process;
@@ -202,6 +219,9 @@ begin
         -- exist in this bench.
         wait for 10*10 ns;
         enable <= '1';
+        if PACKED then
+            packed_en <= '1';
+        end if;
         meta_en <= '0';
         fifo_empty <= '1';
         uf_suppress <= '1';
@@ -239,6 +259,15 @@ begin
                        ", expected " & integer'image(TGT)
                 severity failure;
             report "scheduled: gate held until the timestamp";
+        end if;
+
+        if PACKED then
+            assert samples_before = 0
+                report "packed TX samples leaked before their scheduled timestamp"
+                severity failure;
+            assert samples_after > 0
+                report "packed TX samples did not resume after their timestamp"
+                severity failure;
         end if;
 
         meta_en <= '0';

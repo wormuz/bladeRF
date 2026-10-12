@@ -265,6 +265,44 @@ begin
             report "TX gate failed to resume after wraparound test"
             severity failure;
 
+        -- Ordering must remain correct when two close timestamps straddle
+        -- the signed 64-bit boundary. The second target is later and must
+        -- not replace the first target merely because its sign bit differs.
+        timestamp <= unsigned'(x"7fffffffffffff00");
+        target_timestamp <= unsigned'(x"7ffffffffffffff8");
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        target_timestamp <= unsigned'(x"8000000000000008");
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        timestamp <= unsigned'(x"7ffffffffffffff7");
+        wait for 1 ns;
+        assert state = "01" and muted = '0'
+            report "signed-boundary replacement muted before earlier target"
+            severity failure;
+        timestamp <= unsigned'(x"7ffffffffffffff8");
+        wait for 1 ns;
+        assert muted = '1'
+            report "signed-boundary ordering selected the later target"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and
+               mute_start_timestamp = unsigned'(x"7ffffffffffffff8")
+            report "signed-boundary earlier target was not exact"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after signed-boundary test"
+            severity failure;
+
         -- fifo_reader stretches its underflow LED. The edge-pulse entity used
         -- by tx.vhd must abort once, then permit a fresh ARM while the level
         -- remains asserted for the rest of the display interval.

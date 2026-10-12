@@ -85,34 +85,13 @@ architecture rtl of tx_retune_gate is
         left_ts  : unsigned(63 downto 0);
         right_ts : unsigned(63 downto 0)
     ) return boolean is
-        variable hi_gt   : boolean;
-        variable hi_eq   : boolean;
-        variable mid_gt  : boolean;
-        variable mid_eq  : boolean;
-        variable low_gt  : boolean;
-        variable low_eq  : boolean;
-        variable tail_gt : boolean;
+        variable delta : unsigned(63 downto 0);
     begin
-        if left_ts(63) /= right_ts(63) then
-            return left_ts(63) = '0';
-        end if;
-
-        -- Evaluate all word comparisons in parallel, then combine their
-        -- lexicographic result. The nested form serialized three wide
-        -- equality/greater-than decisions into target_bank_select_i; STA
-        -- measured that path at -0.602 ns in the 8 ns pll_sclk domain.
-        hi_gt   := left_ts(62 downto 48) > right_ts(62 downto 48);
-        hi_eq   := left_ts(62 downto 48) = right_ts(62 downto 48);
-        mid_gt  := left_ts(47 downto 32) > right_ts(47 downto 32);
-        mid_eq  := left_ts(47 downto 32) = right_ts(47 downto 32);
-        low_gt  := left_ts(31 downto 16) > right_ts(31 downto 16);
-        low_eq  := left_ts(31 downto 16) = right_ts(31 downto 16);
-        tail_gt := left_ts(15 downto 0) > right_ts(15 downto 0);
-
-        return hi_gt or
-               (hi_eq and mid_gt) or
-               (hi_eq and mid_eq and low_gt) or
-               (hi_eq and mid_eq and low_eq and tail_gt);
+        -- Timestamp ordering is modulo 2^64, with a separation below 2^63.
+        -- Subtraction handles both the counter wrap and the signed-bit
+        -- boundary; comparing the operands' sign bits directly does not.
+        delta := left_ts - right_ts;
+        return delta(63) = '0' and delta /= 0;
     end function;
 begin
     -- Compare each target bank in parallel and select the one-bit result.
