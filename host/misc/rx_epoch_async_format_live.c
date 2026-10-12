@@ -18,6 +18,7 @@ struct live_test {
     void **buffers;
     atomic_bool stop;
     atomic_uint callbacks;
+    atomic_uint event_only_callbacks;
     int stream_status;
 };
 
@@ -34,7 +35,8 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         return BLADERF_STREAM_SHUTDOWN;
     }
     if (samples == NULL || num_samples == 0) {
-        return test->buffers[0];
+        atomic_fetch_add(&test->event_only_callbacks, 1);
+        return BLADERF_STREAM_REUSE_BUFFER;
     }
     atomic_fetch_add(&test->callbacks, 1);
     return samples;
@@ -47,11 +49,11 @@ static void *run_stream(void *arg)
     return NULL;
 }
 
-static bool wait_for_callback(struct live_test *test)
+static bool wait_for_event_only_callback(struct live_test *test)
 {
     struct timespec pause = { .tv_sec = 0, .tv_nsec = 10000000 };
     for (unsigned int i = 0; i < 300; ++i) {
-        if (atomic_load(&test->callbacks) != 0) {
+        if (atomic_load(&test->event_only_callbacks) != 0) {
             return true;
         }
         nanosleep(&pause, NULL);
@@ -74,9 +76,14 @@ static int request_epoch(struct bladerf *dev, uint32_t *transaction_id)
 int main(void)
 {
     struct live_test test = {0};
+    unsigned int raw_callbacks = 0;
     pthread_t stream_thread;
     uint32_t transaction_id = 0;
     uint64_t frequency_before = 0, frequency_after = 0;
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t event_count = 0;
+    uint64_t next_sequence = 0;
+    bool history_complete = false;
     int status;
 
     status = bladerf_open(&test.dev, NULL);
@@ -114,46 +121,52 @@ int main(void)
         fprintf(stderr, "failed to start RX stream thread\n");
         goto fail;
     }
-    if (!wait_for_callback(&test)) {
-        fprintf(stderr, "raw async stream produced no callback\n");
-        atomic_store(&test.stop, true);
-        (void)bladerf_submit_stream_buffer(test.stream,
-                                          BLADERF_STREAM_SHUTDOWN, 1000);
-        pthread_join(stream_thread, NULL);
+    pthread_join(stream_thread, NULL);
+    if (test.stream_status != BLADERF_ERR_UNSUPPORTED) {
+        fprintf(stderr, "raw async stream status=%d (%s), expected %d\n",
+                test.stream_status, bladerf_strerror(test.stream_status),
+                BLADERF_ERR_UNSUPPORTED);
         goto fail;
     }
-
+    raw_callbacks = atomic_load(&test.callbacks);
+    if (raw_callbacks != 0) {
+        fprintf(stderr, "unsupported raw stream delivered %u IQ callbacks\n",
+                raw_callbacks);
+        goto fail;
+    }
     status = bladerf_get_frequency(test.dev, BLADERF_CHANNEL_RX(0),
                                    &frequency_before);
     if (status != 0) {
         fprintf(stderr, "frequency before: %s\n", bladerf_strerror(status));
-        goto stop_fail;
+        goto fail;
     }
-    status = request_epoch(test.dev, &transaction_id);
-    if (status != BLADERF_ERR_UNSUPPORTED) {
-        fprintf(stderr, "epoch transition status=%d (%s), expected %d\n",
-                status, bladerf_strerror(status), BLADERF_ERR_UNSUPPORTED);
-        goto stop_fail;
+    status = bladerf_rf_events_get_since(
+        test.dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &event_count,
+        &next_sequence, &history_complete);
+    if (status != 0 || !history_complete) {
+        fprintf(stderr, "raw format event query: %s complete=%u\n",
+                bladerf_strerror(status), history_complete);
+        goto fail;
     }
-    status = bladerf_get_frequency(test.dev, BLADERF_CHANNEL_RX(0),
-                                   &frequency_after);
-    if (status != 0 || frequency_before != frequency_after) {
-        fprintf(stderr, "rejected transition changed LO (%llu -> %llu)\n",
-                (unsigned long long)frequency_before,
-                (unsigned long long)frequency_after);
-        goto stop_fail;
+    bool raw_format_event = false;
+    for (uint32_t i = 0; i < event_count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED &&
+            events[i].flags == BLADERF_FORMAT_SC16_Q11 &&
+            events[i].error_code == BLADERF_ERR_UNSUPPORTED) {
+            raw_format_event = true;
+            break;
+        }
     }
-
-    atomic_store(&test.stop, true);
-    (void)bladerf_submit_stream_buffer(test.stream, BLADERF_STREAM_SHUTDOWN,
-                                      1000);
-    pthread_join(stream_thread, NULL);
+    if (!raw_format_event) {
+        fprintf(stderr, "raw stream rejection did not publish its event\n");
+        goto fail;
+    }
     bladerf_deinit_stream(test.stream);
     test.stream = NULL;
 
     status = request_epoch(test.dev, &transaction_id);
     if (status != 0) {
-        fprintf(stderr, "epoch transition after raw stream stop: %s\n",
+        fprintf(stderr, "epoch transition after raw stream rejection: %s\n",
                 bladerf_strerror(status));
         goto fail;
     }
@@ -177,12 +190,11 @@ int main(void)
         goto fail;
     }
 
-    /* The contract remains active without a sync-RX filter object. An async
-     * META consumer must therefore reject ordinary queued retunes too: they
-     * have no host completion event or new epoch boundary. */
-    unsigned int raw_callbacks = atomic_load(&test.callbacks);
-    struct bladerf_quick_tune quick_tune = {0};
+    /* META stream startup changes shared format GPIOs and revokes the
+     * certificate, so the active worker must report withheld data as an
+     * event-only callback until a later transition. */
     atomic_store(&test.callbacks, 0);
+    atomic_store(&test.event_only_callbacks, 0);
     atomic_store(&test.stop, false);
     status = bladerf_init_stream(&test.stream, test.dev, rx_callback,
                                  &test.buffers, RX_BUFFERS,
@@ -196,30 +208,10 @@ int main(void)
         fprintf(stderr, "failed to start META RX stream thread\n");
         goto fail;
     }
-    if (!wait_for_callback(&test)) {
-        fprintf(stderr, "META async stream produced no callback\n");
+    if (!wait_for_event_only_callback(&test)) {
+        fprintf(stderr, "META async stream produced no event-only callback\n");
         goto stop_fail;
     }
-    status = bladerf_schedule_retune(test.dev, BLADERF_CHANNEL_RX(0),
-                                     0, 1835500000ULL, &quick_tune);
-    if (status != BLADERF_ERR_WOULD_BLOCK) {
-        fprintf(stderr, "scheduled RX retune under async epoch contract: "
-                "%d (%s), expected %d\n", status, bladerf_strerror(status),
-                BLADERF_ERR_WOULD_BLOCK);
-        goto stop_fail;
-    }
-    status = bladerf_get_frequency(test.dev, BLADERF_CHANNEL_RX(0),
-                                   &frequency_after);
-    if (status != 0 ||
-        (frequency_after > 1835400000ULL ?
-             frequency_after - 1835400000ULL :
-             1835400000ULL - frequency_after) > 1000ULL) {
-        fprintf(stderr, "rejected scheduled retune changed LO: status=%d "
-                "LO=%llu\n", status,
-                (unsigned long long)frequency_after);
-        goto stop_fail;
-    }
-
     atomic_store(&test.stop, true);
     (void)bladerf_submit_stream_buffer(test.stream, BLADERF_STREAM_SHUTDOWN,
                                       1000);
