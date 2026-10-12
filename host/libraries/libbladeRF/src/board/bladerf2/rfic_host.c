@@ -158,12 +158,19 @@ static int _rfic_host_initialize(struct bladerf *dev)
     }
 
     if (NULL == phy || NULL == phy->pdata) {
+        status = BLADERF_ERR_UNEXPECTED;
         if (NULL != phy) {
-            (void)ad9361_remove(phy);
+            int remove_status = ad9361_remove(phy);
+            if (remove_status < 0) {
+                log_error("Failed to remove invalid AD9361 context: %s\n",
+                          bladerf_strerror(
+                              errno_ad9361_to_bladerf(remove_status)));
+                status = errno_ad9361_to_bladerf(remove_status);
+            }
         }
         bladerf2_axi_io_set_dev(NULL);
         RETURN_ERROR_STATUS("ad9361_init struct initialization",
-                            BLADERF_ERR_UNEXPECTED);
+                            status);
     }
 
     log_verbose("%s: ad9361 initialized @ %p\n", __FUNCTION__, phy);
