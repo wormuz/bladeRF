@@ -537,11 +537,15 @@ CyBool_t NuandHandleVendorRequest(
         apiRetStatus = CyU3PUsbGetEP0Data(wLength, &glPageBuffer[wIndex], &readC);
         if(apiRetStatus != CY_U3P_SUCCESS) {
             LOG_ERROR(apiRetStatus);
+            CyU3PUsbStall(0x0, CyTrue, CyFalse);
+            break;
         }
 
         if(readC != wLength) {
             LOG_ERROR(readC);
             LOG_ERROR(wLength);
+            CyU3PUsbStall(0x0, CyTrue, CyFalse);
+            break;
         }
     break;
 
