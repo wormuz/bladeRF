@@ -136,6 +136,9 @@ int sync_worker_wait_for_state(struct sync_worker *w,
  */
 sync_worker_state sync_worker_get_state(struct sync_worker *w, int *err_code);
 
+/** Read the most recent stream error without consuming it. */
+int sync_worker_peek_error(struct sync_worker *w);
+
 /**
  * Submit a request to the worker task
  *

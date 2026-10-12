@@ -906,6 +906,17 @@ sync_worker_state sync_worker_get_state(struct sync_worker *w,
     return ret;
 }
 
+int sync_worker_peek_error(struct sync_worker *w)
+{
+    int ret;
+
+    MUTEX_LOCK(&w->state_lock);
+    ret = w->err_code;
+    MUTEX_UNLOCK(&w->state_lock);
+
+    return ret;
+}
+
 static void set_state(struct sync_worker *w, sync_worker_state state)
 {
     MUTEX_LOCK(&w->state_lock);

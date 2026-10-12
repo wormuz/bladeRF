@@ -761,6 +761,7 @@ static void test_sync_tx_worker_error_wakeup_is_retryable(void)
 
     assert(sync_tx_handle_worker_error(&sync) == BLADERF_ERR_WOULD_BLOCK);
     assert(sync.state == SYNC_STATE_CHECK_WORKER);
+    assert(sync_worker_peek_error(&worker) == BLADERF_ERR_WOULD_BLOCK);
 
     assert(MUTEX_DESTROY(&worker.state_lock) == 0);
 }

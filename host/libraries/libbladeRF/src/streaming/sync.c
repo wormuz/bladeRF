@@ -601,10 +601,13 @@ static int wait_for_buffer(struct buffer_mgmt *b,
 
 int sync_tx_handle_worker_error(struct bladerf_sync *s)
 {
-    int stream_error = 0;
+    const int stream_error = sync_worker_peek_error(s->worker);
 
-    sync_worker_get_state(s->worker, &stream_error);
     if (stream_error != 0) {
+        /* Keep the error for CHECK_WORKER. The worker may still be
+         * transitioning RUNNING -> IDLE after waking this waiter; consuming
+         * it here could make an immediate retry mistake that worker for a
+         * healthy running stream and sleep without another buffer signal. */
         s->state = SYNC_STATE_CHECK_WORKER;
     }
 
