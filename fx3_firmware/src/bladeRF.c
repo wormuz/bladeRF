@@ -387,7 +387,8 @@ CyBool_t NuandHandleVendorRequest(
 
     /* Device is not ready to handle requests */
     if (!glDeviceReady && bRequest != BLADE_USB_CMD_QUERY_DEVICE_READY) {
-        return -1;
+        CyU3PUsbStall(0, CyTrue, CyFalse);
+        return CyTrue;
     }
 
     switch (bRequest)
