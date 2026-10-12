@@ -548,6 +548,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_WRITE_OTP:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
             apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
         }
 
         apiRetStatus = NuandWriteOtp(wIndex, 0x100, glPageBuffer);
@@ -557,6 +558,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_READ_OTP:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
             apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
         }
 
         apiRetStatus = NuandReadOtp(wIndex, 0x100, glPageBuffer);
@@ -566,6 +568,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_LOCK_OTP:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
             apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
         }
 
         apiRetStatus = NuandLockOtp();
@@ -575,6 +578,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_FLASH_READ:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
             apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
         }
 
         apiRetStatus = CyFxSpiTransfer (
@@ -586,6 +590,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_FLASH_WRITE:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
             apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
         }
 
         apiRetStatus = CyFxSpiTransfer (
@@ -597,6 +602,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_FLASH_ERASE:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
            apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+           break;
         }
 
         apiRetStatus = CyFxSpiEraseSector(CyTrue, wIndex);
@@ -629,6 +635,7 @@ CyBool_t NuandHandleVendorRequest(
     case BLADE_USB_CMD_REFRESH_CAL_CACHE:
         if (glUsbAltInterface != USB_IF_SPI_FLASH) {
            apiRetStatus = CyU3PUsbStall(0x80, CyTrue, CyFalse);
+           break;
         }
 
         apiRetStatus = NuandReadCalTable(glCal);
