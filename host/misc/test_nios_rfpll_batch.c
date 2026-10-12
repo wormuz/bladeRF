@@ -7,6 +7,20 @@
 #include "pkt_16x64.h"
 #include "devices.h"
 
+static struct pkt_buf make_16x64_packet(uint8_t target, bool write,
+                                        uint16_t addr, uint64_t data)
+{
+    uint8_t request[NIOS_PKT_LEN] = { 0 };
+    nios_pkt_16x64_pack(request, target, write, addr, data);
+    return (struct pkt_buf) {
+        .req = { request[0], request[1], request[2], request[3],
+                 request[4], request[5], request[6], request[7],
+                 request[8], request[9], request[10], request[11],
+                 request[12], request[13], request[14], request[15] },
+        .resp = { 0 }, .ready = false,
+    };
+}
+
 enum batch_mode {
     BATCH_SUCCESS,
     BATCH_FAILURE,
@@ -15,6 +29,8 @@ enum batch_mode {
 
 static enum batch_mode mode;
 static unsigned int calls;
+static unsigned int write_calls;
+static bool write_success = true;
 static unsigned int update_calls;
 static bool update_success = true;
 static unsigned int read_calls;
@@ -67,6 +83,36 @@ bool adi_spi_read_checked(uint16_t addr, uint64_t *value)
     return true;
 }
 
+bool adi_spi_write(uint16_t addr, uint64_t data)
+{
+    write_calls++;
+    return addr == 0x247 && data == UINT64_C(0x123456789abcdef0) &&
+           write_success;
+}
+
+static int run_ad9361_write(bool requested_success, bool expected_success)
+{
+    struct pkt_buf packet = {
+        .req = { 0x45, NIOS_PKT_16x64_TARGET_AD9361,
+                 NIOS_PKT_16x64_FLAG_WRITE, 0, 0x47, 0x02,
+                 0xf0, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12,
+                 0, 0 },
+        .ready = false,
+    };
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false, success = false;
+    const unsigned int expected_calls = write_calls + 1;
+
+    write_success = requested_success;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_AD9361 && write && addr == 0x247 &&
+           success == expected_success && write_calls == expected_calls ? 0 : 1;
+}
+
 static int run_invalid_ad9361_read(uint16_t request_addr)
 {
     struct pkt_buf packet = {
@@ -98,7 +144,7 @@ uint64_t rx_epoch_status_snapshot_read(void)
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
 {
-    const uint64_t expected = UINT64_C(0x00ce3d0228f0463b);
+    const uint64_t expected = UINT64_C(0x000e3d0228f0463b);
     calls++;
 
     if (count != 3 || data != expected || completed == NULL) {
@@ -136,7 +182,7 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
 {
     struct pkt_buf packet = {
         .req = { 0x45, 0x03, 0x01, 0x00, 0x03, 0x00,
-                 0x3b, 0x46, 0xf0, 0x28, 0x02, 0x3d, 0xce, 0x00,
+                 0x3b, 0x46, 0xf0, 0x28, 0x02, 0x3d, 0x0e, 0x00,
                  0x00, 0x00 },
         .resp = { 0 },
         .ready = false,
@@ -168,7 +214,8 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
 
 static int run_malformed_batch_case(uint16_t count, uint64_t data)
 {
-    struct pkt_buf packet = { .ready = false };
+    struct pkt_buf packet = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH, true, count, data);
     uint8_t target = 0;
     uint16_t addr = 0;
     uint64_t response = 0;
@@ -176,9 +223,6 @@ static int run_malformed_batch_case(uint16_t count, uint64_t data)
     bool success = true;
     const unsigned int calls_before = calls;
 
-    nios_pkt_16x64_pack(packet.req,
-                        NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH,
-                        true, count, data);
     pkt_16x64(&packet);
     nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
                                &response, &success);
@@ -314,6 +358,8 @@ int main(void)
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
+        run_ad9361_write(false, false) ||
+        run_ad9361_write(true, true) || write_calls != 2 ||
         run_update_bits_value_outside_mask() || update_calls != 2 ||
         run_epoch_snapshot_case(0, true, 1) ||
         run_epoch_snapshot_case(1, false, 1) ||

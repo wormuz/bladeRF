@@ -3,7 +3,10 @@ project(libbladeRF_test_bladerf2_close_empty C)
 
 set(SRC_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../libbladeRF/src)
 
-add_executable(libbladeRF_test_bladerf2_close_empty main.c)
+add_executable(libbladeRF_test_bladerf2_close_empty
+    main.c
+    ${SRC_ROOT}/board/bladerf2/partial_close.c
+)
 target_include_directories(libbladeRF_test_bladerf2_close_empty PRIVATE
     ${SRC_ROOT}
     ${SRC_ROOT}/include

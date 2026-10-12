@@ -30,6 +30,34 @@ static uint8_t rx_trigger_ctl_value;
 static bladerf_vctcxo_tamer_mode tamer_mode_readback =
     BLADERF_VCTCXO_TAMER_DISABLED;
 
+static struct pkt_buf pkt_buf_from_request(const uint8_t request[NIOS_PKT_LEN])
+{
+    return (struct pkt_buf) {
+        .req = { request[0], request[1], request[2], request[3],
+                 request[4], request[5], request[6], request[7],
+                 request[8], request[9], request[10], request[11],
+                 request[12], request[13], request[14], request[15] },
+        .resp = { 0 },
+        .ready = false,
+    };
+}
+
+static struct pkt_buf make_8x8_packet(uint8_t target, bool write,
+                                      uint8_t addr, uint8_t data)
+{
+    uint8_t request[NIOS_PKT_LEN] = { 0 };
+    nios_pkt_8x8_pack(request, target, write, addr, data);
+    return pkt_buf_from_request(request);
+}
+
+static struct pkt_buf make_8x16_packet(uint8_t target, bool write,
+                                       uint8_t addr, uint16_t data)
+{
+    uint8_t request[NIOS_PKT_LEN] = { 0 };
+    nios_pkt_8x16_pack(request, target, write, addr, data);
+    return pkt_buf_from_request(request);
+}
+
 bool si5338_read(uint8_t addr, uint8_t *value)
 {
     (void)addr;
@@ -238,39 +266,48 @@ static int check_legacy_malformed_packet_resets_config_write(void)
 {
     const uint8_t write_cfg = NIOS_PKT_LEGACY_MODE_DIR_WRITE |
                               NIOS_PKT_LEGACY_DEV_CONFIG;
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
     const unsigned int initial_calls = control_reg_write_calls;
 
     /* Start a four-byte control-register write, then interrupt it with an
      * invalid zero-pair packet. The remaining three bytes must not complete
      * the stale transaction. */
-    packet.req[0] = NIOS_PKT_LEGACY_MAGIC;
-    packet.req[1] = write_cfg | 1;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
-    packet.req[3] = 0x01;
-    pkt_legacy(&packet);
-    if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
-
-    packet.req[1] = write_cfg;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
-    packet.req[3] = 0xee;
-    pkt_legacy(&packet);
-    if (packet.resp[0] != NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
-
-    packet.req[1] = write_cfg | 3;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
-    packet.req[3] = 0x02;
-    packet.req[4] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1;
-    packet.req[5] = 0x03;
-    packet.req[6] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2;
-    packet.req[7] = 0x04;
-    pkt_legacy(&packet);
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg | 1,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, 0x01 },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+        if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+    }
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, 0xee },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+        if (packet.resp[0] != NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+    }
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg | 3,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, 0x02,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1, 0x03,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2, 0x04 },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+    }
     if (control_reg_write_calls != initial_calls) return 1;
-
-    packet.req[1] = write_cfg | 1;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 3;
-    packet.req[3] = 0x05;
-    pkt_legacy(&packet);
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg | 1,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 3, 0x05 },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+    }
     if (control_reg_write_calls != initial_calls + 1 ||
         control_reg_write_value != 0x05040302u) {
         return 1;
@@ -278,30 +315,45 @@ static int check_legacy_malformed_packet_resets_config_write(void)
 
     /* A valid packet for another peripheral also interrupts a split config
      * write; later config bytes must begin a fresh accumulation. */
-    packet.req[1] = write_cfg | 1;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
-    packet.req[3] = 0xaa;
-    pkt_legacy(&packet);
-    packet.req[1] = NIOS_PKT_LEGACY_MODE_DIR_READ |
-                    NIOS_PKT_LEGACY_DEV_LMS | 1;
-    packet.req[2] = 0x12;
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg | 1,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, 0xaa },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+    }
     lms_success = true;
-    pkt_legacy(&packet);
-    if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
-
-    packet.req[1] = write_cfg | 3;
-    packet.req[2] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL;
-    packet.req[3] = 0x02;
-    packet.req[4] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1;
-    packet.req[5] = 0x03;
-    packet.req[6] = NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2;
-    packet.req[7] = 0x04;
-    pkt_legacy(&packet);
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC,
+                     NIOS_PKT_LEGACY_MODE_DIR_READ |
+                         NIOS_PKT_LEGACY_DEV_LMS | 1,
+                     0x12, 0xff },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+        if (packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC) return 1;
+    }
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg | 3,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL, 0x02,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 1, 0x03,
+                     NIOS_PKT_LEGACY_PIO_ADDR_CONTROL + 2, 0x04 },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+    }
     if (control_reg_write_calls != initial_calls + 1) return 1;
-
-    packet.req[1] = write_cfg;
-    pkt_legacy(&packet);
-    return packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC ? 0 : 1;
+    {
+        struct pkt_buf packet = {
+            .req = { NIOS_PKT_LEGACY_MAGIC, write_cfg },
+            .resp = { 0 }, .ready = false,
+        };
+        pkt_legacy(&packet);
+        return packet.resp[0] == NIOS_PKT_LEGACY_ERROR_MAGIC ? 0 : 1;
+    }
 }
 
 static int check_8x16_write_failure(void)
@@ -524,23 +576,22 @@ static int check_8x8_trigger_subaddresses(void)
     static const uint8_t targets[] = {
         NIOS_PKT_8x8_TX_TRIGGER_CTL, NIOS_PKT_8x8_RX_TRIGGER_CTL,
     };
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
     uint8_t target, addr, data;
     bool write, success;
     unsigned int i;
 
     for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
-        nios_pkt_8x8_pack(packet.req, targets[i], false, 1, 0);
-        pkt_8x8(&packet);
-        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+        struct pkt_buf read_packet = make_8x8_packet(targets[i], false, 1, 0);
+        struct pkt_buf write_packet = make_8x8_packet(targets[i], true, 1, 0x5a);
+        pkt_8x8(&read_packet);
+        nios_pkt_8x8_resp_unpack(read_packet.resp, &target, &write, &addr, &data,
                                  &success);
         if (target != targets[i] || write || addr != 1 || success) {
             return 1;
         }
 
-        nios_pkt_8x8_pack(packet.req, targets[i], true, 1, 0x5a);
-        pkt_8x8(&packet);
-        nios_pkt_8x8_resp_unpack(packet.resp, &target, &write, &addr, &data,
+        pkt_8x8(&write_packet);
+        nios_pkt_8x8_resp_unpack(write_packet.resp, &target, &write, &addr, &data,
                                  &success);
         if (target != targets[i] || !write || addr != 1 || success) {
             return 1;
@@ -555,13 +606,12 @@ static int check_8x8_trigger_write_status(void)
     static const uint8_t targets[] = {
         NIOS_PKT_8x8_TX_TRIGGER_CTL, NIOS_PKT_8x8_RX_TRIGGER_CTL,
     };
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
     uint8_t target, addr, data;
     bool write, success;
     unsigned int i;
 
     for (i = 0; i < sizeof(targets) / sizeof(targets[0]); ++i) {
-        nios_pkt_8x8_pack(packet.req, targets[i], true, 0, 0xa0);
+        struct pkt_buf packet = make_8x8_packet(targets[i], true, 0, 0xa0);
 
         trigger_ctl_write_success = true;
         pkt_8x8(&packet);
@@ -586,13 +636,18 @@ static int check_8x8_trigger_write_status(void)
 
 static int check_8x16_agc_write_status(void)
 {
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
     uint8_t target, addr;
     uint16_t data;
     bool write, success;
 
-    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
-                       true, NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
+    struct pkt_buf packet = make_8x16_packet(
+        NIOS_PKT_8x16_TARGET_AGC_CORR, true,
+        NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
+    struct pkt_buf success_packet = make_8x16_packet(
+        NIOS_PKT_8x16_TARGET_AGC_CORR, true,
+        NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
+    struct pkt_buf invalid_packet = make_8x16_packet(
+        NIOS_PKT_8x16_TARGET_AGC_CORR, true, 0xff, 0x1234);
     agc_dc_success = false;
     pkt_8x16(&packet);
     nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
@@ -601,33 +656,32 @@ static int check_8x16_agc_write_status(void)
         return 1;
     }
 
-    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
-                       true, NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX, 0x1234);
     agc_dc_success = true;
-    pkt_8x16(&packet);
-    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+    pkt_8x16(&success_packet);
+    nios_pkt_8x16_resp_unpack(success_packet.resp, &target, &write, &addr, &data,
                               &success);
     if (target != NIOS_PKT_8x16_TARGET_AGC_CORR || !write || !success) {
         return 1;
     }
 
-    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_AGC_CORR,
-                       true, 0xff, 0x1234);
-    pkt_8x16(&packet);
-    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+    pkt_8x16(&invalid_packet);
+    nios_pkt_8x16_resp_unpack(invalid_packet.resp, &target, &write, &addr, &data,
                               &success);
     return target == NIOS_PKT_8x16_TARGET_AGC_CORR && write && !success ? 0 : 1;
 }
 
 static int check_8x16_iq_correction_status(void)
 {
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
     uint8_t target, addr;
     uint16_t data;
     bool write, success;
 
-    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_IQ_CORR,
-                       false, NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN, 0);
+    struct pkt_buf packet = make_8x16_packet(
+        NIOS_PKT_8x16_TARGET_IQ_CORR, false,
+        NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN, 0);
+    struct pkt_buf write_packet = make_8x16_packet(
+        NIOS_PKT_8x16_TARGET_IQ_CORR, true,
+        NIOS_PKT_8x16_ADDR_IQ_CORR_RX_PHASE, 0x1234);
     pkt_8x16(&packet);
     nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
                               &success);
@@ -635,18 +689,16 @@ static int check_8x16_iq_correction_status(void)
         return 1;
     }
 
-    nios_pkt_8x16_pack(packet.req, NIOS_PKT_8x16_TARGET_IQ_CORR,
-                       true, NIOS_PKT_8x16_ADDR_IQ_CORR_RX_PHASE, 0x1234);
-    pkt_8x16(&packet);
-    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+    pkt_8x16(&write_packet);
+    nios_pkt_8x16_resp_unpack(write_packet.resp, &target, &write, &addr, &data,
                               &success);
     if (target != NIOS_PKT_8x16_TARGET_IQ_CORR || !write || success) {
         return 1;
     }
 
     iqcorr_success = true;
-    pkt_8x16(&packet);
-    nios_pkt_8x16_resp_unpack(packet.resp, &target, &write, &addr, &data,
+    pkt_8x16(&write_packet);
+    nios_pkt_8x16_resp_unpack(write_packet.resp, &target, &write, &addr, &data,
                               &success);
     return target == NIOS_PKT_8x16_TARGET_IQ_CORR && write && success ? 0 : 1;
 }

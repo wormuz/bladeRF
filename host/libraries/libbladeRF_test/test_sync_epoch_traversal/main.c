@@ -80,6 +80,9 @@ struct fixture {
     sync_buffer_status states[2];
 };
 
+static void fixture_init(struct fixture *f);
+static void fixture_destroy(struct fixture *f);
+
 static unsigned int rx_overrun_events;
 static uint32_t last_rx_overrun_source_flags;
 static uint8_t last_rx_overrun_epoch_id;

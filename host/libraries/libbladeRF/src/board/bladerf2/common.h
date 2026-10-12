@@ -233,6 +233,10 @@ struct bladerf2_board_data {
     bool rx_fpga_loss_count_valid;
     uint64_t tx_fpga_loss_count_last;
     bool tx_fpga_loss_count_valid;
+    /* Empty TX FIFO before the first certified host buffer is startup, not
+     * loss of an application waveform. Once first data is admitted, all
+     * subsequent loss-counter increments are faults. */
+    bool tx_first_data_admitted;
     uint32_t tx_retune2_failure_count_last;
     bool tx_retune2_failure_count_valid;
     bool tx_retune2_failure_watch_active;
@@ -766,24 +770,6 @@ extern char const *bladerf2_state_to_string[4];
             MUTEX_UNLOCK(__lock);          \
             RETURN_ERROR_AD9361(#_fn, _s); \
         }                                  \
-    } while (0)
-
-/**
- * @brief   Execute a command block with a mutex lock
- *
- * @note    Variables declared within the including scope must be declared
- *          one-per-line.
- *
- * @param   _lock    Lock to hold
- * @param   _thing   Block to execute
- */
-#define WITH_MUTEX(_lock, _thing) \
-    do {                          \
-        MUTEX *__lock = _lock;    \
-                                  \
-        MUTEX_LOCK(__lock);       \
-        _thing;                   \
-        MUTEX_UNLOCK(__lock);     \
     } while (0)
 
 /**

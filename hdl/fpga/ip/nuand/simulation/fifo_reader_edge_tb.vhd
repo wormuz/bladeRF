@@ -22,14 +22,14 @@
 --
 -- fifo_reader_tb takes its target as a natural and always starts the timestamp
 -- counter at zero, so it can only exercise small targets on a fresh counter.
--- The release test is now
---     (timestamp + 2) >= raw_header
--- evaluated a cycle early, with a raw header of zero meaning "transmit now".
--- Both the +2 and the zero sentinel interact with 64-bit wraparound, so this
+-- The release test is now based on the signed modulo-2^64 delta between the
+-- timestamp and raw header. It tolerates only the three pipeline ticks of
+-- early comparison; a raw header of zero means "transmit now". The delta and
+-- zero sentinel both interact with 64-bit wraparound, so this
 -- bench takes the counter's start value and the header as std_logic_vector and
 -- covers:
 --
---   * counter started near all-ones, so timestamp + 2 wraps through zero
+--   * counter started near all-ones, so timestamp wraps through zero
 --   * a header of all-ones, which is one tick before timestamp zero under the
 --     modulo half-range contract (only raw zero is the explicit TX_NOW code)
 --   * a header of zero, which must release immediately and must not depend on
@@ -76,6 +76,11 @@ entity fifo_reader_edge_tb is
         -- queue transition rather than a single isolated transaction.
         HDR2_ENABLE    : boolean := false;
         HDR2_TIME      : std_logic_vector(63 downto 0) := (others => '0');
+        -- Hold the sample FIFO empty this many cycles after link START. Used
+        -- with a small watchdog setting to verify startup does not fault.
+        START_EMPTY       : boolean := false;
+        EMPTY_FIFO_CYCLES : natural := 0;
+        PROGRESS_TIMEOUT_LOG2 : natural := 22;
         -- Cycles the meta FIFO stays empty between the two headers.
         HDR2_GAP       : natural := 2000;
         TRACE          : boolean := false
@@ -99,11 +104,13 @@ architecture sim of fifo_reader_edge_tb is
     signal link_start_toggle : std_logic := '0';
 
     signal fifo_usedw : std_logic_vector(11 downto 0) := (others => '1');
+    signal fifo_empty : std_logic := '0';
     signal fifo_read  : std_logic;
     signal fifo_data  : std_logic_vector(63 downto 0) := x"0BAD0BAD0BAD0BAD";
 
     signal pkt_ctrl   : packet_control_t;
     signal pkt_empty  : std_logic;
+    signal fault_sticky : std_logic_vector(4 downto 0);
 
     signal m_usedw    : std_logic_vector(2 downto 0) := "001";
     signal m_read     : std_logic;
@@ -148,6 +155,7 @@ begin
     -- header of 1000 followed by 3000 released at cycle 3001 rather than 1001,
     -- and followed by all-ones it never released at all.
     m_data <= hdr(HDR_TIME) when hdr_index = 0 else hdr(HDR2_TIME);
+    fifo_empty <= '1' when START_EMPTY and cycles < EMPTY_FIFO_CYCLES else '0';
 
     -- With HDR2_ENABLE false this degrades to the single-header behaviour of
     -- fifo_reader_tb: the FIFO goes empty after the first read, so META_LOAD
@@ -221,7 +229,8 @@ begin
             FIFO_USEDW_WIDTH      => fifo_usedw'length,
             FIFO_DATA_WIDTH       => fifo_data'length,
             META_FIFO_USEDW_WIDTH => m_usedw'length,
-            META_FIFO_DATA_WIDTH  => m_data'length
+            META_FIFO_DATA_WIDTH  => m_data'length,
+            PROGRESS_TIMEOUT_LOG2 => PROGRESS_TIMEOUT_LOG2
         )
         port map (
             clock                 => clock,
@@ -235,7 +244,7 @@ begin
             timestamp             => timestamp,
             fifo_usedw            => fifo_usedw,
             fifo_read             => fifo_read,
-            fifo_empty            => '0',
+            fifo_empty            => fifo_empty,
             fifo_data             => fifo_data,
             fifo_holdoff          => '0',
             packet_control        => pkt_ctrl,
@@ -250,7 +259,8 @@ begin
             underflow_led         => uf_led,
             underflow_count       => uf_count,
             underflow_duration    => x"ffff",
-            link_start_toggle     => link_start_toggle
+            link_start_toggle     => link_start_toggle,
+            fault_sticky          => fault_sticky
         );
 
     stim : process
@@ -316,6 +326,12 @@ begin
                        integer'image(reads) & " reads)"
                 severity failure;
             report "case " & integer'image(CASE_ID) & ": stayed shut as expected";
+        end if;
+        if START_EMPTY then
+            assert fault_sticky(1) = '0'
+                report "case " & integer'image(CASE_ID) &
+                       ": empty TX FIFO before first host data caused a start fault"
+                severity failure;
         end if;
 
         done <= true;

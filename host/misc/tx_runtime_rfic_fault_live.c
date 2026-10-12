@@ -25,6 +25,7 @@
  * validity. */
 #include <libbladeRF.h>
 
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -118,6 +119,16 @@ int main(void)
     bool rfics_invalid_seen = false;
     bool feeder_started = false;
     int status;
+    const char *tx_rate_env = getenv("BLADERF_TX_TEST_SAMPLE_RATE");
+    const char *tx_bandwidth_env = getenv("BLADERF_TX_TEST_BANDWIDTH");
+    bladerf_sample_rate tx_sample_rate = 1000000;
+    bladerf_bandwidth tx_bandwidth = 1500000;
+    if (tx_rate_env != NULL) {
+        tx_sample_rate = strtoull(tx_rate_env, NULL, 0);
+    }
+    if (tx_bandwidth_env != NULL) {
+        tx_bandwidth = strtoul(tx_bandwidth_env, NULL, 0);
+    }
 
     if (mode == NULL) {
         fprintf(stderr, "set BLADERF_TEST_RX_TRANSITION_STALL to a TX mode\n");
@@ -147,10 +158,10 @@ int main(void)
     if (status != 0) goto cleanup;
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
     status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
-                                     1000000, NULL);
+                                     tx_sample_rate, NULL);
     if (status != 0) goto cleanup;
     status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_TX(0),
-                                   1500000, NULL);
+                                   tx_bandwidth, NULL);
     if (status != 0) goto cleanup;
     status = bladerf_sync_config(dev, BLADERF_TX_X1,
                                  BLADERF_FORMAT_SC16_Q11,
@@ -159,8 +170,67 @@ int main(void)
 
     status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
     if (status != 0) goto cleanup;
+    /* TX startup calibration and ENSM entry are asynchronous observations.
+     * Do not submit samples or request another retune until the monitor has
+     * certified the newly enabled RFIC path. */
+    if (strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0 ||
+        strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
+        /* Rate/bandwidth changes fence the previous TX RFIC certificate.
+         * Reapply the current host-mode LO and wait for the monitor's new
+         * RFIC-valid event before testing the next configuration setter. */
+        bladerf_frequency current_frequency = 0;
+        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       &current_frequency);
+        if (status != 0) {
+            fprintf(stderr, "TX frequency readback baseline failed: %s\n",
+                    bladerf_strerror(status));
+        }
+        if (status == 0) {
+            status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                           current_frequency);
+            if (status != 0) {
+                fprintf(stderr, "TX direct tune baseline failed: %s\n",
+                        bladerf_strerror(status));
+            }
+        }
+        if (status != 0) {
+            fprintf(stderr, "TX frequency baseline failed: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+        status = wait_for_event(dev, events, &cursor,
+                                BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
+                                EVENT_WAIT_MS);
+        if (status != 0) {
+            uint8_t state_reg = 0, calibration_reg = 0;
+            uint8_t tx_pll_reg = 0, bbpll_reg = 0;
+            (void)bladerf_get_rfic_register(dev, 0x017, &state_reg);
+            (void)bladerf_get_rfic_register(dev, 0x016, &calibration_reg);
+            (void)bladerf_get_rfic_register(dev, 0x287, &tx_pll_reg);
+            (void)bladerf_get_rfic_register(dev, 0x05e, &bbpll_reg);
+            fprintf(stderr, "TX RFIC did not become valid after enable: %s\n",
+                    bladerf_strerror(status));
+            fprintf(stderr,
+                    "  live RFIC state=0x%02x cal=0x%02x tx_pll=0x%02x bbpll=0x%02x\n",
+                    state_reg, calibration_reg, tx_pll_reg, bbpll_reg);
+            uint64_t next = 0;
+            uint32_t event_count = 0;
+            bool complete = false;
+            if (bladerf_rf_events_get_since(
+                    dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                    &event_count, &next, &complete) == 0) {
+                for (uint32_t i = 0; i < event_count; ++i) {
+                    fprintf(stderr,
+                            "  event type=%u rfic=0x%08x error=%d flags=0x%x\n",
+                            (unsigned)events[i].event_type,
+                            events[i].rfic_status, events[i].error_code,
+                            events[i].flags);
+                }
+            }
+            goto cleanup;
+        }
+    }
     if (strcmp(mode, "RUNTIME_TX_QUEUE_CLEAR_FAILURE") == 0 ||
-        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0 ||
         strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_STATUS_READ_FAILURE") == 0 ||
         strcmp(mode, "RUNTIME_TX_GATE_RELEASE_FAILURE") == 0 ||
@@ -174,8 +244,25 @@ int main(void)
                                     EVENT_WAIT_MS);
         }
         if (status != 0) {
+            uint64_t next = cursor;
+            uint32_t event_count = 0;
+            bool complete = false;
+            const int history_status = bladerf_rf_events_get_since(
+                dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                &event_count, &next, &complete);
             fprintf(stderr, "could not establish TX frequency baseline: %s\n",
                     bladerf_strerror(status));
+            if (history_status == 0) {
+                for (uint32_t i = 0; i < event_count; ++i) {
+                    fprintf(stderr,
+                            "  event type=%u epoch=%u requested=%" PRIu64
+                            " readback=%" PRIu64 " error=%d flags=0x%x\n",
+                            (unsigned)events[i].event_type, events[i].epoch_id,
+                            events[i].requested_rx_lo_hz,
+                            events[i].readback_rx_lo_hz,
+                            events[i].error_code, events[i].flags);
+                }
+            }
             goto cleanup;
         }
     }

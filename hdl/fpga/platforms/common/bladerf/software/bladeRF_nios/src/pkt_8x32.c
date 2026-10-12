@@ -461,14 +461,14 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO:
 #ifdef TX_RETUNE_GATE_TARGET_LO_BASE
                     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE, data);
-                    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) == data;
+                    return (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) == data;
 #else
                     return false;
 #endif
                 case NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI:
 #ifdef TX_RETUNE_GATE_TARGET_HI_BASE
                     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE, data);
-                    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) == data;
+                    return (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) == data;
 #else
                     return false;
 #endif

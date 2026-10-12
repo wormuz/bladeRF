@@ -245,4 +245,18 @@ static inline int bladerf_thread_mutex_init(MUTEX *mutex)
 
 #endif /* USE_PTHREADS */
 
+/**
+ * @brief Execute a command block while holding a mutex.
+ *
+ * Variables declared within the block must be declared one per line.
+ */
+#define WITH_MUTEX(_lock, _thing) \
+    do {                          \
+        MUTEX *__lock = _lock;    \
+                                  \
+        MUTEX_LOCK(__lock);       \
+        _thing;                   \
+        MUTEX_UNLOCK(__lock);     \
+    } while (0)
+
 #endif

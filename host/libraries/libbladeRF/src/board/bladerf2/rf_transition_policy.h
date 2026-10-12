@@ -99,6 +99,10 @@ static inline bool bladerf2_rf_link_rx_epoch_valid(uint32_t status)
 #define BLADERF2_AD9361_VCO_LOCK_BIT 0x02u
 #define BLADERF2_AD9361_BBPLL_LOCK_BIT 0x80u
 #define BLADERF2_AD9361_CALIBRATION_BUSY_MASK 0xffu
+/* AD9361 REG_CALIBRATION_CTRL: TX BB tune (bit 6), TX quadrature (bit 4),
+ * and TX monitor calibration (bit 2). RX BB tune, RX quad/gain-step, RFDC,
+ * and BBDC calibration do not invalidate the TX signal path. */
+#define BLADERF2_AD9361_TX_CALIBRATION_BUSY_MASK 0x54u
 #define BLADERF2_AD9361_ENSM_STATE_MASK 0x0fu
 #define BLADERF2_AD9361_ENSM_STATE_TX 0x06u
 #define BLADERF2_AD9361_ENSM_STATE_FDD 0x0au
@@ -346,7 +350,7 @@ bladerf2_tx_rfic_observation(bool status_read_succeeded,
     return (tx_pll_status & BLADERF2_AD9361_VCO_LOCK_BIT) != 0 &&
            (bbpll_status & BLADERF2_AD9361_BBPLL_LOCK_BIT) != 0 &&
            (calibration_status &
-            BLADERF2_AD9361_CALIBRATION_BUSY_MASK) == 0 &&
+            BLADERF2_AD9361_TX_CALIBRATION_BUSY_MASK) == 0 &&
            (ensm == BLADERF2_AD9361_ENSM_STATE_TX ||
             ensm == BLADERF2_AD9361_ENSM_STATE_FDD)
         ? BLADERF2_TX_RFIC_OBSERVATION_VALID
@@ -354,9 +358,16 @@ bladerf2_tx_rfic_observation(bool status_read_succeeded,
 }
 
 static inline bool bladerf2_tx_rfic_observation_requires_hard_block(
-    enum bladerf2_tx_rfic_observation observation)
+    enum bladerf2_tx_rfic_observation observation,
+    bool previously_certified)
 {
-    return observation == BLADERF2_TX_RFIC_OBSERVATION_INVALID;
+    /* Before the first healthy observation in a TX epoch, ENSM and
+     * calibration registers may still describe startup/configuration
+     * transition. Admission remains closed because no RFIC certificate
+     * exists. Once a certificate has been published, any invalid observation
+     * is a runtime loss and must hard-block immediately. */
+    return observation == BLADERF2_TX_RFIC_OBSERVATION_INVALID &&
+           previously_certified;
 }
 
 /* The TX transport certificate is tied to the FPGA generation that the host

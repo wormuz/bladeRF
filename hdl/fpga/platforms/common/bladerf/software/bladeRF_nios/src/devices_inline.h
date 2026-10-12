@@ -307,7 +307,7 @@ static inline bool dwell_cfg_write(uint32_t value)
 {
     #ifdef DWELL_CFG_BASE
     IOWR_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE, value);
-    return IORD_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE) == value;
+    return (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(DWELL_CFG_BASE) == value;
     #else
     (void)value;
     return false;
@@ -608,9 +608,9 @@ static inline bool tx_retune_gate_set_target(uint64_t timestamp)
                                 (uint32_t)timestamp);
     IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE,
                                 (uint32_t)(timestamp >> 32));
-    return IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) ==
+    return (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_LO_BASE) ==
                (uint32_t)timestamp &&
-           IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) ==
+           (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_TARGET_HI_BASE) ==
                (uint32_t)(timestamp >> 32);
 #else
     (void)timestamp;

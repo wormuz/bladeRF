@@ -1586,22 +1586,22 @@ bool agc_dc_corr_write(uint16_t addr, uint16_t value)
     defined(AGC_DC_Q_MIN_BASE) && defined(AGC_DC_I_MIN_BASE)
     if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_Q_MAX) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MAX_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MAX_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MAX_BASE) == value;
     } else if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_I_MAX) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MAX_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MAX_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MAX_BASE) == value;
     } else if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_Q_MID) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MID_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MID_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MID_BASE) == value;
     } else if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_I_MID) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MID_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MID_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MID_BASE) == value;
     } else if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_Q_MIN) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MIN_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MIN_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_Q_MIN_BASE) == value;
     } else if (addr == NIOS_PKT_8x16_ADDR_AGC_DC_I_MIN) {
         IOWR_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MIN_BASE, value);
-        return IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MIN_BASE) == value;
+        return (uint16_t)IORD_ALTERA_AVALON_PIO_DATA(AGC_DC_I_MIN_BASE) == value;
     }
     return false;
 #else

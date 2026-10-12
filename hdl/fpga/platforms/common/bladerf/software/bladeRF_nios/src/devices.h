@@ -526,7 +526,7 @@ bool tamer_cancel(bladerf_module m);
  */
 INLINE void command_uart_read_request(uint8_t *command);
 
-uint32_t command_uart_request_session_generation(void);
+INLINE uint32_t command_uart_request_session_generation(void);
 
 void command_uart_enable_isr(bool enable);
 

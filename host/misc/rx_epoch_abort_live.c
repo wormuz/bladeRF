@@ -241,6 +241,8 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
     bool forbidden_success_event = false;
     uint32_t spi_begin_count = 0;
     uint32_t spi_done_count = 0;
+    int32_t spi_done_rfic_status = 0;
+    int32_t spi_done_error_code = 0;
     uint64_t previous_timestamp = 0;
     int status = bladerf_rx_transition_get_events(
         dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -262,6 +264,8 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
             spi_begin_count = event->flags;
         }
         if (event->event_type == BLADERF_RF_EVT_SPI_DONE) {
+            spi_done_rfic_status = (int32_t)event->rfic_status;
+            spi_done_error_code = event->error_code;
             spi_failed |= event->error_code != 0 &&
                           (int32_t)event->rfic_status < 0;
             spi_done_count = event->flags;
@@ -285,6 +289,8 @@ static int check_injected_spi_failure_trace(struct bladerf *dev,
                 transaction_id, count, invalidated,
                 spi_begin, spi_failed, errored, forbidden_success_event,
                 spi_begin_count, spi_done_count);
+        fprintf(stderr, "SPI_DONE payload rfic_status=%d error=%d\n",
+                spi_done_rfic_status, spi_done_error_code);
         return BLADERF_ERR_UNEXPECTED;
     }
     return 0;
@@ -320,6 +326,7 @@ int main(void)
 
     CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000, NULL));
     CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0), 5000000, NULL));
+    CHECK(bladerf_set_gain_mode(dev, BLADERF_CHANNEL_RX(0), BLADERF_GAIN_MGC));
     CHECK(bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), 30));
     CHECK(bladerf_sync_config(dev, BLADERF_RX_X1,
                               BLADERF_FORMAT_SC16_Q11_META,
@@ -339,7 +346,7 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 6250000,
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 50000000,
                                      NULL);
     unsetenv("BLADERF_TEST_SPI_FAIL_RFIC_REGISTER");
     if (status == 0) {
@@ -358,7 +365,7 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 4000000,
+    status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 161000000,
                                      NULL);
     if (status == 0) {
         fprintf(stderr, "oversample sample-rate range failure was hidden\n");
@@ -376,7 +383,7 @@ int main(void)
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 6250000, NULL));
+    CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0), 50000000, NULL));
     struct bladerf_rf_event config_recovered = {0};
     CHECK(transition(dev, recovery_frequency_hz, &config_recovered));
     CHECK(read_valid_epoch(dev, samples, config_recovered.epoch_id,

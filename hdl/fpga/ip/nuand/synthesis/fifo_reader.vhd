@@ -33,7 +33,8 @@ entity fifo_reader is
         FIFO_USEDW_WIDTH      : natural                 := 12;
         FIFO_DATA_WIDTH       : natural                 := 32;
         META_FIFO_USEDW_WIDTH : natural                 := 3;
-        META_FIFO_DATA_WIDTH  : natural                 := 128
+        META_FIFO_DATA_WIDTH  : natural                 := 128;
+        PROGRESS_TIMEOUT_LOG2 : natural                 := 22
     );
     port (
         clock               :   in      std_logic;
@@ -167,7 +168,6 @@ architecture simple of fifo_reader is
     -- ⛔ Both directions must report, not just RX. Leaving these undriven
     -- here means a wedged transmitter looks healthy while the receiver
     -- reports the same fault -- an asymmetry that reads as an RX problem.
-    constant PROGRESS_TIMEOUT_LOG2 : natural := 22;
     signal progress_count      : unsigned(PROGRESS_TIMEOUT_LOG2 downto 0)
                                     := (others => '0');
     signal read_this_epoch     : std_logic := '0';
@@ -202,7 +202,7 @@ architecture simple of fifo_reader is
         meta_header_valid : std_logic;
         -- Sign of the modulo-2^64 timestamp delta, split at 32 bits so the
         -- subtract carry chain stays short. Registered one cycle ahead using
-        -- timestamp+2 and the raw header. Scheduled targets must be within
+        -- the raw header. Scheduled targets must be within
         -- the unambiguous forward half-range (< 2^63 ticks).
         due_time        : std_logic;
         due_sentinel    : std_logic;
@@ -383,6 +383,13 @@ begin
                     -- Disabled while the shared epoch is still up (see
                     -- fifo_writer): hold the watchdog, not a stall.
                     progress_count  <= (others => '0');
+                elsif( read_this_epoch = '0' and fifo_empty = '1' ) then
+                    -- TX is enabled before the host necessarily submits its
+                    -- first buffer. An empty FIFO is an idle producer, not a
+                    -- stalled transfer. Arm the progress watchdog once the
+                    -- first sample is queued; after any read, an empty FIFO
+                    -- remains a real GPIF stall and is still detected.
+                    progress_count  <= (others => '0');
                 elsif( fifo_read = '1' ) then
                     progress_count  <= (others => '0');
                     read_this_epoch <= '1';
@@ -415,7 +422,8 @@ begin
             -- so the clear at the top of a new epoch is not undone by a
             -- counter that has not been reset yet in the same cycle.
             if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
-                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' ) then
+                progress_count(PROGRESS_TIMEOUT_LOG2) = '1' and
+                (read_this_epoch = '1' or fifo_empty = '0') ) then
                 if( read_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
                 else
@@ -507,9 +515,9 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
-        variable  ts_next       : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
+        variable  v_low_delta   : unsigned(31 downto 0);
         variable  v_low_borrow : unsigned(0 downto 0);
         variable  v_high_delta : unsigned(32 downto 0);
         variable  v_due_sentinel : std_logic;
@@ -545,15 +553,16 @@ begin
         -- The FIFO header is captured in META_LOAD. META_EVAL adds one
         -- cycle before the decision is consumed, and the META_WAIT/DOWNCOUNT
         -- path takes two more cycles to issue the first sample read. Compare
-        -- against timestamp + 3 so that first read still lands exactly on
-        -- the scheduled timestamp.
+        -- the scheduled timestamp. A negative timestamp-target delta is due
+        -- only when it is -1, -2, or -3 ticks.
         --
         -- meta_p_time is constant for the whole of META_WAIT, and equals
         -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
         -- one cycle ahead of that capture is consistent for both states.
-        -- Compare against the RAW header, not against (header - 1).
+        -- Compare against the RAW header, not against (header - 1). Avoid a
+        -- timestamp+3 followed by a second subtract: that serial carry path
+        -- was the TX setup critical path.
         --
-        ts_next := timestamp + 3;
         -- Compare the raw header using a low-half borrow and a 33-bit high-half
         -- delta. The sign bit is the sign of the full modulo-2^64 delta,
         -- without one 64-bit subtract/comparator carry chain. Keep reading the
@@ -564,18 +573,21 @@ begin
         -- this form the explicit sentinel opens the gate independently of the
         -- modulo comparison. Both encodings remain covered by the testbench.
         cmp_tgt := meta_current.meta_header;
+        v_low_delta := timestamp(31 downto 0) - cmp_tgt(31 downto 0);
 
         if( meta_current.meta_header_valid = '1' and
-            ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
+            timestamp(31 downto 0) < cmp_tgt(31 downto 0) ) then
             v_low_borrow := to_unsigned(1, v_low_borrow'length);
         else
             v_low_borrow := to_unsigned(0, v_low_borrow'length);
         end if;
-        v_high_delta := ('0' & ts_next(63 downto 32)) -
-                        ('0' & cmp_tgt(63 downto 32)) -
-                        resize(v_low_borrow, v_high_delta'length);
+        v_high_delta := ('0' & timestamp(63 downto 32)) +
+                        not ('0' & cmp_tgt(63 downto 32)) +
+                        resize(not v_low_borrow, v_high_delta'length);
         if( meta_current.meta_header_valid = '1' and
-            v_high_delta(31) = '0' ) then
+            (v_high_delta(31) = '0' or
+             (v_high_delta(31 downto 0) = x"FFFFFFFF" and
+              v_low_delta >= x"FFFFFFFD")) ) then
             v_due_time := '1';
         else
             v_due_time := '0';
@@ -738,6 +750,32 @@ begin
     -- Keep the wide SC12 carry buffer out of the aggregate FSM record. A
     -- dedicated enabled register avoids the record-wide next-state mux on
     -- this datapath while preserving the original update edge.
+    packed_buffer_write_comb : process(all)
+        variable read_req_v : std_logic;
+    begin
+        read_req_v := '0';
+        for i in in_sample_controls'range loop
+            read_req_v := read_req_v or
+                (in_sample_controls(i).data_req and
+                 in_sample_controls(i).enable);
+        end loop;
+
+        packed_buffer_data_i <=
+            fifo_data(fifo_data'high downto fifo_data'high-47);
+        packed_buffer_write_i <= '0';
+        if( highly_packed_mode_en = '1' and NUM_STREAMS = 2 and
+            fifo_current.state = READ_SAMPLES and fifo_holdoff = '0' and
+            fifo_empty = '0' and
+            (meta_en = '0' or
+             (meta_en = '1' and meta_current.meta_time_go = '1')) and
+            fifo_current.samples_left = 0 and read_req_v = '1' ) then
+            -- This predicate is the exact write condition from the READ_SAMPLES
+            -- branch. It intentionally does not depend on packed_cycle: cycle
+            -- 3 advances the carry buffer without consuming a FIFO word.
+            packed_buffer_write_i <= '1';
+        end if;
+    end process;
+
     packed_buffer_sync : process(clock, reset)
     begin
         if reset = '1' then
@@ -941,7 +979,6 @@ begin
 
         variable unpacked : sample_streams_t(out_samples'range);
         variable read_req : std_logic := '0';
-        variable packed_buffer_write_v : std_logic;
 
     begin
 
@@ -951,8 +988,6 @@ begin
         fifo_future.packet_control.pkt_sop <= meta_current.meta_pkt_sop;
 
         fifo_future.packet_control.data_valid <= '0';
-        packed_buffer_write_v := '0';
-        packed_buffer_data_i <= fifo_data(fifo_data'high downto fifo_data'high-47);
         -- MIMO UNPACKER: STEP 1 of 5
         if (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
             unpack_sc12q11(
@@ -1074,7 +1109,6 @@ begin
                                 fifo_future.eight_bit_sample_sel <= not fifo_current.eight_bit_sample_sel;
                             elsif (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
                                 fifo_future.packed_cycle <= (fifo_current.packed_cycle + 1);
-                                packed_buffer_write_v := '1';
                                 if fifo_current.packed_cycle = 3 then
                                     fifo_future.packed_cycle <= 0;
                                     fifo_future.fifo_read <= '0';
@@ -1139,8 +1173,6 @@ begin
         out_samples <= fifo_current.out_samples;
 
         packet_control <= fifo_current.packet_control;
-
-        packed_buffer_write_i <= packed_buffer_write_v;
 
     end process;
 

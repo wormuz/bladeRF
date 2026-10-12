@@ -307,6 +307,7 @@ set(LIBBLADERF_SOURCE_BLADERF2
         ${BLADERF_FPGA_COMMON_SOURCE_DIR}/ad936x_helpers.c
         ${BLADERF_FPGA_COMMON_SOURCE_DIR}/bladerf2_common.c
         src/board/bladerf2/bladerf2.c
+        src/board/bladerf2/partial_close.c
         src/board/bladerf2/capabilities.c
         src/board/bladerf2/common.c
         src/board/bladerf2/compatibility.c

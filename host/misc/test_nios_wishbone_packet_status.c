@@ -7,6 +7,20 @@
 #include "nios_pkt_32x32.h"
 #include "pkt_32x32.h"
 
+static struct pkt_buf make_32x32_packet(uint8_t target, bool write,
+                                        uint32_t addr, uint32_t data)
+{
+    uint8_t request[NIOS_PKT_LEN] = { 0 };
+    nios_pkt_32x32_pack(request, target, write, addr, data);
+    return (struct pkt_buf) {
+        .req = { request[0], request[1], request[2], request[3],
+                 request[4], request[5], request[6], request[7],
+                 request[8], request[9], request[10], request[11],
+                 request[12], request[13], request[14], request[15] },
+        .resp = { 0 }, .ready = false,
+    };
+}
+
 static bool wishbone_success;
 static bool expansion_direction_success;
 static uint32_t expansion_direction;
@@ -130,13 +144,13 @@ static int check_write_failure(void)
 
 static int check_expansion_direction_failure(void)
 {
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    struct pkt_buf packet = make_32x32_packet(
+        NIOS_PKT_32x32_TARGET_EXP_DIR, true, UINT32_MAX,
+        UINT32_C(0x12345678));
     uint8_t id = 0;
     uint32_t addr = 0, data = 0;
     bool write = false, success = true;
 
-    nios_pkt_32x32_pack(packet.req, NIOS_PKT_32x32_TARGET_EXP_DIR,
-                        true, UINT32_MAX, UINT32_C(0x12345678));
     expansion_direction_success = false;
     pkt_32x32(&packet);
     nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,
@@ -154,15 +168,15 @@ static int check_expansion_direction_failure(void)
 
 static int check_expansion_data_failure(void)
 {
-    struct pkt_buf packet = { .resp = { 0 }, .ready = false };
+    struct pkt_buf packet = make_32x32_packet(
+        NIOS_PKT_32x32_TARGET_EXP, true, UINT32_MAX,
+        UINT32_C(0x87654321));
     uint8_t id = 0;
     uint32_t addr = 0, data = 0;
     bool write = false, success = true;
 
     expansion_direction = UINT32_MAX;
     expansion_output = 0;
-    nios_pkt_32x32_pack(packet.req, NIOS_PKT_32x32_TARGET_EXP,
-                        true, UINT32_MAX, UINT32_C(0x87654321));
     expansion_write_success = false;
     pkt_32x32(&packet);
     nios_pkt_32x32_resp_unpack(packet.resp, &id, &write, &addr, &data,

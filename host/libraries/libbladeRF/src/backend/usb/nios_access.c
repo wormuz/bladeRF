@@ -1523,6 +1523,7 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
 {
     const unsigned int poll_interval_us = 120;
     uint32_t status_before = 0;
+    uint32_t status_after = 0;
     uint64_t now_ns = 0;
     uint64_t deadline_ns;
     int status = nios_tx_retune_gate_status_read(dev, &status_before);
@@ -1566,6 +1567,7 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
             if (status != 0) {
                 break;
             }
+            status_after = gate_status;
             state = gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK;
             /* State alone is not an acknowledgement: an earlier scheduled
              * request may already have left the gate ARMED. Wait for the
@@ -1583,6 +1585,9 @@ int nios_tx_retune_gate_arm(struct bladerf *dev, uint64_t timestamp,
             usleep(poll_interval_us);
         }
         if (status == 0 && !acknowledged) {
+            log_warning("TX retune gate ARM acknowledgement timed out: "
+                        "immediate=%u status_before=0x%08x status_after=0x%08x\n",
+                        immediate, status_before, status_after);
             status = BLADERF_ERR_TIMEOUT;
         }
     }

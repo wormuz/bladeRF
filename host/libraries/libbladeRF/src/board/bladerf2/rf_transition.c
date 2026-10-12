@@ -323,6 +323,7 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_async_link_epoch_id = (uint8_t)(link_status >> 20);
     board_data->tx_async_rfic_state_certified = false;
+    board_data->tx_first_data_admitted = false;
     if (!bladerf2_tx_epoch_generation_unchanged(
             board_data->tx_async_transport_failure_generation,
             failure_generation_baseline)) {
@@ -1076,6 +1077,7 @@ static void *rx_fault_monitor_task(void *arg)
         bool reference_clock_fault = false;
         bool frequency_model_fault = false;
         bool reference_clock_known = false;
+        bool tx_rfic_fault_injected = false;
 
         /* NIOS bulk control and AD9361 SPI requests share serialization with
          * configuration traffic. Hold dev->lock only across these short
@@ -1546,6 +1548,11 @@ static void *rx_fault_monitor_task(void *arg)
                 tx_calibration_status |=
                     BLADERF2_AD9361_CALIBRATION_BUSY_MASK;
             }
+            tx_rfic_fault_injected =
+                strcmp(test_mode, "RUNTIME_TX_RFPLL_UNLOCKED") == 0 ||
+                strcmp(test_mode, "RUNTIME_TX_ENSM_NOT_TX") == 0 ||
+                strcmp(test_mode, "RUNTIME_TX_BBPLL_UNLOCKED") == 0 ||
+                strcmp(test_mode, "RUNTIME_TX_CALIBRATION_ACTIVE") == 0;
         }
         if (should_poll_tx_retune && test_mode != NULL &&
             (strcmp(test_mode, "RUNTIME_TX_RETUNE_FAILURE") == 0 ||
@@ -1652,7 +1659,14 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_loss_count_status == 0) {
                         tx_counter_baseline_was_valid =
                             board_data->tx_fpga_loss_count_valid;
-                        if (!board_data->tx_fpga_loss_count_valid) {
+                        if (!board_data->tx_first_data_admitted) {
+                            /* TX is enabled before the first application
+                             * buffer can be submitted. Empty-FIFO counts in
+                             * this interval are startup, so keep advancing
+                             * the baseline while admission remains closed. */
+                            board_data->tx_fpga_loss_count_last = tx_loss_count;
+                            board_data->tx_fpga_loss_count_valid = true;
+                        } else if (!board_data->tx_fpga_loss_count_valid) {
                             board_data->tx_fpga_loss_count_last = tx_loss_count;
                             board_data->tx_fpga_loss_count_valid = true;
                         } else if (tx_loss_count <
@@ -2134,6 +2148,19 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (!tx_fir_config_valid &&
                         !board_data->tx_fir_configuration_invalid_reported) {
+                        if (board_data->phy != NULL) {
+                            log_warning("TX configuration fenced: FIR valid=%u "
+                                        "RX masks=0x%x TX masks=0x%x "
+                                        "RX bypass=%u TX bypass=%u "
+                                        "RX dec=%u TX int=%u\n",
+                                        board_data->phy->fir_config_valid,
+                                        board_data->phy->rx_fir_coefficients_valid_mask,
+                                        board_data->phy->tx_fir_coefficients_valid_mask,
+                                        board_data->phy->bypass_rx_fir,
+                                        board_data->phy->bypass_tx_fir,
+                                        board_data->phy->rx_fir_dec,
+                                        board_data->phy->tx_fir_int);
+                        }
                         /* Keep TX fenced, but leave configuration recovery
                          * available: a complete FIR rewrite followed by the
                          * normal TX retune can re-establish the certificate. */
@@ -2149,7 +2176,9 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (tx_link_status_error == 0 &&
                         bladerf2_tx_rfic_observation_requires_hard_block(
-                            tx_rfic_observation) &&
+                            tx_rfic_observation,
+                            board_data->tx_rfic_state_valid_reported ||
+                                tx_rfic_fault_injected) &&
                         !board_data->tx_rfic_state_invalid_reported) {
                         board_data->tx_rfic_state_invalid_reported = true;
                         board_data->tx_recovery_blocked = true;
@@ -3071,7 +3100,12 @@ void bladerf2_rx_transition_spi_observe(struct bladerf *dev, bool begin,
         board_data->rf_transition_spi_write_count++;
     } else {
         board_data->rf_transition_spi_last_write_ns = _monotonic_ns();
-        board_data->rf_transition_spi_last_status = status;
+        /* Keep the first write failure for the whole transaction. A later
+         * successful rollback write must not turn SPI_DONE into a false
+         * success event after the RFIC operation already failed. */
+        if (status != 0 || board_data->rf_transition_spi_last_status == 0) {
+            board_data->rf_transition_spi_last_status = status;
+        }
     }
 }
 

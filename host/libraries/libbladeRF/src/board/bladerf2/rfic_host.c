@@ -183,6 +183,16 @@ static int _rfic_host_initialize(struct bladerf *dev)
     {
         FOR_EACH_CHANNEL(dir, 1, i, ch)
         {
+            /* ad9361_init() already tunes TX to its configured operating LO
+             * and runs the initial TX quadrature calibration there. The
+             * temporary 70 MHz reset tune below forces another TX_QUAD_CAL
+             * far from the operating band; with both TX paths required to
+             * converge this transient tune can fail and abort cold start.
+             * Keep the reset retune for RX, whose DC calibration must follow
+             * the host's explicit transition back to its default LO. */
+            if (BLADERF_CHANNEL_IS_TX(ch)) {
+                continue;
+            }
             status = rfic->set_frequency(dev, ch, RESET_FREQUENCY);
             if (status < 0) {
                 goto init_fail;
@@ -573,6 +583,9 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
                                     bladerf_frequency frequency)
 {
     bladerf2_axi_io_set_dev(dev);
+    log_debug("%s: tuning %s LO to %llu Hz\n", __FUNCTION__,
+              BLADERF_CHANNEL_IS_TX(ch) ? "TX" : "RX",
+              (unsigned long long)frequency);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
     struct controller_fns const *rfic      = board_data->rfic;

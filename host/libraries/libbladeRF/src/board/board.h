@@ -608,6 +608,9 @@ struct bladerf_flash_arch {
 /* Boards */
 extern const struct board_fns *bladerf_boards[];
 extern const struct board_fns bladerf2_board_fns;
+
+/* Cleanup for bladeRF2 open failures that occur before board_data exists. */
+void bladerf2_close_partial_open(struct bladerf *dev);
 extern const unsigned int bladerf_boards_len;
 
 #endif

@@ -632,8 +632,7 @@ static void bladerf2_close(struct bladerf *dev)
          * primitives. Those paths clear board_data before returning, and the
          * generic open wrapper still calls board->close() during cleanup. */
         if (board_data == NULL) {
-            free(flash_arch);
-            dev->flash_arch = NULL;
+            bladerf2_close_partial_open(dev);
             return;
         }
         rfic = board_data->rfic;
@@ -3011,6 +3010,54 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
     return false;
 }
 
+static bool bladerf2_tx_note_first_data_admitted(struct bladerf *dev)
+{
+    uint64_t loss_count = 0;
+    int status;
+
+    if (dev == NULL || dev->board_data == NULL ||
+        dev->board->get_loss_event_count == NULL) {
+        return false;
+    }
+    struct bladerf2_board_data *board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    const bool already_started = board_data->tx_first_data_admitted;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (already_started) {
+        return true;
+    }
+
+    /* Snapshot immediately before the first host buffer can enter the
+     * transport. Empty-FIFO events before this boundary are startup; any
+     * increment afterward is a real TX stream loss. */
+    status = dev->board->get_loss_event_count(dev, BLADERF_TX, &loss_count);
+    if (status != 0) {
+        return false;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (!board_data->tx_first_data_admitted) {
+        board_data->tx_fpga_loss_count_last = loss_count;
+        board_data->tx_fpga_loss_count_valid = true;
+        board_data->tx_first_data_admitted = true;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return true;
+}
+
+static void bladerf2_tx_note_first_data_admitted_cached(
+    struct bladerf2_board_data *board_data)
+{
+    if (board_data == NULL) {
+        return;
+    }
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (!board_data->tx_first_data_admitted) {
+        board_data->tx_first_data_admitted = true;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
 static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
 {
     if (dev == NULL || dev->board_data == NULL) {
@@ -3021,8 +3068,14 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
      * observation. Do not terminate an async stream in that narrow initial
      * state; wait for the positive status event. Faulted/revoked states are
      * rejected immediately, and timeout remains a failure-only watchdog. */
-    return bladerf2_tx_wait_for_rfic_certificate(
-        dev, BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS) == 0;
+    if (bladerf2_tx_wait_for_rfic_certificate(
+            dev, BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS) != 0) {
+        return false;
+    }
+    /* This callback runs only for an application buffer that is about to be
+     * submitted. The monitor has been advancing the loss baseline throughout
+     * startup, so its latest value is the boundary before the first data. */
+    return bladerf2_tx_note_first_data_admitted(dev);
 }
 
 static bool bladerf2_tx_async_buffer_valid_now(struct bladerf *dev)
@@ -3050,6 +3103,12 @@ static bool bladerf2_tx_async_buffer_valid_now(struct bladerf *dev)
         board_data->tx_retune2_completion_faulted,
         frequency_model_valid);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (admitted) {
+        /* Nonblocking streams cannot issue a NIOS counter read here. The
+         * monitor continuously refreshes the baseline until this boundary. */
+        bladerf2_tx_note_first_data_admitted_cached(board_data);
+    }
 
     return admitted;
 }
@@ -4831,8 +4890,35 @@ static int bladerf2_sync_tx(struct bladerf *dev,
             board_data->rfic_frequency_model_known));
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (!tx_admission_allowed) {
-        log_warning("%s: TX stream is invalid; stop and re-enable TX before "
-                    "submitting more samples\n", __FUNCTION__);
+        /* START ACK can precede the first healthy RFIC observation. Wait on
+         * that event while the FPGA remains protected by the absent RFIC
+         * certificate; fail if a real fault revokes the epoch or the watchdog
+         * expires. */
+        if (bladerf2_tx_wait_for_rfic_certificate(
+                dev, BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS) != 0) {
+            log_warning("%s: TX stream is invalid; stop and re-enable TX before "
+                        "submitting more samples\n", __FUNCTION__);
+            return BLADERF_ERR_FPGA_OP;
+        }
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        tx_admission_allowed = bladerf2_tx_admission_allowed(
+            board_data->tx_async_link_certified,
+            board_data->tx_async_rfic_state_certified,
+            board_data->tx_stream_faulted_async,
+            board_data->tx_async_transport_faulted,
+            board_data->tx_gate_abort_pending,
+            board_data->tx_retune2_pending_count,
+            board_data->tx_retune2_completion_faulted,
+            bladerf2_rfic_frequency_model_valid(
+                board_data->rfic_reference_clock_known,
+                board_data->rfic_frequency_model_known));
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!tx_admission_allowed) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+    }
+
+    if (!bladerf2_tx_note_first_data_admitted(dev)) {
         return BLADERF_ERR_FPGA_OP;
     }
 

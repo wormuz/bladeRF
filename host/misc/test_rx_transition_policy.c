@@ -290,6 +290,12 @@ int main(void)
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_VALID);
+    /* RX-only calibration activity is not evidence that TX is invalid. */
+    assert(bladerf2_tx_rfic_observation(
+        true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
+        BLADERF2_AD9361_ENSM_STATE_TX,
+        BLADERF2_AD9361_BBPLL_LOCK_BIT, 0x20) ==
+           BLADERF2_TX_RFIC_OBSERVATION_VALID);
     assert(bladerf2_tx_rfic_observation(
         true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_FDD,
@@ -311,7 +317,7 @@ int main(void)
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
            BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID);
     assert(!bladerf2_tx_rfic_observation_requires_hard_block(
-        BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID));
+        BLADERF2_TX_RFIC_OBSERVATION_CONFIG_INVALID, true));
     assert(bladerf2_tx_rfic_observation(
         true, true, 0, BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT, 0) ==
@@ -328,10 +334,12 @@ int main(void)
         true, true, BLADERF2_AD9361_VCO_LOCK_BIT,
         BLADERF2_AD9361_ENSM_STATE_TX,
         BLADERF2_AD9361_BBPLL_LOCK_BIT,
-        BLADERF2_AD9361_CALIBRATION_BUSY_MASK) ==
+        BLADERF2_AD9361_TX_CALIBRATION_BUSY_MASK) ==
            BLADERF2_TX_RFIC_OBSERVATION_INVALID);
+    assert(!bladerf2_tx_rfic_observation_requires_hard_block(
+        BLADERF2_TX_RFIC_OBSERVATION_INVALID, false));
     assert(bladerf2_tx_rfic_observation_requires_hard_block(
-        BLADERF2_TX_RFIC_OBSERVATION_INVALID));
+        BLADERF2_TX_RFIC_OBSERVATION_INVALID, true));
 
     assert(bladerf2_retune_completion_batch_valid(0, 0, 16));
     assert(bladerf2_retune_completion_batch_valid(16, 16, 16));

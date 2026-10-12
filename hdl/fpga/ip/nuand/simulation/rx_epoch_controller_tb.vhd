@@ -123,7 +123,7 @@ begin
                rx_control = command_word
             report "ARM did not carry the matching ID/control word" severity failure;
 
-        command_word(1) := '1';
+        command_word(1) := '0';
         issue(command_word, '0', '1', '0');
         wait until gate_state = "0010";
         if complete_seen /= '1' then
@@ -147,7 +147,7 @@ begin
 
         -- Abort the active epoch, then rearm with a different ID. Stale
         -- COMPLETE/ABORT toggle levels must not replay across handshake polls.
-        command_word(2) := '1';
+        command_word(2) := '0';
         issue(command_word, '0', '0', '1');
         wait until gate_state = "0100";
         wait for 1 ns;
@@ -157,14 +157,14 @@ begin
 
         samples_in(0).data_v <= '0';
         samples_in(1).data_v <= '0';
-        command_word(0) := '0';
+        command_word(0) := '1';
         command_word(15 downto 8) := x"32";
         issue(command_word, '1', '0', '0');
         wait until gate_state = "0001";
         assert gate_epoch_id = x"32"
             report "recovery ARM lost its new epoch ID" severity failure;
 
-        command_word(1) := '0';
+        command_word(1) := '1';
         issue(command_word, '0', '1', '0');
         wait until gate_state = "0010";
         if complete_seen /= '1' then
@@ -189,12 +189,12 @@ begin
         -- actual bundled sys_clock -> rx_clock controller. Its ID must travel
         -- with the toggle, and no old completion is sent between the arms.
         wait until gate_state = "0000";
-        command_word(0) := '1';
+        command_word(0) := '0';
         command_word(15 downto 8) := x"33";
         issue(command_word, '1', '0', '0');
         wait until gate_state = "0001" and gate_epoch_id = x"33";
 
-        command_word(0) := '0';
+        command_word(0) := '1';
         command_word(15 downto 8) := x"34";
         issue(command_word, '1', '0', '0');
         wait until gate_state = "0001" and gate_epoch_id = x"34";
@@ -205,6 +205,9 @@ begin
 
         -- Reset while ABORT's PIO toggle remains high. Recovery must treat
         -- the persistent word as baseline, then accept a genuinely new ARM.
+        command_word(2) := '1';
+        issue(command_word, '0', '0', '1');
+        wait until gate_state = "0100";
         source_reset <= '1';
         rx_reset <= '1';
         wait for 50 ns;
@@ -219,13 +222,20 @@ begin
                gate_state = "0000"
             report "stale RX command toggle replayed after second reset"
             severity failure;
-        command_word(0) := '1';
+        command_word(0) := '0';
         command_word(15 downto 8) := x"35";
         issue(command_word, '1', '0', '0');
         wait until gate_state = "0001" and gate_epoch_id = x"35";
 
         report "rx_epoch_controller_tb: PASS" severity note;
         stop;
+        wait;
+    end process;
+
+    watchdog : process
+    begin
+        wait for 10 us;
+        assert false report "rx_epoch_controller_tb: TIMEOUT" severity failure;
         wait;
     end process;
 end architecture;
