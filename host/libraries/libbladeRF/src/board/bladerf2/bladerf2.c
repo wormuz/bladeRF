@@ -3264,6 +3264,15 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    /* get_quick_tune() writes the mutable AD9361 fastlock bank. The active
+     * transition may already hold a quick-tune handle whose RFIC slot has not
+     * yet been recalled, so reject profile creation until that transaction
+     * finishes. */
+    if (bladerf2_quick_tune_creation_blocked(
+            board_data->rf_transition_pending)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     bool model_known = bladerf2_rfic_frequency_model_valid(
         board_data->rfic_reference_clock_known,

@@ -366,6 +366,9 @@ int main(void)
     assert(bladerf2_retune_profile_slot_conflicts(4, 4, 4, 1));
     assert(bladerf2_retune_profile_slot_conflicts(4, 4, 9, 4));
     assert(!bladerf2_retune_profile_slot_conflicts(4, 4, 9, 1));
+
+    assert(!bladerf2_quick_tune_creation_blocked(false));
+    assert(bladerf2_quick_tune_creation_blocked(true));
     assert(bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 1234, 1840000000ULL, 3));
     assert(!bladerf2_retune_completion_matches(

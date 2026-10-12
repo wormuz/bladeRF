@@ -253,6 +253,15 @@ static inline bool bladerf2_retune_profile_slot_conflicts(
            requested_rffe_profile == queued_rffe_profile;
 }
 
+/* Quick-tune creation stores a new profile in the mutable RFIC fastlock bank.
+ * Do not let that overwrite the slot an in-flight event-driven transition is
+ * about to recall. */
+static inline bool bladerf2_quick_tune_creation_blocked(
+    bool rx_transition_pending)
+{
+    return rx_transition_pending;
+}
+
 /* Dependent FDD VCO-table selection requires the peer synthesizer's known LO.
  * The target side itself may be recovered by an explicit host tune. */
 static inline bool bladerf2_rf_tune_peer_lo_unknown(
