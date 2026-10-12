@@ -4982,6 +4982,26 @@ typedef enum {
     BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
 } bladerf_rf_event_type;
 
+/** Detailed NIOS RETUNE2 activation failure carried by the
+ * BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE event when
+ * BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID is set. */
+typedef enum {
+    BLADERF_RF_NIOS_FAILURE_NONE = 0,
+    BLADERF_RF_NIOS_FAILURE_INVALID_REQUEST,
+    BLADERF_RF_NIOS_FAILURE_TIMER_READ,
+    BLADERF_RF_NIOS_FAILURE_QUEUE_FULL,
+    BLADERF_RF_NIOS_FAILURE_INVALID_TIMESTAMP,
+    BLADERF_RF_NIOS_FAILURE_PROFILE_SLOT_BUSY,
+    BLADERF_RF_NIOS_FAILURE_PROFILE_LOAD,
+    BLADERF_RF_NIOS_FAILURE_PEER_FREQUENCY_UNKNOWN,
+    BLADERF_RF_NIOS_FAILURE_FASTLOCK_SETUP_WRITE,
+    BLADERF_RF_NIOS_FAILURE_PLL_STATUS_READ,
+    BLADERF_RF_NIOS_FAILURE_PLL_LOCK_TIMEOUT,
+    BLADERF_RF_NIOS_FAILURE_RF_PORT_SELECT,
+    BLADERF_RF_NIOS_FAILURE_SPDT_SELECT,
+    BLADERF_RF_NIOS_FAILURE_LO_READBACK
+} bladerf_rf_nios_failure_stage;
+
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX2 (1U << 1)
 
@@ -5026,6 +5046,9 @@ typedef enum {
  * Consumers must treat the notification as a conservative current-stream
  * discontinuity, not attribute it to a specific RX transaction. */
 #define BLADERF_RF_EVENT_F_SOURCE_PROVENANCE_UNKNOWN (1U << 27)
+/** On NIOS_RETUNE_RESPONSE, rfic_status contains a
+ * bladerf_rf_nios_failure_stage value rather than a raw RFIC status word. */
+#define BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID (1U << 26)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)
@@ -5190,7 +5213,8 @@ struct bladerf_rf_event {
     uint64_t requested_rx_lo_hz;
     /** Readback RX LO, or readback TX LO for TX_RETUNE_* events. */
     uint64_t readback_rx_lo_hz;
-    uint32_t rfic_status;         /**< Raw RFIC/device status snapshot */
+    uint32_t rfic_status;         /**< Raw status; NIOS failure stage when
+                                     *   NIOS_FAILURE_STAGE_VALID is set */
     bladerf_rf_state fpga_state;
     bladerf_rf_event_type event_type;
     uint32_t flags;              /**< Event-specific; SPI events contain write count */

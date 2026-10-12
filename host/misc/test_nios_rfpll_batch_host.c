@@ -31,6 +31,7 @@ enum response_mode {
     RESPONSE_LEGACY_ERROR_MARKER,
     RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS,
     RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS,
+    RESPONSE_RETUNE2_FAILURE_STAGE,
 };
 
 static enum response_mode response_mode;
@@ -110,7 +111,14 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         if (pending_replies_remaining != 0) {
             pending_replies_remaining--;
         }
-        nios_pkt_retune2_resp_pack(bytes, 0, flags);
+        nios_pkt_retune2_resp_pack(bytes, 0, flags,
+                                   NIOS_PKT_RETUNE2_FAILURE_NONE);
+        return 0;
+    }
+    if (request[0] == NIOS_PKT_RETUNE2_MAGIC &&
+        response_mode == RESPONSE_RETUNE2_FAILURE_STAGE) {
+        nios_pkt_retune2_resp_pack(
+            bytes, 0, 0, NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT);
         return 0;
     }
     if (request[0] == NIOS_PKT_8x32_MAGIC) {
@@ -321,6 +329,32 @@ static int expect_retune_clear_pending(enum response_mode mode, bool retune2)
     return 0;
 }
 
+static int expect_retune2_failure_stage(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb };
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_RETUNE2_FAILURE_STAGE;
+    status = nios_retune2(&dev, BLADERF_CHANNEL_RX(0), BLADERF_RETUNE_NOW,
+                          1, 1, 0x83, 0);
+    if (status != BLADERF_ERR_UNEXPECTED || !dev.nios_retune_trace.valid ||
+        dev.nios_retune_trace.status != 0 ||
+        dev.nios_retune_trace.device_failure_stage !=
+            NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT) {
+        fprintf(stderr, "RETUNE2 failure-stage mapping mismatch: status=%d "
+                        "valid=%d transport=%d stage=%u\n",
+                status, dev.nios_retune_trace.valid,
+                dev.nios_retune_trace.status,
+                dev.nios_retune_trace.device_failure_stage);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 static int expect_rfic_read_timeout_clears_output(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
@@ -495,14 +529,15 @@ int main(void)
             RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS, false) ||
         expect_retune_clear_pending(
             RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS, true) ||
+        expect_retune2_failure_stage() ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_mismatched_response_poisoned_channel() ||
         expect_legacy_error_marker_is_completed_response() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
         expect_partial_dwell_summary_timeout_is_atomic() ||
-        out_count != 13 || in_count != 13) {
-        if (out_count != 13 || in_count != 13) {
+        out_count != 14 || in_count != 14) {
+        if (out_count != 14 || in_count != 14) {
             fprintf(stderr, "NIOS transaction count mismatch: out=%u in=%u\n",
                     out_count, in_count);
         }

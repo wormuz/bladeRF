@@ -23,6 +23,7 @@ static uint8_t recalled_spdt;
 static bool fail_profile_load;
 static bool fail_profile_load_after_slot_write;
 static bool fail_profile_recall;
+static bool fail_port_select;
 static bool fail_spdt_select;
 static bool fail_tamer_schedule;
 static bool fail_tamer_schedule_ack;
@@ -79,7 +80,8 @@ bool adi_fastlock_load(bladerf_module module, fastlock_profile *profile)
     return true;
 }
 
-bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
+bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile,
+                         uint8_t *failure_stage)
 {
     recall_count++;
     recalled_module = module;
@@ -87,6 +89,11 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile)
     recalled_profile_num = profile->profile_num;
     recalled_port = profile->port;
     recalled_spdt = profile->spdt;
+    if (failure_stage != NULL) {
+        *failure_stage = fail_profile_recall
+            ? NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT
+            : NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
     if (track_rffe_fastlock_slots) {
         fastlock_profile *slots = module == BLADERF_MODULE_TX
             ? simulated_rffe_tx : simulated_rffe_rx;
@@ -107,7 +114,7 @@ bool adi_rfport_select(fastlock_profile *profile)
 {
     (void)profile;
     port_count++;
-    return true;
+    return !fail_port_select;
 }
 
 bool adi_rfspdt_select(bladerf_module module, fastlock_profile *profile)
@@ -239,6 +246,63 @@ static int check_immediate_upload_failure_preserves_profile(void)
               stderr);
         return 1;
     }
+    return 0;
+}
+
+static int check_immediate_failure_stage_response(void)
+{
+    const struct {
+        bool *failure_switch;
+        uint8_t expected_stage;
+        const char *name;
+    } failures[] = {
+        { &fail_profile_recall,
+          NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT, "PLL recall" },
+        { &fail_port_select,
+          NIOS_PKT_RETUNE2_FAILURE_RF_PORT_SELECT, "RF port" },
+        { &fail_spdt_select,
+          NIOS_PKT_RETUNE2_FAILURE_SPDT_SELECT, "SPDT" },
+    };
+
+    for (size_t i = 0; i < sizeof(failures) / sizeof(failures[0]); ++i) {
+        struct pkt_buf request = { 0 };
+        pkt_retune2_init();
+        memset(fastlocks_rx, 0, sizeof(fastlocks_rx));
+        fastlocks_rx[0].profile_num = 1;
+        fastlocks_rx[0].state = FASTLOCK_STATE_BBP;
+        fail_profile_load = false;
+        fail_profile_recall = false;
+        fail_port_select = false;
+        fail_spdt_select = false;
+        *failures[i].failure_switch = true;
+
+        nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
+                              NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0x00);
+        pkt_retune2(&request);
+        *failures[i].failure_switch = false;
+
+        if ((request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+             NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+            nios_pkt_retune2_resp_failure(request.resp) !=
+                failures[i].expected_stage) {
+            fprintf(stderr, "%s activation failure lost its stage: "
+                    "flags=0x%02x stage=%u expected=%u\n",
+                    failures[i].name,
+                    request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS],
+                    nios_pkt_retune2_resp_failure(request.resp),
+                    failures[i].expected_stage);
+            return 1;
+        }
+        for (size_t reserved = NIOS_PKT_RETUNE2_RESP_IDX_RESV + 1;
+             reserved < NIOS_PKT_LEN; ++reserved) {
+            if (request.resp[reserved] != 0) {
+                fprintf(stderr, "%s failure dirtied reserved response byte %zu\n",
+                        failures[i].name, reserved);
+                return 1;
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -1862,6 +1926,9 @@ int main(void)
         return 1;
     }
     if (check_immediate_upload_failure_preserves_profile() != 0) {
+        return 1;
+    }
+    if (check_immediate_failure_stage_response() != 0) {
         return 1;
     }
     if (check_deferred_failure_reporting() != 0) {

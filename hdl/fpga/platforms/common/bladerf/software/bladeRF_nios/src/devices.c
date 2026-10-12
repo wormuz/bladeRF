@@ -25,6 +25,7 @@
 #ifndef BLADERF_NIOS_PC_SIMULATION
 
 #include "devices.h"
+#include "nios_pkt_retune2.h"
 #include "i2c_status_policy.h"
 #include "spi_arbiter_policy.h"
 #include "nios_axi_address_policy.h"
@@ -1113,7 +1114,7 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
                                             * запас проти 100мкс типового
                                             * fastlock lock-часу */
 
-static bool adi_wait_pll_lock(uint16_t lock_reg)
+static bool adi_wait_pll_lock(uint16_t lock_reg, uint8_t *failure_stage)
 {
     uint16_t status_addr = (0x0 << 15) | (0x0 << 12) | (lock_reg & 0x3ff);
     uint32_t i;
@@ -1123,6 +1124,9 @@ static bool adi_wait_pll_lock(uint16_t lock_reg)
         uint8_t status;
 
         if (!adi_spi_read_checked(status_addr, &value)) {
+            if (failure_stage != NULL) {
+                *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ;
+            }
             return false;
         }
         status = (uint8_t)(value >> 56);
@@ -1131,10 +1135,14 @@ static bool adi_wait_pll_lock(uint16_t lock_reg)
         }
     }
 
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT;
+    }
     return false;
 }
 
-bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
+bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
+                         uint8_t *failure_stage)
 {
     bool is_tx = BLADERF_CHANNEL_IS_TX(m);
     uint16_t fl_setup_reg = is_tx ? 0x29a : 0x25a;
@@ -1143,15 +1151,26 @@ bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p)
     uint16_t addr;
     uint64_t data = 0;
 
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
+    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
+        }
+        return false;
+    }
     addr = (0x1 << 15) | (0x0 << 12) | (fl_setup_reg & 0x3ff);
     data = (uint64_t)(((p->profile_num & 0x7) << 5) | (0x1)) << 8 * 7;
-
     if (!adi_spi_write(addr, data)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_FASTLOCK_SETUP_WRITE;
+        }
         return false;
     }
 
     /* Wait for the actual RFPLL lock bit and report a timeout as failure. */
-    return adi_wait_pll_lock(pll_lock_reg);
+    return adi_wait_pll_lock(pll_lock_reg, failure_stage);
 }
 #endif  // BOARD_BLADERF_MICRO
 

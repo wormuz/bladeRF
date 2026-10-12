@@ -3257,6 +3257,7 @@ static int _bladerf_rx_transition_begin(
     uint64_t nios_out_done_ns = 0;
     uint64_t nios_response_done_ns = 0;
     uint64_t nios_duration_ticks = 0;
+    uint8_t nios_failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
     int nios_transport_status = 0;
     bool nios_trace_valid = false;
     bool nios_duration_valid = false;
@@ -3658,6 +3659,8 @@ static int _bladerf_rx_transition_begin(
             nios_out_done_ns = dev->nios_retune_trace.usb_out_done_ns;
             nios_response_done_ns = dev->nios_retune_trace.response_done_ns;
             nios_duration_ticks = dev->nios_retune_trace.device_duration_ticks;
+            nios_failure_stage =
+                dev->nios_retune_trace.device_failure_stage;
             nios_transport_status = dev->nios_retune_trace.status;
             nios_trace_valid = dev->nios_retune_trace.valid;
             nios_duration_valid = dev->nios_retune_trace.device_duration_valid;
@@ -3692,8 +3695,12 @@ static int _bladerf_rx_transition_begin(
                     BLADERF_RF_EVT_NIOS_RETUNE_RESPONSE,
                     BLADERF_RF_STATE_SPI_PROGRAMMING,
                     request->target_frequency_hz, 0,
-                    (uint32_t)nios_transport_status,
-                    status, 0, nios_response_done_ns, 0, 0);
+                    nios_failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE
+                        ? nios_failure_stage
+                        : (uint32_t)nios_transport_status,
+                    status, 0, nios_response_done_ns, 0,
+                    nios_failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE
+                        ? BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID : 0);
             }
         }
         if (status != 0) {

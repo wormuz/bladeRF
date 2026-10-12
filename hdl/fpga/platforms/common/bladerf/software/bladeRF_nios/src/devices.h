@@ -301,7 +301,8 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p);
  * @param m    Which module to recall.
  * @param *p   Fast lock profile structure
  */
-bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p);
+bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
+                         uint8_t *failure_stage);
 
 /**
  * Set the AD9361 port.

@@ -517,9 +517,16 @@ static inline void profile_load_scheduled(struct queue *q,
 }
 
 static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
-                                    uint64_t *readback_frequency_hz)
+                                    uint64_t *readback_frequency_hz,
+                                    uint8_t *failure_stage)
 {
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
     if (p == NULL) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
+        }
         return false;
     }
 
@@ -528,6 +535,9 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
      * Do not activate a saved profile while that frequency is invalidated by
      * an earlier partial/failed tune. */
     if (rfic_frequency_peer_unknown(module)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PEER_FREQUENCY_UNKNOWN;
+        }
         return false;
     }
     /* Invalidate current frequency knowledge */
@@ -535,23 +545,32 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
 #endif  // BLADERF_NIOS_LIBAD936X
 
     /* Activate the RFFE fast lock profile */
-    if (!adi_fastlock_recall(module, p)) {
+    if (!adi_fastlock_recall(module, p, failure_stage)) {
         return false;
     }
 
     /* Adjust the RFFE port */
     if (!adi_rfport_select(p)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_RF_PORT_SELECT;
+        }
         return false;
     }
 
     /* Adjust the RF switches */
     if (!adi_rfspdt_select(module, p)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_SPDT_SELECT;
+        }
         return false;
     }
 #ifdef BLADERF_NIOS_LIBAD936X
     if (readback_frequency_hz != NULL &&
         !rfic_read_frequency_live(module, p->profile_num,
                                   readback_frequency_hz)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_LO_READBACK;
+        }
         return false;
     }
 #else
@@ -817,12 +836,13 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
         case ENTRY_STATE_READY: {
             uint64_t readback_frequency_hz;
+            uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
             uint32_t completion_sequence;
             struct retune2_completion *completion;
 
             /* Activate the fast lock profile for this retune */
             if (!profile_activate(module, &e->profile,
-                                 &readback_frequency_hz)) {
+                                 &readback_frequency_hz, &failure_stage)) {
                 record_retune2_failure(module);
             } else if (module == BLADERF_MODULE_RX ||
                        module == BLADERF_MODULE_TX) {
@@ -884,6 +904,7 @@ void pkt_retune2(struct pkt_buf *b)
     uint64_t duration = 0;
     bool start_time_valid = false;
     bool cancel_failed = false;
+    uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
     uint16_t nios_profile;
     uint8_t rffe_profile;
     uint8_t port;
@@ -901,8 +922,9 @@ void pkt_retune2(struct pkt_buf *b)
      * retune or queue-clear path. */
     if (!nios_pkt_retune2_reserved_valid(b->req)) {
         INCREMENT_ERROR_COUNT();
+        failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
         flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
-        nios_pkt_retune2_resp_pack(b->resp, 0, flags);
+        nios_pkt_retune2_resp_pack(b->resp, 0, flags, failure_stage);
         return;
     }
 
@@ -910,8 +932,9 @@ void pkt_retune2(struct pkt_buf *b)
         timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         if (!time_tamer_read(module, &start_time)) {
             INCREMENT_ERROR_COUNT();
+            failure_stage = NIOS_PKT_RETUNE2_FAILURE_TIMER_READ;
             flags &= ~NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
-            nios_pkt_retune2_resp_pack(b->resp, 0, flags);
+            nios_pkt_retune2_resp_pack(b->resp, 0, flags, failure_stage);
             return;
         }
         start_time_valid = true;
@@ -951,11 +974,13 @@ void pkt_retune2(struct pkt_buf *b)
         /* Do not let malformed route selectors be truncated by the RFIC
          * register helpers into a different, apparently successful path. */
         INCREMENT_ERROR_COUNT();
+        failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
         status = -1;
     } else if (!retune2_profile_indices_valid(nios_profile, rffe_profile)) {
         /* Do not index the per-direction profile arrays or shift a
          * caller-controlled RFFE slot into the preload bitmask unchecked. */
         INCREMENT_ERROR_COUNT();
+        failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
         status = -1;
     } else {
         switch (module) {
@@ -971,6 +996,7 @@ void pkt_retune2(struct pkt_buf *b)
 
         if (profile == NULL) {
             INCREMENT_ERROR_COUNT();
+            failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
             status = -1;
         } else {
             const bool profile_already_in_target_slot =
@@ -1000,6 +1026,7 @@ void pkt_retune2(struct pkt_buf *b)
                  * profile while the queued transaction still owns it. */
                 if (profile_slot_armed(q, requested_profile.profile_num)) {
                     INCREMENT_ERROR_COUNT();
+                    failure_stage = NIOS_PKT_RETUNE2_FAILURE_PROFILE_SLOT_BUSY;
                     status = -1;
                 } else {
                     switch (module) {
@@ -1012,6 +1039,7 @@ void pkt_retune2(struct pkt_buf *b)
                              * NIOS profile usable for a later retune. */
                             if (!profile_load(module, &requested_profile)) {
                                 INCREMENT_ERROR_COUNT();
+                                failure_stage = NIOS_PKT_RETUNE2_FAILURE_PROFILE_LOAD;
                                 status = -1;
                                 break;
                             }
@@ -1020,7 +1048,8 @@ void pkt_retune2(struct pkt_buf *b)
 
                             /* Activate the fast lock profile for this retune */
                             if (profile_activate(module, profile,
-                                                 &readback_frequency_hz)) {
+                                                 &readback_frequency_hz,
+                                                 &failure_stage)) {
                                 flags |=
                                     NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID;
                                 status = 0;
@@ -1089,5 +1118,5 @@ void pkt_retune2(struct pkt_buf *b)
         flags &= ~(NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS);
     }
 
-    nios_pkt_retune2_resp_pack(b->resp, duration, flags);
+    nios_pkt_retune2_resp_pack(b->resp, duration, flags, failure_stage);
 }

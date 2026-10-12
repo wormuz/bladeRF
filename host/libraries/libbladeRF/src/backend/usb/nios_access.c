@@ -99,6 +99,8 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
         dev->nios_retune_trace.usb_out_done_ns = 0;
         dev->nios_retune_trace.response_done_ns = 0;
         dev->nios_retune_trace.status = 0;
+        dev->nios_retune_trace.device_failure_stage =
+            NIOS_PKT_RETUNE2_FAILURE_NONE;
         dev->nios_retune_trace.valid = true;
     }
 
@@ -2042,6 +2044,7 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     uint8_t buf[NIOS_PKT_LEN];
 
     uint8_t resp_flags;
+    uint8_t failure_stage;
     uint64_t duration;
 
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
@@ -2065,9 +2068,11 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     }
 
     nios_pkt_retune2_resp_unpack(buf, &duration, &resp_flags);
+    failure_stage = nios_pkt_retune2_resp_failure(buf);
 
     if (dev->nios_retune_trace.valid) {
         dev->nios_retune_trace.device_duration_ticks = duration;
+        dev->nios_retune_trace.device_failure_stage = failure_stage;
         dev->nios_retune_trace.device_duration_valid =
             (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0;
     }
@@ -2081,6 +2086,10 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     }
 
     if ((resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
+        if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+            log_error("NIOS RETUNE2 failed at device stage %u.\n",
+                      failure_stage);
+        }
         if (timestamp == BLADERF_RETUNE_NOW) {
             log_debug("FPGA tuning reported failure.\n");
             status = BLADERF_ERR_UNEXPECTED;
