@@ -157,7 +157,15 @@ begin
             ts_clock_wait_count <= 0;
             ts_clock_stalled <= '0';
         elsif rising_edge(clock) then
-            if (uaddr = 8 and write = '1' and unsigned(din) = 0) or
+            if mm_ts_reset = '1' then
+                -- META-off intentionally holds the timestamp domain in
+                -- reset, which also holds its heartbeat low. That is not a
+                -- clock failure and must not leave a sticky stall indication
+                -- that prevents Nios from retrying a pending cancellation.
+                ts_clock_wait_count <= 0;
+                ts_clock_stalled <= '0';
+                ts_clock_heartbeat_seen <= ts_clock_heartbeat_mm;
+            elsif (uaddr = 8 and write = '1' and unsigned(din) = 0) or
                intr_set = '1' or intr_cancel = '1' then
                 ts_clock_wait_count <= 0;
                 ts_clock_stalled <= '0';
@@ -165,6 +173,9 @@ begin
             elsif ts_clock_heartbeat_mm /= ts_clock_heartbeat_seen then
                 ts_clock_heartbeat_seen <= ts_clock_heartbeat_mm;
                 ts_clock_wait_count <= 0;
+                -- A heartbeat transition is positive evidence that the
+                -- timestamp clock recovered after the watchdog fired.
+                ts_clock_stalled <= '0';
             elsif ts_clock_stalled = '0' then
                 if ts_clock_wait_count = TS_CLOCK_TIMEOUT_CYCLES then
                     ts_clock_stalled <= '1';

@@ -214,7 +214,13 @@ begin
         -- With META disabled the timestamp domain remains in reset. Nios
         -- still clears both scheduled-retune queues during device open, so
         -- the time-tamer must acknowledge cancellation without waiting for
-        -- a timestamp-domain handshake that cannot run.
+        -- a timestamp-domain handshake that cannot run. Its stopped heartbeat
+        -- is intentional and must not be reported as a clock fault.
+        nop(clock, 5000);
+        read_status(clock, addr, dout, read, readack, status_before);
+        assert status_before(5) = '0'
+            report "timestamp reset was misreported as a stalled clock"
+            severity failure;
         read_status(clock, addr, dout, read, readack, status_before);
         cancel_compare(clock, addr, din, write);
         nop(clock, 20);
@@ -440,6 +446,16 @@ begin
             severity failure;
         read <= '0';
         wait until rising_edge(clock);
+
+        -- A recovered heartbeat clears the sticky stall status without
+        -- requiring another arm/cancel command. Nios uses this transition to
+        -- retry cancellation while retaining queue ownership.
+        ts_clock_enable <= '1';
+        nop(clock, 100);
+        read_status(clock, addr, dout, read, readack, status_after);
+        assert status_after(5) = '0'
+            report "timestamp-clock recovery did not clear stalled status"
+            severity failure;
 
         report "time_tamer_tb: PASS" severity note;
         stop;
