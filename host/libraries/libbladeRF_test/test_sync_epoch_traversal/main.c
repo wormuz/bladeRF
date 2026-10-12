@@ -937,6 +937,31 @@ static void test_public_sync_apis_reject_null_device(void)
     assert(bladerf_get_feature(&dev, NULL) == BLADERF_ERR_INVAL);
 }
 
+static void test_public_flash_apis_reject_invalid_arguments(void)
+{
+    struct bladerf dev = {0};
+    uint8_t byte = 0;
+
+    assert(bladerf_erase_flash(NULL, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_erase_flash_bytes(NULL, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_read_flash(NULL, &byte, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_read_flash(&dev, NULL, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_read_flash_bytes(NULL, &byte, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_read_flash_bytes(&dev, &byte, 0, 1) ==
+           BLADERF_ERR_UNEXPECTED);
+    assert(bladerf_write_flash(NULL, &byte, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_write_flash(&dev, NULL, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_write_flash_bytes(NULL, &byte, 0, 1) == BLADERF_ERR_INVAL);
+    assert(bladerf_write_flash_bytes(&dev, &byte, 0, 1) ==
+           BLADERF_ERR_UNEXPECTED);
+    assert(bladerf_read_otp(NULL, &byte) == BLADERF_ERR_INVAL);
+    assert(bladerf_read_otp(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_write_otp(NULL, &byte) == BLADERF_ERR_INVAL);
+    assert(bladerf_write_otp(&dev, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_lock_otp(NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_erase_flash_bytes(&dev, 0, 1) == BLADERF_ERR_UNEXPECTED);
+}
+
 static void test_tx_transport_fault_is_not_hidden_by_other_invalidity(void)
 {
     struct bladerf2_board_data board_data = {0};
@@ -3398,6 +3423,7 @@ int main(void)
     test_sync_tx_does_not_wait_on_terminal_backend_handoff();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
+    test_public_flash_apis_reject_invalid_arguments();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();

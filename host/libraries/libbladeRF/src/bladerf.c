@@ -2801,6 +2801,7 @@ int bladerf_erase_flash(struct bladerf *dev,
                         uint32_t count)
 {
     int status;
+    CHECK_NULL(dev);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->erase_flash(dev, erase_block, count);
@@ -2816,6 +2817,11 @@ int bladerf_erase_flash_bytes(struct bladerf *dev,
     int      status;
     uint32_t eb;
     uint32_t count;
+
+    CHECK_NULL(dev);
+    if (dev->flash_arch == NULL || dev->flash_arch->ebsize_bytes == 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     /* Make sure address is aligned to an erase block boundary */
     if( (address % dev->flash_arch->ebsize_bytes) == 0 ) {
@@ -2851,6 +2857,10 @@ int bladerf_read_flash(struct bladerf *dev,
                        uint32_t count)
 {
     int status;
+    CHECK_NULL(dev);
+    if (count != 0) {
+        CHECK_NULL(buf);
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->read_flash(dev, buf, page, count);
@@ -2867,6 +2877,14 @@ int bladerf_read_flash_bytes(struct bladerf *dev,
     int      status;
     uint32_t page;
     uint32_t count;
+
+    CHECK_NULL(dev);
+    if (length != 0) {
+        CHECK_NULL(buf);
+    }
+    if (dev->flash_arch == NULL || dev->flash_arch->psize_bytes == 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     /* Check alignment */
     if( ((address % dev->flash_arch->psize_bytes) != 0) ||
@@ -2890,6 +2908,10 @@ int bladerf_write_flash(struct bladerf *dev,
                         uint32_t count)
 {
     int status;
+    CHECK_NULL(dev);
+    if (count != 0) {
+        CHECK_NULL(buf);
+    }
     MUTEX_LOCK(&dev->lock);
 
     status = dev->board->write_flash(dev, buf, page, count);
@@ -2906,6 +2928,14 @@ int bladerf_write_flash_bytes(struct bladerf *dev,
     int      status;
     uint32_t page;
     uint32_t count;
+
+    CHECK_NULL(dev);
+    if (length != 0) {
+        CHECK_NULL(buf);
+    }
+    if (dev->flash_arch == NULL || dev->flash_arch->psize_bytes == 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     /* Check alignment */
     if( ((address % dev->flash_arch->psize_bytes) != 0) ||
@@ -2926,6 +2956,8 @@ int bladerf_read_otp(struct bladerf *dev,
                        uint8_t *buf)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(buf);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->backend->get_otp(dev, (char *)buf);
@@ -2938,6 +2970,8 @@ int bladerf_write_otp(struct bladerf *dev,
                         uint8_t *buf)
 {
     int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(buf);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->backend->write_otp(dev, (char *)buf);
@@ -2949,6 +2983,7 @@ int bladerf_write_otp(struct bladerf *dev,
 int bladerf_lock_otp(struct bladerf *dev)
 {
     int status;
+    CHECK_NULL(dev);
     MUTEX_LOCK(&dev->lock);
 
     status = dev->backend->lock_otp(dev);
