@@ -56,6 +56,14 @@ end entity;
 
 architecture sim of fifo_reader_tb is
 
+    constant PACKED_TEST_WORD : std_logic_vector(63 downto 0) :=
+        x"0BAD0BAD0BAD0BAD";
+
+    function sample12(v : std_logic_vector(11 downto 0)) return signed is
+    begin
+        return resize(signed(v), 16);
+    end function;
+
     signal clock      : std_logic := '0';
     signal reset      : std_logic := '1';
     signal enable     : std_logic := '0';
@@ -69,7 +77,7 @@ architecture sim of fifo_reader_tb is
     signal fifo_usedw : std_logic_vector(11 downto 0) := (others => '1');
     signal fifo_read  : std_logic;
     signal fifo_empty : std_logic := '0';
-    signal fifo_data  : std_logic_vector(63 downto 0) := x"0BAD0BAD0BAD0BAD";
+    signal fifo_data  : std_logic_vector(63 downto 0) := PACKED_TEST_WORD;
     signal fifo_hold  : std_logic := '0';
 
     signal pkt_ctrl   : packet_control_t;
@@ -139,6 +147,7 @@ begin
 
     counters : process(clock)
         variable valid_samples : natural;
+        variable packed_cycle_check : natural range 0 to 3 := 0;
     begin
         if rising_edge(clock) and reset = '0' and fifo_read = '1' then
             if reads_before = 0 and reads_after = 0 then
@@ -162,6 +171,44 @@ begin
                 samples_before <= samples_before + valid_samples;
             else
                 samples_after <= samples_after + valid_samples;
+            end if;
+
+            if timestamp >= to_unsigned(TGT, 64) and
+               out_smp(0).data_v = '1' then
+                assert out_smp(1).data_v = '1'
+                    report "packed TX streams became valid on different cycles"
+                    severity failure;
+                case packed_cycle_check is
+                    when 0 =>
+                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(11 downto 0)) and
+                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(23 downto 12)) and
+                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(35 downto 24)) and
+                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(47 downto 36))
+                            report "packed TX cycle 0 payload mismatch"
+                            severity failure;
+                    when 1 =>
+                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(59 downto 48)) and
+                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(7 downto 0) & PACKED_TEST_WORD(63 downto 60)) and
+                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(19 downto 8)) and
+                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(31 downto 20))
+                            report "packed TX cycle 1 payload mismatch (saved-word carry)"
+                            severity failure;
+                    when 2 =>
+                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(43 downto 32)) and
+                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(55 downto 44)) and
+                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(3 downto 0) & PACKED_TEST_WORD(63 downto 56)) and
+                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(15 downto 4))
+                            report "packed TX cycle 2 payload mismatch (saved-word carry)"
+                            severity failure;
+                    when 3 =>
+                        assert out_smp(0).data_i = sample12(PACKED_TEST_WORD(27 downto 16)) and
+                               out_smp(0).data_q = sample12(PACKED_TEST_WORD(39 downto 28)) and
+                               out_smp(1).data_i = sample12(PACKED_TEST_WORD(51 downto 40)) and
+                               out_smp(1).data_q = sample12(PACKED_TEST_WORD(63 downto 52))
+                            report "packed TX cycle 3 payload mismatch (saved-word carry)"
+                            severity failure;
+                end case;
+                packed_cycle_check := (packed_cycle_check + 1) mod 4;
             end if;
         end if;
     end process;
