@@ -19,6 +19,7 @@
 #define LIVE_RX_META_MESSAGE_SIZE 8192u
 #define LIVE_RX_META_MESSAGE_SAMPLES \
     (LIVE_RX_META_MESSAGE_SIZE / sizeof(int32_t))
+#define LIVE_RX_CAPTURED_EVENTS 128u
 #define LIVE_RX_X2_SAMPLES_PER_TIMESTAMP 2u
 
 enum live_rx_active_mode {
@@ -40,6 +41,8 @@ struct live_stream {
     atomic_int event_query_status;
     uint64_t event_cursor;
     atomic_uint events_drained_from_callback;
+    atomic_uint captured_event_count;
+    struct bladerf_rf_event captured_events[LIVE_RX_CAPTURED_EVENTS];
     atomic_uint data_withheld_events;
     atomic_uint metadata_mismatch_withheld_events;
     atomic_uint timestamp_withheld_events;
@@ -57,6 +60,62 @@ struct live_stream {
     int stream_status;
 };
 
+static uint64_t monotonic_ns(void)
+{
+    struct timespec ts = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) +
+           (uint64_t)ts.tv_nsec;
+}
+
+static void poll_rf_events(struct bladerf *dev, struct live_stream *live)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t event_count = 0;
+    uint64_t next_sequence = live->event_cursor;
+    bool history_complete = false;
+    int query_status = bladerf_rf_events_get_since(
+        dev, live->event_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &event_count, &next_sequence, &history_complete);
+    if (query_status != 0 && history_complete) {
+        atomic_store(&live->event_query_status, query_status);
+        return;
+    }
+
+    live->event_cursor = next_sequence;
+    atomic_fetch_add(&live->events_drained_from_callback, event_count);
+    unsigned int captured = atomic_load_explicit(
+        &live->captured_event_count, memory_order_relaxed);
+    for (uint32_t i = 0; i < event_count &&
+         captured < LIVE_RX_CAPTURED_EVENTS; ++i) {
+        live->captured_events[captured++] = events[i];
+    }
+    atomic_store_explicit(&live->captured_event_count, captured,
+                          memory_order_release);
+    if (!history_complete) {
+        atomic_fetch_add(&live->event_history_gaps, 1);
+    }
+    for (uint32_t i = 0; i < event_count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD) {
+            atomic_fetch_add(&live->data_withheld_events, 1);
+            if (events[i].flags ==
+                BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY) {
+                atomic_fetch_add(&live->timestamp_withheld_events, 1);
+            }
+            if ((events[i].flags &
+                 ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+                BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH) {
+                atomic_fetch_add(&live->metadata_mismatch_withheld_events,
+                                 1);
+            }
+        } else if (events[i].event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
+            atomic_fetch_add(&live->stream_overrun_events, 1);
+        }
+    }
+}
+
 static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                          struct bladerf_metadata *metadata, void *samples,
                          size_t num_samples, void *user_data)
@@ -67,51 +126,19 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     if (atomic_load(&live->stop)) {
         return BLADERF_STREAM_SHUTDOWN;
     }
+    if (!atomic_load(&live->pause_event_poll)) {
+        poll_rf_events(dev, live);
+    }
     if (num_samples == 0) {
         if (samples != NULL) {
             return BLADERF_STREAM_SHUTDOWN;
         }
-        if (!atomic_load(&live->pause_event_poll)) {
-            struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-            uint32_t event_count = 0;
-            uint64_t next_sequence = live->event_cursor;
-            bool history_complete = false;
-            int query_status = bladerf_rf_events_get_since(
-                dev, live->event_cursor, events,
-                BLADERF_RF_EVENT_HISTORY_SIZE, &event_count, &next_sequence,
-                &history_complete);
-            if (query_status != 0 && history_complete) {
-                atomic_store(&live->event_query_status, query_status);
-            } else {
-                live->event_cursor = next_sequence;
-                atomic_fetch_add(&live->events_drained_from_callback,
-                                 event_count);
-                if (!history_complete) {
-                    atomic_fetch_add(&live->event_history_gaps, 1);
-                }
-                for (uint32_t i = 0; i < event_count; ++i) {
-                    if (events[i].event_type ==
-                        BLADERF_RF_EVT_RX_DATA_WITHHELD) {
-                        atomic_fetch_add(&live->data_withheld_events, 1);
-                        if (events[i].flags ==
-                            BLADERF_RF_WITHHELD_TIMESTAMP_DISCONTINUITY) {
-                            atomic_fetch_add(&live->timestamp_withheld_events,
-                                             1);
-                        }
-                        if ((events[i].flags &
-                             ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
-                            BLADERF_RF_WITHHELD_EPOCH_OR_TIMESTAMP_MISMATCH) {
-                            atomic_fetch_add(
-                                &live->metadata_mismatch_withheld_events, 1);
-                        }
-                    } else if (events[i].event_type ==
-                               BLADERF_RF_EVT_RX_STREAM_OVERRUN) {
-                        atomic_fetch_add(&live->stream_overrun_events, 1);
-                    }
-                }
-            }
+        unsigned int event_only_count = atomic_fetch_add(
+            &live->event_only_callbacks, 1) + 1;
+        if (event_only_count == 1) {
+            fprintf(stderr, "first event-only callback host_ns=%llu\n",
+                    (unsigned long long)monotonic_ns());
         }
-        atomic_fetch_add(&live->event_only_callbacks, 1);
         /* This wakeup consumed no caller buffer; recycle the withheld USB
          * transfer instead of handing the backend an unrelated buffer. */
         return BLADERF_STREAM_REUSE_BUFFER;
@@ -261,11 +288,28 @@ static int event_transition(struct bladerf *dev, uint64_t frequency_hz,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
-    uint32_t transaction_id;
+    uint32_t transaction_id = 0;
+    static unsigned int transition_call_count;
+    const unsigned int call_id = ++transition_call_count;
+    if (call_id <= 2) {
+        fprintf(stderr, "transition[%u] begin-call host_ns=%llu\n", call_id,
+                (unsigned long long)monotonic_ns());
+    }
     int status = bladerf_rx_transition_begin(
         dev, channel, &request, &transaction_id);
+    if (call_id <= 2) {
+        fprintf(stderr, "transition[%u] begin-return host_ns=%llu status=%d "
+                "transaction=%u\n", call_id,
+                (unsigned long long)monotonic_ns(), status, transaction_id);
+    }
     if (status == 0) {
         status = bladerf_rx_transition_wait(dev, transaction_id, result, 2000);
+    }
+    if (call_id <= 2) {
+        fprintf(stderr, "transition[%u] wait-return host_ns=%llu status=%d "
+                "event=%u\n", call_id,
+                (unsigned long long)monotonic_ns(), status,
+                status == 0 ? result->event_type : 0);
     }
     if (status == 0 &&
         (result->event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
@@ -304,6 +348,49 @@ static int require_first_host_data_event(
             "after %u valid callbacks\n", epoch_event->epoch_id,
             epoch_event->transaction_id, count);
     return BLADERF_ERR_UNEXPECTED;
+}
+
+static void dump_captured_events(const struct live_stream *live)
+{
+    unsigned int count = atomic_load_explicit(&live->captured_event_count,
+                                               memory_order_acquire);
+    if (count > LIVE_RX_CAPTURED_EVENTS) {
+        count = LIVE_RX_CAPTURED_EVENTS;
+    }
+    fprintf(stderr, "captured RF events=%u\n", count);
+    for (unsigned int i = 0; i < count; ++i) {
+        const struct bladerf_rf_event *event = &live->captured_events[i];
+        fprintf(stderr, "  event[%u] host_ns=%llu type=%u txn=%u epoch=%u "
+                "flags=0x%x error=%d rfic=0x%x fpga_ts=%llu\n", i,
+                (unsigned long long)event->host_monotonic_ns,
+                event->event_type, event->transaction_id, event->epoch_id,
+                event->flags, event->error_code, event->rfic_status,
+                (unsigned long long)event->fpga_timestamp);
+    }
+}
+
+static void dump_event_history(struct live_stream *live)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = live->event_cursor;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        live->dev, live->event_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next_sequence, &complete);
+    fprintf(stderr, "RF history since callback cursor %llu: status=%d "
+            "events=%u next=%llu complete=%u\n",
+            (unsigned long long)live->event_cursor, status, count,
+            (unsigned long long)next_sequence, complete);
+    for (uint32_t i = 0; status == 0 && i < count; ++i) {
+        fprintf(stderr, "  event[%u] host_ns=%llu type=%u txn=%u epoch=%u "
+                "state=%u flags=0x%x error=%d rfic=0x%x fpga_ts=%llu\n",
+                i, (unsigned long long)events[i].host_monotonic_ns,
+                events[i].event_type, events[i].transaction_id,
+                events[i].epoch_id, events[i].fpga_state, events[i].flags,
+                events[i].error_code, events[i].rfic_status,
+                (unsigned long long)events[i].fpga_timestamp);
+    }
 }
 
 int main(void)
@@ -416,18 +503,32 @@ int main(void)
         goto cleanup;
     }
     fprintf(stderr, "async stream started: buffer_samples=%u "
-            "buffer_bytes=%u\n", async_buffer_samples,
-            async_buffer_samples * (unsigned int)sizeof(int32_t));
-    /* Start the async RX worker before certifying the epoch. Stream startup
-     * applies shared format GPIOs and invalidates any earlier RX certificate;
-     * keep the worker running so the transition can observe first valid host
-     * data without invalidating itself afterward. */
-    if (!wait_for_count(&live.event_only_callbacks, 1, 3000)) {
-        fprintf(stderr, "async RX worker did not reach event-only state\n");
-        status = BLADERF_ERR_TIMEOUT;
+            "buffer_bytes=%u host_ns=%llu\n", async_buffer_samples,
+            async_buffer_samples * (unsigned int)sizeof(int32_t),
+            (unsigned long long)monotonic_ns());
+    uint32_t config_gpio = 0;
+    status = bladerf_config_gpio_read(live.dev, &config_gpio);
+    if (status != 0) {
+        fprintf(stderr, "config GPIO read before transition: %s\n",
+                bladerf_strerror(status));
         stop_stream(&live, stream_thread);
         goto cleanup;
     }
+    fprintf(stderr, "pre-transition config GPIO=0x%08x timestamp=%u "
+            "packet=%u host_ns=%llu\n", config_gpio,
+            (config_gpio >> 16) & 1u, (config_gpio >> 19) & 1u,
+            (unsigned long long)monotonic_ns());
+    /* Let the backend queue its initial IN transfers before the transition.
+     * This is test orchestration only; it prevents the transition API from
+     * racing the backend's initial transfer submission. */
+    const struct timespec backend_startup = { .tv_sec = 0,
+                                               .tv_nsec = 100000000 };
+    nanosleep(&backend_startup, NULL);
+    /* Do not wait for a callback to prove the stream has started: with no
+     * certified RX epoch the FPGA may have no payload to complete the first
+     * USB transfer, and waiting for event-only can wait until that transfer
+     * has already timed out. The transition competes for dev->lock with the
+     * stream's format setup, then starts as soon as that setup is committed. */
     status = event_transition(live.dev, 1835000000ULL,
                               live.transition_channel, &event);
     if (status != 0) {
@@ -455,13 +556,17 @@ int main(void)
                 atomic_load(&live.stream_overrun_events), pending_count,
                 history_complete);
         for (uint32_t i = 0; i < pending_count; ++i) {
-            fprintf(stderr, "  event type=%u state=%u epoch=%u flags=0x%x "
-                    "error=%d rfic=0x%x ts=%llu\n", pending[i].event_type,
+            fprintf(stderr, "  event[%u] host_ns=%llu type=%u txn=%u "
+                    "state=%u epoch=%u flags=0x%x error=%d rfic=0x%x "
+                    "ts=%llu\n", i,
+                    (unsigned long long)pending[i].host_monotonic_ns,
+                    pending[i].event_type, pending[i].transaction_id,
                     pending[i].fpga_state, pending[i].epoch_id,
                     pending[i].flags, pending[i].error_code,
                     pending[i].rfic_status,
                     (unsigned long long)pending[i].fpga_timestamp);
         }
+        dump_captured_events(&live);
         status = BLADERF_ERR_TIMEOUT;
         stop_stream(&live, stream_thread);
         goto cleanup;
@@ -488,6 +593,10 @@ int main(void)
 
     /* Same-value configuration still invalidates a prior RX certificate. */
     fprintf(stderr, "issuing invalidating gain setter\n");
+    unsigned int invalidation_event_only_before =
+        atomic_load(&live.event_only_callbacks);
+    unsigned int invalidation_withheld_before =
+        atomic_load(&live.data_withheld_events);
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
     /* Make the host-revoke/FPGA-ABORT window deterministic. Async callbacks
      * must switch to event-only before the delayed NIOS control command. */
@@ -514,30 +623,28 @@ int main(void)
             "250ms ABORT delay=0\n");
 #endif
     fprintf(stderr, "gain setter returned %d\n", status);
-    if (status != 0 ||
-        !wait_for_count(&live.event_only_callbacks, 2, 3000)) {
-        fprintf(stderr, "invalidation did not withhold async IQ: %s\n",
+    if (status != 0) {
+        fprintf(stderr, "gain invalidation failed: %s\n",
                 bladerf_strerror(status));
-        status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
         stop_stream(&live, stream_thread);
         goto cleanup;
     }
-    fprintf(stderr, "event-only callbacks after invalidation: %u\n",
-            atomic_load(&live.event_only_callbacks));
-    if (atomic_load(&live.data_withheld_events) == 0) {
-        fprintf(stderr, "native RX_DATA_WITHHELD event was not observed\n");
-        status = BLADERF_ERR_UNEXPECTED;
-        stop_stream(&live, stream_thread);
-        goto cleanup;
-    }
-
     unsigned int valid_before = atomic_load(&live.valid_callbacks);
     status = event_transition(live.dev, 1835400000ULL,
                               live.transition_channel, &event);
     if (status != 0 ||
+        !wait_for_count(&live.event_only_callbacks,
+                        invalidation_event_only_before + 1, 3000) ||
+        !wait_for_count(&live.data_withheld_events,
+                        invalidation_withheld_before + 1, 3000) ||
         !wait_for_count(&live.valid_callbacks, valid_before + 2, 3000)) {
-        fprintf(stderr, "new async epoch did not restore callback IQ: %s\n",
-                bladerf_strerror(status));
+        fprintf(stderr, "async RX did not withhold and recover around "
+                "retune: %s (event_only=%u withheld=%u valid=%u)\n",
+                bladerf_strerror(status),
+                atomic_load(&live.event_only_callbacks),
+                atomic_load(&live.data_withheld_events),
+                atomic_load(&live.valid_callbacks));
+        dump_captured_events(&live);
         status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
         stop_stream(&live, stream_thread);
         goto cleanup;
@@ -554,19 +661,20 @@ int main(void)
      * moving. Resuming callback polling must report the missing cursor range. */
     atomic_store(&live.pause_event_poll, true);
     unsigned int wrap_valid_target = atomic_load(&live.valid_callbacks);
-    unsigned int wrap_event_target = atomic_load(&live.event_only_callbacks);
     for (unsigned int i = 0; i < cross_band_cycles; ++i) {
         status = bladerf_set_gain(live.dev, live.transition_channel, 30);
-        if (status != 0 ||
-            !wait_for_count(&live.event_only_callbacks, ++wrap_event_target,
-                            3000)) {
+        if (status != 0) {
             fprintf(stderr, "ring-wrap invalidation %u failed: %s\n", i,
                     bladerf_strerror(status));
             status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
             stop_stream(&live, stream_thread);
             goto cleanup;
         }
-        /* Alternate VCO bands on every transition: 947.5 MHz and 1835 MHz. */
+        /* Do not wait for an async callback to acknowledge the invalid
+         * interval: no RF IQ may be available to complete the current USB
+         * transfer. Start the causally required recovery transition as soon
+         * as the invalidating setter returns. Alternate VCO bands on every
+         * transition: 947.5 MHz and 1835 MHz. */
         const uint64_t target_frequency = (i % 2) == 0 ?
             947500000ULL : 1835000000ULL;
         const uint32_t previous_transaction_id = event.transaction_id;
@@ -584,8 +692,14 @@ int main(void)
         }
         if (status != 0 ||
             !wait_for_count(&live.valid_callbacks, ++wrap_valid_target, 3000)) {
-            fprintf(stderr, "ring-wrap recovery %u failed: %s\n", i,
-                    bladerf_strerror(status));
+            fprintf(stderr, "ring-wrap recovery %u failed: %s "
+                    "(valid=%u event_only=%u withheld=%u overrun=%u)\n", i,
+                    bladerf_strerror(status),
+                    atomic_load(&live.valid_callbacks),
+                    atomic_load(&live.event_only_callbacks),
+                    atomic_load(&live.data_withheld_events),
+                    atomic_load(&live.stream_overrun_events));
+            dump_event_history(&live);
             status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
             stop_stream(&live, stream_thread);
             goto cleanup;
@@ -602,12 +716,9 @@ int main(void)
     /* Trigger a callback-side read after wrap; it must surface an incomplete
      * cursor rather than silently treating the retained tail as complete. */
     atomic_store(&live.pause_event_poll, false);
-    status = bladerf_set_gain(live.dev, live.transition_channel, 30);
-    if (status != 0 ||
-        !wait_for_count(&live.event_history_gaps, 1, 3000)) {
-        fprintf(stderr, "callback did not report overwritten RF history: %s\n",
-                bladerf_strerror(status));
-        status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    if (!wait_for_count(&live.event_history_gaps, 1, 3000)) {
+        fprintf(stderr, "callback did not report overwritten RF history\n");
+        status = BLADERF_ERR_UNEXPECTED;
         stop_stream(&live, stream_thread);
         goto cleanup;
     }
