@@ -284,6 +284,37 @@ static int _bladerf2_initialize(struct bladerf *dev)
     return 0;
 }
 
+/* Detect epoch-tag support only after stale scheduled-retune cleanup. Once
+ * enabled, RX starts uncertified and all host IQ admission requires a later
+ * event-confirmed transition. */
+static int bladerf2_rx_epoch_contract_probe(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t status_word = 0;
+    bool supported = false;
+    int status = nios_rx_epoch_status_read(dev, &status_word);
+
+    if (status == 0) {
+        supported = (status_word &
+                     NIOS_PKT_8x32_RX_EPOCH_STATUS_META_ENABLED) != 0;
+    } else if (status != BLADERF_ERR_UNSUPPORTED) {
+        return status;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->rf_transition_epoch_contract_enabled = supported;
+    board_data->rf_transition_epoch_certified = false;
+    board_data->rf_transition_first_valid_timestamp = 0;
+    if (supported) {
+        board_data->rf_transition_epoch_id = (uint8_t)(
+            (status_word >> NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_SHIFT) &
+            NIOS_PKT_8x32_RX_EPOCH_STATUS_EPOCH_ID_MASK);
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    return 0;
+}
+
 
 /******************************************************************************
  *                        Generic Board Functions                             *
@@ -638,6 +669,8 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
             }
         }
     }
+
+    CHECK_STATUS(bladerf2_rx_epoch_contract_probe(dev));
 
     return 0;
 }
@@ -3208,6 +3241,7 @@ static bool bladerf2_tx_note_first_data_admitted(
 
 static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
 {
+    int status;
     if (dev == NULL || dev->board_data == NULL) {
         return false;
     }
@@ -3216,8 +3250,78 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
      * observation. Do not terminate an async stream in that narrow initial
      * state; wait for the positive status event. Faulted/revoked states are
      * rejected immediately, and timeout remains a failure-only watchdog. */
-    if (bladerf2_tx_wait_for_validity(
-            dev, BLADERF2_TX_VALIDITY_WAIT_TIMEOUT_MS) != 0) {
+    status = bladerf2_tx_wait_for_validity(
+        dev, BLADERF2_TX_VALIDITY_WAIT_TIMEOUT_MS);
+    if (status != 0) {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        bool link_certified;
+        bool rfic_certified;
+        bool frequency_model_valid;
+        bool stream_faulted;
+        bool transport_faulted;
+        bool gate_abort_pending;
+        bool retune_applied_waiting;
+        bool gate_release_requested;
+        unsigned int pending_retunes;
+        bool completion_faulted;
+        char monitor_stage[sizeof(board_data->rx_fault_monitor_stage)] = {0};
+        bool tx_direction_on;
+        uint8_t tx_channel_mask;
+        bool tx_frequency_reconfigure_active;
+        bool tx_rf_config_operation_active;
+        bool rf_transition_pending;
+        bool rf_transition_setter_active;
+        int board_state;
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        link_certified = board_data->tx_async_link_certified;
+        rfic_certified = board_data->tx_async_rfic_state_certified;
+        frequency_model_valid = bladerf2_rfic_frequency_model_valid(
+            board_data->rfic_reference_clock_known,
+            board_data->rfic_frequency_model_known);
+        stream_faulted = board_data->tx_stream_faulted_async;
+        transport_faulted = board_data->tx_async_transport_faulted;
+        gate_abort_pending = board_data->tx_gate_abort_pending;
+        retune_applied_waiting =
+            board_data->tx_retune2_applied_waiting_rf_valid;
+        gate_release_requested =
+            board_data->tx_retune_gate_release_requested;
+        pending_retunes = board_data->tx_retune2_pending_count;
+        completion_faulted = board_data->tx_retune2_completion_faulted;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        MUTEX_LOCK(&dev->lock);
+        tx_direction_on = board_data->rf_link_dir_on[1];
+        tx_channel_mask = board_data->tx_channel_enable_mask;
+        tx_frequency_reconfigure_active =
+            board_data->tx_frequency_reconfigure_active;
+        tx_rf_config_operation_active =
+            board_data->tx_rf_config_operation_active;
+        rf_transition_pending = board_data->rf_transition_pending;
+        rf_transition_setter_active =
+            board_data->rf_transition_setter_active;
+        board_state = board_data->state;
+        MUTEX_UNLOCK(&dev->lock);
+        if (board_data->rx_fault_monitor_sync_initialized) {
+            MUTEX_LOCK(&board_data->rx_fault_monitor_lock);
+            memcpy(monitor_stage, board_data->rx_fault_monitor_stage,
+                   sizeof(monitor_stage));
+            MUTEX_UNLOCK(&board_data->rx_fault_monitor_lock);
+        }
+        log_warning("Async TX validity wait failed: %s (link=%u rfic=%u "
+                    "frequency_model=%u stream_fault=%u transport_fault=%u "
+                    "gate_abort=%u applied_waiting=%u release_requested=%u "
+                    "queued=%u completion_fault=%u tx_direction=%u "
+                    "tx_mask=0x%x tune_active=%u config_active=%u "
+                    "rx_transition=%u setter_active=%u board_state=%u "
+                    "monitor_stage=%s)\n",
+                    bladerf_strerror(status), link_certified, rfic_certified,
+                    frequency_model_valid, stream_faulted, transport_faulted,
+                    gate_abort_pending, retune_applied_waiting,
+                    gate_release_requested, pending_retunes, completion_faulted,
+                    tx_direction_on, tx_channel_mask,
+                    tx_frequency_reconfigure_active,
+                    tx_rf_config_operation_active, rf_transition_pending,
+                    rf_transition_setter_active, board_state,
+                    monitor_stage[0] != '\0' ? monitor_stage : "not-started");
         return false;
     }
     return true;
@@ -4909,6 +5013,7 @@ static int bladerf2_stream(struct bladerf_stream *stream,
     bool epoch_contract_enabled = false;
     bool rx_x2_layout_required = false;
     bool rx_layout_unsupported = false;
+    bool tx_data_already_admitted = false;
     bool epochless_rx_format =
         dir == BLADERF_RX &&
         !metadata_rx_format_has_epoch_tag(stream->format);
@@ -4935,6 +5040,11 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             rx_x2_layout_required =
                 board_data->rf_transition_rx_x2_host_data_required;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        } else {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            tx_data_already_admitted =
+                board_data->tx_first_data_admitted;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         }
 
         if (dir == BLADERF_RX &&
@@ -4948,10 +5058,16 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             rv = 0;
         }
         if (rv == 0) {
-            /* Format GPIOs are shared with RX; fence TX before either
-             * direction changes its asynchronous stream format. */
-            CHECK_STATUS_LOCKED(
-                bladerf2_tx_config_change_begin(stream->dev));
+            /* No TX samples can be in flight before the first buffer is
+             * admitted in a link epoch. Initial async stream setup occurs
+             * after module enable; fencing here would revoke that fresh
+             * epoch before the first callback can submit data. Once a buffer
+             * has been admitted, format changes still fence TX before
+             * touching the shared GPIOs. */
+            if (dir == BLADERF_TX && tx_data_already_admitted) {
+                CHECK_STATUS_LOCKED(
+                    bladerf2_tx_config_change_begin(stream->dev));
+            }
             CHECK_STATUS_LOCKED(
                 perform_format_config(stream->dev, dir, stream->format));
             if (epochless_rx_format) {
@@ -4962,6 +5078,19 @@ static int bladerf2_stream(struct bladerf_stream *stream,
             }
         }
     });
+
+    /* bladerf_stream() reserves RX validity before entering this blocking
+     * board callback because format GPIOs are shared by RX and TX. The
+     * reservation protects perform_format_config(), but must not span
+     * async_run_stream(): TX's RFIC validity monitor is gated while an RX
+     * configuration setter is active, and the first async TX buffer waits
+     * for that monitor before it can be submitted. Release after the format
+     * change is committed and before the worker starts. The generic wrapper's
+     * completion callback remains an idempotent fallback on return/error. */
+    if (rv == 0 && stream->dev->board->rx_reconfigure_complete != NULL) {
+        stream->dev->board->rx_reconfigure_complete(
+            stream->dev, BLADERF_CHANNEL_RX(0));
+    }
 
     if (rx_layout_unsupported) {
         bladerf2_rx_layout_unsupported(stream->dev, layout, true);
@@ -5554,6 +5683,7 @@ static int bladerf2_load_fpga(struct bladerf *dev,
     board_data->state = STATE_FPGA_LOADED;
 
     CHECK_STATUS(_bladerf2_initialize(dev));
+    CHECK_STATUS(bladerf2_rx_epoch_contract_probe(dev));
 
     return 0;
 }

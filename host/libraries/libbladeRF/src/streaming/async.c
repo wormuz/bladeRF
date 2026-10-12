@@ -272,8 +272,30 @@ int async_tx_buffer_validate(struct bladerf_stream *stream,
         return 0;
     }
 
+    /* A blocking first-buffer validation may have waited for the initial TX
+     * RFIC certificate. That positive transition can advance the admission
+     * generation while async_tx_buffer_valid() is waiting, so the snapshot
+     * taken by the callback before entering this helper is stale by design.
+     * Anchor timestamp validation to the current generation, recheck validity
+     * against it, and confirm it stayed stable across that recheck. Any later
+     * revocation still changes the generation and is caught below. */
     state_before = stream->state;
     generation_before = stream->tx_admission_generation;
+    if (stream->dev->board != NULL &&
+        stream->dev->board->tx_async_buffer_generation != NULL) {
+        generation_before =
+            stream->dev->board->tx_async_buffer_generation(stream->dev);
+        stream->tx_admission_generation = generation_before;
+    }
+    if (!async_tx_buffer_valid_now(stream)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    if (stream->dev->board != NULL &&
+        stream->dev->board->tx_async_buffer_generation != NULL &&
+        generation_before != stream->dev->board->tx_async_buffer_generation(
+            stream->dev)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
     MUTEX_UNLOCK(&stream->lock);
     status = stream->dev->board->tx_async_buffer_timestamp_check(
         stream->dev, stream->format, metadata, buffer, length);

@@ -110,8 +110,9 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
             }
         }
         atomic_fetch_add(&live->event_only_callbacks, 1);
-        /* The library recycles the withheld transfer after this wakeup. */
-        return live->buffers[0];
+        /* This wakeup consumed no caller buffer; recycle the withheld USB
+         * transfer instead of handing the backend an unrelated buffer. */
+        return BLADERF_STREAM_REUSE_BUFFER;
     }
     if (samples == NULL) {
         return BLADERF_STREAM_SHUTDOWN;
@@ -383,16 +384,11 @@ int main(void)
     if (status == 0 && live.active_mode != LIVE_RX_ACTIVE_RX1) {
         status = bladerf_enable_module(live.dev, BLADERF_CHANNEL_RX(1), true);
     }
-    if (status == 0) {
-        status = event_transition(live.dev, 1835000000ULL,
-                                  live.transition_channel, &event);
-    }
     if (status != 0) {
-        fprintf(stderr, "async RX setup/initial transition: %s\n",
+        fprintf(stderr, "async RX setup: %s\n",
                 bladerf_strerror(status));
         goto cleanup;
     }
-    fprintf(stderr, "initial epoch certified: %u\n", event.epoch_id);
 
     if (pthread_create(&stream_thread, NULL, run_stream, &live) != 0) {
         fprintf(stderr, "pthread_create failed\n");
@@ -400,6 +396,28 @@ int main(void)
         goto cleanup;
     }
     fprintf(stderr, "async stream started\n");
+    /* Start the async RX worker before certifying the epoch. Stream startup
+     * applies shared format GPIOs and invalidates any earlier RX certificate;
+     * keep the worker running so the transition can observe first valid host
+     * data without invalidating itself afterward. */
+    if (!wait_for_count(&live.event_only_callbacks, 1, 3000)) {
+        fprintf(stderr, "async RX worker did not reach event-only state\n");
+        status = BLADERF_ERR_TIMEOUT;
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    status = event_transition(live.dev, 1835000000ULL,
+                              live.transition_channel, &event);
+    if (status != 0) {
+        fprintf(stderr, "async RX initial transition: %s\n",
+                bladerf_strerror(status));
+        stop_stream(&live, stream_thread);
+        goto cleanup;
+    }
+    fprintf(stderr, "initial epoch certified: %u first_valid_timestamp=%llu "
+            "event_type=%u state=%u\n", event.epoch_id,
+            (unsigned long long)event.fpga_timestamp, event.event_type,
+            event.fpga_state);
     if (!wait_for_count(&live.valid_callbacks, 2, 3000)) {
         struct bladerf_rf_event pending[BLADERF_RF_EVENT_HISTORY_SIZE];
         uint32_t pending_count = 0;
@@ -416,9 +434,10 @@ int main(void)
                 history_complete);
         for (uint32_t i = 0; i < pending_count; ++i) {
             fprintf(stderr, "  event type=%u state=%u epoch=%u flags=0x%x "
-                    "error=%d ts=%llu\n", pending[i].event_type,
+                    "error=%d rfic=0x%x ts=%llu\n", pending[i].event_type,
                     pending[i].fpga_state, pending[i].epoch_id,
                     pending[i].flags, pending[i].error_code,
+                    pending[i].rfic_status,
                     (unsigned long long)pending[i].fpga_timestamp);
         }
         status = BLADERF_ERR_TIMEOUT;

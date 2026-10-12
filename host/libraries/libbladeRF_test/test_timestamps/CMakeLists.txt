@@ -80,6 +80,13 @@ endif(MSVC)
 add_executable(libbladeRF_test_txrx_hwloop ${SRC})
 target_link_libraries(libbladeRF_test_txrx_hwloop ${LIBS})
 
+add_executable(libbladeRF_test_tx_timestamp_wrap
+               src/test_tx_timestamp_wrap.c)
+target_include_directories(libbladeRF_test_tx_timestamp_wrap PRIVATE
+    ${BLADERF_HOST_COMMON_INCLUDE_DIRS}
+    ${libbladeRF_SOURCE_DIR}/include
+    ${libbladeRF_SOURCE_DIR}/src/streaming)
+
 configure_file(scripts/test_txrx_hwloop.py
                ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/libbladeRF_test_txrx_hwloop.py
                FILE_PERMISSIONS OWNER_EXECUTE OWNER_READ
