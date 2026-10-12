@@ -1066,7 +1066,16 @@ begin
                     if( fifo_current.samples_left = 0 ) then
                         fifo_future.samples_left <= NUM_STREAMS - 1;
                     else
-                        fifo_future.samples_left <= fifo_current.samples_left - 1;
+                        -- With one or two streams, this branch can only
+                        -- observe samples_left = 1: the packet reader cycles
+                        -- between 0 and NUM_STREAMS-1. Spell out that state
+                        -- transition instead of synthesizing a natural-width
+                        -- decrement on the TX sample path.
+                        if( NUM_STREAMS <= 2 ) then
+                            fifo_future.samples_left <= 0;
+                        else
+                            fifo_future.samples_left <= fifo_current.samples_left - 1;
+                        end if;
                     end if;
                 end if;
 
@@ -1110,7 +1119,14 @@ begin
                             --   Add the number of enabled channels to each channel's offset index.
                             --   This points that channel to the next valid sample in the current fifo_data.
                             fifo_future.ch_shift     <= fifo_current.ch_shift + fifo_current.enabled_channels;
-                            fifo_future.samples_left <= fifo_current.samples_left - 1;
+                            -- For one or two streams, the nonzero branch is
+                            -- exactly the 1 -> 0 transition. Preserve the
+                            -- general decrement for wider configurations.
+                            if( NUM_STREAMS <= 2 ) then
+                                fifo_future.samples_left <= 0;
+                            else
+                                fifo_future.samples_left <= fifo_current.samples_left - 1;
+                            end if;
                         end if;
 
                         if( FIFO_FSM_RESET_VALUE.downcount /= 0 ) then
