@@ -420,13 +420,20 @@ begin
             end if;
 
             -- Do the loopback
-            for i in loopback_streams'range loop
-                if( eight_bit_mode_en = '0' ) then
-                    offset := loopdata'length - (remaining*32);
-                else
-                    offset := loopdata'length - (remaining*16);
-                end if;
+            -- Compute the first unread sample position once. Recomputing it
+            -- from `remaining` for every channel made an earlier channel's
+            -- enable feed a decrement, a stride multiply, and this channel's
+            -- dynamic bit select in the same cycle. Advance the bit offset
+            -- only when a sample is actually emitted; this preserves the
+            -- FIFO ordering and removes the remaining-count arithmetic from
+            -- the next channel's offset calculation.
+            if( eight_bit_mode_en = '0' ) then
+                offset := loopdata'length - (remaining*32);
+            else
+                offset := loopdata'length - (remaining*16);
+            end if;
 
+            for i in loopback_streams'range loop
                 if( adc_controls(i).enable = '1' and remaining > 0 ) then
                     if( eight_bit_mode_en = '0' ) then
                         loopback_streams(i).data_i <=
@@ -448,8 +455,16 @@ begin
 
                     loopback_streams(i).data_v <= '1';
 
-                    -- Shift our loopdata index
+                    -- Advance to the next unread sample in the packed FIFO
+                    -- word. The previous implementation recomputed this
+                    -- offset from the decremented remaining count on every
+                    -- iteration.
                     if( remaining > 0 ) then
+                        if( eight_bit_mode_en = '0' ) then
+                            offset := offset + 32;
+                        else
+                            offset := offset + 16;
+                        end if;
                         remaining := remaining - 1;
                     end if;
                 end if;
