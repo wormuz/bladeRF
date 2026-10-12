@@ -700,18 +700,27 @@ static void bladerf2_close(struct bladerf *dev)
             }
 
             if (board_data->state >= STATE_INITIALIZED && rfic != NULL) {
+                int standby_status;
+
                 log_debug("bladerf2_close: RFIC standby begin\n");
                 if (board_data->rfic_reset_on_close) {
                     /* We need to fully de-initialize the RFIC, so it can be
                      * reset on the next open. This seems to be necessary after
                      * doing direct SPI control of the RFIC.
                      */
-                    rfic->deinitialize(dev);
+                    standby_status = rfic->deinitialize(dev);
                 } else {
                     /* Put the RFIC into standby mode. This will shut down any
                      * current RF activity, but it will not lose the RF state.
                      */
-                    rfic->standby(dev);
+                    standby_status = rfic->standby(dev);
+                }
+                if (standby_status != 0) {
+                    log_error("%s: RFIC %s failed during close: %s\n",
+                              __FUNCTION__,
+                              board_data->rfic_reset_on_close
+                                  ? "deinitialization" : "standby",
+                              bladerf_strerror(standby_status));
                 }
                 log_debug("bladerf2_close: RFIC standby complete\n");
             }
@@ -5151,7 +5160,12 @@ static int bladerf2_load_fpga(struct bladerf *dev,
                  * RX data. Keep the handle open for cleanup/reload, but block
                  * normal FPGA-dependent operations. */
                 if (rfic != NULL && rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
-                    rfic->standby(dev);
+                    int standby_status = rfic->standby(dev);
+                    if (standby_status != 0) {
+                        log_error("Failed to place RFIC in standby after RX "
+                                  "fault monitor restart failure: %s\n",
+                                  bladerf_strerror(standby_status));
+                    }
                 }
                 board_data->state = STATE_FIRMWARE_LOADED;
                 log_error("Failed to restart RX fault monitor after FPGA "
