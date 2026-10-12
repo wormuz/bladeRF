@@ -85,18 +85,34 @@ architecture rtl of tx_retune_gate is
         left_ts  : unsigned(63 downto 0);
         right_ts : unsigned(63 downto 0)
     ) return boolean is
+        variable hi_gt   : boolean;
+        variable hi_eq   : boolean;
+        variable mid_gt  : boolean;
+        variable mid_eq  : boolean;
+        variable low_gt  : boolean;
+        variable low_eq  : boolean;
+        variable tail_gt : boolean;
     begin
         if left_ts(63) /= right_ts(63) then
             return left_ts(63) = '0';
         end if;
 
-        return (left_ts(62 downto 48) > right_ts(62 downto 48)) or
-               ((left_ts(62 downto 48) = right_ts(62 downto 48)) and
-                ((left_ts(47 downto 32) > right_ts(47 downto 32)) or
-                 ((left_ts(47 downto 32) = right_ts(47 downto 32)) and
-                  ((left_ts(31 downto 16) > right_ts(31 downto 16)) or
-                   ((left_ts(31 downto 16) = right_ts(31 downto 16)) and
-                    (left_ts(15 downto 0) > right_ts(15 downto 0)))))));
+        -- Evaluate all word comparisons in parallel, then combine their
+        -- lexicographic result. The nested form serialized three wide
+        -- equality/greater-than decisions into target_bank_select_i; STA
+        -- measured that path at -0.602 ns in the 8 ns pll_sclk domain.
+        hi_gt   := left_ts(62 downto 48) > right_ts(62 downto 48);
+        hi_eq   := left_ts(62 downto 48) = right_ts(62 downto 48);
+        mid_gt  := left_ts(47 downto 32) > right_ts(47 downto 32);
+        mid_eq  := left_ts(47 downto 32) = right_ts(47 downto 32);
+        low_gt  := left_ts(31 downto 16) > right_ts(31 downto 16);
+        low_eq  := left_ts(31 downto 16) = right_ts(31 downto 16);
+        tail_gt := left_ts(15 downto 0) > right_ts(15 downto 0);
+
+        return hi_gt or
+               (hi_eq and mid_gt) or
+               (hi_eq and mid_eq and low_gt) or
+               (hi_eq and mid_eq and low_eq and tail_gt);
     end function;
 begin
     -- Compare each target bank in parallel and select the one-bit result.
@@ -250,4 +266,35 @@ begin
     muted <= muted_i;
     mute_start_timestamp <= mute_start_timestamp_i;
     muted_sample_count <= muted_sample_count_i;
+end architecture;
+
+-- Convert the stretched FIFO underflow indication into a single event pulse.
+-- fifo_reader intentionally holds its LED output high for many cycles; the
+-- TX recovery gate must not interpret that display interval as repeated
+-- aborts that override the host's next ARM.
+library ieee;
+    use ieee.std_logic_1164.all;
+
+entity tx_underflow_event_pulse is
+    port (
+        clock          : in  std_logic;
+        reset          : in  std_logic;
+        underflow_level: in  std_logic;
+        pulse          : out std_logic
+    );
+end entity;
+
+architecture rtl of tx_underflow_event_pulse is
+    signal previous_level : std_logic := '0';
+begin
+    edge_detect : process(clock, reset)
+    begin
+        if reset = '1' then
+            previous_level <= '0';
+            pulse <= '0';
+        elsif rising_edge(clock) then
+            pulse <= underflow_level and not previous_level;
+            previous_level <= underflow_level;
+        end if;
+    end process;
 end architecture;

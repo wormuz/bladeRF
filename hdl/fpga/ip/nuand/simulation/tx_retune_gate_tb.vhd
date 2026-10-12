@@ -13,7 +13,8 @@ architecture test of tx_retune_gate_tb is
     signal clock : std_logic := '0';
     signal reset : std_logic := '1';
     signal timestamp : unsigned(63 downto 0) := (others => '0');
-    signal arm, immediate, complete, abort, underflow_event : std_logic := '0';
+    signal arm, immediate, complete, abort : std_logic := '0';
+    signal underflow_level, underflow_pulse : std_logic := '0';
     signal target_timestamp : unsigned(63 downto 0) := (others => '0');
     signal samples_in : sample_streams_t(0 to 1) := (others => (
         data_i => to_signed(1234, 16),
@@ -27,6 +28,14 @@ architecture test of tx_retune_gate_tb is
 begin
     clock <= not clock after 5 ns;
 
+    underflow_event_pulse : entity work.tx_underflow_event_pulse
+        port map (
+            clock => clock,
+            reset => reset,
+            underflow_level => underflow_level,
+            pulse => underflow_pulse
+        );
+
     dut : entity work.tx_retune_gate
         generic map (NUM_STREAMS => 2)
         port map (
@@ -38,7 +47,7 @@ begin
             target_timestamp => target_timestamp,
             complete => complete,
             abort => abort,
-            underflow => underflow_event,
+            underflow => underflow_pulse,
             in_samples => samples_in,
             out_samples => samples_out,
             state => state,
@@ -256,12 +265,14 @@ begin
             report "TX gate failed to resume after wraparound test"
             severity failure;
 
-        -- The TX integration ORs FIFO underflow into ABORT so DAC muting
-        -- does not wait for the host's periodic status monitor.
-        underflow_event <= '1';
-        wait until rising_edge(clock);
+        -- fifo_reader stretches its underflow LED. The edge-pulse entity used
+        -- by tx.vhd must abort once, then permit a fresh ARM while the level
+        -- remains asserted for the rest of the display interval.
+        underflow_level <= '1';
+        for i in 0 to 2 loop
+            wait until rising_edge(clock);
+        end loop;
         wait for 1 ns;
-        underflow_event <= '0';
         assert state = "11" and muted = '1' and
                samples_out(0).data_i = to_signed(0, 16)
             report "TX abort did not fail closed" severity failure;
@@ -280,6 +291,14 @@ begin
                samples_out(0).data_i = to_signed(0, 16)
             report "TX gate recovery ARM reopened output before completion"
             severity failure;
+        for i in 0 to 3 loop
+            wait until rising_edge(clock);
+        end loop;
+        wait for 1 ns;
+        assert state = "10" and muted = '1' and underflow_pulse = '0'
+            report "stretched underflow level re-aborted TX recovery"
+            severity failure;
+        underflow_level <= '0';
         timestamp <= unsigned'(x"ffffffffffffffff");
         wait for 1 ns;
         assert muted = '1' report "TX gate unmuted during recovery"

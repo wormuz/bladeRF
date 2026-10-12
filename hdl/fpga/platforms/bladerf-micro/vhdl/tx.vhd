@@ -130,6 +130,7 @@ architecture arch of tx is
     signal sample_fifo_holdoff_i          : std_logic;
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
     signal tx_underflow_event              : std_logic := '0';
+    signal tx_underflow_abort              : std_logic := '0';
     signal retune_gate_state               : unsigned(1 downto 0);
     signal retune_gate_arm_ack_seen        : std_logic := '0';
     signal retune_gate_muted               : std_logic;
@@ -142,6 +143,17 @@ architecture arch of tx is
     signal retune_gate_resume_seen         : std_logic := '0';
 
 begin
+
+    -- fifo_reader stretches the underflow LED for visibility. The gate gets
+    -- only the first event pulse so the display interval cannot keep
+    -- overriding a recovery ARM.
+    U_tx_underflow_event_pulse : entity work.tx_underflow_event_pulse
+        port map (
+            clock => tx_clock,
+            reset => tx_reset,
+            underflow_level => tx_underflow_event,
+            pulse => tx_underflow_abort
+        );
 
     set_timestamp_reset : process(tx_clock, tx_reset)
     begin
@@ -312,10 +324,10 @@ begin
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
             complete             => retune_gate_complete,
-            -- FIFO starvation feeds the gate directly; the host monitor
-            -- publishes the durable event but is not on the mute path.
+            -- A one-clock underflow event feeds the gate directly; the
+            -- stretched underflow LED is only for front-panel visibility.
             abort                => retune_gate_abort,
-            underflow            => tx_underflow_event,
+            underflow            => tx_underflow_abort,
             in_samples           => dac_streams_raw,
             out_samples          => dac_streams,
             state                => retune_gate_state,
