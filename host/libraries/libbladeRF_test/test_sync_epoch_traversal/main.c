@@ -936,6 +936,8 @@ static void test_public_sync_apis_reject_null_device(void)
            BLADERF_ERR_INVAL);
     assert(bladerf_get_bandwidth(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
            BLADERF_ERR_INVAL);
+    assert(bladerf_set_bandwidth(NULL, BLADERF_CHANNEL_RX(0), 1, NULL) ==
+           BLADERF_ERR_INVAL);
     assert(bladerf_get_bandwidth_range(&dev, BLADERF_CHANNEL_RX(0), NULL) ==
            BLADERF_ERR_INVAL);
     assert(bladerf_get_frequency(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
@@ -947,6 +949,10 @@ static void test_public_sync_apis_reject_null_device(void)
     assert(bladerf_get_quick_tune(&dev, BLADERF_CHANNEL_TX(0), NULL) ==
            BLADERF_ERR_INVAL);
     assert(bladerf_get_loopback_modes(NULL, NULL) == BLADERF_ERR_INVAL);
+    assert(bladerf_set_rx_mux(NULL, BLADERF_RX_MUX_BASEBAND) ==
+           BLADERF_ERR_INVAL);
+    assert(bladerf_wishbone_master_write(NULL, 0, 0) == BLADERF_ERR_INVAL);
+    assert(bladerf_config_gpio_write(NULL, 0) == BLADERF_ERR_INVAL);
     assert(bladerf_get_loopback(&dev, NULL) == BLADERF_ERR_INVAL);
     assert(bladerf_get_correction(&dev, BLADERF_CHANNEL_RX(0),
                                   BLADERF_CORR_PHASE, NULL) ==

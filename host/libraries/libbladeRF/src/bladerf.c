@@ -1250,6 +1250,7 @@ int bladerf_set_bandwidth(struct bladerf *dev,
                           bladerf_bandwidth *actual)
 {
     int status;
+    CHECK_NULL(dev);
     if (!valid_public_channel(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -2509,6 +2510,7 @@ int bladerf_get_loopback(struct bladerf *dev, bladerf_loopback *l)
 int bladerf_set_rx_mux(struct bladerf *dev, bladerf_rx_mux mux)
 {
     int status;
+    CHECK_NULL(dev);
     switch (mux) {
         case BLADERF_RX_MUX_BASEBAND:
         case BLADERF_RX_MUX_12BIT_COUNTER:
@@ -2730,6 +2732,7 @@ int bladerf_wishbone_master_read(struct bladerf *dev, uint32_t addr, uint32_t *d
 int bladerf_wishbone_master_write(struct bladerf *dev, uint32_t addr, uint32_t data)
 {
     int status;
+    CHECK_NULL(dev);
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_WISHBONE);
     if (status != 0) {
@@ -2771,6 +2774,7 @@ int bladerf_config_gpio_read(struct bladerf *dev, uint32_t *val)
 int bladerf_config_gpio_write(struct bladerf *dev, uint32_t val)
 {
     int status;
+    CHECK_NULL(dev);
     status = invalidate_rx_data_before_reconfigure(
         dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_CONFIG_GPIO);
     if (status != 0) {
