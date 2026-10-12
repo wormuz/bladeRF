@@ -309,6 +309,14 @@ static inline struct queue_entry* peek_next_retune_offset(struct queue *q,
     }
 }
 
+static bool profile_slot_compare_owned(const struct queue_entry *entry)
+{
+    return entry != NULL &&
+           (entry->state == ENTRY_STATE_SCHEDULED ||
+            entry->state == ENTRY_STATE_CANCEL_PENDING ||
+            entry->state == ENTRY_STATE_READY);
+}
+
 static bool profile_slot_armed(const struct queue *q, uint8_t profile_num)
 {
     uint32_t i;
@@ -320,8 +328,7 @@ static bool profile_slot_armed(const struct queue *q, uint8_t profile_num)
     for (i = 0; i < q->count; i++) {
         const struct queue_entry *e =
             &q->entries[(q->rem_idx + i) & (RETUNE2_QUEUE_MAX - 1)];
-        if ((e->state == ENTRY_STATE_SCHEDULED ||
-             e->state == ENTRY_STATE_READY) &&
+        if (profile_slot_compare_owned(e) &&
             e->profile.profile_num == profile_num) {
             return true;
         }
@@ -367,15 +374,14 @@ static inline void profile_load_scheduled(struct queue *q,
         return;
     }
 
-    /* Slots named by armed or fired entries are live hardware state: their
-     * compare may still activate them before the queue head is retired. Keep
-     * those slots reserved while preloading later requests, otherwise a new
-     * request using the same RFFE slot overwrites the profile of an already
-     * scheduled retune. */
+    /* Slots named by armed, cancel-pending, or fired entries are live
+     * hardware state: their compare may still activate them before the queue
+     * head is retired. Keep those slots reserved while preloading later
+     * requests, otherwise a new request using the same RFFE slot overwrites
+     * the profile of a still-live timer compare. */
     for (i = 0; i < q->count; i++) {
         e = peek_next_retune_offset(q, i);
-        if (e != NULL && (e->state == ENTRY_STATE_SCHEDULED ||
-                          e->state == ENTRY_STATE_READY)) {
+        if (profile_slot_compare_owned(e)) {
             used |= 1u << e->profile.profile_num;
         }
     }

@@ -624,6 +624,104 @@ static int check_preload_preserves_scheduled_profile_slot(void)
     return 0;
 }
 
+static int check_cancel_pending_preserves_profile_slot(bladerf_module module)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile first = { 0 };
+    fastlock_profile later = { 0 };
+    struct queue *queue = module == BLADERF_MODULE_TX ? &tx_queue : &rx_queue;
+    fastlock_profile *profiles = module == BLADERF_MODULE_TX
+        ? fastlocks_tx : fastlocks_rx;
+    fastlock_profile *simulated_slots = module == BLADERF_MODULE_TX
+        ? simulated_rffe_tx : simulated_rffe_rx;
+    bool *simulated_valid = module == BLADERF_MODULE_TX
+        ? simulated_rffe_tx_valid : simulated_rffe_rx_valid;
+    uint8_t port = module == BLADERF_MODULE_TX ? 0x40 : 0x83;
+    uint8_t spdt = module == BLADERF_MODULE_TX ? 0xa0 : 0x05;
+    unsigned int loads_after_failure;
+
+    pkt_retune2_init();
+    memset(profiles, 0,
+           NUM_BBP_FASTLOCK_PROFILES * sizeof(*profiles));
+    memset(simulated_valid, 0,
+           NUM_RFFE_FASTLOCK_PROFILES * sizeof(*simulated_valid));
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    cancel_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    fail_tamer_read = false;
+    fail_tamer_schedule = true;
+    fail_tamer_cancel = true;
+    simulated_tamer_clock_stalled = true;
+    compare_fired_rx = false;
+    compare_fired_tx = false;
+
+    first.profile_num = 3;
+    first.state = FASTLOCK_STATE_BBP;
+    first.profile_data[0] = 0xa5;
+    later = first;
+    later.profile_data[0] = 0x5a;
+    if (enqueue_retune(queue, &first, 1, 100) != 1) {
+        fputs("failed to enqueue cancel-pending slot owner\n", stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    profile_load_scheduled(queue, module);
+    pkt_retune2_work();
+    if (queue->entries[queue->rem_idx].state !=
+            ENTRY_STATE_CANCEL_PENDING ||
+        !simulated_valid[3] || simulated_slots[3].profile_data[0] != 0xa5) {
+        fputs("failed schedule did not retain the physical slot owner\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    loads_after_failure = load_count;
+    if (enqueue_retune(queue, &later, 2, 200) != 2) {
+        fputs("failed to enqueue later cancel-pending slot collision\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+    profile_load_scheduled(queue, module);
+    if (load_count != loads_after_failure ||
+        simulated_slots[3].profile_data[0] != 0xa5) {
+        fputs("preload overwrote a CANCEL_PENDING compare's RFFE slot\n",
+              stderr);
+        track_rffe_fastlock_slots = false;
+        return 1;
+    }
+
+    profiles[0].profile_num = 0;
+    profiles[0].profile_data[0] = 0x33;
+    profiles[0].state = FASTLOCK_STATE_BBP;
+    nios_pkt_retune2_pack(request.req, module, NIOS_PKT_RETUNE2_NOW,
+                          0, 3, port, spdt);
+    pkt_retune2(&request);
+    fail_tamer_schedule = false;
+    fail_tamer_cancel = false;
+    simulated_tamer_clock_stalled = false;
+    track_rffe_fastlock_slots = false;
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        load_count != loads_after_failure || recall_count != 0 ||
+        simulated_slots[3].profile_data[0] != 0xa5) {
+        fputs("NOW retune overwrote a CANCEL_PENDING compare's RFFE slot\n",
+              stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_cancel_pending_preserves_profile_slot_rx_tx(void)
+{
+    return check_cancel_pending_preserves_profile_slot(BLADERF_MODULE_RX) == 0 &&
+           check_cancel_pending_preserves_profile_slot(BLADERF_MODULE_TX) == 0
+               ? 0 : 1;
+}
+
 static int check_lost_irq_recovers_from_fpga_event(void)
 {
     fastlock_profile profile = { 0 };
@@ -1241,6 +1339,9 @@ int main(void)
         return 1;
     }
     if (check_preload_preserves_scheduled_profile_slot() != 0) {
+        return 1;
+    }
+    if (check_cancel_pending_preserves_profile_slot_rx_tx() != 0) {
         return 1;
     }
     if (check_lost_irq_recovers_from_fpga_event() != 0) {
