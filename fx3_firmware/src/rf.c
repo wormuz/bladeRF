@@ -44,6 +44,39 @@ static int link_started = 0;
 
 static void NuandRFLinkStop(void);
 
+/* Put both RF directions into the known disabled state before resetting the
+ * FPGA sample pipeline. Continue through both enable writes even if an
+ * earlier GPIO operation fails, and return the first error to the caller. */
+static CyU3PReturnStatus_t NuandRFDisableModules(CyBool_t release_reset)
+{
+    CyU3PReturnStatus_t status;
+    CyU3PReturnStatus_t first_error = CY_U3P_SUCCESS;
+
+    status = CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
+    if (status != CY_U3P_SUCCESS) {
+        first_error = status;
+    }
+
+    status = CyU3PGpioSetValue(GPIO_RX_EN, CyFalse);
+    if (first_error == CY_U3P_SUCCESS && status != CY_U3P_SUCCESS) {
+        first_error = status;
+    }
+
+    status = CyU3PGpioSetValue(GPIO_TX_EN, CyFalse);
+    if (first_error == CY_U3P_SUCCESS && status != CY_U3P_SUCCESS) {
+        first_error = status;
+    }
+
+    if (release_reset) {
+        status = CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+        if (first_error == CY_U3P_SUCCESS && status != CY_U3P_SUCCESS) {
+            first_error = status;
+        }
+    }
+
+    return first_error;
+}
+
 void NuandRFLinkLoopBack(int lp) {
     loopback = lp;
 }
@@ -251,10 +284,12 @@ static void NuandRFLinkStart(void)
     NuandAllowSuspend(CyFalse);
     NuandGPIOReconfigure(CyTrue, CyTrue);
 
-    CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
-    CyU3PGpioSetValue(GPIO_RX_EN, CyFalse);
-    CyU3PGpioSetValue(GPIO_TX_EN, CyFalse);
-    CyU3PGpioSetValue(GPIO_SYS_RST, CyFalse);
+    apiRetStatus = NuandRFDisableModules(CyTrue);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        LOG_ERROR(apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+        return;
+    }
 
     apiRetStatus = NuandConfigureGpif(GPIF_CONFIG_RF_LINK);
     if (apiRetStatus != CY_U3P_SUCCESS) {
@@ -400,9 +435,12 @@ static void NuandRFLinkStop (void)
     }
     link_started = 0;
 
-    CyU3PGpioSetValue(GPIO_SYS_RST, CyTrue);
-    CyU3PGpioSetValue(GPIO_RX_EN, CyFalse);
-    CyU3PGpioSetValue(GPIO_TX_EN, CyFalse);
+    apiRetStatus = NuandRFDisableModules(CyFalse);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        LOG_ERROR(apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+        return;
+    }
 
     /* Abort and clear the channels before tearing them down. The FPGA keeps
      * pushing samples into PIB socket 0 right up to the GPIF shutdown below,
