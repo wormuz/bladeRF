@@ -499,7 +499,8 @@ static int usb_load_fpga(struct bladerf *dev, const uint8_t *image, size_t image
 
 static inline int perform_erase(struct bladerf *dev, uint16_t block)
 {
-    int status, erase_ret;
+    int status;
+    int32_t erase_ret;
     struct bladerf_usb *usb = dev->backend_data;
 
     status = usb->fn->control_transfer(usb->driver,
@@ -511,8 +512,17 @@ static inline int perform_erase(struct bladerf *dev, uint16_t block)
                                         &erase_ret, sizeof(erase_ret),
                                         FLASH_ERASE_TIMEOUT_MS);
 
+    if (status != 0) {
+        return status;
+    }
 
-    return status;
+    if (erase_ret != 0) {
+        log_error("Firmware failed to erase block %u: %d\n", block,
+                  erase_ret);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    return 0;
 }
 
 static int usb_erase_flash_blocks(struct bladerf *dev,
@@ -857,7 +867,8 @@ static int usb_write_otp(struct bladerf *dev, char *otp)
 
 static int usb_lock_otp(struct bladerf *dev)
 {
-    int status, restore_status, commit_status;
+    int status, restore_status;
+    int32_t commit_status = 0;
 
     status = change_setting(dev, USB_IF_SPI_FLASH);
     if (status) {
@@ -867,10 +878,9 @@ static int usb_lock_otp(struct bladerf *dev)
     status = vendor_cmd_int_windex(dev, BLADE_USB_CMD_LOCK_OTP,
                                    0, &commit_status);
 
-    if (commit_status != 0) {
+    if (status == 0 && commit_status != 0) {
         log_error("Failed to lock OTP, FW returned %d\n", commit_status);
-        if (status == 0)
-            status = commit_status;
+        status = BLADERF_ERR_UNEXPECTED;
     }
 
     restore_status = restore_post_flash_setting(dev);
@@ -943,18 +953,7 @@ static int usb_enable_module(struct bladerf *dev, bladerf_direction dir, bool en
                     enable ? "enabling" : "disabling",
                     (dir == BLADERF_RX) ? "RX" : "TX");
 
-        /* FIXME: Work around what seems to be a harmless failure.
-         *        It appears that in firmware or in the lib, we may be
-         *        attempting to disable an already disabled channel, or
-         *        enabling an already enabled channel.
-         *
-         *        Further investigation required
-         *
-         *        0x44 corresponds to CY_U3P_ERROR_ALREADY_STARTED
-         */
-        if (fx3_ret != 0x44) {
-            status = BLADERF_ERR_UNEXPECTED;
-        }
+        status = BLADERF_ERR_UNEXPECTED;
     }
 
     return status;
