@@ -89,9 +89,12 @@ int main(int argc, char **argv)
     for (uint32_t i = 0; i < event_count; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_FORMAT_UNSUPPORTED &&
             events[i].error_code == BLADERF_ERR_UNSUPPORTED) {
-            if (events[i].flags == BLADERF_FORMAT_SC16_Q11) {
+            const uint32_t format_flags = events[i].flags &
+                ~(BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+                  BLADERF_RF_EVENT_F_TRANSITION_RX2);
+            if (format_flags == BLADERF_FORMAT_SC16_Q11) {
                 format_event_count++;
-            } else if (events[i].flags == BLADERF_FORMAT_PACKET_META) {
+            } else if (format_flags == BLADERF_FORMAT_PACKET_META) {
                 packet_meta_event_count++;
             }
         }
@@ -120,7 +123,10 @@ int main(int argc, char **argv)
     bool withheld_event_found = false;
     for (uint32_t i = 0; i < event_count; ++i) {
         if (events[i].event_type == BLADERF_RF_EVT_RX_DATA_WITHHELD &&
-            (events[i].flags & ~BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID) ==
+            (events[i].flags &
+             ~(BLADERF_RF_EVENT_F_FPGA_TIMESTAMP_VALID |
+               BLADERF_RF_EVENT_F_TRANSITION_CHANNEL_VALID |
+               BLADERF_RF_EVENT_F_TRANSITION_RX2)) ==
                 BLADERF_RF_WITHHELD_EPOCH_UNCERTIFIED) {
             withheld_event_found = true;
             break;
