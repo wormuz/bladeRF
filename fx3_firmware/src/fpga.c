@@ -59,25 +59,34 @@ int FpgaBeginProgram(void)
 {
     CyBool_t value;
 
-    unsigned tEnd;
+    unsigned tStart;
     CyU3PReturnStatus_t apiRetStatus;
     apiRetStatus = CyU3PGpioSetValue(GPIO_nCONFIG, CyFalse);
     if (apiRetStatus != CY_U3P_SUCCESS) {
         return apiRetStatus;
     }
 
-    tEnd = CyU3PGetTime() + 10;
-    while (CyU3PGetTime() < tEnd);
+    tStart = CyU3PGetTime();
+    while ((unsigned)(CyU3PGetTime() - tStart) < 10);
     apiRetStatus = CyU3PGpioSetValue(GPIO_nCONFIG, CyTrue);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        return apiRetStatus;
+    }
 
-    tEnd = CyU3PGetTime() + 1000;
+    tStart = CyU3PGetTime();
     do {
         apiRetStatus = CyU3PGpioGetValue(GPIO_nSTATUS, &value);
-        if (CyU3PGetTime() > tEnd)
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            return apiRetStatus;
+        }
+        if (value) {
+            return 0;
+        }
+        if ((unsigned)(CyU3PGetTime() - tStart) >= 1000) {
             return -1;
-    } while (!value);
+        }
+    } while (1);
 
-    return 0;
 }
 
 void NuandFpgaConfigSwInit(void) {
