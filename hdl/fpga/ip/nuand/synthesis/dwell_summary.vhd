@@ -250,6 +250,34 @@ architecture arch of dwell_summary is
         return n;
     end function;
 
+    -- Parallel lexicographic compare for the instantaneous peak update.
+    -- The fitted dwell_summary path crossed this decision and the peak
+    -- register in the 8 ns pll_sclk domain; independent byte comparisons
+    -- avoid a single 32-bit comparator chain while preserving exact order.
+    function energy_gt( left_v : unsigned(31 downto 0);
+                        right_v : unsigned(31 downto 0) ) return boolean is
+        variable b3_gt : boolean;
+        variable b3_eq : boolean;
+        variable b2_gt : boolean;
+        variable b2_eq : boolean;
+        variable b1_gt : boolean;
+        variable b1_eq : boolean;
+        variable b0_gt : boolean;
+    begin
+        b3_gt := left_v(31 downto 24) > right_v(31 downto 24);
+        b3_eq := left_v(31 downto 24) = right_v(31 downto 24);
+        b2_gt := left_v(23 downto 16) > right_v(23 downto 16);
+        b2_eq := left_v(23 downto 16) = right_v(23 downto 16);
+        b1_gt := left_v(15 downto 8) > right_v(15 downto 8);
+        b1_eq := left_v(15 downto 8) = right_v(15 downto 8);
+        b0_gt := left_v(7 downto 0) > right_v(7 downto 0);
+
+        return b3_gt or
+               (b3_eq and b2_gt) or
+               (b3_eq and b2_eq and b1_gt) or
+               (b3_eq and b2_eq and b1_eq and b0_gt);
+    end function;
+
 begin
 
     -- Stage 1: instantaneous energy and clip detection.
@@ -622,7 +650,7 @@ begin
                     dwell_clips <= dwell_clips + 1;
                 end if;
 
-                if( inst_energy > dwell_peak ) then
+                if( energy_gt(inst_energy, dwell_peak) ) then
                     dwell_peak <= inst_energy;
                 end if;
 
