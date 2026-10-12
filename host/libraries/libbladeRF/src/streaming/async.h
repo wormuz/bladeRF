@@ -114,6 +114,8 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
 
 /* Returns false when native RF state revoked asynchronous TX validity. */
 bool async_tx_buffer_valid(struct bladerf_stream *stream);
+/* Query TX admission without waiting for RF certificate publication. */
+bool async_tx_buffer_valid_now(struct bladerf_stream *stream);
 
 /* Request backend-aware termination of an active stream. */
 int async_request_stream_shutdown(struct bladerf_stream *stream);

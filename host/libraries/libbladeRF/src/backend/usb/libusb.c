@@ -2016,7 +2016,8 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
          * immediately before handing the buffer to USB, rather than relying
          * only on async_submit_stream_buffer()'s pre-wait snapshot. */
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
-            !async_tx_buffer_valid(stream)) {
+            !(nonblock ? async_tx_buffer_valid_now(stream)
+                       : async_tx_buffer_valid(stream))) {
             /* The board-level admission may be revoked while this caller
              * waits for USB capacity. This is a retryable RF gate closure,
              * not a USB transport fault; sync TX returns WOULD_BLOCK to its

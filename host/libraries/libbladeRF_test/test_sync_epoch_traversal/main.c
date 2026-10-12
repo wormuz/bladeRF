@@ -112,6 +112,7 @@ static size_t test_tx_submitted_length;
 static const struct backend_fns test_tx_backend;
 static bool test_tx_buffer_valid = true;
 static unsigned int test_tx_validity_checks;
+static unsigned int test_tx_now_validity_checks;
 static unsigned int test_tx_invalidate_at_check;
 static uint32_t test_rx_mux_gpio_value;
 
@@ -426,7 +427,20 @@ static bool validate_async_tx_buffer(struct bladerf *dev)
     assert(dev != NULL);
     test_tx_validity_checks++;
     if (test_tx_invalidate_at_check != 0 &&
-        test_tx_validity_checks >= test_tx_invalidate_at_check) {
+        test_tx_validity_checks + test_tx_now_validity_checks >=
+            test_tx_invalidate_at_check) {
+        return false;
+    }
+    return test_tx_buffer_valid;
+}
+
+static bool validate_async_tx_buffer_now(struct bladerf *dev)
+{
+    assert(dev != NULL);
+    test_tx_now_validity_checks++;
+    if (test_tx_invalidate_at_check != 0 &&
+        test_tx_validity_checks + test_tx_now_validity_checks >=
+            test_tx_invalidate_at_check) {
         return false;
     }
     return test_tx_buffer_valid;
@@ -662,6 +676,7 @@ static void test_async_tx_submit_gate_closure_is_retryable(void)
     test_tx_buffer_valid = true;
     test_tx_invalidate_at_check = 0;
     test_tx_validity_checks = 0;
+    test_tx_now_validity_checks = 0;
 
     assert(MUTEX_INIT(&stream.lock) == 0);
     assert(COND_INIT(&stream.stream_started) == 0);
@@ -676,6 +691,7 @@ static void test_async_tx_submit_gate_closure_is_retryable(void)
     /* Admission closes between the initial snapshot and the final check. */
     test_tx_buffer_valid = true;
     test_tx_validity_checks = 0;
+    test_tx_now_validity_checks = 0;
     test_tx_invalidate_at_check = 2;
     assert(async_submit_stream_buffer(&stream, samples, &length, 0, true) ==
            BLADERF_ERR_WOULD_BLOCK);
@@ -704,6 +720,7 @@ static void test_async_tx_nonblocking_submit_does_not_wait_for_worker(void)
     test_tx_buffer_valid = true;
     test_tx_invalidate_at_check = 0;
     test_tx_validity_checks = 0;
+    test_tx_now_validity_checks = 0;
 
     assert(MUTEX_INIT(&stream.lock) == 0);
     assert(COND_INIT(&stream.stream_started) == 0);
@@ -713,6 +730,8 @@ static void test_async_tx_nonblocking_submit_does_not_wait_for_worker(void)
     assert(async_submit_stream_buffer(&stream, samples, &length, 0, true) ==
            BLADERF_ERR_WOULD_BLOCK);
     assert(test_tx_submit_calls == 0);
+    assert(test_tx_now_validity_checks == 1);
+    assert(test_tx_validity_checks == 0);
 
     assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
     assert(COND_DESTROY(&stream.stream_started) == 0);
@@ -1397,6 +1416,7 @@ static const struct board_fns test_async_board = {
     .rx_data_withheld = note_async_withheld,
     .rx_async_buffer_valid = validate_async_rx_buffer,
     .tx_async_buffer_valid = validate_async_tx_buffer,
+    .tx_async_buffer_valid_now = validate_async_tx_buffer_now,
     .tx_async_transport_failure = note_tx_transport_failure,
 };
 

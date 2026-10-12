@@ -3025,6 +3025,35 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
         dev, BLADERF2_TX_RFIC_CERT_WAIT_TIMEOUT_MS) == 0;
 }
 
+static bool bladerf2_tx_async_buffer_valid_now(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    bool frequency_model_valid;
+    bool admitted;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return false;
+    }
+
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    frequency_model_valid = bladerf2_rfic_frequency_model_valid(
+        board_data->rfic_reference_clock_known,
+        board_data->rfic_frequency_model_known);
+    admitted = bladerf2_tx_admission_allowed(
+        board_data->tx_async_link_certified,
+        board_data->tx_async_rfic_state_certified,
+        board_data->tx_stream_faulted_async,
+        board_data->tx_async_transport_faulted,
+        board_data->tx_gate_abort_pending,
+        board_data->tx_retune2_pending_count,
+        board_data->tx_retune2_completion_faulted,
+        frequency_model_valid);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    return admitted;
+}
+
 
 /******************************************************************************/
 /* RF ports */
@@ -5864,6 +5893,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.rx_data_withheld_at, bladerf2_rx_data_withheld_at),
     FIELD_INIT(.rx_async_buffer_valid, bladerf2_rx_async_buffer_valid),
     FIELD_INIT(.tx_async_buffer_valid, bladerf2_tx_async_buffer_valid),
+    FIELD_INIT(.tx_async_buffer_valid_now,
+               bladerf2_tx_async_buffer_valid_now),
     FIELD_INIT(.tx_async_transport_failure,
                bladerf2_tx_async_transport_failure),
     FIELD_INIT(.get_frequency_range, bladerf2_get_frequency_range),

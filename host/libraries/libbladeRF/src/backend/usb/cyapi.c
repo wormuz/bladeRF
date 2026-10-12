@@ -978,7 +978,8 @@ int cyapi_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
          * immediately before handing the buffer to USB, rather than relying
          * only on async_submit_stream_buffer()'s pre-wait snapshot. */
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
-            !async_tx_buffer_valid(stream)) {
+            !(nonblock ? async_tx_buffer_valid_now(stream)
+                       : async_tx_buffer_valid(stream))) {
             return BLADERF_ERR_WOULD_BLOCK;
         }
 

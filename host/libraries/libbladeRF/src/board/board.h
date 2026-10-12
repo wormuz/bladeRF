@@ -393,6 +393,8 @@ struct board_fns {
     /* Return false after native TX validity has been revoked so async TX
      * callbacks cannot continue re-queuing caller buffers. */
     bool (*tx_async_buffer_valid)(struct bladerf *dev);
+    /* Non-blocking TX certificate query used by non-blocking host submits. */
+    bool (*tx_async_buffer_valid_now)(struct bladerf *dev);
     /* Revoke TX transport validity after a terminal asynchronous stream error.
      * Called without dev->lock, including from USB callbacks. */
     void (*tx_async_transport_failure)(struct bladerf *dev, int error_code);

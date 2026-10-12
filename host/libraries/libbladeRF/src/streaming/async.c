@@ -236,6 +236,21 @@ bool async_tx_buffer_valid(struct bladerf_stream *stream)
     return stream->dev->board->tx_async_buffer_valid(stream->dev);
 }
 
+bool async_tx_buffer_valid_now(struct bladerf_stream *stream)
+{
+    if (stream == NULL ||
+        (stream->layout & BLADERF_DIRECTION_MASK) != BLADERF_TX ||
+        stream->dev == NULL || stream->dev->board == NULL) {
+        return true;
+    }
+
+    if (stream->dev->board->tx_async_buffer_valid_now != NULL) {
+        return stream->dev->board->tx_async_buffer_valid_now(stream->dev);
+    }
+
+    return async_tx_buffer_valid(stream);
+}
+
 int async_request_stream_shutdown(struct bladerf_stream *stream)
 {
     int status = 0;
@@ -639,7 +654,8 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
     MUTEX_LOCK(&stream->lock);
 
     if (buffer != BLADERF_STREAM_SHUTDOWN &&
-        !async_tx_buffer_valid(stream)) {
+        !(nonblock ? async_tx_buffer_valid_now(stream)
+                   : async_tx_buffer_valid(stream))) {
         status = BLADERF_ERR_WOULD_BLOCK;
         goto error;
     }
@@ -689,7 +705,8 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
     }
 
     if (buffer != BLADERF_STREAM_SHUTDOWN &&
-        !async_tx_buffer_valid(stream)) {
+        !(nonblock ? async_tx_buffer_valid_now(stream)
+                   : async_tx_buffer_valid(stream))) {
         status = BLADERF_ERR_WOULD_BLOCK;
         goto error;
     }
