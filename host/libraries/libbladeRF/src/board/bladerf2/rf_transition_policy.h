@@ -14,6 +14,15 @@ static inline bool bladerf2_rfic_frequency_model_valid(
     return reference_clock_known && rfic_clock_tree_known;
 }
 
+/* AD9361 RX1/RX2 manual LMT/full-gain controls (REG_RX1_MANUAL_LMT_FULL_GAIN
+ * and REG_RX2_MANUAL_LMT_FULL_GAIN) change gain only. In particular they do
+ * not invalidate ADI's cached RFPLL/clock-divider model or FIR state. The
+ * generic raw-register API remains conservative for every other address. */
+static inline bool bladerf2_rfic_register_is_gain_only(uint16_t address)
+{
+    return address == 0x109 || address == 0x10c;
+}
+
 static inline bool bladerf2_clock_select_valid(bladerf_clock_select select)
 {
     return select == CLOCK_SELECT_ONBOARD ||

@@ -2740,7 +2740,6 @@ static void bladerf2_rx_async_note_withheld_source(
 static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                                            bladerf_channel_layout layout,
                                            bladerf_format format,
-                                           bool sync_consumer,
                                            const void *buffer,
                                            size_t length,
                                            struct bladerf_metadata *metadata)
@@ -2933,9 +2932,12 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
         }
         bladerf2_rx_data_rearm_notifications_locked(board_data);
 
-        /* Async callers receive this accepted transfer at their callback
-         * boundary. A sync worker only places it in an internal ring; defer
-         * RX_FIRST_VALID_HOST_DATA until sync_rx actually returns IQ. */
+        /* This callback runs at host transfer admission, after epoch and
+         * timestamp validation but before either async delivery or sync-ring
+         * insertion. Publish the event here for both paths: a transition
+         * waiter must not require a simultaneous sync_rx reader merely to
+         * prove that the first valid packet reached the host pipeline. A
+         * later sync read still rechecks the epoch before exposing IQ. */
         struct bladerf_metadata first_packet = {0};
         first_packet.timestamp = metadata_get_timestamp(bytes);
         first_packet.actual_count = (unsigned int)(length / bytes_per_sample);
@@ -2951,14 +2953,12 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             metadata->rx_epoch_id_valid = 1;
             metadata->rx_clipping_flags = first_packet.rx_clipping_flags;
         }
-        if (!sync_consumer) {
-            if (now_ns != 0) {
-                bladerf2_rx_transition_note_first_packet_epoch_locked_at(
-                    dev, &first_packet, layout, now_ns);
-            } else {
-                bladerf2_rx_transition_note_first_packet_epoch_locked(
-                    dev, &first_packet, layout);
-            }
+        if (now_ns != 0) {
+            bladerf2_rx_transition_note_first_packet_epoch_locked_at(
+                dev, &first_packet, layout, now_ns);
+        } else {
+            bladerf2_rx_transition_note_first_packet_epoch_locked(
+                dev, &first_packet, layout);
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         bladerf2_rx_report_clipping(dev, &first_packet);
@@ -6484,19 +6484,25 @@ int bladerf_set_rfic_register(struct bladerf *dev,
                        address <= REG_TX_FAST_LOCK_PROGRAM_CTRL) {
                 ad9361_fastlock_invalidate_cache(board_data->phy, true);
             }
-            /* The raw register API can modify RFPLL/clock-divider state
-             * without updating ADI's cached clock tree. Do not certify any
-             * later LO readback until host-mode RFIC initialization rebuilds
-             * that model. */
-            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-            board_data->rfic_frequency_model_known = false;
-            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            bool gain_only_register =
+                bladerf2_rfic_register_is_gain_only(address);
+            /* The generic raw-register API can modify RFPLL/clock-divider
+             * state without updating ADI's cached clock tree. Preserve that
+             * fail-closed behavior except for the two documented RX manual
+             * gain registers, which do not touch the clock model. */
+            if (!gain_only_register) {
+                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                board_data->rfic_frequency_model_known = false;
+                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            }
             board_data->rfic_reset_on_close = true;
             /* Raw register writes can target FIR configuration/enable
              * registers; the cached enum is no longer authoritative even
              * when the SPI operation reports an error after taking effect. */
-            board_data->rxfir_known = false;
-            board_data->txfir_known = false;
+            if (!gain_only_register) {
+                board_data->rxfir_known = false;
+                board_data->txfir_known = false;
+            }
             status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });

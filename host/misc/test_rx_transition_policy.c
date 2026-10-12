@@ -42,6 +42,10 @@ int main(void)
     assert(!bladerf2_rfic_frequency_model_valid(false, true));
     assert(!bladerf2_rfic_frequency_model_valid(true, false));
     assert(!bladerf2_rfic_frequency_model_valid(false, false));
+    assert(bladerf2_rfic_register_is_gain_only(0x109));
+    assert(bladerf2_rfic_register_is_gain_only(0x10c));
+    assert(!bladerf2_rfic_register_is_gain_only(0x108));
+    assert(!bladerf2_rfic_register_is_gain_only(0x23));
 
     /* Epoch zero is the FPGA reset/unarmed identity and must never receive a
      * host certificate, including when the short epoch counter wraps. */

@@ -387,7 +387,6 @@ struct board_fns {
     bool (*rx_async_buffer_valid)(struct bladerf *dev,
                                   bladerf_channel_layout layout,
                                   bladerf_format format,
-                                  bool sync_consumer,
                                   const void *buffer, size_t length,
                                   struct bladerf_metadata *metadata);
     /* Return false after native TX validity has been revoked so async TX

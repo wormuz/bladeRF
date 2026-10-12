@@ -4762,8 +4762,11 @@ const char *CALL_CONV bladerf_strerror(int error);
  * timeout never implies the data is valid. RX_EPOCH_VALID confirms that the
  * FPGA admitted samples at a new epoch boundary; it does not prove that a
  * host META packet has arrived. RX_FIRST_VALID_HOST_DATA confirms that the
- * first epoch- and timestamp-validated IQ reached the host. A control-plane-
- * only request completes in RX_DATA_INVALID.
+ * first epoch- and timestamp-validated IQ packet was admitted to the host
+ * RX pipeline (and, for sync RX, is eligible for the sync ring). The event
+ * does not mean the application has consumed that packet; callers may begin
+ * sync_rx after transition_wait returns. A control-plane-only request
+ * completes in RX_DATA_INVALID.
  *
  * @{
  */

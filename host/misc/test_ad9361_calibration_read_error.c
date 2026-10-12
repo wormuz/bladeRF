@@ -396,6 +396,37 @@ int main(void)
     phy.pdata = &pdata;
     phy_without_spi.pdata = &pdata;
 
+    /* RX/TX channel enums are masks (RX2/TX2 == 2), while the selected
+     * single-channel register field is shifted to bit 7. Verify that the
+     * ADI helpers encode channel 2 as field value 1 and preserve channel 1. */
+    {
+        bool saved_register_map_enabled = register_map_enabled;
+        unsigned saved_read_count = read_count;
+        unsigned saved_write_count = write_count;
+        uint8_t saved_rx_enable = fake_regs[REG_RX_ENABLE_FILTER_CTRL];
+        uint8_t saved_tx_enable = fake_regs[REG_TX_ENABLE_FILTER_CTRL];
+
+        register_map_enabled = true;
+        fake_regs[REG_RX_ENABLE_FILTER_CTRL] = 0x05;
+        fake_regs[REG_TX_ENABLE_FILTER_CTRL] = 0x05;
+        if (ad9361_en_dis_rx(&phy, RX_2, RX_2) != 0 ||
+            fake_regs[REG_RX_ENABLE_FILTER_CTRL] != 0x85 ||
+            ad9361_en_dis_rx(&phy, RX_2, RX_DISABLE) != 0 ||
+            fake_regs[REG_RX_ENABLE_FILTER_CTRL] != 0x05 ||
+            ad9361_en_dis_tx(&phy, TX_2, TX_2) != 0 ||
+            fake_regs[REG_TX_ENABLE_FILTER_CTRL] != 0x85 ||
+            ad9361_en_dis_tx(&phy, TX_2, TX_DISABLE) != 0 ||
+            fake_regs[REG_TX_ENABLE_FILTER_CTRL] != 0x05) {
+            fprintf(stderr, "RX2/TX2 channel enable field encoding failed\n");
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_RX_ENABLE_FILTER_CTRL] = saved_rx_enable;
+        fake_regs[REG_TX_ENABLE_FILTER_CTRL] = saved_tx_enable;
+        register_map_enabled = saved_register_map_enabled;
+        read_count = saved_read_count;
+        write_count = saved_write_count;
+    }
+
     {
         struct ad9361_rf_phy cleared_phy = {
             .rfpll_requested_valid = { true, true },
@@ -3618,6 +3649,10 @@ int main(void)
             .source = RX_REFCLK,
         };
         uint8_t saved_profile_data[RX_FAST_LOCK_CONFIG_WORD_NUM];
+        uint8_t saved_rx_ref_divider_msb =
+            fake_regs[REG_REF_DIVIDE_CONFIG_1];
+        uint8_t saved_rx_ref_divider_lsb =
+            fake_regs[REG_REF_DIVIDE_CONFIG_2];
         uint64_t saved_lo = phy.current_rx_lo_freq;
         uint8_t saved_div = phy.cached_rx_rfpll_div;
         uint8_t saved_current_profile = phy.fastlock.current_profile[0];
@@ -3641,6 +3676,11 @@ int main(void)
         phy.current_rx_lo_freq = ad9361_to_clk(1800000000);
         phy.cached_rx_rfpll_div = 2;
         phy.rfpll_requested_valid[0] = true;
+        /* This case models an undivided 40 MHz RX reference. Other test
+         * cases leave register-map state behind, so establish the scaler
+         * explicitly before checking the 6.2 GHz out-of-range profile. */
+        fake_regs[REG_REF_DIVIDE_CONFIG_1] = 0;
+        fake_regs[REG_REF_DIVIDE_CONFIG_2] = 0;
         register_map_enabled = true;
         ret = ad9361_fastlock_sync_current_lo(
             &phy, false, 0, 1900000000, &frequency);
@@ -3668,8 +3708,10 @@ int main(void)
         profile_data[1] = 0x01;
         profile_data[12] = 0; /* 12.4 GHz VCO / 2 = 6.2 GHz LO. */
         frequency = UINT64_C(0xfeedface);
+        register_map_enabled = true;
         ret = ad9361_fastlock_sync_current_lo(
             &phy, false, 0, 0, &frequency);
+        register_map_enabled = saved_register_map_enabled;
         if (ret != -EINVAL || frequency != UINT64_C(0xfeedface) ||
             phy.current_rx_lo_freq != 0 ||
             phy.fastlock.current_profile[0] != 0xffu ||
@@ -3693,6 +3735,8 @@ int main(void)
         phy.clk_refin = saved_refclk;
         phy.clks[RX_RFPLL] = saved_rxpll;
         phy.ref_clk_scale[RX_REFCLK] = saved_rx_refclk;
+        fake_regs[REG_REF_DIVIDE_CONFIG_1] = saved_rx_ref_divider_msb;
+        fake_regs[REG_REF_DIVIDE_CONFIG_2] = saved_rx_ref_divider_lsb;
     }
 
     /* Malformed clocks/durations are rejected before arithmetic or writes. */

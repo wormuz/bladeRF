@@ -169,7 +169,7 @@ void *async_rx_process_buffer(struct bladerf_stream *stream,
                stream->dev->board->rx_async_buffer_valid != NULL &&
                !stream->dev->board->rx_async_buffer_valid(
                    stream->dev, stream->layout, stream->format,
-                   stream->sync_consumer, samples, received_bytes, metadata)) {
+                   samples, received_bytes, metadata)) {
         /* Notify once when a continuous invalid-data interval begins. The
          * native event history records its reason; repeated rejected buffers
          * owned by libbladeRF can be recycled without another callback. Keep
