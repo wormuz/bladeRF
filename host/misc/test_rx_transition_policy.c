@@ -405,6 +405,10 @@ int main(void)
     assert(bladerf2_retune2_blocks_schedule(3, false, false, true));
     assert(bladerf2_retune2_blocks_schedule(3, false, true, false));
     assert(bladerf2_retune2_blocks_schedule(0, true, false, false));
+    assert(bladerf2_retune2_request_rejected(true, true, true));
+    assert(!bladerf2_retune2_request_rejected(true, false, true));
+    assert(!bladerf2_retune2_request_rejected(true, true, false));
+    assert(!bladerf2_retune2_request_rejected(false, true, true));
     assert(!bladerf2_rf_tune_peer_lo_unknown(true, false, false, false));
     assert(!bladerf2_rf_tune_peer_lo_unknown(false, false, false, false));
     assert(bladerf2_rf_tune_peer_lo_unknown(true, true, false, true));

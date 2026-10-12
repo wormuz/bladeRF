@@ -242,6 +242,16 @@ static inline bool bladerf2_retune2_blocks_schedule(
            (rx_pending_count != 0 && (tx_target || immediate));
 }
 
+/* A complete NIOS response can prove that a scheduled RX request was
+ * rejected before queue insertion. A missing/mismatched response cannot. */
+static inline bool bladerf2_retune2_request_rejected(
+    bool scheduled_rx_request, bool transport_trace_valid,
+    bool transport_succeeded)
+{
+    return scheduled_rx_request && transport_trace_valid &&
+           transport_succeeded;
+}
+
 /* A fastlock slot remains leased while a timestamped request can still use
  * it. NIOS and AD9361 keep separate profile banks, so either index colliding
  * is enough to make reuse unsafe. */

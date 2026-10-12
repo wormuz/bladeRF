@@ -3677,25 +3677,53 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
+    dev->nios_retune_trace.valid = false;
     int status = dev->backend->retune2(dev, ch, timestamp,
                                        quick_tune->nios_profile,
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt);
     if (status != 0) {
+        /* nios_access records the transport result before nios_retune2 maps
+         * a completed NIOS rejection to a host error. A zero transport result
+         * therefore proves the scheduled command was rejected explicitly;
+         * it was not accepted into the NIOS queue. */
+        bool const request_rejected = bladerf2_retune2_request_rejected(
+            watch_rx_retune_failure, dev->nios_retune_trace.valid,
+            dev->nios_retune_trace.status == 0);
+
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             if (watch_rx_retune_failure) {
-                if (!board_data->rx_retune2_failure_count_valid) {
-                    board_data->rx_retune2_failure_count_last =
-                        rx_retune_failure_baseline;
-                    board_data->rx_retune2_failure_count_valid = true;
+                if (request_rejected) {
+                    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+                    if (rx_pending_slot <
+                            NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH &&
+                        board_data->rx_retune2_pending[rx_pending_slot].valid) {
+                        board_data->rx_retune2_pending[rx_pending_slot].valid =
+                            false;
+                        if (board_data->rx_retune2_pending_count != 0) {
+                            board_data->rx_retune2_pending_count--;
+                        }
+                    }
+                    if (board_data->rx_retune2_pending_count == 0) {
+                        board_data->rx_retune2_failure_watch_active = false;
+                        board_data->rx_retune2_status_unavailable_reported =
+                            false;
+                    }
+                    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+                } else {
+                    if (!board_data->rx_retune2_failure_count_valid) {
+                        board_data->rx_retune2_failure_count_last =
+                            rx_retune_failure_baseline;
+                        board_data->rx_retune2_failure_count_valid = true;
+                    }
+                    /* A missing or mismatched USB response can follow NIOS
+                     * queue acceptance. Retain the ledger until completion
+                     * or an acknowledged queue clear resolves that outcome. */
+                    bladerf2_rx_retune_watch_begin(
+                        &board_data->rx_retune2_failure_watch_active,
+                        &board_data->rx_retune2_failure_watch_generation,
+                        &board_data->rx_retune2_status_unavailable_reported);
                 }
-                /* The USB response can fail after the NIOS accepted the
-                 * command. Keep observing scheduled work and retain its
-                 * ledger until completion or an acknowledged queue clear. */
-                bladerf2_rx_retune_watch_begin(
-                    &board_data->rx_retune2_failure_watch_active,
-                    &board_data->rx_retune2_failure_watch_generation,
-                    &board_data->rx_retune2_status_unavailable_reported);
             } else {
                 /* NOW has no deferred completion record. If its response was
                  * lost, only a successful queue clear can prove that no
@@ -3705,18 +3733,23 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             }
 
-            /* A returned transport error does not prove the RFIC stayed at
-             * its previous tune. Revoke all cached evidence and report the
-             * unresolved command outcome to event consumers. */
-            ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+            /* Only an ambiguous transport result makes the applied RF state
+             * unknown. A complete NIOS response that rejected a scheduled
+             * request is a known failure and must not be reported as missing
+             * status. */
             struct bladerf_rf_event event = {0};
             event.host_monotonic_ns = bladerf2_monotonic_ns();
-            event.event_type = BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+            event.event_type = request_rejected
+                ? BLADERF_RF_EVT_RX_RETUNE_FAILED
+                : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
             event.fpga_state = BLADERF_RF_STATE_ERROR;
             event.requested_rx_lo_hz = frequency;
             event.error_code = status;
             bladerf2_rf_event_append(board_data, &event);
-            board_data->rx_retune2_status_unavailable_reported = true;
+            if (!request_rejected) {
+                ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+                board_data->rx_retune2_status_unavailable_reported = true;
+            }
         }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
