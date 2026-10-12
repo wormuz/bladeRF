@@ -410,7 +410,16 @@ fi
 # Error out at the first sign of trouble
 set -e
 
-work_dir="work/${platform}-${size}-${rev}"
+# Allow a release qualification to use a fresh database without deleting the
+# default work tree (which may contain the last known-good reports/image).
+# Keep the label to one path component: relative platform paths below assume
+# the work directory is directly under hdl/quartus/work.
+work_label="${BLADERF_QUARTUS_WORK_LABEL:-}"
+if [[ -n "$work_label" && "$work_label" == */* ]]; then
+    echo "BLADERF_QUARTUS_WORK_LABEL must be a single path component" >&2
+    exit 1
+fi
+work_dir="work/${platform}-${size}-${rev}${work_label:+-${work_label}}"
 work_dir_abs="${SCRIPT_DIR}/${work_dir}"
 
 if [ "$clear_work_dir" == "1" ]; then
