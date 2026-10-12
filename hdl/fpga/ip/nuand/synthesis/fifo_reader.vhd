@@ -515,9 +515,9 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
+        variable  ts_next       : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
-        variable  v_low_delta   : unsigned(31 downto 0);
         variable  v_low_borrow : unsigned(0 downto 0);
         variable  v_high_delta : unsigned(32 downto 0);
         variable  v_due_sentinel : std_logic;
@@ -553,41 +553,30 @@ begin
         -- The FIFO header is captured in META_LOAD. META_EVAL adds one
         -- cycle before the decision is consumed, and the META_WAIT/DOWNCOUNT
         -- path takes two more cycles to issue the first sample read. Compare
-        -- the scheduled timestamp. A negative timestamp-target delta is due
-        -- only when it is -1, -2, or -3 ticks.
+        -- the scheduled timestamp.
         --
         -- meta_p_time is constant for the whole of META_WAIT, and equals
         -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
         -- one cycle ahead of that capture is consistent for both states.
-        -- Compare against the RAW header, not against (header - 1). Avoid a
-        -- timestamp+3 followed by a second subtract: that serial carry path
-        -- was the TX setup critical path.
-        --
-        -- Compare the raw header using a low-half borrow and a 33-bit high-half
-        -- delta. The sign bit is the sign of the full modulo-2^64 delta,
-        -- without one 64-bit subtract/comparator carry chain. Keep reading the
-        -- registered header, keeping the M10K output off this path.
-        --
-        -- Sentinel: a raw header of 0 means "transmit now". Under the old form
-        -- 0 - 1 wrapped to all ones and META_WAIT matched MAX_TIMESTAMP; under
-        -- this form the explicit sentinel opens the gate independently of the
-        -- modulo comparison. Both encodings remain covered by the testbench.
+        -- Compare against timestamp + 3. This is the implementation from the
+        -- last hosted xA4 fit with positive setup and hold margins. The raw
+        -- delta alternative regressed the timestamp-to-due_combined path.
+        -- Keep the subtraction split at 32 bits and the header registered.
+        -- A raw header of zero is the explicit TX_NOW sentinel.
+        ts_next := timestamp + 3;
         cmp_tgt := meta_current.meta_header;
-        v_low_delta := timestamp(31 downto 0) - cmp_tgt(31 downto 0);
 
         if( meta_current.meta_header_valid = '1' and
-            timestamp(31 downto 0) < cmp_tgt(31 downto 0) ) then
+            ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
             v_low_borrow := to_unsigned(1, v_low_borrow'length);
         else
             v_low_borrow := to_unsigned(0, v_low_borrow'length);
         end if;
-        v_high_delta := ('0' & timestamp(63 downto 32)) +
-                        not ('0' & cmp_tgt(63 downto 32)) +
-                        resize(not v_low_borrow, v_high_delta'length);
+        v_high_delta := ('0' & ts_next(63 downto 32)) -
+                        ('0' & cmp_tgt(63 downto 32)) -
+                        resize(v_low_borrow, v_high_delta'length);
         if( meta_current.meta_header_valid = '1' and
-            (v_high_delta(31) = '0' or
-             (v_high_delta(31 downto 0) = x"FFFFFFFF" and
-              v_low_delta >= x"FFFFFFFD")) ) then
+            v_high_delta(31) = '0' ) then
             v_due_time := '1';
         else
             v_due_time := '0';
