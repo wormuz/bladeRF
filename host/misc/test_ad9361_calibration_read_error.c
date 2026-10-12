@@ -2903,6 +2903,37 @@ int main(void)
         phy.clk_refin = &clock_nodes[BB_REFCLK];
         phy.bbpll_initialized = true;
 
+        /* Reject overflowing startup frequencies before setup performs any
+         * RFIC writes or narrows them to the shifted PLL representation. */
+        {
+            uint64_t saved_rx_freq = pdata.rx_synth_freq;
+            uint64_t saved_tx_freq = pdata.tx_synth_freq;
+            unsigned writes_before = write_count;
+
+            pdata.rx_synth_freq = 18000000000ULL;
+            pdata.tx_synth_freq = 1800000000ULL;
+            ret = ad9361_setup(&phy);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Invalid RX startup LO was not rejected before SPI: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            pdata.rx_synth_freq = 1800000000ULL;
+            pdata.tx_synth_freq = 18000000000ULL;
+            ret = ad9361_setup(&phy);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Invalid TX startup LO was not rejected before SPI: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            pdata.rx_synth_freq = saved_rx_freq;
+            pdata.tx_synth_freq = saved_tx_freq;
+        }
+
         /* Legacy round-rate returns the high-band encoded rate through a
          * signed type. Preserve its valid bit pattern above INT32_MAX. */
         {
