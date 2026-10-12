@@ -8,6 +8,12 @@ binary="$build_dir/output/rx_nios_boot_probe"
 source_file="$script_dir/rx_nios_boot_probe.c"
 header_file="/usr/include/libusb-1.0/libusb.h"
 serial="${BLADERF_PROBE_SERIAL:-f695006ba84a40daa7b777c6a6eba78}"
+iterations="${1:-100}"
+
+if (($# > 1)); then
+  echo "usage: $0 [iterations:1..100000]" >&2
+  exit 2
+fi
 
 mkdir -p "$build_dir/output"
 if [[ ! -x "$binary" || "$source_file" -nt "$binary" ||
@@ -17,4 +23,4 @@ if [[ ! -x "$binary" || "$source_file" -nt "$binary" ||
     $(pkg-config --libs libusb-1.0) -o "$binary"
 fi
 
-exec "$binary" "$serial"
+exec "$binary" "$serial" "$iterations"
