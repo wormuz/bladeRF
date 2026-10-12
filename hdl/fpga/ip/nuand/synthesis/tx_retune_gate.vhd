@@ -250,34 +250,3 @@ begin
     mute_start_timestamp <= mute_start_timestamp_i;
     muted_sample_count <= muted_sample_count_i;
 end architecture;
-
--- Convert the stretched FIFO underflow indication into a single event pulse.
--- fifo_reader intentionally holds its LED output high for many cycles; the
--- TX recovery gate must not interpret that display interval as repeated
--- aborts that override the host's next ARM.
-library ieee;
-    use ieee.std_logic_1164.all;
-
-entity tx_underflow_event_pulse is
-    port (
-        clock          : in  std_logic;
-        reset          : in  std_logic;
-        underflow_level: in  std_logic;
-        pulse          : out std_logic
-    );
-end entity;
-
-architecture rtl of tx_underflow_event_pulse is
-    signal previous_level : std_logic := '0';
-begin
-    edge_detect : process(clock, reset)
-    begin
-        if reset = '1' then
-            previous_level <= '0';
-            pulse <= '0';
-        elsif rising_edge(clock) then
-            pulse <= underflow_level and not previous_level;
-            previous_level <= underflow_level;
-        end if;
-    end process;
-end architecture;

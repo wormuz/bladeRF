@@ -941,6 +941,7 @@ begin
 
         underflow_led       =>  tx_underflow_led,
         underflow_count     =>  open,
+        underflow_event     =>  open,
         underflow_duration  =>  x"ffff",
         loopback_data       =>  open,
         loopback_data_valid =>  open

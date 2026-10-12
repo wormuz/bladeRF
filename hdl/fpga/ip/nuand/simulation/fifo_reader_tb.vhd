@@ -128,6 +128,7 @@ architecture sim of fifo_reader_tb is
 
     signal uf_led     : std_logic;
     signal uf_count   : unsigned(63 downto 0);
+    signal uf_event   : std_logic;
     signal uf_dur     : unsigned(15 downto 0) := x"ffff";
     signal uf_suppress : std_logic := '0';
     signal fault_sticky : std_logic_vector(4 downto 0);
@@ -158,6 +159,35 @@ architecture sim of fifo_reader_tb is
 begin
 
     clock <= not clock after 5 ns when not done else '0';
+
+    -- The event pulse and episode counter share the same edge detector. This
+    -- guards the event interface independently of the much longer LED timer.
+    underflow_event_contract : process(clock)
+        variable previous_count : unsigned(63 downto 0) := (others => '0');
+        variable previous_event : std_logic := '0';
+    begin
+        if rising_edge(clock) then
+            if reset = '1' then
+                previous_count := (others => '0');
+                previous_event := '0';
+            else
+                if uf_event = '1' then
+                    assert previous_event = '0'
+                        report "underflow event was not a one-cycle pulse"
+                        severity failure;
+                    assert uf_count = previous_count + 1
+                        report "underflow event did not match episode counter"
+                        severity failure;
+                else
+                    assert uf_count = previous_count
+                        report "underflow counter changed without event"
+                        severity failure;
+                end if;
+                previous_count := uf_count;
+                previous_event := uf_event;
+            end if;
+        end if;
+    end process;
 
     m_data <= hdr(to_unsigned(TGT, 64));
 
@@ -312,6 +342,7 @@ begin
             out_samples           => out_smp,
             underflow_led         => uf_led,
             underflow_count       => uf_count,
+            underflow_event       => uf_event,
             underflow_duration    => uf_dur,
             underflow_suppress    => uf_suppress,
             link_start_toggle     => link_start_toggle,
@@ -421,8 +452,19 @@ begin
         -- Packed mode can retain two prefetched words after the source FIFO
         -- becomes empty; let the skid queue drain before checking starvation.
         wait for 100 ns;
-        assert uf_count = 1
+        assert uf_count = 1 and uf_led = '1'
             report "real TX starvation after resume was not counted"
+            severity failure;
+
+        -- Separate two underflow episodes while the visibility LED is still
+        -- high. The second event must be observable even though the LED has
+        -- no new rising edge; the recovery gate consumes underflow_event.
+        uf_suppress <= '1';
+        wait for 30 ns;
+        uf_suppress <= '0';
+        wait for 40 ns;
+        assert uf_count = 2 and uf_led = '1'
+            report "new underflow episode was hidden by the stretched LED"
             severity failure;
 
         done <= true;

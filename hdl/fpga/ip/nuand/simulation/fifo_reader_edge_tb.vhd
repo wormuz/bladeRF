@@ -258,6 +258,7 @@ begin
             out_samples           => out_smp,
             underflow_led         => uf_led,
             underflow_count       => uf_count,
+            underflow_event       => open,
             underflow_duration    => x"ffff",
             link_start_toggle     => link_start_toggle,
             fault_sticky          => fault_sticky,

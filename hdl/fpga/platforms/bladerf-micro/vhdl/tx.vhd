@@ -131,8 +131,8 @@ architecture arch of tx is
     signal loopback_fifo_source_data      : std_logic_vector(sample_fifo.rdata'range);
     signal loopback_fifo_source_valid     : std_logic;
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
+    signal tx_underflow_led_i              : std_logic := '0';
     signal tx_underflow_event              : std_logic := '0';
-    signal tx_underflow_abort              : std_logic := '0';
     signal retune_gate_state               : unsigned(1 downto 0);
     signal retune_gate_arm_ack_seen        : std_logic := '0';
     signal retune_gate_muted               : std_logic;
@@ -145,17 +145,6 @@ architecture arch of tx is
     signal retune_gate_resume_seen         : std_logic := '0';
 
 begin
-
-    -- fifo_reader stretches the underflow LED for visibility. The gate gets
-    -- only the first event pulse so the display interval cannot keep
-    -- overriding a recovery ARM.
-    U_tx_underflow_event_pulse : entity work.tx_underflow_event_pulse
-        port map (
-            clock => tx_clock,
-            reset => tx_reset,
-            underflow_level => tx_underflow_event,
-            pulse => tx_underflow_abort
-        );
 
     set_timestamp_reset : process(tx_clock, tx_reset)
     begin
@@ -311,8 +300,9 @@ begin
             in_sample_controls  =>  dac_controls,
             out_samples         =>  dac_streams_raw,
 
-            underflow_led       =>  tx_underflow_event,
+            underflow_led       =>  tx_underflow_led_i,
             underflow_count     =>  tx_underflow_count,
+            underflow_event     =>  tx_underflow_event,
             underflow_duration  =>  x"ffff",
             underflow_suppress  =>  retune_gate_muted,
             loopback_data       =>  loopback_fifo_source_data,
@@ -334,7 +324,7 @@ begin
             -- A one-clock underflow event feeds the gate directly; the
             -- stretched underflow LED is only for front-panel visibility.
             abort                => retune_gate_abort,
-            underflow            => tx_underflow_abort,
+            underflow            => tx_underflow_event,
             in_samples           => dac_streams_raw,
             out_samples          => dac_streams,
             state                => retune_gate_state,
@@ -345,7 +335,7 @@ begin
             muted_sample_count  => retune_gate_muted_sample_count
         );
 
-    tx_underflow_led <= tx_underflow_event;
+    tx_underflow_led <= tx_underflow_led_i;
 
     process(tx_clock, tx_reset)
     begin

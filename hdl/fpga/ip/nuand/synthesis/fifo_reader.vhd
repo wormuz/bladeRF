@@ -68,6 +68,10 @@ entity fifo_reader is
 
         underflow_led       :   buffer  std_logic;
         underflow_count     :   buffer  unsigned(63 downto 0);
+        -- One-cycle pulse for each new underflow episode. Keep this separate
+        -- from underflow_led, whose visibility timer may remain asserted
+        -- across recovery and hide a later independent underflow.
+        underflow_event     :   out     std_logic := '0';
         underflow_duration  :   in      unsigned(15 downto 0);
         -- A timestamped RF transition deliberately replaces TX IQ with
         -- zeros. FIFO starvation during that acknowledged mute interval is
@@ -1329,9 +1333,12 @@ begin
         if( reset = '1' ) then
             prev_underflow  := '0';
             underflow_count <= (others =>'0');
+            underflow_event <= '0';
         elsif( rising_edge( clock ) ) then
+            underflow_event <= '0';
             if( prev_underflow = '0' and underflow_detected = '1' ) then
                 underflow_count <= underflow_count + 1;
+                underflow_event <= '1';
             end if;
             prev_underflow := underflow_detected;
         end if;
