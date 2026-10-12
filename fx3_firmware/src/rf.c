@@ -44,6 +44,14 @@ static int link_started = 0;
 
 static void NuandRFLinkStop(void);
 
+static void NuandRFCheckStatus(CyU3PReturnStatus_t status)
+{
+    if (status != CY_U3P_SUCCESS) {
+        LOG_ERROR(status);
+        CyFxAppErrorHandler(status);
+    }
+}
+
 /* Put both RF directions into the known disabled state before resetting the
  * FPGA sample pipeline. Continue through both enable writes even if an
  * earlier GPIO operation fails, and return the first error to the caller. */
@@ -202,8 +210,8 @@ static void UartBridgeStart(void)
     }
 
     /* Flush the endpoint memory */
-    CyU3PUsbFlushEp(BLADE_UART_EP_PRODUCER);
-    CyU3PUsbFlushEp(BLADE_UART_EP_CONSUMER);
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_UART_EP_PRODUCER));
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_UART_EP_CONSUMER));
 
     /* Set DMA channel transfer size */
     apiRetStatus = CyU3PDmaChannelSetXfer(&glChHandlebladeRFUtoUART, BLADE_DMA_TX_SIZE);
@@ -236,12 +244,12 @@ static void UartBridgeStop(void)
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
 
     /* Flush the endpoint memory */
-    CyU3PUsbFlushEp(BLADE_UART_EP_PRODUCER);
-    CyU3PUsbFlushEp(BLADE_UART_EP_CONSUMER);
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_UART_EP_PRODUCER));
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_UART_EP_CONSUMER));
 
     /* Destroy the channel */
-    CyU3PDmaChannelDestroy(&glChHandlebladeRFUARTtoU);
-    CyU3PDmaChannelDestroy(&glChHandlebladeRFUtoUART);
+    NuandRFCheckStatus(CyU3PDmaChannelDestroy(&glChHandlebladeRFUARTtoU));
+    NuandRFCheckStatus(CyU3PDmaChannelDestroy(&glChHandlebladeRFUtoUART));
 
     /* Disable endpoints. */
     CyU3PMemSet((uint8_t *)&epCfg, 0, sizeof (epCfg));
@@ -259,7 +267,7 @@ static void UartBridgeStop(void)
         LOG_ERROR(apiRetStatus);
         CyFxAppErrorHandler (apiRetStatus);
     }
-    CyU3PUartDeInit();
+    NuandRFCheckStatus(CyU3PUartDeInit());
 }
 
 
@@ -386,8 +394,8 @@ static void NuandRFLinkStart(void)
     }
 
     /* Flush the Endpoint memory */
-    CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_PRODUCER);
-    CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_CONSUMER);
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_PRODUCER));
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_CONSUMER));
 
     /* Set DMA channel transfer size. */
 
@@ -450,18 +458,20 @@ static void NuandRFLinkStop (void)
      * top of them - the "buffer committed, consumer not draining" wedge.
      * NuandFpgaConfigStop has always reset before destroying (fpga.c); the
      * sample path was the asymmetric one. */
-    CyU3PDmaChannelReset(&glChHandleUtoP);
-    if (!loopback_when_created)
-        CyU3PDmaChannelReset(&glChHandlePtoU);
+    NuandRFCheckStatus(CyU3PDmaChannelReset(&glChHandleUtoP));
+    if (!loopback_when_created) {
+        NuandRFCheckStatus(CyU3PDmaChannelReset(&glChHandlePtoU));
+    }
 
     /* Flush endpoint memory buffers */
-    CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_PRODUCER);
-    CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_CONSUMER);
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_PRODUCER));
+    NuandRFCheckStatus(CyU3PUsbFlushEp(BLADE_RF_SAMPLE_EP_CONSUMER));
 
     /* Destroy the channels */
-    CyU3PDmaChannelDestroy(&glChHandleUtoP);
-    if (!loopback_when_created)
-        CyU3PDmaChannelDestroy(&glChHandlePtoU);
+    NuandRFCheckStatus(CyU3PDmaChannelDestroy(&glChHandleUtoP));
+    if (!loopback_when_created) {
+        NuandRFCheckStatus(CyU3PDmaChannelDestroy(&glChHandlePtoU));
+    }
 
     /* Disable endpoints. */
     CyU3PMemSet ((uint8_t *)&epCfg, 0, sizeof (epCfg));

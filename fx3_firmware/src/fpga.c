@@ -214,7 +214,11 @@ static void NuandFpgaConfigStart(void)
 
     if (doUsb) {
         /* Flush the endpoint memory */
-        CyU3PUsbFlushEp(BLADE_FPGA_EP_PRODUCER);
+        apiRetStatus = CyU3PUsbFlushEp(BLADE_FPGA_EP_PRODUCER);
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            LOG_ERROR(apiRetStatus);
+            CyFxAppErrorHandler(apiRetStatus);
+        }
     }
 
     /* Set DMA channel transfer size. */
@@ -239,13 +243,25 @@ void NuandFpgaConfigStop(void)
     config_started = 0;
 
     /* Abort and clear the channel */
-    CyU3PDmaChannelReset(&glChHandlebladeRFUtoP);
+    apiRetStatus = CyU3PDmaChannelReset(&glChHandlebladeRFUtoP);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        LOG_ERROR(apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+    }
 
     /* Flush the endpoint memory */
-    CyU3PUsbFlushEp(BLADE_FPGA_EP_PRODUCER);
+    apiRetStatus = CyU3PUsbFlushEp(BLADE_FPGA_EP_PRODUCER);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        LOG_ERROR(apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+    }
 
     /* Destroy the channel */
-    CyU3PDmaChannelDestroy(&glChHandlebladeRFUtoP);
+    apiRetStatus = CyU3PDmaChannelDestroy(&glChHandlebladeRFUtoP);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        LOG_ERROR(apiRetStatus);
+        CyFxAppErrorHandler(apiRetStatus);
+    }
 
     /* Disable endpoints. */
     CyU3PMemSet((uint8_t *)&epCfg, 0, sizeof (epCfg));
@@ -348,14 +364,20 @@ static CyU3PReturnStatus_t FpgaSendFlashBytes(uint8_t *ptr,
     if (apiRetStatus)
         return apiRetStatus;
 
-    CyU3PDmaChannelAbort(&glChHandlebladeRFUtoP);
+    apiRetStatus = CyU3PDmaChannelAbort(&glChHandlebladeRFUtoP);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        return apiRetStatus;
+    }
 
     apiRetStatus = CyU3PDmaChannelGetStatus(&glChHandlebladeRFUtoP,
                                             &state, &prodCnt, &consCnt);
     if (apiRetStatus)
         return apiRetStatus;
 
-    CyU3PDmaChannelReset(&glChHandlebladeRFUtoP);
+    apiRetStatus = CyU3PDmaChannelReset(&glChHandlebladeRFUtoP);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        return apiRetStatus;
+    }
 
     apiRetStatus = CyU3PDmaChannelGetStatus(&glChHandlebladeRFUtoP,
                                             &state, &prodCnt, &consCnt);
@@ -386,32 +408,48 @@ static CyU3PReturnStatus_t FpgaSendFlashBytes(uint8_t *ptr,
 
 CyBool_t NuandLoadFromFlash(int fpga_len)
 {
-    uint8_t *ptr;
+    uint8_t *ptr = NULL;
     int nleft;
     CyBool_t retval = CyFalse;
+    CyBool_t spi_initialized = CyFalse;
     uint32_t sector_idx = 1025;
 
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
+
+    if (fpga_len <= 0) {
+        return CyFalse;
+    }
 
     NuandFpgaConfigStart();
     ptr = CyU3PDmaBufferAlloc(4096);
     if (ptr == NULL) {
         goto out;
     }
-    apiRetStatus = CyFxSpiInit(0x100);
+    apiRetStatus = CyFxSpiInit();
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        goto out;
+    }
+    spi_initialized = CyTrue;
 
     CyFxSpiFastRead(CyTrue);
     apiRetStatus = CyU3PSpiSetClock(30000000);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        goto out;
+    }
 
-    if (FpgaBeginProgram() != CY_U3P_SUCCESS) {
+    apiRetStatus = FpgaBeginProgram();
+    if (apiRetStatus != CY_U3P_SUCCESS) {
         goto out;
     }
 
     nleft = fpga_len;
 
     while(nleft) {
-        if (CyFxSpiTransfer(sector_idx++, 0x100, ptr, CyTrue, CyFalse) != CY_U3P_SUCCESS)
+        apiRetStatus = CyFxSpiTransfer(sector_idx++, 0x100, ptr,
+                                       CyTrue, CyFalse);
+        if (apiRetStatus != CY_U3P_SUCCESS) {
             break;
+        }
 
         apiRetStatus = FpgaSendFlashBytes(ptr,
                 (nleft > 256) ? 256 : nleft, nleft <= 256);
@@ -427,13 +465,22 @@ CyBool_t NuandLoadFromFlash(int fpga_len)
         }
     }
 
-    NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_FLASH);
+    if (retval) {
+        NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_FLASH);
+    }
 
 out:
     if (ptr != NULL) {
         CyU3PDmaBufferFree(ptr);
     }
-    CyU3PSpiDeInit();
+    if (spi_initialized) {
+        apiRetStatus = CyFxSpiDeInit();
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            LOG_ERROR(apiRetStatus);
+            retval = CyFalse;
+            NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_INVALID);
+        }
+    }
 
     CyFxSpiFastRead(CyFalse);
     NuandFpgaConfigStop();
@@ -587,6 +634,7 @@ CyBool_t NuandLoadCompressedFromFlash(int fpga_len, int compressed_len)
     int cleft = compressed_len;
     int decoded;
     CyBool_t retval = CyFalse;
+    CyBool_t spi_initialized = CyFalse;
     uint32_t sector_idx = 1025;
     CyU3PReturnStatus_t apiRetStatus = CY_U3P_SUCCESS;
 
@@ -602,12 +650,20 @@ CyBool_t NuandLoadCompressedFromFlash(int fpga_len, int compressed_len)
         goto out;
     }
 
-    apiRetStatus = CyFxSpiInit(0x100);
+    apiRetStatus = CyFxSpiInit();
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        goto out;
+    }
+    spi_initialized = CyTrue;
 
     CyFxSpiFastRead(CyTrue);
     apiRetStatus = CyU3PSpiSetClock(30000000);
+    if (apiRetStatus != CY_U3P_SUCCESS) {
+        goto out;
+    }
 
-    if (FpgaBeginProgram() != CY_U3P_SUCCESS) {
+    apiRetStatus = FpgaBeginProgram();
+    if (apiRetStatus != CY_U3P_SUCCESS) {
         goto out;
     }
 
@@ -649,7 +705,9 @@ CyBool_t NuandLoadCompressedFromFlash(int fpga_len, int compressed_len)
     }
 
     retval = (cleft == 0 && in_avail == 0 && nleft == 0) ? CyTrue : CyFalse;
-    NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_FLASH);
+    if (retval) {
+        NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_FLASH);
+    }
 
 out:
     if (in != NULL) {
@@ -661,7 +719,14 @@ out:
     if (page != NULL) {
         CyU3PDmaBufferFree(page);
     }
-    CyU3PSpiDeInit();
+    if (spi_initialized) {
+        apiRetStatus = CyFxSpiDeInit();
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            LOG_ERROR(apiRetStatus);
+            retval = CyFalse;
+            NuandSetFpgaConfigSource(NUAND_FPGA_CONFIG_SOURCE_INVALID);
+        }
+    }
 
     CyFxSpiFastRead(CyFalse);
     NuandFpgaConfigStop();
