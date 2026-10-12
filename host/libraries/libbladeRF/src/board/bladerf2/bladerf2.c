@@ -5313,15 +5313,19 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
         CHECK_STATUS(bladerf2_tx_rf_config_change_begin(dev, board_data));
     }
 
-    /* De-initialize RFIC if it's initialized by another tuning mode */
+    /* Release the previous owner before handing the PHY to another control
+     * path. An OFF status is fail-closed, but may follow a failed standby
+     * operation that retained a partial PHY or left RFFE controls uncertain;
+     * deinitialize() is required to retry that cleanup as well. */
     if (NULL != rfic_other) {
         CHECK_STATUS(rfic_other->get_init_state(dev, &init_state));
 
         if (init_state != BLADERF_RFIC_INIT_STATE_OFF) {
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Releasing",
                       tuningmode2str(mode_other));
-            CHECK_STATUS(rfic_other->deinitialize(dev));
         }
+
+        CHECK_STATUS(rfic_other->deinitialize(dev));
     }
 
     /* Set board data */
