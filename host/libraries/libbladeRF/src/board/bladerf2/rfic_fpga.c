@@ -825,10 +825,15 @@ static int _rfic_fpga_get_txmute(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         uint64_t readval;
 
+        if (state == NULL) {
+            return BLADERF_ERR_INVAL;
+        }
+
         CHECK_STATUS(
             _rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_TXMUTE, &readval));
 
-        return (readval > 0);
+        *state = readval > 0;
+        return 0;
     }
 
     return BLADERF_ERR_UNSUPPORTED;
