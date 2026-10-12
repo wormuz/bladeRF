@@ -719,6 +719,35 @@ static void test_async_tx_nonblocking_submit_does_not_wait_for_worker(void)
     assert(MUTEX_DESTROY(&stream.lock) == 0);
 }
 
+static void test_sync_tx_requeues_backend_rejected_callback_buffer(void)
+{
+    struct bladerf_sync sync = {0};
+    int16_t buffers[2][8] = {{0}};
+    void *buffer_ptrs[2] = {buffers[0], buffers[1]};
+    sync_buffer_status buffer_states[2] = {
+        SYNC_BUFFER_IN_FLIGHT, SYNC_BUFFER_FULL
+    };
+
+    sync.buf_mgmt.buffers = buffer_ptrs;
+    sync.buf_mgmt.status = buffer_states;
+    sync.buf_mgmt.num_buffers = 2;
+    sync.buf_mgmt.submitter = SYNC_TX_SUBMITTER_CALLBACK;
+    sync.buf_mgmt.cons_i = 1;
+    sync.buf_mgmt.prod_i = 0;
+
+    assert(MUTEX_INIT(&sync.buf_mgmt.lock) == 0);
+    assert(COND_INIT(&sync.buf_mgmt.buf_ready) == 0);
+
+    sync_worker_restore_rejected_tx_buffer(&sync, buffers[0]);
+    assert(buffer_states[0] == SYNC_BUFFER_FULL);
+    assert(buffer_states[1] == SYNC_BUFFER_FULL);
+    assert(sync.buf_mgmt.submitter == SYNC_TX_SUBMITTER_CALLBACK);
+    assert(sync.buf_mgmt.cons_i == 0);
+
+    assert(COND_DESTROY(&sync.buf_mgmt.buf_ready) == 0);
+    assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
+}
+
 static void test_sync_tx_does_not_replay_rejected_samples(void)
 {
     struct bladerf_sync sync = {0};
@@ -3309,6 +3338,7 @@ int main(void)
     test_tx_async_shutdown_reports_only_real_errors();
     test_async_tx_submit_gate_closure_is_retryable();
     test_async_tx_nonblocking_submit_does_not_wait_for_worker();
+    test_sync_tx_requeues_backend_rejected_callback_buffer();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();

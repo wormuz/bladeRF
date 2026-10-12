@@ -1489,6 +1489,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             next_buffer != BLADERF_STREAM_NO_DATA &&
             !async_tx_buffer_valid(stream)) {
             stream->error_code = BLADERF_ERR_WOULD_BLOCK;
+            stream->tx_buffer_rejected = next_buffer;
             next_buffer = BLADERF_STREAM_SHUTDOWN;
         }
 
@@ -1800,6 +1801,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
                 buffer != BLADERF_STREAM_NO_DATA &&
                 !async_tx_buffer_valid(stream)) {
                 stream->error_code = BLADERF_ERR_WOULD_BLOCK;
+                stream->tx_buffer_rejected = buffer;
                 if (stream_data->num_avail == stream_data->num_transfers) {
                     mark_stream_done(stream);
                 } else {

@@ -587,6 +587,7 @@ int async_run_stream(struct bladerf_stream *stream, bladerf_channel_layout layou
     stream->error_code = 0;
     stream->shutdown_requested = false;
     stream->state = STREAM_RUNNING;
+    stream->tx_buffer_rejected = NULL;
     stream->rx_withheld_notice_active = false;
     COND_SIGNAL(&stream->stream_started);
     MUTEX_UNLOCK(&stream->lock);

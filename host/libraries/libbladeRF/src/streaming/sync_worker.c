@@ -982,8 +982,20 @@ static sync_worker_state exec_idle_state(struct bladerf_sync *s)
 static void exec_running_state(struct bladerf_sync *s)
 {
     int status;
+    void *rejected_tx_buffer = NULL;
 
     status = async_run_stream(s->worker->stream, s->stream_config.layout);
+
+    if ((s->stream_config.layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        MUTEX_LOCK(&s->worker->stream->lock);
+        rejected_tx_buffer = s->worker->stream->tx_buffer_rejected;
+        s->worker->stream->tx_buffer_rejected = NULL;
+        MUTEX_UNLOCK(&s->worker->stream->lock);
+
+        if (rejected_tx_buffer != NULL) {
+            sync_worker_restore_rejected_tx_buffer(s, rejected_tx_buffer);
+        }
+    }
 
     log_verbose("%s worker: stream ended with: %s\n",
                 worker2str(s), bladerf_strerror(status));
@@ -1001,6 +1013,30 @@ static void exec_running_state(struct bladerf_sync *s)
         COND_SIGNAL(&s->buf_mgmt.buf_ready);
         MUTEX_UNLOCK(&s->buf_mgmt.lock);
     }
+}
+
+void sync_worker_restore_rejected_tx_buffer(struct bladerf_sync *s,
+                                            void *buffer)
+{
+    struct buffer_mgmt *b = &s->buf_mgmt;
+    unsigned int idx;
+
+    MUTEX_LOCK(&b->lock);
+    idx = sync_buf2idx(b, buffer);
+    if (idx < b->num_buffers && b->status[idx] == SYNC_BUFFER_IN_FLIGHT) {
+        /* The callback advanced cons_i before returning the buffer, but the
+         * backend's final RF check rejected it before USB submission. Restore
+         * precisely this slot; other IN_FLIGHT buffers may have reached USB
+         * and remain subject to the normal terminal-stream retirement path. */
+        b->status[idx] = SYNC_BUFFER_FULL;
+        b->submitter = SYNC_TX_SUBMITTER_CALLBACK;
+        b->cons_i = idx;
+        COND_SIGNAL(&b->buf_ready);
+    } else {
+        log_warning("Rejected TX callback buffer %p is not marked in flight\n",
+                    buffer);
+    }
+    MUTEX_UNLOCK(&b->lock);
 }
 
 void *sync_worker_task(void *arg)

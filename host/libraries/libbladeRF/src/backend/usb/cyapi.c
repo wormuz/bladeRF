@@ -716,6 +716,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             if (next_buffer != BLADERF_STREAM_SHUTDOWN &&
                 next_buffer != BLADERF_STREAM_NO_DATA &&
                 !async_tx_buffer_valid(stream)) {
+                stream->tx_buffer_rejected = next_buffer;
                 status = BLADERF_ERR_WOULD_BLOCK;
                 done = true;
                 break;
@@ -847,6 +848,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             next_buffer != BLADERF_STREAM_SHUTDOWN &&
             next_buffer != BLADERF_STREAM_NO_DATA &&
             !async_tx_buffer_valid(stream)) {
+            stream->tx_buffer_rejected = next_buffer;
             next_buffer = BLADERF_STREAM_SHUTDOWN;
             status = BLADERF_ERR_WOULD_BLOCK;
             done = true;

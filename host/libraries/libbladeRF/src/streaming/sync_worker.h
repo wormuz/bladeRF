@@ -147,6 +147,11 @@ void sync_worker_submit_request(struct sync_worker *w, unsigned int request);
 /* async.c calls this for each RX transfer withheld before rx_callback(). */
 void *sync_worker_rx_buffer_rejected(void *user_data, void *buffer);
 
+/* Restore a deferred TX buffer when the USB backend rejects the callback's
+ * selected buffer at its final RF-admission check. */
+void sync_worker_restore_rejected_tx_buffer(struct bladerf_sync *sync,
+                                            void *buffer);
+
 /* Discard completed RX ring entries that precede a newly fenced epoch.
  * Called with the sync lock held; this function acquires buf_mgmt.lock. */
 static inline void sync_worker_discard_rx_epoch(struct bladerf_sync *s)

@@ -61,6 +61,10 @@ struct bladerf_stream {
     /* The following items must be accessed atomically */
     int error_code;
     bladerf_stream_state state;
+    /* TX callback buffer rejected by the backend's final RF admission check.
+     * Protected by lock; the sync worker restores deferred-ring ownership
+     * after the backend has drained and returned. */
+    void *tx_buffer_rejected;
     bool shutdown_requested;
     bool deinit_requested;
     unsigned int active_stream_calls;
