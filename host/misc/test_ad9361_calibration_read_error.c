@@ -2927,13 +2927,31 @@ int main(void)
             uint32_t saved_rxpll_request = phy.rfpll_requested[0];
             bool saved_rxpll_request_valid = phy.rfpll_requested_valid[0];
             bool saved_rx_source_valid = phy.rfpll_source_valid[0];
+            bool saved_tx_source_valid = phy.rfpll_source_valid[1];
             unsigned writes_before = write_count;
 
             phy.rfpll_source_valid[0] = true;
+            phy.rfpll_source_valid[1] = true;
             ret = ad9361_set_rx_lo_freq(&phy, 7000000000ULL);
             if (ret != -EINVAL || write_count != writes_before) {
                 fprintf(stderr,
                         "Out-of-range RX LO request reached RFPLL programming: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_set_rx_lo_freq(&phy, 18000000000ULL);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Overflowing RX LO request reached RFPLL programming: "
+                        "ret=%" PRId32 " writes=%u->%u\n",
+                        ret, writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_set_tx_lo_freq(&phy, 18000000000ULL);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "Overflowing TX LO request reached RFPLL programming: "
                         "ret=%" PRId32 " writes=%u->%u\n",
                         ret, writes_before, write_count);
                 return EXIT_FAILURE;
@@ -2972,6 +2990,7 @@ int main(void)
             phy.rfpll_requested[0] = saved_rxpll_request;
             phy.rfpll_requested_valid[0] = saved_rxpll_request_valid;
             phy.rfpll_source_valid[0] = saved_rx_source_valid;
+            phy.rfpll_source_valid[1] = saved_tx_source_valid;
         }
 
         fail_write_reg = REG_CP_CURRENT;
