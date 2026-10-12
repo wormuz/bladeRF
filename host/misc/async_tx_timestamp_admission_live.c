@@ -61,14 +61,20 @@ static void *tx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     return buffer;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    const bool future_test = argc == 2 && strcmp(argv[1], "future") == 0;
     struct bladerf *dev = NULL;
     struct bladerf_stream *stream = NULL;
     struct test_state state = {0};
     bladerf_timestamp now;
     bladerf_loopback loopback;
     int status;
+
+    if (argc > 2 || (argc == 2 && !future_test)) {
+        fprintf(stderr, "usage: %s [future]\n", argv[0]);
+        return EXIT_FAILURE;
+    }
 
     status = bladerf_open(&dev, NULL);
     if (status != 0) {
@@ -157,7 +163,8 @@ int main(void)
         goto done;
     }
 
-    state.scheduled_timestamp = now - 1;
+    state.scheduled_timestamp = future_test ?
+        now + UINT64_C(3000000) : now - 1;
     status = bladerf_init_stream(&stream, dev, tx_callback, &state.buffers,
                                  TX_NUM_BUFFERS, BLADERF_FORMAT_PACKET_META,
                                  TX_BUFFER_SAMPLES, TX_NUM_TRANSFERS, &state);
@@ -167,12 +174,13 @@ int main(void)
     }
 
     status = bladerf_stream(stream, BLADERF_TX_X1);
+    const int expected_status = future_test ? 0 : BLADERF_ERR_TIME_PAST;
     printf("loopback=BIST stream_status=%d expected=%d callbacks=%u "
            "scheduled_timestamp=%llu initial_timestamp=%llu\n",
-           status, BLADERF_ERR_TIME_PAST, state.callback_count,
+           status, expected_status, state.callback_count,
            (unsigned long long)state.scheduled_timestamp,
            (unsigned long long)now);
-    if (status != BLADERF_ERR_TIME_PAST) {
+    if (status != expected_status) {
         static const uint16_t tx_status_regs[] = { 0x287, 0x017, 0x05e, 0x016 };
         static const char *const tx_status_names[] = {
             "tx_pll", "ensm", "bbpll", "calibration"
