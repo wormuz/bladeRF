@@ -343,6 +343,14 @@ int main(void)
     assert(bladerf2_tx_retune_release_request_after_cancel(true, 0));
     assert(!bladerf2_tx_retune_release_request_after_cancel(true, 1));
     assert(!bladerf2_tx_retune_release_request_after_cancel(false, 0));
+    assert(bladerf2_tx_retune_failure_counter_observation(
+        false, 0, 7) == BLADERF2_TX_RETUNE_FAILURE_COUNTER_BASELINE);
+    assert(bladerf2_tx_retune_failure_counter_observation(
+        true, 7, 7) == BLADERF2_TX_RETUNE_FAILURE_COUNTER_UNCHANGED);
+    assert(bladerf2_tx_retune_failure_counter_observation(
+        true, 7, 8) == BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED);
+    assert(bladerf2_tx_retune_failure_counter_observation(
+        true, UINT32_MAX, 0) == BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET);
     assert(bladerf2_retune_profile_slot_conflicts(4, 4, 4, 1));
     assert(bladerf2_retune_profile_slot_conflicts(4, 4, 9, 4));
     assert(!bladerf2_retune_profile_slot_conflicts(4, 4, 9, 1));

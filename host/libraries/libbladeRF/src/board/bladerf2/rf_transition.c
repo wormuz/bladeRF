@@ -1674,22 +1674,27 @@ static void *rx_fault_monitor_task(void *arg)
                     if (tx_retune2_watch_active &&
                         tx_link_status_error == 0 &&
                         tx_retune2_status == 0) {
-                        if (!board_data->tx_retune2_failure_count_valid) {
+                        const enum
+                            bladerf2_tx_retune_failure_counter_observation
+                                failure_observation =
+                            bladerf2_tx_retune_failure_counter_observation(
+                                board_data->tx_retune2_failure_count_valid,
+                                board_data->tx_retune2_failure_count_last,
+                                tx_retune2_failure_count);
+                        if (failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_BASELINE ||
+                            failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED ||
+                            failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET) {
+                            report_tx_retune_failure = failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED;
+                            report_tx_retune_counter_reset =
+                                failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET;
                             board_data->tx_retune2_failure_count_last =
                                 tx_retune2_failure_count;
                             board_data->tx_retune2_failure_count_valid = true;
-                            report_tx_retune_failure =
-                                tx_retune2_failure_count != 0;
-                        } else if (tx_retune2_failure_count !=
-                                   board_data->tx_retune2_failure_count_last) {
-                            report_tx_retune_failure =
-                                tx_retune2_failure_count >
-                                board_data->tx_retune2_failure_count_last;
-                            report_tx_retune_counter_reset =
-                                tx_retune2_failure_count <
-                                board_data->tx_retune2_failure_count_last;
-                            board_data->tx_retune2_failure_count_last =
-                                tx_retune2_failure_count;
                         }
                         if (report_tx_retune_failure ||
                             report_tx_retune_counter_reset) {
@@ -2313,19 +2318,26 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_retune_recovery_pending = true;
                     } else if (tx_retune2_status == 0 &&
                                tx_retune2_success_status == 0) {
-                        if (!board_data->tx_retune2_failure_count_valid) {
+                        const enum
+                            bladerf2_tx_retune_failure_counter_observation
+                                failure_observation =
+                            bladerf2_tx_retune_failure_counter_observation(
+                                board_data->tx_retune2_failure_count_valid,
+                                board_data->tx_retune2_failure_count_last,
+                                tx_retune2_failure_count);
+                        if (failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_BASELINE ||
+                            failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED ||
+                            failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET) {
+                            report_failure = failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED;
+                            report_counter_reset = failure_observation ==
+                                BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET;
                             board_data->tx_retune2_failure_count_last =
                                 tx_retune2_failure_count;
                             board_data->tx_retune2_failure_count_valid = true;
-                            report_failure = tx_retune2_failure_count != 0;
-                        } else if (tx_retune2_failure_count !=
-                                   board_data->tx_retune2_failure_count_last) {
-                            report_failure = tx_retune2_failure_count >
-                                board_data->tx_retune2_failure_count_last;
-                            report_counter_reset = tx_retune2_failure_count <
-                                board_data->tx_retune2_failure_count_last;
-                            board_data->tx_retune2_failure_count_last =
-                                tx_retune2_failure_count;
                         }
                         if (report_failure || report_counter_reset) {
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);

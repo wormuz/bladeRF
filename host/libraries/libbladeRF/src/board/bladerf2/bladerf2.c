@@ -3375,6 +3375,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
         return BLADERF_ERR_WOULD_BLOCK;
     }
     uint32_t success_count;
+    uint32_t tx_retune_failure_baseline = 0;
     uint32_t rx_retune_failure_baseline = 0;
     uint32_t rx_retune_success_baseline = 0;
     bool watch_rx_retune_failure =
@@ -3465,12 +3466,29 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         bool gate_abort_pending;
         bool success_count_valid;
+        bool failure_count_valid;
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         gate_abort_pending = board_data->tx_gate_abort_pending;
         success_count_valid = board_data->tx_retune2_success_count_valid;
+        failure_count_valid = board_data->tx_retune2_failure_count_valid;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (board_data->tx_recovery_blocked || gate_abort_pending) {
             return BLADERF_ERR_WOULD_BLOCK;
+        }
+        /* NIOS retains this counter across host close/open. Capture its
+         * baseline before arming the FPGA gate or sending this request;
+         * otherwise the monitor can mistake an earlier session's nonzero
+         * count for a failure of the new TX tune. */
+        if (!failure_count_valid) {
+            CHECK_STATUS(nios_retune2_failure_count_read(
+                dev, BLADERF_MODULE_TX, &tx_retune_failure_baseline));
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (!board_data->tx_retune2_failure_count_valid) {
+                board_data->tx_retune2_failure_count_last =
+                    tx_retune_failure_baseline;
+                board_data->tx_retune2_failure_count_valid = true;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         }
         if (!success_count_valid) {
             CHECK_STATUS(nios_retune2_success_count_read(

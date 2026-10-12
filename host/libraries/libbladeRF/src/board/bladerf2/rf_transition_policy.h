@@ -142,6 +142,31 @@ static inline bool bladerf2_tx_retune_release_request_after_cancel(
     return release_requested && pending_before_clear == 0;
 }
 
+enum bladerf2_tx_retune_failure_counter_observation {
+    BLADERF2_TX_RETUNE_FAILURE_COUNTER_BASELINE,
+    BLADERF2_TX_RETUNE_FAILURE_COUNTER_UNCHANGED,
+    BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED,
+    BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET,
+};
+
+/* The NIOS failure counter survives a host handle close/open. Its first
+ * observation establishes a baseline; a nonzero historical value is not
+ * evidence that the currently watched queue failed. */
+static inline enum bladerf2_tx_retune_failure_counter_observation
+bladerf2_tx_retune_failure_counter_observation(
+    bool baseline_valid, uint32_t baseline, uint32_t observed)
+{
+    if (!baseline_valid) {
+        return BLADERF2_TX_RETUNE_FAILURE_COUNTER_BASELINE;
+    }
+    if (observed == baseline) {
+        return BLADERF2_TX_RETUNE_FAILURE_COUNTER_UNCHANGED;
+    }
+    return observed > baseline
+        ? BLADERF2_TX_RETUNE_FAILURE_COUNTER_ADVANCED
+        : BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET;
+}
+
 static inline bool bladerf2_retune_completion_matches(
     uint64_t requested_timestamp, uint64_t requested_frequency_hz,
     uint16_t requested_profile, uint64_t completed_timestamp,
