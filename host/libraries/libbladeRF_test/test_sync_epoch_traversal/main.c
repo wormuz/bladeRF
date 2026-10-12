@@ -688,6 +688,37 @@ static void test_async_tx_submit_gate_closure_is_retryable(void)
     assert(MUTEX_DESTROY(&stream.lock) == 0);
 }
 
+static void test_async_tx_nonblocking_submit_does_not_wait_for_worker(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf_stream stream = {0};
+    int16_t samples[8] = {0};
+    size_t length = sizeof(samples);
+
+    dev.board = &test_async_board;
+    dev.backend = &test_tx_backend;
+    stream.dev = &dev;
+    stream.layout = BLADERF_TX_X1;
+    stream.state = STREAM_IDLE;
+    test_tx_submit_calls = 0;
+    test_tx_buffer_valid = true;
+    test_tx_invalidate_at_check = 0;
+    test_tx_validity_checks = 0;
+
+    assert(MUTEX_INIT(&stream.lock) == 0);
+    assert(COND_INIT(&stream.stream_started) == 0);
+    assert(COND_INIT(&stream.can_submit_buffer) == 0);
+
+    /* A non-blocking submission must not wait for a future worker start. */
+    assert(async_submit_stream_buffer(&stream, samples, &length, 0, true) ==
+           BLADERF_ERR_WOULD_BLOCK);
+    assert(test_tx_submit_calls == 0);
+
+    assert(COND_DESTROY(&stream.can_submit_buffer) == 0);
+    assert(COND_DESTROY(&stream.stream_started) == 0);
+    assert(MUTEX_DESTROY(&stream.lock) == 0);
+}
+
 static void test_sync_tx_does_not_replay_rejected_samples(void)
 {
     struct bladerf_sync sync = {0};
@@ -3277,6 +3308,7 @@ int main(void)
 
     test_tx_async_shutdown_reports_only_real_errors();
     test_async_tx_submit_gate_closure_is_retryable();
+    test_async_tx_nonblocking_submit_does_not_wait_for_worker();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();

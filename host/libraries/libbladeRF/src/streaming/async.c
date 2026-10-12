@@ -645,6 +645,14 @@ int async_submit_stream_buffer(struct bladerf_stream *stream,
 
     if (buffer != BLADERF_STREAM_SHUTDOWN) {
         while (stream->state != STREAM_RUNNING) {
+            /* The non-blocking API promises to return when submission would
+             * have to wait. This includes waiting for the stream worker to
+             * start, not only waiting for a backend transfer slot. */
+            if (nonblock) {
+                status = BLADERF_ERR_WOULD_BLOCK;
+                goto error;
+            }
+
             log_debug("Buffer submitted while stream's not running. "
                     "Waiting for stream to start.\n");
 
