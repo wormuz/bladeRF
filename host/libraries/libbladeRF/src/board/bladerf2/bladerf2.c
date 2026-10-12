@@ -694,7 +694,15 @@ static void bladerf2_close(struct bladerf *dev)
                     if (dev->backend->is_fpga_configured(dev) &&
                         have_cap(board_data->capabilities,
                                  BLADERF_CAP_SCHEDULED_RETUNE)) {
-                        dev->board->cancel_scheduled_retunes(dev, ch);
+                        int status = dev->board->cancel_scheduled_retunes(
+                            dev, ch);
+                        if (status != 0) {
+                            log_error("%s: could not cancel scheduled %s "
+                                      "retunes during close: %s\n",
+                                      __FUNCTION__,
+                                      dir == BLADERF_TX ? "TX" : "RX",
+                                      bladerf_strerror(status));
+                        }
                     }
                 }
             }
