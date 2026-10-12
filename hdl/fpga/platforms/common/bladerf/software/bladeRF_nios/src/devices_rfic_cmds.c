@@ -519,7 +519,12 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
 {
     bladerf_rfic_init_state new_state = (bladerf_rfic_init_state)init_state;
 
-    if (state->init_state == new_state) {
+    /* OFF is also the fail-closed state for a failed standby transition.
+     * That path may retain the PHY or fail to clear RFFE controls, so an
+     * explicit OFF request must retry teardown instead of treating the
+     * state label as proof that cleanup completed. */
+    if (state->init_state == new_state &&
+        new_state != BLADERF_RFIC_INIT_STATE_OFF) {
         DBG("%s: already in state %x\n", __FUNCTION__, state->init_state);
         return true;
     }
