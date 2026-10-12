@@ -113,6 +113,7 @@ static void bladeRFConfigUtoPDmaCallback(CyU3PDmaChannel *chHandle, CyU3PDmaCbTy
         status = CyU3PDmaChannelCommitBuffer (chHandle, input->buffer_p.count * 2, 0);
         if (status != CY_U3P_SUCCESS) {
             LOG_ERROR(status);
+            CyFxAppErrorHandler(status);
         }
 
         /* Increment the counter. */
