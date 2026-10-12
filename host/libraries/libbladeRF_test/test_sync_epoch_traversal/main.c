@@ -272,6 +272,36 @@ static void test_rx_packet_meta_length_is_bounded_by_transfer(void)
         packet, sizeof(packet) + 1, sizeof(packet)));
 }
 
+static void test_sync_rx_packet_meta_capacity_rejection_preserves_output(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta = {0};
+    const uint32_t payload[4] = {
+        UINT32_C(0x11223344), UINT32_C(0x55667788),
+        UINT32_C(0x99aabbcc), UINT32_C(0xddeeff00),
+    };
+    uint32_t output[3];
+    const uint32_t sentinel = UINT32_C(0xa5a5a5a5);
+
+    fixture_init(&f);
+    f.sync.stream_config.format = BLADERF_FORMAT_PACKET_META;
+    f.sync.stream_config.bytes_per_sample = sizeof(uint32_t);
+    f.sync.stream_config.samples_per_buffer = SAMPLES_PER_BUFFER;
+    metadata_set_packet(f.buffers[0], 17, 0, 4, 0, 0);
+    memcpy(f.buffers[0] + METADATA_HEADER_SIZE, payload, sizeof(payload));
+    for (size_t i = 0; i < sizeof(output) / sizeof(output[0]); ++i) {
+        output[i] = sentinel;
+    }
+
+    assert(sync_rx(&f.sync, output, 3, &meta, 0) == BLADERF_ERR_MEM);
+    assert(meta.actual_count == 0);
+    for (size_t i = 0; i < sizeof(output) / sizeof(output[0]); ++i) {
+        assert(output[i] == sentinel);
+    }
+
+    fixture_destroy(&f);
+}
+
 static void test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation(void)
 {
     struct bladerf_sync sync = {0};
@@ -3203,6 +3233,7 @@ int main(void)
     test_sync_packet_meta_tx_length_includes_header();
     test_sync_packet_meta_tx_accepts_odd_x2_payload_within_capacity();
     test_rx_packet_meta_length_is_bounded_by_transfer();
+    test_sync_rx_packet_meta_capacity_rejection_preserves_output();
     test_sync_tx_x2_rejects_unpaired_samples_before_burst_mutation();
     test_sync_tx_rejects_timestamp_before_wrapped_counter();
     test_rx_transition_apis_reject_non_bladerf2_before_state_access();
