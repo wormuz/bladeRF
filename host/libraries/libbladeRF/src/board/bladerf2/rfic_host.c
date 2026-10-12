@@ -107,6 +107,7 @@ static int _rfic_host_initialize(struct bladerf *dev)
     size_t i;
     uint32_t config_gpio;
     int status;
+    int cleanup_status;
 
     log_debug("%s: initializating\n", __FUNCTION__);
 
@@ -232,16 +233,29 @@ init_fail:
     /* Initialization is transactional from the board's point of view. The
      * RFIC may be partially programmed, so disconnect the RF path, remove
      * the partial ADI context, and make a later INIT start from OFF. Keep the
-     * first failing operation's status for the caller. */
-    (void)_rfic_host_clear_rffe_control(dev);
+     * original error unless cleanup fails: that leaves hardware state less
+     * certain and must be visible to the caller. */
+    cleanup_status = _rfic_host_clear_rffe_control(dev);
+    if (cleanup_status < 0) {
+        log_error("Failed to disconnect RFFE after AD9361 init error %d: %s\n",
+                  status, bladerf_strerror(cleanup_status));
+    }
     if (NULL != board_data->phy) {
-        (void)ad9361_remove(board_data->phy);
+        int remove_status = ad9361_remove(board_data->phy);
+        if (remove_status < 0) {
+            log_error("Failed to remove partial AD9361 context after init "
+                      "error %d: %s\n", status,
+                      bladerf_strerror(remove_status));
+            if (cleanup_status == 0) {
+                cleanup_status = remove_status;
+            }
+        }
         board_data->phy = NULL;
     }
     board_data->rxfir_known = false;
     board_data->txfir_known = false;
     bladerf2_axi_io_set_dev(NULL);
-    return status;
+    return cleanup_status < 0 ? cleanup_status : status;
 }
 
 static int _rfic_host_deinitialize(struct bladerf *dev)
