@@ -22,8 +22,8 @@
 --
 -- Two cases, both required:
 --   scheduled  a burst timestamped in the future must produce NO valid
---              samples before that timestamp. Packed mode may prefetch one
---              FIFO word one clock early to align samples across word edges.
+--              samples before that timestamp. Packed mode may fill a two-word
+--              skid queue before the start edge to align FIFO word boundaries.
 --   now        a burst with timestamp 0 (the host's TX_NOW encoding, which
 --              the reader turns into all ones by subtracting 1) must start
 --              immediately
@@ -51,7 +51,8 @@ entity fifo_reader_tb is
         -- Sample timestamp for the burst. 0 means "transmit now".
         TGT      : natural := 4000;
         NSTREAMS : natural := 1;
-        PACKED   : boolean := false
+        PACKED   : boolean := false;
+        PROGRESS_TIMEOUT_LOG2 : natural := 22
     );
 end entity;
 
@@ -127,6 +128,7 @@ architecture sim of fifo_reader_tb is
     signal uf_count   : unsigned(63 downto 0);
     signal uf_dur     : unsigned(15 downto 0) := x"ffff";
     signal uf_suppress : std_logic := '0';
+    signal fault_sticky : std_logic_vector(4 downto 0);
 
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
@@ -261,7 +263,8 @@ begin
             FIFO_USEDW_WIDTH      => 12,
             FIFO_DATA_WIDTH       => 64,
             META_FIFO_USEDW_WIDTH => 3,
-            META_FIFO_DATA_WIDTH  => 128
+            META_FIFO_DATA_WIDTH  => 128,
+            PROGRESS_TIMEOUT_LOG2 => PROGRESS_TIMEOUT_LOG2
         )
         port map (
             clock                 => clock,
@@ -291,7 +294,8 @@ begin
             underflow_count       => uf_count,
             underflow_duration    => uf_dur,
             underflow_suppress    => uf_suppress,
-            link_start_toggle     => link_start_toggle
+            link_start_toggle     => link_start_toggle,
+            fault_sticky          => fault_sticky
         );
 
     stim : process
@@ -345,11 +349,10 @@ begin
                            ", expected " & integer'image(TGT)
                     severity failure;
             else
-                -- Packed mode prefetches one FIFO word so the sample that
-                -- straddles a word boundary is ready at the scheduled edge.
-                -- The application-visible sample boundary must still be exact.
-                assert reads_before = 1
-                    report "packed TX did not limit early read to one prefetch word"
+                -- The packed skid queue holds two words while waiting. The
+                -- application-visible sample boundary must still be exact.
+                assert reads_before = 2
+                    report "packed TX did not fill its two-word prefetch queue"
                     severity failure;
                 assert first_valid_timestamp = to_unsigned(TGT, 64)
                     report "scheduled packed samples opened at " &
@@ -371,10 +374,16 @@ begin
                 report "packed TX samples did not resume after their timestamp"
                 severity failure;
         end if;
+        assert fault_sticky(1) = '0' and fault_sticky(2) = '0'
+            report "scheduled TX hold was reported as transport timeout: " &
+                   to_hstring(fault_sticky)
+            severity failure;
 
         meta_en <= '0';
         fifo_empty <= '1';
-        wait for 30 ns;
+        -- Packed mode can retain two prefetched words after the source FIFO
+        -- becomes empty; let the skid queue drain before checking starvation.
+        wait for 100 ns;
         assert uf_count = 1
             report "real TX starvation after resume was not counted"
             severity failure;

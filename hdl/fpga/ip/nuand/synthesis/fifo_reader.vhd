@@ -130,8 +130,10 @@ architecture simple of fifo_reader is
     signal   link_active_i      : std_logic := '0';
     signal   speed_latched_i    : std_logic := '0';
     signal   protocol_violation : std_logic := '0';
+    signal   expected_idle_i    : std_logic;
     signal   epoch_counter      : unsigned(7 downto 0) := (others => '0');
     signal   link_toggle_prev   : std_logic := '0';
+    signal   link_start_event_i : std_logic;
     -- Toggle inputs arrive through synchronizers that still hold the
     -- pre-reset value for a few cycles after this block leaves reset,
     -- while the controller that drives them was reset to zero: every
@@ -286,7 +288,108 @@ architecture simple of fifo_reader is
     signal packed_buffer_write_i : std_logic := '0';
     signal packed_buffer_data_i : std_logic_vector(47 downto 0) := (others => '0');
 
+    -- Decouple the packed sample unpacker from the show-ahead FIFO. The
+    -- two-word queue absorbs the FIFO read latency so a scheduled-start
+    -- decision never drives the M10K read port combinationally.
+    signal packed_word0_i : std_logic_vector(63 downto 0) := (others => '0');
+    signal packed_word1_i : std_logic_vector(63 downto 0) := (others => '0');
+    signal packed_head_i : std_logic := '0';
+    signal packed_tail_i : std_logic := '0';
+    signal packed_count_i : natural range 0 to 2 := 0;
+    signal packed_active_i : std_logic;
+    signal packed_input_enable_i : std_logic;
+    signal packed_refill_i : std_logic;
+    signal packed_pop_i : std_logic;
+    signal packed_data_i : std_logic_vector(63 downto 0);
+    signal sample_fifo_empty_i : std_logic;
+    signal sample_fifo_starved_i : std_logic;
+
 begin
+
+    link_start_event_i <= '1' when link_start_toggle /= link_toggle_prev and
+                                   enable = '1' and settle_count = 0
+                          else '0';
+    expected_idle_i <= '1' when enable = '1' and meta_en = '1' and
+                                ((meta_current.state = META_WAIT and
+                                  meta_current.due_combined = '0') or
+                                 (meta_current.state = META_LOAD and
+                                  meta_current.meta_fifo_empty = '1'))
+                       else '0';
+    packed_active_i <= '1' when highly_packed_mode_en = '1' and
+                                NUM_STREAMS = 2 and FIFO_DATA_WIDTH = 64 and
+                                packet_en = '0'
+                       else '0';
+    packed_input_enable_i <= '1' when meta_en = '0' or
+                                      meta_current.state = META_EVAL or
+                                      meta_current.state = META_WAIT or
+                                      meta_current.state = META_DOWNCOUNT
+                             else '0';
+    packed_refill_i <= '1' when packed_active_i = '1' and
+                                packed_input_enable_i = '1' and enable = '1' and
+                                link_active_i = '1' and abort_active_i = '0' and
+                                link_start_event_i = '0' and
+                                fifo_empty = '0' and packed_count_i < 2
+                       else '0';
+    packed_pop_i <= fifo_future.fifo_read when packed_active_i = '1' else '0';
+    packed_data_i <= packed_word0_i when packed_head_i = '0' else packed_word1_i;
+    sample_fifo_empty_i <= '1' when packed_active_i = '1' and packed_count_i = 0
+                           else '0' when packed_active_i = '1'
+                           else fifo_empty;
+    sample_fifo_starved_i <= '1' when packed_active_i = '1' and
+                                      packed_count_i = 0 and fifo_empty = '1'
+                             else '1' when packed_active_i = '0' and fifo_empty = '1'
+                             else '0';
+
+    -- In packed mode the external FIFO can be read ahead up to two words.
+    -- The unpacker consumes the local queue at its existing logical read
+    -- points; other formats retain the original registered FIFO interface.
+    fifo_read <= packed_refill_i when packed_active_i = '1'
+                 else fifo_current.fifo_read;
+
+    packed_word_queue : process(clock, reset)
+        variable refill_v : boolean;
+        variable pop_v : boolean;
+        variable count_v : integer range 0 to 2;
+    begin
+        if reset = '1' then
+            packed_word0_i <= (others => '0');
+            packed_word1_i <= (others => '0');
+            packed_head_i <= '0';
+            packed_tail_i <= '0';
+            packed_count_i <= 0;
+        elsif rising_edge(clock) then
+            if packed_active_i = '0' or enable = '0' or link_active_i = '0' or
+               abort_active_i = '1' or link_start_event_i = '1' then
+                packed_head_i <= '0';
+                packed_tail_i <= '0';
+                packed_count_i <= 0;
+            elsif enable = '1' then
+                refill_v := packed_refill_i = '1';
+                pop_v := packed_pop_i = '1' and packed_count_i /= 0;
+                count_v := packed_count_i;
+
+                if refill_v then
+                    if packed_tail_i = '0' then
+                        packed_word0_i <= fifo_data;
+                    else
+                        packed_word1_i <= fifo_data;
+                    end if;
+                    packed_tail_i <= not packed_tail_i;
+                end if;
+
+                if pop_v then
+                    packed_head_i <= not packed_head_i;
+                end if;
+
+                if refill_v and not pop_v then
+                    count_v := count_v + 1;
+                elsif pop_v and not refill_v then
+                    count_v := count_v - 1;
+                end if;
+                packed_count_i <= count_v;
+            end if;
+        end if;
+    end process;
 
     -- Throw compile/synthesis error if things don't make sense
     assert ( (in_sample_controls'low = out_samples'low) and
@@ -303,7 +406,6 @@ begin
     -- violation (sticky, independent of speed_mismatch) -- it never
     -- "heals" the protocol or clears mismatch by itself.
     latch_usb_speed : process( clock, reset )
-        variable start_link_pulse  : std_logic;
         variable stop_link_pulse   : std_logic;
         variable clear_fault_pulse : std_logic;
         variable abort_active_next : std_logic;
@@ -336,10 +438,6 @@ begin
                 settle_count <= settle_count - 1;
             end if;
 
-            start_link_pulse := '0';
-            if( link_start_toggle /= link_toggle_prev and enable = '1' and settle_count = 0 ) then
-                start_link_pulse := '1';
-            end if;
             link_toggle_prev <= link_start_toggle;
 
             stop_link_pulse := '0';
@@ -354,7 +452,7 @@ begin
             end if;
             clear_toggle_prev <= clear_fault_toggle;
 
-            if( start_link_pulse = '1' ) then
+            if( link_start_event_i = '1' ) then
                 latched_usb_speed <= usb_speed;
                 speed_mismatch    <= '0';
                 link_active_i     <= '1';
@@ -383,6 +481,12 @@ begin
                     -- Disabled while the shared epoch is still up (see
                     -- fifo_writer): hold the watchdog, not a stall.
                     progress_count  <= (others => '0');
+                elsif( expected_idle_i = '1' ) then
+                    -- A scheduled packet intentionally waits for its target;
+                    -- META_LOAD with an empty metadata FIFO also means the
+                    -- host has no transfer queued yet. Neither is a stalled
+                    -- GPIF transfer, even if sample words were prefetched.
+                    progress_count <= (others => '0');
                 elsif( read_this_epoch = '0' and fifo_empty = '1' ) then
                     -- TX is enabled before the host necessarily submits its
                     -- first buffer. An empty FIFO is an idle producer, not a
@@ -407,13 +511,13 @@ begin
             -- Sticky transport-fault flags: set-dominant, cleared only by
             -- reset / new epoch / explicit clear-fault pulse -- never by
             -- the fault condition healing.
-            if( start_link_pulse = '1' ) then
+            if( link_start_event_i = '1' ) then
                 fault_sticky_i <= (others => '0');
             elsif( clear_fault_pulse = '1' ) then
                 fault_sticky_i <= (others => '0');
             end if;
 
-            if( usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0' ) then
+            if( usb_speed /= latched_usb_speed and link_active_i = '1' and link_start_event_i = '0' ) then
                 fault_sticky_i(FAULT_BIT_SPEED_MISMATCH) <= '1';
             end if;
 
@@ -421,8 +525,9 @@ begin
             -- epoch ever moved a sample. Guarded on start_link_pulse = '0'
             -- so the clear at the top of a new epoch is not undone by a
             -- counter that has not been reset yet in the same cycle.
-            if( link_active_i = '1' and enable = '1' and start_link_pulse = '0' and
+            if( link_active_i = '1' and enable = '1' and link_start_event_i = '0' and
                 progress_count(PROGRESS_TIMEOUT_LOG2) = '1' and
+                expected_idle_i = '0' and
                 (read_this_epoch = '1' or fifo_empty = '0') ) then
                 if( read_this_epoch = '0' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
@@ -439,7 +544,7 @@ begin
             -- cycle's fault_sticky_i writes.
             abort_active_next := '0';
             if( stop_link_pulse = '1'
-                or (usb_speed /= latched_usb_speed and link_active_i = '1' and start_link_pulse = '0')
+                or (usb_speed /= latched_usb_speed and link_active_i = '1' and link_start_event_i = '0')
                 or abort_active_i = '1' ) then
                 abort_active_next := '1';
             end if;
@@ -456,7 +561,7 @@ begin
             -- cleared only by reset or a new epoch. A stop pulse drops
             -- link_active_i but leaves sticky faults and epoch_counter
             -- untouched so the host can read them after stop.
-            if( start_link_pulse = '1' ) then
+            if( link_start_event_i = '1' ) then
                 abort_active_i <= '0';
             else
                 abort_active_i <= abort_active_next;
@@ -736,16 +841,6 @@ begin
         end if;
     end process;
 
-    -- In highly packed SC12 mode, the next 64-bit FIFO word is needed while
-    -- assembling the sample that spans the current word boundary. Present
-    -- the already-decided read request before the edge that registers the
-    -- current sample, so the show-ahead FIFO advances on that edge. The
-    -- registered request is one cycle too late for the packed carry. Keep
-    -- the established registered timing for all other formats.
-    fifo_read <= fifo_future.fifo_read
-        when highly_packed_mode_en = '1' and NUM_STREAMS = 2
-        else fifo_current.fifo_read;
-
     -- Keep the wide SC12 carry buffer out of the aggregate FSM record. A
     -- dedicated enabled register avoids the record-wide next-state mux on
     -- this datapath while preserving the original update edge. Do not gate
@@ -765,11 +860,11 @@ begin
         end loop;
 
         packed_buffer_data_i <=
-            fifo_data(fifo_data'high downto fifo_data'high-47);
+            packed_data_i(packed_data_i'high downto packed_data_i'high-47);
         packed_buffer_write_i <= '0';
-        if( highly_packed_mode_en = '1' and NUM_STREAMS = 2 and
+        if( packed_active_i = '1' and
             fifo_current.state = READ_SAMPLES and fifo_holdoff = '0' and
-            fifo_empty = '0' and fifo_current.samples_left = 0 and
+            sample_fifo_empty_i = '0' and fifo_current.samples_left = 0 and
             read_req_v = '1' ) then
             -- This predicate is the exact write condition from the READ_SAMPLES
             -- branch. It intentionally does not depend on packed_cycle: cycle
@@ -941,8 +1036,8 @@ begin
             elsif (cycle = 2) then
                 rv(0).data_i := resize(signed(previous_data(27 downto 16)),rv(0).data_i'length);
                 rv(0).data_q := resize(signed(previous_data(39 downto 28)),rv(0).data_q'length);
-                rv(1).data_i := resize(signed(fifo_data(3 downto 0) & previous_data(47 downto 40)), rv(1).data_i'length);
-                rv(1).data_q := resize(signed(fifo_data(15 downto 4)), rv(1).data_q'length);
+                rv(1).data_i := resize(signed(data(3 downto 0) & previous_data(47 downto 40)), rv(1).data_i'length);
+                rv(1).data_q := resize(signed(data(15 downto 4)), rv(1).data_q'length);
             elsif (cycle = 3) then
                 rv(0).data_i := resize(signed(previous_data(11 downto 0)),rv(0).data_i'length);
                 rv(0).data_q := resize(signed(previous_data(23 downto 12)),rv(0).data_q'length);
@@ -991,9 +1086,9 @@ begin
 
         fifo_future.packet_control.data_valid <= '0';
         -- MIMO UNPACKER: STEP 1 of 5
-        if (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
+        if (packed_active_i = '1') then
             unpack_sc12q11(
-                data => fifo_data,
+                data => packed_data_i,
                 previous_data => packed_buffer_i,
                 cycle => fifo_current.packed_cycle,
                 rv => unpacked
@@ -1098,7 +1193,7 @@ begin
                     -- Pause for a spell
                     fifo_future.state <= READ_HOLDOFF;
 
-                elsif( fifo_empty = '0' and
+                elsif( sample_fifo_empty_i = '0' and
                        (meta_en = '0' or (meta_en = '1' and meta_current.meta_time_go = '1')) ) then
 
                     -- Check for valid data request
@@ -1118,7 +1213,7 @@ begin
                             if( eight_bit_mode_en = '1' ) then
                                 fifo_future.fifo_read <= read_req and fifo_current.eight_bit_sample_sel;
                                 fifo_future.eight_bit_sample_sel <= not fifo_current.eight_bit_sample_sel;
-                            elsif (highly_packed_mode_en = '1' and NUM_STREAMS = 2) then
+                            elsif (packed_active_i = '1') then
                                 fifo_future.packed_cycle <= (fifo_current.packed_cycle + 1);
                                 if fifo_current.packed_cycle = 3 then
                                     fifo_future.packed_cycle <= 0;
@@ -1181,7 +1276,7 @@ begin
             end loop;
         end if;
 
-        if( fifo_empty = '1' and packet_en = '0' ) then
+        if( sample_fifo_empty_i = '1' and packet_en = '0' ) then
             -- Re-evaluate the MIMO settings
             fifo_future.state <= FIFO_FSM_RESET_VALUE.state;
         end if;
@@ -1206,7 +1301,7 @@ begin
         elsif( rising_edge( clock ) ) then
             underflow_detected <= '0';
             if( enable = '1' and underflow_suppress = '0' and
-                fifo_empty = '1' and
+                sample_fifo_starved_i = '1' and
                 (meta_en = '0' or (meta_en = '1' and meta_current.meta_time_go = '1')) ) then
                 underflow_detected <= '1';
             end if;

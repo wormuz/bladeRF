@@ -34,6 +34,12 @@ ghdl -r --std=08 fifo_reader_tb -gTGT=0 --assert-level=error \
     --stop-time=70us
 ghdl -r --std=08 fifo_reader_tb -gTGT=4000 -gNSTREAMS=2 -gPACKED=true \
     --assert-level=error --stop-time=70us
+ghdl -r --std=08 fifo_reader_tb -gTGT=0 -gNSTREAMS=2 -gPACKED=true \
+    --assert-level=error --stop-time=70us
+ghdl -r --std=08 fifo_reader_tb -gTGT=4000 -gPROGRESS_TIMEOUT_LOG2=4 \
+    --assert-level=error --stop-time=70us
+ghdl -r --std=08 fifo_reader_tb -gTGT=4000 -gNSTREAMS=2 -gPACKED=true \
+    -gPROGRESS_TIMEOUT_LOG2=4 --assert-level=error --stop-time=70us
 
 ghdl -e --std=08 fifo_reader_edge_tb
 ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
