@@ -78,22 +78,33 @@ CyU3PReturnStatus_t CyFxSpiWaitForStatus(void)
 {
     uint8_t buf[2], rd_buf[2];
     CyU3PReturnStatus_t status = CY_U3P_SUCCESS;
+    CyU3PReturnStatus_t ssnStatus;
+    uint32_t start = CyU3PGetTime();
 
     /* Wait for status response from SPI flash device. */
     do {
         buf[0] = 0x06;  /* Write enable command. */
 
-        CyU3PSpiSetSsnLine(CyFalse);
+        status = CyU3PSpiSetSsnLine(CyFalse);
+        if (status != CY_U3P_SUCCESS) {
+            return status;
+        }
         status = CyU3PSpiTransmitWords (buf, 1);
-        CyU3PSpiSetSsnLine(CyTrue);
+        ssnStatus = CyU3PSpiSetSsnLine(CyTrue);
         if (status != CY_U3P_SUCCESS) {
             LOG_ERROR(status);
             return status;
         }
+        if (ssnStatus != CY_U3P_SUCCESS) {
+            return ssnStatus;
+        }
 
         buf[0] = 0x05;  /* Read status command */
 
-        CyU3PSpiSetSsnLine(CyFalse);
+        status = CyU3PSpiSetSsnLine(CyFalse);
+        if (status != CY_U3P_SUCCESS) {
+            return status;
+        }
         status = CyU3PSpiTransmitWords(buf, 1);
         if (status != CY_U3P_SUCCESS) {
             LOG_ERROR(status);
@@ -102,10 +113,17 @@ CyU3PReturnStatus_t CyFxSpiWaitForStatus(void)
         }
 
         status = CyU3PSpiReceiveWords(rd_buf, 2);
-        CyU3PSpiSetSsnLine(CyTrue);
+        ssnStatus = CyU3PSpiSetSsnLine(CyTrue);
         if(status != CY_U3P_SUCCESS) {
             LOG_ERROR(status);
             return status;
+        }
+        if (ssnStatus != CY_U3P_SUCCESS) {
+            return ssnStatus;
+        }
+
+        if ((uint32_t)(CyU3PGetTime() - start) >= 30000) {
+            return CY_U3P_ERROR_FAILURE;
         }
 
     } while ((rd_buf[0] & 1) || (!(rd_buf[0] & 0x2)));
@@ -157,7 +175,10 @@ CyU3PReturnStatus_t CyFxSpiTransfer(uint16_t pageAddress, uint16_t byteCount,
                     return status;
             }
 
-            CyU3PSpiSetSsnLine(CyFalse);
+            status = CyU3PSpiSetSsnLine(CyFalse);
+            if (status != CY_U3P_SUCCESS) {
+                return status;
+            }
             status = CyU3PSpiTransmitWords(location, location[0] == 0x03 ? 4 : 5);
 
             if (status != CY_U3P_SUCCESS) {
@@ -172,7 +193,10 @@ CyU3PReturnStatus_t CyFxSpiTransfer(uint16_t pageAddress, uint16_t byteCount,
                 return status;
             }
 
-            CyU3PSpiSetSsnLine(CyTrue);
+            status = CyU3PSpiSetSsnLine(CyTrue);
+            if (status != CY_U3P_SUCCESS) {
+                return status;
+            }
         } else { /* Write */
             /* Write command */
             if (isOtp && NuandGetSPIManufacturer() == 0xEF) {
@@ -185,7 +209,10 @@ CyU3PReturnStatus_t CyFxSpiTransfer(uint16_t pageAddress, uint16_t byteCount,
             if (status != CY_U3P_SUCCESS)
                 return status;
 
-            CyU3PSpiSetSsnLine(CyFalse);
+            status = CyU3PSpiSetSsnLine(CyFalse);
+            if (status != CY_U3P_SUCCESS) {
+                return status;
+            }
             status = CyU3PSpiTransmitWords(location, 4);
             if (status != CY_U3P_SUCCESS) {
                 LOG_ERROR(status);
@@ -199,7 +226,10 @@ CyU3PReturnStatus_t CyFxSpiTransfer(uint16_t pageAddress, uint16_t byteCount,
                 return status;
             }
 
-            CyU3PSpiSetSsnLine(CyTrue);
+            status = CyU3PSpiSetSsnLine(CyTrue);
+            if (status != CY_U3P_SUCCESS) {
+                return status;
+            }
         }
 
         byteAddress += FLASH_PAGE_SIZE;
@@ -214,14 +244,12 @@ CyU3PReturnStatus_t CyFxSpiTransfer(uint16_t pageAddress, uint16_t byteCount,
 CyU3PReturnStatus_t CyFxSpiEraseSector(CyBool_t isErase, uint8_t sector)
 {
     uint32_t temp = 0;
+    uint32_t start;
     uint8_t  location[4], rdBuf[2];
     CyU3PReturnStatus_t status = CY_U3P_SUCCESS;
+    CyU3PReturnStatus_t ssnStatus;
 
-    location[0] = 0x06;  /* Write enable. */
-
-    CyU3PSpiSetSsnLine (CyFalse);
-    status = CyU3PSpiTransmitWords (location, 1);
-    CyU3PSpiSetSsnLine (CyTrue);
+    status = CyFxSpiWaitForStatus();
     if (status != CY_U3P_SUCCESS)
         return status;
 
@@ -233,18 +261,39 @@ CyU3PReturnStatus_t CyFxSpiEraseSector(CyBool_t isErase, uint8_t sector)
         location[2] = (temp >> 8) & 0xFF;
         location[3] = temp & 0xFF;
 
-        CyU3PSpiSetSsnLine (CyFalse);
+        status = CyU3PSpiSetSsnLine (CyFalse);
+        if (status != CY_U3P_SUCCESS)
+            return status;
         status = CyU3PSpiTransmitWords (location, 4);
-        CyU3PSpiSetSsnLine (CyTrue);
+        ssnStatus = CyU3PSpiSetSsnLine (CyTrue);
+        if (status != CY_U3P_SUCCESS)
+            return status;
+        if (ssnStatus != CY_U3P_SUCCESS)
+            return ssnStatus;
     }
 
     location[0] = 0x05; /* RDSTATUS */
+    start = CyU3PGetTime();
     do {
-        CyU3PSpiSetSsnLine (CyFalse);
+        status = CyU3PSpiSetSsnLine (CyFalse);
+        if (status != CY_U3P_SUCCESS)
+            return status;
         status = CyU3PSpiTransmitWords (location, 1);
+        if (status != CY_U3P_SUCCESS) {
+            CyU3PSpiSetSsnLine (CyTrue);
+            return status;
+        }
         status = CyU3PSpiReceiveWords(rdBuf, 1);
-        CyU3PSpiSetSsnLine (CyTrue);
-    } while(rdBuf[0] & 1);
+        ssnStatus = CyU3PSpiSetSsnLine (CyTrue);
+        if (status != CY_U3P_SUCCESS)
+            return status;
+        if (ssnStatus != CY_U3P_SUCCESS)
+            return ssnStatus;
+        if (rdBuf[0] & 1) {
+            if ((uint32_t)(CyU3PGetTime() - start) >= 30000)
+                return CY_U3P_ERROR_FAILURE;
+        }
+    } while (rdBuf[0] & 1);
 
-    return status;
+    return CY_U3P_SUCCESS;
 }
