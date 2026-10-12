@@ -223,13 +223,14 @@ static uint8_t spi_mfn[2];
 static CyBool_t cached_spi_mfn = CyFalse;
 CyU3PReturnStatus_t cacheSPIManufacturer(void) {
     uint8_t location[4];
+    CyU3PReturnStatus_t status;
 
     location[0] = 0x90; // RD Manu
     location[1] = 0x0;
     location[2] = 0x0;
     location[3] = 0x0;
 
-    CyU3PReturnStatus_t status = FlashTransfer(location, 4, spi_mfn, 2);
+    status = FlashTransfer(location, 4, spi_mfn, 2);
     if (status != CY_U3P_SUCCESS) {
         cached_spi_mfn = CyFalse;
         return status;

@@ -391,6 +391,10 @@ static int cyapi_control_transfer(void *driver,
     success = dev->ControlEndPt->XferData((PUCHAR)buffer, len);
     if (!success) {
         status = BLADERF_ERR_IO;
+    } else if ((uint32_t)len != buffer_len) {
+        log_debug("Control transfer length mismatch: requested=%u, transferred=%u\n",
+                  (unsigned int)buffer_len, (unsigned int)len);
+        status = BLADERF_ERR_IO;
     }
 
     return status;
