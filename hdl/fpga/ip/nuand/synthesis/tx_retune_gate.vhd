@@ -55,7 +55,6 @@ architecture rtl of tx_retune_gate is
     signal target_reached_i : std_logic;
     signal target_after_bank0_i : std_logic;
     signal target_after_bank1_i : std_logic;
-    signal target_after_i : std_logic;
     signal immediate_i : std_logic := '0';
     signal muted_i : std_logic := '0';
     signal abort_i : std_logic;
@@ -106,8 +105,6 @@ begin
                             else '0';
     target_after_bank1_i <= '1' when timestamp_after(target_bank1_i, target_timestamp)
                             else '0';
-    target_after_i <= target_after_bank1_i when target_bank_select_i = '1'
-                      else target_after_bank0_i;
 
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
@@ -219,9 +216,14 @@ begin
                     else
                         target_bank0_i <= target_timestamp;
                     end if;
-                    if target_after_i = '1' then
-                        target_bank_select_i <= not target_bank_select_i;
-                    end if;
+                    -- Select the newly written bank only when the currently
+                    -- active boundary is later than the new request. Express
+                    -- both active-bank cases directly so the current selector
+                    -- does not feed a comparator-result mux and then a second
+                    -- selector mux on this 8 ns path.
+                    target_bank_select_i <=
+                        (target_bank_select_i and not target_after_bank1_i) or
+                        (not target_bank_select_i and target_after_bank0_i);
                     if arm_immediate = '1' or due_now then
                         state_i <= STATE_MUTED;
                         mute_start_timestamp_i <= timestamp;
