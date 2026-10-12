@@ -333,6 +333,9 @@ CyU3PReturnStatus_t NuandFlashInit() {
     NuandGPIOReconfigure(CyFalse, CyTrue);
 
     status = CyFxSpiInit();
+    if (status != CY_U3P_SUCCESS) {
+        return status;
+    }
 
     mfn = NuandGetSPIManufacturer();
 

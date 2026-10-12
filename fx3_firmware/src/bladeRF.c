@@ -652,7 +652,12 @@ CyBool_t NuandHandleVendorRequest(
 
     case BLADE_USB_CMD_JUMP_TO_BOOTLOADER:
         StopApplication();
-        NuandFlashInit();
+        apiRetStatus = NuandFlashInit();
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            LOG_ERROR(apiRetStatus);
+            CyU3PUsbStall(0, CyTrue, CyFalse);
+            break;
+        }
 
         // Erase the first sector so we can write the bootloader
         // header
@@ -830,7 +835,12 @@ void CyFxbladeRFApplnUSBEventCB (CyU3PUsbEventType_t evtype, uint16_t evdata)
             } else if (alt_interface == USB_IF_RF_LINK) {
                 NuandRFLink.start();
             } else if (alt_interface == USB_IF_SPI_FLASH) {
-                NuandFlashInit();
+                apiRetStatus = NuandFlashInit();
+                if (apiRetStatus != CY_U3P_SUCCESS) {
+                    LOG_ERROR(apiRetStatus);
+                    CyFxAppErrorHandler(apiRetStatus);
+                    return;
+                }
             }
             glUsbAltInterface = alt_interface;
         break;
@@ -872,13 +882,16 @@ static CyBool_t CyFxApplnLPMRqtCB (
 }
 
 static uint8_t otp_buf[0x100];
-static void extractSerialAndCal(void)
+static CyU3PReturnStatus_t extractSerialAndCal(void)
 {
-    int status;
+    CyU3PReturnStatus_t status;
     char serial_buf[32];
     int i;
 
-    NuandFlashInit();
+    status = NuandFlashInit();
+    if (status != CY_U3P_SUCCESS) {
+        return status;
+    }
 
     status = NuandReadOtp(0, 0x100, otp_buf);
 
@@ -903,6 +916,7 @@ static void extractSerialAndCal(void)
     }
 
     NuandFlashDeinit();
+    return CY_U3P_SUCCESS;
 }
 
 void bladeRFInit(void)
@@ -1051,10 +1065,16 @@ void bladeRFInit(void)
 /* Entry function for the bladeRFAppThread. */
 void bladeRFAppThread_Entry( uint32_t input)
 {
+    CyU3PReturnStatus_t status;
+
     CyFxGpioInit();
 
     populateVersionString();
-    extractSerialAndCal();
+    status = extractSerialAndCal();
+    if (status != CY_U3P_SUCCESS) {
+        LOG_ERROR(status);
+        CyFxAppErrorHandler(status);
+    }
 
     NuandFpgaConfigSwInit();
 
