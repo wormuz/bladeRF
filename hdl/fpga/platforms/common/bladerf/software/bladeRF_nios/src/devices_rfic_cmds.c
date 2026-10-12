@@ -332,10 +332,17 @@ static bool _rfic_initialize(struct rfic_state *state)
 
         if (NULL == state->phy->pdata) {
             state->init_stage = BLADERF_RFIC_INIT_STAGE_PDATA_NULL;
-            /* Oh no */
             DBG("%s: ad9361_init failed silently\n", __FUNCTION__);
-            ad9361_remove(state->phy);
+            struct ad9361_rf_phy *phy = state->phy;
             state->phy = NULL;
+            int remove_status = ad9361_remove(phy);
+            state->init_stage = rfic_init_cleanup_stage(
+                remove_status, state->init_stage,
+                BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED);
+            if (remove_status < 0) {
+                DBG("%s: cleanup of invalid AD9361 context failed (%d)\n",
+                    __FUNCTION__, remove_status);
+            }
             return false;
         }
 
