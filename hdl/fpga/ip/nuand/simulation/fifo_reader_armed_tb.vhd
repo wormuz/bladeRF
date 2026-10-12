@@ -106,7 +106,9 @@ begin
             link_active           => link_active,
             protocol_start_violation => protocol_start_violation,
             fault_sticky          => fault_sticky,
-            abort_active          => abort_active
+            abort_active          => abort_active,
+            loopback_data         => open,
+            loopback_data_valid   => open
         );
 
     ts_proc : process(clock)

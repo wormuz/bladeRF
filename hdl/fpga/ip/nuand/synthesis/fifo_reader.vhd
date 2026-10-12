@@ -98,7 +98,13 @@ entity fifo_reader is
         -- also drops on stop and abort while the toggle stands still, so it
         -- conflates "consumed this epoch" with "still running".
         epoch_ack                   :   out     std_logic := '0';
-        epoch_valid                 :   out     std_logic := '0'
+        epoch_valid                 :   out     std_logic := '0';
+
+        -- Data/valid pair for the TX digital-loopback FIFO. In packed mode
+        -- the sample FIFO is read ahead, so loopback follows logical
+        -- consumption from the local queue rather than physical prefetch.
+        loopback_data               :   out     std_logic_vector(FIFO_DATA_WIDTH-1 downto 0);
+        loopback_data_valid         :   out     std_logic
   );
 end entity;
 
@@ -327,6 +333,7 @@ begin
     packed_refill_i <= '1' when packed_active_i = '1' and
                                 packed_input_enable_i = '1' and enable = '1' and
                                 link_active_i = '1' and abort_active_i = '0' and
+                                fifo_holdoff = '0' and
                                 link_start_event_i = '0' and
                                 fifo_empty = '0' and packed_count_i < 2
                        else '0';
@@ -345,6 +352,10 @@ begin
     -- points; other formats retain the original registered FIFO interface.
     fifo_read <= packed_refill_i when packed_active_i = '1'
                  else fifo_current.fifo_read;
+
+    loopback_data <= packed_data_i when packed_active_i = '1' else fifo_data;
+    loopback_data_valid <= packed_pop_i when packed_active_i = '1'
+                           else fifo_current.fifo_read;
 
     packed_word_queue : process(clock, reset)
         variable refill_v : boolean;

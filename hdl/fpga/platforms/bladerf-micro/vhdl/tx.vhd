@@ -128,6 +128,8 @@ architecture arch of tx is
 
     signal sample_fifo_holdoff            : std_logic;
     signal sample_fifo_holdoff_i          : std_logic;
+    signal loopback_fifo_source_data      : std_logic_vector(sample_fifo.rdata'range);
+    signal loopback_fifo_source_valid     : std_logic;
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
     signal tx_underflow_event              : std_logic := '0';
     signal tx_underflow_abort              : std_logic := '0';
@@ -221,8 +223,11 @@ begin
     loopback_proc : process( tx_clock )
     begin
         if( rising_edge(tx_clock) ) then
-            loopback_fifo_wdata <= sample_fifo.rdata;
-            loopback_fifo_wreq  <= sample_fifo.rreq and loopback_enabled;
+            -- fifo_reader may physically prefetch packed words before their
+            -- scheduled output boundary. Use its logical-consumption sideband
+            -- so digital loopback keeps the TX sample timeline.
+            loopback_fifo_wdata <= loopback_fifo_source_data;
+            loopback_fifo_wreq  <= loopback_fifo_source_valid and loopback_enabled;
         end if;
     end process;
 
@@ -309,7 +314,9 @@ begin
             underflow_led       =>  tx_underflow_event,
             underflow_count     =>  tx_underflow_count,
             underflow_duration  =>  x"ffff",
-            underflow_suppress  =>  retune_gate_muted
+            underflow_suppress  =>  retune_gate_muted,
+            loopback_data       =>  loopback_fifo_source_data,
+            loopback_data_valid =>  loopback_fifo_source_valid
         );
 
     U_tx_retune_gate : entity work.tx_retune_gate

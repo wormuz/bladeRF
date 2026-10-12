@@ -111,6 +111,8 @@ architecture sim of fifo_reader_tb is
     signal fifo_data  : std_logic_vector(63 downto 0) := test_fifo_word(0);
     signal fifo_word_index : natural := 0;
     signal fifo_hold  : std_logic := '0';
+    signal loopback_data : std_logic_vector(63 downto 0);
+    signal loopback_data_valid : std_logic;
 
     signal pkt_ctrl   : packet_control_t;
     signal pkt_empty  : std_logic;
@@ -132,6 +134,8 @@ architecture sim of fifo_reader_tb is
 
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
+    signal loopback_reads_before : natural := 0;
+    signal loopback_reads_after  : natural := 0;
     signal samples_before : natural := 0;
     signal samples_after  : natural := 0;
     signal first_read_timestamp : unsigned(63 downto 0) := (others => '0');
@@ -197,6 +201,7 @@ begin
     counters : process(clock)
         variable valid_samples : natural;
         variable packed_samples_checked : natural := 0;
+        variable loopback_word_checked : natural := 0;
         variable expected_sample : std_logic_vector(23 downto 0);
         variable first_valid_seen : boolean := false;
     begin
@@ -208,6 +213,21 @@ begin
                 reads_before <= reads_before + 1;
             else
                 reads_after <= reads_after + 1;
+            end if;
+        end if;
+
+        if rising_edge(clock) and reset = '0' and loopback_data_valid = '1' then
+            if PACKED then
+                assert loopback_data = test_fifo_word(loopback_word_checked)
+                    report "packed loopback word order mismatch at word " &
+                           integer'image(loopback_word_checked)
+                    severity failure;
+                loopback_word_checked := loopback_word_checked + 1;
+            end if;
+            if timestamp < to_unsigned(TGT, 64) then
+                loopback_reads_before <= loopback_reads_before + 1;
+            else
+                loopback_reads_after <= loopback_reads_after + 1;
             end if;
         end if;
 
@@ -295,7 +315,9 @@ begin
             underflow_duration    => uf_dur,
             underflow_suppress    => uf_suppress,
             link_start_toggle     => link_start_toggle,
-            fault_sticky          => fault_sticky
+            fault_sticky          => fault_sticky,
+            loopback_data         => loopback_data,
+            loopback_data_valid   => loopback_data_valid
         );
 
     stim : process
@@ -313,6 +335,10 @@ begin
         enable <= '1';
         if PACKED then
             packed_en <= '1';
+            -- The real TX integration asserts this while the loopback FIFO
+            -- is full. Packed read-ahead must preserve that backpressure even
+            -- though loopback writes now follow logical queue consumption.
+            fifo_hold <= '1';
         end if;
         meta_en <= '0';
         fifo_empty <= '1';
@@ -326,6 +352,14 @@ begin
         meta_en <= '1';
         wait for 10 ns;
         link_start_toggle <= not link_start_toggle;
+
+        if PACKED then
+            wait for 100 ns;
+            assert reads_before = 0 and fifo_read = '0'
+                report "packed read-ahead ignored loopback FIFO holdoff"
+                severity failure;
+            fifo_hold <= '0';
+        end if;
 
         wait for 60 us;
 
@@ -353,6 +387,9 @@ begin
                 -- application-visible sample boundary must still be exact.
                 assert reads_before = 2
                     report "packed TX did not fill its two-word prefetch queue"
+                    severity failure;
+                assert loopback_reads_before = 0 and loopback_reads_after > 0
+                    report "packed prefetch escaped into loopback before its timestamp"
                     severity failure;
                 assert first_valid_timestamp = to_unsigned(TGT, 64)
                     report "scheduled packed samples opened at " &

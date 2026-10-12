@@ -260,7 +260,9 @@ begin
             underflow_count       => uf_count,
             underflow_duration    => x"ffff",
             link_start_toggle     => link_start_toggle,
-            fault_sticky          => fault_sticky
+            fault_sticky          => fault_sticky,
+            loopback_data         => open,
+            loopback_data_valid   => open
         );
 
     stim : process

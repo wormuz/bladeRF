@@ -941,7 +941,9 @@ begin
 
         underflow_led       =>  tx_underflow_led,
         underflow_count     =>  open,
-        underflow_duration  =>  x"ffff"
+        underflow_duration  =>  x"ffff",
+        loopback_data       =>  open,
+        loopback_data_valid =>  open
       ) ;
 
     tx_sample_raw_i     <= tx_samples(0).data_i;
