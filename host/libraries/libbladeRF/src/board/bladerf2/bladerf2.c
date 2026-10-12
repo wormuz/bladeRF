@@ -3460,6 +3460,46 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
     return 0;
 }
 
+/* Immediate retune completion is reported by NIOS, but the host must also
+ * reconcile the frequency model owned by its current RFIC controller. */
+static int bladerf2_quick_tune_readback(
+    struct bladerf *dev, bladerf_channel ch, uint8_t profile,
+    bladerf_frequency expected_frequency,
+    bladerf_frequency *readback_frequency)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    struct controller_fns const *rfic = board_data->rfic;
+
+    if (rfic->command_mode == RFIC_COMMAND_HOST) {
+        if (board_data->phy == NULL) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+
+        int status = ad9361_fastlock_sync_current_lo(
+            board_data->phy, BLADERF_CHANNEL_IS_TX(ch), profile,
+            expected_frequency, readback_frequency);
+        return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
+    }
+
+    /* In FPGA tuning mode the NIOS owns the AD9361 context. A successful
+     * retune2 NOW response is only accepted after profile_activate() has
+     * read the live PLL profile and committed that frequency to the NIOS
+     * RFIC model, so query the same owner instead of dereferencing the
+     * intentionally absent host PHY. */
+    int status = rfic->get_frequency(dev, ch, readback_frequency);
+    if (status != 0) {
+        return status;
+    }
+
+    if (expected_frequency != 0 &&
+        !bladerf2_rfic_frequency_matches(expected_frequency,
+                                         *readback_frequency)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    return 0;
+}
+
 static int bladerf2_schedule_retune(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_timestamp timestamp,
@@ -3819,9 +3859,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             /* Nios recalls the TX fastlock profile directly in the RFIC;
              * that does not update ADI's host clock-tree cache. Verify the
              * selected profile's PLL words, as the RX transition path does. */
-            readback_status = ad9361_fastlock_sync_current_lo(
-                board_data->phy, true, quick_tune->rffe_profile,
-                frequency, &readback_frequency);
+            readback_status = bladerf2_quick_tune_readback(
+                dev, ch, quick_tune->rffe_profile, frequency,
+                &readback_frequency);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
             board_data->tx_retune2_pending_count--;
@@ -3830,14 +3870,16 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                 bladerf2_retune_completion_unresolved(pending_count);
             board_data->tx_retune2_applied_waiting_rf_valid =
                 readback_status == 0 &&
-                bladerf2_rfic_frequency_matches(frequency,
-                                                readback_frequency) &&
+                (frequency == 0 ||
+                 bladerf2_rfic_frequency_matches(frequency,
+                                                 readback_frequency)) &&
                 pending_count == 0;
             board_data->tx_retune2_applied_frequency_hz = readback_frequency;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             if (readback_status != 0 ||
-                !bladerf2_rfic_frequency_matches(frequency,
-                                                readback_frequency)) {
+                (frequency != 0 &&
+                 !bladerf2_rfic_frequency_matches(
+                     frequency, readback_frequency))) {
                 bladerf2_tx_retune_event(
                     dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
                     frequency, readback_status == 0 ? readback_frequency : 0,
@@ -3861,12 +3903,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
 
     if (!BLADERF_CHANNEL_IS_TX(ch) && timestamp == BLADERF_RETUNE_NOW) {
         bladerf_frequency readback_frequency = 0;
-        int readback_status = ad9361_fastlock_sync_current_lo(
-            board_data->phy, false, quick_tune->rffe_profile,
-            frequency, &readback_frequency);
-        if (readback_status != 0 ||
-            !bladerf2_rfic_frequency_matches(frequency,
-                                            readback_frequency)) {
+        int readback_status = bladerf2_quick_tune_readback(
+            dev, ch, quick_tune->rffe_profile, frequency,
+            &readback_frequency);
+        if (readback_status != 0) {
             struct bladerf_rf_event event = {0};
             event.host_monotonic_ns = bladerf2_monotonic_ns();
             event.event_type = BLADERF_RF_EVT_RX_RETUNE_FAILED;

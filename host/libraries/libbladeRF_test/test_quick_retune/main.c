@@ -206,11 +206,12 @@ out:
     return status;
 }
 
-#define OPTARG "i:d:v:h"
+#define OPTARG "i:d:v:fh"
 static struct option long_options[] = {
     { "iterations", required_argument,  NULL,   'i' },
     { "device",     required_argument,  NULL,   'd' },
     { "verbosity",  required_argument,  NULL,   'v' },
+    { "fpga-tuning", no_argument,       NULL,   'f' },
     { "help",       no_argument,        NULL,   'h' },
     { NULL,         0,                  NULL,   0   },
 };
@@ -222,6 +223,7 @@ int main(int argc, char *argv[])
     int opt_ind = 0;
     uint32_t iterations = ITERATIONS;
     bool ok;
+    bool fpga_tuning = false;
     struct bladerf *dev = NULL;
     bladerf_log_level log_level;
     const char *devstr = NULL;
@@ -252,10 +254,15 @@ int main(int argc, char *argv[])
                 bladerf_log_set_verbosity(log_level);
                 break;
 
+            case 'f':
+                fpga_tuning = true;
+                break;
+
             case 'h':
                 printf("TX a tone across %d frequencies.\n", NUM_FREQS);
                 printf("  -d, --device <str>    Specify device to open.\n");
                 printf("  -v, --verbosity <l>   Set libbladeRF verbosity level.\n");
+                printf("  -f, --fpga-tuning     Exercise quick retunes with NIOS owning the RFIC.\n");
                 printf("  -h, --help            Show this text.\n");
                 printf("\n");
                 return EXIT_SUCCESS;
@@ -279,6 +286,38 @@ int main(int argc, char *argv[])
     }
 
     printf("Iterations: %d\n", iterations);
+    if (fpga_tuning) {
+        struct bladerf_quick_tune rx_quick_tune;
+        const bladerf_frequency rx_test_frequency = 1835000000ULL;
+
+        status = bladerf_set_tuning_mode(dev, BLADERF_TUNING_MODE_FPGA);
+        if (status != 0) {
+            fprintf(stderr, "Unable to select FPGA tuning mode: %s\n",
+                    bladerf_strerror(status));
+            bladerf_close(dev);
+            return status;
+        }
+
+        status = bladerf_set_frequency(dev, BLADERF_CHANNEL_RX(0),
+                                       rx_test_frequency);
+        if (status == 0) {
+            status = bladerf_get_quick_tune(dev, BLADERF_CHANNEL_RX(0),
+                                            &rx_quick_tune);
+        }
+        if (status == 0) {
+            /* Zero means the saved quick-tune profile supplies the target
+             * frequency. This also exercises the NIOS-owned RX readback. */
+            status = bladerf_schedule_retune(
+                dev, BLADERF_CHANNEL_RX(0), BLADERF_RETUNE_NOW, 0,
+                &rx_quick_tune);
+        }
+        if (status != 0) {
+            fprintf(stderr, "FPGA-owned RX quick tune failed: %s\n",
+                    bladerf_strerror(status));
+            bladerf_close(dev);
+            return status;
+        }
+    }
     status = run_test(dev, iterations);
 
     bladerf_close(dev);
