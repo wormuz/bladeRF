@@ -1103,6 +1103,38 @@ static void test_rx_previous_link_fault_event_is_durable_and_deduplicated(void)
     MUTEX_DESTROY(&board_data.rf_transition_event_lock);
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
+
+static void test_tx_recovery_waits_for_gate_abort_completion(void)
+{
+    struct bladerf dev = {0};
+    struct bladerf2_board_data board_data = {0};
+    const uint32_t healthy_link_status =
+        BLADERF2_RF_LINK_STATUS_VERSION_2 | (9u << 20);
+
+    dev.board_data = &board_data;
+    board_data.tx_async_transport_faulted = false;
+    board_data.tx_gate_abort_pending = true;
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+
+    /* Link/RFIC readback cannot certify active TX while the FPGA gate's
+     * fail-closed abort is still pending. */
+    assert(!bladerf2_tx_status_recovery_event(&dev, healthy_link_status));
+    assert(board_data.rf_transition_event_count == 0);
+    assert(!board_data.tx_async_link_certified);
+    assert(!board_data.tx_async_rfic_state_certified);
+
+    board_data.tx_gate_abort_pending = false;
+    assert(bladerf2_tx_status_recovery_event(&dev, healthy_link_status));
+    assert(board_data.rf_transition_event_count == 1);
+    assert(board_data.rf_transition_events[0].event_type ==
+           BLADERF_RF_EVT_TX_STATUS_RECOVERED);
+    assert(board_data.tx_async_link_certified);
+    assert(board_data.tx_async_rfic_state_certified);
+
+    assert(MUTEX_DESTROY(&board_data.rf_transition_event_lock) == 0);
+    assert(MUTEX_DESTROY(&board_data.rx_async_epoch_lock) == 0);
+}
 static unsigned int async_fault_order;
 static unsigned int async_fault_withheld_order;
 static unsigned int async_fault_overrun_order;
@@ -3451,6 +3483,7 @@ int main(void)
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();
+    test_tx_recovery_waits_for_gate_abort_completion();
     test_rf_transition_calibration_is_explicit();
     test_rx_epoch_admission_event_preserves_channel();
     test_rx_channel_mask_runtime_policy();

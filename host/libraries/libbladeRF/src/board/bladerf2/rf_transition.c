@@ -203,7 +203,8 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
 
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->tx_async_transport_faulted) {
+    if (board_data->tx_async_transport_faulted ||
+        board_data->tx_gate_abort_pending) {
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return false;
     }
@@ -2119,7 +2120,8 @@ static void *rx_fault_monitor_task(void *arg)
                         tx_counter_baseline_was_valid &&
                         !report_tx_fault && !report_tx_underrun &&
                         !report_tx_retune_failure &&
-                        !counter_reset) {
+                        !counter_reset && !abort_tx_gate_pending &&
+                        !abort_tx_retune_gate) {
                         if (bladerf2_tx_status_recovery_event(
                                 dev, rf_link_status)) {
                             board_data->tx_status_unavailable_reported = false;
