@@ -26,6 +26,9 @@ static int32_t bladerf2_headless_gpio_get(struct no_os_gpio_desc **desc,
     if (NULL == desc || NULL == param) {
         return -EINVAL;
     }
+    if (param->number < 0 || param->number >= 32) {
+        return -EINVAL;
+    }
 
     d = calloc(1, sizeof(*d));
     if (NULL == d) {
@@ -48,10 +51,11 @@ static int32_t bladerf2_headless_gpio_get_optional(struct no_os_gpio_desc **desc
 {
     /* An absent line is not an error: the driver treats a NULL descriptor as
      * "this board does not wire that signal". */
-    if (NULL == param) {
-        if (NULL != desc) {
-            *desc = NULL;
-        }
+    if (NULL == desc) {
+        return -EINVAL;
+    }
+    if (NULL == param || param->number < 0) {
+        *desc = NULL;
         return 0;
     }
 
@@ -98,20 +102,26 @@ static int32_t bladerf2_headless_gpio_set_value(struct no_os_gpio_desc *desc,
                                                 uint8_t value)
 {
     uint32_t reg;
+    uint32_t pin_mask;
 
-    if (NULL == desc) {
+    if (NULL == desc || desc->number < 0 || desc->number >= 32) {
         return -EINVAL;
     }
 
-    reg = rffe_csr_read();
-
-    if (value) {
-        reg |= (1u << desc->number);
-    } else {
-        reg &= ~(1u << desc->number);
+    pin_mask = UINT32_C(1) << desc->number;
+    if (!rffe_csr_read_checked(&reg)) {
+        return -EIO;
     }
 
-    rffe_csr_write(reg);
+    if (value) {
+        reg |= pin_mask;
+    } else {
+        reg &= ~pin_mask;
+    }
+
+    if (!rffe_csr_write_checked(reg, pin_mask)) {
+        return -EIO;
+    }
 
     return 0;
 }
@@ -121,13 +131,16 @@ static int32_t bladerf2_headless_gpio_get_value(struct no_os_gpio_desc *desc,
 {
     uint32_t reg;
 
-    if (NULL == desc || NULL == value) {
+    if (NULL == desc || NULL == value ||
+        desc->number < 0 || desc->number >= 32) {
         return -EINVAL;
     }
 
-    reg = rffe_csr_read();
+    if (!rffe_csr_read_checked(&reg)) {
+        return -EIO;
+    }
 
-    *value = (reg & (1u << desc->number)) ? 1 : 0;
+    *value = (reg & (UINT32_C(1) << desc->number)) ? 1 : 0;
 
     return 0;
 }
