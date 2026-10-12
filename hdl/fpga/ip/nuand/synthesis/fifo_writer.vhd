@@ -520,7 +520,8 @@ begin
             -- abort/discard decode from feeding the wide snapshot register.
             start_fault_pending_i <= '0';
             fault_context_pending_i <= '0';
-            if( start_link_pulse = '1' or rx_epoch_gate_fault = '1' ) then
+            if( start_link_pulse = '1' or rx_epoch_gate_fault = '1' or
+                rx_epoch_discard_active = '1' ) then
                 start_fault_pending_i <= '0';
                 fault_context_pending_i <= '0';
             elsif( link_active_i = '1' and enable = '1' and
@@ -541,7 +542,12 @@ begin
 
             -- Publish each sticky flag and its context snapshot on the same
             -- edge, preserving the host's atomic status/context contract.
-            if( start_link_pulse = '0' and rx_epoch_gate_fault = '0' ) then
+            -- A discard may begin in the cycle after the watchdog stages an
+            -- event. Cancel the pending event as well as suppressing new
+            -- detections, so an intentional RF transition cannot publish a
+            -- stale transport fault one clock into its fence.
+            if( start_link_pulse = '0' and rx_epoch_gate_fault = '0' and
+                rx_epoch_discard_active = '0' ) then
                 if( start_fault_pending_i = '1' ) then
                     fault_sticky_i(FAULT_BIT_START_NO_PROGRESS) <= '1';
                 end if;

@@ -141,16 +141,16 @@ begin
             severity failure;
         for i in 1 to 3 loop wait until rising_edge(clock); end loop;
 
-        -- With no sample writes, advance the watchdog to one below its
-        -- terminal count (three cycles above plus twelve here). Assert the
-        -- fence during the preceding half-cycle, matching the RX gate's
-        -- combinational ARM indication, before the threshold edge.
-        for i in 1 to 12 loop wait until rising_edge(clock); end loop;
+        -- With no sample writes, advance through threshold detection so the
+        -- watchdog has staged a pending event. Assert the fence before the
+        -- following publication edge; a staged event must be cancelled.
+        -- Three cycles above plus fourteen reaches the pending-event stage.
+        for i in 1 to 14 loop wait until rising_edge(clock); end loop;
         wait until falling_edge(clock);
         discard_active <= '1';
         wait until rising_edge(clock);
         assert fault_sticky = "000000"
-            report "epoch fence coincident with watchdog expiry latched a false fault"
+            report "epoch fence failed to cancel a pending watchdog fault"
             severity failure;
 
         discard_active <= '1';
