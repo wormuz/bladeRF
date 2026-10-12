@@ -377,6 +377,10 @@ int sync_tx(struct bladerf_sync *sync,
 
 unsigned int sync_buf2idx(struct buffer_mgmt *b, void *addr);
 
+/* Called with sync->lock held after a TX buffer wakeup. Propagates a worker
+ * error and leaves the TX state ready to inspect/restart that worker. */
+int sync_tx_handle_worker_error(struct bladerf_sync *sync);
+
 void *sync_idx2buf(struct buffer_mgmt *b, unsigned int idx);
 
 int sync_prime_stream(struct bladerf_sync *sync, unsigned int timeout_ms);

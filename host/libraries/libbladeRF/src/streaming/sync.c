@@ -599,6 +599,18 @@ static int wait_for_buffer(struct buffer_mgmt *b,
     return status;
 }
 
+int sync_tx_handle_worker_error(struct bladerf_sync *s)
+{
+    int stream_error = 0;
+
+    sync_worker_get_state(s->worker, &stream_error);
+    if (stream_error != 0) {
+        s->state = SYNC_STATE_CHECK_WORKER;
+    }
+
+    return stream_error;
+}
+
 #ifndef SYNC_WORKER_START_TIMEOUT_MS
 #   define SYNC_WORKER_START_TIMEOUT_MS 250
 #endif
@@ -2802,9 +2814,19 @@ int sync_tx(struct bladerf_sync *s,
                             status = sync_timeout_remaining_ms(
                                 call_start_ns, timeout_ms, &wait_timeout_ms);
                         }
+                        /* Check before sleeping as well as after waking.
+                         * The worker publishes its error before taking
+                         * buf_mgmt.lock to signal; holding that lock here
+                         * makes the check-to-wait handoff race-free. */
+                        if (status == 0) {
+                            status = sync_tx_handle_worker_error(s);
+                        }
                         if (status == 0) {
                             status = wait_for_buffer(b, wait_timeout_ms,
                                                      __FUNCTION__, b->prod_i);
+                            if (status == 0) {
+                                status = sync_tx_handle_worker_error(s);
+                            }
                         }
 
                         /* Same check after the wait: a completion may have

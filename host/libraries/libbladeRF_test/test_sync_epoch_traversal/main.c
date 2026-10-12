@@ -748,6 +748,23 @@ static void test_sync_tx_requeues_backend_rejected_callback_buffer(void)
     assert(MUTEX_DESTROY(&sync.buf_mgmt.lock) == 0);
 }
 
+static void test_sync_tx_worker_error_wakeup_is_retryable(void)
+{
+    struct bladerf_sync sync = {0};
+    struct sync_worker worker = {0};
+
+    sync.worker = &worker;
+    sync.state = SYNC_STATE_WAIT_FOR_BUFFER;
+    worker.state = SYNC_WORKER_STATE_IDLE;
+    worker.err_code = BLADERF_ERR_WOULD_BLOCK;
+    assert(MUTEX_INIT(&worker.state_lock) == 0);
+
+    assert(sync_tx_handle_worker_error(&sync) == BLADERF_ERR_WOULD_BLOCK);
+    assert(sync.state == SYNC_STATE_CHECK_WORKER);
+
+    assert(MUTEX_DESTROY(&worker.state_lock) == 0);
+}
+
 static void test_sync_tx_does_not_replay_rejected_samples(void)
 {
     struct bladerf_sync sync = {0};
@@ -3339,6 +3356,7 @@ int main(void)
     test_async_tx_submit_gate_closure_is_retryable();
     test_async_tx_nonblocking_submit_does_not_wait_for_worker();
     test_sync_tx_requeues_backend_rejected_callback_buffer();
+    test_sync_tx_worker_error_wakeup_is_retryable();
     test_sync_tx_does_not_replay_rejected_samples();
     test_public_sync_apis_reject_null_device();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();
