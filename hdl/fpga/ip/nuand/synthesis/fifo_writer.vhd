@@ -870,7 +870,15 @@ begin
         end if;
 
         -- Output assignments
-        meta_fifo_write <= meta_current.meta_write and not abort_active_out;
+        -- Keep the terminal RX epoch fault on a local write-mask path.
+        -- Factoring it through abort_active_out put the state->meta-DCFIFO
+        -- write path through the shared OR before the FIFO's own full check
+        -- (setup -0.464 ns on the fitted xA4 image). The Boolean conditions
+        -- are unchanged; this avoids loading that high-fanout status net with
+        -- the metadata write timing path.
+        meta_fifo_write <= meta_current.meta_write and
+                           not abort_active_i and
+                           not rx_epoch_gate_fault;
         meta_fifo_data  <= meta_current.meta_data;
 
     end process;
@@ -1270,7 +1278,9 @@ begin
         -- Gate faults can arrive between the writer FSM's clock edges. Mask
         -- both sides of the sample/META pair immediately so a previously
         -- registered keepalive write cannot cross the fault boundary alone.
-        fifo_write <= fifo_current.fifo_write and not abort_active_out;
+    fifo_write <= fifo_current.fifo_write and
+                  not abort_active_i and
+                  not rx_epoch_gate_fault;
         fifo_data  <= std_logic_vector(fifo_current.fifo_data);
 
     end process;
