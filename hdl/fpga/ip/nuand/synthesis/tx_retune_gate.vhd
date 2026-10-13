@@ -50,6 +50,15 @@ architecture rtl of tx_retune_gate is
     signal target_bank0_i : unsigned(63 downto 0) := (others => '0');
     signal target_bank1_i : unsigned(63 downto 0) := (others => '0');
     signal target_bank_select_i : std_logic := '0';
+    signal target_bank_active_write_i : std_logic;
+    signal target_bank_armed_write_i : std_logic;
+    signal target_bank0_write_en_i : std_logic;
+    signal target_bank1_write_en_i : std_logic;
+    attribute keep : boolean;
+    attribute keep of target_bank_active_write_i : signal is TRUE;
+    attribute keep of target_bank_armed_write_i : signal is TRUE;
+    attribute keep of target_bank0_write_en_i : signal is TRUE;
+    attribute keep of target_bank1_write_en_i : signal is TRUE;
     signal target_reached_bank0_i : std_logic;
     signal target_reached_bank1_i : std_logic;
     signal target_reached_i : std_logic;
@@ -85,18 +94,16 @@ architecture rtl of tx_retune_gate is
         right_ts : unsigned(63 downto 0)
     ) return boolean is
     begin
-        -- Timestamp ordering is modulo 2^64, with a separation below 2^63.
-        -- The sign bit partitions the ring into two halves. Within one half,
-        -- ordinary low-bit ordering is the modulo ordering; across halves,
-        -- that ordering reverses. This is equivalent to testing the sign and
-        -- nonzero bits of a 64-bit subtraction, while avoiding a full-width
-        -- subtract followed by a separate zero-detect on the
-        -- target_timestamp-to-bank-select path.
-        if left_ts(63) = right_ts(63) then
-            return left_ts(62 downto 0) > right_ts(62 downto 0);
-        else
+        -- For timestamps less than 2^63 apart, timestamps in the same
+        -- half-range use ordinary low-63-bit ordering. Across the sign
+        -- boundary, the order reverses. Compare the full low field in one
+        -- native operator rather than cascading high-word and low-word
+        -- comparators; post-fit STA measured that cascade on
+        -- target_timestamp -> target_bank_select_i.
+        if left_ts(63) /= right_ts(63) then
             return left_ts(62 downto 0) < right_ts(62 downto 0);
         end if;
+        return left_ts(62 downto 0) > right_ts(62 downto 0);
     end function;
 begin
     -- Compare each target bank in parallel and select the one-bit result.
@@ -115,6 +122,18 @@ begin
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
     abort_i <= abort or underflow;
+
+    -- Factor command acceptance from bank selection. The fitted path was
+    -- selector-Q into the 64-bit bank D mux; with this structure it drives
+    -- only the local bank-enable gates.
+    target_bank_active_write_i <= '1' when abort_i = '0' and arm = '1' and
+        (state_i = STATE_ACTIVE or state_i = STATE_ERROR) else '0';
+    target_bank_armed_write_i <= '1' when abort_i = '0' and arm = '1' and
+        state_i = STATE_ARMED else '0';
+    target_bank0_write_en_i <= target_bank_active_write_i or
+        (target_bank_armed_write_i and target_bank_select_i);
+    target_bank1_write_en_i <= target_bank_armed_write_i and
+        not target_bank_select_i;
 
     -- Timestamp subtraction is wrap-safe for targets less than 2^63 ticks
     -- away, matching the NIOS scheduled-retune future-time constraint.
@@ -165,13 +184,33 @@ begin
         out_samples <= samples_v;
     end process;
 
+    -- Keep target storage writes independent of the scheduled-boundary
+    -- comparison.  In STATE_ARMED the comparison can toggle the active-bank
+    -- selector, while the incoming request is written to the bank that was
+    -- inactive at the start of this cycle.  Combining these in the FSM made
+    -- the comparator/selector feedback path also drive the 64-bit bank D
+    -- inputs in the fitted netlist.
+    target_banks : process(clock, reset)
+    begin
+        if reset = '1' then
+            target_bank0_i <= (others => '0');
+            target_bank1_i <= (others => '0');
+        elsif rising_edge(clock) then
+            if target_bank0_write_en_i = '1' then
+                target_bank0_i <= target_timestamp;
+            end if;
+            if target_bank1_write_en_i = '1' then
+                target_bank1_i <= target_timestamp;
+            end if;
+        end if;
+    end process;
+
     state_machine : process(clock, reset)
         variable due_now : boolean;
+        variable next_bank_select : std_logic;
     begin
         if reset = '1' then
             state_i <= STATE_ACTIVE;
-            target_bank0_i <= (others => '0');
-            target_bank1_i <= (others => '0');
             target_bank_select_i <= '0';
             immediate_i <= '0';
             mute_start_timestamp_i <= (others => '0');
@@ -190,7 +229,6 @@ begin
                 end if;
             elsif arm = '1' then
                 if state_i = STATE_ACTIVE then
-                    target_bank0_i <= target_timestamp;
                     target_bank_select_i <= '0';
                     immediate_i <= arm_immediate;
                     if arm_immediate = '1' or
@@ -207,7 +245,6 @@ begin
                     -- briefly replay stale IQ while RFIC state is unknown.
                     -- A fresh ARM and later COMPLETE are both required to
                     -- resume the stream.
-                    target_bank0_i <= target_timestamp;
                     target_bank_select_i <= '0';
                     immediate_i <= arm_immediate;
                     state_i <= STATE_MUTED;
@@ -217,21 +254,18 @@ begin
                     -- Keep the earliest requested boundary while a retune
                     -- is already armed. Write data to the inactive bank so
                     -- this comparator controls only the bank selector.
-                    if target_bank_select_i = '0' then
-                        target_bank1_i <= target_timestamp;
-                    else
-                        target_bank0_i <= target_timestamp;
-                    end if;
-                    -- Select the newly written bank only when the currently
-                    -- active boundary is later than the new request. Express
-                    -- both active-bank cases directly so the current selector
-                    -- does not feed a comparator-result mux and then a second
-                    -- selector mux on this 8 ns path. When bank 0 is active,
-                    -- an earlier request selects bank 1; when bank 1 is
-                    -- active, that same condition selects bank 0.
-                    target_bank_select_i <=
+                    -- Keep the measured selector structure from the positive
+                    -- slack hosted fit: choose the active-bank comparison,
+                    -- then toggle only when the active boundary is later.
+                    -- Feed each parallel comparison directly into the
+                    -- selector next-state equation. This removes the
+                    -- comparator-result mux followed by conditional-toggle
+                    -- logic on the measured target_timestamp-to-selector
+                    -- critical path.
+                    next_bank_select :=
                         (target_bank_select_i and not target_after_bank1_i) or
                         (not target_bank_select_i and target_after_bank0_i);
+                    target_bank_select_i <= next_bank_select;
                     if arm_immediate = '1' or due_now then
                         state_i <= STATE_MUTED;
                         mute_start_timestamp_i <= timestamp;

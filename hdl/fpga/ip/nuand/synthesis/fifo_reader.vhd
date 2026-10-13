@@ -737,9 +737,10 @@ begin
         variable  packet_len    : integer;
         variable  ts_next       : unsigned(63 downto 0);
         variable  ts_load_next  : unsigned(63 downto 0);
-        variable  due_header    : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
+        variable  v_fifo_borrow : std_logic;
+        variable  v_header_borrow : std_logic;
         variable  v_high_delta : unsigned(32 downto 0);
         variable  v_due_sentinel : std_logic;
     begin
@@ -780,19 +781,25 @@ begin
         cmp_tgt := meta_current.meta_header;
         v_due_time := '0';
 
+        ts_load_next := timestamp + 4;
+        if ts_load_next(31 downto 0) <
+           unsigned(meta_current.meta_fifo_data(63 downto 32)) then
+            v_fifo_borrow := '1';
+        else
+            v_fifo_borrow := '0';
+        end if;
+        if ts_load_next(31 downto 0) < cmp_tgt(31 downto 0) then
+            v_header_borrow := '1';
+        else
+            v_header_borrow := '0';
+        end if;
+
         if meta_current.state = META_LOAD and
            meta_current.meta_fifo_empty = '0' and
            (packet_en = '0' or packet_ready = '1') then
-            due_header := unsigned(meta_current.meta_fifo_data(95 downto 32));
+            meta_future.due_low_borrow <= (0 => v_fifo_borrow);
         else
-            due_header := meta_current.meta_header;
-        end if;
-
-        ts_load_next := timestamp + 4;
-        if ts_load_next(31 downto 0) < due_header(31 downto 0) then
-            meta_future.due_low_borrow <= to_unsigned(1, 1);
-        else
-            meta_future.due_low_borrow <= to_unsigned(0, 1);
+            meta_future.due_low_borrow <= (0 => v_header_borrow);
         end if;
 
         v_high_delta := ('0' & ts_next(63 downto 32)) -
