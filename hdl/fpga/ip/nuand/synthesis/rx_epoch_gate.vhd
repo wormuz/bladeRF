@@ -100,10 +100,31 @@ architecture arch of rx_epoch_gate is
     constant STATE_ERROR      : unsigned(3 downto 0) := "0100";
 
     signal state            : unsigned(3 downto 0) := STATE_ACTIVE;
+    signal sample_tuple_q   : sample_streams_t(0 to NUM_STREAMS-1) :=
+                              (others => ZERO_SAMPLE);
+    signal forward_samples_q : std_logic := '0';
     -- Reset/unarmed identity. Host epoch allocation reserves zero so an
     -- FPGA reset cannot reproduce a certified epoch tag after 8-bit wrap.
     signal active_epoch_id  : unsigned(7 downto 0)  := (others => '0');
 begin
+
+    -- Capture the incoming tuple and its one-bit real-IQ decision in the
+    -- same stage as the timestamp below. Applying the zero-IQ selection
+    -- after these registers preserves the existing external cycle alignment
+    -- while removing the high-fanout enable/state mux from the input-to-data
+    -- register path identified in the fitted timing report.
+    output_samples : process(all)
+        variable samples_v : sample_streams_t(0 to NUM_STREAMS-1);
+    begin
+        samples_v := sample_tuple_q;
+        if forward_samples_q = '0' then
+            for i in samples_v'range loop
+                samples_v(i).data_i := (others => '0');
+                samples_v(i).data_q := (others => '0');
+            end loop;
+        end if;
+        out_samples <= samples_v;
+    end process;
 
     gate : process(clock, reset)
         variable any_enabled : std_logic;
@@ -119,7 +140,8 @@ begin
             state               <= STATE_ACTIVE;
             active_epoch_id      <= (others => '0');
             out_sample_controls  <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-            out_samples          <= (others => ZERO_SAMPLE);
+            sample_tuple_q       <= (others => ZERO_SAMPLE);
+            forward_samples_q    <= '0';
             out_timestamp        <= (others => '0');
             out_epoch_id         <= (others => '0');
             out_state            <= STATE_ACTIVE;
@@ -295,13 +317,12 @@ begin
             -- data-valid path removes a measured critical path while retaining
             -- cycle alignment with out_timestamp.
             for i in samples_v'range loop
-                samples_v(i) := ZERO_SAMPLE;
+                samples_v(i) := in_samples(i);
+                -- RX_X2 is admitted as a tuple: both enabled lanes must be
+                -- valid on this edge. This masks the validity bits without
+                -- putting either lane's data_v through the IQ data mux.
+                -- RX_X1 reduces to its single lane's valid bit.
                 if forward_samples then
-                    samples_v(i) := in_samples(i);
-                    -- RX_X2 is admitted as a tuple: both enabled lanes must
-                    -- be valid on this edge. This masks the validity bits
-                    -- without putting either lane's data_v through the IQ
-                    -- data mux. RX_X1 reduces to its single lane's valid bit.
                     samples_v(i).data_v := in_sample_controls(i).enable and
                                            all_enabled_valid;
                 else
@@ -309,7 +330,8 @@ begin
                                            keepalive_data_valid;
                 end if;
             end loop;
-            out_samples <= samples_v;
+            sample_tuple_q    <= samples_v;
+            forward_samples_q <= '1' when forward_samples else '0';
 
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;

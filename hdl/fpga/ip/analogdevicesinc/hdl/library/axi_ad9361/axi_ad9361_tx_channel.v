@@ -142,6 +142,13 @@ module axi_ad9361_tx_channel (
   wire    [15:0]  dac_pat_data_1_s;
   wire    [15:0]  dac_pat_data_2_s;
   wire    [ 3:0]  dac_data_sel_s;
+  wire            dac_data_sel_pn_s;
+  wire            dac_data_sel_adc_s;
+  wire            dac_data_sel_zero_s;
+  wire            dac_data_sel_dma_s;
+  wire            dac_data_sel_pat_s;
+  wire            dac_data_sel_dds_s;
+  wire    [11:0]  dac_data_mux_s;
   wire            dac_iqcor_enb_s;
   wire    [15:0]  dac_iqcor_coeff_1_s;
   wire    [15:0]  dac_iqcor_coeff_2_s;
@@ -299,17 +306,27 @@ module axi_ad9361_tx_channel (
   end
   endgenerate
 
+  // Decode the registered source select in parallel so the host DMA data
+  // does not traverse the priority mux on its way to dac_data_out. The
+  // previous timing report measured the host sample path through that mux.
+  assign dac_data_sel_pn_s   = (dac_data_sel_s == 4'h9);
+  assign dac_data_sel_adc_s  = (dac_data_sel_s == 4'h8);
+  assign dac_data_sel_zero_s = (dac_data_sel_s == 4'h3);
+  assign dac_data_sel_dma_s  = (dac_data_sel_s == 4'h2);
+  assign dac_data_sel_pat_s  = (dac_data_sel_s == 4'h1);
+  assign dac_data_sel_dds_s  = !(dac_data_sel_pn_s  || dac_data_sel_adc_s ||
+                                 dac_data_sel_zero_s || dac_data_sel_dma_s ||
+                                 dac_data_sel_pat_s);
+  assign dac_data_mux_s = ({12{dac_data_sel_pn_s}}  & dac_pn_data) |
+                          ({12{dac_data_sel_adc_s}} & adc_data) |
+                          ({12{dac_data_sel_dma_s}} & dma_data[15:4]) |
+                          ({12{dac_data_sel_pat_s}} & dac_pat_data[15:4]) |
+                          ({12{dac_data_sel_dds_s}} & dac_dds_data[15:4]);
+
   // dac mux
 
   always @(posedge dac_clk) begin
-    case (dac_data_sel_s)
-      4'h9: dac_data_out <= dac_pn_data;
-      4'h8: dac_data_out <= adc_data;
-      4'h3: dac_data_out <= 12'd0;
-      4'h2: dac_data_out <= dma_data[15:4];
-      4'h1: dac_data_out <= dac_pat_data[15:4];
-      default: dac_data_out <= dac_dds_data[15:4];
-    endcase
+    dac_data_out <= dac_data_mux_s;
   end
 
   // prbs sequences

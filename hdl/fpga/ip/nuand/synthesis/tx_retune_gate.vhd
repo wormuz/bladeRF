@@ -76,12 +76,6 @@ architecture rtl of tx_retune_gate is
     signal target_after_bank1_i : std_logic;
     signal target_after_stage0_bank0_i : timestamp_order_parts_t;
     signal target_after_stage0_bank1_i : timestamp_order_parts_t;
-    signal target_after_stage1_bank0_i : timestamp_order_parts_t := (
-        sign_diff => '0', high_eq => '1', high_lt => '0', high_gt => '0',
-        low_lt => '0', low_gt => '0');
-    signal target_after_stage1_bank1_i : timestamp_order_parts_t := (
-        sign_diff => '0', high_eq => '1', high_lt => '0', high_gt => '0',
-        low_lt => '0', low_gt => '0');
     signal replacement_compare_pending_i : std_logic := '0';
     signal immediate_i : std_logic := '0';
     signal muted_i : std_logic := '0';
@@ -163,23 +157,27 @@ begin
         target_bank0_i, target_timestamp);
     target_after_stage0_bank1_i <= timestamp_order_parts(
         target_bank1_i, target_timestamp);
-    target_after_bank0_i <= '1' when timestamp_after(target_after_stage1_bank0_i)
-                            else '0';
-    target_after_bank1_i <= '1' when timestamp_after(target_after_stage1_bank1_i)
-                            else '0';
-
-    compare_timestamp_parts : process(clock, reset)
+    -- Register the final one-bit ordering result at the compare-stage
+    -- boundary. Recombining registered compare parts here fed low_gt through
+    -- selector logic into the 64-bit target-bank write enables. Computing
+    -- the same result from stage-0 parts before this register keeps the
+    -- boundary and cycle alignment while shortening that measured path.
+    compare_timestamp_order : process(clock, reset)
     begin
         if reset = '1' then
-            target_after_stage1_bank0_i <= (
-                sign_diff => '0', high_eq => '1', high_lt => '0',
-                high_gt => '0', low_lt => '0', low_gt => '0');
-            target_after_stage1_bank1_i <= (
-                sign_diff => '0', high_eq => '1', high_lt => '0',
-                high_gt => '0', low_lt => '0', low_gt => '0');
+            target_after_bank0_i <= '0';
+            target_after_bank1_i <= '0';
         elsif rising_edge(clock) then
-            target_after_stage1_bank0_i <= target_after_stage0_bank0_i;
-            target_after_stage1_bank1_i <= target_after_stage0_bank1_i;
+            if timestamp_after(target_after_stage0_bank0_i) then
+                target_after_bank0_i <= '1';
+            else
+                target_after_bank0_i <= '0';
+            end if;
+            if timestamp_after(target_after_stage0_bank1_i) then
+                target_after_bank1_i <= '1';
+            else
+                target_after_bank1_i <= '0';
+            end if;
         end if;
     end process;
 
