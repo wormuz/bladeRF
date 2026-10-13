@@ -331,7 +331,11 @@ begin
                 end if;
             end loop;
             sample_tuple_q    <= samples_v;
-            forward_samples_q <= '1' when forward_samples else '0';
+            if forward_samples then
+                forward_samples_q <= '1';
+            else
+                forward_samples_q <= '0';
+            end if;
 
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;
