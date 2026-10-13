@@ -103,12 +103,16 @@ static int nios_access(struct bladerf *dev, uint8_t peripheral,
                                   PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
     if (status != 0) {
         if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
-            log_error("NIOS request channel is desynchronized; reopen the device\n");
+            log_error("NIOS legacy request channel is desynchronized; "
+                      "reopen the device\n");
         } else if (stage == NIOS_TRANSACTION_OUT_FAILED) {
-            log_debug("Failed to submit NIOS II request: %s\n",
+            log_error("Failed to send NIOS legacy request to peripheral "
+                      "0x%02x: %s\n", peripheral,
                       bladerf_strerror(status));
         } else {
-            log_debug("Failed to receive NIOS II response: %s\n",
+            log_error("NIOS legacy request to peripheral 0x%02x was sent, "
+                      "but no response was received: %s. Device/FPGA state "
+                      "is unknown.\n", peripheral,
                       bladerf_strerror(status));
         }
         return status;
@@ -217,8 +221,10 @@ int nios_legacy_get_fpga_version(struct bladerf *dev,
                              USB_DIR_DEVICE_TO_HOST, &cmd, 1);
 
         if (status != 0) {
-            log_debug("Failed to read FPGA version[%d]: %s\n", i,
-                      bladerf_strerror(status));
+            log_error("Could not read FPGA version byte %d: the NIOS "
+                      "configuration-peripheral request failed before a "
+                      "response; this does not establish FPGA state (%s).\n",
+                      i, bladerf_strerror(status));
 
             return status;
         }
