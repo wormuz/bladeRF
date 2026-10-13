@@ -23,8 +23,12 @@ extern int32_t no_os_axi_io_read(uint32_t base, uint32_t offset,
 #define AXI_AD9361_0_BASE 0x00000000u
 #endif
 #define AXI_ADC_REG_CLK_FREQ 0x54u
+#define AXI_ADC_REG_CLK_RATIO 0x58u
 #define AXI_AD9361_TX_OFFSET 0x4000u
-#define NIOS_UP_CLOCK_HZ 80000000.0
+/* platform.sh generates the bladeRF Micro system clock at 80 MHz. */
+#define FPGA_UP_CLOCK_HZ 80000000.0
+/* ADI axi_adc_core.c uses rate * 390625 >> 8, i.e. 100 MHz / 65536. */
+#define ADI_HOST_CLOCK_HZ 100000000.0
 
 static uint64_t monotonic_raw_ns(void)
 {
@@ -63,6 +67,7 @@ int main(int argc, char **argv)
     bladerf_timestamp rx_prev = 0, tx_prev = 0;
     uint64_t host_prev = 0;
     uint32_t core_version = 0, core_id = 0, rx_clk = 0, tx_clk = 0;
+    uint32_t rx_ratio = 0, tx_ratio = 0;
     static const uint16_t clock_reg_addrs[] = {
         0x003u, 0x00au, 0x045u, 0x041u, 0x042u, 0x043u, 0x044u,
         0x2abu, 0x2acu
@@ -130,6 +135,17 @@ int main(int argc, char **argv)
         fprintf(stderr, "TX ADI clock monitor read: %d\n", status);
         goto out_unbind;
     }
+    status = no_os_axi_io_read(axi_base, AXI_ADC_REG_CLK_RATIO, &rx_ratio);
+    if (status < 0) {
+        fprintf(stderr, "RX ADI clock-ratio read: %d\n", status);
+        goto out_unbind;
+    }
+    status = no_os_axi_io_read(axi_base + AXI_AD9361_TX_OFFSET,
+                               AXI_ADC_REG_CLK_RATIO, &tx_ratio);
+    if (status < 0) {
+        fprintf(stderr, "TX ADI clock-ratio read: %d\n", status);
+        goto out_unbind;
+    }
     for (unsigned int i = 0;
          i < sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0]); i++) {
         status = bladerf_get_rfic_register(dev, clock_reg_addrs[i],
@@ -159,10 +175,17 @@ int main(int argc, char **argv)
            core_version, core_id);
     printf("ADI_clock_monitor_rx_count=%" PRIu32
            " tx_count=%" PRIu32 " (counts per 65536 up_clk cycles)"
-           " rx_sample_rate_from_monitor=%.3f tx_sample_rate_from_monitor=%.3f\n",
-           rx_clk, tx_clk,
-           (double)rx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0,
-           (double)tx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0);
+           " rx_ratio=0x%08" PRIx32 " tx_ratio=0x%08" PRIx32
+           " rx_monitored_clk_hz=%.3f tx_monitored_clk_hz=%.3f"
+           " rx_sample_equiv_hz=%.3f tx_sample_equiv_hz=%.3f"
+           " rx_host_clock_estimate_hz=%.3f tx_host_clock_estimate_hz=%.3f\n",
+           rx_clk, tx_clk, rx_ratio, tx_ratio,
+           (double)rx_clk * FPGA_UP_CLOCK_HZ / 65536.0,
+           (double)tx_clk * FPGA_UP_CLOCK_HZ / 65536.0,
+           (double)rx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0,
+           (double)tx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0,
+           (double)rx_clk * ADI_HOST_CLOCK_HZ / 65536.0 * rx_ratio,
+           (double)tx_clk * ADI_HOST_CLOCK_HZ / 65536.0 * tx_ratio);
     printf("AD9361_clock_registers:");
     for (unsigned int i = 0;
          i < sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0]); i++) {
@@ -203,11 +226,13 @@ int main(int argc, char **argv)
         printf("interval=%u host_s=%.9f rx_timestamp_hz=%.3f"
                " tx_timestamp_hz=%.3f rx_clock_count=%" PRIu32
                " tx_clock_count=%" PRIu32
-               " rx_sample_rate_from_monitor=%.3f"
-               " tx_sample_rate_from_monitor=%.3f\n",
+               " rx_monitored_clk_hz=%.3f rx_sample_equiv_hz=%.3f"
+               " tx_monitored_clk_hz=%.3f tx_sample_equiv_hz=%.3f\n",
                i, dt, rx_hz, tx_hz, rx_clk, tx_clk,
-               (double)rx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0,
-               (double)tx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0);
+               (double)rx_clk * FPGA_UP_CLOCK_HZ / 65536.0,
+               (double)rx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0,
+               (double)tx_clk * FPGA_UP_CLOCK_HZ / 65536.0,
+               (double)tx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0);
         fflush(stdout);
         rx_prev = rx_now;
         tx_prev = tx_now;
