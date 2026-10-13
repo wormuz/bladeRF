@@ -158,7 +158,10 @@ begin
 
     U_tamer : entity work.time_tamer
       generic map (
-        CANCEL_TIMEOUT_CYCLES => 63
+        -- A healthy cancel crosses to the slower timestamp domain and back
+        -- twice (low/high/low ACK). Keep room for both CDC round trips while
+        -- retaining a short injected-clock-loss watchdog test.
+        CANCEL_TIMEOUT_CYCLES => 127
       )
       port map (
         clock           =>  clock,
@@ -388,15 +391,15 @@ begin
             severity failure;
         ts_clock_enable <= '0';
         cancel_compare(clock, addr, din, write);
-        nop(clock, 100);
+        nop(clock, 200);
         read_status(clock, addr, dout, read, readack, status_after);
         assert status_after(7) = '1' and intr = '0'
             report "missing cancel ACK was not reported fail-closed"
             severity failure;
         ts_clock_enable <= '1';
-        nop(clock, 100);
+        nop(clock, 200);
         cancel_compare(clock, addr, din, write);
-        nop(clock, 100);
+        nop(clock, 200);
         read_status(clock, addr, dout, read, readack, status_after);
         assert status_after(7) = '0' and intr = '0'
             report "cancel recovery did not clear the failure diagnostic"

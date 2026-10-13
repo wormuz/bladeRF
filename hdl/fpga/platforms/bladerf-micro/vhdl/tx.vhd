@@ -128,6 +128,7 @@ architecture arch of tx is
 
     signal sample_fifo_holdoff            : std_logic;
     signal sample_fifo_holdoff_i          : std_logic;
+    signal loopback_fifo_near_full         : std_logic;
     signal loopback_fifo_source_data      : std_logic_vector(sample_fifo.rdata'range);
     signal loopback_fifo_source_valid     : std_logic;
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
@@ -220,9 +221,15 @@ begin
         end if;
     end process;
 
-    -- Pass through loopback_fifo_wfull immediately
-    sample_fifo_holdoff <=  sample_fifo_holdoff_i or
-                            (loopback_enabled and loopback_fifo_wfull);
+    -- Stop reading TX samples before the loopback FIFO is full. The exact
+    -- full flag feeds a wide combinational admission path into the TX sample
+    -- FIFO's M10K read control; a 12-word reserve covers the registered
+    -- holdoff response and the already-registered loopback write request.
+    loopback_fifo_near_full <= '1' when
+        unsigned(loopback_fifo_wused) >= to_unsigned(
+            LOOPBACK_FIFO_LENGTH - 12, loopback_fifo_wused'length)
+        else '0';
+    sample_fifo_holdoff <= sample_fifo_holdoff_i;
 
     -- Persist sample fifo holdoff for a number of clocks, to give time for
     -- the FIFO to drain properly
@@ -238,7 +245,7 @@ begin
                     sample_fifo_holdoff_i   <= '1';
                 end if;
 
-                if( loopback_fifo_wfull = '1' ) then
+                if( loopback_fifo_near_full = '1' ) then
                     backoff_downcount       := 3;
                     sample_fifo_holdoff_i   <= '1';
                 end if;

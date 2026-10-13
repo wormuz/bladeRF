@@ -311,12 +311,16 @@ begin
     end process ;
 
     -- Register outputs
-    register_sout : process(clock, reset, session_reset) is
+    register_sout : process(clock, reset) is
     begin
-        if (reset = '1' or session_reset = '1') then
+        if (reset = '1') then
             rs232_sout <= '1';
         elsif (rising_edge(clock)) then
-            rs232_sout <= rs232_sout_reg;
+            if (session_reset = '1') then
+                rs232_sout <= '1';
+            else
+                rs232_sout <= rs232_sout_reg;
+            end if;
         end if;
     end process register_sout;
 

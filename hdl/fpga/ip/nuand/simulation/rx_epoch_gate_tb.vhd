@@ -524,12 +524,12 @@ begin
         samples_in(1).data_v <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
-        assert out_samples(0).data_i = to_signed(0, 16) and
-               out_samples(1).data_i = to_signed(0, 16) and
-               out_samples(0).data_v = '1' and
-               out_samples(1).data_v = '1' and
+        assert out_samples(0).data_i = to_signed(1111, 16) and
+               out_samples(1).data_i = to_signed(2222, 16) and
+               out_samples(0).data_v = '0' and
+               out_samples(1).data_v = '0' and
                discard_active = '1'
-            report "RX_X2 lane-valid mask mismatch state=" & to_hstring(state) &
+            report "RX_X2 partial tuple was not invalidated state=" & to_hstring(state) &
                    " data_v=" & std_logic'image(out_samples(0).data_v) &
                    std_logic'image(out_samples(1).data_v) &
                    " discard=" & std_logic'image(discard_active)

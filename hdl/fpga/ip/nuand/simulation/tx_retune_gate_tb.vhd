@@ -50,6 +50,20 @@ begin
             muted_sample_count => muted_sample_count);
 
     stimulus : process
+        procedure queue_arm_at(value : unsigned(63 downto 0)) is
+        begin
+            -- Model the controller's target lead cycle and the gate's
+            -- registered compare resolution for queued replacements.
+            target_timestamp <= value;
+            wait until rising_edge(clock);
+            wait until falling_edge(clock);
+            arm <= '1';
+            wait until rising_edge(clock);
+            wait until falling_edge(clock);
+            arm <= '0';
+            wait until rising_edge(clock);
+            wait until falling_edge(clock);
+        end procedure;
     begin
         wait for 20 ns;
         wait until falling_edge(clock);
@@ -144,18 +158,10 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
-        target_timestamp <= to_unsigned(65, 64);
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(to_unsigned(65, 64));
         -- A later queued request must not replace the already selected 65
         -- tick boundary when it is written into the other target bank.
-        target_timestamp <= to_unsigned(70, 64);
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(to_unsigned(70, 64));
         timestamp <= to_unsigned(64, 64);
         wait for 1 ns;
         assert state = "01" and muted = '0'
@@ -187,16 +193,8 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
-        target_timestamp <= to_unsigned(65, 64);
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
-        target_timestamp <= to_unsigned(60, 64);
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(to_unsigned(65, 64));
+        queue_arm_at(to_unsigned(60, 64));
         timestamp <= to_unsigned(59, 64);
         wait for 1 ns;
         assert state = "01" and muted = '0'
@@ -228,11 +226,7 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
-        target_timestamp <= unsigned'(x"fffffffffffffff0");
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(unsigned'(x"fffffffffffffff0"));
         timestamp <= unsigned'(x"ffffffffffffffef");
         wait for 1 ns;
         assert state = "01" and muted = '0'
@@ -266,11 +260,7 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
-        target_timestamp <= unsigned'(x"8000000000000008");
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(unsigned'(x"8000000000000008"));
         timestamp <= unsigned'(x"7ffffffffffffff7");
         wait for 1 ns;
         assert state = "01" and muted = '0'

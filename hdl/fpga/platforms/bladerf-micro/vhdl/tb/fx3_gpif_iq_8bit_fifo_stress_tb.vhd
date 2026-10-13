@@ -464,14 +464,15 @@ begin
         begin
             if( sys_rst = '1' ) then
                 dac_controls <= (
-                    0 => (enable => ENABLE_CHANNEL_0, data_req => '1'),
-                    1 => (enable => ENABLE_CHANNEL_1, data_req => '1')
+                    0 => (enable => ENABLE_CHANNEL_0, data_req => ENABLE_CHANNEL_0),
+                    1 => (enable => ENABLE_CHANNEL_1, data_req => ENABLE_CHANNEL_1)
                 );
             elsif( rising_edge(tx_clock) ) then
                 for i in dac_controls'range loop
                     dac_controls(i) <= (
                         enable   =>     dac_controls(i).enable,
-                        data_req => not dac_controls(i).data_req );
+                        data_req => not dac_controls(i).data_req and
+                                      dac_controls(i).enable );
                 end loop;
             end if;
         end process;

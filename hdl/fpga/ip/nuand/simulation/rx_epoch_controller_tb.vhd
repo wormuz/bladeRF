@@ -111,6 +111,9 @@ begin
                gate_state = "0000" and discard_active = '0'
             report "stale RX command toggle replayed after reset"
             severity failure;
+        assert epoch_id = x"7f" and meta_enable = '1'
+            report "reset recovery did not baseline from the captured control word"
+            severity failure;
 
         -- The fresh ARM toggles from the surviving high baseline to low.
         -- The ID and toggles must arrive together at the gate.

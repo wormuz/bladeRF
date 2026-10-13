@@ -4,6 +4,7 @@ library ieee ;
 
 library std ;
     use std.textio.all ;
+    use std.env.all;
 
 entity command_uart_tb is
 end entity ;
@@ -203,6 +204,8 @@ begin
         nop(clock, 4500);
 
         -- A fresh request in the new session must be held until NIOS finishes.
+        write_word(clock, host_addr, host_din, host_write, 24,
+                   x"00000001");
         send_retune(
             clock       => clock,
             addr        => host_addr,
@@ -227,7 +230,8 @@ begin
 
         nop( clock, 1000 ) ;
 
-        report "-- End of Simulation --" severity failure ;
+        report "command_uart_tb: PASS" severity note;
+        stop;
 
     end process ;
 
@@ -239,7 +243,9 @@ begin
         variable first_request : boolean := true;
     begin
         loop
-            wait until rising_edge(clock) and dev_irq = '1';
+            if dev_irq /= '1' then
+                wait until rising_edge(clock) and dev_irq = '1';
+            end if;
             report "DEVICE: Received request";
             nop(clock, 100);
             read_command(clock, dev_addr, dev_dout, dev_read, request);

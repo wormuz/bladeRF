@@ -63,6 +63,9 @@ entity fifo_reader is
         meta_fifo_empty     :   in      std_logic;
         meta_fifo_data      :   in      std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
 
+        -- TX producers qualify data_req with each stream's enable before
+        -- entering this timing-critical FIFO reader. Keep enable separately
+        -- for channel-map/offset decoding.
         in_sample_controls  :   in      sample_controls_t(0 to NUM_STREAMS-1) := (others => SAMPLE_CONTROL_DISABLE);
         out_samples         :   out     sample_streams_t(0 to NUM_STREAMS-1)  := (others => ZERO_SAMPLE);
 
@@ -372,7 +375,7 @@ begin
         read_req_v := '0';
         for i in in_sample_controls'range loop
             read_req_v := read_req_v or
-                (in_sample_controls(i).data_req and in_sample_controls(i).enable);
+                in_sample_controls(i).data_req;
         end loop;
 
         packed_pop_request_i <= '0';
@@ -973,8 +976,7 @@ begin
         read_req_v := '0';
         for i in in_sample_controls'range loop
             read_req_v := read_req_v or
-                (in_sample_controls(i).data_req and
-                 in_sample_controls(i).enable);
+                in_sample_controls(i).data_req;
         end loop;
 
         packed_buffer_data_i <=
@@ -1317,9 +1319,8 @@ begin
                     -- Check for valid data request
                     read_req := '0';
                     for i in in_sample_controls'range loop
-                        read_req := read_req or (in_sample_controls(i).data_req and in_sample_controls(i).enable);
-                        fifo_future.out_samples(i).data_v <= in_sample_controls(i).data_req and
-                                                             in_sample_controls(i).enable;
+                        read_req := read_req or in_sample_controls(i).data_req;
+                        fifo_future.out_samples(i).data_v <= in_sample_controls(i).data_req;
                     end loop;
 
                     -- Received a valid data request

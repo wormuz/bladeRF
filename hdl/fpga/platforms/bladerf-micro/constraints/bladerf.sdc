@@ -340,22 +340,14 @@ set hs_pairs [list \
     {*U_rx_epoch_snapshot_handshake|source_holding[*]}              {*bladerf_core:*|rx_epoch_snapshot_sys[*]} \
     {*U_rx_fault_causes_handshake|source_holding[*]}                {*bladerf_core:*|rx_fault_causes_sys[*]} \
     {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} \
-    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|target_timestamp[*]} \
-    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|previous_toggles[*]} \
-    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|arm_ack_toggle} \
-    {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|arm_immediate} \
-    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|epoch_id_rx[*]} \
-    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|previous_toggles[*]} \
-    {*rx_epoch_controller:U_rx_epoch_controller|handshake:transfer|source_holding[*]} {*rx_epoch_controller:U_rx_epoch_controller|meta_enable_rx} \
     {*U_tx_retune_gate_status_handshake|source_holding[*]}          {*bladerf_core:*|tx_retune_gate_status_sys[*]} \
 ]
 
 # On reset recovery each controller establishes its surviving command levels
-# directly from control_wire_* before the regular control_* capture stage is
-# active. Those first-sample destination registers are separate bundled-data
-# captures and must receive the same bounded-skew/net-delay treatment. Without
-# these pairs STA times the asynchronous source_holding -> initialization
-# captures as one-cycle paths (the normal control_* pairs do not cover them).
+# from the registered control_* word on the cycle after the handshake capture.
+# Thus the control_* pair above is the only asynchronous bundled-data capture;
+# decoded toggle/epoch registers are synchronous destinations and must not be
+# constrained as direct source_holding endpoints.
 
 # The dwell_cfg pair exists only in the sweep revision, and it is a genuine
 # bundled-data crossing: dwell_cfg_rx[29:24] selects a shift and [23:0] is

@@ -33,6 +33,7 @@ architecture rtl of rx_epoch_controller is
     signal complete_rx      : std_logic := '0';
     signal abort_rx         : std_logic := '0';
     signal control_initialized : std_logic := '0';
+    signal control_init_capture_pending : std_logic := '0';
     signal epoch_id_rx      : unsigned(7 downto 0) := (others => '0');
     signal meta_enable_rx   : std_logic := '0';
     signal complete_seen_rx : std_logic := '0';
@@ -84,6 +85,7 @@ begin
             complete_rx <= '0';
             abort_rx <= '0';
             control_initialized <= '0';
+            control_init_capture_pending <= '0';
             epoch_id_rx <= (others => '0');
             meta_enable_rx <= '0';
             complete_seen_rx <= '0';
@@ -91,16 +93,23 @@ begin
             arm_rx <= '0';
             complete_rx <= '0';
             abort_rx <= '0';
-            if acknowledge_rx = '1' and control_initialized = '0' then
+            if control_init_capture_pending = '1' then
+                -- Baseline from the destination-clock capture register.
+                -- Sampling control_wire_rx here would create a second raw
+                -- bundled-data capture path beside capture_control.
+                previous_toggles <= control_rx(2 downto 0);
+                epoch_id_rx <= unsigned(control_rx(15 downto 8));
+                meta_enable_rx <= control_rx(16);
+                control_initialized <= '1';
+                control_init_capture_pending <= '0';
+                complete_seen_rx <= '0';
+            elsif acknowledge_rx = '1' and control_initialized = '0' then
                 -- SYS_RST resets this RX-clock decoder, but NIOS and its PIO
                 -- remain alive (nios_system reset_reset_n is tied high).
                 -- Establish the surviving toggle levels as a baseline so
-                -- reset recovery cannot replay a stale command.
-                previous_toggles <= control_wire_rx(2 downto 0);
-                epoch_id_rx <= unsigned(control_wire_rx(15 downto 8));
-                meta_enable_rx <= control_wire_rx(16);
-                control_initialized <= '1';
-                complete_seen_rx <= '0';
+                -- reset recovery cannot replay a stale command. capture_control
+                -- registers the payload on this edge; baseline it next cycle.
+                control_init_capture_pending <= '1';
             else
                 if control_rx(0) /= previous_toggles(0) then
                     arm_rx <= '1';

@@ -391,7 +391,15 @@ begin
         elsif( rising_edge(loopback_fifo.rclock) ) then
 
             -- Is loopback enabled?
-            if( rx_mux_mode = RX_MUX_DIGITAL_LOOPBACK and rx_enable = '1' ) then
+            -- Use the local registered enable for the loopback datapath.
+            -- The synchronized module enable also fans out across the RX
+            -- datapath; routing it through the packed-FIFO unpack/enable
+            -- logic was the fitted critical path to loopback_streams.data_q.
+            -- loopback_enabled is updated from rx_enable above, so gate
+            -- sample-valid with rx_enable below to keep disable immediate
+            -- while allowing data registers to use this local copy.
+            if( rx_mux_mode = RX_MUX_DIGITAL_LOOPBACK and
+                loopback_enabled = '1' ) then
                 loopback_enabled    <= '1';
             else
                 loopback_enabled    <= '0';
@@ -453,7 +461,7 @@ begin
                                     loopback_streams(i).data_q'length), 4);
                     end if;
 
-                    loopback_streams(i).data_v <= '1';
+                    loopback_streams(i).data_v <= rx_enable;
 
                     -- Advance to the next unread sample in the packed FIFO
                     -- word. The previous implementation recomputed this

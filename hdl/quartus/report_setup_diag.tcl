@@ -8,18 +8,24 @@
 
 set project_name "bladerf"
 set revision "sweep"
+set model "slow"
+set temperature "85"
 foreach {key value} $quartus(args) {
     if {$key eq "-projname"} { set project_name $value }
     if {$key eq "-rev"} { set revision $value }
+    if {$key eq "-model"} { set model $value }
+    if {$key eq "-temperature"} { set temperature $value }
 }
 
 project_open -revision $revision $project_name
-create_timing_netlist -model slow -temperature 85 -voltage 1100
+create_timing_netlist -model $model -temperature $temperature -voltage 1100
 read_sdc
 update_timing_netlist
 
 report_timing -setup -npaths 20 -detail full_path \
-    -file "${revision}.setup_paths.rpt"
+    -file "${revision}.${model}_${temperature}C.setup_paths.rpt"
+report_timing -hold -npaths 20 -detail full_path \
+    -file "${revision}.${model}_${temperature}C.hold_paths.rpt"
 
 set index 0
 foreach_in_collection path [get_timing_paths -setup -npaths 20 -detail path_only] {

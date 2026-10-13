@@ -705,11 +705,19 @@ begin
         );
 
     dac_assignment_proc : process( all )
+        variable channel_enable_v : std_logic;
+        variable channel_request_v : std_logic;
     begin
         for i in dac_controls'range loop
-            dac_controls(i).enable   <= (ad9361.ch(i).dac.i.enable or ad9361.ch(i).dac.q.enable or tx_loopback_enabled) and
-                                        mimo_tx_enables(i);
-            dac_controls(i).data_req <= (ad9361.ch(i).dac.i.valid  or ad9361.ch(i).dac.q.valid  or tx_loopback_enabled) and
+            channel_enable_v := ad9361.ch(i).dac.i.enable or
+                                ad9361.ch(i).dac.q.enable or
+                                tx_loopback_enabled;
+            channel_request_v := ad9361.ch(i).dac.i.valid or
+                                 ad9361.ch(i).dac.q.valid or
+                                 tx_loopback_enabled;
+            dac_controls(i).enable <= channel_enable_v and mimo_tx_enables(i);
+            dac_controls(i).data_req <= channel_request_v and
+                                        channel_enable_v and
                                         mimo_tx_enables(i);
 
             if( rising_edge(tx_clock) ) then

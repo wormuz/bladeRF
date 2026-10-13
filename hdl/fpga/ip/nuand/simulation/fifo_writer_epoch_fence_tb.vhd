@@ -18,6 +18,7 @@ architecture tb of fifo_writer_epoch_fence_tb is
     signal reset : std_logic := '1';
     signal done : boolean := false;
     signal enable : std_logic := '1';
+    signal packed_en : std_logic := '0';
     signal discard_active : std_logic := '0';
     signal epoch_gate_fault : std_logic := '0';
     signal epoch_meta_enable : std_logic := '0';
@@ -63,7 +64,7 @@ begin
             usb_speed => '0',
             meta_en => '1',
             packet_en => '0',
-            highly_packed_mode_en => '0',
+            highly_packed_mode_en => packed_en,
             timestamp => (others => '0'),
             mini_exp => (others => '0'),
             rx_epoch_meta_enable => epoch_meta_enable,
@@ -214,10 +215,15 @@ begin
         fifo_usedw <= x"010";
         meta_fifo_usedw <= "1010";
         gpif_diag <= "111";
+        packed_en <= '1';
         wait until fifo_write = '1';
         fifo_full <= '1';
         for i in 1 to 64 loop
             wait until rising_edge(clock);
+            wait for 1 ns;
+            assert fifo_write = '0'
+                report "packed RX writer continued committing while FIFO was full"
+                severity failure;
             exit when fault_sticky(5) = '1';
         end loop;
         assert fault_sticky(2) = '1' and fault_sticky(5) = '1'
@@ -231,6 +237,17 @@ begin
                fault_context(24 downto 22) = "111"
             report "stall context did not preserve quantized sample/META occupancy"
             severity failure;
+
+        fifo_full <= '0';
+        for i in 1 to 64 loop
+            wait until rising_edge(clock);
+            wait for 1 ns;
+            exit when fifo_write = '1';
+        end loop;
+        assert fifo_write = '1'
+            report "packed RX writer did not resume after FIFO backpressure"
+            severity failure;
+        packed_en <= '0';
 
         -- Reset and begin a fresh epoch, admit one sample, then stop upstream
         -- sample-valid while both FIFOs remain writable. The context snapshot

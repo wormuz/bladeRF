@@ -103,46 +103,7 @@ architecture arch of rx_epoch_gate is
     -- Reset/unarmed identity. Host epoch allocation reserves zero so an
     -- FPGA reset cannot reproduce a certified epoch tag after 8-bit wrap.
     signal active_epoch_id  : unsigned(7 downto 0)  := (others => '0');
-    signal sample_stage_iq  : sample_streams_t(0 to NUM_STREAMS-1) :=
-                                  (others => ZERO_SAMPLE);
-    signal sample_forward_i : std_logic_vector(NUM_STREAMS-1 downto 0) :=
-                                  (others => '0');
-    signal keepalive_valid_i : std_logic_vector(NUM_STREAMS-1 downto 0) :=
-                                  (others => '0');
-
 begin
-
-    -- Register RF IQ independently from the epoch/control decision. The
-    -- previous combined FSM mux put adc_enable through two levels of wide
-    -- sample-data selection, which became the RX setup bottleneck.
-    stage_samples : process(clock, reset)
-    begin
-        if reset = '1' then
-            sample_stage_iq <= (others => ZERO_SAMPLE);
-        elsif rising_edge(clock) then
-            sample_stage_iq <= in_samples;
-        end if;
-    end process;
-
-    -- A registered per-lane mode selects either the staged RF IQ or the
-    -- zero-IQ transport keepalive. This preserves the original one-cycle
-    -- sample/metadata alignment while keeping lane-enable logic off the
-    -- 32-bit IQ register D paths.
-    output_samples : process(all)
-        variable samples_v : sample_streams_t(0 to NUM_STREAMS-1);
-    begin
-        for i in samples_v'range loop
-            samples_v(i) := ZERO_SAMPLE;
-            if sample_forward_i(i) = '1' then
-                samples_v(i).data_i := sample_stage_iq(i).data_i;
-                samples_v(i).data_q := sample_stage_iq(i).data_q;
-                samples_v(i).data_v := sample_stage_iq(i).data_v;
-            else
-                samples_v(i).data_v := keepalive_valid_i(i);
-            end if;
-        end loop;
-        out_samples <= samples_v;
-    end process;
 
     gate : process(clock, reset)
         variable any_enabled : std_logic;
@@ -151,13 +112,14 @@ begin
         variable valid_enabled_lane_count : natural;
         variable partial_enabled_valid : boolean;
         variable keepalive_data_valid : std_logic;
+        variable forward_samples : boolean;
+        variable samples_v : sample_streams_t(0 to NUM_STREAMS-1);
     begin
         if( reset = '1' ) then
             state               <= STATE_ACTIVE;
             active_epoch_id      <= (others => '0');
             out_sample_controls  <= (in_sample_controls'range => SAMPLE_CONTROL_DISABLE);
-            sample_forward_i     <= (others => '0');
-            keepalive_valid_i    <= (others => '0');
+            out_samples          <= (others => ZERO_SAMPLE);
             out_timestamp        <= (others => '0');
             out_epoch_id         <= (others => '0');
             out_state            <= STATE_ACTIVE;
@@ -169,7 +131,7 @@ begin
             -- timestamp in the same pipeline stage so fifo_writer metadata
             -- names the sample it describes rather than the next ADC tick.
             out_timestamp <= rx_timestamp;
-            sample_forward_i <= (others => '0');
+            forward_samples := false;
 
             -- A common epoch boundary must be a real sample on every enabled
             -- ADC lane. RX_X1 enables one lane; RX_X2 requires both lanes.
@@ -195,11 +157,6 @@ begin
             partial_enabled_valid := enabled_lane_count > 1 and
                 valid_enabled_lane_count > 0 and
                 valid_enabled_lane_count < enabled_lane_count;
-            for i in keepalive_valid_i'range loop
-                keepalive_valid_i(i) <= in_sample_controls(i).enable and
-                                         keepalive_data_valid;
-            end loop;
-
             case state is
                 when STATE_ACTIVE =>
                     if( epoch_abort = '1' ) then
@@ -220,13 +177,18 @@ begin
                         -- RX_X2 is one sample tuple, not two independent
                         -- streams. Once active, a one-lane valid gap means
                         -- the pair can no longer be proven aligned. Fence
-                        -- both lanes and publish ERROR instead of forwarding
-                        -- a partial tuple as certified IQ.
+                        -- both lanes and publish ERROR instead of marking a
+                        -- partial tuple as valid IQ. The IQ bus may still
+                        -- carry its ordinary source value while data_v is 0;
+                        -- fifo_writer never admits an invalid sample. Keeping
+                        -- this validity decision out of the 32-bit IQ mux
+                        -- avoids a measured 8.5 ns data_v-to-data_i path.
                         out_sample_controls <= in_sample_controls;
+                        forward_samples := true;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
-                        sample_forward_i   <= (others => '1');
+                        forward_samples := true;
                     end if;
 
                     if( epoch_arm = '1' and epoch_abort = '0' ) then
@@ -277,7 +239,7 @@ begin
                         state <= STATE_PENDING;
                     elsif( all_enabled_valid = '1' ) then
                         out_sample_controls  <= in_sample_controls;
-                        sample_forward_i     <= (others => '1');
+                        forward_samples := true;
                         epoch_start_event    <= '1';
                         first_valid_timestamp <= rx_timestamp;
                         state <= STATE_ACTIVE_NEW;
@@ -305,10 +267,11 @@ begin
                         -- Keep RX_X2 fail-closed through the certificate
                         -- handoff cycle as well as steady ACTIVE operation.
                         out_sample_controls <= in_sample_controls;
+                        forward_samples := true;
                         state <= STATE_ERROR;
                     else
                         out_sample_controls <= in_sample_controls;
-                        sample_forward_i   <= (others => '1');
+                        forward_samples := true;
                         state               <= STATE_ACTIVE;
                     end if;
 
@@ -327,6 +290,27 @@ begin
                     end if;
             end case;
 
+            -- Register the final sample tuple at the epoch boundary. Keeping
+            -- the zero-IQ/real-IQ selection out of fifo_writer's combinational
+            -- data-valid path removes a measured critical path while retaining
+            -- cycle alignment with out_timestamp.
+            for i in samples_v'range loop
+                samples_v(i) := ZERO_SAMPLE;
+                if forward_samples then
+                    samples_v(i) := in_samples(i);
+                    -- RX_X2 is admitted as a tuple: both enabled lanes must
+                    -- be valid on this edge. This masks the validity bits
+                    -- without putting either lane's data_v through the IQ
+                    -- data mux. RX_X1 reduces to its single lane's valid bit.
+                    samples_v(i).data_v := in_sample_controls(i).enable and
+                                           all_enabled_valid;
+                else
+                    samples_v(i).data_v := in_sample_controls(i).enable and
+                                           keepalive_data_valid;
+                end if;
+            end loop;
+            out_samples <= samples_v;
+
             out_epoch_id       <= active_epoch_id;
             out_state          <= state;
         end if;
@@ -341,11 +325,12 @@ begin
     -- already low during reset. Avoid feeding reset directly into a CDC
     -- snapshot data bit: that made Quartus flag the source register's D and
     -- asynchronous clear as the same signal (Design Assistant S102).
-    out_discard_active <= '1' when (state = STATE_PENDING or
-                  state = STATE_WAIT_FIRST_SAMPLE or
-                  state = STATE_ERROR or
-                  epoch_arm = '1' or epoch_abort = '1') else
-        '0';
+    -- The externally visible state encodings keep their documented values,
+    -- but the three fenced/error states are exactly the states where bit 0
+    -- and bit 1 differ, plus ERROR (bit 2). This compact decode avoids three
+    -- equality comparators on the RX writer's progress watchdog path.
+    out_discard_active <= ((state(1) xor state(0)) or state(2)) or
+                          epoch_arm or epoch_abort;
 
     out_fault <= '1' when state = STATE_ERROR else '0';
 

@@ -41,6 +41,15 @@ entity tx_retune_gate is
 end entity;
 
 architecture rtl of tx_retune_gate is
+    type timestamp_order_parts_t is record
+        sign_diff : std_logic;
+        high_eq   : std_logic;
+        high_lt   : std_logic;
+        high_gt   : std_logic;
+        low_lt    : std_logic;
+        low_gt    : std_logic;
+    end record;
+
     constant STATE_ACTIVE : unsigned(1 downto 0) := "00";
     constant STATE_ARMED  : unsigned(1 downto 0) := "01";
     constant STATE_MUTED  : unsigned(1 downto 0) := "10";
@@ -50,6 +59,7 @@ architecture rtl of tx_retune_gate is
     signal target_bank0_i : unsigned(63 downto 0) := (others => '0');
     signal target_bank1_i : unsigned(63 downto 0) := (others => '0');
     signal target_bank_select_i : std_logic := '0';
+    signal target_bank_effective_select_i : std_logic;
     signal target_bank_active_write_i : std_logic;
     signal target_bank_armed_write_i : std_logic;
     signal target_bank0_write_en_i : std_logic;
@@ -64,6 +74,15 @@ architecture rtl of tx_retune_gate is
     signal target_reached_i : std_logic;
     signal target_after_bank0_i : std_logic;
     signal target_after_bank1_i : std_logic;
+    signal target_after_stage0_bank0_i : timestamp_order_parts_t;
+    signal target_after_stage0_bank1_i : timestamp_order_parts_t;
+    signal target_after_stage1_bank0_i : timestamp_order_parts_t := (
+        sign_diff => '0', high_eq => '1', high_lt => '0', high_gt => '0',
+        low_lt => '0', low_gt => '0');
+    signal target_after_stage1_bank1_i : timestamp_order_parts_t := (
+        sign_diff => '0', high_eq => '1', high_lt => '0', high_gt => '0',
+        low_lt => '0', low_gt => '0');
+    signal replacement_compare_pending_i : std_logic := '0';
     signal immediate_i : std_logic := '0';
     signal muted_i : std_logic := '0';
     signal abort_i : std_logic;
@@ -85,25 +104,51 @@ architecture rtl of tx_retune_gate is
         return delta(63) = '0';
     end function;
 
-    -- Strict modulo ordering for two scheduled timestamps. The caller's
-    -- contract limits their separation to less than 2^63 ticks. This avoids
-    -- forming a 64-bit difference merely to decide which queued mute
-    -- boundary is earlier.
-    function timestamp_after(
+    -- Partial comparisons for the queued-boundary ordering pipeline. Splitting
+    -- the low 63-bit lexicographic compare lets Quartus register the two
+    -- halves before the final one-bit decision, instead of routing a full
+    -- timestamp comparator into the bank selector in one cycle.
+    function timestamp_order_parts(
         left_ts  : unsigned(63 downto 0);
         right_ts : unsigned(63 downto 0)
-    ) return boolean is
+    ) return timestamp_order_parts_t is
+        variable parts : timestamp_order_parts_t;
     begin
-        -- For timestamps less than 2^63 apart, timestamps in the same
-        -- half-range use ordinary low-63-bit ordering. Across the sign
-        -- boundary, the order reverses. Compare the full low field in one
-        -- native operator rather than cascading high-word and low-word
-        -- comparators; post-fit STA measured that cascade on
-        -- target_timestamp -> target_bank_select_i.
-        if left_ts(63) /= right_ts(63) then
-            return left_ts(62 downto 0) < right_ts(62 downto 0);
+        parts.sign_diff := left_ts(63) xor right_ts(63);
+        parts.high_eq := '0';
+        if left_ts(62 downto 32) = right_ts(62 downto 32) then
+            parts.high_eq := '1';
+            parts.high_lt := '0';
+            parts.high_gt := '0';
+        elsif left_ts(62 downto 32) < right_ts(62 downto 32) then
+            parts.high_lt := '1';
+            parts.high_gt := '0';
+        else
+            parts.high_lt := '0';
+            parts.high_gt := '1';
         end if;
-        return left_ts(62 downto 0) > right_ts(62 downto 0);
+        if left_ts(31 downto 0) < right_ts(31 downto 0) then
+            parts.low_lt := '1';
+        else
+            parts.low_lt := '0';
+        end if;
+        if left_ts(31 downto 0) > right_ts(31 downto 0) then
+            parts.low_gt := '1';
+        else
+            parts.low_gt := '0';
+        end if;
+        return parts;
+    end function;
+
+    function timestamp_after(parts : timestamp_order_parts_t)
+        return boolean is
+    begin
+        if parts.sign_diff = '1' then
+            return parts.high_lt = '1' or
+                   (parts.high_eq = '1' and parts.low_lt = '1');
+        end if;
+        return parts.high_gt = '1' or
+               (parts.high_eq = '1' and parts.low_gt = '1');
     end function;
 begin
     -- Compare each target bank in parallel and select the one-bit result.
@@ -114,10 +159,39 @@ begin
                               else '0';
     target_reached_i <= target_reached_bank1_i when target_bank_select_i = '1'
                         else target_reached_bank0_i;
-    target_after_bank0_i <= '1' when timestamp_after(target_bank0_i, target_timestamp)
+    target_after_stage0_bank0_i <= timestamp_order_parts(
+        target_bank0_i, target_timestamp);
+    target_after_stage0_bank1_i <= timestamp_order_parts(
+        target_bank1_i, target_timestamp);
+    target_after_bank0_i <= '1' when timestamp_after(target_after_stage1_bank0_i)
                             else '0';
-    target_after_bank1_i <= '1' when timestamp_after(target_bank1_i, target_timestamp)
+    target_after_bank1_i <= '1' when timestamp_after(target_after_stage1_bank1_i)
                             else '0';
+
+    compare_timestamp_parts : process(clock, reset)
+    begin
+        if reset = '1' then
+            target_after_stage1_bank0_i <= (
+                sign_diff => '0', high_eq => '1', high_lt => '0',
+                high_gt => '0', low_lt => '0', low_gt => '0');
+            target_after_stage1_bank1_i <= (
+                sign_diff => '0', high_eq => '1', high_lt => '0',
+                high_gt => '0', low_lt => '0', low_gt => '0');
+        elsif rising_edge(clock) then
+            target_after_stage1_bank0_i <= target_after_stage0_bank0_i;
+            target_after_stage1_bank1_i <= target_after_stage0_bank1_i;
+        end if;
+    end process;
+
+    -- The target timestamp and each bank are registered for a full compare
+    -- stage before selector feedback. This effective selector also directs a
+    -- back-to-back request into the bank that remains inactive after the
+    -- pending comparison resolves.
+    target_bank_effective_select_i <=
+        (target_bank_select_i and not target_after_bank1_i) or
+        (not target_bank_select_i and target_after_bank0_i)
+        when state_i = STATE_ARMED and replacement_compare_pending_i = '1'
+        else target_bank_select_i;
 
     -- FIFO underflow is a local data-plane fault. Mute in this gate rather
     -- than waiting for the host's periodic fault monitor.
@@ -131,9 +205,9 @@ begin
     target_bank_armed_write_i <= '1' when abort_i = '0' and arm = '1' and
         state_i = STATE_ARMED else '0';
     target_bank0_write_en_i <= target_bank_active_write_i or
-        (target_bank_armed_write_i and target_bank_select_i);
+        (target_bank_armed_write_i and target_bank_effective_select_i);
     target_bank1_write_en_i <= target_bank_armed_write_i and
-        not target_bank_select_i;
+        not target_bank_effective_select_i;
 
     -- Timestamp subtraction is wrap-safe for targets less than 2^63 ticks
     -- away, matching the NIOS scheduled-retune future-time constraint.
@@ -212,6 +286,7 @@ begin
         if reset = '1' then
             state_i <= STATE_ACTIVE;
             target_bank_select_i <= '0';
+            replacement_compare_pending_i <= '0';
             immediate_i <= '0';
             mute_start_timestamp_i <= (others => '0');
             mute_start_event <= '0';
@@ -221,8 +296,17 @@ begin
             resume_event <= '0';
             due_now := target_reached_i = '1';
 
+            if abort_i = '0' and state_i = STATE_ARMED and
+               replacement_compare_pending_i = '1' then
+                next_bank_select :=
+                    (target_bank_select_i and not target_after_bank1_i) or
+                    (not target_bank_select_i and target_after_bank0_i);
+                target_bank_select_i <= next_bank_select;
+            end if;
+
             if abort_i = '1' then
                 state_i <= STATE_ERROR;
+                replacement_compare_pending_i <= '0';
                 if state_i /= STATE_MUTED and state_i /= STATE_ERROR then
                     mute_start_timestamp_i <= timestamp;
                     mute_start_event <= '1';
@@ -230,6 +314,7 @@ begin
             elsif arm = '1' then
                 if state_i = STATE_ACTIVE then
                     target_bank_select_i <= '0';
+                    replacement_compare_pending_i <= '0';
                     immediate_i <= arm_immediate;
                     if arm_immediate = '1' or
                        timestamp_reached(timestamp, target_timestamp) then
@@ -246,37 +331,30 @@ begin
                     -- A fresh ARM and later COMPLETE are both required to
                     -- resume the stream.
                     target_bank_select_i <= '0';
+                    replacement_compare_pending_i <= '0';
                     immediate_i <= arm_immediate;
                     state_i <= STATE_MUTED;
                 elsif state_i = STATE_ARMED then
-                    -- Requests are ordered by NIOS; retain the earliest
-                    -- boundary so queued transitions cannot reopen a gap.
-                    -- Keep the earliest requested boundary while a retune
-                    -- is already armed. Write data to the inactive bank so
-                    -- this comparator controls only the bank selector.
-                    -- Keep the measured selector structure from the positive
-                    -- slack hosted fit: choose the active-bank comparison,
-                    -- then toggle only when the active boundary is later.
-                    -- Feed each parallel comparison directly into the
-                    -- selector next-state equation. This removes the
-                    -- comparator-result mux followed by conditional-toggle
-                    -- logic on the measured target_timestamp-to-selector
-                    -- critical path.
-                    next_bank_select :=
-                        (target_bank_select_i and not target_after_bank1_i) or
-                        (not target_bank_select_i and target_after_bank0_i);
-                    target_bank_select_i <= next_bank_select;
+                    -- A simultaneous new ARM is captured into the bank that
+                    -- remains inactive after the pending comparison resolves.
                     if arm_immediate = '1' or due_now then
                         state_i <= STATE_MUTED;
+                        replacement_compare_pending_i <= '0';
                         mute_start_timestamp_i <= timestamp;
                         mute_start_event <= '1';
+                    elsif arm = '1' then
+                        replacement_compare_pending_i <= '1';
+                    else
+                        replacement_compare_pending_i <= '0';
                     end if;
                 end if;
-            elsif state_i = STATE_ARMED and
-                  (immediate_i = '1' or due_now) then
-                state_i <= STATE_MUTED;
-                mute_start_timestamp_i <= timestamp;
-                mute_start_event <= '1';
+            elsif state_i = STATE_ARMED then
+                replacement_compare_pending_i <= '0';
+                if immediate_i = '1' or due_now then
+                    state_i <= STATE_MUTED;
+                    mute_start_timestamp_i <= timestamp;
+                    mute_start_event <= '1';
+                end if;
             elsif state_i = STATE_MUTED and complete = '1' then
                 state_i <= STATE_ACTIVE;
                 immediate_i <= '0';
