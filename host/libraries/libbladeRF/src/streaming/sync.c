@@ -1527,12 +1527,20 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                         }
                     }
                     /* Transition waiters must install the new epoch boundary
-                     * while this read is blocked. Keep the buffer lock (the
-                     * condition-variable contract), but release parser state. */
+                     * while this read is blocked. The condition wait returns
+                     * with buf_mgmt.lock held; release it before reacquiring
+                     * sync->lock, then take it again in the normal
+                     * sync->lock -> buf_mgmt.lock order. Otherwise epoch
+                     * invalidation can hold sync->lock while waiting for the
+                     * buffer lock as this reader holds the buffer lock while
+                     * waiting for sync->lock.
+                     */
                     MUTEX_UNLOCK(&s->lock);
                     status = wait_for_buffer(b, wait_timeout_ms,
                                              __FUNCTION__, b->cons_i);
+                    MUTEX_UNLOCK(&b->lock);
                     MUTEX_LOCK(&s->lock);
+                    MUTEX_LOCK(&b->lock);
 
                     if (status == 0) {
                         if (b->status[b->cons_i] != SYNC_BUFFER_FULL) {
