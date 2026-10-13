@@ -62,6 +62,8 @@ int main(int argc, char **argv)
         ? (bladerf_sample_rate)strtoull(argv[4], NULL, 10) : 0u;
     const uint32_t axi_base = argc > 5
         ? (uint32_t)strtoul(argv[5], NULL, 0) : AXI_AD9361_0_BASE;
+    const bladerf_sample_rate second_rx_rate = argc > 6
+        ? (bladerf_sample_rate)strtoull(argv[6], NULL, 10) : 0u;
     struct bladerf *dev = NULL;
     bladerf_sample_rate rx_rate = 0, tx_rate = 0;
     bladerf_timestamp rx_prev = 0, tx_prev = 0;
@@ -70,7 +72,8 @@ int main(int argc, char **argv)
     uint32_t rx_ratio = 0, tx_ratio = 0;
     static const uint16_t clock_reg_addrs[] = {
         0x003u, 0x00au, 0x045u, 0x041u, 0x042u, 0x043u, 0x044u,
-        0x2abu, 0x2acu
+        0x03fu, 0x04bu, 0x04eu, 0x05eu, 0x046u, 0x048u, 0x049u,
+        0x04au, 0x2abu, 0x2acu
     };
     uint8_t clock_regs[sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0])] = {0};
     int status;
@@ -79,10 +82,11 @@ int main(int argc, char **argv)
     if (intervals == 0 || interval_ms == 0) {
         fprintf(stderr, "usage: %s [intervals=5] [interval_ms=1000]"
                         " [rx_rate_hz=23040000] [tx_rate_hz=0=unchanged]"
-                        " [axi_base=0]\n", argv[0]);
+                        " [axi_base=0] [second_rx_rate_hz=0=none]\n", argv[0]);
         return EXIT_FAILURE;
     }
 
+    bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
     status = bladerf_open(&dev, NULL);
     if (status < 0) {
         fprintf(stderr, "bladerf_open: %s\n", bladerf_strerror(status));
@@ -113,7 +117,6 @@ int main(int argc, char **argv)
         goto out;
     }
 
-    bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
     bladerf2_axi_io_set_dev(dev);
     status = no_os_axi_io_read(axi_base, 0x00u, &core_version);
     if (status < 0) {
@@ -237,6 +240,72 @@ int main(int argc, char **argv)
         rx_prev = rx_now;
         tx_prev = tx_now;
         host_prev = host_now;
+    }
+
+    if (second_rx_rate != 0) {
+        bladerf_timestamp rx_now, tx_now;
+        bladerf_sample_rate rx_readback = 0, tx_readback = 0;
+        uint64_t host_now;
+        double dt;
+
+        status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0),
+                                         second_rx_rate, NULL);
+        if (status < 0) {
+            fprintf(stderr, "second RX sample-rate set: %s\n",
+                    bladerf_strerror(status));
+            goto out_unbind;
+        }
+        status = bladerf_get_sample_rate(dev, BLADERF_CHANNEL_RX(0),
+                                         &rx_readback);
+        if (status < 0) {
+            fprintf(stderr, "second RX sample-rate read: %s\n",
+                    bladerf_strerror(status));
+            goto out_unbind;
+        }
+        status = bladerf_get_sample_rate(dev, BLADERF_CHANNEL_TX(0),
+                                         &tx_readback);
+        if (status < 0) {
+            fprintf(stderr, "second TX sample-rate read: %s\n",
+                    bladerf_strerror(status));
+            goto out_unbind;
+        }
+        usleep((useconds_t)interval_ms * 1000u);
+        status = read_timestamp(dev, BLADERF_RX, &rx_now);
+        if (status < 0) {
+            fprintf(stderr, "post-rate RX timestamp read: %s\n",
+                    bladerf_strerror(status));
+            goto out_unbind;
+        }
+        status = read_timestamp(dev, BLADERF_TX, &tx_now);
+        if (status < 0) {
+            fprintf(stderr, "post-rate TX timestamp read: %s\n",
+                    bladerf_strerror(status));
+            goto out_unbind;
+        }
+        status = read_clock_monitor(axi_base, &rx_clk);
+        if (status < 0) {
+            fprintf(stderr, "post-rate RX clock monitor read: %d\n", status);
+            goto out_unbind;
+        }
+        status = read_clock_monitor(axi_base + AXI_AD9361_TX_OFFSET, &tx_clk);
+        if (status < 0) {
+            fprintf(stderr, "post-rate TX clock monitor read: %d\n", status);
+            goto out_unbind;
+        }
+        host_now = monotonic_raw_ns();
+        dt = (double)(host_now - host_prev) / 1e9;
+        printf("post_rate_rx_requested_hz=%" PRIu64
+               " rx_readback_hz=%" PRIu64 " tx_readback_hz=%" PRIu64
+               " host_s=%.9f rx_timestamp_hz=%.3f tx_timestamp_hz=%.3f"
+               " rx_clock_count=%" PRIu32 " tx_clock_count=%" PRIu32
+               " rx_sample_equiv_hz=%.3f tx_sample_equiv_hz=%.3f\n",
+               (uint64_t)second_rx_rate, (uint64_t)rx_readback,
+               (uint64_t)tx_readback, dt,
+               (double)(rx_now - rx_prev) / dt,
+               (double)(tx_now - tx_prev) / dt,
+               rx_clk, tx_clk,
+               (double)rx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0,
+               (double)tx_clk * FPGA_UP_CLOCK_HZ / 65536.0 / 2.0);
     }
     ret = EXIT_SUCCESS;
 
