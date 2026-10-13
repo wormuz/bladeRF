@@ -37,6 +37,11 @@
 
 static struct rfic_state state;
 
+bool rfic_frequency_state_available(void)
+{
+    return state.phy != NULL;
+}
+
 bool rfic_frequency_peer_unknown(bladerf_module target)
 {
     bool tx_target;

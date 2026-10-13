@@ -30,11 +30,13 @@
 #include "nios_pkt_8x32.h"       /* Completion record protocol */
 #include "devices.h"
 #include "debug.h"
+#include "rfic_frequency_policy.h"
 
 #ifdef BLADERF_NIOS_LIBAD936X
 void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz);
+bool rfic_frequency_state_available(void);
 bool rfic_frequency_peer_unknown(bladerf_module target);
 #endif  // BLADERF_NIOS_LIBAD936X
 
@@ -517,9 +519,16 @@ static inline void profile_load_scheduled(struct queue *q,
 }
 
 static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
+                                    bool immediate,
                                     uint64_t *readback_frequency_hz,
                                     uint8_t *failure_stage)
 {
+#ifdef BLADERF_NIOS_LIBAD936X
+    bool frequency_state_available = rfic_frequency_state_available();
+    bool host_owned_fastlock = rfic_fastlock_host_owned_without_phy(
+        immediate, frequency_state_available);
+#endif
+
     if (failure_stage != NULL) {
         *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
     }
@@ -533,15 +542,25 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
 #ifdef BLADERF_NIOS_LIBAD936X
     /* Dependent-FDD PLL programming chooses a VCO table using the peer LO.
      * Do not activate a saved profile while that frequency is invalidated by
-     * an earlier partial/failed tune. */
-    if (rfic_frequency_peer_unknown(module)) {
+     * an earlier partial/failed tune. In HOST mode NIOS has no PHY; only an
+     * immediate recall is allowed there because the host verifies the LO
+     * synchronously before certifying its transition. */
+    if (!frequency_state_available && !host_owned_fastlock) {
         if (failure_stage != NULL) {
             *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PEER_FREQUENCY_UNKNOWN;
         }
         return false;
     }
-    /* Invalidate current frequency knowledge */
-    rfic_invalidate_frequency(module);
+    if (frequency_state_available && rfic_frequency_peer_unknown(module)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PEER_FREQUENCY_UNKNOWN;
+        }
+        return false;
+    }
+    if (frequency_state_available) {
+        /* Invalidate current frequency knowledge */
+        rfic_invalidate_frequency(module);
+    }
 #endif  // BLADERF_NIOS_LIBAD936X
 
     /* Activate the RFFE fast lock profile */
@@ -566,12 +585,16 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     }
 #ifdef BLADERF_NIOS_LIBAD936X
     if (readback_frequency_hz != NULL &&
+        !host_owned_fastlock &&
         !rfic_read_frequency_live(module, p->profile_num,
                                   readback_frequency_hz)) {
         if (failure_stage != NULL) {
             *failure_stage = NIOS_PKT_RETUNE2_FAILURE_LO_READBACK;
         }
         return false;
+    }
+    if (readback_frequency_hz != NULL && host_owned_fastlock) {
+        *readback_frequency_hz = 0;
     }
 #else
     if (readback_frequency_hz != NULL) {
@@ -841,7 +864,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             struct retune2_completion *completion;
 
             /* Activate the fast lock profile for this retune */
-            if (!profile_activate(module, &e->profile,
+            if (!profile_activate(module, &e->profile, false,
                                  &readback_frequency_hz, &failure_stage)) {
                 record_retune2_failure(module);
             } else if (module == BLADERF_MODULE_RX ||
@@ -1052,6 +1075,7 @@ void pkt_retune2(struct pkt_buf *b)
 
                             /* Activate the fast lock profile for this retune */
                             if (profile_activate(module, profile,
+                                                 timestamp == NIOS_PKT_RETUNE2_NOW,
                                                  &readback_frequency_hz,
                                                  &failure_stage)) {
                                 flags |=
