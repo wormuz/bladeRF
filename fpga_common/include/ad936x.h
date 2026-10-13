@@ -91,6 +91,8 @@ int32_t ad9361_rx_fastlock_get_freq(struct ad9361_rf_phy *phy,
 #define AD936X_REG_RX2_INPUT_BC_OFFSETS 0x180
 #define AD936X_REG_RX2_INPUT_BC_I_OFFSET 0x181
 #define AD936X_REG_FORCE_BITS 0x182
+#define AD936X_REG_INVERT_BITS 0x189
+#define AD936X_INVERT_RX1_RF_DC_CGOUT_WORD (1u << 4)
 
 #define AD936X_READ (0 << 15)
 #define AD936X_WRITE (1 << 15)

@@ -27,10 +27,11 @@
 
 DECLARE_TEST_CASE(correction);
 
-static void dump_rx_bc_offset_registers(struct bladerf *dev)
+static void dump_rx_offset_registers(struct bladerf *dev, bool low_band)
 {
     uint8_t value;
-    for (uint16_t address = 0x17d; address <= 0x182; ++address) {
+    uint16_t start = low_band ? 0x17d : 0x174;
+    for (uint16_t address = start; address < start + 5; ++address) {
         int status = bladerf_get_rfic_register(dev, address, &value);
         if (status == 0) {
             fprintf(stderr, "[DIAG] AD9361[0x%03x]=0x%02x\n",
@@ -39,6 +40,10 @@ static void dump_rx_bc_offset_registers(struct bladerf *dev)
             fprintf(stderr, "[DIAG] AD9361[0x%03x] read failed: %s\n",
                     address, bladerf_strerror(status));
         }
+    }
+    int status = bladerf_get_rfic_register(dev, 0x182, &value);
+    if (status == 0) {
+        fprintf(stderr, "[DIAG] AD9361[0x182]=0x%02x\n", value);
     }
     const uint16_t diagnostic_registers[] = {0x169, 0x18b, 0x189, 0x1a2,
                                                0x1a3, 0x1a4, 0x1a5};
@@ -202,16 +207,15 @@ static failure_count random_vals(struct bladerf *dev,
     return failures;
 }
 
-/* On bladeRF 2.x, RX gain and phase corrections use distinct AD9361
- * registers in the B/C RF band. Verify that changing one does not overwrite
- * the other; a simple set/get round trip cannot catch two API fields aliased
- * to the same register. */
-static failure_count test_rx_bc_gain_phase_independence(
-    struct bladerf *dev, bladerf_channel ch, bool quiet)
+/* Verify correction readback and packed-field independence for each RX port.
+ * A set/get round trip alone cannot catch adjacent fields being overwritten. */
+static failure_count test_rx_correction_independence(
+    struct bladerf *dev, bladerf_channel ch, bool quiet,
+    const char *target_port)
 {
     const char *ports[16];
     const char *original_port = NULL;
-    const char *bc_port = NULL;
+    const char *selected_port = NULL;
     const char *original_rx1_port = NULL;
     unsigned int i;
     int port_count, status;
@@ -235,19 +239,20 @@ static failure_count test_rx_bc_gain_phase_independence(
         return 1;
     }
     for (i = 0; i < (unsigned int)port_count; i++) {
-        if (strcmp(ports[i], "B_BALANCED") == 0) {
-            bc_port = ports[i];
+        if (strcmp(ports[i], target_port) == 0) {
+            selected_port = ports[i];
             break;
         }
     }
-    if (bc_port == NULL) {
-        PRINT("    B_BALANCED unavailable; skipping RX correction alias check\n");
+    if (selected_port == NULL) {
+        PRINT("    %s unavailable; skipping RX correction alias check\n",
+              target_port);
         return 0;
     }
 
     status = bladerf_get_rf_port(dev, ch, &original_port);
     if (status == 0) {
-        status = bladerf_set_rf_port(dev, ch, bc_port);
+        status = bladerf_set_rf_port(dev, ch, selected_port);
     }
     if (status == 0) {
         status = bladerf_get_correction(dev, ch, BLADERF_CORR_GAIN,
@@ -270,7 +275,7 @@ static failure_count test_rx_bc_gain_phase_independence(
                                      &original_rx1_port);
         if (status == 0) {
             status = bladerf_set_rf_port(dev, BLADERF_CHANNEL_RX(0),
-                                         bc_port);
+                                         selected_port);
         }
         if (status == 0) {
             status = bladerf_get_correction(dev, BLADERF_CHANNEL_RX(0),
@@ -280,8 +285,8 @@ static failure_count test_rx_bc_gain_phase_independence(
         have_rx1_i_snapshot = status == 0;
     }
     if (status != 0) {
-        PR_ERROR("Unable to prepare B/C correction independence check: %s\n",
-                 bladerf_strerror(status));
+        PR_ERROR("Unable to prepare %s correction independence check: %s\n",
+                 target_port, bladerf_strerror(status));
         failures++;
         goto restore_port;
     }
@@ -300,28 +305,20 @@ static failure_count test_rx_bc_gain_phase_independence(
                                         &phase_readback);
     }
     if (status != 0 || gain_readback != 128 || phase_readback != 192) {
-        PR_ERROR("RX%u B/C gain/phase corrections aliased or failed "
+        PR_ERROR("RX%u %s gain/phase corrections aliased or failed "
                  "(status=%s gain=%d phase=%d)\n",
                  ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                 target_port,
                  bladerf_strerror(status),
                  status == 0 ? gain_readback : 0,
                  status == 0 ? phase_readback : 0);
         failures++;
     }
 
-    /* RX I and Q offsets share packed AD9361 bytes. In particular, RX2 Q's
-     * upper bits share RX2_INPUT_*_OFFSETS with the RX2 I low bits. */
-    /* 1552 encodes low two bits 10, so RX2 Q writes expose any overwrite of
-     * the I bits packed beside Q in the shared AD9361 register. */
+    /* Check signed I values, then set Q and ensure the packed I/Q fields
+     * remain independent. */
     status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_I, 1552);
     if (status == 0) {
-        int16_t probe_i = 0;
-        int probe_status = bladerf_get_correction(
-            dev, ch, BLADERF_CORR_DCOFF_I, &probe_i);
-        fprintf(stderr, "[DIAG] RX%u after I set: status=%s I=%d\n",
-                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
-                bladerf_strerror(probe_status), probe_i);
-        dump_rx_bc_offset_registers(dev);
         int reverse_status = bladerf_set_correction(
             dev, ch, BLADERF_CORR_DCOFF_I, -1552);
         int16_t reverse_i = 0;
@@ -329,14 +326,11 @@ static failure_count test_rx_bc_gain_phase_independence(
             reverse_status = bladerf_get_correction(
                 dev, ch, BLADERF_CORR_DCOFF_I, &reverse_i);
         }
-        fprintf(stderr, "[DIAG] RX%u after I=-1552: status=%s I=%d\n",
-                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
-                bladerf_strerror(reverse_status), reverse_i);
-        dump_rx_bc_offset_registers(dev);
         if (reverse_status != 0 || reverse_i != -1552) {
-            PR_ERROR("RX%u B/C I negative round-trip failed "
+            PR_ERROR("RX%u %s I negative round-trip failed "
                      "(status=%s value=%d)\n",
                      ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                     target_port,
                      bladerf_strerror(reverse_status), reverse_i);
             failures++;
         }
@@ -344,11 +338,6 @@ static failure_count test_rx_bc_gain_phase_independence(
         if (status == 0) {
             status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_Q, 512);
         }
-    }
-    if (status == 0) {
-        fprintf(stderr, "[DIAG] RX%u after Q set\n",
-                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u);
-        dump_rx_bc_offset_registers(dev);
     }
     if (status == 0) {
         status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_I,
@@ -364,9 +353,10 @@ static failure_count test_rx_bc_gain_phase_independence(
                                         &rx1_i_readback);
     }
     if (status != 0 || i_readback != 1552 || q_readback != 512) {
-        PR_ERROR("RX%u B/C I/Q offsets aliased or failed "
+        PR_ERROR("RX%u %s I/Q offsets aliased or failed "
                  "(status=%s I=%d Q=%d)\n",
                  ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                 target_port,
                  bladerf_strerror(status),
                  status == 0 ? i_readback : 0,
                  status == 0 ? q_readback : 0);
@@ -374,12 +364,13 @@ static failure_count test_rx_bc_gain_phase_independence(
     }
     if (status == 0 && have_rx1_i_snapshot &&
         rx1_i_readback != original_rx1_i) {
-        PR_ERROR("RX2 B/C Q offset changed RX1 B/C I offset "
-                 "(%d -> %d)\n", original_rx1_i, rx1_i_readback);
+        PR_ERROR("RX2 %s Q offset changed RX1 I offset "
+                 "(%d -> %d)\n", target_port, original_rx1_i,
+                 rx1_i_readback);
         failures++;
     }
     if (failures != 0) {
-        dump_rx_bc_offset_registers(dev);
+        dump_rx_offset_registers(dev, strcmp(target_port, "A_BALANCED") != 0);
     }
 
     if (have_original_corrections) {
@@ -430,6 +421,80 @@ restore_port:
     return failures;
 }
 
+static failure_count test_bladerf2_tx_correction_independence(
+    struct bladerf *dev)
+{
+    static const int16_t values[2][4] = {
+        {1024, -1024, 2048, -2048},
+        {-1024, 1024, -2048, 2048},
+    };
+    int16_t original[2][4];
+    failure_count failures = 0;
+    int status;
+
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        bladerf_channel ch = BLADERF_CHANNEL_TX(lane);
+        for (size_t i = 0; i < ARRAY_SIZE(corrections); i++) {
+            status = bladerf_get_correction(dev, ch, corrections[i].type,
+                                            &original[lane][i]);
+            if (status != 0) {
+                PR_ERROR("Unable to snapshot TX%u %s correction: %s\n",
+                         lane + 1, corrections[i].name,
+                         bladerf_strerror(status));
+                return failures + 1;
+            }
+        }
+    }
+
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        bladerf_channel ch = BLADERF_CHANNEL_TX(lane);
+        for (size_t i = 0; i < ARRAY_SIZE(corrections); i++) {
+            status = bladerf_set_correction(dev, ch, corrections[i].type,
+                                            values[lane][i]);
+            if (status != 0) {
+                PR_ERROR("Failed to set TX%u %s correction: %s\n",
+                         lane + 1, corrections[i].name,
+                         bladerf_strerror(status));
+                failures++;
+                break;
+            }
+        }
+    }
+
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        bladerf_channel ch = BLADERF_CHANNEL_TX(lane);
+        for (size_t i = 0; i < ARRAY_SIZE(corrections); i++) {
+            int16_t readback = 0;
+            status = bladerf_get_correction(dev, ch, corrections[i].type,
+                                            &readback);
+            if (status != 0 || readback != values[lane][i]) {
+                PR_ERROR("TX%u %s correction mismatch: status=%s "
+                         "expected=%d got=%d\n",
+                         lane + 1, corrections[i].name,
+                         bladerf_strerror(status), values[lane][i],
+                         status == 0 ? readback : 0);
+                failures++;
+            }
+        }
+    }
+
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        bladerf_channel ch = BLADERF_CHANNEL_TX(lane);
+        for (size_t i = 0; i < ARRAY_SIZE(corrections); i++) {
+            status = bladerf_set_correction(dev, ch, corrections[i].type,
+                                            original[lane][i]);
+            if (status != 0) {
+                PR_ERROR("Failed to restore TX%u %s correction: %s\n",
+                         lane + 1, corrections[i].name,
+                         bladerf_strerror(status));
+                failures++;
+            }
+        }
+    }
+
+    return failures;
+}
+
 
 failure_count test_correction(struct bladerf *dev,
                               struct app_params *p,
@@ -445,10 +510,15 @@ failure_count test_correction(struct bladerf *dev,
     }
 
     if (0 == strcmp(board_name, "bladerf2")) {
-        failures += test_rx_bc_gain_phase_independence(
-            dev, BLADERF_CHANNEL_RX(0), quiet);
-        failures += test_rx_bc_gain_phase_independence(
-            dev, BLADERF_CHANNEL_RX(1), quiet);
+        failures += test_rx_correction_independence(
+            dev, BLADERF_CHANNEL_RX(0), quiet, "A_BALANCED");
+        failures += test_rx_correction_independence(
+            dev, BLADERF_CHANNEL_RX(1), quiet, "A_BALANCED");
+        failures += test_rx_correction_independence(
+            dev, BLADERF_CHANNEL_RX(0), quiet, "B_BALANCED");
+        failures += test_rx_correction_independence(
+            dev, BLADERF_CHANNEL_RX(1), quiet, "B_BALANCED");
+        failures += test_bladerf2_tx_correction_independence(dev);
         return failures;
     }
 

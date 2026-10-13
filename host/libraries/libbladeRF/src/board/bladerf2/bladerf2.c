@@ -4596,6 +4596,65 @@ static const int ad9361_correction_force_bit[2][4][2] = {
 };
 // clang-format on
 
+static int bladerf2_get_rx_dcoff_by_band(struct bladerf *dev,
+                                         bladerf_channel ch,
+                                         bladerf_correction corr,
+                                         bool low_band,
+                                         int16_t *value)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    struct ad9361_rf_phy *phy = board_data->phy;
+    bool is_q = corr == BLADERF_CORR_DCOFF_Q;
+    uint16_t data;
+    int32_t val;
+    uint8_t data_top, data_bot;
+
+    NULL_CHECK(value);
+    val = ad9361_spi_read(
+        phy->spi,
+        ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_top);
+    if (val < 0) {
+        RETURN_ERROR_AD9361("ad9361_spi_read(top)", val);
+    }
+    data_top = val;
+    val = ad9361_spi_read(
+        phy->spi,
+        ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_bot);
+    if (val < 0) {
+        RETURN_ERROR_AD9361("ad9361_spi_read(bottom)", val);
+    }
+    data_bot = val;
+
+    if (ch == BLADERF_CHANNEL_RX(0)) {
+        if (!is_q) {
+            data = ((data_top & 0x0f) << 6) | (data_bot >> 2);
+        } else {
+            data = ((data_top & 0x03) << 8) | data_bot;
+        }
+    } else if (!is_q) {
+        data = (data_top << 2) | ((data_bot >> 6) & 0x03);
+    } else {
+        data = ((data_top & 0x3f) << 4) | (data_bot >> 4);
+    }
+
+    data <<= 3;
+    *value = data | ((data & (1 << 12)) ? 0xf000 : 0x0000);
+    return 0;
+}
+
+static void bladerf2_pack_rx_dcoff_words(const uint16_t words[2][2],
+                                         uint8_t regs[5])
+{
+    regs[0] = words[0][1] & 0xff;
+    regs[1] = ((words[0][0] & 0x3f) << 2) |
+              ((words[0][1] >> 8) & 0x03);
+    regs[2] = ((words[0][0] >> 6) & 0x0f) |
+              ((words[1][1] & 0x0f) << 4);
+    regs[3] = ((words[1][1] >> 4) & 0x3f) |
+              ((words[1][0] & 0x03) << 6);
+    regs[4] = (words[1][0] >> 2) & 0xff;
+}
+
 static int bladerf2_get_correction(struct bladerf *dev,
                                    bladerf_channel ch,
                                    bladerf_correction corr,
@@ -4651,61 +4710,10 @@ static int bladerf2_get_correction(struct bladerf *dev,
 
     if ((corr == BLADERF_CORR_DCOFF_I || corr == BLADERF_CORR_DCOFF_Q) &&
         (ch & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
-        /* RX DC offset corrections are stuffed in a super convoluted way in
-         * the register map. See AD9361 register map page 51. */
-        bool is_q = (corr == BLADERF_CORR_DCOFF_Q);
-        uint8_t data_top, data_bot;
-        uint16_t data;
+        return bladerf2_get_rx_dcoff_by_band(dev, ch, corr, low_band, value);
+    }
 
-        /* Read top register */
-        val = ad9361_spi_read(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_top);
-        if (val < 0) {
-            RETURN_ERROR_AD9361("ad9361_spi_read(top)", val);
-        }
-
-        data_top = val;
-
-        /* Read bottom register */
-        val = ad9361_spi_read(
-            phy->spi,
-            ad9361_correction_rx_dcoff_reg_table[ch][low_band][is_q].reg_bot);
-        if (val < 0) {
-            RETURN_ERROR_AD9361("ad9361_spi_read(bottom)", val);
-        }
-
-        data_bot = val;
-
-        if (ch == BLADERF_CHANNEL_RX(0)) {
-            if (!is_q) {
-                /*    top: | x x x x 9 8 7 6 | */
-                /* bottom: | 5 4 3 2 1 0 x x | */
-                data = ((data_top & 0xf) << 6) | (data_bot >> 2);
-            } else {
-                /*    top: | x x x x x x 9 8 | */
-                /* bottom: | 7 6 5 4 3 2 1 0 | */
-                data = ((data_top & 0x3) << 8) | data_bot;
-            }
-        } else {
-            if (!is_q) {
-                /* RX2 I LSBs occupy [7:6], beside RX2 Q in [5:0]. */
-                data = (data_top << 2) | ((data_bot >> 6) & 0x3);
-            } else {
-                /*    top: | x x 9 8 7 6 5 4 | */
-                /* bottom: | 3 2 1 0 x x x x | */
-                /* RX2 Q shares the top register with RX2 I. Keep only its
-                 * six Q MSBs and ignore the RX2 I bits in [7:6]. */
-                data = ((data_top & 0x3f) << 4) | (data_bot >> 4);
-            }
-        }
-
-        /* Scale 10-bit to 13-bit */
-        data = data << 3;
-
-        /* Sign extend value */
-        *value = data | ((data & (1 << 12)) ? 0xf000 : 0x0000);
-    } else {
+    {
         /* Look up correction register and value shift in table */
         reg   = ad9361_correction_reg_table[ch].corr[corr].reg[low_band];
         shift = ad9361_correction_reg_table[ch].corr[corr].shift;
@@ -4725,6 +4733,148 @@ static int bladerf2_get_correction(struct bladerf *dev,
         } else {
             *value = data | ((data & (1 << 13)) ? 0xc000 : 0x0000);
         }
+    }
+
+    return 0;
+}
+
+/* The four RX RF-DC correction words share five AD9361 bytes. With the
+ * calibrated RX1 CGOUT inversion enabled, writing one packed component while
+ * force is active can change its neighbors. Snapshot the logical words,
+ * disable both lane force bits, write a coherent packed image, then restore
+ * the requested force state. */
+static int bladerf2_set_rx_dcoff_correction(struct bladerf *dev,
+                                             bladerf_channel ch,
+                                             bladerf_correction corr,
+                                             int16_t value,
+                                             bool low_band)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    struct ad9361_rf_phy *phy = board_data->phy;
+    const bladerf_channel rx1 = BLADERF_CHANNEL_RX(0);
+    const bladerf_channel rx2 = BLADERF_CHANNEL_RX(1);
+    bool rx1_inverted;
+    uint16_t regs[5];
+    uint8_t new_regs[5], rollback_regs[5];
+    int16_t logical[2][2];
+    uint16_t old_words[2][2], words[2][2];
+    uint8_t old_force, new_force, force_mask;
+    int32_t val;
+    int status;
+    unsigned int written = 0;
+
+    val = ad9361_spi_read(phy->spi, AD936X_REG_INVERT_BITS);
+    if (val < 0) {
+        RETURN_ERROR_AD9361("ad9361_spi_read(invert)", val);
+    }
+    rx1_inverted = (val & AD936X_INVERT_RX1_RF_DC_CGOUT_WORD) != 0;
+
+    status = bladerf2_get_rx_dcoff_by_band(
+        dev, rx1, BLADERF_CORR_DCOFF_I, low_band, &logical[0][0]);
+    if (status == 0) status = bladerf2_get_rx_dcoff_by_band(
+        dev, rx1, BLADERF_CORR_DCOFF_Q, low_band, &logical[0][1]);
+    if (status == 0) status = bladerf2_get_rx_dcoff_by_band(
+        dev, rx2, BLADERF_CORR_DCOFF_I, low_band, &logical[1][0]);
+    if (status == 0) status = bladerf2_get_rx_dcoff_by_band(
+        dev, rx2, BLADERF_CORR_DCOFF_Q, low_band, &logical[1][1]);
+    if (status != 0) {
+        return status;
+    }
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        for (unsigned int component = 0; component < 2; component++) {
+            int32_t scaled = (int32_t)logical[lane][component] >> 3;
+            if (lane == 0 && rx1_inverted) {
+                scaled = -scaled;
+            }
+            old_words[lane][component] =
+                (uint16_t)((uint32_t)scaled & 0x3ff);
+        }
+    }
+
+    logical[ch == rx1 ? 0 : 1][corr == BLADERF_CORR_DCOFF_Q ? 1 : 0] = value;
+    for (unsigned int lane = 0; lane < 2; lane++) {
+        for (unsigned int component = 0; component < 2; component++) {
+            int32_t scaled = (int32_t)logical[lane][component] >> 3;
+            if (lane == 0 && rx1_inverted) {
+                scaled = -scaled;
+            }
+            words[lane][component] = (uint16_t)((uint32_t)scaled & 0x3ff);
+        }
+    }
+
+    regs[0] = ad9361_correction_rx_dcoff_reg_table[rx1][low_band][1].reg_bot;
+    regs[1] = ad9361_correction_rx_dcoff_reg_table[rx1][low_band][1].reg_top;
+    regs[2] = ad9361_correction_rx_dcoff_reg_table[rx1][low_band][0].reg_top;
+    regs[3] = ad9361_correction_rx_dcoff_reg_table[rx2][low_band][1].reg_top;
+    regs[4] = ad9361_correction_rx_dcoff_reg_table[rx2][low_band][0].reg_top;
+
+    bladerf2_pack_rx_dcoff_words(words, new_regs);
+    bladerf2_pack_rx_dcoff_words(old_words, rollback_regs);
+
+    val = ad9361_spi_read(phy->spi, AD936X_REG_FORCE_BITS);
+    if (val < 0) {
+        RETURN_ERROR_AD9361("ad9361_spi_read(force)", val);
+    }
+    old_force = val;
+    force_mask =
+        (1u << ad9361_correction_force_bit[0][BLADERF_CORR_DCOFF_I][0]) |
+        (1u << ad9361_correction_force_bit[1][BLADERF_CORR_DCOFF_I][0]) |
+        (1u << ad9361_correction_force_bit[0][BLADERF_CORR_DCOFF_I][1]) |
+        (1u << ad9361_correction_force_bit[1][BLADERF_CORR_DCOFF_I][1]);
+    uint8_t band_force_mask =
+        (1u << ad9361_correction_force_bit[0][BLADERF_CORR_DCOFF_I]
+                                           [low_band]) |
+        (1u << ad9361_correction_force_bit[1][BLADERF_CORR_DCOFF_I]
+                                           [low_band]);
+    new_force = (old_force & (uint8_t)~force_mask) |
+                (old_force & band_force_mask) |
+                (1u << ad9361_correction_force_bit[ch >> 1][corr][low_band]);
+
+    status = ad9361_spi_write(phy->spi, AD936X_REG_FORCE_BITS,
+                               old_force & (uint8_t)~force_mask);
+    if (status < 0) {
+        int restore = ad9361_spi_write(phy->spi, AD936X_REG_FORCE_BITS,
+                                       old_force);
+        if (restore < 0) {
+            log_error("%s: failed to restore force register (%" PRId32
+                      ") after force-clear error (%" PRId32 ")\n",
+                      __FUNCTION__, restore, status);
+        }
+        RETURN_ERROR_AD9361("ad9361_spi_write(force clear)", status);
+    }
+
+    for (written = 0; written < ARRAY_SIZE(regs); written++) {
+        status = ad9361_spi_write(phy->spi, regs[written], new_regs[written]);
+        if (status < 0) {
+            break;
+        }
+    }
+
+    if (status >= 0) {
+        status = ad9361_spi_write(phy->spi, AD936X_REG_FORCE_BITS, new_force);
+    }
+    if (status < 0) {
+        int rollback_status = 0;
+        (void)ad9361_spi_write(phy->spi, AD936X_REG_FORCE_BITS,
+                               old_force & (uint8_t)~force_mask);
+        for (unsigned int i = 0; i < ARRAY_SIZE(regs); i++) {
+            int rollback = ad9361_spi_write(phy->spi, regs[i],
+                                            rollback_regs[i]);
+            if (rollback < 0 && rollback_status == 0) {
+                rollback_status = rollback;
+            }
+        }
+        int rollback = ad9361_spi_write(phy->spi, AD936X_REG_FORCE_BITS,
+                                        old_force);
+        if (rollback < 0 && rollback_status == 0) {
+            rollback_status = rollback;
+        }
+        if (rollback_status < 0) {
+            log_error("%s: RX DC correction rollback failed (%" PRId32
+                      ") after SPI error (%" PRId32 ")\n",
+                      __FUNCTION__, rollback_status, status);
+        }
+        RETURN_ERROR_AD9361("ad9361_spi_write(rx_dc_offset)", status);
     }
 
     return 0;
@@ -4795,79 +4945,25 @@ static int bladerf2_set_correction(struct bladerf *dev,
 
     if ((corr == BLADERF_CORR_DCOFF_I || corr == BLADERF_CORR_DCOFF_Q) &&
         (ch & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
-        /* RX DC offset corrections are stuffed in a super convoluted way in
-         * the register map. See AD9361 register map page 51. */
-        bool is_q = (corr == BLADERF_CORR_DCOFF_Q);
-        uint8_t data_top, data_bot;
-        correction_reg_count = 2;
-        correction_regs[0] = ad9361_correction_rx_dcoff_reg_table
-            [ch][low_band][is_q].reg_top;
-        correction_regs[1] = ad9361_correction_rx_dcoff_reg_table
-            [ch][low_band][is_q].reg_bot;
-
-        /* Snapshot all packed bytes before changing the live correction. */
-        val = ad9361_spi_read(phy->spi, correction_regs[0]);
-        if (val < 0) {
-            RETURN_ERROR_AD9361("ad9361_spi_read(top)", val);
-        }
-        old_correction[0] = val;
-        val = ad9361_spi_read(phy->spi, correction_regs[1]);
-        if (val < 0) {
-            RETURN_ERROR_AD9361("ad9361_spi_read(bottom)", val);
-        }
-        old_correction[1] = val;
-        data_top = old_correction[0];
-        data_bot = old_correction[1];
-
-        /* Scale 13-bit to 10-bit */
-        data = value >> 3;
-
-        /* Modify registers */
-        if (ch == BLADERF_CHANNEL_RX(0)) {
-            if (!is_q) {
-                /*    top: | x x x x 9 8 7 6 | */
-                /* bottom: | 5 4 3 2 1 0 x x | */
-                data_top = (data_top & 0xf0) | ((data >> 6) & 0x0f);
-                data_bot = (data_bot & 0x03) | ((data & 0x3f) << 2);
-            } else {
-                /*    top: | x x x x x x 9 8 | */
-                /* bottom: | 7 6 5 4 3 2 1 0 | */
-                data_top = (data_top & 0xfc) | ((data >> 8) & 0x03);
-                data_bot = data & 0xff;
-            }
-        } else {
-            if (!is_q) {
-                /* Preserve RX2 Q MSBs in [5:0]. */
-                data_top = (data >> 2) & 0xff;
-                data_bot = (data_bot & 0x3f) | ((data & 0x03) << 6);
-            } else {
-                /*    top: | x x 9 8 7 6 5 4 | */
-                /* bottom: | 3 2 1 0 x x x x | */
-                /* Preserve RX2 I's two LSBs sharing this register. */
-                data_top = (data_top & 0xc0) | ((data >> 4) & 0x3f);
-                /* Preserve RX1 I MSBs in the shared lower nibble. */
-                data_bot = (data_bot & 0x0f) | ((data & 0x0f) << 4);
-            }
-        }
-
-        new_correction[0] = data_top;
-        new_correction[1] = data_bot;
-    } else {
-        /* Look up correction register and value shift in table */
-        reg   = ad9361_correction_reg_table[ch].corr[corr].reg[low_band];
-        shift = ad9361_correction_reg_table[ch].corr[corr].shift;
-        correction_regs[0] = reg;
-
-        val = ad9361_spi_read(phy->spi, reg);
-        if (val < 0) {
-            RETURN_ERROR_AD9361("ad9361_spi_read(correction)", val);
-        }
-        old_correction[0] = val;
-
-        /* Scale 12-bit/13-bit to 8-bit */
-        data = (value >> shift) & 0xff;
-        new_correction[0] = data & 0xff;
+        return bladerf2_set_rx_dcoff_correction(
+            dev, ch, corr, value, low_band);
     }
+
+    /* Look up correction register and value shift in the table. RX DC
+     * offsets were handled above as a five-byte coherent transaction. */
+    reg   = ad9361_correction_reg_table[ch].corr[corr].reg[low_band];
+    shift = ad9361_correction_reg_table[ch].corr[corr].shift;
+    correction_regs[0] = reg;
+
+    val = ad9361_spi_read(phy->spi, reg);
+    if (val < 0) {
+        RETURN_ERROR_AD9361("ad9361_spi_read(correction)", val);
+    }
+    old_correction[0] = val;
+
+    /* Scale 12-bit/13-bit to 8-bit */
+    data = (value >> shift) & 0xff;
+    new_correction[0] = data & 0xff;
 
     reg = (BLADERF_CHANNEL_IS_TX(ch)) ? AD936X_REG_TX_FORCE_BITS
                                       : AD936X_REG_FORCE_BITS;
