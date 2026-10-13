@@ -61,7 +61,9 @@
 
 #define BLOCK_SAMPLES     256u
 #define POWER_RATIO_THRESH 8.0
+#ifndef ABS_FLOOR
 #define ABS_FLOOR         200.0
+#endif
 
 #define RX_SEARCH_MARGIN_MS 60u
 #define RX_SEARCH_MARGIN_PRE_MS 5u
@@ -489,9 +491,25 @@ int main(int argc, char *argv[])
                 dump_recent_rf_events(dev);
                 goto out_disable_tx;
             }
+            printf("tx_burst_metadata k=%u timestamp=%llu status=0x%x\n",
+                   k, (unsigned long long)tx_meta[k].timestamp,
+                   tx_meta[k].status);
         }
     }
-    printf("tx_status=0x%x\n", tx_meta[0].status);
+    {
+        uint32_t tx_status_or = 0;
+        unsigned int k;
+        for (k = 0; k < nbursts; k++) {
+            tx_status_or |= tx_meta[k].status;
+        }
+        printf("tx_status_or=0x%x\n", tx_status_or);
+        if (tx_status_or != 0) {
+            fprintf(stderr, "TX metadata reported status flags: 0x%x\n",
+                    tx_status_or);
+            dump_recent_rf_events(dev);
+            goto out_disable_tx;
+        }
+    }
     dump_recent_rf_events(dev);
 
     /* Search window is anchored to the scheduled TX timestamps (not to
