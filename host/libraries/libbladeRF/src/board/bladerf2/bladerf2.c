@@ -2336,12 +2336,26 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
 
         /* Try to restore default operations if there was a failure */
         if (fir_set_failed) {
+            int rx_restore_status, tx_restore_status;
+
             log_debug("%s: attempting to reset filters to default...\n",
                       __FUNCTION__);
-            CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_RX(0),
-                                          BLADERF_RFIC_RXFIR_DEFAULT, 0));
-            CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
-                                          BLADERF_RFIC_TXFIR_DEFAULT));
+            /* RX and TX FIRs are a paired sample-rate configuration. A
+             * failed restore of one side must not suppress the restore
+             * attempt for the other side; otherwise a transient calibration
+             * failure can leave the second path in 4x mode. */
+            rx_restore_status = rfic->set_filter(
+                dev, BLADERF_CHANNEL_RX(0), BLADERF_RFIC_RXFIR_DEFAULT, 0);
+            tx_restore_status = rfic->set_filter(
+                dev, BLADERF_CHANNEL_TX(0), 0, BLADERF_RFIC_TXFIR_DEFAULT);
+            if (rx_restore_status < 0) {
+                log_error("%s: could not restore RX filter mode: %s\n",
+                          __FUNCTION__, bladerf_strerror(rx_restore_status));
+            }
+            if (tx_restore_status < 0) {
+                log_error("%s: could not restore TX filter mode: %s\n",
+                          __FUNCTION__, bladerf_strerror(tx_restore_status));
+            }
 
             return BLADERF_ERR_UNEXPECTED;
         }

@@ -606,7 +606,7 @@ int main(void)
     /* TX-only RF band and port changes must use the same public-layer fence
      * exactly once; their board callbacks do not own TX admission policy. */
     assert(bladerf_select_band(&dev, tx0, 2450000000) == 0);
-    assert(bladerf_set_rf_port(&dev, tx0, "A") == 0);
+    assert(bladerf_set_rf_port(&dev, tx0, "TXA") == 0);
     assert(state.select_band_calls == 1 &&
            state.select_band_channel == tx0 && state.set_rf_port_calls == 1 &&
            state.set_rf_port_channel == tx0 && state.tx_fence_calls == 10);
@@ -658,7 +658,7 @@ int main(void)
     state.tx_fence_status = BLADERF_ERR_WOULD_BLOCK;
     assert(bladerf_select_band(&dev, tx0, 2400000000) ==
            BLADERF_ERR_WOULD_BLOCK);
-    assert(bladerf_set_rf_port(&dev, tx0, "B") == BLADERF_ERR_WOULD_BLOCK);
+    assert(bladerf_set_rf_port(&dev, tx0, "TXB") == BLADERF_ERR_WOULD_BLOCK);
     assert(state.select_band_calls == 1 && state.set_rf_port_calls == 1);
     state.tx_fence_status = 0;
 
@@ -703,7 +703,7 @@ int main(void)
     /* XB-300 TRX antenna routing affects RX regardless of the selected mode. */
     assert(bladerf_xb300_set_trx(&dev, BLADERF_XB300_TRX_RX) == 0);
     assert(state.invalidate_calls == 21 && state.complete_calls == 15);
-    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_SHARED_PATH &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
 
     /* Its LNA affects RX gain; PA/AUX controls are TX-only and preserve RX. */
@@ -733,7 +733,7 @@ int main(void)
     state.invalidate_status = 0;
     assert(bladerf_expansion_gpio_masked_write(&dev, 0x10, 0x10) == 0);
     assert(state.invalidate_calls == 24 && state.complete_calls == 17);
-    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_RF_PORT &&
+    assert(state.invalidate_reason == BLADERF_RF_INVALIDATE_SHARED_PATH &&
            state.invalidated_channel == rx0 && state.completed_channel == rx0);
     assert(bladerf_expansion_gpio_dir_masked_write(&dev, 0x10, 0x10) == 0);
     assert(state.invalidate_calls == 25 && state.complete_calls == 18 &&
@@ -792,6 +792,8 @@ int main(void)
      * notify even outside epoch-filter mode; a failed fence must prevent the
      * NIOS queue write, while TX remains independent of RX validity. */
     state.invalidate_status = 0;
+    quick_tune.port = 0x83;
+    quick_tune.spdt = 0x00;
     assert(bladerf_schedule_retune(&dev, rx2, 0x12345678, 900000000,
                                    &quick_tune) == 0);
     assert(state.invalidate_calls == 33 && state.complete_calls == 23 &&
@@ -809,6 +811,8 @@ int main(void)
            state.schedule_retune_calls == 1);
 
     state.invalidate_status = 0;
+    quick_tune.port = 0x00;
+    quick_tune.spdt = 0x00;
     assert(bladerf_schedule_retune(&dev, tx0, 0x3456789a, 902000000,
                                    &quick_tune) == 0);
     assert(state.invalidate_calls == 34 && state.complete_calls == 23 &&
