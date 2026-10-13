@@ -393,6 +393,13 @@ int main(void)
     assert(!bladerf2_rfic_frequency_matches(1840000000ULL, 1840001001ULL));
     assert(nios_retune_profile_word_valid(UINT16_MAX));
     assert(!nios_retune_profile_word_valid((uint32_t)UINT16_MAX + 1u));
+
+    /* A queue-clear CANCEL_PENDING reply must continue the ACK polling loop;
+     * the same status on an ordinary schedule is not a clear intermediate. */
+    assert(nios_retune_clear_is_pending(true, 0x08, 0x08));
+    assert(nios_retune_clear_is_pending(true, 0x10, 0x10));
+    assert(!nios_retune_clear_is_pending(false, 0x08, 0x08));
+    assert(!nios_retune_clear_is_pending(true, 0x02, 0x08));
     assert(bladerf2_rfic_frequency_matches(1840001000ULL, 1840000000ULL));
     /* The common legacy RX invalidation gate and RF tune setters both use
      * this policy, so loopback/mux/correction cannot race a queued NIOS LO. */

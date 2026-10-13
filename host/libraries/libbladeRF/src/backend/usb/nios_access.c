@@ -2018,7 +2018,12 @@ int nios_retune(struct bladerf *dev, bladerf_channel ch,
     }
 
     if ((resp_flags & NIOS_PKT_RETUNERESP_FLAG_SUCCESS) == 0) {
-        if (timestamp == BLADERF_RETUNE_NOW) {
+        if (nios_retune_clear_is_pending(
+                timestamp == NIOS_PKT_RETUNE_CLEAR_QUEUE, resp_flags,
+                NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING)) {
+            /* nios_retune_clear_wait() owns retry and deadline policy. */
+            status = 0;
+        } else if (timestamp == BLADERF_RETUNE_NOW) {
             log_debug("FPGA tuning reported failure.\n");
             status = BLADERF_ERR_UNEXPECTED;
         } else if ((resp_flags &
@@ -2089,7 +2094,12 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     }
 
     if ((resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
-        if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+        if (nios_retune_clear_is_pending(
+                timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE, resp_flags,
+                NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)) {
+            /* nios_retune_clear_wait() owns retry and deadline policy. */
+            status = 0;
+        } else if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
             log_error("NIOS RETUNE2 failed at device stage %u.\n",
                       failure_stage);
         }
