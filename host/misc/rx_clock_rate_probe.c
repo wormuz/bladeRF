@@ -63,7 +63,11 @@ int main(int argc, char **argv)
     bladerf_timestamp rx_prev = 0, tx_prev = 0;
     uint64_t host_prev = 0;
     uint32_t core_version = 0, core_id = 0, rx_clk = 0, tx_clk = 0;
-    uint8_t bbpll_regs[4] = {0};
+    static const uint16_t clock_reg_addrs[] = {
+        0x003u, 0x00au, 0x045u, 0x041u, 0x042u, 0x043u, 0x044u,
+        0x2abu, 0x2acu
+    };
+    uint8_t clock_regs[sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0])] = {0};
     int status;
     int ret = EXIT_FAILURE;
 
@@ -126,12 +130,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "TX ADI clock monitor read: %d\n", status);
         goto out_unbind;
     }
-    for (unsigned int i = 0; i < 4; i++) {
-        status = bladerf_get_rfic_register(dev, (uint16_t)(0x41u + i),
-                                           &bbpll_regs[i]);
+    for (unsigned int i = 0;
+         i < sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0]); i++) {
+        status = bladerf_get_rfic_register(dev, clock_reg_addrs[i],
+                                           &clock_regs[i]);
         if (status < 0) {
-            fprintf(stderr, "BBPLL register 0x%02x read: %s\n",
-                    0x41u + i, bladerf_strerror(status));
+            fprintf(stderr, "AD9361 clock register 0x%02x read: %s\n",
+                    clock_reg_addrs[i], bladerf_strerror(status));
             goto out_unbind;
         }
     }
@@ -158,8 +163,12 @@ int main(int argc, char **argv)
            rx_clk, tx_clk,
            (double)rx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0,
            (double)tx_clk * NIOS_UP_CLOCK_HZ / 65536.0 / 2.0);
-    printf("AD9361_BBPLL_freq_word=0x%02x%02x%02x%02x (regs 0x41..0x44)\n",
-           bbpll_regs[3], bbpll_regs[2], bbpll_regs[1], bbpll_regs[0]);
+    printf("AD9361_clock_registers:");
+    for (unsigned int i = 0;
+         i < sizeof(clock_reg_addrs) / sizeof(clock_reg_addrs[0]); i++) {
+        printf(" 0x%03x=0x%02x", clock_reg_addrs[i], clock_regs[i]);
+    }
+    putchar('\n');
 
     for (unsigned int i = 0; i < intervals; i++) {
         bladerf_timestamp rx_now, tx_now;
