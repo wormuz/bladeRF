@@ -209,13 +209,20 @@ architecture simple of fifo_writer is
     signal rx_epoch_clip_sticky : std_logic_vector(1 downto 0) := (others => '0');
     signal rx_epoch_clip_id     : unsigned(7 downto 0) := (others => '0');
 
-    type meta_state_t is (
-        IDLE,
-        META_WRITE,
-        META_DOWNCOUNT,
-        PACKET_WAIT_EOP,
-        ABORTED
-    );
+    -- Keep the metadata FSM explicitly one-hot. The previous enum/case next
+    -- state mux placed two wide selectors between the registered fifo_enough
+    -- decision and META_WRITE, violating setup on the RX clock.
+    subtype meta_state_t is std_logic_vector(4 downto 0);
+    constant META_IDLE_BIT          : natural := 0;
+    constant META_WRITE_BIT         : natural := 1;
+    constant META_DOWNCOUNT_BIT     : natural := 2;
+    constant META_PACKET_WAIT_BIT   : natural := 3;
+    constant META_ABORTED_BIT       : natural := 4;
+    constant META_IDLE_STATE        : meta_state_t := "00001";
+    constant META_WRITE_STATE       : meta_state_t := "00010";
+    constant META_DOWNCOUNT_STATE   : meta_state_t := "00100";
+    constant META_PACKET_WAIT_STATE : meta_state_t := "01000";
+    constant META_ABORTED_STATE     : meta_state_t := "10000";
 
     type meta_fsm_t is record
         dma_downcount   : natural range 0 to 65536;
@@ -233,8 +240,8 @@ architecture simple of fifo_writer is
 
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
     signal meta_future  : meta_fsm_t := META_FSM_RESET_VALUE;
-    signal meta_state_current : meta_state_t := IDLE;
-    signal meta_state_future  : meta_state_t := IDLE;
+    signal meta_state_current : meta_state_t := META_IDLE_STATE;
+    signal meta_state_future  : meta_state_t := META_IDLE_STATE;
 
     type fifo_state_t is (
         CLEAR,
@@ -716,7 +723,7 @@ begin
     begin
         if( reset = '1' ) then
             meta_current <= META_FSM_RESET_VALUE;
-            meta_state_current <= IDLE;
+            meta_state_current <= META_IDLE_STATE;
         elsif( rising_edge(clock) ) then
             meta_current <= meta_future;
             meta_state_current <= meta_state_future;
@@ -730,67 +737,70 @@ begin
     -- remain in meta_fsm_comb below.
     meta_state_comb : process(all)
         variable next_state : meta_state_t;
-        variable sample_present : boolean;
+        variable sample_present : std_logic;
+        variable downcount_done : std_logic;
+        variable fifo_enough_i : std_logic;
     begin
         next_state := meta_state_current;
-        sample_present := false;
+        sample_present := '0';
+        fifo_enough_i := '0';
+        if fifo_enough then
+            fifo_enough_i := '1';
+        end if;
         for i in in_samples'range loop
             if in_samples(i).data_v = '1' then
-                sample_present := true;
+                sample_present := '1';
             end if;
         end loop;
 
-        case meta_state_current is
-            when IDLE =>
-                if fifo_enough then
-                    if packet_en = '1' then
-                        if packet_control.pkt_sop = '1' then
-                            next_state := PACKET_WAIT_EOP;
-                        end if;
-                    else
-                        next_state := META_WRITE;
-                    end if;
-                end if;
+        downcount_done := '0';
+        if meta_current.dma_downcount <= 2 then
+            if eight_bit_mode_en = '0' or
+               (fifo_future.eight_bit_delay = '1' and
+                fifo_future.samples_left = 0) then
+                downcount_done := '1';
+            end if;
+        end if;
+        if both_streams_enabled(fifo_current.in_sample_controls_r) and
+           eight_bit_mode_en = '0' and
+           meta_current.dma_downcount <= NUM_STREAMS + 2 then
+            downcount_done := '1';
+        end if;
 
-            when META_WRITE =>
-                if meta_fifo_full = '0' and sample_present then
-                    next_state := META_DOWNCOUNT;
-                end if;
-
-            when META_DOWNCOUNT =>
-                if meta_current.dma_downcount <= 2 then
-                    if eight_bit_mode_en = '0' or
-                       (fifo_future.eight_bit_delay = '1' and
-                        fifo_future.samples_left = 0) then
-                        next_state := IDLE;
-                    end if;
-                end if;
-                if both_streams_enabled(fifo_current.in_sample_controls_r) and
-                   eight_bit_mode_en = '0' and
-                   meta_current.dma_downcount <= NUM_STREAMS + 2 then
-                    next_state := IDLE;
-                end if;
-
-            when PACKET_WAIT_EOP =>
-                if packet_control.data_valid = '1' and
-                   packet_control.pkt_eop = '1' then
-                    next_state := IDLE;
-                end if;
-
-            when ABORTED =>
-                if abort_active_out = '0' then
-                    next_state := IDLE;
-                end if;
-
-            when others =>
-                next_state := IDLE;
-        end case;
+        -- Derive each one-hot D input independently. In particular the
+        -- registered fifo_enough signal now reaches META_WRITE through one
+        -- local product term, without the enum selector and record-wide
+        -- abort/disable override muxes.
+        next_state := (others => '0');
+        next_state(META_IDLE_BIT) :=
+            (meta_state_current(META_IDLE_BIT) and not fifo_enough_i) or
+            (meta_state_current(META_IDLE_BIT) and fifo_enough_i and
+             packet_en and not packet_control.pkt_sop) or
+            (meta_state_current(META_DOWNCOUNT_BIT) and downcount_done) or
+            (meta_state_current(META_PACKET_WAIT_BIT) and
+             packet_control.data_valid and packet_control.pkt_eop) or
+            (meta_state_current(META_ABORTED_BIT) and not abort_active_out);
+        next_state(META_WRITE_BIT) :=
+            (meta_state_current(META_IDLE_BIT) and fifo_enough_i and
+             not packet_en) or
+            (meta_state_current(META_WRITE_BIT) and
+             not ((not meta_fifo_full) and sample_present));
+        next_state(META_DOWNCOUNT_BIT) :=
+            (meta_state_current(META_WRITE_BIT) and
+             (not meta_fifo_full) and sample_present) or
+            (meta_state_current(META_DOWNCOUNT_BIT) and not downcount_done);
+        next_state(META_PACKET_WAIT_BIT) :=
+            (meta_state_current(META_IDLE_BIT) and fifo_enough_i and
+             packet_en and packet_control.pkt_sop) or
+            (meta_state_current(META_PACKET_WAIT_BIT) and
+             not (packet_control.data_valid and packet_control.pkt_eop));
+        next_state(META_ABORTED_BIT) := abort_active_out;
 
         -- Abort dominates disable, matching the prior sticky-halt behavior.
         if abort_active_out = '1' then
-            next_state := ABORTED;
+            next_state := META_ABORTED_STATE;
         elsif enable = '0' or meta_en = '0' or link_active_i = '0' then
-            next_state := IDLE;
+            next_state := META_IDLE_STATE;
         end if;
 
         meta_state_future <= next_state;
@@ -831,8 +841,7 @@ begin
         end if;
 
 
-        case meta_state_current is
-            when IDLE =>
+        if meta_state_current(META_IDLE_BIT) = '1' then
 
                 meta_future.dma_downcount <= dma_buf_size - 4;
 
@@ -854,7 +863,7 @@ begin
                     meta_future.meta_written <= '0';
                 end if;
 
-            when META_WRITE =>
+        elsif meta_state_current(META_WRITE_BIT) = '1' then
 
                 for i in in_samples'range loop
                     if (meta_fifo_full = '0' and in_samples(i).data_v = '1') then
@@ -863,13 +872,13 @@ begin
                     end if;
                 end loop;
 
-            when META_DOWNCOUNT =>
+        elsif meta_state_current(META_DOWNCOUNT_BIT) = '1' then
 
                 if( fifo_current.fifo_write = '1' and meta_current.meta_write = '0' ) then
                     meta_future.dma_downcount <= meta_current.dma_downcount - NUM_STREAMS;
                 end if;
 
-            when PACKET_WAIT_EOP =>
+        elsif meta_state_current(META_PACKET_WAIT_BIT) = '1' then
 
                 if( packet_control.data_valid = '1' ) then
                    meta_future.dma_downcount <= meta_current.dma_downcount + 1;
@@ -879,7 +888,7 @@ begin
                    end if;
                 end if;
 
-            when ABORTED =>
+        elsif meta_state_current(META_ABORTED_BIT) = '1' then
 
                 -- Sticky halt: only a new epoch (start pulse) leaves this
                 -- state. abort_active_i clears the same cycle the start
@@ -889,11 +898,7 @@ begin
                 meta_future.meta_write   <= '0';
                 meta_future.meta_written <= '0';
 
-            when others =>
-                null;
-
-
-        end case;
+        end if;
 
         -- Abort and disable steer state in meta_state_comb above. They mask
         -- payload sidebands here; metadata data remains driven by

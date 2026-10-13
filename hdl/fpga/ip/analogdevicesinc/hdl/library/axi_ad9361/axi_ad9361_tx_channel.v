@@ -149,6 +149,7 @@ module axi_ad9361_tx_channel (
   wire            dac_data_sel_pat_s;
   wire            dac_data_sel_dds_s;
   wire    [11:0]  dac_data_mux_s;
+  wire    [11:0]  dac_data_mux_nodma_s;
   wire            dac_iqcor_enb_s;
   wire    [15:0]  dac_iqcor_coeff_1_s;
   wire    [15:0]  dac_iqcor_coeff_2_s;
@@ -317,11 +318,14 @@ module axi_ad9361_tx_channel (
   assign dac_data_sel_dds_s  = !(dac_data_sel_pn_s  || dac_data_sel_adc_s ||
                                  dac_data_sel_zero_s || dac_data_sel_dma_s ||
                                  dac_data_sel_pat_s);
-  assign dac_data_mux_s = ({12{dac_data_sel_pn_s}}  & dac_pn_data) |
-                          ({12{dac_data_sel_adc_s}} & adc_data) |
-                          ({12{dac_data_sel_dma_s}} & dma_data[15:4]) |
-                          ({12{dac_data_sel_pat_s}} & dac_pat_data[15:4]) |
-                          ({12{dac_data_sel_dds_s}} & dac_dds_data[15:4]);
+  assign dac_data_mux_nodma_s = ({12{dac_data_sel_pn_s}}  & dac_pn_data) |
+                                ({12{dac_data_sel_adc_s}} & adc_data) |
+                                ({12{dac_data_sel_pat_s}} & dac_pat_data[15:4]) |
+                                ({12{dac_data_sel_dds_s}} & dac_dds_data[15:4]);
+  // Keep the critical DMA sample path to a single source-select mux after
+  // the input pin. Other sources retain the parallel decoded selection.
+  assign dac_data_mux_s = dac_data_sel_dma_s ? dma_data[15:4] :
+                                                dac_data_mux_nodma_s;
 
   // dac mux
 

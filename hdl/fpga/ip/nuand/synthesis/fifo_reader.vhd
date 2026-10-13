@@ -380,7 +380,7 @@ begin
 
         packed_pop_request_i <= '0';
         if packed_active_i = '1' and fifo_current.state = READ_SAMPLES and
-           fifo_holdoff = '0' and sample_fifo_empty_i = '0' and
+           fifo_holdoff = '0' and packed_count_i /= 0 and
            (meta_en = '0' or meta_current.meta_time_go = '1') and
            read_req_v = '1' and fifo_current.samples_left = 0 then
             if eight_bit_mode_en = '1' then
@@ -984,7 +984,7 @@ begin
         packed_buffer_write_i <= '0';
         if( packed_active_i = '1' and
             fifo_current.state = READ_SAMPLES and fifo_holdoff = '0' and
-            sample_fifo_empty_i = '0' and fifo_current.samples_left = 0 and
+            packed_count_i /= 0 and fifo_current.samples_left = 0 and
             read_req_v = '1' ) then
             -- This predicate is the exact write condition from the READ_SAMPLES
             -- branch. It intentionally does not depend on packed_cycle: cycle
