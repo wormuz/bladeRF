@@ -52,9 +52,11 @@ begin
     stimulus : process
         procedure queue_arm_at(value : unsigned(63 downto 0)) is
         begin
-            -- Model the controller's target lead cycle and the gate's
-            -- registered compare resolution for queued replacements.
+            -- Model the controller's two-cycle target lead for the
+            -- registered partial and final TX bank-order comparisons.
             target_timestamp <= value;
+            wait until rising_edge(clock);
+            wait until falling_edge(clock);
             wait until rising_edge(clock);
             wait until falling_edge(clock);
             arm <= '1';
@@ -122,11 +124,7 @@ begin
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         arm <= '0';
-        target_timestamp <= to_unsigned(50, 64);
-        arm <= '1';
-        wait until rising_edge(clock);
-        wait until falling_edge(clock);
-        arm <= '0';
+        queue_arm_at(to_unsigned(50, 64));
         timestamp <= to_unsigned(39, 64);
         wait for 1 ns;
         assert state = "01" and muted = '0'

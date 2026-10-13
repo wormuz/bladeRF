@@ -33,6 +33,7 @@ architecture rtl of tx_retune_gate_controller is
     signal control_init_capture_pending : std_logic := '0';
     signal arm_pending : std_logic := '0';
     signal arm_pending_toggle : std_logic := '0';
+    signal arm_compare_lead : std_logic := '0';
 begin
     transfer : entity work.handshake
         generic map (DATA_WIDTH => 96)
@@ -80,6 +81,7 @@ begin
             control_init_capture_pending <= '0';
             arm_pending <= '0';
             arm_pending_toggle <= '0';
+            arm_compare_lead <= '0';
             arm <= '0';
             arm_immediate <= '0';
             arm_ack_toggle <= '0';
@@ -102,6 +104,7 @@ begin
                 control_initialized <= '1';
                 control_init_capture_pending <= '0';
                 arm_pending <= '0';
+                arm_compare_lead <= '0';
             elsif acknowledge_tx = '1' and control_initialized = '0' then
                 -- FX3 SYS_RST resets the TX-clock decoder but leaves the
                 -- NIOS system and command PIOs running. Adopt the surviving
@@ -114,16 +117,22 @@ begin
                 -- the timestamp mailbox. Decode toggles from the control
                 -- word, never from low timestamp bits.
                 if arm_pending = '1' then
-                    -- Give the registered target timestamp one full TX-clock
-                    -- cycle to feed the gate's compare-part pipeline before
-                    -- the ARM pulse is consumed there.
-                    arm <= '1';
-                    arm_ack_toggle <= arm_pending_toggle;
-                    arm_pending <= '0';
+                    if arm_compare_lead = '0' then
+                        -- The bank-order comparison has two registered
+                        -- stages. Keep ARM pending until both have consumed
+                        -- the stable target from this bundled transfer.
+                        arm_compare_lead <= '1';
+                    else
+                        arm <= '1';
+                        arm_ack_toggle <= arm_pending_toggle;
+                        arm_pending <= '0';
+                        arm_compare_lead <= '0';
+                    end if;
                 end if;
                 if control_tx(64) /= previous_toggles(0) then
                     arm_pending <= '1';
                     arm_pending_toggle <= control_tx(64);
+                    arm_compare_lead <= '0';
                 end if;
                 if control_tx(65) /= previous_toggles(1) then
                     complete <= '1';

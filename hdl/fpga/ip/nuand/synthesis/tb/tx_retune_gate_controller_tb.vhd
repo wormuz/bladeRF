@@ -54,6 +54,33 @@ begin
             end loop;
             assert found report "TX gate CDC command was lost" severity failure;
         end procedure;
+
+        procedure wait_for_compare_arm(
+            expected_target : unsigned(63 downto 0)) is
+            variable captured : boolean := false;
+        begin
+            for i in 0 to 100 loop
+                wait until rising_edge(tx_clock);
+                wait for 1 ns;
+                if target = expected_target then
+                    captured := true;
+                    exit;
+                end if;
+            end loop;
+            assert captured report "TX target was not captured" severity failure;
+            assert arm = '0'
+                report "TX ARM escaped before compare pipeline lead" severity failure;
+            wait until rising_edge(tx_clock);
+            wait for 1 ns;
+            assert arm = '0'
+                report "TX ARM escaped after only one compare lead cycle"
+                severity failure;
+            wait until rising_edge(tx_clock);
+            wait for 1 ns;
+            assert arm = '1'
+                report "TX ARM was not issued after compare pipeline lead"
+                severity failure;
+        end procedure;
     begin
         -- Model the NIOS PIO retaining command toggles across FX3 SYS_RST.
         control(2 downto 0) <= "111";
@@ -70,7 +97,7 @@ begin
         target_hi <= x"01234567";
         control(3) <= '0';
         control(0) <= '0';
-        wait_for(arm, '1');
+        wait_for_compare_arm(unsigned'(x"0123456789abcdef"));
         assert std_logic_vector(target) = x"0123456789abcdef"
             report "TX gate target was torn across CDC" severity failure;
         assert immediate = '0' report "future ARM became immediate" severity failure;
@@ -85,7 +112,7 @@ begin
         target_lo <= x"00000002";
         target_hi <= x"00000003";
         control(0) <= '1';
-        wait_for(arm, '1');
+        wait_for_compare_arm(unsigned'(x"0000000300000002"));
         assert std_logic_vector(target) = x"0000000300000002" and
                arm_ack_toggle = '1'
             report "back-to-back ARM acknowledgement was stale"
