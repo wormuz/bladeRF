@@ -105,6 +105,7 @@ static int32_t fake_gpio_remove_status[4];
 static unsigned fake_spi_remove_count;
 static unsigned fake_gpio_remove_count;
 static bool register_map_enabled;
+static bool fake_calibration_autocomplete;
 static int32_t fail_read_reg = -1;
 static int32_t fail_write_reg = -1;
 static uint8_t last_fir_high_byte;
@@ -253,6 +254,9 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
             return -EIO;
         if (register_map_enabled) {
             fake_regs[reg] = data[2];
+            if (fake_calibration_autocomplete &&
+                reg == REG_CALIBRATION_CTRL)
+                fake_regs[reg] = 0;
             if (reg == REG_ENSM_CONFIG_1 && state_after_ensm_write >= 0)
                 fake_regs[REG_STATE] = (uint8_t)state_after_ensm_write;
         }
@@ -298,6 +302,49 @@ int main(void)
     int32_t calib_fraction = INT32_MIN;
     uint64_t sampling_frequency = UINT64_MAX;
     uint32_t dds_frequency = UINT32_C(0x12345678);
+
+    /* A 300 kHz RX BBF at a 1.024 GHz BBPLL needs divider 269. The
+     * divider's high bit is in 0x1F9[0], so its low byte must still be
+     * written to 0x1F8 without rejecting the valid 9-bit value. */
+    {
+        struct ad9361_rf_phy bbf_phy = { .spi = &spi };
+        uint8_t saved_fake_regs[sizeof(fake_regs)];
+        unsigned saved_fake_write_counts[sizeof(fake_write_counts) /
+                                         sizeof(fake_write_counts[0])];
+        unsigned saved_read_count = read_count;
+        unsigned saved_write_count = write_count;
+        unsigned saved_delay_count = delay_count;
+        bool saved_register_map_enabled = register_map_enabled;
+        bool saved_calibration_autocomplete = fake_calibration_autocomplete;
+
+        memcpy(saved_fake_regs, fake_regs, sizeof(fake_regs));
+        memcpy(saved_fake_write_counts, fake_write_counts,
+               sizeof(fake_write_counts));
+        memset(fake_regs, 0, sizeof(fake_regs));
+        register_map_enabled = true;
+        fake_calibration_autocomplete = true;
+        ret = ad9361_rx_bb_analog_filter_calib(&bbf_phy, 300000, 1024000000);
+        if (ret != 0 || bbf_phy.rxbbf_div != 269 ||
+            fake_regs[REG_RX_BBF_TUNE_DIVIDE] != 13 ||
+            (fake_regs[REG_RX_BBF_TUNE_CONFIG] & RX_BBF_TUNE_DIVIDE) == 0) {
+            fprintf(stderr,
+                    "RX BBF 9-bit divider programming failed: ret=%" PRId32
+                    " divider=%u low=%u high=%u\n",
+                    ret, bbf_phy.rxbbf_div,
+                    fake_regs[REG_RX_BBF_TUNE_DIVIDE],
+                    !!(fake_regs[REG_RX_BBF_TUNE_CONFIG] &
+                       RX_BBF_TUNE_DIVIDE));
+            return EXIT_FAILURE;
+        }
+        memcpy(fake_regs, saved_fake_regs, sizeof(fake_regs));
+        memcpy(fake_write_counts, saved_fake_write_counts,
+               sizeof(fake_write_counts));
+        read_count = saved_read_count;
+        write_count = saved_write_count;
+        delay_count = saved_delay_count;
+        register_map_enabled = saved_register_map_enabled;
+        fake_calibration_autocomplete = saved_calibration_autocomplete;
+    }
     uint32_t sine_length = UINT32_MAX;
     unsigned axi_accesses_before;
     uint64_t lo_frequency = UINT64_MAX;
@@ -1146,15 +1193,16 @@ int main(void)
     }
 
     /* AD9361 burst reads descend through register addresses. The integer
-     * BBPLL word is at 0x44, followed by fractional bytes 3, 2, 1. */
+     * BBPLL word is at 0x44, followed by fractional bytes 3, 2, 1; word 1
+     * carries the most-significant fractional bits. */
     {
         struct refclk_scale bbpll = { .spi = &spi, .phy = &phy };
 
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_regs[REG_INTEGER_BB_FREQ_WORD] = 25;
-        fake_regs[REG_FRACT_BB_FREQ_WORD_3] = 0x13;
+        fake_regs[REG_FRACT_BB_FREQ_WORD_3] = 0x00;
         fake_regs[REG_FRACT_BB_FREQ_WORD_2] = 0x20;
-        fake_regs[REG_FRACT_BB_FREQ_WORD_1] = 0x00;
+        fake_regs[REG_FRACT_BB_FREQ_WORD_1] = 0x13;
         register_map_enabled = true;
         read_count = 0;
         ret = ad9361_bbpll_recalc_rate_checked(&bbpll, 38400000, &rfpll_rate);
@@ -1162,8 +1210,12 @@ int main(void)
         if (ret != 0 || rfpll_rate != 983040000 || read_count != 1) {
             fprintf(stderr,
                     "BBPLL burst read decoded wrong word: ret=%" PRId32
-                    " rate=%" PRIu32 " reads=%u\n",
-                    ret, rfpll_rate, read_count);
+                    " rate=%" PRIu32 " reads=%u regs=%02x:%02x:%02x:%02x\n",
+                    ret, rfpll_rate, read_count,
+                    fake_regs[REG_INTEGER_BB_FREQ_WORD],
+                    fake_regs[REG_FRACT_BB_FREQ_WORD_3],
+                    fake_regs[REG_FRACT_BB_FREQ_WORD_2],
+                    fake_regs[REG_FRACT_BB_FREQ_WORD_1]);
             return EXIT_FAILURE;
         }
     }
@@ -2921,6 +2973,48 @@ int main(void)
     }
 
     {
+        struct ad9361_rf_phy bbpll_phy = { .spi = &spi };
+        struct refclk_scale bbpll = { .spi = &spi, .phy = &bbpll_phy };
+        uint8_t saved_fake_regs[sizeof(fake_regs)];
+        bool saved_register_map_enabled = register_map_enabled;
+        uint32_t recalculated_rate = 0;
+        const uint32_t requested_rate = 737280000;
+        const uint32_t reference_rate = 38400000;
+
+        memcpy(saved_fake_regs, fake_regs, sizeof(fake_regs));
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_CH_1_OVERFLOW] = BBPLL_LOCK;
+        ret = ad9361_bbpll_set_rate(&bbpll, requested_rate, reference_rate);
+        if (ret != 0 ||
+            fake_regs[REG_INTEGER_BB_FREQ_WORD] != 19 ||
+            fake_regs[REG_FRACT_BB_FREQ_WORD_1] != 0x06 ||
+            fake_regs[REG_FRACT_BB_FREQ_WORD_2] != 0x60 ||
+            fake_regs[REG_FRACT_BB_FREQ_WORD_3] != 0x00) {
+            fprintf(stderr,
+                    "BBPLL fractional register order mismatch: ret=%" PRId32
+                    " words=%02x:%02x:%02x integer=%u\n",
+                    ret, fake_regs[REG_FRACT_BB_FREQ_WORD_1],
+                    fake_regs[REG_FRACT_BB_FREQ_WORD_2],
+                    fake_regs[REG_FRACT_BB_FREQ_WORD_3],
+                    fake_regs[REG_INTEGER_BB_FREQ_WORD]);
+            return EXIT_FAILURE;
+        }
+
+        ret = ad9361_bbpll_recalc_rate_checked(
+            &bbpll, reference_rate, &recalculated_rate);
+        if (ret != 0 || recalculated_rate != requested_rate) {
+            fprintf(stderr,
+                    "BBPLL fractional readback mismatch: ret=%" PRId32
+                    " rate=%" PRIu32 " expected=%" PRIu32 "\n",
+                    ret, recalculated_rate, requested_rate);
+            return EXIT_FAILURE;
+        }
+        memcpy(fake_regs, saved_fake_regs, sizeof(fake_regs));
+        register_map_enabled = saved_register_map_enabled;
+    }
+
+    {
         struct no_os_clk clock_nodes[NUM_AD9361_CLKS] = {0};
         struct refclk_scale clock_scales[NUM_AD9361_CLKS] = {0};
         static const enum ad9361_clocks parents[NUM_AD9361_CLKS] = {
@@ -3706,12 +3800,18 @@ int main(void)
          * syncing a NIOS-owned recall so readback comes from the bank. */
         {
             unsigned reads_before_invalidation = read_count;
+            bool saved_register_map_enabled = register_map_enabled;
 
+            /* The fallback path reads the profile bank through SPI; keep the
+             * fake register map enabled so it observes the simulated empty
+             * bank rather than the generic SPI status byte. */
+            register_map_enabled = true;
             fake_regs[REG_RX_FAST_LOCK_PROGRAM_READ] = 0;
             ad9361_fastlock_invalidate_cache(&phy, false);
             frequency = UINT64_C(0xfeedface);
             ret = ad9361_fastlock_sync_current_lo(
                 &phy, false, 0, 0, &frequency);
+            register_map_enabled = saved_register_map_enabled;
             if (ret != -EINVAL ||
                 frequency != UINT64_C(0xfeedface) ||
                 read_count <= reads_before_invalidation ||
