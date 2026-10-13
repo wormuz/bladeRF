@@ -2390,8 +2390,18 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
 
             CHECK_STATUS(rfic->set_sample_rate(dev, ch, 30e6));
 
-            CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_RX(0),
-                                          BLADERF_RFIC_RXFIR_DEFAULT, 0));
+            /* As when entering 4x mode, changing the RX FIR while the TX
+             * interpolation filter is still active presents a transient
+             * 30/120 MHz clock pair to AD9361 TX quadrature calibration.
+             * That pair has no supported calibration NCO mapping. Defer the
+             * automatic calibration until the TX FIR is restored below. */
+            bool tx_quad_was_manual = board_data->phy->manual_tx_quad_cal_en;
+            board_data->phy->manual_tx_quad_cal_en = true;
+            int filter_status = rfic->set_filter(
+                dev, BLADERF_CHANNEL_RX(0), BLADERF_RFIC_RXFIR_DEFAULT, 0);
+            board_data->phy->manual_tx_quad_cal_en = tx_quad_was_manual;
+            CHECK_STATUS(filter_status);
+
             CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
                                           BLADERF_RFIC_TXFIR_DEFAULT));
         }

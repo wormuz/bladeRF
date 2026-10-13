@@ -27,6 +27,84 @@
 #include <inttypes.h>
 
 DECLARE_TEST_CASE(samplerate);
+DECLARE_TEST_CASE(samplerate_transition);
+
+
+failure_count test_samplerate_transition(struct bladerf *dev,
+                                         struct app_params *p,
+                                         bool quiet)
+{
+    const bladerf_channel channels[] = {
+        BLADERF_CHANNEL_RX(0), BLADERF_CHANNEL_RX(1),
+        BLADERF_CHANNEL_TX(0), BLADERF_CHANNEL_TX(1)
+    };
+    failure_count failures = 0;
+
+    (void)p;
+    (void)quiet;
+
+    if (strcmp(bladerf_get_board_name(dev), "bladerf2") != 0) {
+        PRINT("samplerate_transition: bladeRF2-only test, skipping\n");
+        return 0;
+    }
+
+    for (size_t i = 0; i < ARRAY_SIZE(channels); ++i) {
+        bladerf_sample_rate original, actual, readback;
+        int status = bladerf_get_sample_rate(dev, channels[i], &original);
+        if (status != 0) {
+            PR_ERROR("Unable to read original sample rate for %s: %s\n",
+                     BLADERF_CHANNEL_IS_TX(channels[i])
+                         ? (channels[i] == BLADERF_CHANNEL_TX(1) ? "TX2" : "TX1")
+                         : (channels[i] == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
+                     bladerf_strerror(status));
+            failures++;
+            continue;
+        }
+        status = bladerf_set_sample_rate(dev, channels[i], 520834, &actual);
+        if (status == 0 && actual != 520834) {
+            PR_ERROR("%s low-rate setup returned %u Hz, expected 520834 Hz\n",
+                     BLADERF_CHANNEL_IS_TX(channels[i])
+                         ? (channels[i] == BLADERF_CHANNEL_TX(1) ? "TX2" : "TX1")
+                         : (channels[i] == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
+                     actual);
+            failures++;
+            status = BLADERF_ERR_UNEXPECTED;
+        }
+        if (status == 0)
+            status = bladerf_set_sample_rate(dev, channels[i], 10520834,
+                                             &actual);
+        if (status == 0)
+            status = bladerf_get_sample_rate(dev, channels[i], &readback);
+        if (status != 0 || actual < 10520833 || actual > 10520834 ||
+            readback != actual) {
+            PR_ERROR("%s 4x-FIR exit to 10,520,834 Hz failed: %s "
+                     "(actual=%u readback=%u)\n",
+                     BLADERF_CHANNEL_IS_TX(channels[i])
+                         ? (channels[i] == BLADERF_CHANNEL_TX(1) ? "TX2" : "TX1")
+                         : (channels[i] == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
+                     bladerf_strerror(status), actual, readback);
+            failures++;
+        }
+
+        /* Restore even after a failed transition; a failed FIR update may
+         * leave the RFIC filter cache unknown, in which case reopen is the
+         * only recovery and this test reports the restore failure too. */
+        status = bladerf_set_sample_rate(dev, channels[i], original, &actual);
+        if (status == 0)
+            status = bladerf_get_sample_rate(dev, channels[i], &readback);
+        if (status != 0 || actual != original || readback != original) {
+            PR_ERROR("%s sample-rate restore to %u Hz failed: %s "
+                     "(actual=%u readback=%u)\n",
+                     BLADERF_CHANNEL_IS_TX(channels[i])
+                         ? (channels[i] == BLADERF_CHANNEL_TX(1) ? "TX2" : "TX1")
+                         : (channels[i] == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
+                     original, bladerf_strerror(status), actual, readback);
+            failures++;
+        }
+    }
+
+    return failures;
+}
 
 
 static int set_and_check(struct bladerf *dev,

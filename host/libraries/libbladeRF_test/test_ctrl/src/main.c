@@ -48,6 +48,7 @@ static const struct test_case *tests[] = {
     &test_case_xb200,
     &test_case_correction,
     &test_case_samplerate,
+    &test_case_samplerate_transition,
     &test_case_bandwidth,
     &test_case_gain,
     &test_case_frequency,

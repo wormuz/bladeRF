@@ -122,6 +122,7 @@ DECLARE_TEST(loopback);
 DECLARE_TEST(rx_mux);
 DECLARE_TEST(lpf_mode);
 DECLARE_TEST(samplerate);
+DECLARE_TEST(samplerate_transition);
 DECLARE_TEST(sampling);
 DECLARE_TEST(threads);
 DECLARE_TEST(xb200);
