@@ -176,6 +176,14 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
     for (count = 0; count < TRIES; count++) {
         int read_status = _rfic_fpga_get_status(dev, &rfic_status);
         if (read_status < 0) {
+            if (sequence_supported) {
+                log_error("%s: failed to read NIOS RFIC status while "
+                          "waiting for command retirement "
+                          "(expected_sequence=%u); the command outcome is "
+                          "unknown (%s)\n",
+                          __FUNCTION__, expected_sequence,
+                          bladerf_strerror(read_status));
+            }
             return read_status;
         }
 
