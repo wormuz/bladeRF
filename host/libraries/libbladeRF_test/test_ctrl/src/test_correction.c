@@ -27,6 +27,34 @@
 
 DECLARE_TEST_CASE(correction);
 
+static void dump_rx_bc_offset_registers(struct bladerf *dev)
+{
+    uint8_t value;
+    for (uint16_t address = 0x17d; address <= 0x182; ++address) {
+        int status = bladerf_get_rfic_register(dev, address, &value);
+        if (status == 0) {
+            fprintf(stderr, "[DIAG] AD9361[0x%03x]=0x%02x\n",
+                    address, value);
+        } else {
+            fprintf(stderr, "[DIAG] AD9361[0x%03x] read failed: %s\n",
+                    address, bladerf_strerror(status));
+        }
+    }
+    const uint16_t diagnostic_registers[] = {0x169, 0x18b, 0x189, 0x1a2,
+                                               0x1a3, 0x1a4, 0x1a5};
+    for (size_t i = 0; i < ARRAY_SIZE(diagnostic_registers); ++i) {
+        int status = bladerf_get_rfic_register(
+            dev, diagnostic_registers[i], &value);
+        if (status == 0) {
+            fprintf(stderr, "[DIAG] AD9361[0x%03x]=0x%02x\n",
+                    diagnostic_registers[i], value);
+        } else {
+            fprintf(stderr, "[DIAG] AD9361[0x%03x] read failed: %s\n",
+                    diagnostic_registers[i], bladerf_strerror(status));
+        }
+    }
+}
+
 const struct correction {
     const char *name;
     bladerf_correction type;
@@ -287,7 +315,40 @@ static failure_count test_rx_bc_gain_phase_independence(
      * the I bits packed beside Q in the shared AD9361 register. */
     status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_I, 1552);
     if (status == 0) {
-        status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_Q, 512);
+        int16_t probe_i = 0;
+        int probe_status = bladerf_get_correction(
+            dev, ch, BLADERF_CORR_DCOFF_I, &probe_i);
+        fprintf(stderr, "[DIAG] RX%u after I set: status=%s I=%d\n",
+                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                bladerf_strerror(probe_status), probe_i);
+        dump_rx_bc_offset_registers(dev);
+        int reverse_status = bladerf_set_correction(
+            dev, ch, BLADERF_CORR_DCOFF_I, -1552);
+        int16_t reverse_i = 0;
+        if (reverse_status == 0) {
+            reverse_status = bladerf_get_correction(
+                dev, ch, BLADERF_CORR_DCOFF_I, &reverse_i);
+        }
+        fprintf(stderr, "[DIAG] RX%u after I=-1552: status=%s I=%d\n",
+                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                bladerf_strerror(reverse_status), reverse_i);
+        dump_rx_bc_offset_registers(dev);
+        if (reverse_status != 0 || reverse_i != -1552) {
+            PR_ERROR("RX%u B/C I negative round-trip failed "
+                     "(status=%s value=%d)\n",
+                     ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u,
+                     bladerf_strerror(reverse_status), reverse_i);
+            failures++;
+        }
+        status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_I, 1552);
+        if (status == 0) {
+            status = bladerf_set_correction(dev, ch, BLADERF_CORR_DCOFF_Q, 512);
+        }
+    }
+    if (status == 0) {
+        fprintf(stderr, "[DIAG] RX%u after Q set\n",
+                ch == BLADERF_CHANNEL_RX(0) ? 1u : 2u);
+        dump_rx_bc_offset_registers(dev);
     }
     if (status == 0) {
         status = bladerf_get_correction(dev, ch, BLADERF_CORR_DCOFF_I,
@@ -316,6 +377,9 @@ static failure_count test_rx_bc_gain_phase_independence(
         PR_ERROR("RX2 B/C Q offset changed RX1 B/C I offset "
                  "(%d -> %d)\n", original_rx1_i, rx1_i_readback);
         failures++;
+    }
+    if (failures != 0) {
+        dump_rx_bc_offset_registers(dev);
     }
 
     if (have_original_corrections) {
