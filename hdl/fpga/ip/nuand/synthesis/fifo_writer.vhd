@@ -218,7 +218,6 @@ architecture simple of fifo_writer is
     );
 
     type meta_fsm_t is record
-        state           : meta_state_t;
         dma_downcount   : natural range 0 to 65536;
         meta_write      : std_logic;
         meta_data       : std_logic_vector(meta_fifo_data'range);
@@ -226,7 +225,6 @@ architecture simple of fifo_writer is
     end record;
 
     constant META_FSM_RESET_VALUE : meta_fsm_t := (
-        state           => IDLE,
         dma_downcount   => 0,
         meta_write      => '0',
         meta_data       => (others => '-'),
@@ -235,6 +233,8 @@ architecture simple of fifo_writer is
 
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
     signal meta_future  : meta_fsm_t := META_FSM_RESET_VALUE;
+    signal meta_state_current : meta_state_t := IDLE;
+    signal meta_state_future  : meta_state_t := IDLE;
 
     type fifo_state_t is (
         CLEAR,
@@ -273,6 +273,7 @@ architecture simple of fifo_writer is
 
     signal fifo_current : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
     signal fifo_future  : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
+    signal packed_write_cycle_sel_i : std_logic_vector(3 downto 0) := "0001";
 
     signal sync_mini_exp: std_logic_vector(1 downto 0);
 
@@ -293,6 +294,23 @@ architecture simple of fifo_writer is
     end function;
 
 begin
+
+    -- Decode the packed-word phase one cycle ahead with the FSM state. The
+    -- binary write_cycle previously selected a 64-bit SC12 slice through a
+    -- multi-level mux on the RX FIFO data-register path.
+    packed_write_cycle_select : process(clock, reset)
+    begin
+        if reset = '1' then
+            packed_write_cycle_sel_i <= "0001";
+        elsif rising_edge(clock) then
+            case fifo_future.write_cycle is
+                when 0 => packed_write_cycle_sel_i <= "0001";
+                when 1 => packed_write_cycle_sel_i <= "0010";
+                when 2 => packed_write_cycle_sel_i <= "0100";
+                when 3 => packed_write_cycle_sel_i <= "1000";
+            end case;
+        end if;
+    end process;
 
     -- Throw an error if port widths don't make sense
     assert (fifo_data'length >= (NUM_STREAMS*2*in_samples(in_samples'low).data_i'length) )
@@ -698,9 +716,84 @@ begin
     begin
         if( reset = '1' ) then
             meta_current <= META_FSM_RESET_VALUE;
+            meta_state_current <= IDLE;
         elsif( rising_edge(clock) ) then
             meta_current <= meta_future;
+            meta_state_current <= meta_state_future;
         end if;
+    end process;
+
+    -- Keep RX metadata state decode on its own narrow path. The fitted image
+    -- measured fifo_enough through the record-wide payload mux and global
+    -- abort/disable overrides to the state bits (−0.245 ns setup). This
+    -- process computes only state transitions; payload and write controls
+    -- remain in meta_fsm_comb below.
+    meta_state_comb : process(all)
+        variable next_state : meta_state_t;
+        variable sample_present : boolean;
+    begin
+        next_state := meta_state_current;
+        sample_present := false;
+        for i in in_samples'range loop
+            if in_samples(i).data_v = '1' then
+                sample_present := true;
+            end if;
+        end loop;
+
+        case meta_state_current is
+            when IDLE =>
+                if fifo_enough then
+                    if packet_en = '1' then
+                        if packet_control.pkt_sop = '1' then
+                            next_state := PACKET_WAIT_EOP;
+                        end if;
+                    else
+                        next_state := META_WRITE;
+                    end if;
+                end if;
+
+            when META_WRITE =>
+                if meta_fifo_full = '0' and sample_present then
+                    next_state := META_DOWNCOUNT;
+                end if;
+
+            when META_DOWNCOUNT =>
+                if meta_current.dma_downcount <= 2 then
+                    if eight_bit_mode_en = '0' or
+                       (fifo_future.eight_bit_delay = '1' and
+                        fifo_future.samples_left = 0) then
+                        next_state := IDLE;
+                    end if;
+                end if;
+                if both_streams_enabled(fifo_current.in_sample_controls_r) and
+                   eight_bit_mode_en = '0' and
+                   meta_current.dma_downcount <= NUM_STREAMS + 2 then
+                    next_state := IDLE;
+                end if;
+
+            when PACKET_WAIT_EOP =>
+                if packet_control.data_valid = '1' and
+                   packet_control.pkt_eop = '1' then
+                    next_state := IDLE;
+                end if;
+
+            when ABORTED =>
+                if abort_active_out = '0' then
+                    next_state := IDLE;
+                end if;
+
+            when others =>
+                next_state := IDLE;
+        end case;
+
+        -- Abort dominates disable, matching the prior sticky-halt behavior.
+        if abort_active_out = '1' then
+            next_state := ABORTED;
+        elsif enable = '0' or meta_en = '0' or link_active_i = '0' then
+            next_state := IDLE;
+        end if;
+
+        meta_state_future <= next_state;
     end process;
 
     packet_ready <= '1' when fifo_enough else '0';
@@ -738,18 +831,14 @@ begin
         end if;
 
 
-        case meta_current.state is
+        case meta_state_current is
             when IDLE =>
 
                 meta_future.dma_downcount <= dma_buf_size - 4;
 
                 if( fifo_enough ) then
                     if( packet_en = '1' ) then
-                       -- use downcount to count number of DWORDS for packets
-
                        if( packet_control.pkt_sop = '1' ) then
-                          meta_future.state  <= PACKET_WAIT_EOP;
-
                           -- meta is not written yet, but there should be space
                           meta_future.meta_written <= '1';
 
@@ -760,8 +849,6 @@ begin
                              meta_future.dma_downcount <= 1;
                           end if;
                        end if;
-                    else
-                       meta_future.state  <= META_WRITE;
                     end if;
                 else
                     meta_future.meta_written <= '0';
@@ -773,7 +860,6 @@ begin
                     if (meta_fifo_full = '0' and in_samples(i).data_v = '1') then
                         meta_future.meta_write <= '1';
                         meta_future.meta_written <= '1';
-                        meta_future.state <= META_DOWNCOUNT;
                     end if;
                 end loop;
 
@@ -783,40 +869,6 @@ begin
                     meta_future.dma_downcount <= meta_current.dma_downcount - NUM_STREAMS;
                 end if;
 
-                if( meta_current.dma_downcount <= 2 ) then
-                    -- Look for 2 because of the 2 cycles passing
-                    -- through IDLE and META_WRITE after this.
-                    -- 8bit format requires an additional 2 cycle delay.
-                    if( eight_bit_mode_en = '1' ) then
-                        if( fifo_future.eight_bit_delay = '1' and fifo_future.samples_left = 0) then
-                            meta_future.state <= IDLE;
-                        end if;
-                    else
-                        meta_future.state <= IDLE;
-                    end if;
-                end if;
-
-                -- Patches the late meta write for MIMO mode
-                --
-                -- Reads the registered copy, not the port. The port arrives
-                -- combinationally from adc_enable in the AD9361 control
-                -- register bundle, through the or/and in adc_assignment_proc
-                -- at the top level, and was the design-wide worst setup path
-                -- (-0.636 ns into state.PACKET_WAIT_EOP / state.META_WRITE).
-                -- The registered copy is written unconditionally every clock
-                -- (see in_sample_controls_r below), so this lags by exactly one
-                -- cycle. That is harmless here: the condition tests whether the
-                -- stream is in MIMO mode, which software sets long before
-                -- samples flow, and it is further gated on dma_downcount being
-                -- within NUM_STREAMS + 2 of the end -- a multi-cycle window,
-                -- not an exact coincidence.
-                if( both_streams_enabled(fifo_current.in_sample_controls_r) and
-                    eight_bit_mode_en = '0' and
-                    meta_current.dma_downcount <= NUM_STREAMS + 2 )
-                then
-                    meta_future.state <= IDLE;
-                end if;
-
             when PACKET_WAIT_EOP =>
 
                 if( packet_control.data_valid = '1' ) then
@@ -824,7 +876,6 @@ begin
 
                    if( packet_control.pkt_eop = '1' ) then
                        meta_future.meta_write  <= '1';
-                       meta_future.state       <= IDLE;
                    end if;
                 end if;
 
@@ -837,40 +888,24 @@ begin
                 -- clause below reads to enter this state -- symmetric.
                 meta_future.meta_write   <= '0';
                 meta_future.meta_written <= '0';
-                if( abort_active_out = '0' ) then
-                    meta_future.state <= IDLE;
-                end if;
 
             when others =>
+                null;
 
-                meta_future.state <= IDLE;
 
         end case;
 
-        -- Abort?
-        -- abort_active_out steers the next FSM state; the output write
-        -- enable also has an immediate gate-fault mask. Metadata data remains
-        -- driven by meta_current.meta_data.
-        -- One priority chain, not two sequential overrides. Written as two
-        -- separate if statements this cost -0.164 ns on the setup path
-        -- meta_current.meta_written -> meta_current.state.IDLE (measured,
-        -- hostedxA4-2026-09-10_04.09.16): the next-state logic ran through
-        -- two more multiplexers stacked on top of the whole case statement.
-        --
-        -- The order matters as much as the depth. With the disable clause
-        -- second it overrode the abort, so dropping enable walked the FSM
-        -- out of ABORTED into IDLE without a new epoch -- exactly the sticky
-        -- halt the abort exists to provide. Abort wins now.
+        -- Abort and disable steer state in meta_state_comb above. They mask
+        -- payload sidebands here; metadata data remains driven by
+        -- meta_current.meta_data.
         if( abort_active_out = '1' ) then
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
-            meta_future.state         <= ABORTED;
         elsif( (enable = '0') or (meta_en = '0') or (link_active_i = '0') ) then
             -- link_active_i = '0' with enable high is ARMED: held here until
             -- the epoch arrives, same as not enabled.
             meta_future.meta_write    <= '0';
             meta_future.meta_written  <= '0';
-            meta_future.state         <= IDLE;
         end if;
 
         -- Output assignments
@@ -1129,16 +1164,18 @@ begin
                     d => fifo_current.fifo_12b_buf
                 );
 
-                if fifo_current.write_cycle = 1 then
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1 downto fifo_current.fifo_12b_buf'low);
-                elsif fifo_current.write_cycle = 2 then
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1+16 downto fifo_current.fifo_12b_buf'low+16);
-                elsif fifo_current.write_cycle = 3 then
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1+32 downto fifo_current.fifo_12b_buf'low+32);
-                end if;
+                case packed_write_cycle_sel_i is
+                    when "0010" =>
+                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                            fifo_data'length-1 downto fifo_current.fifo_12b_buf'low);
+                    when "0100" =>
+                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                            fifo_data'length-1+16 downto fifo_current.fifo_12b_buf'low+16);
+                    when "1000" =>
+                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                            fifo_data'length-1+32 downto fifo_current.fifo_12b_buf'low+32);
+                    when others => null;
+                end case;
             end if;
 
             if( eight_bit_mode_en = '1' ) then
@@ -1238,7 +1275,12 @@ begin
                     fifo_future.fifo_write <= '0';
                     fifo_future.state      <= HOLDOFF;
                     fifo_future.write_cycle <= fifo_current.write_cycle;
-                    fifo_future.fifo_12b_buf <= fifo_current.fifo_12b_buf;
+                    -- Let the SC12 staging register take its normal sample
+                    -- update on this edge. Holding its 96-bit payload from
+                    -- the combinational full feedback created a measured
+                    -- FIFO-reset/status-to-buffer setup path. The stream is
+                    -- already invalidated on downstream full; HOLDOFF holds
+                    -- the staging register on following cycles.
                 end if;
 
             when HOLDOFF =>

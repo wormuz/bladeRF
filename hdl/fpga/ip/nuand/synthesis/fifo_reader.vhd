@@ -144,6 +144,9 @@ architecture simple of fifo_reader is
     signal   epoch_counter      : unsigned(7 downto 0) := (others => '0');
     signal   link_toggle_prev   : std_logic := '0';
     signal   link_start_event_i : std_logic;
+    signal   link_start_mismatch_packed_i : std_logic;
+    attribute keep : boolean;
+    attribute keep of link_start_mismatch_packed_i : signal is TRUE;
     -- Toggle inputs arrive through synchronizers that still hold the
     -- pre-reset value for a few cycles after this block leaves reset,
     -- while the controller that drives them was reset to zero: every
@@ -218,6 +221,7 @@ architecture simple of fifo_reader is
         -- the unambiguous forward half-range (< 2^63 ticks).
         due_time        : std_logic;
         due_sentinel    : std_logic;
+        due_low_borrow  : unsigned(0 downto 0);
         -- Time reached or TX_NOW sentinel, precomputed in the same cycle.
         due_combined    : std_logic;
     end record;
@@ -239,6 +243,7 @@ architecture simple of fifo_reader is
         meta_header_valid => '0',
         due_time        => '0',
         due_sentinel    => '0',
+        due_low_borrow  => (others => '0'),
         due_combined    => '0'
     );
 
@@ -306,11 +311,12 @@ architecture simple of fifo_reader is
     signal packed_head_i : std_logic := '0';
     signal packed_tail_i : std_logic := '0';
     signal packed_count_i : natural range 0 to 2 := 0;
-    signal packed_active_i : std_logic;
+    signal packed_active_i : std_logic := '0';
     signal packed_input_enable_i : std_logic;
     signal packed_refill_i : std_logic;
     signal packed_pop_i : std_logic;
     signal packed_pop_valid_i : std_logic;
+    signal packed_pop_request_i : std_logic;
     signal packed_data_i : std_logic_vector(63 downto 0);
     signal packed_loopback_data_i : std_logic_vector(63 downto 0) := (others => '0');
     signal packed_loopback_valid_i : std_logic := '0';
@@ -322,33 +328,101 @@ begin
     link_start_event_i <= '1' when link_start_toggle /= link_toggle_prev and
                                    enable = '1' and settle_count = 0
                           else '0';
+    -- Keep only the synchronized toggle mismatch on the packed FIFO
+    -- admission path. The event decoder below also includes enable and reset
+    -- settling policy; those terms lengthen the path to the TX FIFO M10K.
+    -- A mismatch can conservatively pause reads while disabled/reset settling
+    -- is in progress (both already prohibit valid TX consumption).
+    link_start_mismatch_packed_i <= '1' when
+        link_start_toggle /= link_toggle_prev
+        else '0';
     expected_idle_i <= '1' when enable = '1' and meta_en = '1' and
                                 ((meta_current.state = META_WAIT and
                                   meta_current.due_combined = '0') or
                                  (meta_current.state = META_LOAD and
                                   meta_current.meta_fifo_empty = '1'))
                        else '0';
-    packed_active_i <= '1' when highly_packed_mode_en = '1' and
-                                NUM_STREAMS = 2 and FIFO_DATA_WIDTH = 64 and
-                                packet_en = '0'
-                       else '0';
+    -- The mode bit comes from the synchronized FX3 control word. Register the
+    -- decoded mode before it fans out into FIFO read/ram-control logic; STA
+    -- showed that direct fanout as a setup-critical path to the TX FIFO RAM.
+    packed_mode_select : process(clock, reset)
+    begin
+        if reset = '1' then
+            packed_active_i <= '0';
+        elsif rising_edge(clock) then
+            if highly_packed_mode_en = '1' and NUM_STREAMS = 2 and
+               FIFO_DATA_WIDTH = 64 and packet_en = '0' then
+                packed_active_i <= '1';
+            else
+                packed_active_i <= '0';
+            end if;
+        end if;
+    end process;
     packed_input_enable_i <= '1' when meta_en = '0' or
                                       meta_current.state = META_EVAL or
                                       meta_current.state = META_WAIT or
                                       meta_current.state = META_DOWNCOUNT
                              else '0';
-    packed_refill_i <= '1' when packed_active_i = '1' and
-                                packed_input_enable_i = '1' and enable = '1' and
-                                link_active_i = '1' and abort_active_i = '0' and
-                                fifo_holdoff = '0' and
-                                link_start_event_i = '0' and
-                                fifo_empty = '0' and packed_count_i < 2
-                       else '0';
-    packed_pop_i <= fifo_future.fifo_read when packed_active_i = '1' else '0';
+    -- Keep packed loopback consumption independent of the full next-state
+    -- decode. In the fitted design, fifo_future.fifo_read carried the FSM's
+    -- packed-cycle arithmetic through the loopback valid/data capture path.
+    packed_pop_request : process(all)
+        variable read_req_v : std_logic;
+    begin
+        read_req_v := '0';
+        for i in in_sample_controls'range loop
+            read_req_v := read_req_v or
+                (in_sample_controls(i).data_req and in_sample_controls(i).enable);
+        end loop;
+
+        packed_pop_request_i <= '0';
+        if packed_active_i = '1' and fifo_current.state = READ_SAMPLES and
+           fifo_holdoff = '0' and sample_fifo_empty_i = '0' and
+           (meta_en = '0' or meta_current.meta_time_go = '1') and
+           read_req_v = '1' and fifo_current.samples_left = 0 then
+            if eight_bit_mode_en = '1' then
+                packed_pop_request_i <= fifo_current.eight_bit_sample_sel;
+            elsif fifo_current.packed_cycle /= 3 then
+                packed_pop_request_i <= '1';
+            end if;
+        end if;
+    end process;
+    -- Register the FIFO refill request. The previous combinational request
+    -- decoded packed_count_i and drove the asynchronous FIFO M10K address
+    -- stall path in the same cycle. Predict the queue occupancy after this
+    -- cycle's registered refill/pop instead, so the RAM control path starts
+    -- at a register while preserving the two-word queue limit.
+    packed_refill_request : process(clock, reset)
+        variable count_after_v : integer range 0 to 2;
+    begin
+        if reset = '1' then
+            packed_refill_i <= '0';
+        elsif rising_edge(clock) then
+            count_after_v := packed_count_i;
+            if packed_refill_i = '1' and packed_pop_valid_i = '0' then
+                count_after_v := count_after_v + 1;
+            elsif packed_pop_valid_i = '1' and packed_refill_i = '0' then
+                count_after_v := count_after_v - 1;
+            end if;
+
+            if packed_active_i = '1' and
+               packed_input_enable_i = '1' and enable = '1' and
+               link_active_i = '1' and abort_active_i = '0' and
+               fifo_holdoff = '0' and
+               link_start_mismatch_packed_i = '0' and
+               link_start_event_i = '0' and fifo_empty = '0' and
+               count_after_v < 2 then
+                packed_refill_i <= '1';
+            else
+                packed_refill_i <= '0';
+            end if;
+        end if;
+    end process;
+    packed_pop_i <= packed_pop_request_i;
     packed_pop_valid_i <= '1' when packed_pop_i = '1' and
                                    packed_count_i /= 0 and enable = '1' and
                                    link_active_i = '1' and abort_active_i = '0' and
-                                   link_start_event_i = '0' and fifo_holdoff = '0'
+                                   link_start_mismatch_packed_i = '0' and fifo_holdoff = '0'
                           else '0';
     packed_data_i <= packed_word0_i when packed_head_i = '0' else packed_word1_i;
     sample_fifo_empty_i <= '1' when packed_active_i = '1' and packed_count_i = 0
@@ -662,9 +736,10 @@ begin
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
         variable  ts_next       : unsigned(63 downto 0);
+        variable  ts_load_next  : unsigned(63 downto 0);
+        variable  due_header    : unsigned(63 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
-        variable  v_low_borrow : unsigned(0 downto 0);
         variable  v_high_delta : unsigned(32 downto 0);
         variable  v_due_sentinel : std_logic;
     begin
@@ -694,38 +769,39 @@ begin
         meta_time := meta_current.meta_header - 1;
         meta_future.meta_p_time_r <= meta_time;
 
-        -- Precompute the modulo timestamp-due condition one cycle early.
-        --
-        -- The FIFO header is captured in META_LOAD. META_EVAL adds one
-        -- cycle before the decision is consumed, and the META_WAIT/DOWNCOUNT
-        -- path takes two more cycles to issue the first sample read. Compare
-        -- the scheduled timestamp.
-        --
-        -- meta_p_time is constant for the whole of META_WAIT, and equals
-        -- meta_p_time_r captured on entry, so comparing against meta_p_time_r
-        -- one cycle ahead of that capture is consistent for both states.
-        -- Compare against timestamp + 3. This is the implementation from the
-        -- last hosted xA4 fit with positive setup and hold margins. The raw
-        -- delta alternative regressed the timestamp-to-due_combined path.
-        -- Keep the subtraction split at 32 bits and the header registered.
-        -- A raw header of zero is the explicit TX_NOW sentinel.
+        -- Pipeline the modulo timestamp comparison by one cycle. The low
+        -- word borrow is registered each cycle; the high-word subtraction
+        -- consumes the previous borrow. Since this path advances one sample
+        -- clock at a time, compare timestamp+4 in the borrow stage with
+        -- timestamp+3 in the high stage. This preserves the original
+        -- three-tick launch compensation and continues updating while
+        -- META_WAIT is active. A raw zero header is the TX_NOW sentinel.
         ts_next := timestamp + 3;
         cmp_tgt := meta_current.meta_header;
+        v_due_time := '0';
 
-        if( meta_current.meta_header_valid = '1' and
-            ts_next(31 downto 0) < cmp_tgt(31 downto 0) ) then
-            v_low_borrow := to_unsigned(1, v_low_borrow'length);
+        if meta_current.state = META_LOAD and
+           meta_current.meta_fifo_empty = '0' and
+           (packet_en = '0' or packet_ready = '1') then
+            due_header := unsigned(meta_current.meta_fifo_data(95 downto 32));
         else
-            v_low_borrow := to_unsigned(0, v_low_borrow'length);
+            due_header := meta_current.meta_header;
         end if;
+
+        ts_load_next := timestamp + 4;
+        if ts_load_next(31 downto 0) < due_header(31 downto 0) then
+            meta_future.due_low_borrow <= to_unsigned(1, 1);
+        else
+            meta_future.due_low_borrow <= to_unsigned(0, 1);
+        end if;
+
         v_high_delta := ('0' & ts_next(63 downto 32)) -
                         ('0' & cmp_tgt(63 downto 32)) -
-                        resize(v_low_borrow, v_high_delta'length);
-        if( meta_current.meta_header_valid = '1' and
-            v_high_delta(31) = '0' ) then
+                        resize(meta_current.due_low_borrow,
+                               v_high_delta'length);
+        if meta_current.meta_header_valid = '1' and
+           v_high_delta(31) = '0' then
             v_due_time := '1';
-        else
-            v_due_time := '0';
         end if;
         meta_future.due_time <= v_due_time;
 
@@ -739,8 +815,6 @@ begin
             v_due_sentinel := '0';
         end if;
         meta_future.due_sentinel <= v_due_sentinel;
-
-        -- Fold the modulo-time result with the explicit TX_NOW sentinel.
         meta_future.due_combined <= v_due_time or v_due_sentinel;
 
         case meta_current.state is
@@ -769,10 +843,6 @@ begin
                 end if;
 
             when META_EVAL =>
-
-                -- The registered header is stable for this complete cycle;
-                -- due_combined is registered at the META_EVAL -> META_WAIT
-                -- edge and is consumed by META_WAIT.
                 meta_future.state <= META_WAIT;
                 if( packet_en = '1' or
                     not (v_due_time = '1' or v_due_sentinel = '1') ) then
