@@ -2087,8 +2087,32 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
         }
 
         state->filter_invalid[BLADERF_TX] = true;
-        CHECK_BOOL(ad9361_set_tx_fir_config(state->phy, *fir_config));
-        CHECK_BOOL(ad9361_set_tx_fir_en_dis(state->phy, enable));
+        {
+            int32_t cleanup_status = 0;
+            int32_t status = ad9361_set_tx_fir_config_with_cleanup(
+                state->phy, *fir_config, &cleanup_status);
+
+            rfic_command_record_cleanup_error(cleanup_status);
+            status = rfic_operation_status_with_cleanup(
+                status, cleanup_status);
+            if (status < 0) {
+                RFIC_ERR("AD9361 TX FIR configuration", status);
+                return false;
+            }
+        }
+        {
+            int32_t cleanup_status = 0;
+            int32_t status = ad9361_set_tx_fir_en_dis_with_cleanup(
+                state->phy, enable, &cleanup_status);
+
+            rfic_command_record_cleanup_error(cleanup_status);
+            status = rfic_operation_status_with_cleanup(
+                status, cleanup_status);
+            if (status < 0) {
+                RFIC_ERR("AD9361 TX FIR enable", status);
+                return false;
+            }
+        }
 
         state->txfir = txfir;
         state->filter_invalid[BLADERF_TX] = false;
@@ -2127,8 +2151,32 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
         }
 
         state->filter_invalid[BLADERF_RX] = true;
-        CHECK_BOOL(ad9361_set_rx_fir_config(state->phy, *fir_config));
-        CHECK_BOOL(ad9361_set_rx_fir_en_dis(state->phy, enable));
+        {
+            int32_t cleanup_status = 0;
+            int32_t status = ad9361_set_rx_fir_config_with_cleanup(
+                state->phy, *fir_config, &cleanup_status);
+
+            rfic_command_record_cleanup_error(cleanup_status);
+            status = rfic_operation_status_with_cleanup(
+                status, cleanup_status);
+            if (status < 0) {
+                RFIC_ERR("AD9361 RX FIR configuration", status);
+                return false;
+            }
+        }
+        {
+            int32_t cleanup_status = 0;
+            int32_t status = ad9361_set_rx_fir_en_dis_with_cleanup(
+                state->phy, enable, &cleanup_status);
+
+            rfic_command_record_cleanup_error(cleanup_status);
+            status = rfic_operation_status_with_cleanup(
+                status, cleanup_status);
+            if (status < 0) {
+                RFIC_ERR("AD9361 RX FIR enable", status);
+                return false;
+            }
+        }
 
         state->rxfir = rxfir;
         state->filter_invalid[BLADERF_RX] = false;

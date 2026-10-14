@@ -23,6 +23,13 @@ int main(void)
     };
     const uint64_t reinit_frequency_hz = UINT64_C(1835000000);
 
+    /* Cleanup is a secondary result, but cleanup-only failure must still
+     * fail the overall RFIC operation. Preserve an earlier primary error. */
+    assert(rfic_operation_status_with_cleanup(0, 0) == 0);
+    assert(rfic_operation_status_with_cleanup(0, -EIO) == -EIO);
+    assert(rfic_operation_status_with_cleanup(-ETIMEDOUT, -EIO) ==
+           -ETIMEDOUT);
+
     assert(rfic_calibration_command_allowed(false, false));
     assert(rfic_calibration_command_allowed(false, true));
     assert(!rfic_calibration_command_allowed(true, false));

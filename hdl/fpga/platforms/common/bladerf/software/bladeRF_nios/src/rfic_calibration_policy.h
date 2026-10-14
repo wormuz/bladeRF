@@ -24,6 +24,15 @@ enum rfic_sample_rate_cache_action {
     RFIC_SAMPLE_RATE_CACHE_INVALIDATE,
 };
 
+/* Keep a failed RFIC operation as the primary result; if the operation
+ * succeeded but restoration failed, the cleanup error becomes the command
+ * failure. The cleanup result is still reported separately by the caller. */
+static inline int32_t rfic_operation_status_with_cleanup(
+    int32_t operation_status, int32_t cleanup_status)
+{
+    return operation_status < 0 ? operation_status : cleanup_status;
+}
+
 /* A rejected, side-effect-free preflight must not erase valid readback
  * caches. Once a transaction is active, or a failed start left the RF
  * bandwidth state invalid, callers must keep both shared-rate caches closed. */
