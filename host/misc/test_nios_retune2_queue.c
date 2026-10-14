@@ -816,7 +816,7 @@ static int check_tokened_now_uses_terminal_completion(void)
     return 0;
 }
 
-static int check_tokenless_tx_now_defers_terminal_response(void)
+static int check_tokenless_now_defers_terminal_response(void)
 {
     struct pkt_buf request = { 0 };
 
@@ -887,6 +887,91 @@ static int check_tokenless_tx_now_defers_terminal_response(void)
               stderr);
         return 1;
     }
+
+    /* RX NOW used to run the complete profile recall and PLL wait in the
+     * packet handler. It must retain the same legacy response while the
+     * worker observes lock and readback. */
+    pkt_retune2_init();
+    memset(&request, 0, sizeof(request));
+    request.session_generation = 0x13572468;
+    memset(fastlocks_rx, 0, sizeof(fastlocks_rx));
+    fastlocks_rx[0].profile_num = 1;
+    fastlocks_rx[0].port = 0x83;
+    fastlocks_rx[0].spdt = 0x00;
+    fastlocks_rx[0].state = FASTLOCK_STATE_BBP_RFFE;
+    fail_profile_recall = false;
+    simulated_fastlock_terminal_status = 0;
+    simulate_txq_yield = false;
+    nios_pkt_retune2_pack(
+        request.req, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_NOW,
+        0, 1, 0x83, 0x00);
+    pkt_retune2(&request);
+    if (!request.response_deferred || request.response_prepared ||
+        request.ready || rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].deferred_response_pkt != &request ||
+        !run_until_queue_empty(&rx_queue, 8) || !request.response_prepared ||
+        !request.ready ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+          NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID)) !=
+            (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+             NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID)) {
+        fputs("tokenless RX NOW did not defer and publish terminal success\n",
+              stderr);
+        return 1;
+    }
+
+    /* A nonresident RX profile must also upload one SPI word per worker
+     * pass; the dispatcher response stays deferred until upload and recall
+     * have both completed. */
+    pkt_retune2_init();
+    memset(&request, 0, sizeof(request));
+    request.session_generation = 0x11223344;
+    fastlocks_rx[0].profile_num = 1;
+    fastlocks_rx[0].port = 0x83;
+    fastlocks_rx[0].spdt = 0x00;
+    fastlocks_rx[0].state = FASTLOCK_STATE_BBP;
+    staged_profile_load_active = false;
+    staged_profile_fail_after_write = -1;
+    load_count = 0;
+    nios_pkt_retune2_pack(
+        request.req, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_NOW,
+        0, 1, 0x83, 0x00);
+    pkt_retune2(&request);
+    if (!request.response_deferred || request.response_prepared ||
+        !staged_profile_load_active || rx_queue.count != 1 ||
+        !run_until_queue_empty(&rx_queue, 32) || !request.response_prepared ||
+        !request.ready || load_count != 18 ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
+        fputs("tokenless RX NOW did not retain its response through profile upload\n",
+              stderr);
+        return 1;
+    }
+
+    pkt_retune2_init();
+    memset(&request, 0, sizeof(request));
+    request.session_generation = 0x24681357;
+    fastlocks_rx[0].profile_num = 1;
+    fastlocks_rx[0].state = FASTLOCK_STATE_BBP_RFFE;
+    fail_profile_recall = true;
+    nios_pkt_retune2_pack(
+        request.req, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_NOW,
+        0, 1, 0x83, 0x00);
+    pkt_retune2(&request);
+    if (!request.response_deferred || !run_until_queue_empty(&rx_queue, 8) ||
+        !request.response_prepared || !request.ready ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        nios_pkt_retune2_resp_failure(request.resp) !=
+            NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT) {
+        fputs("tokenless RX NOW did not publish terminal PLL failure\n",
+              stderr);
+        fail_profile_recall = false;
+        return 1;
+    }
+    fail_profile_recall = false;
 
     simulate_txq_yield = false;
     return 0;
@@ -3218,7 +3303,7 @@ int main(void)
     if (check_tokened_now_uses_terminal_completion() != 0) {
         return 1;
     }
-    if (check_tokenless_tx_now_defers_terminal_response() != 0) {
+    if (check_tokenless_now_defers_terminal_response() != 0) {
         return 1;
     }
     if (check_tokened_now_clear_preserves_terminal_identity() != 0) {

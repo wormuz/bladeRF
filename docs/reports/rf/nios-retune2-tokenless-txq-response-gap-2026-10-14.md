@@ -16,11 +16,19 @@ This is a concrete source-level liveness and response-correlation gap. It is not
 
 Tokenless TX `NOW` now uses the same retained queue as tokened `NOW`. The queue entry retains the original packet buffer, and TXQ success/failure prepares the legacy response only after the worker reaches a terminal result. The NIOS main loop keeps the request ISR fenced while that response is pending and routes the completed packet through the existing immutable-response retry path. This prevents early success and prevents request-side effects from being replayed when UART publication is backpressured.
 
-The host now uses a scoped 120 s IN-response watchdog only for tokenless TX `NOW`; all other NIOS requests retain the 250 ms deadline. This matches the existing tokened terminal-result watchdog and is much longer than the source-derived TXQ calibration cycle budget (35 attempts, approximately 3.22 s at the locally derived minimum CLKRF). It is a transport failure watchdog, not a calibration-completion predicate. Whole-command setup/restore, SPI transfer, and scheduler-service upper bounds still need source closure; if they invalidate the 120 s ceiling, revise it from those bounds rather than enlarging it by guesswork. A zero-byte timeout still fails closed and desynchronizes the host channel; it never reports RF success.
+The host now uses a scoped 120 s IN-response watchdog only for tokenless TX `NOW`; tokenless RX `NOW` has a separate 5 s watchdog (see follow-up below), and ordinary NIOS requests retain the 250 ms deadline. The TX watchdog matches the existing tokened terminal-result watchdog and is much longer than the source-derived TXQ calibration cycle budget (35 attempts, approximately 3.22 s at the locally derived minimum CLKRF). These are transport failure watchdogs, not calibration-completion predicates. Whole-command setup/restore, SPI transfer, and scheduler-service upper bounds still need source closure; revise the watchdogs from those bounds if they are invalidated. A zero-byte timeout still fails closed and desynchronizes the host channel; it never reports RF success.
+
+## Follow-up finding: tokenless RX `NOW` also bypassed the worker
+
+The same branch audit found that tokenless RX `NOW` synchronously called `profile_load()` and `profile_activate()` from packet dispatch. `adi_fastlock_recall()` then busy-polled the RX RFPLL for up to 20 ms, while the token-capable path already split profile upload and lock/readback across worker turns. This left the main RX sweep path with a separate blocking island even though it has no TXQ calibration.
+
+The source now routes every tokenless `NOW` direction through the retained queue, retaining the original packet buffer until a terminal success/failure response is ready. Tokened callers retain their acceptance/completion protocol. For host response watchdogs, untagged TX remains at 120 s because of the documented TXQ search; untagged RX uses 5 s. The RX value is a failure watchdog, not a validity rule: source adapter limits give 18 profile-upload writes × (10 ms arbiter acquire + 10 ms SPI transfer + 10 ms release) = 540 ms before PLL, RF-port, readback and USB work. This is a conservative adapter-only estimate, not a measured or complete whole-command WCET; the aggregate command/service-gap bound remains open.
+
+Regression source now covers tokenless RX deferred success and PLL failure as well as TXQ terminal success/failure, and host tests assert both directions select an extended timeout. These tests have not been built or run.
 
 ## Source anchors
 
-- `hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c`: tokened `NOW` enqueues; tokenless `NOW` calls `profile_activate()` with `allow_txq_yield=false`.
+- `hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c`: current source enqueues all tokenless `NOW` requests; older source called `profile_activate()` with `allow_txq_yield=false`.
 - `hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/devices_rfic.c`: TX fastlock readback finalizes TXQ synchronously when yielding is disabled; the queue path starts/polls the retained transaction.
 - `thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c`: `ad9361_ensure_tx_quad_calib()` polls to terminal in a loop; the transaction start/poll API is available for cooperative continuation.
 - `host/libraries/libbladeRF/src/backend/usb/nios_access.c`: NIOS packet transaction uses the 250 ms peripheral response timeout.
@@ -34,7 +42,7 @@ The host now uses a scoped 120 s IN-response watchdog only for tokenless TX `NOW
 - Session reset/reopen retires the old response and cannot associate it with a later request.
 - Host timeout/retry and late response preserve request identity and never report an unknown result as success.
 - No-capability legacy host/image and token-capable current host/image both follow explicit, tested contracts.
-- Host-side regression asserts tokenless TX `NOW` gets the scoped extended IN timeout while ordinary transactions remain at 250 ms (`host/misc/test_nios_rfpll_batch_host.c`).
+- Host-side regression asserts tokenless RX/TX `NOW` get their scoped extended IN timeout (`host/misc/test_nios_rfpll_batch_host.c`).
 
 ## Verification status
 

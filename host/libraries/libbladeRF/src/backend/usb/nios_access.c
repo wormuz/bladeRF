@@ -40,15 +40,18 @@
 #include "nios_deadline_policy.h"
 #include "nios_pkt_formats.h"
 
-/* A tokenless TX NOW response preserves the legacy synchronous API while
- * NIOS yields through the TXQ phase-search worker. Source has 32 sweep
- * attempts, one verification, and up to initial + cached-phase attempts:
- * 35 calibration starts total. UG-570's 94,464 CLKRF cycles per TX channel
- * and the locally derived minimum CLKRF give about 3.22 s of worst-case TXQ
- * calibration wait. Use the existing 120 s terminal-result watchdog as a
- * per-command compatibility ceiling while whole-command service-gap bounds
- * remain under audit; leave ordinary peripheral operations at 250 ms.
+/* Untagged NOW retains the legacy synchronous API while NIOS yields through
+ * the retained profile/PLL/TXQ worker. The TXQ source permits 35 calibration
+ * starts; UG-570's 94,464 CLKRF cycles per TX channel and the locally derived
+ * minimum CLKRF give about 3.22 s of calibration wait. Keep its existing
+ * 120 s failure watchdog until whole-command/service-gap bounds close. RX
+ * has no TXQ phase; its 18-step profile upload has a conservative 540 ms
+ * adapter-only bound (18 writes × 10 ms acquire + transfer + release), so
+ * use a separate 5 s watchdog for the remaining recall/readback and transport
+ * work. Neither timeout establishes success; ordinary peripheral operations
+ * retain 250 ms.
  */
+#define NIOS_RETUNE2_LEGACY_RX_RESPONSE_TIMEOUT_MS 5000u
 #define NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS 120000u
 
 #include "board/board.h"
@@ -2533,11 +2536,12 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     status = timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE
         ? nios_retune_clear_wait(dev, buf, NIOS_PKT_RETUNE2_RESP_IDX_FLAGS,
                                  NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)
-        : (timestamp == NIOS_PKT_RETUNE2_NOW &&
-           BLADERF_CHANNEL_IS_TX(ch) && !tokened_async_now)
+        : (timestamp == NIOS_PKT_RETUNE2_NOW && !tokened_async_now)
               ? nios_access_with_response_timeout(
                     dev, buf,
-                    NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS)
+                    BLADERF_CHANNEL_IS_TX(ch)
+                        ? NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS
+                        : NIOS_RETUNE2_LEGACY_RX_RESPONSE_TIMEOUT_MS)
               : nios_access(dev, buf);
     if (status != 0) {
         return status;

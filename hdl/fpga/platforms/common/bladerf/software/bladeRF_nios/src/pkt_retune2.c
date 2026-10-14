@@ -908,7 +908,8 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
 
     /* Queue-worker transitions own the RFIC across this autonomous wait.
      * Tokened NOW enters this worker after its acceptance ACK; tokenless NOW
-     * bypasses it and keeps the legacy synchronous completion contract. */
+     * retains its legacy synchronous response, but is also completed by this
+     * worker before that response is published. */
     if (allow_txq_yield) {
         if (!pll_locked) {
             if (!adi_fastlock_recall_start(module, p, failure_stage))
@@ -1730,25 +1731,25 @@ void pkt_retune2(struct pkt_buf *b)
             requested_profile.state = profile_already_in_target_slot
                 ? FASTLOCK_STATE_BBP_RFFE : FASTLOCK_STATE_BBP;
             if (timestamp == NIOS_PKT_RETUNE2_NOW) {
-                /* TX NOW always uses the retained worker so TXQ cannot
-                 * monopolize the packet-dispatch context. Tokened callers
-                 * receive the existing acceptance/completion protocol;
-                 * tokenless callers retain their synchronous response by
-                 * keeping this packet buffer until the worker is terminal. */
+                /* NOW transitions use the retained worker so profile upload,
+                 * RFPLL acquisition, and TXQ cannot monopolize packet
+                 * dispatch. Tokened callers receive the existing
+                 * acceptance/completion protocol; tokenless callers retain
+                 * their synchronous response by keeping this packet buffer
+                 * until the worker is terminal. */
                 uint64_t readback_frequency_hz = 0;
                 struct queue *q = module == BLADERF_MODULE_TX
                     ? &tx_queue : &rx_queue;
                 struct queue *other_q = module == BLADERF_MODULE_TX
                     ? &rx_queue : &tx_queue;
                 bool async_now = request_token != 0;
-                bool deferred_legacy_tx_now = false;
-                bool queued_now = async_now || deferred_legacy_tx_now;
+                bool deferred_legacy_now = false;
+                bool queued_now = async_now || deferred_legacy_now;
                 bool owner_busy = false;
 
 #ifdef BLADERF_NIOS_LIBAD936X
-                deferred_legacy_tx_now =
-                    module == BLADERF_MODULE_TX && request_token == 0;
-                queued_now = async_now || deferred_legacy_tx_now;
+                deferred_legacy_now = request_token == 0;
+                queued_now = async_now || deferred_legacy_now;
                 owner_busy = rfic_command_worker_active() ||
                              rfic_command_owns_device();
 #endif
@@ -1801,14 +1802,14 @@ void pkt_retune2(struct pkt_buf *b)
                                      * profile port can be modified. */
                                     entry->state =
                                         ENTRY_STATE_PROFILE_LOAD_PENDING;
-                                    if (deferred_legacy_tx_now) {
+                                    if (deferred_legacy_now) {
                                         entry->deferred_response_pkt = b;
                                         b->response_deferred = true;
                                     }
                                     load_status = adi_fastlock_load_start(
                                         module, &entry->profile);
                                     if (load_status < 0) {
-                                        if (deferred_legacy_tx_now) {
+                                        if (deferred_legacy_now) {
                                             entry->deferred_response_pkt = NULL;
                                             b->response_deferred = false;
                                         }
@@ -1831,8 +1832,8 @@ void pkt_retune2(struct pkt_buf *b)
                                     }
                                 }
                             } else {
-                                /* RX has no TXQ continuation and keeps the
-                                 * existing fast synchronous path. */
+                                /* Builds without the retained AD936x worker
+                                 * keep the original synchronous path. */
                                 if (!profile_load(module,
                                                  &requested_profile)) {
                                     INCREMENT_ERROR_COUNT();

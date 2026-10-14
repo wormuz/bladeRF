@@ -379,7 +379,7 @@ static int expect_retune2_failure_stage(void)
     return 0;
 }
 
-static int expect_tokenless_tx_retune_uses_extended_response_deadline(void)
+static int expect_tokenless_now_retunes_use_extended_response_deadline(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
     struct bladerf dev = { .backend_data = &usb, .board = &mock_board };
@@ -390,8 +390,22 @@ static int expect_tokenless_tx_retune_uses_extended_response_deadline(void)
     last_in_timeout_ms = 0;
     status = nios_retune2(&dev, BLADERF_CHANNEL_TX(0), NIOS_PKT_RETUNE2_NOW,
                           0, 1, 0x83, 0, 0);
-    if (status != 0 || last_in_timeout_ms <= PERIPHERAL_TIMEOUT_MS) {
+    if (status != 0 || last_in_timeout_ms != 120000u) {
         fprintf(stderr, "tokenless TX RETUNE2 did not use its scoped response "
+                        "deadline: status=%d timeout=%u\n",
+                status, last_in_timeout_ms);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_RETUNE2_SUCCESS;
+    last_in_timeout_ms = 0;
+    status = nios_retune2(&dev, BLADERF_CHANNEL_RX(0), NIOS_PKT_RETUNE2_NOW,
+                          0, 1, 0x83, 0, 0);
+    if (status != 0 || last_in_timeout_ms != 5000u) {
+        fprintf(stderr, "tokenless RX RETUNE2 did not use its scoped response "
                         "deadline: status=%d timeout=%u\n",
                 status, last_in_timeout_ms);
         MUTEX_DESTROY(&usb.peripheral_lock);
@@ -576,7 +590,7 @@ int main(void)
         expect_retune_clear_pending(
             RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS, true) ||
         expect_retune2_failure_stage() ||
-        expect_tokenless_tx_retune_uses_extended_response_deadline() ||
+        expect_tokenless_now_retunes_use_extended_response_deadline() ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_mismatched_response_poisoned_channel() ||
