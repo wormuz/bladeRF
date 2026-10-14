@@ -31,6 +31,7 @@ static uint32_t fake_sample_rate_rx_clks[NUM_RX_CLOCKS];
 static uint32_t fake_sample_rate_tx_clks[NUM_TX_CLOCKS];
 static bool fake_mux_commit_parent;
 static int32_t fake_mux_parent_status;
+static int32_t fake_mux_cleanup_status;
 static int32_t fake_axi_adc_remove_status;
 static int32_t fake_axi_dac_remove_status;
 static unsigned fake_axi_adc_remove_count;
@@ -70,6 +71,8 @@ static int32_t test_update_rf_bandwidth_with_cleanup(
     int32_t *cleanup_status);
 static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
                                        uint8_t index);
+static int32_t test_clk_mux_set_parent_with_cleanup(
+    struct refclk_scale *clk_priv, uint8_t index, int32_t *cleanup_status);
 static int32_t test_axi_adc_remove(struct axi_adc *adc);
 static int32_t test_axi_dac_remove(struct axi_dac *dac);
 
@@ -79,6 +82,14 @@ static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
     if (fake_mux_commit_parent)
         clk_priv->mult = index;
     return fake_mux_parent_status;
+}
+
+static int32_t test_clk_mux_set_parent_with_cleanup(
+    struct refclk_scale *clk_priv, uint8_t index, int32_t *cleanup_status)
+{
+    if (cleanup_status)
+        *cleanup_status = fake_mux_cleanup_status;
+    return test_clk_mux_set_parent(clk_priv, index);
 }
 
 #define ad9361_calculate_rf_clock_chain test_calculate_rf_clock_chain
@@ -92,6 +103,7 @@ static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
 #define ad9361_update_rf_bandwidth test_update_rf_bandwidth
 #define ad9361_update_rf_bandwidth_with_cleanup test_update_rf_bandwidth_with_cleanup
 #define ad9361_clk_mux_set_parent test_clk_mux_set_parent
+#define ad9361_clk_mux_set_parent_with_cleanup test_clk_mux_set_parent_with_cleanup
 #define axi_adc_remove test_axi_adc_remove
 #define axi_dac_remove test_axi_dac_remove
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
@@ -106,6 +118,7 @@ static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
 #undef ad9361_update_rf_bandwidth
 #undef ad9361_update_rf_bandwidth_with_cleanup
 #undef ad9361_clk_mux_set_parent
+#undef ad9361_clk_mux_set_parent_with_cleanup
 #undef axi_adc_remove
 #undef axi_dac_remove
 
@@ -2493,23 +2506,39 @@ int main(void)
         struct refclk_scale *old_rx_mux = phy.ref_clk_scale[RX_RFPLL];
         struct refclk_scale *old_tx_mux = phy.ref_clk_scale[TX_RFPLL];
         enum dev_id old_dev_sel = phy.dev_sel;
+        int32_t cleanup_status = 123;
         phy.ref_clk_scale[RX_RFPLL] = &rx_mux;
         phy.ref_clk_scale[TX_RFPLL] = &tx_mux;
         phy.dev_sel = ID_AD9361;
         fake_mux_parent_status = -EIO;
+        fake_mux_cleanup_status = -ETIMEDOUT;
         fake_mux_commit_parent = true;
         pdata.use_ext_rx_lo = INT_LO;
-        if (ad9361_set_rx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+        if (ad9361_set_rx_lo_int_ext_with_cleanup(
+                    &phy, EXT_LO, &cleanup_status) != -EIO ||
+            cleanup_status != -ETIMEDOUT ||
             pdata.use_ext_rx_lo != EXT_LO) {
             fprintf(stderr,
-                    "RX LO source cache rolled back after mux commit\n");
+                    "RX LO mux cleanup/cache status was lost after commit\n");
             return EXIT_FAILURE;
         }
         pdata.use_ext_tx_lo = INT_LO;
-        if (ad9361_set_tx_lo_int_ext(&phy, EXT_LO) != -EIO ||
+        cleanup_status = 123;
+        if (ad9361_set_tx_lo_int_ext_with_cleanup(
+                    &phy, EXT_LO, &cleanup_status) != -EIO ||
+            cleanup_status != -ETIMEDOUT ||
             pdata.use_ext_tx_lo != EXT_LO) {
             fprintf(stderr,
-                    "TX LO source cache rolled back after mux commit\n");
+                    "TX LO mux cleanup/cache status was lost after commit\n");
+            return EXIT_FAILURE;
+        }
+
+        cleanup_status = 123;
+        if (ad9361_set_rx_lo_int_ext_with_cleanup(
+                    NULL, EXT_LO, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "RX LO API kept stale cleanup status on rejection\n");
             return EXIT_FAILURE;
         }
 
@@ -2532,6 +2561,7 @@ int main(void)
         }
 
         fake_mux_parent_status = 0;
+        fake_mux_cleanup_status = 0;
         phy.ref_clk_scale[RX_RFPLL] = old_rx_mux;
         phy.ref_clk_scale[TX_RFPLL] = old_tx_mux;
         phy.dev_sel = old_dev_sel;
@@ -5493,6 +5523,7 @@ int main(void)
             uint64_t lo_readback = UINT64_MAX;
             uint8_t old_ensm_state = fake_regs[REG_STATE];
             int32_t old_state_after_ensm_write = state_after_ensm_write;
+            uint8_t old_prev_ensm_state = phy.prev_ensm_state;
 
             fake_regs[REG_STATE] = ENSM_STATE_ALERT;
             state_after_ensm_write = ENSM_STATE_ALERT;
@@ -5534,8 +5565,40 @@ int main(void)
                         "Successful LO mux recovery did not restore validity\n");
                 return EXIT_FAILURE;
             }
+
+            /* A failed status read during the mux operation is primary;
+             * restoration still runs and its independent ENSM write failure
+             * must remain visible through the cleanup output. */
+            fake_regs[REG_STATE] = ENSM_STATE_RX;
+            state_after_ensm_write = ENSM_STATE_ALERT;
+            phy.prev_ensm_state = ENSM_STATE_RX;
+            rx_mux.mult = INT_LO;
+            fail_read_reg = REG_MULTICHIP_SYNC_AND_TX_MON_CTRL;
+            fail_write_once_reg = REG_ENSM_CONFIG_1;
+            fail_write_once_reg_occurrence = 2;
+            apply_failed_write_once = false;
+            {
+                int32_t cleanup_status = 0;
+
+                ret = ad9361_clk_mux_set_parent_with_cleanup(
+                    &rx_mux, EXT_LO, &cleanup_status);
+                fail_read_reg = -1;
+                fail_write_once_reg = -1;
+                if (ret != -EIO || cleanup_status != -EIO ||
+                    !ad9361_calibration_state_unknown(&phy) ||
+                    rx_mux.mult != INT_LO) {
+                    fprintf(stderr,
+                            "LO mux lost primary or ENSM cleanup failure\n");
+                    return EXIT_FAILURE;
+                }
+            }
+            phy.calibration_state_unknown = false;
+            phy.rfpll_source_valid[0] = true;
+            phy.rfpll_source_valid[1] = true;
+            rx_mux.mult = INT_LO;
             fake_regs[REG_STATE] = old_ensm_state;
             state_after_ensm_write = old_state_after_ensm_write;
+            phy.prev_ensm_state = old_prev_ensm_state;
         }
         register_map_enabled = false;
     }
