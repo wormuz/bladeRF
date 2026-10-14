@@ -858,8 +858,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             /* Preserve the first concrete callback/poll error even if a
              * later wrapper accidentally reports success. A false callback
              * with no recorded errno remains an explicit INTERNAL result. */
-            e->result_code = bladerf_rfic_result_finalize(
-                e->result_code, e->rv);
+            e->result_code = bladerf_rfic_result_finalize_with_cleanup(
+                e->result_code, e->rv, e->cleanup_result_code);
             e->rv = e->result_code == BLADERF_RFIC_RESULT_SUCCESS;
 
             /* Publish COMPLETE only after the full ADI callback returns. */

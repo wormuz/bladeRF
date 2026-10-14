@@ -143,6 +143,15 @@ int main(void)
     assert(bladerf_rfic_result_finalize(BLADERF_RFIC_RESULT_SUCCESS,
                                         false) ==
            BLADERF_RFIC_RESULT_INTERNAL);
+    assert(!bladerf_rfic_cleanup_failed(BLADERF_RFIC_RESULT_SUCCESS));
+    assert(bladerf_rfic_cleanup_failed(BLADERF_RFIC_RESULT_IO));
+    assert(bladerf_rfic_result_finalize_with_cleanup(
+               BLADERF_RFIC_RESULT_SUCCESS, true,
+               BLADERF_RFIC_RESULT_IO) ==
+           BLADERF_RFIC_RESULT_INTERNAL);
+    assert(bladerf_rfic_result_finalize_with_cleanup(
+               BLADERF_RFIC_RESULT_IO, false,
+               BLADERF_RFIC_RESULT_TIMEOUT) == BLADERF_RFIC_RESULT_IO);
     assert(bladerf_rfic_result_ack_matches(true, 0, 0x1234, 17,
                                            0x1234, 17));
     assert(!bladerf_rfic_result_ack_matches(false, 0, 0x1234, 17,

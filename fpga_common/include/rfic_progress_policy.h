@@ -147,6 +147,22 @@ static inline uint8_t bladerf_rfic_result_finalize(
     return latched_result;
 }
 
+/* A secondary cleanup failure invalidates the whole transaction even when
+ * the requested operation itself completed. Preserve the cleanup class in
+ * RESULT_DETAIL while terminalizing the primary result as INTERNAL. */
+static inline bool bladerf_rfic_cleanup_failed(uint8_t cleanup_result)
+{
+    return cleanup_result != BLADERF_RFIC_RESULT_SUCCESS;
+}
+
+static inline uint8_t bladerf_rfic_result_finalize_with_cleanup(
+    uint8_t latched_result, bool operation_succeeded, uint8_t cleanup_result)
+{
+    return bladerf_rfic_result_finalize(
+        latched_result,
+        operation_succeeded && !bladerf_rfic_cleanup_failed(cleanup_result));
+}
+
 #define BLADERF_RFIC_PROGRESS_SEQUENCE_SHIFT 32
 #define BLADERF_RFIC_PROGRESS_SEQUENCE_MASK  0xffffffffu
 #define BLADERF_RFIC_PROGRESS_TRANSACTION_SHIFT 16
