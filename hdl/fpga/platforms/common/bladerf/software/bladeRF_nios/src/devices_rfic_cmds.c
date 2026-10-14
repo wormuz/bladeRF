@@ -377,6 +377,74 @@ static void _rfic_init_tail_advance_module(struct rfic_state *state,
     }
 }
 
+/* The wire format has four step bits. Report the actual retained ADI setup
+ * phase as a stable coarse stage instead of leaving INIT stuck at the generic
+ * SETUP_POLL value for the entire constructor. */
+static uint8_t _rfic_init_progress_step(const struct rfic_state *state)
+{
+    uint8_t const stage = (uint8_t)state->init_job.stage;
+
+    if (state->init_job_started &&
+        (state->init_job_pending || state->phy == NULL ||
+         state->init_tail_phase == RFIC_INIT_TAIL_IDLE)) {
+        switch (stage) {
+        case AD9361_INIT_TXN_RESET_ASSERT:
+        case AD9361_INIT_TXN_RESET_LOW_WAIT:
+        case AD9361_INIT_TXN_RESET_RELEASE:
+        case AD9361_INIT_TXN_RESET_HIGH_WAIT:
+            return BLADERF_RFIC_PROGRESS_INIT_RESET;
+        case AD9361_INIT_TXN_PRODUCT_ID:
+        case AD9361_INIT_TXN_LOCK_READ:
+        case AD9361_INIT_TXN_LOCK_WRITE:
+        case AD9361_INIT_TXN_LOCK_VERIFY:
+            return BLADERF_RFIC_PROGRESS_INIT_IDENTIFY_LOCK;
+        case AD9361_INIT_TXN_CLOCKS:
+            return BLADERF_RFIC_PROGRESS_INIT_CLOCKS;
+        case AD9361_INIT_TXN_SETUP_START:
+            return BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK;
+        case AD9361_INIT_TXN_SETUP_POLL: {
+            uint8_t const setup = (uint8_t)state->init_job.setup_job.stage;
+
+            if (setup < AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_START)
+                return BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK;
+            if (setup <= AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_WAIT)
+                return BLADERF_RFIC_PROGRESS_INIT_CLOCK_CHAIN;
+            if (setup < AD9361_SETUP_TRANSACTION_RX_CP_START)
+                return BLADERF_RFIC_PROGRESS_INIT_POST_CLOCK;
+            if (setup <= AD9361_SETUP_TRANSACTION_TX_CP_WAIT)
+                return BLADERF_RFIC_PROGRESS_INIT_SYNTH_CP;
+            if (setup < AD9361_SETUP_TRANSACTION_GM_START)
+                return BLADERF_RFIC_PROGRESS_INIT_POST_CP;
+            if (setup <= AD9361_SETUP_TRANSACTION_GM_STOP)
+                return BLADERF_RFIC_PROGRESS_INIT_GAIN_TABLE;
+            if (setup <= AD9361_SETUP_TRANSACTION_GC_UPDATE)
+                return BLADERF_RFIC_PROGRESS_INIT_GAIN_CONTROL;
+            return BLADERF_RFIC_PROGRESS_INIT_CALIBRATION;
+        }
+        case AD9361_INIT_TXN_PLATFORM_POST_SETUP:
+            return BLADERF_RFIC_PROGRESS_INIT_CALIBRATION;
+        default:
+            break;
+        }
+    }
+
+    switch (state->init_tail_phase) {
+    case RFIC_INIT_TAIL_RESET_LO:
+        return BLADERF_RFIC_PROGRESS_INIT_TAIL_RESET_LO;
+    case RFIC_INIT_TAIL_FILTER:
+        return BLADERF_RFIC_PROGRESS_INIT_TAIL_FILTER;
+    case RFIC_INIT_TAIL_SAMPLE_RATE:
+        return BLADERF_RFIC_PROGRESS_INIT_TAIL_SAMPLE_RATE;
+    case RFIC_INIT_TAIL_FINAL_LO:
+    case RFIC_INIT_TAIL_TX_GAIN:
+    case RFIC_INIT_TAIL_TX_MUTE:
+    case RFIC_INIT_TAIL_DONE:
+        return BLADERF_RFIC_PROGRESS_INIT_TAIL_FINAL_LO_OUTPUT;
+    default:
+        return BLADERF_RFIC_PROGRESS_INIT_UNKNOWN;
+    }
+}
+
 /**
  * @brief      Initializes RFIC and RFFE
  *
@@ -927,11 +995,9 @@ bool _rfic_cmd_rd_progress(struct rfic_state *state,
                 BLADERF_RFIC_PROGRESS_PHASE_RFPLL,
                 state->rfpll_job.rate_transaction.stage);
         } else if (active->cmd == BLADERF_RFIC_COMMAND_INIT) {
-            uint8_t init_step = state->init_job_pending
-                ? state->init_job.stage
-                : (uint8_t)state->init_tail_phase;
             phase_or_result = bladerf_rfic_progress_phase_encode(
-                BLADERF_RFIC_PROGRESS_PHASE_INIT, init_step);
+                BLADERF_RFIC_PROGRESS_PHASE_INIT,
+                _rfic_init_progress_step(state));
         } else if (state->rfdc_job_pending) {
             phase_or_result = bladerf_rfic_progress_phase_encode(
                 BLADERF_RFIC_PROGRESS_PHASE_RFDC,

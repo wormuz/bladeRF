@@ -189,6 +189,28 @@ enum bladerf_rfic_progress_phase_class {
     BLADERF_RFIC_PROGRESS_PHASE_RFPLL = 6,
 };
 
+/* Coarse INIT subphases carried in the low nibble of PROGRESS. Keep these
+ * values stable: the packet already has a phase byte and needs no format
+ * change to distinguish a live nested INIT stage from the top-level cursor. */
+enum bladerf_rfic_progress_init_step {
+    BLADERF_RFIC_PROGRESS_INIT_UNKNOWN = 0,
+    BLADERF_RFIC_PROGRESS_INIT_RESET = 1,
+    BLADERF_RFIC_PROGRESS_INIT_IDENTIFY_LOCK = 2,
+    BLADERF_RFIC_PROGRESS_INIT_CLOCKS = 3,
+    BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK = 4,
+    BLADERF_RFIC_PROGRESS_INIT_CLOCK_CHAIN = 5,
+    BLADERF_RFIC_PROGRESS_INIT_POST_CLOCK = 6,
+    BLADERF_RFIC_PROGRESS_INIT_SYNTH_CP = 7,
+    BLADERF_RFIC_PROGRESS_INIT_POST_CP = 8,
+    BLADERF_RFIC_PROGRESS_INIT_GAIN_TABLE = 9,
+    BLADERF_RFIC_PROGRESS_INIT_GAIN_CONTROL = 10,
+    BLADERF_RFIC_PROGRESS_INIT_CALIBRATION = 11,
+    BLADERF_RFIC_PROGRESS_INIT_TAIL_RESET_LO = 12,
+    BLADERF_RFIC_PROGRESS_INIT_TAIL_FILTER = 13,
+    BLADERF_RFIC_PROGRESS_INIT_TAIL_SAMPLE_RATE = 14,
+    BLADERF_RFIC_PROGRESS_INIT_TAIL_FINAL_LO_OUTPUT = 15,
+};
+
 static inline uint8_t bladerf_rfic_progress_phase_encode(uint8_t phase_class,
                                                          uint8_t phase_step)
 {
@@ -224,6 +246,34 @@ static inline uint8_t bladerf_rfic_progress_phase_class(uint8_t phase)
 static inline uint8_t bladerf_rfic_progress_phase_step(uint8_t phase)
 {
     return (uint8_t)(phase & BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK);
+}
+
+static inline const char *bladerf_rfic_progress_init_step_name(uint8_t phase)
+{
+    if (!bladerf_rfic_progress_phase_is_tagged(phase) ||
+        bladerf_rfic_progress_phase_class(phase) !=
+            BLADERF_RFIC_PROGRESS_PHASE_INIT)
+        return "not-init";
+
+    switch (bladerf_rfic_progress_phase_step(phase)) {
+    case BLADERF_RFIC_PROGRESS_INIT_RESET: return "reset";
+    case BLADERF_RFIC_PROGRESS_INIT_IDENTIFY_LOCK: return "identify-lock";
+    case BLADERF_RFIC_PROGRESS_INIT_CLOCKS: return "clock-registration";
+    case BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK: return "setup-pre-clock";
+    case BLADERF_RFIC_PROGRESS_INIT_CLOCK_CHAIN: return "clock-chain";
+    case BLADERF_RFIC_PROGRESS_INIT_POST_CLOCK: return "setup-post-clock";
+    case BLADERF_RFIC_PROGRESS_INIT_SYNTH_CP: return "synth-charge-pump";
+    case BLADERF_RFIC_PROGRESS_INIT_POST_CP: return "setup-post-cp";
+    case BLADERF_RFIC_PROGRESS_INIT_GAIN_TABLE: return "gain-table";
+    case BLADERF_RFIC_PROGRESS_INIT_GAIN_CONTROL: return "gain-control";
+    case BLADERF_RFIC_PROGRESS_INIT_CALIBRATION: return "setup-calibration";
+    case BLADERF_RFIC_PROGRESS_INIT_TAIL_RESET_LO: return "tail-reset-lo";
+    case BLADERF_RFIC_PROGRESS_INIT_TAIL_FILTER: return "tail-filter";
+    case BLADERF_RFIC_PROGRESS_INIT_TAIL_SAMPLE_RATE: return "tail-sample-rate";
+    case BLADERF_RFIC_PROGRESS_INIT_TAIL_FINAL_LO_OUTPUT:
+        return "tail-final-lo-output";
+    default: return "unknown-init-step";
+    }
 }
 
 struct bladerf_rfic_progress {

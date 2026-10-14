@@ -305,7 +305,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                 "observed_sequence=%u, queue_length=%u, "
                                 "active_state=%u, progress_id=%u, "
                                 "progress_cmd=0x%02x, progress_phase=0x%02x, "
-                                "progress_sequence=%u); operation is not "
+                                "progress_stage=%s, progress_sequence=%u); "
+                                "operation is not "
                                 "cancelled and outcome remains unresolved\n",
                                 __FUNCTION__,
                                 (unsigned int)expected_transaction_id,
@@ -316,6 +317,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                 (unsigned int)progress_transaction_id,
                                 (unsigned int)progress_command,
                                 (unsigned int)progress_phase_or_result,
+                                bladerf_rfic_progress_init_step_name(
+                                    progress_phase_or_result),
                                 progress_sequence);
                     return BLADERF_ERR_TIMEOUT;
                 }
@@ -363,7 +366,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                         "(expected_sequence=%u, observed_sequence=%u, "
                         "queue_length=%u active=%u cmd=0x%02x ch=0x%x "
                         "state=%u progress_id=%u progress_cmd=0x%02x "
-                        "progress_phase=0x%02x progress_sequence=%u)\n",
+                        "progress_phase=0x%02x progress_stage=%s "
+                        "progress_sequence=%u)\n",
                         __FUNCTION__, expected_sequence,
                         rfic_status.last_write_sequence,
                         rfic_status.write_queue_length,
@@ -374,6 +378,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                         (unsigned int)progress_transaction_id,
                         (unsigned int)progress_command,
                         (unsigned int)progress_phase_or_result,
+                        bladerf_rfic_progress_init_step_name(
+                            progress_phase_or_result),
                         progress_sequence);
         }
         return BLADERF_ERR_TIMEOUT;

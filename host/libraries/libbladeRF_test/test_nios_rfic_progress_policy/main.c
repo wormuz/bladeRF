@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "rfic_progress_policy.h"
@@ -94,6 +95,47 @@ int main(void)
         assert(bladerf_rfic_progress_phase_encode(8, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(7, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(1, 16) == 0);
+
+        /* INIT's nested constructor/tail uses stable step codes in the same
+         * four-bit field; every named stage must remain representable and
+         * distinct without changing the packet layout. */
+        {
+            static const uint8_t init_steps[] = {
+                BLADERF_RFIC_PROGRESS_INIT_RESET,
+                BLADERF_RFIC_PROGRESS_INIT_IDENTIFY_LOCK,
+                BLADERF_RFIC_PROGRESS_INIT_CLOCKS,
+                BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK,
+                BLADERF_RFIC_PROGRESS_INIT_CLOCK_CHAIN,
+                BLADERF_RFIC_PROGRESS_INIT_POST_CLOCK,
+                BLADERF_RFIC_PROGRESS_INIT_SYNTH_CP,
+                BLADERF_RFIC_PROGRESS_INIT_POST_CP,
+                BLADERF_RFIC_PROGRESS_INIT_GAIN_TABLE,
+                BLADERF_RFIC_PROGRESS_INIT_GAIN_CONTROL,
+                BLADERF_RFIC_PROGRESS_INIT_CALIBRATION,
+                BLADERF_RFIC_PROGRESS_INIT_TAIL_RESET_LO,
+                BLADERF_RFIC_PROGRESS_INIT_TAIL_FILTER,
+                BLADERF_RFIC_PROGRESS_INIT_TAIL_SAMPLE_RATE,
+                BLADERF_RFIC_PROGRESS_INIT_TAIL_FINAL_LO_OUTPUT,
+            };
+            size_t i, j;
+
+            for (i = 0; i < sizeof(init_steps) / sizeof(init_steps[0]); i++) {
+                const uint8_t encoded = bladerf_rfic_progress_phase_encode(
+                    BLADERF_RFIC_PROGRESS_PHASE_INIT, init_steps[i]);
+
+                assert(bladerf_rfic_progress_phase_is_tagged(encoded));
+                assert(bladerf_rfic_progress_phase_class(encoded) ==
+                       BLADERF_RFIC_PROGRESS_PHASE_INIT);
+                assert(bladerf_rfic_progress_phase_step(encoded) ==
+                       init_steps[i]);
+                assert(bladerf_rfic_progress_init_step_name(encoded)[0] !=
+                       '\0');
+                for (j = i + 1; j < sizeof(init_steps) / sizeof(init_steps[0]);
+                     j++)
+                    assert(init_steps[i] != init_steps[j]);
+            }
+            assert(bladerf_rfic_progress_init_step_name(0) != NULL);
+        }
     }
 
     assert(bladerf_rfic_result_ack_is_duplicate(0x1234, 17, 0x1234, 17));
