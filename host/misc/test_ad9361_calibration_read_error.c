@@ -1514,6 +1514,77 @@ int main(void)
 			}
 		}
 
+		/* A TXQ primary error must remain distinct from a cleanup SPI failure
+		 * in the child job and reach the parent transaction's cleanup result. */
+		{
+			struct ad9361_rf_phy txq_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+			};
+			struct ad9361_tx_quad_calibration_transaction txq = {0};
+
+			register_map_enabled = true;
+			fail_write_once_reg = REG_PARALLEL_PORT_CONF_2;
+			fail_write_once_reg_occurrence = 1;
+			apply_failed_write_once = true;
+			txq.phy = &txq_phy;
+			txq.active = true;
+			txq.stage = AD9361_TX_QUAD_TRANSACTION_CALIBRATE;
+			txq.job.active = true;
+			txq.job.status = -ETIMEDOUT;
+			txq.job.stage = AD9361_TX_QUAD_JOB_CLEANUP;
+			txq.job.phase_inversion_touched = true;
+			txq_phy.tx_quad_transaction = &txq;
+			if (ad9361_tx_quad_calibration_transaction_poll(
+				    &txq_phy, &txq) != 1 ||
+			    txq.cleanup_status != 0 || txq.status != -ETIMEDOUT ||
+			    txq.job.cleanup_status != -EIO ||
+			    !txq_phy.calibration_state_unknown) {
+				fprintf(stderr,
+					"TXQ child did not retain separate primary and cleanup failures\n");
+				return EXIT_FAILURE;
+			}
+			if (ad9361_tx_quad_calibration_transaction_poll(
+				    &txq_phy, &txq) != -ETIMEDOUT ||
+			    !txq.terminal || txq.terminal_status != -ETIMEDOUT ||
+			    txq.cleanup_status != -EIO) {
+				fprintf(stderr,
+					"TXQ parent lost its first cleanup error or masked primary failure\n");
+				return EXIT_FAILURE;
+			}
+			fail_write_once_reg = -1;
+			fail_write_once_reg_occurrence = 1;
+			apply_failed_write_once = false;
+			register_map_enabled = false;
+		}
+
+		/* Enclosing bandwidth/sample-rate finish paths must aggregate the
+		 * earliest child cleanup while preserving their primary status. */
+		{
+			struct ad9361_rf_bandwidth_transaction bandwidth = {0};
+			struct ad9361_sample_rate_transaction sample_rate = {0};
+
+			bandwidth.tx_quad_job.cleanup_status = -EIO;
+			bandwidth.tracking_restore_status = -ETIMEDOUT;
+			if (ad9361_rf_bandwidth_transaction_finish(
+				    &bandwidth, -EINVAL) != -EINVAL ||
+			    bandwidth.cleanup_status != -EIO ||
+			    bandwidth.terminal_status != -EINVAL) {
+				fprintf(stderr,
+					"Bandwidth finish lost primary or first cleanup status\n");
+				return EXIT_FAILURE;
+			}
+			sample_rate.bandwidth_job = bandwidth;
+			if (ad9361_sample_rate_transaction_finish(
+				    &sample_rate, 0) != -EIO ||
+			    sample_rate.cleanup_status != -EIO ||
+			    sample_rate.terminal_status != -EIO) {
+				fprintf(stderr,
+					"Sample-rate finish reported success after nested cleanup failure\n");
+				return EXIT_FAILURE;
+			}
+		}
+
 		/* RFDC is also a retained parent: start only establishes tracking
 		 * state and arms its ENSM child; it must not wait through ALERT inline. */
 		{
