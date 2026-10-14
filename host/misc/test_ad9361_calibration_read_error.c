@@ -2944,6 +2944,14 @@ int main(void)
                     "Clock-plan API left stale cleanup status on rejection\n");
             return EXIT_FAILURE;
         }
+        cleanup_status = 123;
+        if (ad9361_do_calib_with_cleanup(
+                NULL, RFDC_CAL, -1, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "Calibration API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
     }
 
     /* A failed filter/calibration/tracking/ENSM step preserves the last
