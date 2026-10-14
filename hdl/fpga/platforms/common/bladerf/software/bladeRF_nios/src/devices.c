@@ -1128,7 +1128,9 @@ bool adi_axi_read(uint32_t addr, uint32_t *data)
     uint32_t clear_toggle;
     bool success;
 
-    if (!data || !nios_axi_address_valid(addr)) {
+    if (!data || !nios_axi_access_allowed(
+            addr, (control_reg_read() &
+                   CONTROL_AD9361_RX_IF_CLOCK_ALIVE) != 0)) {
         return false;
     }
 
@@ -1158,7 +1160,9 @@ bool adi_axi_write(uint32_t addr, uint32_t data)
     uint32_t clear_toggle;
     bool success;
 
-    if (!nios_axi_address_valid(addr)) {
+    if (!nios_axi_access_allowed(
+            addr, (control_reg_read() &
+                   CONTROL_AD9361_RX_IF_CLOCK_ALIVE) != 0)) {
         return false;
     }
 
