@@ -1470,6 +1470,13 @@ static int _rfic_host_set_filter(struct bladerf *dev,
     bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
+    int32_t status, cleanup_status = 0;
+
+    if (_rfic_host_calibration_faulted(board_data)) {
+        _rfic_host_fail_closed(dev, board_data);
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         AD9361_TXFIRConfig *fir_config = NULL;
@@ -1507,7 +1514,28 @@ static int _rfic_host_set_filter(struct bladerf *dev,
                 return BLADERF_ERR_UNEXPECTED;
         }
 
-        CHECK_AD936X(ad9361_set_tx_fir_config(phy, *fir_config));
+        status = ad9361_set_tx_fir_config_with_cleanup(
+            phy, *fir_config, &cleanup_status);
+        if (status < 0 || cleanup_status < 0) {
+            _rfic_host_fail_closed(dev, board_data);
+            if (cleanup_status < 0) {
+                if (status < 0) {
+                    log_error("AD9361 TX FIR configuration returned %s; "
+                              "cleanup also returned %s\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(status)),
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(cleanup_status)));
+                } else {
+                    log_error("AD9361 TX FIR cleanup failed (%s)\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(cleanup_status)));
+                }
+                if (status >= 0)
+                    status = cleanup_status;
+            }
+            RETURN_ERROR_AD9361("AD9361 TX FIR configuration", status);
+        }
         CHECK_AD936X(ad9361_set_tx_fir_en_dis(phy, enable));
 
         board_data->txfir = txfir;
@@ -1548,7 +1576,29 @@ static int _rfic_host_set_filter(struct bladerf *dev,
                 return BLADERF_ERR_UNEXPECTED;
         }
 
-        CHECK_AD936X(ad9361_set_rx_fir_config(phy, *fir_config));
+        cleanup_status = 0;
+        status = ad9361_set_rx_fir_config_with_cleanup(
+            phy, *fir_config, &cleanup_status);
+        if (status < 0 || cleanup_status < 0) {
+            _rfic_host_fail_closed(dev, board_data);
+            if (cleanup_status < 0) {
+                if (status < 0) {
+                    log_error("AD9361 RX FIR configuration returned %s; "
+                              "cleanup also returned %s\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(status)),
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(cleanup_status)));
+                } else {
+                    log_error("AD9361 RX FIR cleanup failed (%s)\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(cleanup_status)));
+                }
+                if (status >= 0)
+                    status = cleanup_status;
+            }
+            RETURN_ERROR_AD9361("AD9361 RX FIR configuration", status);
+        }
         CHECK_AD936X(ad9361_set_rx_fir_en_dis(phy, enable));
 
         board_data->rxfir = rxfir;
