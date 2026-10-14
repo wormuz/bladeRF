@@ -2882,6 +2882,14 @@ int main(void)
                     "TRX FIR loader left stale cleanup status on rejection\n");
             return EXIT_FAILURE;
         }
+        cleanup_status = 123;
+        if (ad9361_set_trx_path_clks_with_cleanup(
+                NULL, NULL, NULL, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "Clock-plan API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
     }
 
     /* A failed filter/calibration/tracking/ENSM step preserves the last
