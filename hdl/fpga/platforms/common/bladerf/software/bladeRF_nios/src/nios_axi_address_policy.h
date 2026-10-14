@@ -12,9 +12,9 @@ static inline bool nios_axi_address_valid(uint32_t address)
     return address <= UINT16_MAX;
 }
 
-/* The FPGA top level warns that losing the AD9361 interface clock can stall
- * its register-access path. Check the independently sampled watchdog bit
- * before issuing MMIO; the guard also rejects malformed addresses. */
+/* Reject known AD9361 interface-clock loss before issuing MMIO. The FPGA AXI
+ * front end separately returns a bounded error if a downstream register ack
+ * is lost; this guard provides an earlier failure at the NIOS boundary. */
 static inline bool nios_axi_access_allowed(uint32_t address,
                                           bool if_clock_alive)
 {

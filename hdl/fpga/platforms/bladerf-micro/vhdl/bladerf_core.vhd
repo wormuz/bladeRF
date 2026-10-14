@@ -588,8 +588,9 @@ begin
         );
 
     -- GPI[27] is reserved in the control PIO. It carries an independent
-    -- alive indication so NIOS can reject AD9361 AXI initialization before
-    -- an absent if_l_clk can hold Avalon waitrequest indefinitely.
+    -- alive indication so NIOS can reject AD9361 register access early when
+    -- if_l_clk is absent. The up_axi front end has a separate system-clock
+    -- timeout that returns an AXI error if a downstream register ack is lost.
     nios_gpio_input_pack : process(all)
         variable gpio_input : std_logic_vector(31 downto 0);
     begin
