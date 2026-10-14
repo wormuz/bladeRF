@@ -621,6 +621,34 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                  * cleanup; terminal queue retirement stays centralized. */
                 q->progress_sequence++;
                 break;
+            } else if (state.fir_enable_job_pending) {
+                step_status = ad9361_fir_enable_transaction_poll(
+                    state.phy, &state.fir_enable_job);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                rfic_command_record_cleanup_error(
+                    state.fir_enable_job.cleanup_status);
+                state.fir_enable_job_pending = false;
+                if (step_status < 0) {
+                    rfic_command_record_error(step_status);
+                    state.fir_enable_resume_command = false;
+                    if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
+                        state.init_nested_status = step_status;
+                        state.init_nested_complete = true;
+                        q->progress_sequence++;
+                        break;
+                    }
+                } else {
+                    /* The next callback pass publishes the filter cache (or
+                     * advances the INIT tail) without replaying coefficient
+                     * writes or starting another calibration. */
+                    state.fir_enable_resume_command = true;
+                    q->progress_sequence++;
+                    break;
+                }
             } else if (state.rfpll_job_pending) {
                 step_status = ad9361_rfpll_clock_transaction_poll(
                     state.phy, &state.rfpll_job);
@@ -858,7 +886,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                         state.sample_rate_job_pending,
                         state.bandwidth_job_pending,
                         state.init_job_pending || state.init_tail_pending ||
-                        state.rfpll_job_pending)) {
+                        state.rfpll_job_pending ||
+                        state.fir_enable_job_pending)) {
                     q->progress_sequence++;
                     break;
                 }
@@ -1166,7 +1195,7 @@ bool rfic_command_worker_active(void)
                state.rfdc_job_pending, state.tx_quad_job_pending,
                state.sample_rate_job_pending, state.bandwidth_job_pending,
                state.init_job_pending || state.init_tail_pending ||
-               state.rfpll_job_pending);
+               state.rfpll_job_pending || state.fir_enable_job_pending);
 }
 
 bool rfic_command_owns_device(void)
@@ -1179,7 +1208,7 @@ bool rfic_command_owns_device(void)
             state.rfdc_job_pending, state.tx_quad_job_pending,
             state.sample_rate_job_pending, state.bandwidth_job_pending,
             state.init_job_pending || state.init_tail_pending ||
-                state.rfpll_job_pending),
+                state.rfpll_job_pending || state.fir_enable_job_pending),
         adi_fastlock_recall_active() || adi_fastlock_load_active());
 }
 

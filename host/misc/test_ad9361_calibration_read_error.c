@@ -3027,6 +3027,11 @@ int main(void)
             ad9361_gt(NULL) != 0 ||
             ad9361_setup(NULL) != -EINVAL ||
             ad9361_validate_enable_fir(NULL) != -EINVAL ||
+            ad9361_fir_enable_transaction_start(
+                NULL, false, 1,
+                &(struct ad9361_fir_enable_transaction){0}) != -EINVAL ||
+            ad9361_fir_enable_transaction_poll(
+                NULL, &(struct ad9361_fir_enable_transaction){0}) != -EINVAL ||
             ad9361_register_clocks(NULL) != -EINVAL ||
             ad9361_unregister_clocks(NULL) != -EINVAL ||
             ad9361_rssi_gain_step_calib(NULL) != -EINVAL ||
@@ -3133,6 +3138,62 @@ int main(void)
             cleanup_status != 0) {
             fprintf(stderr,
                     "Calibration API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* The retained FIR API must keep the legacy no-op path inert and must
+     * refuse an asynchronous call that would enter the synchronous digital
+     * interface tune path on platforms other than the xA4 policy. */
+    {
+        struct ad9361_phy_platform_data fir_pdata = {
+            .rx2tx2 = true,
+        };
+        struct ad9361_rf_phy fir_phy = {
+            .spi = &spi,
+            .pdata = &fir_pdata,
+            .bypass_rx_fir = true,
+            .bypass_tx_fir = true,
+            .fir_config_valid = true,
+        };
+        struct ad9361_fir_enable_transaction fir_job = {0};
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+
+        ret = ad9361_fir_enable_transaction_start(
+            &fir_phy, false, 0, &fir_job);
+        if (ret != 0 || !fir_job.terminal || fir_job.active ||
+            ad9361_fir_enable_transaction_poll(&fir_phy, &fir_job) != 0 ||
+            ad9361_operation_busy(&fir_phy) || read_count != reads_before ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR retained no-op performed work or held ownership\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(&fir_job, 0, sizeof(fir_job));
+        fir_phy.fir_config_valid = false;
+        fir_pdata.dig_interface_tune_fir_disable = 0;
+        ret = ad9361_fir_enable_transaction_start(
+            &fir_phy, false, 0, &fir_job);
+        if (ret != -EOPNOTSUPP || fir_job.active ||
+            !fir_phy.bypass_rx_fir || read_count != reads_before ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR async API entered unsupported digital tune path\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(&fir_job, 0, sizeof(fir_job));
+        fir_pdata.dig_interface_tune_fir_disable = 1;
+        fir_pdata.bb_clk_change_dig_tune_en = true;
+        ret = ad9361_fir_enable_transaction_start(
+            &fir_phy, false, 0, &fir_job);
+        if (ret != -EOPNOTSUPP || fir_job.active ||
+            !fir_phy.bypass_rx_fir || read_count != reads_before ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR async API accepted blocking clock-change tune\n");
             return EXIT_FAILURE;
         }
     }

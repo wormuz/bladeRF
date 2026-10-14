@@ -187,6 +187,12 @@ enum bladerf_rfic_progress_phase_class {
     BLADERF_RFIC_PROGRESS_PHASE_SAMPLE_RATE = 4,
     BLADERF_RFIC_PROGRESS_PHASE_BANDWIDTH = 5,
     BLADERF_RFIC_PROGRESS_PHASE_RFPLL = 6,
+    BLADERF_RFIC_PROGRESS_PHASE_FIR = 7,
+};
+
+enum bladerf_rfic_progress_fir_step {
+    BLADERF_RFIC_PROGRESS_FIR_CLOCK_CHAIN = 0,
+    BLADERF_RFIC_PROGRESS_FIR_BANDWIDTH_TXQ = 1,
 };
 
 /* Coarse INIT subphases carried in the low nibble of PROGRESS. Keep these
@@ -215,7 +221,7 @@ static inline uint8_t bladerf_rfic_progress_phase_encode(uint8_t phase_class,
                                                          uint8_t phase_step)
 {
     if (phase_class == 0 ||
-        phase_class > BLADERF_RFIC_PROGRESS_PHASE_RFPLL ||
+        phase_class > BLADERF_RFIC_PROGRESS_PHASE_FIR ||
         phase_step > BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK) {
         return 0;
     }
@@ -234,7 +240,7 @@ static inline bool bladerf_rfic_progress_phase_is_tagged(uint8_t phase)
 
     return (phase & BLADERF_RFIC_PROGRESS_PHASE_TAG) != 0 &&
            phase_class >= BLADERF_RFIC_PROGRESS_PHASE_INIT &&
-           phase_class <= BLADERF_RFIC_PROGRESS_PHASE_RFPLL;
+           phase_class <= BLADERF_RFIC_PROGRESS_PHASE_FIR;
 }
 
 static inline uint8_t bladerf_rfic_progress_phase_class(uint8_t phase)
@@ -273,6 +279,38 @@ static inline const char *bladerf_rfic_progress_init_step_name(uint8_t phase)
     case BLADERF_RFIC_PROGRESS_INIT_TAIL_FINAL_LO_OUTPUT:
         return "tail-final-lo-output";
     default: return "unknown-init-step";
+    }
+}
+
+static inline const char *bladerf_rfic_progress_phase_name(uint8_t phase)
+{
+    if (!bladerf_rfic_progress_phase_is_tagged(phase))
+        return "untagged";
+
+    switch (bladerf_rfic_progress_phase_class(phase)) {
+    case BLADERF_RFIC_PROGRESS_PHASE_INIT:
+        return bladerf_rfic_progress_init_step_name(phase);
+    case BLADERF_RFIC_PROGRESS_PHASE_RFDC:
+        return "rfdc-calibration";
+    case BLADERF_RFIC_PROGRESS_PHASE_TXQ:
+        return "tx-quad-calibration";
+    case BLADERF_RFIC_PROGRESS_PHASE_SAMPLE_RATE:
+        return "sample-rate";
+    case BLADERF_RFIC_PROGRESS_PHASE_BANDWIDTH:
+        return "bandwidth";
+    case BLADERF_RFIC_PROGRESS_PHASE_RFPLL:
+        return "rfpll";
+    case BLADERF_RFIC_PROGRESS_PHASE_FIR:
+        switch (bladerf_rfic_progress_phase_step(phase)) {
+        case BLADERF_RFIC_PROGRESS_FIR_CLOCK_CHAIN:
+            return "fir-clock-chain";
+        case BLADERF_RFIC_PROGRESS_FIR_BANDWIDTH_TXQ:
+            return "fir-bandwidth-txq";
+        default:
+            return "fir-unknown";
+        }
+    default:
+        return "unknown";
     }
 }
 

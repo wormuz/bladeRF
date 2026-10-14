@@ -317,7 +317,7 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                 (unsigned int)progress_transaction_id,
                                 (unsigned int)progress_command,
                                 (unsigned int)progress_phase_or_result,
-                                bladerf_rfic_progress_init_step_name(
+                                bladerf_rfic_progress_phase_name(
                                     progress_phase_or_result),
                                 progress_sequence);
                     return BLADERF_ERR_TIMEOUT;
@@ -378,7 +378,7 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                         (unsigned int)progress_transaction_id,
                         (unsigned int)progress_command,
                         (unsigned int)progress_phase_or_result,
-                        bladerf_rfic_progress_init_step_name(
+                        bladerf_rfic_progress_phase_name(
                             progress_phase_or_result),
                         progress_sequence);
         }

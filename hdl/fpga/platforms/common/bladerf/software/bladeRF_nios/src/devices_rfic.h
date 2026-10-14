@@ -141,6 +141,16 @@ struct rfic_state {
     bool bandwidth_job_pending;
     bool bandwidth_resume_command;
 
+    /* FIR configure/enable uses a retained ADI transaction because enable
+     * validation nests clock-chain, analog-filter, and TXQ work. Preserve the
+     * command identity so a resumed callback commits cache only, never reloads
+     * coefficients or restarts calibration. */
+    struct ad9361_fir_enable_transaction fir_enable_job;
+    bool fir_enable_job_pending;
+    bool fir_enable_resume_command;
+    bladerf_channel fir_enable_channel;
+    uint32_t fir_enable_filter;
+
     /* RFDC calibration history is per selected RX RF input. AD9361 keeps
      * separate RFDC values for input A and inputs B/C, so frequency-only
      * history can reuse a correction from the wrong input after a port

@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "rfic_progress_policy.h"
 
@@ -75,6 +76,8 @@ int main(void)
             BLADERF_RFIC_PROGRESS_PHASE_INIT, 15);
         const uint8_t rfpll_phase = bladerf_rfic_progress_phase_encode(
             BLADERF_RFIC_PROGRESS_PHASE_RFPLL, 3);
+        const uint8_t fir_phase = bladerf_rfic_progress_phase_encode(
+            BLADERF_RFIC_PROGRESS_PHASE_FIR, 1);
 
         assert(bladerf_rfic_progress_phase_is_tagged(rfdc_phase));
         assert(bladerf_rfic_progress_phase_class(rfdc_phase) ==
@@ -87,13 +90,22 @@ int main(void)
         assert(bladerf_rfic_progress_phase_class(rfpll_phase) ==
                BLADERF_RFIC_PROGRESS_PHASE_RFPLL);
         assert(bladerf_rfic_progress_phase_step(rfpll_phase) == 3);
+        assert(bladerf_rfic_progress_phase_is_tagged(fir_phase));
+        assert(bladerf_rfic_progress_phase_class(fir_phase) ==
+               BLADERF_RFIC_PROGRESS_PHASE_FIR);
+        assert(bladerf_rfic_progress_phase_step(fir_phase) == 1);
+        assert(strcmp(bladerf_rfic_progress_phase_name(fir_phase),
+                      "fir-bandwidth-txq") == 0);
+        assert(strcmp(bladerf_rfic_progress_phase_name(rfdc_phase),
+                      "rfdc-calibration") == 0);
+        assert(strcmp(bladerf_rfic_progress_phase_name(init_phase),
+                      bladerf_rfic_progress_init_step_name(init_phase)) == 0);
         assert(!bladerf_rfic_progress_phase_is_tagged(
             BLADERF_RFIC_RESULT_TIMEOUT));
         assert(!bladerf_rfic_progress_phase_is_tagged(
             BLADERF_RFIC_RESULT_NO_RESULT));
         assert(bladerf_rfic_progress_phase_encode(0, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(8, 0) == 0);
-        assert(bladerf_rfic_progress_phase_encode(7, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(1, 16) == 0);
 
         /* INIT's nested constructor/tail uses stable step codes in the same
