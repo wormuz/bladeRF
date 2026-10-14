@@ -95,7 +95,7 @@ static int32_t _rfic_read_cal_done(struct ad9361_rf_phy *phy, uint32_t mask,
     return 0;
 }
 
-/* An LO jump of this size or more invalidates the RF DC offset
+/* An LO jump strictly greater than this size invalidates the RF DC offset
  * calibration for the previous frequency (ADI EngineerZone, "AD9361
  * RF DC offset calibration timeout": "if the frequency change is more
  * than 100MHz, you need to run DC offset and QEC init cals in order

@@ -167,7 +167,7 @@ static inline bool rfic_rfdc_calibration_required(uint64_t last_hz,
                             ? requested_hz - last_hz
                             : last_hz - requested_hz;
 
-    return last_hz == 0 || delta_hz >= threshold_hz;
+    return last_hz == 0 || delta_hz > threshold_hz;
 }
 
 /* UG-570's RFDC result is selected by the active RX RF input. A frequency
