@@ -693,7 +693,7 @@ int main(void)
             fprintf(stderr, "band transaction start mutated hardware or lost owner\n");
             return EXIT_FAILURE;
         }
-        while (polls++ < 32) {
+        while (polls++ < 128) {
             unsigned gpio_at_start = gpio_direction_count;
             uint32_t delay_us =
                 ad9361_ext_band_transaction_poll_delay_us(&band_job);
@@ -713,7 +713,7 @@ int main(void)
             if (step == 0)
                 break;
         }
-        if (!band_job.terminal || band_job.terminal_status != 0 || polls >= 32 ||
+        if (!band_job.terminal || band_job.terminal_status != 0 || polls >= 128 ||
             gpio_direction_count != gpio_before + 3 ||
             gpio_direction_ops[gpio_before] != 0 ||
             gpio_direction_ops[gpio_before + 1] != 1 ||
@@ -724,17 +724,56 @@ int main(void)
             return EXIT_FAILURE;
         }
 
+        /* A malformed graph is rejected by a bounded poll before mutation. */
+        {
+            struct ad9361_band_setting malformed = {
+                .freq_min = 1800000000ULL,
+                .freq_max = 1900000000ULL,
+                .pre_seq_len = 1,
+                .pre_seq = NULL,
+            };
+            struct ad9361_band_setting *saved_target = settings[0];
+            settings[0] = &malformed;
+            memset(&band_job, 0, sizeof(band_job));
+            if (ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job) != 0 ||
+                !band_job.active || !band_job.validation_pending ||
+                gpio_direction_count != gpio_before + 3 ||
+                ad9361_ext_band_transaction_poll(&band_phy, &band_job) !=
+                    -EINVAL ||
+                !band_job.terminal || band_job.mutation_started ||
+                band_ctl.current_rx_setting != &root) {
+                fprintf(stderr,
+                        "band graph validation was not retained before mutation\n");
+                return EXIT_FAILURE;
+            }
+            settings[0] = saved_target;
+        }
+
         /* A cycle is rejected before mutation and leaves the valid cache intact. */
         {
             struct ad9361_band_setting *saved_settings = settings[0];
+            int32_t step;
+            unsigned cycle_polls = 0;
             settings[0] = &pre;
             pre.freq_min = 1800000000ULL;
             pre.freq_max = 1900000000ULL;
             pre.pre_seq = &pre;
             pre.pre_seq_len = 1;
             memset(&band_job, 0, sizeof(band_job));
-            if (ad9361_ext_band_transaction_start(
-                    &band_phy, false, 1835000000ULL, &band_job) != -ELOOP ||
+            step = ad9361_ext_band_transaction_start(
+                &band_phy, false, 1835000000ULL, &band_job);
+            while (step == 0 || step == 1) {
+                if (cycle_polls++ >= 128) {
+                    step = -E2BIG;
+                    break;
+                }
+                step = ad9361_ext_band_transaction_poll(&band_phy,
+                                                        &band_job);
+                if (step != 1)
+                    break;
+            }
+            if (step != -ELOOP || !band_job.terminal ||
                 gpio_direction_count != gpio_before + 3 ||
                 band_ctl.current_rx_setting != &root) {
                 fprintf(stderr, "band cycle was not rejected before mutation\n");
