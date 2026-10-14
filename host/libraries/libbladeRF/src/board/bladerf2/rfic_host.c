@@ -294,6 +294,7 @@ static int _rfic_host_initialize(struct bladerf *dev)
         AD9361_InitParam init_params =
             *(AD9361_InitParam *)board_data->rfic_init_params;
         int32_t init_status;
+        int32_t init_cleanup_status = 0;
         /* The no_os_axi_io accessors (FPGA AXI AD9361 core over NIOS) have no
          * context argument, so bind this thread to the device for init. */
         bladerf2_axi_io_set_dev(dev);
@@ -304,8 +305,16 @@ static int _rfic_host_initialize(struct bladerf *dev)
         init_params.gpio_cal_sw1.extra = dev;
         init_params.gpio_cal_sw2.extra = dev;
 
-        init_status = ad9361_init(&phy, &init_params);
+        init_status = ad9361_init_with_cleanup(
+            &phy, &init_params, &init_cleanup_status);
         if (init_status < 0) {
+            if (init_cleanup_status < 0) {
+                log_error("AD9361 init failed (%s); cleanup also failed (%s)\n",
+                          bladerf_strerror(
+                              errno_ad9361_to_bladerf(init_status)),
+                          bladerf_strerror(
+                              errno_ad9361_to_bladerf(init_cleanup_status)));
+            }
             /* A quarantined start can make cleanup return ownership of a
              * partial PHY. Retain it so the next INIT can assert RESETB
              * before releasing its resources. */
