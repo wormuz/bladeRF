@@ -695,6 +695,62 @@ static void test_scheduled_retune2_timeout_retains_and_drains_late_ack(void)
     teardown(&usb);
 }
 
+static void test_tokenless_retune2_timeout_recovers_after_session_reset(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_8x32_pack(request,
+                       NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                       false, 0, 0);
+    nios_pkt_8x32_resp_pack(fake.scripted_responses[0],
+                            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                            false, 0, 0x101, true);
+    fake.scripted_response_count = 1;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+
+    fake.fail_call = fake.calls + 2;
+    nios_pkt_retune2_pack(request, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0, 0x44);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+    assert(usb.peripheral->pending_retune2_session_generation == 0x101);
+
+    /* A session-generation read in the same session cannot prove that a
+     * deferred tokenless operation's response has been retired. */
+    fake.fail_call = 0;
+    nios_pkt_8x32_resp_pack(fake.scripted_responses[1],
+                            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                            false, 0, 0x101, true);
+    fake.scripted_response_count = 2;
+    nios_pkt_8x32_pack(request,
+                       NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                       false, 0, 0);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+
+    /* A confirmed new FPGA session has discarded every old-session reply. */
+    nios_pkt_8x32_resp_pack(fake.scripted_responses[2],
+                            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                            false, 0, 0x102, true);
+    fake.scripted_response_count = 3;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+    assert(!usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+    assert(usb.peripheral->command_session_generation == 0x102);
+    teardown(&usb);
+}
+
 static void test_tagged_write_partial_timeout_fails_closed(void)
 {
     struct bladerf_usb usb;
@@ -1359,6 +1415,7 @@ int main(void)
     test_retune2_response_echoes_request_token();
     test_tokened_now_async_acceptance_response();
     test_scheduled_retune2_timeout_retains_and_drains_late_ack();
+    test_tokenless_retune2_timeout_recovers_after_session_reset();
     test_success();
     test_in_timeout_fails_closed();
     test_zero_byte_read_timeout_recovers_through_ordered_barrier();

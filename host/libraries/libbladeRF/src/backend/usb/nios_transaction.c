@@ -839,10 +839,29 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
                     (response[NIOS_PKT_8x32_IDX_FLAGS] &
                      NIOS_PKT_8x32_FLAG_SUCCESS) != 0) {
                     uint32_t value;
+                    uint32_t previous_generation =
+                        state->command_session_generation;
+                    bool previous_generation_valid =
+                        state->command_session_generation_valid;
 
                     nios_pkt_8x32_unpack(buffer, NULL, NULL, NULL, &value);
                     state->command_session_generation = value;
                     state->command_session_generation_valid = true;
+
+                    /* A new FPGA command-session generation means its UART
+                     * response queue was reset, so an unanswered RETUNE2
+                     * from the old session can no longer arrive. A read in
+                     * the same generation is not an ordering barrier for a
+                     * deferred tokenless operation and must not clear it. */
+                    if (recovering_pending_retune2 &&
+                        state->pending_retune2_response &&
+                        previous_generation_valid &&
+                        value != state->pending_retune2_session_generation) {
+                        state->pending_retune2_response = false;
+                        memset(state->pending_retune2_request, 0,
+                               sizeof(state->pending_retune2_request));
+                        state->pending_retune2_session_generation = 0;
+                    }
                 }
                 if (recovering_pending_retune2 &&
                     state->pending_retune2_response &&
@@ -891,8 +910,7 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
         if (status == BLADERF_ERR_TIMEOUT) {
             if (response_bytes == 0 && validate_echo &&
                 request[NIOS_PKT_RETUNE2_IDX_MAGIC] ==
-                    NIOS_PKT_RETUNE2_MAGIC &&
-                nios_pkt_retune2_unpack_request_token(request) != 0) {
+                    NIOS_PKT_RETUNE2_MAGIC) {
                 if (!state->command_session_generation_valid) {
                     state->desynchronized = true;
                     status = BLADERF_ERR_UNEXPECTED;
