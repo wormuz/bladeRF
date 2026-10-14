@@ -102,7 +102,11 @@ add_instance rfic_monotonic_timer altera_avalon_timer
 set_instance_parameter_value rfic_monotonic_timer {alwaysRun} {1}
 set_instance_parameter_value rfic_monotonic_timer {counterSize} {64}
 set_instance_parameter_value rfic_monotonic_timer {fixedPeriod} {1}
-set_instance_parameter_value rfic_monotonic_timer {period} {18446744073709551615}
+# Quartus 25.1 validates this parameter through floating-point arithmetic;
+# UINT64_MAX rounds up to 2^64 and is rejected as larger than a 64-bit timer.
+# Keep the free-running period at the nearest safely representable value
+# below that boundary (the counter still wraps only after ~5,800 years).
+set_instance_parameter_value rfic_monotonic_timer {period} {18446744073709547520}
 set_instance_parameter_value rfic_monotonic_timer {periodUnits} {CLOCKS}
 set_instance_parameter_value rfic_monotonic_timer {resetOutput} {0}
 set_instance_parameter_value rfic_monotonic_timer {snapshot} {1}
@@ -864,10 +868,10 @@ set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 arbit
 set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 baseAddress {0x9760}
 set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 defaultConnection {0}
 
-add_connection nios2.data_master rfic_monotonic_timer.avalon_slave
-set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave baseAddress {0x9840}
-set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave defaultConnection {0}
+add_connection nios2.data_master rfic_monotonic_timer.s1
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.s1 arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.s1 baseAddress {0x9840}
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.s1 defaultConnection {0}
 
 add_connection nios2.data_master wb_timeout_status.s1
 set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 arbitrationPriority {1}

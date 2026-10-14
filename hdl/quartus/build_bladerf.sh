@@ -490,6 +490,8 @@ else
         --script $(readlink -f $QUARTUS_ROOTDIR/..)/nios2eds/sdk2/bin/bsp-set-defaults.tcl \
         --sopc nios_system.sopcinfo \
         --set hal.max_file_descriptors 4 \
+        --set hal.sys_clk_timer none \
+        --set hal.timestamp_timer rfic_monotonic_timer \
         --set hal.enable_instruction_related_exceptions_api false \
         --set hal.make.bsp_cflags_optimization "-Os" \
         --set hal.enable_exit 0 \

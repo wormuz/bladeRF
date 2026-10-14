@@ -92,6 +92,7 @@ add_library(ad936x STATIC
 
 target_compile_options(ad936x PRIVATE
     -DBLADERF_NIOS_BUILD -DNUAND_MODIFICATIONS -Wall -Os
+    -ffunction-sections -fdata-sections
     -include ${LIBAD936X_PLATFORM_DIR}/nios_stdio_guard.h
 )
 
@@ -193,6 +194,7 @@ endif()
 set(LIBAD936X_UPSTREAM_FILES
     ad9361.c
     ad9361.h
+    ad9361_tx_quad_cal_policy.h
     ad9361_api.c
     ad9361_api.h
     ad9361_conv.c
