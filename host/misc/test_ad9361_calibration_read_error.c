@@ -886,6 +886,60 @@ int main(void)
         }
     }
 
+    /* Retained parent transactions must carry nested cleanup failures all
+     * the way to the constructor result, without replacing the primary
+     * operation error when both failed. */
+    {
+        struct ad9361_rf_phy phy = {0};
+        struct ad9361_setup_calibration_transaction calibration = {
+            .phy = &phy,
+            .rfdc_job = { .cleanup_status = -EIO },
+        };
+        struct ad9361_setup_transaction setup = {
+            .phy = &phy,
+            .calibration_job = { .cleanup_status = -ETIMEDOUT },
+        };
+        struct ad9361_init_transaction init = {
+            .cleanup_status = -EIO,
+        };
+        int32_t status;
+
+        phy.setup_calibration_transaction = &calibration;
+        status = ad9361_setup_calibration_transaction_finish(
+            &calibration, -ETIMEDOUT);
+        if (status != -ETIMEDOUT ||
+            calibration.cleanup_status != -EIO ||
+            phy.setup_calibration_transaction != NULL) {
+            fprintf(stderr,
+                    "Setup calibration lost nested cleanup or primary status\n");
+            return EXIT_FAILURE;
+        }
+
+        phy.setup_transaction = &setup;
+        status = ad9361_setup_transaction_finish(&setup, 0);
+        if (status != -ETIMEDOUT ||
+            setup.cleanup_status != -ETIMEDOUT ||
+            phy.setup_transaction != NULL) {
+            fprintf(stderr,
+                    "Setup parent reported success after child cleanup failure\n");
+            return EXIT_FAILURE;
+        }
+
+        status = ad9361_init_transaction_finish(&init, 0);
+        if (status != -EIO || init.terminal_status != -EIO) {
+            fprintf(stderr,
+                    "Init transaction reported success after cleanup failure\n");
+            return EXIT_FAILURE;
+        }
+        status = ad9361_init_transaction_finish(&init, -ETIMEDOUT);
+        if (status != -ETIMEDOUT || init.terminal_status != -ETIMEDOUT ||
+            init.cleanup_status != -EIO) {
+            fprintf(stderr,
+                    "Init cleanup replaced primary operation failure\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* The Gm subtable is an ordered indirect write port. Its retained setup
      * phase must preserve every address/data/commit operation while yielding
      * after at most one SPI write and the original 2 us inter-row interval. */
