@@ -12,6 +12,11 @@
 
 static int32_t fake_clock_chain_status;
 static unsigned fake_bandwidth_update_count;
+static unsigned fake_bandwidth_update_fail_call;
+static int32_t fake_bandwidth_update_fail_status;
+static unsigned fake_bandwidth_cleanup_fail_call;
+static int32_t fake_bandwidth_cleanup_fail_status;
+static int32_t fake_clock_chain_cleanup_status;
 static bool fake_sample_rate_transaction_enabled;
 static int32_t fake_sample_rate_calculate_status;
 static int32_t fake_sample_rate_clock_readback_status;
@@ -39,6 +44,9 @@ static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
                                         const uint32_t *rx_path_clks,
                                         const uint32_t *tx_path_clks);
+static int32_t test_set_trx_clock_chain_with_cleanup(
+    struct ad9361_rf_phy *phy, const uint32_t *rx_path_clks,
+    const uint32_t *tx_path_clks, int32_t *cleanup_status);
 static int32_t test_clock_chain_transaction_start(
     struct ad9361_rf_phy *phy, const uint32_t *rx_path_clks,
     const uint32_t *tx_path_clks,
@@ -57,6 +65,9 @@ static int32_t test_rf_bandwidth_transaction_poll(
     struct ad9361_rf_bandwidth_transaction *transaction);
 static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
                                         uint32_t rx_bw, uint32_t tx_bw);
+static int32_t test_update_rf_bandwidth_with_cleanup(
+    struct ad9361_rf_phy *phy, uint32_t rx_bw, uint32_t tx_bw,
+    int32_t *cleanup_status);
 static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
                                        uint8_t index);
 static int32_t test_axi_adc_remove(struct axi_adc *adc);
@@ -72,24 +83,28 @@ static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
 
 #define ad9361_calculate_rf_clock_chain test_calculate_rf_clock_chain
 #define ad9361_set_trx_clock_chain test_set_trx_clock_chain
+#define ad9361_set_trx_clock_chain_with_cleanup test_set_trx_clock_chain_with_cleanup
 #define ad9361_clock_chain_transaction_start test_clock_chain_transaction_start
 #define ad9361_clock_chain_transaction_poll test_clock_chain_transaction_poll
 #define ad9361_get_trx_clock_chain test_get_trx_clock_chain
 #define ad9361_rf_bandwidth_transaction_start test_rf_bandwidth_transaction_start
 #define ad9361_rf_bandwidth_transaction_poll test_rf_bandwidth_transaction_poll
 #define ad9361_update_rf_bandwidth test_update_rf_bandwidth
+#define ad9361_update_rf_bandwidth_with_cleanup test_update_rf_bandwidth_with_cleanup
 #define ad9361_clk_mux_set_parent test_clk_mux_set_parent
 #define axi_adc_remove test_axi_adc_remove
 #define axi_dac_remove test_axi_dac_remove
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
 #undef ad9361_calculate_rf_clock_chain
 #undef ad9361_set_trx_clock_chain
+#undef ad9361_set_trx_clock_chain_with_cleanup
 #undef ad9361_clock_chain_transaction_start
 #undef ad9361_clock_chain_transaction_poll
 #undef ad9361_get_trx_clock_chain
 #undef ad9361_rf_bandwidth_transaction_start
 #undef ad9361_rf_bandwidth_transaction_poll
 #undef ad9361_update_rf_bandwidth
+#undef ad9361_update_rf_bandwidth_with_cleanup
 #undef ad9361_clk_mux_set_parent
 #undef axi_adc_remove
 #undef axi_dac_remove
@@ -306,7 +321,46 @@ static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
     (void)rx_bw;
     (void)tx_bw;
     ++fake_bandwidth_update_count;
+    if (fake_bandwidth_update_fail_call == fake_bandwidth_update_count)
+        return fake_bandwidth_update_fail_status;
     return 0;
+}
+
+static int32_t test_set_trx_clock_chain_with_cleanup(
+    struct ad9361_rf_phy *phy, const uint32_t *rx_path_clks,
+    const uint32_t *tx_path_clks, int32_t *cleanup_status)
+{
+    int32_t ret;
+
+    if (!fake_sample_rate_transaction_enabled)
+        return ad9361_set_trx_clock_chain_with_cleanup(
+            phy, rx_path_clks, tx_path_clks, cleanup_status);
+    ret = test_set_trx_clock_chain(phy, rx_path_clks, tx_path_clks);
+    if (cleanup_status)
+        *cleanup_status = fake_clock_chain_cleanup_status;
+    if (ret >= 0 && fake_clock_chain_cleanup_status < 0)
+        ret = fake_clock_chain_cleanup_status;
+    return ret;
+}
+
+static int32_t test_update_rf_bandwidth_with_cleanup(
+    struct ad9361_rf_phy *phy, uint32_t rx_bw, uint32_t tx_bw,
+    int32_t *cleanup_status)
+{
+    int32_t ret;
+
+    if (!fake_sample_rate_transaction_enabled)
+        return ad9361_update_rf_bandwidth_with_cleanup(
+            phy, rx_bw, tx_bw, cleanup_status);
+    ret = test_update_rf_bandwidth(phy, rx_bw, tx_bw);
+    if (cleanup_status) {
+        *cleanup_status =
+            fake_bandwidth_cleanup_fail_call == fake_bandwidth_update_count
+                ? fake_bandwidth_cleanup_fail_status : 0;
+    }
+    if (ret >= 0 && cleanup_status && *cleanup_status < 0)
+        ret = *cleanup_status;
+    return ret;
 }
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_conv.c"
@@ -7792,6 +7846,64 @@ int main(void)
                     sample_phy.current_bw_valid,
                     fake_sample_rate_bw_start_count);
             return EXIT_FAILURE;
+        }
+
+        /* The synchronous clock-plan wrapper must retain the operation
+         * failure when old-bandwidth restoration also fails, and return the
+         * latter through its cleanup channel. */
+        {
+            uint32_t requested_rx[NUM_RX_CLOCKS];
+            uint32_t requested_tx[NUM_TX_CLOCKS];
+            int32_t cleanup_status = 0;
+
+            fake_sample_rate_rx_clks[BBPLL_FREQ] = 983040000;
+            fake_sample_rate_rx_clks[ADC_FREQ] = 491520000;
+            fake_sample_rate_rx_clks[RX_SAMPL_FREQ] = 30720000;
+            fake_sample_rate_tx_clks[BBPLL_FREQ] = 983040000;
+            fake_sample_rate_tx_clks[DAC_FREQ] = 491520000;
+            fake_sample_rate_tx_clks[TX_SAMPL_FREQ] = 30720000;
+            memcpy(requested_rx, fake_sample_rate_rx_clks,
+                   sizeof(requested_rx));
+            memcpy(requested_tx, fake_sample_rate_tx_clks,
+                   sizeof(requested_tx));
+            requested_rx[RX_SAMPL_FREQ] = 15360000;
+            requested_tx[TX_SAMPL_FREQ] = 15360000;
+            sample_phy.calibration_state_unknown = false;
+            sample_phy.current_bw_valid = true;
+            sample_phy.current_rx_bw_Hz = 18000000;
+            sample_phy.current_tx_bw_Hz = 18000000;
+            fake_sample_rate_clock_set_count = 0;
+            fake_sample_rate_clock_set_attempt_count = 0;
+            fake_sample_rate_clock_set_fail_attempt = 0;
+            fake_clock_chain_status = 0;
+            fake_clock_chain_cleanup_status = 0;
+            fake_bandwidth_update_count = 0;
+            fake_bandwidth_update_fail_call = 1;
+            fake_bandwidth_update_fail_status = -ETIMEDOUT;
+            fake_bandwidth_cleanup_fail_call = 2;
+            fake_bandwidth_cleanup_fail_status = -EACCES;
+
+            ret = ad9361_set_trx_path_clks_with_cleanup(
+                &sample_phy, requested_rx, requested_tx, &cleanup_status);
+            if (ret != -ETIMEDOUT || cleanup_status != -EACCES ||
+                !ad9361_calibration_state_unknown(&sample_phy) ||
+                sample_phy.current_bw_valid ||
+                fake_sample_rate_clock_set_count != 2 ||
+                fake_bandwidth_update_count != 2 ||
+                fake_sample_rate_rx_clks[RX_SAMPL_FREQ] != 30720000 ||
+                fake_sample_rate_tx_clks[TX_SAMPL_FREQ] != 30720000) {
+                fprintf(stderr,
+                        "Clock-plan rollback lost primary/cleanup outcome: "
+                        "ret=%" PRId32 " cleanup=%" PRId32
+                        " unknown=%d clock_sets=%u bw_updates=%u\n",
+                        ret, cleanup_status,
+                        ad9361_calibration_state_unknown(&sample_phy),
+                        fake_sample_rate_clock_set_count,
+                        fake_bandwidth_update_count);
+                return EXIT_FAILURE;
+            }
+            fake_bandwidth_update_fail_call = 0;
+            fake_bandwidth_cleanup_fail_call = 0;
         }
 
         fake_sample_rate_transaction_enabled = false;
