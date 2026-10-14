@@ -217,6 +217,7 @@ static void _rfic_fail_closed_after_path_mutation(struct rfic_state *state,
 
     RFIC_ERR(reason, -EIO);
     if (!rfic_force_rf_path_off()) {
+        rfic_command_record_cleanup_error(-EIO);
         DBG("%s: RFFE disconnect readback failed; reset remains required\n",
             __FUNCTION__);
     }
@@ -278,7 +279,8 @@ static bool _reset_rfic(bool state)
  * @return     true if successful, false if not
  */
 static bool _rfic_deinitialize(struct rfic_state *state,
-                               bool board_reset_asserted)
+                               bool board_reset_asserted,
+                               bool report_cleanup_errors)
 {
     state->frequency_invalid[BLADERF_RX] = true;
     state->frequency_invalid[BLADERF_TX] = true;
@@ -288,6 +290,8 @@ static bool _rfic_deinitialize(struct rfic_state *state,
 
     /* Unset RFFE bits controlling RFIC */
     const bool rffe_cleared = _clear_rffe_ctrl();
+    if (!rffe_cleared && report_cleanup_errors)
+        rfic_command_record_cleanup_error(-EIO);
     if (board_reset_asserted && !_reset_rfic(true)) {
         RFIC_ERR("AD9361 RESETB lost before PHY teardown", -EIO);
         return false;
@@ -318,6 +322,8 @@ static bool _rfic_deinitialize(struct rfic_state *state,
                 state->phy = NULL;
             if (remove_status < 0) {
                 state->calibration_faulted = true;
+                if (report_cleanup_errors)
+                    rfic_command_record_cleanup_error(remove_status);
                 RFIC_ERR("ad9361_remove", remove_status);
                 if (!rffe_cleared) {
                     _rfic_fail_closed_after_path_mutation(
@@ -857,7 +863,7 @@ static bool _rfic_standby(struct rfic_state *state)
 
     /* If we aren't initialized, just go directly to deinitialization */
     if (NULL == state->phy) {
-        return _rfic_deinitialize(state, false);
+        return _rfic_deinitialize(state, false, false);
     }
 
     /* Unset RFFE bits controlling RFIC */
@@ -1083,7 +1089,7 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
 
     switch (new_state) {
         case BLADERF_RFIC_INIT_STATE_OFF:
-            return _rfic_deinitialize(state, false);
+            return _rfic_deinitialize(state, false, false);
 
         case BLADERF_RFIC_INIT_STATE_ON:
             if (state->calibration_faulted) {
@@ -1098,7 +1104,7 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
                     RFIC_ERR("failed to assert AD9361 RESETB", -EIO);
                     return false;
                 }
-                if (!_rfic_deinitialize(state, true)) {
+                if (!_rfic_deinitialize(state, true, false)) {
                     DBG("%s: teardown failed before calibration recovery\n",
                         __FUNCTION__);
                     return false;
@@ -1128,7 +1134,7 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
              * state, whether its partial PHY was consumed or retained. Keep a
              * board-level fault so the next ON resets before retrying. */
             state->calibration_faulted = true;
-            if (!_rfic_deinitialize(state, false)) {
+            if (!_rfic_deinitialize(state, false, true)) {
                 DBG("%s: cleanup after failed initialization also failed\n",
                     __FUNCTION__);
             }

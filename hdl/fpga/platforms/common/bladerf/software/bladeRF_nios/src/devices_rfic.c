@@ -198,6 +198,7 @@ void rfic_fail_tx_quad_calibration(int32_t status,
         ad9361_calibration_state_unknown(state.phy)) {
         (void)rfic_latch_calibration_fault();
     } else if (!rfic_disable_tx_output()) {
+        rfic_command_record_cleanup_error(-EIO);
         RFIC_ERR("TX RFFE fail-closed disconnect", -EIO);
     }
 }
@@ -561,6 +562,7 @@ static bool rfic_latch_calibration_fault(void)
     state.calibration_faulted = true;
     state.init_state = BLADERF_RFIC_INIT_STATE_OFF;
     if (!rfic_force_rf_path_off()) {
+        rfic_command_record_cleanup_error(-EIO);
         RFIC_DBG("failed to disconnect RFFE after unknown calibration state\n");
     }
     return true;
