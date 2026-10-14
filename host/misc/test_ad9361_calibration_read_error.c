@@ -2047,6 +2047,8 @@ int main(void)
         struct rf_gain_ctrl gain_ctrl = {0};
         uint32_t rx_path_rates[NUM_RX_CLOCKS] = {0};
         uint32_t tx_path_rates[NUM_TX_CLOCKS] = {0};
+        uint32_t untouched_rx_path_rates[NUM_RX_CLOCKS] = {0};
+        uint32_t untouched_tx_path_rates[NUM_TX_CLOCKS] = {0};
         uint8_t fastlock_values[RX_FAST_LOCK_CONFIG_WORD_NUM] = {0};
         char fir_data[] = "x";
         unsigned initial_write_count = write_count;
@@ -2162,6 +2164,12 @@ int main(void)
             ad9361_get_rx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
             ad9361_get_tx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
             lo_frequency != UINT64_MAX ||
+            ad9361_get_trx_clock_chain(&cp_phy, rx_path_rates,
+                                       tx_path_rates) != -EBUSY ||
+            memcmp(rx_path_rates, untouched_rx_path_rates,
+                   sizeof(rx_path_rates)) != 0 ||
+            memcmp(tx_path_rates, untouched_tx_path_rates,
+                   sizeof(tx_path_rates)) != 0 ||
             ad9361_rssi_gain_step_calib(&cp_phy) != -EBUSY ||
             ad9361_rssi_program_lna_gain(&cp_phy) != -EBUSY ||
             ad9361_rssi_write_err_tbl(&cp_phy) != -EBUSY ||
