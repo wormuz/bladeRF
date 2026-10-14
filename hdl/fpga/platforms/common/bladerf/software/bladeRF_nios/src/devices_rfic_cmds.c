@@ -728,6 +728,12 @@ ad9361_init_ready:
 
         switch (state->init_tail_phase) {
         case RFIC_INIT_TAIL_RESET_LO:
+            if (!rfic_init_should_stage_reset_lo(
+                    dir == BLADERF_TX, restore_standby_state)) {
+                state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
+                state->init_tail_pending = true;
+                return true;
+            }
             state->init_nested_status = 0;
             if (!_rfic_cmd_wr_frequency_internal(
                     state, ch, RESET_FREQUENCY, true, true))
