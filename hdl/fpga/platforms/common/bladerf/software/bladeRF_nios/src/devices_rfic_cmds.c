@@ -1347,6 +1347,7 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
     bool converter_available = false;
     bool resumed = state->sample_rate_resume_command;
     int32_t status;
+    int32_t cleanup_status;
 
     if (resumed) {
         state->sample_rate_resume_command = false;
@@ -1402,8 +1403,15 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
         converter_available = state->phy->rx_adc != NULL;
 #endif
         if (converter_available) {
-            CHECK_BOOL(ad9361_dig_tune(state->phy, 61440000,
-                                       DO_IDELAY | DO_ODELAY));
+            cleanup_status = 0;
+            status = ad9361_dig_tune_with_cleanup(
+                state->phy, 61440000, DO_IDELAY | DO_ODELAY,
+                &cleanup_status);
+            rfic_command_record_cleanup_error(cleanup_status);
+            if (status < 0) {
+                RFIC_ERR("ad9361_dig_tune", status);
+                return false;
+            }
         } else if (state->phy->pdata->dig_interface_tune_skipmode != 2) {
             RFIC_ERR("digital interface tune unavailable without AXI ADC",
                      -ENOTSUP);
