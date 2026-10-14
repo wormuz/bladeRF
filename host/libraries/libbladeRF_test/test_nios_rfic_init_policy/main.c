@@ -38,10 +38,6 @@ int main(void)
     assert(!rfic_init_digital_tune_policy_valid(0, true));
     assert(!rfic_init_digital_tune_policy_valid(1, true));
     assert(!rfic_init_digital_tune_policy_valid(2, false));
-    assert(rfic_init_should_stage_reset_lo(false, false));
-    assert(!rfic_init_should_stage_reset_lo(true, false));
-    assert(!rfic_init_should_stage_reset_lo(false, true));
-    assert(!rfic_init_should_stage_reset_lo(true, true));
     assert(rfic_disconnect_verify_mask(0x000fffff, 1u) == 0x000ffffe);
     assert(rfic_disconnect_verify_mask(0x000fffff, 0x00000008) ==
            0x000ffff7);

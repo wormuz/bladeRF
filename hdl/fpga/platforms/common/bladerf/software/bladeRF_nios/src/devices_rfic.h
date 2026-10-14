@@ -48,7 +48,7 @@ typedef uint8_t command_bitmask;
 
 enum rfic_init_tail_phase {
     RFIC_INIT_TAIL_IDLE = 0,
-    RFIC_INIT_TAIL_RESET_LO,
+    RFIC_INIT_TAIL_RESET_LO, /* Reserved progress code; cold INIT skips it. */
     RFIC_INIT_TAIL_FILTER,
     RFIC_INIT_TAIL_SAMPLE_RATE,
     RFIC_INIT_TAIL_FINAL_LO,

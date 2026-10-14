@@ -54,11 +54,6 @@ static bladerf_frequency const BLADERF_VCTCXO_FREQUENCY = 38400000;
  */
 static bladerf_frequency const BLADERF_REFIN_DEFAULT = 10000000;
 
-/**
- * RFIC reset frequency (arbitrary)
- */
-static bladerf_frequency const RESET_FREQUENCY = 70000000;
-
 // clang-format off
 // Config GPIO
 #define CFG_GPIO_POWERSOURCE        0

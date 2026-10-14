@@ -132,7 +132,7 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
 
 static bool _rfic_ensure_rx_rfdc_calibrated(
     struct rfic_state *state, bladerf_frequency frequency,
-    bool init_sequence, bool allow_async)
+    bool allow_async)
 {
     uint32_t rx_port;
 
@@ -144,8 +144,7 @@ static bool _rfic_ensure_rx_rfdc_calibrated(
 
     if (!rfic_rfdc_port_calibration_required(
             state->last_rfdc_calib_freq[BLADERF_RX], rx_port, frequency,
-            BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ, init_sequence,
-            RESET_FREQUENCY)) {
+            BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ)) {
         return true;
     }
 
@@ -379,7 +378,7 @@ static void _rfic_init_tail_advance_module(struct rfic_state *state,
         state->init_tail_phase = restore_standby_state
             ? RFIC_INIT_TAIL_TX_MUTE : RFIC_INIT_TAIL_TX_GAIN;
     } else {
-        state->init_tail_phase = RFIC_INIT_TAIL_RESET_LO;
+        state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
     }
 }
 
@@ -696,8 +695,15 @@ ad9361_init_ready:
         state->init_channel_index = 0;
         state->init_nested_complete = false;
         state->init_nested_status = 0;
+        /* The retained ADI constructor has already configured each operating
+         * LO and completed setup RFDC on the configured RX input. The old
+         * 70 MHz RX staging hop left that input unchanged while RX was off;
+         * INIT policy skipped RFDC at the staging point, then returned to the
+         * already-calibrated LO. The actual band-dependent RX input is
+         * selected and calibrated by the RX-enable path. Do not retune the
+         * RFPLL away from and back to the constructor's verified LO here. */
         state->init_tail_phase = restore_standby_state
-            ? RFIC_INIT_TAIL_TX_MUTE : RFIC_INIT_TAIL_RESET_LO;
+            ? RFIC_INIT_TAIL_TX_MUTE : RFIC_INIT_TAIL_FILTER;
     }
 
     state->init_tail_pending = false;
@@ -708,9 +714,7 @@ ad9361_init_ready:
 
         /* The LO was already programmed before its retained calibration
          * started. Resume after that LO phase; never replay the setter. */
-        if (state->init_tail_phase == RFIC_INIT_TAIL_RESET_LO) {
-            state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
-        } else if (state->init_tail_phase == RFIC_INIT_TAIL_FINAL_LO) {
+        if (state->init_tail_phase == RFIC_INIT_TAIL_FINAL_LO) {
             _rfic_init_tail_advance_module(state, restore_standby_state);
         } else {
             RFIC_ERR("unexpected INIT nested-job continuation", -EIO);
@@ -733,25 +737,6 @@ ad9361_init_ready:
             : init_param->rx_path_clock_frequencies[5];
 
         switch (state->init_tail_phase) {
-        case RFIC_INIT_TAIL_RESET_LO:
-            if (!rfic_init_should_stage_reset_lo(
-                    dir == BLADERF_TX, restore_standby_state)) {
-                state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
-                state->init_tail_pending = true;
-                return true;
-            }
-            state->init_nested_status = 0;
-            if (!_rfic_cmd_wr_frequency_internal(
-                    state, ch, RESET_FREQUENCY, true, true))
-                return false;
-            if (state->rfdc_job_pending || state->tx_quad_job_pending) {
-                state->init_tail_pending = true;
-                return true;
-            }
-            state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
-            state->init_tail_pending = true;
-            return true;
-
         case RFIC_INIT_TAIL_FILTER:
             if (!_rfic_cmd_wr_filter(
                     state, ch, dir == BLADERF_TX
@@ -1327,8 +1312,7 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
                  * a corresponding LO write. Calibrate that input before
                  * committing the RFFE enable so its own RFDC correction is
                  * present when samples resume. */
-                if (!_rfic_ensure_rx_rfdc_calibrated(state, freq, false,
-                                                      true)) {
+                if (!_rfic_ensure_rx_rfdc_calibrated(state, freq, true)) {
                     _rfic_fail_closed_after_path_mutation(
                         state, "RX RFDC calibration failed after port update");
                     return false;
@@ -1680,7 +1664,7 @@ lo_programmed:
         /* RFDC history is indexed by the actual AD9361 input selector, not
          * frequency alone. */
         CHECK_TRUE(_rfic_ensure_rx_rfdc_calibrated(
-            state, frequency, init_sequence, allow_async_calibration));
+            state, frequency, allow_async_calibration));
         if (state->rfdc_job_pending) {
             state->rfdc_commit_rx_frequency = true;
             return true;

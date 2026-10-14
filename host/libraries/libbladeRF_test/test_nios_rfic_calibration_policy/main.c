@@ -171,30 +171,22 @@ int main(void)
         history[0], reinit_frequency_hz, RFDC_THRESHOLD_HZ));
 
     /* ADI setup calibrated port A at 2.4 GHz; bladeRF routes 2.4 GHz to B.
-     * The cold-init staging tune must not mark B calibrated, and the final
-     * operating tune must therefore run RFDC on B despite zero LO delta. */
+     * Port identity alone therefore requires RFDC on B, even at the same LO. */
     history[0] = UINT64_C(2400000000);
-    assert(!rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(70000000), RFDC_THRESHOLD_HZ, true,
-        UINT64_C(70000000)));
     assert(rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(2400000000), RFDC_THRESHOLD_HZ, true,
-        UINT64_C(70000000)));
+        history, 1, UINT64_C(2400000000), RFDC_THRESHOLD_HZ));
 
     /* The A/B selector can change at the 3 GHz boundary with only a tiny LO
      * step. Calibration is keyed by port, so this cannot reuse A's result. */
     history[0] = UINT64_C(2999900000);
     history[1] = 0;
     assert(rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(3000100000), RFDC_THRESHOLD_HZ, false,
-        UINT64_C(70000000)));
+        history, 1, UINT64_C(3000100000), RFDC_THRESHOLD_HZ));
     history[1] = UINT64_C(3000100000);
     assert(!rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(3050000000), RFDC_THRESHOLD_HZ, false,
-        UINT64_C(70000000)));
+        history, 1, UINT64_C(3050000000), RFDC_THRESHOLD_HZ));
     assert(rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(3100100000), RFDC_THRESHOLD_HZ, false,
-        UINT64_C(70000000)));
+        history, 1, UINT64_C(3100100000), RFDC_THRESHOLD_HZ));
 
     assert(!rfic_rfdc_calibration_required(
         reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ - 1,

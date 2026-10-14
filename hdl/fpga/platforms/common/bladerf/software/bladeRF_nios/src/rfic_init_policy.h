@@ -46,17 +46,6 @@ static inline bool rfic_init_digital_tune_policy_valid(uint8_t skip_mode,
     return skip_mode == 2 && fir_disable;
 }
 
-/* The AD9361 constructor has already tuned TX to its configured operating LO
- * and run the initial TX quadrature calibration there. A temporary low-band
- * TX staging tune would force another calibration at a frequency the device
- * will immediately leave; retain the RX staging tune used to establish the
- * explicit RX DC-calibration transition. */
-static inline bool rfic_init_should_stage_reset_lo(bool tx_module,
-                                                   bool restore_standby)
-{
-    return !tx_module && !restore_standby;
-}
-
 /* Disconnect verification must exclude RESETB: the RFFE helper clears RF
  * path controls while preserving the caller's asserted/deasserted reset
  * state, including during quarantine recovery. */

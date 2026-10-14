@@ -236,7 +236,6 @@ static int _rfic_host_initialize(struct bladerf *dev)
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = NULL;
     struct controller_fns const *rfic      = board_data->rfic;
-    bladerf_direction dir;
     bladerf_channel ch;
     size_t i;
     uint32_t config_gpio;
@@ -353,28 +352,10 @@ static int _rfic_host_initialize(struct bladerf *dev)
 
     board_data->phy = phy;
 
-    /* Force AD9361 to a non-default freq. This will entice it to do a
-     * proper re-tuning when we set it back to the default freq later on. */
-    FOR_EACH_DIRECTION(dir)
-    {
-        FOR_EACH_CHANNEL(dir, 1, i, ch)
-        {
-            /* ad9361_init() already tunes TX to its configured operating LO
-             * and runs the initial TX quadrature calibration there. The
-             * temporary 70 MHz reset tune below forces another TX_QUAD_CAL
-             * far from the operating band; with both TX paths required to
-             * converge this transient tune can fail and abort cold start.
-             * Keep the reset retune for RX, whose DC calibration must follow
-             * the host's explicit transition back to its default LO. */
-            if (BLADERF_CHANNEL_IS_TX(ch)) {
-                continue;
-            }
-            status = rfic->set_frequency(dev, ch, RESET_FREQUENCY);
-            if (status < 0) {
-                goto init_fail;
-            }
-        }
-    }
+    /* ad9361_init() programs both configured operating LOs and completes its
+     * setup calibrations there. A temporary reset-frequency hop adds no
+     * calibration coverage: RX port selection is deferred while RX is off,
+     * and the final LO setter returns to the already configured frequency. */
 
     /* Set up AD9361 FIR filters */
     /* TODO: permit specification of filter taps, for the truly brave */
