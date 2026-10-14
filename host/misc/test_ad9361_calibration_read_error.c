@@ -2833,6 +2833,40 @@ int main(void)
         }
     }
 
+    /* Cleanup-aware FIR APIs initialize their secondary result even when
+     * argument validation prevents the operation from starting. */
+    {
+        int32_t cleanup_status = 123;
+
+        if (ad9361_validate_enable_fir_with_cleanup(
+                NULL, &cleanup_status) != -EINVAL || cleanup_status != 0) {
+            fprintf(stderr,
+                    "FIR validation left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
+        if (ad9361_set_rx_fir_en_dis_with_cleanup(
+                NULL, 1, &cleanup_status) != -EINVAL || cleanup_status != 0) {
+            fprintf(stderr,
+                    "RX FIR API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
+        if (ad9361_set_tx_fir_en_dis_with_cleanup(
+                NULL, 1, &cleanup_status) != -EINVAL || cleanup_status != 0) {
+            fprintf(stderr,
+                    "TX FIR API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
+        if (ad9361_set_trx_fir_en_dis_with_cleanup(
+                NULL, 1, &cleanup_status) != -EINVAL || cleanup_status != 0) {
+            fprintf(stderr,
+                    "TRX FIR API left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* A failed filter/calibration/tracking/ENSM step preserves the last
      * requested values for recovery, but marks them untrusted so a request
      * matching those values cannot be mistaken for a hardware no-op. */

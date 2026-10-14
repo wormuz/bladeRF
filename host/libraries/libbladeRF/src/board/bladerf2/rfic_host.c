@@ -1470,7 +1470,7 @@ static int _rfic_host_set_filter(struct bladerf *dev,
     bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
-    int32_t status, cleanup_status = 0;
+    int32_t status, cleanup_status = 0, enable_cleanup_status = 0;
 
     if (_rfic_host_calibration_faulted(board_data)) {
         _rfic_host_fail_closed(dev, board_data);
@@ -1536,7 +1536,27 @@ static int _rfic_host_set_filter(struct bladerf *dev,
             }
             RETURN_ERROR_AD9361("AD9361 TX FIR configuration", status);
         }
-        CHECK_AD936X(ad9361_set_tx_fir_en_dis(phy, enable));
+        status = ad9361_set_tx_fir_en_dis_with_cleanup(
+            phy, enable, &enable_cleanup_status);
+        if (status < 0 || enable_cleanup_status < 0) {
+            _rfic_host_fail_closed(dev, board_data);
+            if (enable_cleanup_status < 0) {
+                if (status < 0) {
+                    log_error("AD9361 TX FIR enable returned %s; cleanup also "
+                              "returned %s\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(status)),
+                              bladerf_strerror(errno_ad9361_to_bladerf(
+                                  enable_cleanup_status)));
+                } else {
+                    log_error("AD9361 TX FIR enable cleanup failed (%s)\n",
+                              bladerf_strerror(errno_ad9361_to_bladerf(
+                                  enable_cleanup_status)));
+                    status = enable_cleanup_status;
+                }
+            }
+            RETURN_ERROR_AD9361("AD9361 TX FIR enable", status);
+        }
 
         board_data->txfir = txfir;
         board_data->txfir_known = true;
@@ -1599,7 +1619,27 @@ static int _rfic_host_set_filter(struct bladerf *dev,
             }
             RETURN_ERROR_AD9361("AD9361 RX FIR configuration", status);
         }
-        CHECK_AD936X(ad9361_set_rx_fir_en_dis(phy, enable));
+        status = ad9361_set_rx_fir_en_dis_with_cleanup(
+            phy, enable, &enable_cleanup_status);
+        if (status < 0 || enable_cleanup_status < 0) {
+            _rfic_host_fail_closed(dev, board_data);
+            if (enable_cleanup_status < 0) {
+                if (status < 0) {
+                    log_error("AD9361 RX FIR enable returned %s; cleanup also "
+                              "returned %s\n",
+                              bladerf_strerror(
+                                  errno_ad9361_to_bladerf(status)),
+                              bladerf_strerror(errno_ad9361_to_bladerf(
+                                  enable_cleanup_status)));
+                } else {
+                    log_error("AD9361 RX FIR enable cleanup failed (%s)\n",
+                              bladerf_strerror(errno_ad9361_to_bladerf(
+                                  enable_cleanup_status)));
+                    status = enable_cleanup_status;
+                }
+            }
+            RETURN_ERROR_AD9361("AD9361 RX FIR enable", status);
+        }
 
         board_data->rxfir = rxfir;
         board_data->rxfir_known = true;
