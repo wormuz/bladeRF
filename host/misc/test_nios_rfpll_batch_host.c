@@ -324,7 +324,7 @@ static int expect_spi_read(enum response_mode mode, int expected_status)
 static int expect_retune_clear_pending(enum response_mode mode, bool retune2)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
-    struct bladerf dev = { .backend_data = &usb };
+    struct bladerf dev = { .backend_data = &usb, .board = &mock_board };
     int status;
 
     MUTEX_INIT(&usb.peripheral_lock);
@@ -355,7 +355,7 @@ static int expect_retune_clear_pending(enum response_mode mode, bool retune2)
 static int expect_retune2_failure_stage(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
-    struct bladerf dev = { .backend_data = &usb };
+    struct bladerf dev = { .backend_data = &usb, .board = &mock_board };
     int status;
 
     MUTEX_INIT(&usb.peripheral_lock);
