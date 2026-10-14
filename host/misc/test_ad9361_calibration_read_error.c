@@ -2159,6 +2159,9 @@ int main(void)
             ad9361_get_temperature(&cp_phy, &temperature) != -EBUSY ||
             ad9361_get_temp(&cp_phy) != -EBUSY ||
             ad9361_get_auxadc(&cp_phy) != -EBUSY ||
+            ad9361_get_rx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
+            ad9361_get_tx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
+            lo_frequency != UINT64_MAX ||
             ad9361_rssi_gain_step_calib(&cp_phy) != -EBUSY ||
             ad9361_rssi_program_lna_gain(&cp_phy) != -EBUSY ||
             ad9361_rssi_write_err_tbl(&cp_phy) != -EBUSY ||
