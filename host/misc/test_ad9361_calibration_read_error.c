@@ -2163,6 +2163,10 @@ int main(void)
             ad9361_get_auxadc(&cp_phy) != -EBUSY ||
             ad9361_get_rx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
             ad9361_get_tx_lo_freq(&cp_phy, &lo_frequency) != -EBUSY ||
+            ad9361_rx_fastlock_get_freq(&cp_phy, 0, &lo_frequency) !=
+                -EBUSY ||
+            ad9361_tx_fastlock_get_freq(&cp_phy, 0, &lo_frequency) !=
+                -EBUSY ||
             lo_frequency != UINT64_MAX ||
             ad9361_get_trx_clock_chain(&cp_phy, rx_path_rates,
                                        tx_path_rates) != -EBUSY ||
