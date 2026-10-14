@@ -9001,6 +9001,70 @@ int main(void)
         }
     }
 
+    /* Setup is not terminal when its final ENSM command is merely written;
+     * it remains owned until REG_STATE confirms the requested stable state. */
+    {
+        struct ad9361_phy_platform_data post_pdata = {0};
+        struct ad9361_rf_phy post_phy = {0};
+        struct ad9361_setup_transaction setup_job = {0};
+        uint32_t delay_us;
+
+        post_pdata.rx2tx2 = true;
+        post_pdata.fdd = true;
+        post_pdata.rssi_skip_calib = true;
+        post_pdata.rssi_ctrl.rssi_unit_is_rx_samples = true;
+        post_pdata.rssi_ctrl.rssi_duration = 1;
+        post_pdata.txmon_ctrl.tx_mon_duration = 16;
+        post_phy.spi = &spi;
+        post_phy.pdata = &post_pdata;
+
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        state_after_ensm_write = ENSM_STATE_ALERT;
+        setup_job.phy = &post_phy;
+        setup_job.active = true;
+        setup_job.stage = AD9361_SETUP_TRANSACTION_CALIBRATION;
+        setup_job.calibration_job.phy = &post_phy;
+        setup_job.calibration_job.terminal = true;
+        setup_job.calibration_job.terminal_status = 0;
+        post_phy.setup_transaction = &setup_job;
+
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        if (ret != 1 || setup_job.terminal ||
+            setup_job.stage !=
+                AD9361_SETUP_TRANSACTION_POST_CALIBRATION_WAIT ||
+            !setup_job.post_calibration_wait.active ||
+            post_phy.status_wait != &setup_job.post_calibration_wait) {
+            fprintf(stderr,
+                    "Setup reported success before ENSM readback: ret=%" PRId32
+                    " stage=%u terminal=%d wait=%p\n",
+                    ret, setup_job.stage, setup_job.terminal,
+                    (void *)post_phy.status_wait);
+            return EXIT_FAILURE;
+        }
+
+        /* Model the hardware completing the transition after the command. */
+        fake_regs[REG_STATE] = ENSM_STATE_FDD;
+        delay_us = ad9361_setup_transaction_poll_delay_us(&setup_job);
+        if (delay_us)
+            no_os_udelay(delay_us);
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        state_after_ensm_write = -1;
+        register_map_enabled = false;
+        if (ret != 0 || !setup_job.terminal ||
+            setup_job.terminal_status != 0 ||
+            post_phy.status_wait != NULL ||
+            setup_job.post_calibration_wait.terminal_status != 0) {
+            fprintf(stderr,
+                    "Setup did not retire after ENSM readback: ret=%" PRId32
+                    " terminal=%" PRId32 " wait=%p\n",
+                    ret, setup_job.terminal_status,
+                    (void *)post_phy.status_wait);
+            return EXIT_FAILURE;
+        }
+    }
+
     puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
     return EXIT_SUCCESS;
 }
