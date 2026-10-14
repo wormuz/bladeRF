@@ -7,6 +7,7 @@
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_ext_band_ctrl.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_conv.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_adc_core/axi_adc_core.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_dac_core/axi_dac_core.c"
 
@@ -2926,6 +2927,14 @@ int main(void)
                 NULL, &cleanup_status) != -EINVAL || cleanup_status != 0) {
             fprintf(stderr,
                     "RSSI calibration left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
+        if (ad9361_dig_interface_timing_analysis_with_cleanup(
+                NULL, NULL, 0, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "Timing analysis left stale cleanup status on rejection\n");
             return EXIT_FAILURE;
         }
         cleanup_status = 123;
