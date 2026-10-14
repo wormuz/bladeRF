@@ -133,7 +133,7 @@ void rfic_invalidate_frequency(bladerf_module module)
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz,
                               uint8_t *failure_stage,
-                              bool allow_txq_yield, bool *txq_pending)
+                              bool *txq_pending)
 {
     int32_t status;
     bool tx;
@@ -165,18 +165,13 @@ bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
     /* Fastlock recall bypasses the ordinary LO setter, so TX must run the
      * same final-output calibration gate after port selection and readback. */
     if (tx) {
-        if (allow_txq_yield) {
-            if (txq_pending == NULL ||
-                !rfic_start_tx_quad_calibration_for_retune(
-                    txq_pending, failure_stage)) {
-                return false;
-            }
-            if (*txq_pending) {
-                return true;
-            }
-        } else if (!rfic_finalize_tx_quad_calibration(failure_stage)) {
+        if (txq_pending == NULL ||
+            !rfic_start_tx_quad_calibration_for_retune(
+                txq_pending, failure_stage)) {
             return false;
         }
+        if (*txq_pending)
+            return true;
     }
 
     /* profile_activate() calls this only after the RFPLL lock, AD9361 port,
@@ -331,27 +326,6 @@ bool rfic_tx_quad_retune_owner(void)
 {
     return state.tx_quad_job_pending && state.tx_quad_retune_owner;
 }
-
-bool rfic_finalize_tx_quad_calibration(uint8_t *failure_stage)
-{
-    int32_t status;
-
-    if (state.phy == NULL) {
-        RFIC_ERR("TX quadrature calibration without PHY", -EIO);
-        if (failure_stage != NULL) {
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_TX_QUAD_CALIBRATION;
-        }
-        return false;
-    }
-    status = ad9361_ensure_tx_quad_calib(state.phy);
-    if (status >= 0) {
-        return true;
-    }
-
-    rfic_fail_tx_quad_calibration(status, failure_stage);
-    return false;
-}
-
 
 /******************************************************************************/
 /* Dispatching */

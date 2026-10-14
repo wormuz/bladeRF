@@ -241,9 +241,8 @@ void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz,
                               uint8_t *failure_stage,
-                              bool allow_txq_yield, bool *txq_pending);
+                              bool *txq_pending);
 bool rfic_disable_tx_output(void);
-bool rfic_finalize_tx_quad_calibration(uint8_t *failure_stage);
 bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
                                                    uint8_t *failure_stage);
 bool rfic_start_tx_quad_calibration_for_command(bool *pending,

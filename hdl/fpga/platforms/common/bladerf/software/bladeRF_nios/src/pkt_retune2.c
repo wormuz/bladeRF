@@ -37,7 +37,7 @@ void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz,
                               uint8_t *failure_stage,
-                              bool allow_txq_yield, bool *txq_pending);
+                              bool *txq_pending);
 bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
                                                 uint8_t *failure_stage);
 int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage);
@@ -839,8 +839,6 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     bool rfic_faulted = rfic_command_state_faulted();
     bool host_owned_fastlock = rfic_fastlock_host_owned_without_phy(
         immediate, phy_present, rfic_faulted);
-#else
-    (void)allow_txq_yield;
 #endif
 
     if (failure_stage != NULL) {
@@ -910,6 +908,18 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
      * Tokened NOW enters this worker after its acceptance ACK; tokenless NOW
      * retains its legacy synchronous response, but is also completed by this
      * worker before that response is published. */
+#ifdef BLADERF_NIOS_LIBAD936X
+    /* The retained AD936x worker is mandatory in this build. Never let a
+     * call-site flag route an xA4 NIOS recall through the blocking helper. */
+    (void)allow_txq_yield;
+    if (!pll_locked) {
+        if (!adi_fastlock_recall_start(module, p, failure_stage))
+            return false;
+        if (pll_pending != NULL)
+            *pll_pending = true;
+        return true;
+    }
+#else
     if (allow_txq_yield) {
         if (!pll_locked) {
             if (!adi_fastlock_recall_start(module, p, failure_stage))
@@ -921,6 +931,7 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     } else if (!adi_fastlock_recall(module, p, failure_stage)) {
         return false;
     }
+#endif
 
     /* Adjust the RFFE port */
     if (!adi_rfport_select(p)) {
@@ -942,7 +953,7 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
         !host_owned_fastlock &&
         !rfic_read_frequency_live(module, p->profile_num,
                                   readback_frequency_hz, failure_stage,
-                                  allow_txq_yield, txq_pending)) {
+                                  txq_pending)) {
         if (failure_stage != NULL) {
             if (*failure_stage == NIOS_PKT_RETUNE2_FAILURE_NONE) {
                 *failure_stage = NIOS_PKT_RETUNE2_FAILURE_LO_READBACK;
@@ -1832,6 +1843,17 @@ void pkt_retune2(struct pkt_buf *b)
                                     }
                                 }
                             } else {
+#ifdef BLADERF_NIOS_LIBAD936X
+                                /* Every request in this build must have
+                                 * queued_now set above (tokened or retained
+                                 * legacy response). Fail closed if that
+                                 * admission invariant ever changes; do not
+                                 * reintroduce a blocking recall/TXQ path. */
+                                INCREMENT_ERROR_COUNT();
+                                failure_stage =
+                                    NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+                                status = -1;
+#else
                                 /* Builds without the retained AD936x worker
                                  * keep the original synchronous path. */
                                 if (!profile_load(module,
@@ -1857,6 +1879,7 @@ void pkt_retune2(struct pkt_buf *b)
                                     INCREMENT_ERROR_COUNT();
                                     status = -1;
                                 }
+#endif
                             }
                             break;
 
