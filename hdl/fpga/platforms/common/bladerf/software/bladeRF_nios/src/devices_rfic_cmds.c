@@ -41,15 +41,6 @@
 #include "rfic_init_policy.h"
 #include "rfic_tx_output_policy.h"
 
-/* REG_CALIBRATION_CTRL mask bit for RF DC offset calibration
- * (ad9361.h RFDC_CAL == 1<<1, thirdparty/analogdevicesinc/no-OS/
- * drivers/rf-transceiver/ad9361/ad9361.h:741 in this tree). That
- * header is ad9361.c's private internals, not meant to be included
- * outside the driver -- ad9361_do_calib() is the public entry point
- * (ad9361_api.h) that takes this mask value directly, so the value is
- * duplicated here rather than reaching into the private header. */
-#define BLADERF_AD9361_RFDC_CAL_MASK (1 << 1)
-
 /* The control PIO is clocked by sys_clock. This bit is driven by a separate
  * FPGA watchdog observing adi_rx_clock, so the preflight is independent of
  * the AD9361 register path. It verifies that the RF data interface clock is
@@ -111,11 +102,6 @@ static int32_t _rfic_read_cal_done(struct ad9361_rf_phy *phy, uint32_t mask,
  * sample-rate path must not invoke the BIST tuner. The host-owned PHY and its
  * converter handle are separate from this NIOS instance. */
 
-extern int32_t ad9361_do_calib(struct ad9361_rf_phy *phy, uint32_t cal,
-                               int32_t arg);
-extern int32_t ad9361_do_calib_bounded(struct ad9361_rf_phy *phy,
-                                       uint32_t cal, int32_t arg);
-
 extern AD9361_InitParam bladerf2_rfic_init_params;
 extern AD9361_RXFIRConfig bladerf2_rfic_rx_fir_config;
 extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config;
@@ -127,15 +113,13 @@ extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config_int4;
 static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
                                             bladerf_channel channel,
                                             uint64_t frequency,
-                                            bool init_sequence,
-                                            bool allow_async_calibration);
+                                            bool init_sequence);
 static bool _rfic_cmd_wr_filter_init_pair(struct rfic_state *state,
                                           bladerf_channel channel,
                                           uint32_t filter);
 
 static bool _rfic_ensure_rx_rfdc_calibrated(
-    struct rfic_state *state, bladerf_frequency frequency,
-    bool allow_async)
+    struct rfic_state *state, bladerf_frequency frequency)
 {
     uint32_t rx_port;
 
@@ -151,22 +135,17 @@ static bool _rfic_ensure_rx_rfdc_calibrated(
         return true;
     }
 
-    if (allow_async) {
-        int32_t status = ad9361_rfdc_calibration_start(state->phy,
-                                                       &state->rfdc_job);
-        if (status < 0) {
-            RFIC_ERR("ad9361_rfdc_calibration_start", status);
-            return false;
-        }
-        state->rfdc_job_pending = true;
-        state->rfdc_job_port = (uint8_t)rx_port;
-        state->rfdc_job_frequency = frequency;
-        return true;
+    /* This NIOS command path must never wait for a complete RFDC calibration
+     * in one worker turn. The retained job owns completion and cache commit. */
+    int32_t status = ad9361_rfdc_calibration_start(state->phy,
+                                                   &state->rfdc_job);
+    if (status < 0) {
+        RFIC_ERR("ad9361_rfdc_calibration_start", status);
+        return false;
     }
-
-    CHECK_BOOL(ad9361_do_calib_bounded(
-        state->phy, BLADERF_AD9361_RFDC_CAL_MASK, -1));
-    state->last_rfdc_calib_freq[BLADERF_RX][rx_port] = frequency;
+    state->rfdc_job_pending = true;
+    state->rfdc_job_port = (uint8_t)rx_port;
+    state->rfdc_job_frequency = frequency;
     return true;
 }
 
@@ -777,7 +756,7 @@ ad9361_init_ready:
         case RFIC_INIT_TAIL_FINAL_LO:
             state->init_nested_status = 0;
             if (!_rfic_cmd_wr_frequency_internal(
-                    state, ch, target_frequency, true, true))
+                    state, ch, target_frequency, true))
                 return false;
             if (state->rfdc_job_pending || state->tx_quad_job_pending) {
                 state->init_tail_pending = true;
@@ -1332,7 +1311,7 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
                  * a corresponding LO write. Calibrate that input before
                  * committing the RFFE enable so its own RFDC correction is
                  * present when samples resume. */
-                if (!_rfic_ensure_rx_rfdc_calibrated(state, freq, true)) {
+                if (!_rfic_ensure_rx_rfdc_calibrated(state, freq)) {
                     _rfic_fail_closed_after_path_mutation(
                         state, "RX RFDC calibration failed after port update");
                     return false;
@@ -1549,8 +1528,7 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
 static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
                                             bladerf_channel channel,
                                             uint64_t frequency,
-                                            bool init_sequence,
-                                            bool allow_async_calibration)
+                                            bool init_sequence)
 {
     bladerf_direction dir =
         BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
@@ -1670,21 +1648,16 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
 
 lo_programmed:
     if (BLADERF_CHANNEL_IS_TX(channel)) {
-        if (allow_async_calibration) {
-            bool tx_quad_pending;
+        bool tx_quad_pending;
 
-            CHECK_TRUE(rfic_start_tx_quad_calibration_for_frequency(
-                &tx_quad_pending, NULL));
-            if (tx_quad_pending)
-                return true;
-        } else {
-            CHECK_TRUE(rfic_finalize_tx_quad_calibration(NULL));
-        }
+        CHECK_TRUE(rfic_start_tx_quad_calibration_for_frequency(
+            &tx_quad_pending, NULL));
+        if (tx_quad_pending)
+            return true;
     } else {
         /* RFDC history is indexed by the actual AD9361 input selector, not
          * frequency alone. */
-        CHECK_TRUE(_rfic_ensure_rx_rfdc_calibrated(
-            state, frequency, allow_async_calibration));
+        CHECK_TRUE(_rfic_ensure_rx_rfdc_calibrated(state, frequency));
         if (state->rfdc_job_pending) {
             state->rfdc_commit_rx_frequency = true;
             return true;
@@ -1699,8 +1672,7 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
                             bladerf_channel channel,
                             uint64_t frequency)
 {
-    return _rfic_cmd_wr_frequency_internal(state, channel, frequency, false,
-                                           true);
+    return _rfic_cmd_wr_frequency_internal(state, channel, frequency, false);
 }
 
 /**
