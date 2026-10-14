@@ -3233,6 +3233,30 @@ int main(void)
                     "FIR pair preflight failure did not restore both bypass states\n");
             return EXIT_FAILURE;
         }
+
+        memset(&fir_job, 0, sizeof(fir_job));
+        fir_job.phy = &fir_phy;
+        fir_job.stage = AD9361_FIR_ENABLE_TRANSACTION_CLOCK;
+        fir_job.active = true;
+        fir_job.update_rx = true;
+        fir_job.update_tx = true;
+        fir_job.old_rx_bypass = true;
+        fir_job.old_tx_bypass = true;
+        fir_job.clock_chain_job.phy = &fir_phy;
+        fir_job.clock_chain_job.terminal = true;
+        fir_job.clock_chain_job.terminal_status = 2;
+        fir_phy.fir_enable_transaction = &fir_job;
+        ret = ad9361_fir_enable_transaction_poll(&fir_phy, &fir_job);
+        if (ret != -EIO || fir_job.active || !fir_job.terminal ||
+            !ad9361_calibration_state_unknown(&fir_phy) ||
+            fir_phy.bypass_rx_fir != fir_job.old_rx_bypass ||
+            fir_phy.bypass_tx_fir != fir_job.old_tx_bypass ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR parent accepted noncanonical child completion status\n");
+            return EXIT_FAILURE;
+        }
+
     }
 
     /* A failed filter/calibration/tracking/ENSM step preserves the last
