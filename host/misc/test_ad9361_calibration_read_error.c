@@ -2964,6 +2964,22 @@ int main(void)
             return EXIT_FAILURE;
         }
         cleanup_status = 123;
+        if (ad9361_get_rx_fir_config_with_cleanup(
+                NULL, 0, NULL, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "RX FIR getter left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
+        if (ad9361_get_tx_fir_config_with_cleanup(
+                NULL, 0, NULL, &cleanup_status) != -EINVAL ||
+            cleanup_status != 0) {
+            fprintf(stderr,
+                    "TX FIR getter left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
         if (ad9361_validate_enable_fir_with_cleanup(
                 NULL, &cleanup_status) != -EINVAL || cleanup_status != 0) {
             fprintf(stderr,
@@ -5515,6 +5531,91 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+        {
+            struct ad9361_rf_phy fir_get_phy = {
+                .spi = &spi,
+                .pdata = &pdata,
+            };
+            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 777 };
+            uint32_t old_filter_conf = fake_regs[REG_RX_FILTER_CONFIG];
+			uint32_t old_filter_gain = fake_regs[REG_RX_FILTER_GAIN];
+            int32_t cleanup_status = 0;
+
+            fake_regs[REG_RX_FILTER_CONFIG] = 0;
+            fake_regs[REG_RX_FILTER_GAIN] = 0;
+            fail_read_reg = REG_RX_FILTER_COEF_READ_DATA_1;
+            fail_write_once_reg = REG_RX_FILTER_CONFIG;
+            fail_write_once_reg_occurrence = 2;
+            apply_failed_write_once = false;
+            ret = ad9361_get_rx_fir_config_with_cleanup(
+                &fir_get_phy, 0, &fir_cfg, &cleanup_status);
+            fail_read_reg = -1;
+            fail_write_once_reg = -1;
+            if (ret != -EIO || cleanup_status != -EIO ||
+                !fir_get_phy.calibration_state_unknown ||
+                fir_cfg.rx_coef_size != 777) {
+                fprintf(stderr,
+                        "RX FIR getter lost primary/restore failure or changed output\n");
+                return EXIT_FAILURE;
+            }
+            fake_regs[REG_RX_FILTER_CONFIG] = old_filter_conf;
+			fake_regs[REG_RX_FILTER_GAIN] = old_filter_gain;
+        }
+	{
+		struct ad9361_rf_phy fir_get_phy = {
+			.spi = &spi,
+			.pdata = &pdata,
+		};
+		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 777 };
+		uint32_t old_filter_conf = fake_regs[REG_TX_FILTER_CONF];
+		int32_t cleanup_status = 0;
+
+		fake_regs[REG_TX_FILTER_CONF] = 0;
+		fail_read_reg = REG_TX_FILTER_COEF_READ_DATA_1;
+		fail_write_once_reg = REG_TX_FILTER_CONF;
+		fail_write_once_reg_occurrence = 2;
+		apply_failed_write_once = false;
+		ret = ad9361_get_tx_fir_config_with_cleanup(
+			&fir_get_phy, 0, &fir_cfg, &cleanup_status);
+		fail_read_reg = -1;
+		fail_write_once_reg = -1;
+		if (ret != -EIO || cleanup_status != -EIO ||
+		    !fir_get_phy.calibration_state_unknown ||
+		    fir_cfg.tx_coef_size != 777) {
+			fprintf(stderr,
+				"TX FIR getter lost primary/restore failure or changed output\n");
+			return EXIT_FAILURE;
+		}
+		fake_regs[REG_TX_FILTER_CONF] = old_filter_conf;
+	}
+	{
+		struct ad9361_rf_phy timing_phy = {
+			.spi = &spi,
+			.pdata = &pdata,
+		};
+		int32_t cleanup_status = 0;
+		int32_t old_state_after_write = state_after_ensm_write;
+		uint8_t old_ensm_state = fake_regs[REG_STATE];
+		uint8_t old_rx_delay = fake_regs[REG_RX_CLOCK_DATA_DELAY];
+
+		fake_regs[REG_STATE] = ENSM_STATE_RX;
+		state_after_ensm_write = ENSM_STATE_ALERT;
+		fail_write_once_reg = REG_ENSM_CONFIG_1;
+		fail_write_once_reg_occurrence = 2;
+		apply_failed_write_once = false;
+		ret = ad9361_set_intf_delay(&timing_phy, false, 0, 0, true,
+					    &cleanup_status);
+		fail_write_once_reg = -1;
+		state_after_ensm_write = old_state_after_write;
+		if (ret != -EIO || cleanup_status != -EIO ||
+		    !timing_phy.calibration_state_unknown) {
+			fprintf(stderr,
+				"Timing delay helper lost ENSM restore failure\n");
+			return EXIT_FAILURE;
+		}
+		fake_regs[REG_STATE] = old_ensm_state;
+		fake_regs[REG_RX_CLOCK_DATA_DELAY] = old_rx_delay;
+	}
 	{
 		char fir_text[512];
 		size_t used;
