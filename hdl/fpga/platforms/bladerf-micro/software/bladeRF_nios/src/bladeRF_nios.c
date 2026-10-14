@@ -631,6 +631,8 @@ int main(void)
                  * session after reconnect. Its reply would be discarded, but
                  * its side effects would otherwise still happen. */
                 pkt.ready = false;
+                pkt.deferred_work_active_at_accept = false;
+                command_uart_response_retire(&pkt.response_prepared);
                 command_uart_enable_isr(true);
                 have_request = false;
             }
