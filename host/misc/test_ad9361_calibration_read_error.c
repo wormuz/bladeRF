@@ -244,8 +244,12 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
             } else {
                 fail_write_once_reg = -1;
                 fail_write_once_reg_occurrence = 1;
-                if (apply_failed_write_once && register_map_enabled)
+                if (apply_failed_write_once && register_map_enabled) {
                     fake_regs[reg] = data[2];
+                    if (fake_calibration_autocomplete &&
+                        reg == REG_CALIBRATION_CTRL)
+                        fake_regs[reg] = 0;
+                }
                 apply_failed_write_once = false;
                 return -EIO;
             }
@@ -1441,6 +1445,95 @@ int main(void)
         fprintf(stderr, "completed calibration mishandled: ret=%" PRId32
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
         return EXIT_FAILURE;
+    }
+
+    /* A failed start write can have reached the RFIC and completed before a
+     * readback. A clear busy bit cannot prove that the calibration was never
+     * accepted; retain a board-level fail-closed PHY state. */
+    {
+        struct ad9361_rf_phy start_fault_phy = { .spi = &spi };
+        struct ad9361_calibration_wait wait = {0};
+        struct ad9361_bbdc_calibration_job job = {0};
+        unsigned writes_before;
+
+        register_map_enabled = true;
+        fake_calibration_autocomplete = true;
+        fail_write_once_reg = REG_CALIBRATION_CTRL;
+        apply_failed_write_once = true;
+        ret = ad9361_calibration_wait_start(
+            &start_fault_phy, BBDC_CAL, 1000, &wait);
+        if (ret != -EIO ||
+            fake_regs[REG_CALIBRATION_CTRL] != 0 ||
+            !ad9361_calibration_state_unknown(&start_fault_phy) ||
+            start_fault_phy.calibration_wait != NULL) {
+            fprintf(stderr,
+                    "ambiguous completed calibration start was accepted: ret=%" PRId32
+                    " ctrl=0x%02x unknown=%u owner=%p\n", ret,
+                    fake_regs[REG_CALIBRATION_CTRL],
+                    ad9361_calibration_state_unknown(&start_fault_phy),
+                    (void *)start_fault_phy.calibration_wait);
+            return EXIT_FAILURE;
+        }
+        writes_before = write_count;
+        if (ad9361_bbdc_calibration_start(&start_fault_phy, &job) != -EIO ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "poisoned PHY accepted a follow-on BBDC mutation\n");
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
+        fake_calibration_autocomplete = false;
+    }
+
+    /* The synthesizer CP path owns status_wait rather than calibration_wait.
+     * Other calibration/tracking starts must respect that same exclusive
+     * RFIC owner. */
+    {
+        struct ad9361_rf_phy wait_owner_phy = {
+            .spi = &spi,
+            .pdata = &pdata,
+        };
+        struct ad9361_status_wait status_wait = {0};
+        struct ad9361_bbdc_calibration_job job = {0};
+        unsigned writes_before;
+
+        register_map_enabled = true;
+        if (ad9361_status_wait_start(&wait_owner_phy, REG_STATE, 1, 1,
+                                     1000, 10, &status_wait) != 0)
+            return EXIT_FAILURE;
+        writes_before = write_count;
+        if (ad9361_bbdc_calibration_start(&wait_owner_phy, &job) != -EBUSY ||
+            ad9361_tracking_control(&wait_owner_phy, false, false, false) !=
+                -EBUSY ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "RFIC mutation overlapped an active status-wait owner\n");
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_STATE] = 1;
+        if (ad9361_status_wait_poll(&wait_owner_phy, &status_wait) != 0 ||
+            wait_owner_phy.status_wait != NULL) {
+            fprintf(stderr, "status-wait owner did not retire cleanly\n");
+            return EXIT_FAILURE;
+        }
+
+        {
+            struct ad9361_rf_phy lost_wait_phy = { .spi = &spi };
+            struct ad9361_status_wait lost_wait = {0};
+
+            if (ad9361_status_wait_start(&lost_wait_phy, REG_STATE, 1, 1,
+                                         1000, 10, &lost_wait) != 0)
+                return EXIT_FAILURE;
+            lost_wait.active = false;
+            if (ad9361_status_wait_poll(&lost_wait_phy, &lost_wait) != -EIO ||
+                !ad9361_calibration_state_unknown(&lost_wait_phy) ||
+                lost_wait_phy.status_wait != &lost_wait) {
+                fprintf(stderr,
+                        "lost status-wait context was not quarantined\n");
+                return EXIT_FAILURE;
+            }
+        }
+        register_map_enabled = false;
     }
 
     /* TX quadrature calibration must fail closed on setup writes and status
