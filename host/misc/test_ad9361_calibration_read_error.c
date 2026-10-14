@@ -8647,6 +8647,60 @@ int main(void)
         }
     }
 
+    /* A failed ENSM restore after programming preloaded factory RSSI tables
+     * must survive the retained setup parent as a cleanup result. */
+    {
+        struct ad9361_phy_platform_data post_pdata = {0};
+        struct ad9361_rf_phy post_phy = {0};
+        struct ad9361_setup_transaction setup_job = {0};
+        int32_t expected_cleanup = -EIO;
+
+        post_pdata.rx2tx2 = true;
+        post_pdata.fdd = true;
+        post_pdata.rssi_skip_calib = true;
+        post_pdata.rssi_lna_err_tbl[0] = 1;
+        post_pdata.rssi_ctrl.rssi_unit_is_rx_samples = true;
+        post_pdata.rssi_ctrl.rssi_duration = 1;
+        post_pdata.txmon_ctrl.tx_mon_duration = 16;
+        post_phy.spi = &spi;
+        post_phy.pdata = &post_pdata;
+
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_STATE] = ENSM_STATE_RX;
+        state_after_ensm_write = ENSM_STATE_ALERT;
+        fail_write_once_reg = REG_ENSM_CONFIG_1;
+        /* Initial force-to-ALERT writes twice; fail the first restore write. */
+        fail_write_once_reg_occurrence = 3;
+        setup_job.phy = &post_phy;
+        setup_job.active = true;
+        setup_job.stage = AD9361_SETUP_TRANSACTION_CALIBRATION;
+        setup_job.calibration_job.phy = &post_phy;
+        setup_job.calibration_job.terminal = true;
+        setup_job.calibration_job.terminal_status = 0;
+        post_phy.setup_transaction = &setup_job;
+
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        fail_write_once_reg = -1;
+        state_after_ensm_write = -1;
+        register_map_enabled = false;
+        if (ret != -EIO || !setup_job.terminal ||
+            setup_job.terminal_status != -EIO ||
+            setup_job.cleanup_status != expected_cleanup ||
+            post_phy.setup_transaction != NULL ||
+            !ad9361_calibration_state_unknown(&post_phy)) {
+            fprintf(stderr,
+                    "Post-calibration ENSM cleanup was lost: ret=%" PRId32
+                    " terminal=%" PRId32 " cleanup=%" PRId32
+                    " owner=%p unknown=%d\n",
+                    ret, setup_job.terminal_status,
+                    setup_job.cleanup_status,
+                    (void *)post_phy.setup_transaction,
+                    ad9361_calibration_state_unknown(&post_phy));
+            return EXIT_FAILURE;
+        }
+    }
+
     puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
     return EXIT_SUCCESS;
 }
