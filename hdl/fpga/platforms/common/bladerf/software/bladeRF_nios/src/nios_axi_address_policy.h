@@ -12,9 +12,9 @@ static inline bool nios_axi_address_valid(uint32_t address)
     return address <= UINT16_MAX;
 }
 
-/* The AD9361 Avalon slave is clocked by the RF data interface clock and may
- * hold waitrequest indefinitely when that clock is absent. Check the
- * independently sampled FPGA clock-watchdog bit before issuing the MMIO. */
+/* The FPGA top level warns that losing the AD9361 interface clock can stall
+ * its register-access path. Check the independently sampled watchdog bit
+ * before issuing MMIO; the guard also rejects malformed addresses. */
 static inline bool nios_axi_access_allowed(uint32_t address,
                                           bool if_clock_alive)
 {
