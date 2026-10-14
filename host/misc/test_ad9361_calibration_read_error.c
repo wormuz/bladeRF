@@ -5286,6 +5286,42 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+        {
+            struct ad9361_rf_phy fir_fault_phy = {
+                .spi = &spi,
+                .pdata = &pdata,
+            };
+            int32_t cleanup_status = 123;
+            unsigned writes_before = write_count;
+            int32_t old_state_after_write = state_after_ensm_write;
+
+            /* The ALERT write may reach the device even when SPI reports an
+             * error. The driver then refuses speculative restore writes
+             * because ENSM state is unknown; preserve that cleanup outcome
+             * separately from the original transport error. */
+            fake_regs[REG_STATE] = ENSM_STATE_RX;
+            state_after_ensm_write = ENSM_STATE_RX;
+            fail_write_once_reg = REG_ENSM_CONFIG_1;
+            fail_write_once_reg_occurrence = 1;
+            apply_failed_write_once = true;
+            ret = ad9361_load_fir_filter_coef_with_cleanup(
+                &fir_fault_phy, FIR_TX1, 0, 16, fir_coef,
+                &cleanup_status);
+            fail_write_once_reg = -1;
+            state_after_ensm_write = old_state_after_write;
+            if (ret != -EIO || cleanup_status != -EIO ||
+                !fir_fault_phy.calibration_state_unknown ||
+                write_count != writes_before + 1) {
+                fprintf(stderr,
+                        "FIR loader lost primary/cleanup ENSM errors: "
+                        "ret=%" PRId32 " cleanup=%" PRId32
+                        " unknown=%d writes=%u\n",
+                        ret, cleanup_status,
+                        fir_fault_phy.calibration_state_unknown,
+                        write_count - writes_before);
+                return EXIT_FAILURE;
+            }
+        }
 	{
 		char fir_text[512];
 		size_t used;
