@@ -35,6 +35,14 @@ static inline bool command_uart_response_should_prepare(bool prepared)
     return !prepared;
 }
 
+/* The main-loop pump may retry only a response that already owns the packet
+ * slot. An unprepared packet still needs the RFIC-safe-point dispatch path. */
+static inline bool command_uart_response_should_retry(bool ready,
+						      bool prepared)
+{
+	return ready && prepared;
+}
+
 static inline void command_uart_response_mark_prepared(volatile bool *prepared)
 {
     *prepared = true;

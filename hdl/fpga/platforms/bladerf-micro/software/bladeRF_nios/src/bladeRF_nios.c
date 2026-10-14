@@ -100,6 +100,52 @@ static const struct pkt_handler pkt_handlers[] = {
 
 #ifdef BLADERF_NIOS_LIBAD936X
 static struct pkt_buf *cooperative_pkt;
+
+/* A safe-point publication can be backpressured by the command UART's
+ * pending slot. Retry the immutable response from the main loop as well, so
+ * completion of the RFIC callback does not need to produce another SPI or
+ * delay safe point before the response can be delivered. */
+static void retry_prepared_cooperative_response(void)
+{
+    enum command_uart_try_publish_result result;
+
+    if (cooperative_pkt == NULL ||
+        !command_uart_response_should_retry(
+            cooperative_pkt->ready,
+            cooperative_pkt->response_prepared)) {
+        return;
+    }
+
+    if (cooperative_pkt->session_generation !=
+        command_uart_current_session_generation()) {
+        cooperative_pkt->ready = false;
+        cooperative_pkt->deferred_work_active_at_accept = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
+        command_uart_enable_isr(true);
+        return;
+    }
+
+    result = command_uart_try_publish_response(
+        cooperative_pkt->resp, cooperative_pkt->session_generation);
+    switch (result) {
+    case COMMAND_UART_TRY_PUBLISH_OK:
+    case COMMAND_UART_TRY_PUBLISH_STALE:
+        cooperative_pkt->ready = false;
+        cooperative_pkt->deferred_work_active_at_accept = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
+        command_uart_enable_isr(true);
+        break;
+    case COMMAND_UART_TRY_PUBLISH_BACKPRESSURE:
+        break;
+    case COMMAND_UART_TRY_PUBLISH_ERROR:
+    default:
+        cooperative_pkt->ready = false;
+        cooperative_pkt->deferred_work_active_at_accept = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
+        DBG("Command UART response failed; request admission fenced until session reset\n");
+        break;
+    }
+}
 #endif
 
 static void run_deferred_packet_work(void)
@@ -129,6 +175,7 @@ static void run_deferred_packet_work(void)
                 break;
             }
         }
+        retry_prepared_cooperative_response();
         return;
     }
 
@@ -156,6 +203,7 @@ static void run_deferred_packet_work(void)
                 }
             }
         }
+        retry_prepared_cooperative_response();
         return;
     }
 
@@ -179,6 +227,7 @@ static void run_deferred_packet_work(void)
      * not merely while this C function happens to be on the stack. */
     command_uart_set_worker_busy(rfic_command_worker_active() ||
                                  rfic_command_owns_device());
+    retry_prepared_cooperative_response();
 #endif
 }
 
@@ -370,25 +419,7 @@ static void service_rfic_status_request(void)
 
 publish_cooperative_response:
     command_uart_response_mark_prepared(&cooperative_pkt->response_prepared);
-    switch (command_uart_try_publish_response(
-        cooperative_pkt->resp, cooperative_pkt->session_generation)) {
-    case COMMAND_UART_TRY_PUBLISH_OK:
-    case COMMAND_UART_TRY_PUBLISH_STALE:
-        cooperative_pkt->ready = false;
-        command_uart_response_retire(&cooperative_pkt->response_prepared);
-        command_uart_enable_isr(true);
-        break;
-    case COMMAND_UART_TRY_PUBLISH_BACKPRESSURE:
-        /* Keep the request slot fenced. The main loop and later safe points
-         * retry publication without re-running the packet handler. */
-        break;
-    case COMMAND_UART_TRY_PUBLISH_ERROR:
-    default:
-        cooperative_pkt->ready = false;
-        command_uart_response_retire(&cooperative_pkt->response_prepared);
-        DBG("Command UART response failed; request admission fenced until session reset\n");
-        break;
-    }
+    retry_prepared_cooperative_response();
 }
 #endif
 
