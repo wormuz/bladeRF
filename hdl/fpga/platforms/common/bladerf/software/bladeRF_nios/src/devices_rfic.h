@@ -35,6 +35,9 @@
 #include "devices_rfic_cmds.h"
 #include "devices_rfic_queue.h"
 #include "rfic_channel_validation.h"
+#include "rfic_calibration_policy.h"
+#include <ad9361.h>
+#include <ad9361_api.h>
 
 
 /******************************************************************************/
@@ -42,6 +45,17 @@
 /******************************************************************************/
 
 typedef uint8_t command_bitmask;
+
+enum rfic_init_tail_phase {
+    RFIC_INIT_TAIL_IDLE = 0,
+    RFIC_INIT_TAIL_RESET_LO,
+    RFIC_INIT_TAIL_FILTER,
+    RFIC_INIT_TAIL_SAMPLE_RATE,
+    RFIC_INIT_TAIL_FINAL_LO,
+    RFIC_INIT_TAIL_TX_GAIN,
+    RFIC_INIT_TAIL_TX_MUTE,
+    RFIC_INIT_TAIL_DONE,
+};
 
 #define RFIC_CMD_INIT_REQD 1   /**< Command requires initialized state */
 #define RFIC_CMD_CHAN_SYSTEM 2 /**< Command valid for wildcard channels */
@@ -60,8 +74,39 @@ struct rfic_state {
      * stopped instead of only "false". */
     uint8_t init_stage;
 
+    /* Cold INIT retains the ADI candidate-PHY constructor while the sole
+     * RFIC queue worker yields between setup/calibration polls. The context
+     * and init parameters remain resident until terminal result/cleanup. */
+    struct ad9361_init_transaction init_job;
+    bool init_job_started;
+    bool init_job_pending;
+    int32_t init_job_status;
+    enum rfic_init_tail_phase init_tail_phase;
+    uint8_t init_module_index;
+    uint8_t init_channel_index;
+    bool init_restore_standby;
+    bool init_nested_complete;
+    int32_t init_nested_status;
+    bool init_tail_pending;
+
+    /* NIOS LO programming uses the retained ADI RFPLL clock transaction.
+     * The command resumes after PLL lock to run RFDC/TXQ and publish the LO
+     * cache; it must not replay port selection or the LO programming phase. */
+    struct ad9361_rfpll_clock_transaction rfpll_job;
+    bool rfpll_job_pending;
+    bool frequency_rfpll_resume_command;
+    bladerf_channel frequency_rfpll_channel;
+    bladerf_frequency frequency_rfpll_target;
+    bool frequency_rfpll_init_sequence;
+    int32_t frequency_rfpll_status;
+
     /* AD9361 state structure */
     struct ad9361_rf_phy *phy;
+
+    /* Set once a calibration has started but completion could not be
+     * established. Reject all RFIC traffic until INIT/ON performs RESETB
+     * and a complete AD9361 reinitialization succeeds. */
+    bool calibration_faulted;
 
     /* Queue for handling long-running write operations */
     struct rfic_queue write_queue;
@@ -81,16 +126,57 @@ struct rfic_state {
     bool bandwidth_invalid[NUM_MODULES];
     bool filter_invalid[NUM_MODULES];
 
-    /* LO frequency at the last RFDC_CAL run for this direction. ADI
-     * guidance (EngineerZone, RF DC offset calibration timeout thread):
-     * RF DC offset cal is frequency-dependent and must be rerun after
-     * LO jumps larger than 100MHz from the calibrated point, or the
-     * receiver carries a stale DC-offset correction as a residual
-     * image-like artifact at the new frequency. ad9361_setup() only
-     * calibrates once at init; nothing in this driver reran it on
-     * retune before this field was added. 0 means "never calibrated
-     * at this frequency" so the first real tune always calibrates. */
-    bladerf_frequency last_rfdc_calib_freq[NUM_MODULES];
+    /* RX/TX sample-rate changes share the AD9361 clock tree and bandwidth
+     * calibration. Keep the entire clock→filter→TXQ/recovery transaction
+     * resident while the RFIC queue yields between TXQ polls. */
+    struct ad9361_sample_rate_transaction sample_rate_job;
+    bool sample_rate_job_pending;
+    bool sample_rate_resume_command;
+    bool sample_rate_saved_samplerate_invalid[NUM_MODULES];
+    bool sample_rate_saved_bandwidth_invalid[NUM_MODULES];
+
+    /* Standalone RX/TX bandwidth writes also run shared BBF/TXQ work. Keep
+     * their ADI transaction resident while the queue yields between polls. */
+    struct ad9361_rf_bandwidth_transaction bandwidth_job;
+    bool bandwidth_job_pending;
+    bool bandwidth_resume_command;
+
+    /* RFDC calibration history is per selected RX RF input. AD9361 keeps
+     * separate RFDC values for input A and inputs B/C, so frequency-only
+     * history can reuse a correction from the wrong input after a port
+     * switch (including a small LO step at the bladeRF 3 GHz crossover). */
+    bladerf_frequency last_rfdc_calib_freq[NUM_MODULES]
+                                               [RFIC_RX_RF_PORT_COUNT];
+
+    /* Runtime RX retune may yield while RF DC calibration is active. This
+     * context stays resident until the hardware completion and ADI restore
+     * phase have both reached a terminal result. */
+    struct ad9361_rfdc_calibration_job rfdc_job;
+    bool rfdc_job_pending;
+    bool rfdc_commit_rx_frequency;
+    uint8_t rfdc_job_port;
+    bladerf_frequency rfdc_job_frequency;
+    /* RX enable must defer its RFFE commit until a newly selected RF input's
+     * RFDC calibration and tracking/ENSM restoration have completed. */
+    bool rfdc_resume_enable_command;
+    bladerf_channel rfdc_resume_enable_channel;
+    uint32_t rfdc_resume_enable_value;
+    uint32_t rfdc_resume_enable_rffe_reg;
+    int32_t rfdc_resume_enable_status;
+
+    /* Runtime TX LO retune may yield across TXQ attempts/phase search. The
+     * target TX frequency remains invalid until tracking/ENSM restoration and
+     * calibration-history commit both complete. */
+    struct ad9361_tx_quad_calibration_transaction tx_quad_job;
+    bool tx_quad_job_pending;
+    bool tx_quad_commit_tx_frequency;
+    bool tx_quad_retune_owner;
+    /* TX enable resumes its queue callback only after TXQ has restored the
+     * RFIC transaction state; the RFFE enable commit must remain after QEC. */
+    bool tx_quad_resume_command;
+    bladerf_channel tx_quad_resume_channel;
+    uint32_t tx_quad_resume_value;
+    uint32_t tx_quad_resume_rffe_reg;
 
     /* TX mute state at standby */
     bool tx_mute_state[2];
@@ -140,8 +226,24 @@ bool rfic_command_write_immed(bladerf_rfic_command command,
  */
 void rfic_invalidate_frequency(bladerf_module module);
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
-                              uint64_t *frequency_hz);
+                              uint64_t *frequency_hz,
+                              uint8_t *failure_stage,
+                              bool allow_txq_yield, bool *txq_pending);
+bool rfic_disable_tx_output(void);
+bool rfic_finalize_tx_quad_calibration(uint8_t *failure_stage);
+bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
+                                                   uint8_t *failure_stage);
+bool rfic_start_tx_quad_calibration_for_command(bool *pending,
+                                                 uint8_t *failure_stage);
+bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
+                                               uint8_t *failure_stage);
+int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage);
+bool rfic_tx_quad_retune_owner(void);
+void rfic_fail_tx_quad_calibration(int32_t status,
+                                   uint8_t *failure_stage);
 bool rfic_frequency_state_available(void);
+bool rfic_phy_present(void);
+bool rfic_command_state_faulted(void);
 
 /* Check that the peer LO needed for dependent-FDD VCO selection is known. */
 bool rfic_frequency_peer_unknown(bladerf_module target);
@@ -191,9 +293,15 @@ static char const RFIC_DBG_FMT[] = "%s: cmd=%s ch=%s state=%s [%x]=%x(-%x)\n";
     DBG(RFIC_DBG_FMT, prefix, cmd, ch, state, addr, data, -data)
 
 /* Error message output */
-static char const RFIC_ERR_FMT[] = "%s: error: %s returned %x (-%x)\n";
+static char const RFIC_ERR_FMT[] = "%s: error: %s returned status %d\n";
+void rfic_command_record_error(int32_t status);
+void rfic_command_record_cleanup_error(int32_t status);
 #define RFIC_ERR(thing, retval) \
-    DBG(RFIC_ERR_FMT, __FUNCTION__, thing, retval, -retval)
+    do { \
+        int32_t const _rfic_error_status = (int32_t)(retval); \
+        rfic_command_record_error(_rfic_error_status); \
+        DBG(RFIC_ERR_FMT, __FUNCTION__, thing, (int)_rfic_error_status); \
+    } while (0)
 
 #include "rfic_check.h"
 
@@ -224,6 +332,15 @@ static inline char const *_rfic_cmdstr(uint8_t cmd)
     switch (cmd) {
         case BLADERF_RFIC_COMMAND_STATUS:
             return "STATUS  ";
+
+        case BLADERF_RFIC_COMMAND_TRANSACTION_STATUS:
+            return "TXNSTAT ";
+
+        case BLADERF_RFIC_COMMAND_PROGRESS:
+            return "PROGRESS ";
+
+        case BLADERF_RFIC_COMMAND_RESULT_DETAIL:
+            return "RESULTD ";
 
         case BLADERF_RFIC_COMMAND_INIT:
             return "INIT    ";

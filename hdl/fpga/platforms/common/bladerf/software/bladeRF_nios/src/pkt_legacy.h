@@ -29,6 +29,7 @@
 #include "nios_pkt_legacy.h"
 
 void pkt_legacy(struct pkt_buf *b);
+void pkt_legacy_abort(void);
 
 #define PKT_LEGACY { \
     .magic          = NIOS_PKT_LEGACY_MAGIC, \

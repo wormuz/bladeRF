@@ -292,8 +292,9 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_ts_lo_sys          : std_logic_vector(31 downto 0);
     signal rx_epoch_ts_hi_sys          : std_logic_vector(31 downto 0);
 
-    -- TX LO retune fence command/status. Target timestamp and command toggles
-    -- cross together into tx_clock; status returns only after gate consumption.
+    -- TX LO retune fence: ARM/COMPLETE/ABORT and target cross together into
+    -- tx_clock. The fault-only FIFO flush/release toggles decode directly in
+    -- sys_clock so the recovery barrier remains usable if ad9361.clock stops.
     signal tx_retune_gate_ctrl_sys        : std_logic_vector(31 downto 0);
     signal tx_retune_gate_target_lo_sys  : std_logic_vector(31 downto 0);
     signal tx_retune_gate_target_hi_sys  : std_logic_vector(31 downto 0);
@@ -303,7 +304,13 @@ architecture core_bladerf of bladerf_core is
     signal tx_retune_gate_target_tx      : unsigned(63 downto 0) := (others => '0');
     signal tx_retune_gate_complete_tx    : std_logic := '0';
     signal tx_retune_gate_abort_tx       : std_logic := '0';
+    signal tx_retune_gate_fifo_flush_sys : std_logic := '0';
+    signal tx_retune_gate_fifo_release_sys : std_logic := '0';
     signal tx_retune_gate_status_tx      : std_logic_vector(31 downto 0);
+    signal tx_fault_flush_status_sys    : std_logic_vector(5 downto 0);
+    signal tx_fault_stop_pclk           : std_logic;
+    signal tx_fault_gpif_idle_pclk      : std_logic;
+    signal tx_fault_gpif_idle_sys       : std_logic;
     signal tx_retune_gate_status_req_sys : std_logic := '0';
     signal tx_retune_gate_status_ack_sys : std_logic;
     signal tx_retune_gate_status_wire_sys : std_logic_vector(31 downto 0);
@@ -701,6 +708,8 @@ begin
             packet_enable       =>  packet_en_pclk,
             rx_enable           =>  rx_enable_pclk,
             tx_enable           =>  tx_enable_pclk,
+            tx_fault_stop       =>  tx_fault_stop_pclk,
+            tx_fault_idle       =>  tx_fault_gpif_idle_pclk,
 
             gpif_in             =>  fx3_gpif_in,
             gpif_out            =>  fx3_gpif_out,
@@ -734,6 +743,15 @@ begin
             rx_meta_fifo_usedr  =>  rx_meta_fifo.rused,
             rx_meta_fifo_data   =>  rx_meta_fifo.rdata,
             rx_diag             =>  fx3_rx_diag
+        );
+
+    U_tx_fault_gpif_idle_sync : entity work.synchronizer
+        generic map (RESET_LEVEL => '0')
+        port map (
+            reset => sys_reset,
+            clock => sys_clock,
+            async => tx_fault_gpif_idle_pclk,
+            sync => tx_fault_gpif_idle_sys
         );
 
     -- FX3 GPIF bidirectional signal control
@@ -856,7 +874,14 @@ begin
             tx_retune_gate_ctrl_export       => tx_retune_gate_ctrl_sys,
             tx_retune_gate_target_lo_export  => tx_retune_gate_target_lo_sys,
             tx_retune_gate_target_hi_export  => tx_retune_gate_target_hi_sys,
-            tx_retune_gate_status_export     => tx_retune_gate_status_sys,
+            -- TX gate bits are refreshed by the TX-clock handshake; fault
+            -- flush bits are live from sys_clock and remain observable even
+            -- when the AD9361 data clock has stopped.
+            tx_retune_gate_status_export     =>
+                tx_retune_gate_status_sys(31 downto 12) &
+                tx_fault_flush_status_sys(5) &
+                tx_fault_flush_status_sys(4 downto 0) &
+                tx_retune_gate_status_sys(5 downto 0),
             rx_fault_causes_export           => rx_fault_causes_sys,
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
@@ -1302,7 +1327,9 @@ begin
             arm_ack_toggle    => tx_retune_gate_arm_ack_tx,
             target_timestamp  => tx_retune_gate_target_tx,
             complete          => tx_retune_gate_complete_tx,
-            abort             => tx_retune_gate_abort_tx
+            abort             => tx_retune_gate_abort_tx,
+            fifo_flush_sys    => tx_retune_gate_fifo_flush_sys,
+            fifo_release_sys  => tx_retune_gate_fifo_release_sys
         );
 
     -- Return one coherent gate status word to NIOS. The continuous handshake
@@ -1697,6 +1724,9 @@ begin
             NUM_STREAMS          => dac_controls'length
         )
         port map (
+            sys_clock            => sys_clock,
+            sys_reset            => sys_reset,
+            fault_gpif_idle_sys  => tx_fault_gpif_idle_sys,
             tx_reset             => tx_reset,
             tx_clock             => tx_clock,
             tx_enable            => tx_enable,
@@ -1713,7 +1743,11 @@ begin
             retune_gate_target   => tx_retune_gate_target_tx,
             retune_gate_complete => tx_retune_gate_complete_tx,
             retune_gate_abort    => tx_retune_gate_abort_tx,
+            retune_gate_fifo_flush_sys => tx_retune_gate_fifo_flush_sys,
+            retune_gate_fifo_flush_release_sys => tx_retune_gate_fifo_release_sys,
             retune_gate_status   => tx_retune_gate_status_tx,
+            fault_flush_status_sys => tx_fault_flush_status_sys,
+            fault_stop_pclk       => tx_fault_stop_pclk,
 
             -- Link status
             link_start_toggle          => link_start_toggle_tx,
@@ -1890,7 +1924,9 @@ begin
 
             -- Digital Loopback Interface
             loopback_fifo_wenabled => tx_loopback_enabled,
-            loopback_fifo_wreset   => tx_reset,
+            -- Fault recovery clears TX samples already copied into the
+            -- digital-loopback FIFO as well as the source sample/META queues.
+            loopback_fifo_wreset   => tx_reset or tx_fifo_flush_aclr,
             loopback_fifo_wclock   => tx_loopback_fifo.wclock,
             loopback_fifo_wdata    => tx_loopback_fifo.wdata,
             loopback_fifo_wreq     => tx_loopback_fifo.wreq,

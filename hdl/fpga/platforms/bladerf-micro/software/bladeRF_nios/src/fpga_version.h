@@ -5,16 +5,18 @@
 
 #include <stdint.h>
 
-/* 0x7778 and PATCH=1 mark an out-of-tree build, so a flashed image can be
- * told apart from Nuand's stock 0.16.0. The host keys compatibility off
- * MAJOR/MINOR only: find_fpga_compat() (helpers/version.c:95) returns the
- * newest table entry for anything above it, so 0.16.1 logs "newer than
- * entries in the compatibility table" and proceeds. VERSION_ID is never
- * compared against an expected value anywhere in the host or Nios tree. */
+/* 0x7778 marks this out-of-tree image. FPGA 0.18.0 adds active RFIC queue
+ * head fields to STATUS; 0.19.0 adds cooperative RFIC progress telemetry;
+ * 0.20.0 adds retained-result acknowledgement; 0.21.0 adds explicit BUSY
+ * responses for tagged RFIC mutations received during callback ownership;
+ * 0.22.0 adds retained RETUNE2 failure identity and cause records;
+ * 0.23.0 adds session-bound request tokens to deferred outcomes;
+ * 0.24.0 adds correlated primary/cleanup result detail for RFIC commands.
+ * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      17
-#define FPGA_VERSION_PATCH      1
+#define FPGA_VERSION_MINOR      24
+#define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \
                                  (FPGA_VERSION_PATCH << 16) ) )

@@ -47,6 +47,11 @@ entity fx3_gpif is
     rx_enable           :   out std_logic;
     meta_enable         :   in  std_logic;
     packet_enable       :   in  std_logic;
+    -- Fault-only barrier: abort GPIF's current TX parse, refuse new TX DMA
+    -- requests, then let the host reset/rearm the FX3 channel after all USB
+    -- submissions have retired. This also handles an incomplete DMA buffer.
+    tx_fault_stop       :   in  std_logic := '0';
+    tx_fault_idle       :   out std_logic := '0';
 
     -- TX FIFO
     tx_fifo_write       :   out std_logic;
@@ -220,6 +225,16 @@ architecture sample_shuffler of fx3_gpif is
     end function;
 
 begin
+    -- Acknowledge only after no TX parse state can issue GPIF acknowledgments.
+    -- RX transfers use a different FX3 DMA channel and do not prevent resetting
+    -- the host-to-FPGA TX channel.
+    tx_fault_idle <= '1' when tx_fault_stop = '1' and
+        current.state /= SETUP_WR and current.state /= META_WRITE and
+        current.state /= SAMPLE_WRITE and
+        current.state /= SAMPLE_WRITE_IGNORE and
+        not (current.state = FINISHED and current.finishing_rx = '0')
+        else '0';
+
     -- DMA handshake signals (active-low, so inverting for clarity)
     dma_req.rx0 <= not dma0_rx_reqx;
     dma_req.rx1 <= not dma1_rx_reqx;
@@ -409,6 +424,22 @@ begin
         future.rx_meta_en   <= meta_enable;
         future.tx_meta_en   <= meta_enable;
 
+        if tx_fault_stop = '1' and
+           (current.state = SETUP_WR or current.state = META_WRITE or
+            current.state = SAMPLE_WRITE or
+            current.state = SAMPLE_WRITE_IGNORE or
+            (current.state = FINISHED and current.finishing_rx = '0')) then
+            -- Stale host payload is invalid after this barrier. Stop parser
+            -- acknowledgements at the next PCLK edge; the host resets the FX3
+            -- AUTO-DMA channel only after tx_fault_idle crosses to sys_clock.
+            future.state          <= IDLE;
+            future.gpif_mode      <= IDLE;
+            future.dma_acks       <= (others => '0');
+            future.tx_fifo_wr     <= '0';
+            future.txm_fifo_wr    <= '0';
+            future.dma_downcount  <= -1;
+            future.meta_downcount <= META_DOWNCOUNT_RESET;
+        else
         case (current.state) is
             -- =================================================================
             -- Idle State
@@ -431,7 +462,7 @@ begin
                         future.ack_downcount    <= ACK_DOWNCOUNT_READ;
                         future.rx_current_dma   <= RX0;
                         future.state            <= SETUP_RD;
-                    elsif (can_tx) then
+                    elsif (can_tx and tx_fault_stop = '0') then
                         future.ack_downcount    <= ACK_DOWNCOUNT_WRITE;
                         future.tx_current_dma   <= TX3;
                         future.state            <= SETUP_WR;
@@ -639,6 +670,7 @@ begin
                 end if;
 
         end case;
+        end if;
     end process fsm_comb_proc;
 
     -- Output process for FSM

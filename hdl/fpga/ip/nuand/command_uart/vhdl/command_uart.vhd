@@ -66,9 +66,17 @@ architecture arch of command_uart is
     signal sync_sin     : std_logic ;
 
     signal reg_response : std_logic_vector(127 downto 0) ;
+    -- Avalon writes stage a response here. The UART serializes immutable
+    -- snapshots so later response writes cannot alter an active frame.
+    signal tx_response : std_logic_vector(127 downto 0) := (others => '0');
+    signal pending_response : std_logic_vector(127 downto 0) := (others => '0');
+    signal pending_response_valid : std_logic := '0';
+    signal response_active : std_logic := '0';
+    signal response_overflow : std_logic := '0';
     signal reg_request  : std_logic_vector(127 downto 0) ;
     signal request_session  : std_logic_vector(31 downto 0) := (others => '0');
     signal response_session : std_logic_vector(31 downto 0) := (others => '0');
+    signal request_busy     : std_logic := '0';
 
     signal sin_data     : std_logic_vector(7 downto 0) ;
     signal sin_we       : std_logic ;
@@ -100,6 +108,7 @@ architecture arch of command_uart is
     signal control  :   std_logic_vector(7 downto 0) := (0 => '1', others =>'0') ;
 
     alias isr_enable is control(0) ;
+    alias worker_busy is control(1) ;
 
 begin
 
@@ -113,10 +122,14 @@ begin
             command_in <= '0' ;
             if( write = '1' ) then
                 case to_integer(unsigned(addr)) is
-                    when  0| 1| 2| 3 => reg_response( 31 downto   0) <= din ; command_in <= '1' ;
+                    when  0| 1| 2| 3 => reg_response( 31 downto   0) <= din ;
                     when  4| 5| 6| 7 => reg_response( 63 downto  32) <= din ;
                     when  8| 9|10|11 => reg_response( 95 downto  64) <= din ;
-                    when 12|13|14|15 => reg_response(127 downto  96) <= din ;
+                    -- NIOS writes low-to-high. The last word is the atomic
+                    -- commit point after both payload and session are set.
+                    when 12|13|14|15 =>
+                        reg_response(127 downto  96) <= din ;
+                        command_in <= '1' ;
                     when 16|17|18|19 => control(7 downto 0) <= din(7 downto 0) ;
                     when 24|25|26|27 => response_session <= din ;
                     when others => null ;
@@ -129,17 +142,36 @@ begin
         type state_t is (WAITING_FOR_COMMAND, SEND_BYTE, WAITING_FOR_START, WAITING_FOR_DONE) ;
         variable state : state_t ;
         variable count : natural range 0 to 15 := 15 ;
+        variable commit_consumed : boolean;
+        variable pending_slot_available : boolean;
     begin
         if( reset = '1' or session_reset = '1' ) then
             state := WAITING_FOR_COMMAND ;
             sout_we <= '0' ;
+            tx_response <= (others => '0');
+            pending_response <= (others => '0');
+            pending_response_valid <= '0';
+            response_active <= '0';
+            response_overflow <= '0';
         elsif( rising_edge(clock) ) then
             sout_we <= '0' ;
-            sout_data <= reg_response(count*8+7 downto count*8) ;
+            commit_consumed := false;
+            pending_slot_available := (pending_response_valid = '0');
+            sout_data <= tx_response(count*8+7 downto count*8) ;
             case state is
                 when WAITING_FOR_COMMAND =>
-                    if( command_in = '1' and
+                    if (pending_response_valid = '1') then
+                        tx_response <= pending_response;
+                        pending_response_valid <= '0';
+                        pending_slot_available := true;
+                        response_active <= '1';
+                        state := SEND_BYTE;
+                        count := 0;
+                    elsif( command_in = '1' and response_overflow = '0' and
                         response_session = session_generation ) then
+                        tx_response <= reg_response;
+                        response_active <= '1';
+                        commit_consumed := true;
                         state := SEND_BYTE ;
                         count := 0 ;
                     end if ;
@@ -158,11 +190,43 @@ begin
                         if( count < 15 ) then
                             count := count + 1 ;
                             state := SEND_BYTE ;
+                        elsif (pending_response_valid = '1') then
+                            tx_response <= pending_response;
+                            pending_response_valid <= '0';
+                            pending_slot_available := true;
+                            response_active <= '1';
+                            count := 0;
+                            state := SEND_BYTE;
+                        elsif (command_in = '1' and response_overflow = '0' and
+                               response_session = session_generation) then
+                            -- A commit on the final stop-bit boundary is
+                            -- consumed directly rather than lost.
+                            tx_response <= reg_response;
+                            response_active <= '1';
+                            commit_consumed := true;
+                            count := 0;
+                            state := SEND_BYTE;
                         else
+                            response_active <= '0';
                             state := WAITING_FOR_COMMAND ;
                         end if ;
                     end if ;
             end case ;
+
+            -- One committed response may wait behind the active frame. The
+            -- NIOS writer checks bit 2 (pending slot full) before staging a
+            -- new response; overflow is still surfaced as a sticky fault.
+            if (command_in = '1' and
+                response_overflow = '0' and
+                response_session = session_generation and
+                not commit_consumed and state /= WAITING_FOR_COMMAND) then
+                if (pending_slot_available) then
+                    pending_response <= reg_response;
+                    pending_response_valid <= '1';
+                else
+                    response_overflow <= '1';
+                end if;
+            end if;
         end if ;
     end process ;
 
@@ -179,6 +243,13 @@ begin
                     when 12|13|14|15 => dout <= reg_request(127 downto 96) ;
                     when 16|17|18|19 => dout(7 downto 0) <= control ;
                     when 20|21|22|23 => dout <= request_session ;
+                    when 24|25|26|27 => dout <= session_generation ;
+                    when 28|29|30|31 => dout <= (4 => response_active,
+                                                   3 => response_overflow,
+                                                   2 => pending_response_valid,
+                                                   1 => worker_busy,
+                                                   0 => request_busy,
+                                                   others => '0') ;
                     when others => dout <= (others => '0') ;
                 end case ;
             end if ;
@@ -194,11 +265,18 @@ begin
             state := WAIT_FOR_MAGIC ;
             count := 0 ;
             irq <= '0' ;
+            request_busy <= '0' ;
         elsif( rising_edge(clock) ) then
             if( sin_we = '1' and state /= WAIT_FOR_READ and
                 state /= INTERRUPT ) then
                 reg_request(count*8+7 downto count*8) <= sin_data ;
             end if ;
+            -- Capture worker ownership before the case statement can move a
+            -- pending request from WAIT_FOR_READ to WAIT_FOR_MAGIC.
+            if( worker_busy = '1' and
+                (state = INTERRUPT or state = WAIT_FOR_READ) ) then
+                request_busy <= '1';
+            end if;
             case state is
                 when WAIT_FOR_MAGIC =>
                     if( sin_we = '1' ) then
@@ -211,6 +289,7 @@ begin
                             state := RECEIVE_COMMAND ;
                             count := count + 1 ;
                             request_session <= session_generation;
+                            request_busy <= worker_busy;
                         end if ;
                     end loop ;
                     if( count = 0 ) then
@@ -219,10 +298,15 @@ begin
 
                 when RECEIVE_COMMAND =>
                     if( sin_we = '1' ) then
+                        request_busy <= request_busy or worker_busy;
                         if( count < 15 ) then
                             count := count + 1 ;
                         else
                             count := 0 ;
+                            -- Capture whether the complete request arrived
+                            -- while NIOS owned a synchronous peripheral
+                            -- callback. This is independent of later IRQ
+                            -- latency and callback return timing.
                             state := INTERRUPT ;
                         end if ;
                     end if ;
@@ -238,9 +322,17 @@ begin
                 when WAIT_FOR_READ =>
                     if( read = '1' ) then
                         irq <= '0' ;
+                        -- The NIOS ISR snapshots request_busy before reading
+                        -- this request word. Clear the per-request latch only
+                        -- when the request buffer is consumed; status/session
+                        -- reads must not erase the evidence prematurely.
+                        if( to_integer(unsigned(addr)) <= 15 ) then
+                            request_busy <= '0';
+                        end if;
                         state := WAIT_FOR_MAGIC ;
                     end if ;
             end case ;
+
         end if ;
     end process ;
 

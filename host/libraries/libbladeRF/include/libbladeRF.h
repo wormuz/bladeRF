@@ -4944,8 +4944,11 @@ typedef enum {
      * and new submissions are blocked. The transport-link certificate stays
      * separate, while the RFIC and frequency certificates are revoked
      * because the requested RF state is unknown. The FPGA TX gate is aborted.
-     * `flags` carries the cumulative
-     * NIOS failure counter observed by the host. */
+     * On FPGA versions with failure records, `fpga_timestamp` is the scheduled
+     * timestamp, `requested_rx_lo_hz` identifies the requested TX LO, and
+     * `rfic_status` carries the NIOS failure stage when
+     * NIOS_FAILURE_STAGE_VALID is set. Older FPGA versions report an
+     * aggregate diagnostic and put the cumulative failure counter in `flags`. */
     BLADERF_RF_EVT_TX_RETUNE_FAILED,
     /** A scheduled TX retune was accepted and is awaiting NIOS completion.
      * TX RFIC-state and frequency certificates are revoked until fresh
@@ -4971,14 +4974,17 @@ typedef enum {
      * certificate remains independent and is not reported as failed. */
     BLADERF_RF_EVT_TX_CONFIGURATION_INVALID,
     /** NIOS reported a failure while loading or activating a previously
-     * accepted scheduled RX fastlock request. Queue acceptance already
-     * emitted RX_DATA_INVALIDATED; this diagnostic event does not itself
-     * change the current epoch's validity. `flags` carries the cumulative
-     * NIOS RX failure counter. */
+     * accepted scheduled RX fastlock request. On FPGA versions with failure
+     * records, `fpga_timestamp` is the scheduled timestamp,
+     * `requested_rx_lo_hz` identifies the request, and `rfic_status` carries
+     * the NIOS failure stage when NIOS_FAILURE_STAGE_VALID is set. Older
+     * FPGA versions report an aggregate diagnostic and put the cumulative
+     * failure counter in `flags`. */
     BLADERF_RF_EVT_RX_RETUNE_FAILED,
-    /** The host could not read the NIOS RX retune failure counter, or the
-     * counter reset while being monitored. This diagnostic does not itself
-     * change RX epoch validity; `error_code` contains the read/reset error. */
+    /** The host could not read or correlate NIOS RX retune failure status,
+     * including counter reset, ring loss, or an unmatched failure record.
+     * This diagnostic accompanies fail-closed RX retune outcome handling;
+     * `error_code` contains the read/correlation error. */
     BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
 } bladerf_rf_event_type;
 
@@ -4999,7 +5005,12 @@ typedef enum {
     BLADERF_RF_NIOS_FAILURE_PLL_LOCK_TIMEOUT,
     BLADERF_RF_NIOS_FAILURE_RF_PORT_SELECT,
     BLADERF_RF_NIOS_FAILURE_SPDT_SELECT,
-    BLADERF_RF_NIOS_FAILURE_LO_READBACK
+    BLADERF_RF_NIOS_FAILURE_LO_READBACK,
+    BLADERF_RF_NIOS_FAILURE_TX_QUAD_CALIBRATION,
+    BLADERF_RF_NIOS_FAILURE_RFIC_FAULTED,
+    BLADERF_RF_NIOS_FAILURE_SCHEDULE,
+    BLADERF_RF_NIOS_FAILURE_TIMER_STOPPED,
+    BLADERF_RF_NIOS_FAILURE_INTERNAL
 } bladerf_rf_nios_failure_stage;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)
@@ -5213,8 +5224,8 @@ struct bladerf_rf_event {
     uint64_t requested_rx_lo_hz;
     /** Readback RX LO, or readback TX LO for TX_RETUNE_* events. */
     uint64_t readback_rx_lo_hz;
-    uint32_t rfic_status;         /**< Raw status; NIOS failure stage when
-                                     *   NIOS_FAILURE_STAGE_VALID is set */
+    uint32_t rfic_status;         /**< Raw status; NIOS failure stage for
+                                     *   stage-tagged RX/TX retune failures. */
     bladerf_rf_state fpga_state;
     bladerf_rf_event_type event_type;
     uint32_t flags;              /**< Event-specific; SPI events contain write count */

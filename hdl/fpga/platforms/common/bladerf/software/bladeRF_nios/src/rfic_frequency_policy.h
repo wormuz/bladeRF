@@ -30,9 +30,10 @@ static inline bool rfic_frequency_change_blocked(bool init_sequence,
  * recalls have no such synchronous host readback and must retain NIOS PHY
  * ownership. */
 static inline bool rfic_fastlock_host_owned_without_phy(bool immediate,
-                                                         bool phy_available)
+                                                         bool phy_present,
+                                                         bool faulted)
 {
-    return immediate && !phy_available;
+    return immediate && !phy_present && !faulted;
 }
 
 #endif

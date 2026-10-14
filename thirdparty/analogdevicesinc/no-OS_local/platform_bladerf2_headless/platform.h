@@ -45,6 +45,7 @@
 
 #include "config.h"
 #include "stdint.h"
+#include "stdbool.h"
 /* Renamed upstream: util.h became ad9361_util.h when the driver moved to
  * drivers/rf-transceiver/ad9361/. */
 #include "ad9361_util.h"
@@ -159,6 +160,12 @@ void udelay(unsigned long usecs);
 void mdelay(unsigned long msecs);
 void no_os_udelay(uint32_t usecs);
 void no_os_mdelay(uint32_t msecs);
+/* Optional cooperative service hook used by the NIOS command loop while
+ * AD9361 code waits for hardware. The hook must not mutate the active RFIC
+ * transaction. */
+typedef void (*bladerf_platform_service_fn)(void);
+void bladerf_platform_set_service_hook(bladerf_platform_service_fn hook);
+void bladerf_platform_service(void);
 unsigned long msleep_interruptible(unsigned int msecs);
 
 #ifndef AXI_ADC_NOT_PRESENT

@@ -39,6 +39,10 @@ struct pkt_buf {
     uint8_t       req[NIOS_PKT_LEN];      /* Request */
     uint8_t       resp[NIOS_PKT_LEN];     /* Response */
     uint32_t      session_generation;     /* FX3/FPGA command-link session */
+    /* Latched by the UART ISR so a request received during a synchronous
+     * handler/deferred callback cannot execute later if it misses the last
+     * cooperative service point. */
+    volatile bool deferred_work_active_at_accept;
     volatile bool ready;                  /* Ready flag */
 };
 

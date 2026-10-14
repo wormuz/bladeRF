@@ -36,6 +36,7 @@ static CyU3PDmaChannel glChHandlePtoU;
 
 static int loopback = 0;
 static int loopback_when_created;
+static volatile uint32_t tx_dma_pause_state = BLADE_TX_DMA_PAUSE_IDLE;
 
 /* Tracks whether the sample-path resources (DMA channels, bulk endpoints,
  * GPIF, UART bridge) are currently live, so Start and Stop can each be
@@ -43,6 +44,23 @@ static int loopback_when_created;
 static int link_started = 0;
 
 static void NuandRFLinkStop(void);
+
+static void NuandRFLinkDmaCallback(CyU3PDmaChannel *handle,
+                                   CyU3PDmaCbType_t type,
+                                   CyU3PDmaCBInput_t *input)
+{
+    (void)input;
+    if (tx_dma_pause_state == BLADE_TX_DMA_PAUSE_PENDING &&
+        handle == &glChHandleUtoP &&
+        (type & CY_U3P_DMA_CB_CONS_SUSP) != 0) {
+        tx_dma_pause_state = BLADE_TX_DMA_PAUSE_CONFIRMED;
+    }
+    if (tx_dma_pause_state == BLADE_TX_DMA_PAUSE_PENDING &&
+        handle == &glChHandleUtoP &&
+        (type & (CY_U3P_DMA_CB_ERROR | CY_U3P_DMA_CB_ABORTED)) != 0) {
+        tx_dma_pause_state = BLADE_TX_DMA_PAUSE_FAILED;
+    }
+}
 
 static void NuandRFCheckStatus(CyU3PReturnStatus_t status)
 {
@@ -186,8 +204,10 @@ static void UartBridgeStart(void)
     dmaCfg.prodSckId = CY_U3P_UIB_SOCKET_PROD_2;
     dmaCfg.consSckId = CY_U3P_LPP_SOCKET_UART_CONS;
     dmaCfg.dmaMode = CY_U3P_DMA_MODE_BYTE;
-    dmaCfg.notification = 0;
-    dmaCfg.cb = 0;
+    dmaCfg.notification = CY_U3P_DMA_CB_CONS_SUSP |
+                          CY_U3P_DMA_CB_ERROR |
+                          CY_U3P_DMA_CB_ABORTED;
+    dmaCfg.cb = NuandRFLinkDmaCallback;
     dmaCfg.prodHeader = 0;
     dmaCfg.prodFooter = 0;
     dmaCfg.consHeader = 0;
@@ -370,6 +390,7 @@ static void NuandRFLinkStart(void)
     dmaCfg.prodAvailCount = 0;
 
     loopback_when_created = loopback;
+    tx_dma_pause_state = BLADE_TX_DMA_PAUSE_IDLE;
 
     if (loopback) {
         dmaCfg.prodSckId = BLADE_RF_SAMPLE_EP_PRODUCER_USB_SOCKET;
@@ -503,6 +524,36 @@ static void NuandRFLinkStop (void)
     glAppMode = MODE_NO_CONFIG;
 }
 
+CyU3PReturnStatus_t NuandRFLinkPauseTxDma(void)
+{
+    CyU3PReturnStatus_t status;
+
+    if (!link_started || loopback_when_created) {
+        return CY_U3P_ERROR_NOT_SUPPORTED;
+    }
+    if (tx_dma_pause_state == BLADE_TX_DMA_PAUSE_PENDING ||
+        tx_dma_pause_state == BLADE_TX_DMA_PAUSE_CONFIRMED) {
+        return CY_U3P_SUCCESS;
+    }
+    if (tx_dma_pause_state == BLADE_TX_DMA_PAUSE_FAILED) {
+        return CY_U3P_ERROR_FAILURE;
+    }
+
+    tx_dma_pause_state = BLADE_TX_DMA_PAUSE_PENDING;
+    status = CyU3PDmaChannelSetSuspend(
+        &glChHandleUtoP, CY_U3P_DMA_SCK_SUSP_NONE,
+        CY_U3P_DMA_SCK_SUSP_CUR_BUF);
+    if (status != CY_U3P_SUCCESS) {
+        tx_dma_pause_state = BLADE_TX_DMA_PAUSE_FAILED;
+    }
+    return status;
+}
+
+uint32_t NuandRFLinkTxDmaPauseStatus(void)
+{
+    return tx_dma_pause_state;
+}
+
 static uint8_t RF_status_bits[] = {
     [BLADE_RF_SAMPLE_EP_PRODUCER] = 0,
     [BLADE_RF_SAMPLE_EP_CONSUMER] = 0,
@@ -516,6 +567,10 @@ CyU3PReturnStatus_t NuandRFLinkResetEndpoint(uint8_t endpoint)
 
     switch(endpoint) {
         case BLADE_RF_SAMPLE_EP_PRODUCER:
+            /* A successful endpoint reset is the recovery/rearm boundary for
+             * the host-to-FPGA TX channel. Ignore any delayed abort callback
+             * from the channel being reset after this state is cleared. */
+            tx_dma_pause_state = BLADE_TX_DMA_PAUSE_IDLE;
             status = ClearDMAChannel(endpoint, &glChHandleUtoP,
                                      BLADE_DMA_TX_SIZE);
             break;

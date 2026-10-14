@@ -41,6 +41,7 @@
 #include "nios_pkt_formats.h"
 
 #include "board/board.h"
+#include "helpers/have_cap.h"
 #include "helpers/version.h"
 #include "helpers/timeout.h"
 
@@ -101,6 +102,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
         dev->nios_retune_trace.status = 0;
         dev->nios_retune_trace.device_failure_stage =
             NIOS_PKT_RETUNE2_FAILURE_NONE;
+        dev->nios_retune_trace.retune2_terminal_unknown = false;
         dev->nios_retune_trace.valid = true;
     }
 
@@ -335,14 +337,12 @@ static int nios_8x32_write(struct bladerf *dev, uint8_t id,
 }
 
 /* NIOS services requests from its main loop. A full AD9361 initialization
- * runs synchronously there. Calibration completion polls are bounded at
- * 20,000 iterations with 1.2 ms between reads (24 s nominal per calibration,
- * plus SPI/handler overhead). A preserved mode-switch request remained
- * blocked for about 55 s before its host probe was interrupted; successful
- * init duration is not known. Send the request exactly once: the command UART
- * has no transaction ID, so retransmitting after an IN timeout could
- * duplicate a side effect or misassociate a delayed response. This watchdog
- * never certifies RF state or IQ validity. */
+ * and other RFIC writes are queued, then their ADI callback executes
+ * synchronously in deferred work. FPGA protocol 0.18.0 tags RFIC writes so a
+ * late queue-acceptance reply can be correlated after an IN timeout; actual
+ * operation completion still comes from the queue retirement/status record.
+ * This response watchdog reports transport failure only and never certifies
+ * RF state or IQ validity. */
 static int nios_rfic_access_wait_response(struct bladerf *dev, uint8_t *buf)
 {
     struct bladerf_usb *usb = dev->backend_data;
@@ -397,16 +397,18 @@ static int nios_16x64_read(struct bladerf *dev,
     }
 }
 
-static int nios_16x64_write(struct bladerf *dev,
-                            uint8_t id,
-                            uint16_t addr,
-                            uint64_t data)
+static int nios_16x64_write_with_transaction_id(struct bladerf *dev,
+                                                uint8_t id,
+                                                uint16_t addr,
+                                                uint64_t data,
+                                                uint16_t transaction_id)
 {
     int status;
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
 
-    nios_pkt_16x64_pack(buf, id, true, addr, data);
+    nios_pkt_16x64_pack_with_transaction_id(
+        buf, id, true, addr, data, transaction_id);
 
     /* A timed-out response leaves command execution uncertain. Do not
      * retransmit a potentially non-idempotent RFIC command. */
@@ -420,6 +422,13 @@ static int nios_16x64_write(struct bladerf *dev,
         return status;
     }
 
+    if (id == NIOS_PKT_16x64_TARGET_RFIC &&
+        nios_pkt_16x64_resp_is_busy(buf)) {
+        return have_cap_dev(dev, BLADERF_CAP_RFIC_BUSY_RESPONSE)
+                   ? BLADERF_ERR_WOULD_BLOCK
+                   : BLADERF_ERR_FPGA_OP;
+    }
+
     nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, NULL, &success);
 
     if (success) {
@@ -428,6 +437,12 @@ static int nios_16x64_write(struct bladerf *dev,
         log_debug("%s: response packet reported failure.\n", __FUNCTION__);
         return BLADERF_ERR_FPGA_OP;
     }
+
+static int nios_16x64_write(struct bladerf *dev, uint8_t id, uint16_t addr,
+                            uint64_t data)
+{
+    return nios_16x64_write_with_transaction_id(dev, id, addr, data, 0);
+}
 }
 
 static int nios_32x32_read(struct bladerf *dev, uint32_t id,
@@ -951,11 +966,13 @@ int nios_rfic_command_read(struct bladerf *dev, uint16_t cmd, uint64_t *data)
     return status;
 }
 
-int nios_rfic_command_write(struct bladerf *dev, uint16_t cmd, uint64_t data)
+int nios_rfic_command_write(struct bladerf *dev, uint16_t cmd, uint64_t data,
+                            uint16_t transaction_id)
 {
     int status;
 
-    status = nios_16x64_write(dev, NIOS_PKT_16x64_TARGET_RFIC, cmd, data);
+    status = nios_16x64_write_with_transaction_id(
+        dev, NIOS_PKT_16x64_TARGET_RFIC, cmd, data, transaction_id);
 
 #ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
     if (status == 0) {
@@ -1055,6 +1072,17 @@ int nios_retune2_failure_count_read(struct bladerf *dev,
                           addr, value);
 }
 
+int nios_command_session_generation_read(struct bladerf *dev,
+                                         uint32_t *generation)
+{
+    if (generation == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_read(
+        dev, NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION, 0,
+        generation);
+}
+
 int nios_retune2_success_count_read(struct bladerf *dev,
                                     bladerf_module module,
                                     uint32_t *value)
@@ -1081,7 +1109,9 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  uint32_t sequence,
                                  uint64_t *frequency_hz,
                                  uint64_t *scheduled_timestamp,
-                                 uint16_t *nios_profile)
+                                 uint16_t *nios_profile,
+                                 uint32_t *session_generation,
+                                 uint16_t *request_token)
 {
     uint8_t select_addr;
     uint32_t first_sequence;
@@ -1089,17 +1119,22 @@ int nios_retune2_completion_read(struct bladerf *dev,
     uint32_t lo;
     uint32_t hi;
     uint32_t profile;
+    uint32_t session = 0;
+    uint32_t token = 0;
     uint32_t timestamp_lo;
     uint32_t timestamp_hi;
     int status;
 
     if (frequency_hz == NULL || scheduled_timestamp == NULL ||
-        nios_profile == NULL) {
+        nios_profile == NULL || session_generation == NULL ||
+        request_token == NULL) {
         return BLADERF_ERR_INVAL;
     }
     *frequency_hz = 0;
     *scheduled_timestamp = 0;
     *nios_profile = 0;
+    *session_generation = 0;
+    *request_token = 0;
     if (module == BLADERF_MODULE_RX) {
         select_addr = NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX;
     } else if (module == BLADERF_MODULE_TX) {
@@ -1148,6 +1183,18 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI,
                                 &timestamp_hi);
     }
+    if (status == 0 &&
+        have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_SESSION_GENERATION, &session);
+    }
+    if (status == 0 &&
+        have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN, &token);
+    }
     if (status == 0) {
         status = nios_8x32_read(dev,
                                 NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
@@ -1163,13 +1210,125 @@ int nios_retune2_completion_read(struct bladerf *dev,
     /* The completion record stores this field as uint16_t. Reject corrupt
      * peripheral data instead of silently narrowing it to a plausible saved
      * profile ID that could update the AD9361 fastlock cache incorrectly. */
-    if (!nios_retune_profile_word_valid(profile)) {
+    if (!nios_retune_profile_word_valid(profile) || token > UINT16_MAX) {
         return BLADERF_ERR_UNEXPECTED;
     }
 
     *frequency_hz = ((uint64_t)hi << 32) | lo;
     *scheduled_timestamp = ((uint64_t)timestamp_hi << 32) | timestamp_lo;
     *nios_profile = (uint16_t)profile;
+    *session_generation = session;
+    *request_token = (uint16_t)token;
+    return 0;
+}
+
+int nios_retune2_failure_completion_read(struct bladerf *dev,
+                                         bladerf_module module,
+                                         uint32_t sequence,
+                                         uint64_t *scheduled_timestamp,
+                                         uint16_t *nios_profile,
+                                         uint8_t *failure_stage,
+                                         uint32_t *session_generation,
+                                         uint16_t *request_token)
+{
+    uint8_t select_addr;
+    uint32_t first_sequence;
+    uint32_t last_sequence;
+    uint32_t timestamp_lo;
+    uint32_t timestamp_hi;
+    uint32_t profile;
+    uint32_t stage;
+    uint32_t session = 0;
+    uint32_t token = 0;
+    int status;
+
+    if (scheduled_timestamp == NULL || nios_profile == NULL ||
+        failure_stage == NULL || session_generation == NULL ||
+        request_token == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    *scheduled_timestamp = 0;
+    *nios_profile = 0;
+    *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    *session_generation = 0;
+    *request_token = 0;
+    if (module == BLADERF_MODULE_RX) {
+        select_addr = NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_RX;
+    } else if (module == BLADERF_MODULE_TX) {
+        select_addr = NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX;
+    } else {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = nios_8x32_write(dev,
+                             NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                             select_addr, sequence);
+    if (status != 0) {
+        return status;
+    }
+    status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                            NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE,
+                            &first_sequence);
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_LO,
+                                &timestamp_lo);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_HI,
+                                &timestamp_hi);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_PROFILE,
+                                &profile);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_FAILURE_STAGE,
+                                &stage);
+    }
+    if (status == 0 &&
+        have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_FAILURE_SESSION_GENERATION, &session);
+    }
+    if (status == 0 &&
+        have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_FAILURE_REQUEST_TOKEN, &token);
+    }
+    if (status == 0) {
+        status = nios_8x32_read(dev,
+                                NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE,
+                                &last_sequence);
+    }
+    if (status != 0) {
+        return status;
+    }
+    if (first_sequence != sequence || last_sequence != sequence) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    if (!nios_retune_profile_word_valid(profile) ||
+        stage == NIOS_PKT_RETUNE2_FAILURE_NONE ||
+        stage > NIOS_PKT_RETUNE2_FAILURE_INTERNAL ||
+        token > UINT16_MAX) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    *scheduled_timestamp = ((uint64_t)timestamp_hi << 32) | timestamp_lo;
+    *nios_profile = (uint16_t)profile;
+    *failure_stage = (uint8_t)stage;
+    *session_generation = session;
+    *request_token = (uint16_t)token;
     return 0;
 }
 
@@ -1605,6 +1764,172 @@ int nios_tx_retune_gate_status_read(struct bladerf *dev, uint32_t *value)
         NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, value);
 }
 
+int nios_tx_fifo_fault_flush_start(struct bladerf *dev)
+{
+    const uint32_t busy_mask =
+        NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY;
+    const uint32_t drain_progress_mask =
+        NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED |
+        NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY;
+    uint32_t gate_status = 0;
+    int status = nios_tx_retune_gate_status_read(dev, &gate_status);
+    if (status != 0) {
+        return status;
+    }
+    if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR)
+        != 0) {
+        return BLADERF_ERR_FPGA_OP;
+    }
+
+    /* The previous command may have reached the FPGA even if its USB
+     * response was lost. Any busy state means the start was accepted; the
+     * caller's wait() remains responsible for requiring the full drain-ready
+     * mask before touching FX3 or claiming recovery progress. */
+    if ((gate_status & busy_mask) != 0) {
+        return 0;
+    }
+
+    /* This dedicated host-authorized recovery command must not depend on the
+     * TX-clock retune state, whose status freezes if ad9361.clock disappears. */
+    if ((gate_status & drain_progress_mask) != 0) {
+        /* Progress without BUSY is an impossible/stale status combination. */
+        return BLADERF_ERR_FPGA_OP;
+    }
+
+    status = nios_tx_retune_gate_cmd(
+        dev, NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_FLUSH);
+    if (status != 0) {
+        /* Command response failure is ambiguous. Re-read the independent
+         * sys_clock status before returning the transport error. */
+        int command_status = status;
+        status = nios_tx_retune_gate_status_read(dev, &gate_status);
+        if (status != 0) {
+            return command_status;
+        }
+        if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR)
+            != 0) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+        if ((gate_status & busy_mask) != 0) {
+            return 0;
+        }
+        return command_status;
+    }
+    return 0;
+}
+
+int nios_tx_fifo_fault_flush_wait(struct bladerf *dev,
+                                  unsigned int timeout_ms)
+{
+    const unsigned int poll_interval_us = 120;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
+    int status = bladerf_monotonic_now_ns(&now_ns);
+
+    if (!nios_deadline_start(status, now_ns,
+                             (uint64_t)timeout_ms * 1000000ULL,
+                             &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    while (!expired) {
+        uint32_t gate_status = 0;
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (expired) {
+            break;
+        }
+        status = nios_tx_retune_gate_status_read(dev, &gate_status);
+        if (status != 0) {
+            return status;
+        }
+        if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR)
+            != 0) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+        if ((gate_status & (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY |
+                            NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED |
+                            NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY)) ==
+            (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY |
+             NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED |
+             NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY)) {
+            /* PCLK has blocked FIFO writes and stopped TX parser acknowledgments.
+             * FIFO empty is not certified until AD9361 clock restoration and
+             * clear release. */
+            return 0;
+        }
+        usleep(poll_interval_us);
+    }
+    return BLADERF_ERR_TIMEOUT;
+}
+
+int nios_tx_fifo_fault_flush_release(struct bladerf *dev,
+                                     unsigned int timeout_ms)
+{
+    const unsigned int poll_interval_us = 120;
+    uint32_t gate_status = 0;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
+    int status = nios_tx_retune_gate_status_read(dev, &gate_status);
+
+    if (status != 0) {
+        return status;
+    }
+    if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR) != 0 ||
+        (gate_status & (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY |
+                        NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED |
+                        NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY)) !=
+        (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY |
+         NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED |
+         NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = nios_tx_retune_gate_cmd(
+        dev, NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_RELEASE);
+    if (status != 0) {
+        return status;
+    }
+    status = bladerf_monotonic_now_ns(&now_ns);
+    if (!nios_deadline_start(status, now_ns,
+                             (uint64_t)timeout_ms * 1000000ULL,
+                             &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    while (!expired) {
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (expired) {
+            break;
+        }
+        status = nios_tx_retune_gate_status_read(dev, &gate_status);
+        if (status != 0) {
+            return status;
+        }
+        if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR)
+            != 0) {
+            return BLADERF_ERR_FPGA_OP;
+        }
+        if ((gate_status & NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY)
+                == 0 &&
+            (gate_status & (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_RELEASED |
+                            NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFOS_EMPTY)) ==
+                (NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_RELEASED |
+                 NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFOS_EMPTY)) {
+            return 0;
+        }
+        usleep(poll_interval_us);
+    }
+    return BLADERF_ERR_TIMEOUT;
+}
+
 int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile)
 {
@@ -2009,6 +2334,12 @@ int nios_retune(struct bladerf *dev, bladerf_channel ch,
 
     nios_pkt_retune_resp_unpack(buf, &duration, &vcocap, &resp_flags);
 
+    if ((resp_flags & NIOS_PKT_RETUNERESP_FLAG_BUSY) != 0) {
+        return have_cap_dev(dev, BLADERF_CAP_RFIC_BUSY_RESPONSE)
+                   ? BLADERF_ERR_WOULD_BLOCK
+                   : BLADERF_ERR_FPGA_OP;
+    }
+
     if (resp_flags & NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID) {
         log_verbose("%s retune operation: vcocap=%u, duration=%"PRIu64"\n",
                     channel2str(ch), vcocap, duration);
@@ -2040,10 +2371,117 @@ int nios_retune(struct bladerf *dev, bladerf_channel ch,
     return status;
 }
 
+static int nios_retune2_wait_now_terminal(
+    struct bladerf *dev, bladerf_channel ch, uint16_t nios_profile,
+    uint16_t request_token, uint32_t session_generation,
+    uint32_t success_baseline, uint32_t failure_baseline,
+    uint8_t *failure_stage)
+{
+    bladerf_module const module = BLADERF_CHANNEL_IS_TX(ch)
+        ? BLADERF_MODULE_TX : BLADERF_MODULE_RX;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
+    int status = bladerf_monotonic_now_ns(&now_ns);
+
+    if (!nios_deadline_start(status, now_ns, 120000000000ULL,
+                             &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    for (;;) {
+        uint32_t success_count;
+        uint32_t failure_count;
+        uint32_t success_delta;
+        uint32_t failure_delta;
+
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (expired) {
+            return BLADERF_ERR_TIMEOUT;
+        }
+
+        status = nios_retune2_success_count_read(dev, module, &success_count);
+        if (status == 0) {
+            status = nios_retune2_failure_count_read(dev, module,
+                                                      &failure_count);
+        }
+        if (status != 0) {
+            return status;
+        }
+
+        success_delta = success_count - success_baseline;
+        failure_delta = failure_count - failure_baseline;
+        if (success_delta > NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH ||
+            failure_delta > NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+
+        for (uint32_t offset = 0; offset < success_delta; ++offset) {
+            uint32_t const sequence = success_baseline + 1u + offset;
+            uint64_t frequency_hz;
+            uint64_t timestamp;
+            uint16_t completed_profile;
+            uint16_t completed_token;
+            uint32_t completed_session;
+
+            status = nios_retune2_completion_read(
+                dev, module, sequence, &frequency_hz, &timestamp,
+                &completed_profile, &completed_session, &completed_token);
+            if (status == BLADERF_ERR_WOULD_BLOCK) {
+                continue;
+            }
+            if (status != 0) {
+                return status;
+            }
+            if (completed_token == request_token &&
+                completed_session == session_generation) {
+                (void)frequency_hz;
+                return timestamp == NIOS_PKT_RETUNE2_NOW &&
+                       completed_profile == nios_profile
+                    ? 0 : BLADERF_ERR_UNEXPECTED;
+            }
+        }
+
+        for (uint32_t offset = 0; offset < failure_delta; ++offset) {
+            uint32_t const sequence = failure_baseline + 1u + offset;
+            uint64_t timestamp;
+            uint16_t failed_profile;
+            uint16_t failed_token;
+            uint32_t failed_session;
+            uint8_t stage;
+
+            status = nios_retune2_failure_completion_read(
+                dev, module, sequence, &timestamp, &failed_profile, &stage,
+                &failed_session, &failed_token);
+            if (status == BLADERF_ERR_WOULD_BLOCK) {
+                continue;
+            }
+            if (status != 0) {
+                return status;
+            }
+            if (failed_token == request_token &&
+                failed_session == session_generation) {
+                if (timestamp != NIOS_PKT_RETUNE2_NOW ||
+                    failed_profile != nios_profile ||
+                    stage == NIOS_PKT_RETUNE2_FAILURE_NONE) {
+                    return BLADERF_ERR_UNEXPECTED;
+                }
+                *failure_stage = stage;
+                return BLADERF_ERR_FPGA_OP;
+            }
+        }
+
+        usleep(120);
+    }
+}
+
 int nios_retune2(struct bladerf *dev, bladerf_channel ch,
                  uint64_t timestamp, uint16_t nios_profile,
                  uint8_t rffe_profile, uint8_t port,
-                 uint8_t spdt)
+                 uint8_t spdt, uint16_t request_token)
 {
     int status;
     uint8_t buf[NIOS_PKT_LEN];
@@ -2051,6 +2489,11 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     uint8_t resp_flags;
     uint8_t failure_stage;
     uint64_t duration;
+    uint32_t success_baseline = 0;
+    uint32_t failure_baseline = 0;
+    bool tokened_async_now = timestamp == NIOS_PKT_RETUNE2_NOW &&
+        request_token != 0 &&
+        have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN);
 
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         log_verbose("Clearing %s retune queue.\n", channel2str(ch));
@@ -2061,8 +2504,13 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
                     rffe_profile, port, spdt);
     }
 
-    nios_pkt_retune2_pack(buf, ch, timestamp, nios_profile, rffe_profile,
-                          port, spdt);
+    if (have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        nios_pkt_retune2_pack_token(buf, ch, timestamp, nios_profile,
+                                    rffe_profile, port, spdt, request_token);
+    } else {
+        nios_pkt_retune2_pack(buf, ch, timestamp, nios_profile, rffe_profile,
+                              port, spdt);
+    }
 
     status = timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE
         ? nios_retune_clear_wait(dev, buf, NIOS_PKT_RETUNE2_RESP_IDX_FLAGS,
@@ -2073,6 +2521,11 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     }
 
     nios_pkt_retune2_resp_unpack(buf, &duration, &resp_flags);
+    if ((resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_BUSY) != 0) {
+        return have_cap_dev(dev, BLADERF_CAP_RFIC_BUSY_RESPONSE)
+                   ? BLADERF_ERR_WOULD_BLOCK
+                   : BLADERF_ERR_FPGA_OP;
+    }
     failure_stage = nios_pkt_retune2_resp_failure(buf);
     if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
         duration = 0;
@@ -2083,6 +2536,36 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
         dev->nios_retune_trace.device_failure_stage = failure_stage;
         dev->nios_retune_trace.device_duration_valid =
             (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0;
+    }
+
+    if ((resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING) != 0) {
+        uint32_t response_session_generation =
+            (uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION] |
+            ((uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 1]
+             << 8) |
+            ((uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 2]
+             << 16) |
+            ((uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 3]
+             << 24);
+
+        nios_pkt_retune2_resp_get_async_baseline(
+            buf, &success_baseline, &failure_baseline);
+
+        if (!tokened_async_now ||
+            (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        status = nios_retune2_wait_now_terminal(
+            dev, ch, nios_profile, request_token,
+            response_session_generation, success_baseline,
+            failure_baseline, &failure_stage);
+        if (dev->nios_retune_trace.valid) {
+            dev->nios_retune_trace.device_failure_stage = failure_stage;
+            dev->nios_retune_trace.device_duration_valid = false;
+            dev->nios_retune_trace.retune2_terminal_unknown =
+                status != 0 && status != BLADERF_ERR_FPGA_OP;
+        }
+        return status;
     }
 
     if (resp_flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) {

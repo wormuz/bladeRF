@@ -40,6 +40,9 @@ entity fifo_reader is
         clock               :   in      std_logic;
         reset               :   in      std_logic;
         enable              :   in      std_logic;
+        -- Fault recovery clears only queued-stream parser/prefetch state;
+        -- link epoch and sticky diagnostic state remain intact.
+        fifo_flush          :   in      std_logic := '0';
 
         usb_speed           :   in      std_logic;
         meta_en             :   in      std_logic;
@@ -348,9 +351,9 @@ begin
     -- The mode bit comes from the synchronized FX3 control word. Register the
     -- decoded mode before it fans out into FIFO read/ram-control logic; STA
     -- showed that direct fanout as a setup-critical path to the TX FIFO RAM.
-    packed_mode_select : process(clock, reset)
+    packed_mode_select : process(clock, reset, fifo_flush)
     begin
-        if reset = '1' then
+        if reset = '1' or fifo_flush = '1' then
             packed_active_i <= '0';
         elsif rising_edge(clock) then
             if highly_packed_mode_en = '1' and NUM_STREAMS = 2 and
@@ -395,10 +398,10 @@ begin
     -- stall path in the same cycle. Predict the queue occupancy after this
     -- cycle's registered refill/pop instead, so the RAM control path starts
     -- at a register while preserving the two-word queue limit.
-    packed_refill_request : process(clock, reset)
+    packed_refill_request : process(clock, reset, fifo_flush)
         variable count_after_v : integer range 0 to 2;
     begin
-        if reset = '1' then
+        if reset = '1' or fifo_flush = '1' then
             packed_refill_i <= '0';
         elsif rising_edge(clock) then
             count_after_v := packed_count_i;
@@ -439,16 +442,17 @@ begin
     -- In packed mode the external FIFO can be read ahead up to two words.
     -- The unpacker consumes the local queue at its existing logical read
     -- points; other formats retain the original registered FIFO interface.
-    fifo_read <= packed_refill_i when packed_active_i = '1'
-                 else fifo_current.fifo_read;
+    fifo_read <= '0' when fifo_flush = '1' else
+                 packed_refill_i when packed_active_i = '1' else
+                 fifo_current.fifo_read;
 
     -- The local queue is popped on fifo_future.fifo_read, one cycle before
     -- fifo_current.fifo_read reaches the logical-consumption boundary. Keep
     -- that early control for queue management, but publish loopback data and
     -- valid together on the registered logical-read cycle.
-    packed_loopback_tap : process(clock, reset)
+    packed_loopback_tap : process(clock, reset, fifo_flush)
     begin
-        if reset = '1' then
+        if reset = '1' or fifo_flush = '1' then
             packed_loopback_data_i <= (others => '0');
             packed_loopback_valid_i <= '0';
         elsif rising_edge(clock) then
@@ -461,15 +465,16 @@ begin
     end process;
 
     loopback_data <= packed_loopback_data_i when packed_active_i = '1' else fifo_data;
-    loopback_data_valid <= packed_loopback_valid_i when packed_active_i = '1'
+    loopback_data_valid <= '0' when fifo_flush = '1' else
+                           packed_loopback_valid_i when packed_active_i = '1'
                            else fifo_current.fifo_read;
 
-    packed_word_queue : process(clock, reset)
+    packed_word_queue : process(clock, reset, fifo_flush)
         variable refill_v : boolean;
         variable pop_v : boolean;
         variable count_v : integer range 0 to 2;
     begin
-        if reset = '1' then
+        if reset = '1' or fifo_flush = '1' then
             packed_word0_i <= (others => '0');
             packed_word1_i <= (others => '0');
             packed_head_i <= '0';
@@ -722,9 +727,9 @@ begin
     -- ------------------------------------------------------------------------
 
     -- Meta FIFO synchronous process
-    meta_fsm_sync : process( clock, reset )
+    meta_fsm_sync : process( clock, reset, fifo_flush )
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or fifo_flush = '1' ) then
             meta_current <= META_FSM_RESET_VALUE;
         elsif( rising_edge(clock) ) then
             meta_current <= meta_future;
@@ -943,7 +948,12 @@ begin
         end if;
 
         -- Output assignments
-        meta_fifo_read <= meta_current.meta_read;
+        if fifo_flush = '1' then
+            meta_future <= META_FSM_RESET_VALUE;
+            meta_fifo_read <= '0';
+        else
+            meta_fifo_read <= meta_current.meta_read;
+        end if;
 
     end process;
 
@@ -953,9 +963,9 @@ begin
     -- ------------------------------------------------------------------------
 
     -- Sample FIFO synchronous process
-    fifo_fsm_sync : process( clock, reset )
+    fifo_fsm_sync : process( clock, reset, fifo_flush )
     begin
-        if( reset = '1' ) then
+        if( reset = '1' or fifo_flush = '1' ) then
             fifo_current <= FIFO_FSM_RESET_VALUE;
         elsif( rising_edge(clock) ) then
             fifo_current <= fifo_future;
@@ -993,9 +1003,9 @@ begin
         end if;
     end process;
 
-    packed_buffer_sync : process(clock, reset)
+    packed_buffer_sync : process(clock, reset, fifo_flush)
     begin
-        if reset = '1' then
+        if reset = '1' or fifo_flush = '1' then
             packed_buffer_i <= (others => '0');
         elsif rising_edge(clock) then
             if packed_buffer_write_i = '1' then

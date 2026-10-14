@@ -55,6 +55,7 @@ set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip ps_sy
 # Implementation Details
 set_global_assignment -name VHDL_FILE [file normalize [file join $common_dir vhdl/fx3_gpif_p.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $common_dir vhdl/fx3_gpif.vhd]]
+set_global_assignment -name VHDL_FILE [file normalize [file join $nuand_ip synthesis/tx_fifo_fault_flush.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/tx.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/rx.vhd]]
 set_global_assignment -name VHDL_FILE [file normalize [file join $here vhdl/bladerf_core.vhd]]

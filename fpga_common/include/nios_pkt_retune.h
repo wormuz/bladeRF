@@ -277,7 +277,10 @@ static inline void nios_pkt_retune_unpack(const uint8_t *buf,
  *                    acknowledge cancellation of its armed compare.
  *      flags[3]: 1 = Queue clear is pending its timestamp-domain cancel ACK.
  *
- *      flags[7:4]    Reserved. Set to 0.
+ *      flags[4]: 1 = Request rejected because an RFIC callback owns the
+ *                    NIOS command processor. Request was not queued.
+ *
+ *      flags[7:5]    Reserved. Set to 0.
  */
 
 #define NIOS_PKT_RETUNERESP_IDX_MAGIC   0
@@ -290,6 +293,7 @@ static inline void nios_pkt_retune_unpack(const uint8_t *buf,
 #define NIOS_PKT_RETUNERESP_FLAG_SUCCESS       (1 << 1)
 #define NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED (1 << 2)
 #define NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING (1 << 3)
+#define NIOS_PKT_RETUNERESP_FLAG_BUSY          (1 << 4)
 
 static inline void nios_pkt_retune_resp_pack(uint8_t *buf,
                                              uint64_t duration,

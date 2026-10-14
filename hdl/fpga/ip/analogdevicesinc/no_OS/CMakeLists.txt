@@ -92,6 +92,7 @@ add_library(ad936x STATIC
 
 target_compile_options(ad936x PRIVATE
     -DBLADERF_NIOS_BUILD -DNUAND_MODIFICATIONS -Wall -Os
+    -include ${LIBAD936X_PLATFORM_DIR}/nios_stdio_guard.h
 )
 
 # Diagnostic only: AXI_ADC_NOT_PRESENT stubs the converter/digital-tuning

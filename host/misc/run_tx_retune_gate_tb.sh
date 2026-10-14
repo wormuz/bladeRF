@@ -9,17 +9,24 @@ cd "${build_dir}"
 ghdl -a --std=08 \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/fifo_readwrite_p.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/synchronizer_model.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/handshake.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate_controller.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_fifo_fault_flush.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/tx_retune_gate_tb.vhd" \
-    "${repo_root}/hdl/fpga/ip/nuand/synthesis/tb/tx_retune_gate_controller_tb.vhd"
+    "${repo_root}/hdl/fpga/ip/nuand/synthesis/tb/tx_retune_gate_controller_tb.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/synthesis/tb/tx_fifo_fault_flush_tb.vhd"
 
 ghdl -e --std=08 tx_retune_gate_tb
 ghdl -r --std=08 tx_retune_gate_tb --assert-level=error
 
 ghdl -e --std=08 tx_retune_gate_controller_tb
 ghdl -r --std=08 tx_retune_gate_controller_tb --assert-level=error \
+    --stop-time=10us
+
+ghdl -e --std=08 tx_fifo_fault_flush_tb
+ghdl -r --std=08 tx_fifo_fault_flush_tb --assert-level=error \
     --stop-time=10us
 
 ghdl -a --std=08 \

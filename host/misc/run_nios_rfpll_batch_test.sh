@@ -9,6 +9,7 @@ trap 'rm -f "$test_bin" "$host_test_bin" "$queue_test_bin"' EXIT
 
 cc -Wall -Wextra -Werror -Wno-unused-parameter \
     -DBLADERF_NIOS_PC_SIMULATION \
+    -DBLADERF_NIOS_LIBAD936X \
     -I"$repo_root/fpga_common/include" \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
     -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \
@@ -37,6 +38,7 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
 cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     -ffunction-sections -fdata-sections \
     -DBLADERF_NIOS_PC_SIMULATION \
+    -DBLADERF_NIOS_LIBAD936X \
     -I"$repo_root/fpga_common/include" \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
     -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \

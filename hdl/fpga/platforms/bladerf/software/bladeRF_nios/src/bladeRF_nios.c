@@ -192,7 +192,10 @@ int main(void)
             handler->exec(&pkt);
 
             /* Write response to host */
-            command_uart_write_response(pkt.resp, pkt.session_generation);
+            if (!command_uart_publish_response(pkt.resp,
+                                               pkt.session_generation)) {
+                DBG("Command UART response failed; request admission fenced until session reset\n");
+            }
             command_uart_enable_isr(true);
         } else {
 

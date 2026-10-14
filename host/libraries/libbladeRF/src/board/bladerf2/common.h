@@ -149,8 +149,21 @@ struct bladerf2_board_data {
         STATE_INITIALIZED,
     } state;
 
+    /* Set while an FPGA reload owns RFIC teardown/reinitialization. Guards
+     * TX-only controls that bypass RX data invalidation's setter reservation. */
+    bool rfic_lifecycle_active;
+
     /* AD9361 PHY Handle */
     struct ad9361_rf_phy *phy;
+    /* Survives PHY removal after a calibration timeout so reinitialization
+     * still knows a RESETB pulse is required before touching the AD9361. */
+    bool calibration_faulted;
+    /* One TX invalidation event per latched AD9361 poison episode. Guarded
+     * by rx_async_epoch_lock so an async producer sees revocation first. */
+    bool tx_rfic_fault_event_reported;
+    /* Shared-AD9361 poison also invalidates both RX channels. Guarded by
+     * rx_async_epoch_lock and reset only after successful full init. */
+    bool rx_rfic_fault_event_reported;
 
     /* RFIC configuration parameters */
     void *rfic_init_params;
@@ -166,6 +179,19 @@ struct bladerf2_board_data {
 
     /* Bitmask of capabilities determined by version numbers */
     uint64_t capabilities;
+
+    /* One RFIC command may outlive its host wait timeout. Preserve its token
+     * and payload so a retry can be safely deduplicated by NIOS. */
+    bool rfic_wq_pending;
+    /* True when this host adopted an active tagged command after device or
+     * process reopen and therefore does not know its original payload. */
+    bool rfic_wq_pending_adopted;
+    bool rfic_wq_pending_result_valid;
+    int rfic_wq_pending_result_status;
+    uint16_t rfic_wq_pending_id;
+    uint16_t rfic_wq_pending_addr;
+    uint64_t rfic_wq_pending_data;
+    uint32_t rfic_wq_pending_sequence;
 
     /* Format currently being used with a module, or -1 if module is not used */
     bladerf_format module_format[NUM_MODULES];
@@ -253,11 +279,14 @@ struct bladerf2_board_data {
     bool rx_retune2_success_count_valid;
     uint8_t rx_retune2_pending_count;
     bool rx_retune2_outcome_unknown;
+    uint16_t retune2_request_token_next;
     struct {
         uint64_t timestamp;
         uint64_t requested_frequency_hz;
         uint16_t nios_profile;
         uint16_t rffe_profile;
+        uint16_t request_token;
+        uint32_t session_generation;
         bool valid;
     } rx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
     uint32_t tx_retune2_success_count_last;
@@ -280,6 +309,8 @@ struct bladerf2_board_data {
         uint64_t requested_frequency_hz;
         uint16_t nios_profile;
         uint16_t rffe_profile;
+        uint16_t request_token;
+        uint32_t session_generation;
         bool valid;
     } tx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
     uint8_t tx_link_epoch_id;
@@ -298,6 +329,12 @@ struct bladerf2_board_data {
     uint64_t tx_async_transport_failure_generation;
     /* Invalidates TX buffers that crossed a RF/link transition in flight. */
     uint64_t tx_async_admission_generation;
+    /* Counts TX submissions plus their backend completion callbacks. Guarded
+     * by rx_async_epoch_lock; zero is required before FX3/FPGA fault flush. */
+    unsigned int tx_async_submit_leases;
+    /* Latched after an acknowledged/attempted TX gate ABORT. A new link ACK
+     * alone cannot reopen TX until the end-to-end DMA/FIFO flush completes. */
+    bool tx_async_fault_flush_required;
     uint8_t tx_async_link_epoch_id;
     bool tx_recovery_blocked;
     bool tx_status_unavailable_reported;
@@ -435,6 +472,10 @@ int bladerf2_rx_transition_host_revoke(struct bladerf *dev,
                                       struct bladerf_sync *sync,
                                       int transition_status);
 void bladerf2_rx_epoch_revoke_admission(void *context);
+/* Lock-safe shared-RFIC poison notification; may be called from a board
+ * callback while dev->lock is already held. Revokes sync/async RX admission
+ * and records one durable invalidation event per poison episode. */
+void bladerf2_rx_rfic_state_invalid(struct bladerf *dev, int error_code);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
@@ -465,6 +506,10 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
                               bladerf_rf_event_type event_type,
                               uint64_t loss_count, uint32_t link_status,
                               int32_t error_code);
+void bladerf2_tx_retune_failure_detail_event(
+    struct bladerf *dev, uint64_t scheduled_timestamp,
+    uint64_t requested_frequency_hz, uint8_t failure_stage,
+    int32_t error_code);
 void bladerf2_tx_retune_event(struct bladerf *dev,
                               bladerf_rf_event_type event_type,
                               uint64_t requested_frequency_hz,
@@ -473,6 +518,10 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
                               int32_t error_code);
 void bladerf2_tx_stream_set_faulted(
     struct bladerf2_board_data *board_data, bool faulted);
+/* Caller holds dev->lock; revoke TX validity and confirm FPGA TX gate abort. */
+int bladerf2_tx_gate_abort_fail_closed(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    uint32_t link_status);
 int bladerf2_rfic_reference_clock_status(struct bladerf *dev);
 void bladerf2_tx_stream_set_epoch_id(
     struct bladerf2_board_data *board_data, uint8_t epoch_id);
@@ -562,6 +611,10 @@ struct bladerf_rfic_status_register {
      * reports it in WQSUCCESS; result_valid proves at least one command
      * retired since reset, so the 0xFF reset sentinel cannot look successful. */
     bool last_write_success;
+    bool active_command_valid;
+    uint8_t active_command;
+    uint8_t active_channel;
+    uint8_t active_state;
 };
 
 
@@ -851,5 +904,9 @@ int bladerf2_rx_epoch_admission_prepare(
     bool *admission_lock_held);
 void bladerf2_rx_epoch_admission_finish(
     struct bladerf2_board_data *board_data, bool *admission_lock_held);
+
+/* Finalize TX quadrature calibration and disconnect the TX RFFE path if the
+ * calibration fails, preserving the failure instead of exposing stale TX. */
+int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev);
 
 #endif  // BLADERF2_COMMON_H_

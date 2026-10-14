@@ -1059,6 +1059,58 @@ static void test_tx_transport_fault_is_not_hidden_by_other_invalidity(void)
     MUTEX_DESTROY(&board_data.rx_async_epoch_lock);
 }
 
+static void test_shared_rfic_poison_invalidates_rx_once_per_episode(void)
+{
+    struct bladerf2_board_data board_data = {0};
+    struct bladerf dev = {0};
+    uint32_t event_index;
+
+    assert(MUTEX_INIT(&board_data.rx_async_epoch_lock) == 0);
+    assert(MUTEX_INIT(&board_data.rf_transition_event_lock) == 0);
+    dev.board_data = &board_data;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rx_async_have_expected_timestamp = true;
+
+    /* A TX/shared-clock RFIC failure poisons the AD9361 used by both RX
+     * channels. The callback is intentionally invoked without dev.lock, as
+     * the production path may already own it. */
+    bladerf2_rx_rfic_state_invalid(&dev, BLADERF_ERR_UNEXPECTED);
+    assert(!board_data.rf_transition_epoch_certified);
+    assert(!board_data.rx_async_have_expected_timestamp);
+    assert(board_data.rx_rfic_fault_event_reported);
+    assert(board_data.rf_transition_event_sequence == 1);
+    event_index = (board_data.rf_transition_event_head +
+                   BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+                  BLADERF2_RF_EVENT_HISTORY_SIZE;
+    assert(board_data.rf_transition_events[event_index].event_type ==
+           BLADERF_RF_EVT_RX_DATA_INVALIDATED);
+    assert(board_data.rf_transition_events[event_index].flags ==
+           BLADERF_RF_INVALIDATE_RFIC_REG);
+    assert(board_data.rf_transition_events[event_index].error_code ==
+           BLADERF_ERR_UNEXPECTED);
+
+    /* Further observations of the same poison retain the fence without
+     * spamming duplicate events. */
+    bladerf2_rx_rfic_state_invalid(&dev, BLADERF_ERR_IO);
+    assert(board_data.rf_transition_event_sequence == 1);
+
+    /* Successful full RFIC initialization starts a new poison episode. */
+    MUTEX_LOCK(&board_data.rx_async_epoch_lock);
+    board_data.rx_rfic_fault_event_reported = false;
+    board_data.rf_transition_epoch_certified = true;
+    MUTEX_UNLOCK(&board_data.rx_async_epoch_lock);
+    bladerf2_rx_rfic_state_invalid(&dev, BLADERF_ERR_IO);
+    assert(board_data.rf_transition_event_sequence == 2);
+    event_index = (board_data.rf_transition_event_head +
+                   BLADERF2_RF_EVENT_HISTORY_SIZE - 1) %
+                  BLADERF2_RF_EVENT_HISTORY_SIZE;
+    assert(board_data.rf_transition_events[event_index].error_code ==
+           BLADERF_ERR_IO);
+
+    assert(MUTEX_DESTROY(&board_data.rf_transition_event_lock) == 0);
+    assert(MUTEX_DESTROY(&board_data.rx_async_epoch_lock) == 0);
+}
+
 static void test_rf_event_cursor_resynchronizes_after_overrun(void)
 {
     struct bladerf dev = {0};
@@ -3459,8 +3511,45 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
     fixture_destroy(&f);
 }
 
+static void test_retune_failure_record_identity(void)
+{
+    assert(bladerf2_retune_failure_matches(
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234));
+    assert(!bladerf2_retune_failure_matches(
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
+        UINT64_C(0x123456789abcdef1), 7, 41, 0x1234));
+    assert(!bladerf2_retune_failure_matches(
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
+        UINT64_C(0x123456789abcdef0), 8, 41, 0x1234));
+    assert(!bladerf2_retune_failure_matches(
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
+        UINT64_C(0x123456789abcdef0), 7, 42, 0x1234));
+    assert(!bladerf2_retune_failure_matches(
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
+        UINT64_C(0x123456789abcdef0), 7, 41, 0x1235));
+}
+
 int main(void)
 {
+    /* FPGA reload owns RFIC teardown/reinitialization. TX-only legacy
+     * controls must honor that lifecycle fence. */
+    assert(!bladerf2_tx_rf_config_change_blocked(
+        false, false, false, false, false, false, 0, false));
+    assert(bladerf2_tx_rf_config_change_blocked(
+        true, false, false, false, false, false, 0, false));
+    assert(bladerf2_tx_rf_config_change_blocked(
+        false, true, false, false, false, false, 0, false));
+    assert(bladerf2_tx_rf_config_change_blocked(
+        false, false, false, false, false, false, 1, false));
+    assert(bladerf2_close_requires_rfic_deinitialize(
+        false, false, true, false));
+    assert(bladerf2_close_requires_rfic_deinitialize(
+        false, true, false, true));
+    assert(!bladerf2_close_requires_rfic_deinitialize(
+        false, true, false, false));
+
+    test_retune_failure_record_identity();
     test_rx_metadata_status_flag_translation();
     test_sync_tx_x2_timestamp_units();
     test_async_packet_meta_tx_length_is_bounded();
@@ -3521,6 +3610,7 @@ int main(void)
     test_public_sync_apis_reject_null_device();
     test_public_flash_apis_reject_invalid_arguments();
     test_tx_transport_fault_is_not_hidden_by_other_invalidity();
+    test_shared_rfic_poison_invalidates_rx_once_per_episode();
     test_rf_link_status_v2_epoch_policy();
     test_rf_event_cursor_resynchronizes_after_overrun();
     test_rx_previous_link_fault_event_is_durable_and_deduplicated();

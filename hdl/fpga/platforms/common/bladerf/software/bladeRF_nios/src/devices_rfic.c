@@ -24,11 +24,16 @@
 
 #include "devices.h"
 
+#include <errno.h>
+#include <string.h>
+
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 
 #include "devices_rfic.h"
 #include "ad936x_helpers.h"
+#include "nios_pkt_retune2.h"
 #include "rfic_frequency_policy.h"
+#include "rfic_scheduler_policy.h"
 
 
 /******************************************************************************/
@@ -37,9 +42,46 @@
 
 static struct rfic_state state;
 
+static bool rfic_latch_calibration_fault(void);
+
 bool rfic_frequency_state_available(void)
 {
+    return state.phy != NULL && !state.calibration_faulted;
+}
+
+bool rfic_phy_present(void)
+{
     return state.phy != NULL;
+}
+
+bool rfic_command_state_faulted(void)
+{
+    return state.calibration_faulted;
+}
+
+/* Preserve the first concrete failure for the currently executing queue
+ * callback. Cleanup may fail afterwards, but must not overwrite the error
+ * that caused cleanup to run. */
+void rfic_command_record_error(int32_t status)
+{
+    struct rfic_queue_entry *active = rfic_queue_peek(&state.write_queue);
+
+    if (status < 0 && active != NULL &&
+        active->state == ENTRY_STATE_RUNNING) {
+        active->result_code = bladerf_rfic_result_latch_error(
+            active->result_code, status);
+    }
+}
+
+void rfic_command_record_cleanup_error(int32_t status)
+{
+    struct rfic_queue_entry *active = rfic_queue_peek(&state.write_queue);
+
+    if (status < 0 && active != NULL &&
+        active->state == ENTRY_STATE_RUNNING &&
+        active->cleanup_result_code == BLADERF_RFIC_RESULT_SUCCESS) {
+        active->cleanup_result_code = bladerf_rfic_result_from_status(status);
+    }
 }
 
 bool rfic_frequency_peer_unknown(bladerf_module target)
@@ -81,7 +123,9 @@ void rfic_invalidate_frequency(bladerf_module module)
 }
 
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
-                              uint64_t *frequency_hz)
+                              uint64_t *frequency_hz,
+                              uint8_t *failure_stage,
+                              bool allow_txq_yield, bool *txq_pending)
 {
     int32_t status;
     bool tx;
@@ -89,6 +133,12 @@ bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
     if (frequency_hz == NULL || state.phy == NULL ||
         (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
         return false;
+    }
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
+    if (txq_pending != NULL) {
+        *txq_pending = false;
     }
 
     tx = module == BLADERF_MODULE_TX;
@@ -104,11 +154,191 @@ bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
         return false;
     }
 
+    /* Fastlock recall bypasses the ordinary LO setter, so TX must run the
+     * same final-output calibration gate after port selection and readback. */
+    if (tx) {
+        if (allow_txq_yield) {
+            if (txq_pending == NULL ||
+                !rfic_start_tx_quad_calibration_for_retune(
+                    txq_pending, failure_stage)) {
+                return false;
+            }
+            if (*txq_pending) {
+                return true;
+            }
+        } else if (!rfic_finalize_tx_quad_calibration(failure_stage)) {
+            return false;
+        }
+    }
+
     /* profile_activate() calls this only after the RFPLL lock, AD9361 port,
      * and RFFE SPDT operations have all succeeded. This is the commit point
      * for the FPGA tuning owner's cached LO state. */
     state.frequency_invalid[module] = false;
     return true;
+}
+
+void rfic_fail_tx_quad_calibration(int32_t status,
+                                   uint8_t *failure_stage)
+{
+    RFIC_ERR("TX quadrature calibration", status);
+    state.tx_quad_job_pending = false;
+    state.tx_quad_commit_tx_frequency = false;
+    state.tx_quad_resume_command = false;
+    state.tx_quad_retune_owner = false;
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_TX_QUAD_CALIBRATION;
+    }
+    state.frequency_invalid[BLADERF_MODULE_TX] = true;
+    if (state.phy != NULL) {
+        ad9361_fastlock_invalidate_current_lo(state.phy, true);
+    }
+    if (state.phy != NULL &&
+        ad9361_calibration_state_unknown(state.phy)) {
+        (void)rfic_latch_calibration_fault();
+    } else if (!rfic_disable_tx_output()) {
+        RFIC_ERR("TX RFFE fail-closed disconnect", -EIO);
+    }
+}
+
+bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
+                                                   uint8_t *failure_stage)
+{
+    int32_t status;
+
+    if (pending == NULL || state.phy == NULL) {
+        rfic_fail_tx_quad_calibration(-EIO, failure_stage);
+        return false;
+    }
+    *pending = false;
+    status = ad9361_ensure_tx_quad_calib_start(state.phy,
+                                                &state.tx_quad_job);
+    if (status == 1) {
+        return true;
+    }
+    if (status < 0) {
+        rfic_fail_tx_quad_calibration(status, failure_stage);
+        return false;
+    }
+
+    state.tx_quad_job_pending = true;
+    state.tx_quad_commit_tx_frequency = true;
+    state.tx_quad_resume_command = false;
+    state.tx_quad_retune_owner = false;
+    state.frequency_invalid[BLADERF_MODULE_TX] = true;
+    *pending = true;
+    return true;
+}
+
+bool rfic_start_tx_quad_calibration_for_command(bool *pending,
+                                                 uint8_t *failure_stage)
+{
+    int32_t status;
+
+    if (pending == NULL || state.phy == NULL) {
+        rfic_fail_tx_quad_calibration(-EIO, failure_stage);
+        return false;
+    }
+    *pending = false;
+    status = ad9361_ensure_tx_quad_calib_start(state.phy,
+                                                &state.tx_quad_job);
+    if (status == 1) {
+        return true;
+    }
+    if (status < 0) {
+        rfic_fail_tx_quad_calibration(status, failure_stage);
+        return false;
+    }
+
+    state.tx_quad_job_pending = true;
+    state.tx_quad_commit_tx_frequency = false;
+    state.tx_quad_resume_command = true;
+    state.tx_quad_retune_owner = false;
+    *pending = true;
+    return true;
+}
+
+bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
+                                                uint8_t *failure_stage)
+{
+    int32_t status;
+
+    if (pending == NULL || state.phy == NULL) {
+        rfic_fail_tx_quad_calibration(-EIO, failure_stage);
+        return false;
+    }
+    *pending = false;
+    status = ad9361_ensure_tx_quad_calib_start(state.phy,
+                                                &state.tx_quad_job);
+    if (status == 1) {
+        state.frequency_invalid[BLADERF_MODULE_TX] = false;
+        return true;
+    }
+    if (status < 0) {
+        rfic_fail_tx_quad_calibration(status, failure_stage);
+        return false;
+    }
+
+    state.tx_quad_job_pending = true;
+    state.tx_quad_commit_tx_frequency = false;
+    state.tx_quad_resume_command = false;
+    state.tx_quad_retune_owner = true;
+    state.frequency_invalid[BLADERF_MODULE_TX] = true;
+    *pending = true;
+    return true;
+}
+
+int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage)
+{
+    int32_t status;
+
+    if (!state.tx_quad_job_pending || !state.tx_quad_retune_owner ||
+        state.phy == NULL) {
+        return -EINVAL;
+    }
+    status = ad9361_tx_quad_calibration_transaction_poll(
+        state.phy, &state.tx_quad_job);
+    if (status == 1) {
+        return 1;
+    }
+    if (status == 0 && ad9361_calibration_state_unknown(state.phy)) {
+        status = -EIO;
+    }
+
+    state.tx_quad_job_pending = false;
+    state.tx_quad_retune_owner = false;
+    if (status < 0) {
+        rfic_fail_tx_quad_calibration(status, failure_stage);
+        return status;
+    }
+
+    state.frequency_invalid[BLADERF_MODULE_TX] = false;
+    return 0;
+}
+
+bool rfic_tx_quad_retune_owner(void)
+{
+    return state.tx_quad_job_pending && state.tx_quad_retune_owner;
+}
+
+bool rfic_finalize_tx_quad_calibration(uint8_t *failure_stage)
+{
+    int32_t status;
+
+    if (state.phy == NULL) {
+        RFIC_ERR("TX quadrature calibration without PHY", -EIO);
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_TX_QUAD_CALIBRATION;
+        }
+        return false;
+    }
+    status = ad9361_ensure_tx_quad_calib(state.phy);
+    if (status >= 0) {
+        return true;
+    }
+
+    rfic_fail_tx_quad_calibration(status, failure_stage);
+    return false;
 }
 
 
@@ -136,6 +366,21 @@ struct rfic_command_fns const funcs[] = {
     {
         FIELD_INIT(.command, BLADERF_RFIC_COMMAND_STATUS),
         FIELD_INIT(.read64, _rfic_cmd_rd_status),
+        FIELD_INIT(.bitmask, RFIC_CMD_CHAN_SYSTEM),
+    },
+    {
+        FIELD_INIT(.command, BLADERF_RFIC_COMMAND_TRANSACTION_STATUS),
+        FIELD_INIT(.read64, _rfic_cmd_rd_transaction_status),
+        FIELD_INIT(.bitmask, RFIC_CMD_CHAN_SYSTEM),
+    },
+    {
+        FIELD_INIT(.command, BLADERF_RFIC_COMMAND_PROGRESS),
+        FIELD_INIT(.read64, _rfic_cmd_rd_progress),
+        FIELD_INIT(.bitmask, RFIC_CMD_CHAN_SYSTEM),
+    },
+    {
+        FIELD_INIT(.command, BLADERF_RFIC_COMMAND_RESULT_DETAIL),
+        FIELD_INIT(.read64, _rfic_cmd_rd_result_detail),
         FIELD_INIT(.bitmask, RFIC_CMD_CHAN_SYSTEM),
     },
     {
@@ -305,9 +550,31 @@ static bool _check_validity(struct rfic_command_fns const *cmd_ptr,
  *
  * @param      q     rfic_queue pointer
  */
+static bool rfic_latch_calibration_fault(void)
+{
+    if (state.phy == NULL ||
+        !ad9361_calibration_state_unknown(state.phy)) {
+        return false;
+    }
+
+    state.calibration_faulted = true;
+    state.init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    if (!rfic_force_rf_path_off()) {
+        RFIC_DBG("failed to disconnect RFFE after unknown calibration state\n");
+    }
+    return true;
+}
+
 static void rfic_command_work_wq(struct rfic_queue *q)
 {
     struct rfic_queue_entry *e = rfic_queue_peek(q);
+
+    /* A RETUNE2 entry owns the shared TXQ context until its terminal poll.
+     * Do not let a newly queued RFIC write steal that poll or inherit its
+     * result; the scheduler routes polling back to the owning RETUNE2 queue. */
+    if (state.tx_quad_retune_owner) {
+        return;
+    }
 
     if (NULL == e) {
         return;
@@ -324,28 +591,280 @@ static void rfic_command_work_wq(struct rfic_queue *q)
     switch (e->state) {
         case ENTRY_STATE_NEW: {
             e->state = ENTRY_STATE_RUNNING;
+            q->progress_sequence++;
             break;
         }
 
         case ENTRY_STATE_RUNNING: {
             struct rfic_command_fns const *f = _get_cmd_ptr(e->cmd);
+            int32_t step_status;
 
             e->rv    = false;
-            e->state = ENTRY_STATE_COMPLETE;
 
-            /* State may have changed after enqueue (for example, INIT OFF
-             * can run before a command that was accepted while initialized).
-             * Revalidate immediately before touching the PHY, and tolerate a
-             * stale/corrupt command ID without dereferencing a NULL handler. */
-            if (NULL != f && _check_validity(f, e->ch) &&
-                (NULL != f->write64 || NULL != f->write32)) {
-                e->rv = false;
-                if (NULL != f->write64) {
-                    e->rv = f->write64(&state, e->ch, e->value);
-                } else if (_rfic_write32_payload_valid(e->value)) {
-                    e->rv = f->write32(&state, e->ch, (uint32_t)e->value);
+            if (state.init_job_pending) {
+                step_status = ad9361_init_transaction_poll(&state.init_job);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.init_job_pending = false;
+                state.init_job_status = step_status;
+                if (step_status < 0)
+                    rfic_command_record_error(step_status);
+
+                /* Re-enter the INIT callback on the next worker pass. It
+                 * performs the common success continuation or fail-closed
+                 * cleanup; terminal queue retirement stays centralized. */
+                q->progress_sequence++;
+                break;
+            } else if (state.rfpll_job_pending) {
+                step_status = ad9361_rfpll_clock_transaction_poll(
+                    state.phy, &state.rfpll_job);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.rfpll_job_pending = false;
+                state.frequency_rfpll_status = step_status;
+                state.frequency_rfpll_resume_command = true;
+                if (step_status < 0)
+                    rfic_command_record_error(step_status);
+
+                /* Re-enter the same frequency callback after lock/readback.
+                 * It resumes at RFDC/TXQ without reprogramming the LO. */
+                q->progress_sequence++;
+                break;
+            } else if (state.sample_rate_job_pending) {
+                step_status = ad9361_sample_rate_transaction_poll(
+                    state.phy, &state.sample_rate_job);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.sample_rate_job_pending = false;
+                if (step_status < 0) {
+                    if (rfic_sample_rate_restore_cache_after_rollback(
+                            state.sample_rate_job.rollback_complete,
+                            state.phy->current_bw_valid,
+                            !ad9361_calibration_state_unknown(state.phy))) {
+                        /* The old clock plan and bandwidth completed their
+                         * rollback transaction. Restore the cache-validity
+                         * snapshot from before the rejected rate change. */
+                        memcpy(state.samplerate_invalid,
+                               state.sample_rate_saved_samplerate_invalid,
+                               sizeof(state.samplerate_invalid));
+                        memcpy(state.bandwidth_invalid,
+                               state.sample_rate_saved_bandwidth_invalid,
+                               sizeof(state.bandwidth_invalid));
+                    }
+                    rfic_command_record_error(step_status);
+                    if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
+                        state.init_nested_status = step_status;
+                        state.init_nested_complete = true;
+                        q->progress_sequence++;
+                        break;
+                    }
+                } else {
+                    /* The sample-rate transaction has committed clock,
+                     * filters, TXQ and restoration. Resume the command only
+                     * for its post-commit interface check/cache publication. */
+                    state.sample_rate_resume_command = true;
+                    q->progress_sequence++;
+                    break;
+                }
+            } else if (state.bandwidth_job_pending) {
+                step_status = ad9361_rf_bandwidth_transaction_poll(
+                    state.phy, &state.bandwidth_job);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.bandwidth_job_pending = false;
+                if (step_status < 0) {
+                    rfic_command_record_error(step_status);
+                    if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
+                        state.init_nested_status = step_status;
+                        state.init_nested_complete = true;
+                        q->progress_sequence++;
+                        break;
+                    }
+                } else {
+                    /* Resume only the wrapper's cache publication. The
+                     * hardware/filter/TXQ transaction has already finished. */
+                    state.bandwidth_resume_command = true;
+                    q->progress_sequence++;
+                    break;
+                }
+            } else if (state.tx_quad_job_pending) {
+                enum rfic_calibration_poll_action action;
+
+                step_status = ad9361_tx_quad_calibration_transaction_poll(
+                    state.phy, &state.tx_quad_job);
+                action = rfic_calibration_poll_action(
+                    step_status, state.tx_quad_resume_command);
+                if (action == RFIC_CALIBRATION_POLL_AGAIN) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.tx_quad_job_pending = false;
+                if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
+                    if (step_status == 0 &&
+                        ad9361_calibration_state_unknown(state.phy))
+                        step_status = -EIO;
+                    state.tx_quad_resume_command = false;
+                    if (step_status < 0) {
+                        rfic_command_record_error(step_status);
+                        rfic_fail_tx_quad_calibration(step_status, NULL);
+                    } else if (state.tx_quad_commit_tx_frequency) {
+                        state.frequency_invalid[BLADERF_MODULE_TX] = false;
+                    }
+                    state.tx_quad_commit_tx_frequency = false;
+                    state.init_nested_status = step_status;
+                    state.init_nested_complete = true;
+                    q->progress_sequence++;
+                    break;
+                }
+                if (action == RFIC_CALIBRATION_POLL_FAIL_COMMAND) {
+                    state.tx_quad_resume_command = false;
+                    rfic_command_record_error(step_status);
+                    rfic_fail_tx_quad_calibration(step_status, NULL);
+                } else {
+                    if (state.tx_quad_commit_tx_frequency)
+                        state.frequency_invalid[BLADERF_MODULE_TX] = false;
+                    if (action == RFIC_CALIBRATION_POLL_RESUME_COMMAND) {
+                        if (rfic_latch_calibration_fault()) {
+                            rfic_command_record_error(-EIO);
+                            state.tx_quad_resume_command = false;
+                            e->rv = false;
+                        } else {
+                            /* Keep the command RUNNING. Its callback resumes
+                             * at the saved commit phase, without replaying
+                             * the RFIC setup that preceded calibration. */
+                            state.tx_quad_commit_tx_frequency = false;
+                            q->progress_sequence++;
+                            break;
+                        }
+                    }
+                    if (e->result_code != BLADERF_RFIC_RESULT_IO)
+                        e->rv = true;
+                }
+                state.tx_quad_commit_tx_frequency = false;
+            } else if (state.rfdc_job_pending) {
+                enum rfic_rfdc_poll_action action;
+
+                step_status = ad9361_rfdc_calibration_poll(
+                    state.phy, &state.rfdc_job);
+                action = rfic_rfdc_poll_action(
+                    step_status, state.rfdc_resume_enable_command);
+                if (action == RFIC_RFDC_POLL_AGAIN) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                state.rfdc_job_pending = false;
+                if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
+                    if (step_status == 0 &&
+                        ad9361_calibration_state_unknown(state.phy))
+                        step_status = -EIO;
+                    if (step_status < 0) {
+                        rfic_command_record_error(step_status);
+                    } else {
+                        state.last_rfdc_calib_freq[BLADERF_RX]
+                                                    [state.rfdc_job_port] =
+                            state.rfdc_job_frequency;
+                        if (state.rfdc_commit_rx_frequency)
+                            state.frequency_invalid[BLADERF_MODULE_RX] = false;
+                    }
+                    state.rfdc_commit_rx_frequency = false;
+                    state.init_nested_status = step_status;
+                    state.init_nested_complete = true;
+                    q->progress_sequence++;
+                    break;
+                }
+                if (action == RFIC_RFDC_POLL_RESUME_RX_ENABLE) {
+                    state.rfdc_resume_enable_status = step_status;
+                    if (step_status < 0) {
+                        rfic_command_record_error(step_status);
+                    } else {
+                        state.last_rfdc_calib_freq[BLADERF_RX]
+                                                    [state.rfdc_job_port] =
+                            state.rfdc_job_frequency;
+                    }
+                    /* Re-enter only the saved RX-enable continuation, which
+                     * performs its RFFE commit or fail-closed cleanup. */
+                    q->progress_sequence++;
+                    break;
+                }
+                if (step_status < 0) {
+                    rfic_command_record_error(step_status);
+                } else {
+                    state.last_rfdc_calib_freq[BLADERF_RX]
+                                                [state.rfdc_job_port] =
+                        state.rfdc_job_frequency;
+                    if (state.rfdc_commit_rx_frequency)
+                        state.frequency_invalid[BLADERF_MODULE_RX] = false;
+                    e->rv = true;
+                }
+                state.rfdc_commit_rx_frequency = false;
+            } else {
+                /* State may have changed after enqueue (for example,
+                 * INIT OFF can run before a command accepted while
+                 * initialized). Revalidate immediately before touching
+                 * the PHY and tolerate stale/corrupt command IDs. */
+                if (NULL != f && _check_validity(f, e->ch) &&
+                    (NULL != f->write64 || NULL != f->write32)) {
+                    if (!rfic_calibration_command_allowed(
+                            state.calibration_faulted,
+                            e->cmd == BLADERF_RFIC_COMMAND_INIT)) {
+                        rfic_command_record_error(-EIO);
+                    } else {
+                        e->rv = false;
+                        if (NULL != f->write64) {
+                            e->rv = f->write64(&state, e->ch, e->value);
+                        } else if (_rfic_write32_payload_valid(e->value)) {
+                            e->rv = f->write32(&state, e->ch,
+                                               (uint32_t)e->value);
+                        }
+                    }
+                }
+
+                /* A resumable callback leaves the queue head RUNNING. The
+                 * only permitted follow-up work is its matching poll and
+                 * the read-only progress/status service hook. */
+                if (rfic_scheduler_calibration_pending(
+                        state.rfdc_job_pending, state.tx_quad_job_pending,
+                        state.sample_rate_job_pending,
+                        state.bandwidth_job_pending,
+                        state.init_job_pending || state.init_tail_pending ||
+                        state.rfpll_job_pending)) {
+                    q->progress_sequence++;
+                    break;
                 }
             }
+
+            /* A completed response bit is not enough if the AD9361 still
+             * reports an in-flight calibration. Poison the entire RFIC
+             * command surface and disconnect the board paths immediately. */
+            if (rfic_latch_calibration_fault()) {
+                e->rv = false;
+                rfic_command_record_error(-EIO);
+            }
+
+            /* Preserve the first concrete callback/poll error even if a
+             * later wrapper accidentally reports success. A false callback
+             * with no recorded errno remains an explicit INTERNAL result. */
+            e->result_code = bladerf_rfic_result_finalize(
+                e->result_code, e->rv);
+            e->rv = e->result_code == BLADERF_RFIC_RESULT_SUCCESS;
+
+            /* Publish COMPLETE only after the full ADI callback returns. */
+            e->state = ENTRY_STATE_COMPLETE;
+            q->progress_sequence++;
 
             break;
         }
@@ -354,6 +873,12 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             /* Drop the item from the queue */
             q->last_rv = e->rv;
             q->last_rv_valid = true;
+            q->last_rv_transaction_id = e->transaction_id;
+            q->last_rv_ch = e->ch;
+            q->last_rv_cmd = e->cmd;
+            q->last_rv_value = e->value;
+            q->last_result_code = e->result_code;
+            q->last_cleanup_result_code = e->cleanup_result_code;
             q->last_rv_sequence++;
             rfic_dequeue(q, NULL);
             break;
@@ -364,7 +889,84 @@ static void rfic_command_work_wq(struct rfic_queue *q)
     }
 }
 
+static int rfic_find_transaction(struct rfic_queue *q, uint16_t transaction_id,
+                                 uint8_t ch, uint8_t cmd, uint64_t value)
+{
+    size_t i;
+
+    if (transaction_id == 0) {
+        return 0;
+    }
+
+    for (i = 0; i < q->count; i++) {
+        size_t idx = (q->rem_idx + i) & (COMMAND_QUEUE_MAX - 1);
+        struct rfic_queue_entry const *e = &q->entries[idx];
+
+        if (e->transaction_id == transaction_id) {
+            return e->ch == ch && e->cmd == cmd && e->value == value ? 1 : -1;
+        }
+    }
+
+    if (q->last_rv_transaction_id == transaction_id) {
+        return q->last_rv_ch == ch && q->last_rv_cmd == cmd &&
+                       q->last_rv_value == value
+                   ? 1
+                   : -1;
+    }
+
+    return 0;
+}
+
 bool rfic_command_write(uint16_t addr, uint64_t data)
+{
+    return rfic_command_write_with_transaction_id(addr, data, 0);
+}
+
+bool rfic_command_transaction_is_duplicate(uint16_t addr, uint64_t data,
+                                           uint16_t transaction_id)
+{
+    if (transaction_id == 0 || !_rfic_address_fields_valid(addr)) {
+        return false;
+    }
+
+    return rfic_find_transaction(&state.write_queue, transaction_id,
+                                 _rfic_unpack_chan(addr),
+                                 _rfic_unpack_cmd(addr), data) == 1;
+}
+
+bool rfic_command_ack_result(uint16_t transaction_id, uint32_t sequence)
+{
+    struct rfic_queue *q = &state.write_queue;
+
+    if (transaction_id == 0) {
+        return false;
+    }
+
+    /* ACK retries are safe if the first ACK took effect but its USB response
+     * was lost. Bind the idempotence record to both transaction and sequence. */
+    if (bladerf_rfic_result_ack_is_duplicate(
+            q->last_acked_transaction_id, q->last_acked_sequence,
+            transaction_id, sequence)) {
+        return true;
+    }
+
+    if (!bladerf_rfic_result_ack_matches(
+            q->last_rv_valid, q->count, q->last_rv_transaction_id,
+            q->last_rv_sequence, transaction_id, sequence) ||
+        q->last_result_code == BLADERF_RFIC_RESULT_NO_RESULT) {
+        return false;
+    }
+
+    q->last_rv_valid = false;
+    q->last_result_code = BLADERF_RFIC_RESULT_NO_RESULT;
+    q->last_cleanup_result_code = BLADERF_RFIC_RESULT_NO_RESULT;
+    q->last_acked_transaction_id = transaction_id;
+    q->last_acked_sequence = sequence;
+    return true;
+}
+
+bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
+                                            uint16_t transaction_id)
 {
     if (!_rfic_address_fields_valid(addr)) {
         return false;
@@ -374,11 +976,64 @@ bool rfic_command_write(uint16_t addr, uint64_t data)
     uint8_t const ch                 = _rfic_unpack_chan(addr);
     struct rfic_command_fns const *f = _get_cmd_ptr(cmd);
     bool rv                          = false;
+    bool clear_legacy_result         = false;
+
+    if (cmd == BLADERF_RFIC_COMMAND_RESULT_ACK) {
+        if ((data >> 32) != 0 || transaction_id == 0) {
+            return false;
+        }
+        return rfic_command_ack_result(transaction_id, (uint32_t)data);
+    }
+
+    if (!rfic_calibration_command_allowed(
+            state.calibration_faulted,
+            cmd == BLADERF_RFIC_COMMAND_INIT)) {
+        return false;
+    }
+
+    /* Once a host opts into tagged stop-and-wait transactions, accepting a
+     * legacy untagged write would make its terminal result unacknowledgeable. */
+    if (transaction_id == 0 &&
+        state.write_queue.tagged_protocol_enabled) {
+        return false;
+    }
+
+    if (transaction_id != 0) {
+        int duplicate = rfic_find_transaction(&state.write_queue,
+                                              transaction_id, ch, cmd, data);
+        if (duplicate != 0) {
+            return duplicate > 0;
+        }
+
+        /* Tagged protocol is stop-and-wait. A second tagged command must not
+         * sit behind a callback and overwrite its unacknowledged terminal
+         * result before the host has observed it. A legacy untagged result
+         * has no token to acknowledge, so the first tagged command may retire
+         * it only after that new command is actually accepted. */
+        if (!bladerf_rfic_tagged_write_allowed(
+                state.write_queue.count, state.write_queue.last_rv_valid,
+                state.write_queue.last_rv_transaction_id)) {
+            return false;
+        }
+        clear_legacy_result = state.write_queue.last_rv_valid;
+    }
 
     if (NULL != f && (NULL != f->write64 || NULL != f->write32) &&
         _check_validity(f, ch)) {
-        rv = rfic_enqueue(&state.write_queue, ch, cmd, data) !=
-             COMMAND_QUEUE_FULL;
+        rv = rfic_enqueue(&state.write_queue, ch, cmd, data,
+                          transaction_id) != COMMAND_QUEUE_FULL;
+        if (rv) {
+            if (transaction_id != 0 && clear_legacy_result) {
+                state.write_queue.last_rv_valid = false;
+                state.write_queue.last_result_code =
+                    BLADERF_RFIC_RESULT_NO_RESULT;
+                state.write_queue.last_cleanup_result_code =
+                    BLADERF_RFIC_RESULT_NO_RESULT;
+            }
+            if (transaction_id != 0) {
+                state.write_queue.tagged_protocol_enabled = true;
+            }
+        }
     }
 
     RFIC_DBG("WR ", _rfic_cmdstr(cmd), _rfic_chanstr(ch), rv ? "ENQ" : "BAD",
@@ -395,12 +1050,20 @@ bool rfic_command_write_immed(bladerf_rfic_command cmd,
 
     bool rv = false;
 
-    if (NULL == f || !_check_validity(f, ch)) {
+    if (!rfic_calibration_command_allowed(
+            state.calibration_faulted,
+            cmd == BLADERF_RFIC_COMMAND_INIT)) {
+        rv = false;
+    } else if (NULL == f || !_check_validity(f, ch)) {
         rv = false;
     } else if (NULL != f->write64) {
         rv = f->write64(&state, ch, data);
     } else if (NULL != f->write32 && _rfic_write32_payload_valid(data)) {
         rv = f->write32(&state, ch, (uint32_t)data);
+    }
+
+    if (rfic_latch_calibration_fault()) {
+        rv = false;
     }
 
     RFIC_DBG("WR!", _rfic_cmdstr(cmd), _rfic_chanstr(ch), rv ? "OK " : "BAD",
@@ -436,7 +1099,14 @@ bool rfic_command_read_immed(bladerf_rfic_command cmd,
     // Canary
     *data = 0xDEADBEEF0B4DF00D;
 
-    if (NULL == f || !_check_validity(f, ch)) {
+    if (state.calibration_faulted &&
+        cmd != BLADERF_RFIC_COMMAND_STATUS &&
+        cmd != BLADERF_RFIC_COMMAND_TRANSACTION_STATUS &&
+        cmd != BLADERF_RFIC_COMMAND_PROGRESS &&
+        cmd != BLADERF_RFIC_COMMAND_RESULT_DETAIL &&
+        cmd != BLADERF_RFIC_COMMAND_INIT) {
+        rv = false;
+    } else if (NULL == f || !_check_validity(f, ch)) {
         rv = false;
     } else if (NULL != f->read64) {
         rv = f->read64(&state, ch, data);
@@ -470,6 +1140,35 @@ void rfic_command_init(void)
 void rfic_command_work(void)
 {
     rfic_command_work_wq(&state.write_queue);
+}
+
+bool rfic_command_worker_active(void)
+{
+    return rfic_queue_peek(&state.write_queue) != NULL ||
+           rfic_scheduler_calibration_pending(
+               state.rfdc_job_pending, state.tx_quad_job_pending,
+               state.sample_rate_job_pending, state.bandwidth_job_pending,
+               state.init_job_pending || state.init_tail_pending ||
+               state.rfpll_job_pending);
+}
+
+bool rfic_command_owns_device(void)
+{
+    struct rfic_queue_entry *active = rfic_queue_peek(&state.write_queue);
+
+    return rfic_scheduler_device_owned(
+        active != NULL && active->state == ENTRY_STATE_RUNNING,
+        rfic_scheduler_calibration_pending(
+            state.rfdc_job_pending, state.tx_quad_job_pending,
+            state.sample_rate_job_pending, state.bandwidth_job_pending,
+            state.init_job_pending || state.init_tail_pending ||
+                state.rfpll_job_pending),
+        adi_fastlock_recall_active() || adi_fastlock_load_active());
+}
+
+void rfic_command_progress_tick(void)
+{
+    rfic_queue_progress_tick(&state.write_queue);
 }
 
 #endif  // defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)

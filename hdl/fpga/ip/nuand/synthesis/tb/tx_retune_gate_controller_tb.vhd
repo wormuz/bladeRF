@@ -8,6 +8,7 @@ end entity;
 architecture test of tx_retune_gate_controller_tb is
     signal source_clock : std_logic := '0';
     signal tx_clock : std_logic := '0';
+    signal tx_clock_enable : std_logic := '1';
     signal source_reset : std_logic := '1';
     signal tx_reset : std_logic := '1';
     signal control : std_logic_vector(31 downto 0) := (others => '0');
@@ -19,9 +20,11 @@ architecture test of tx_retune_gate_controller_tb is
     signal target : unsigned(63 downto 0);
     signal complete : std_logic;
     signal abort : std_logic;
+    signal fifo_flush_sys : std_logic;
+    signal fifo_release_sys : std_logic;
 begin
     source_clock <= not source_clock after 5 ns;
-    tx_clock <= not tx_clock after 7 ns;
+    tx_clock <= not tx_clock after 7 ns when tx_clock_enable = '1' else '0';
 
     dut : entity work.tx_retune_gate_controller
         port map (
@@ -37,7 +40,9 @@ begin
             arm_ack_toggle => arm_ack_toggle,
             target_timestamp => target,
             complete => complete,
-            abort => abort
+            abort => abort,
+            fifo_flush_sys => fifo_flush_sys,
+            fifo_release_sys => fifo_release_sys
         );
 
     stimulus : process
@@ -53,6 +58,22 @@ begin
                 end if;
             end loop;
             assert found report "TX gate CDC command was lost" severity failure;
+        end procedure;
+
+        procedure wait_for_source(signal value : in std_logic;
+                                  expected : std_logic) is
+            variable found : boolean := false;
+        begin
+            for i in 0 to 100 loop
+                wait until rising_edge(source_clock);
+                wait for 1 ns;
+                if value = expected then
+                    found := true;
+                    exit;
+                end if;
+            end loop;
+            assert found report "system-clock fault command was lost"
+                severity failure;
         end procedure;
 
         procedure wait_for_compare_arm(
@@ -83,7 +104,7 @@ begin
         end procedure;
     begin
         -- Model the NIOS PIO retaining command toggles across FX3 SYS_RST.
-        control(2 downto 0) <= "111";
+        control(5 downto 0) <= "111111";
         wait for 50 ns;
         source_reset <= '0';
         tx_reset <= '0';
@@ -127,7 +148,20 @@ begin
         wait_for(complete, '0');
         control(2) <= '0';
         wait_for(abort, '1');
-        report "TX gate controller CDC checks complete" severity note;
+        wait_for(abort, '0');
+
+        -- Fault-flush commands remain decodable in sys_clock after TX clock
+        -- loss; ordinary gate commands above deliberately used tx_clock.
+        tx_clock_enable <= '0';
+        wait for 30 ns;
+        control(4) <= '0';
+        wait_for_source(fifo_flush_sys, '1');
+        wait_for_source(fifo_flush_sys, '0');
+        control(5) <= '0';
+        wait_for_source(fifo_release_sys, '1');
+        wait_for_source(fifo_release_sys, '0');
+        report "TX retune and independent fault command CDC checks complete"
+            severity note;
         wait;
     end process;
 end architecture;

@@ -37,6 +37,7 @@
 #include "host_config.h"
 #include "nios_pkt_retune2.h"
 #include "range.h"
+#include "rfic_progress_policy.h"
 
 /**
  * Number of modules (directions) present. 1 RX, 1 TX = 2.
@@ -215,6 +216,28 @@ typedef enum {
      *    +----------------+------------------------+
      */
     BLADERF_RFIC_COMMAND_STATUS = 0x00,
+    BLADERF_RFIC_COMMAND_TRANSACTION_STATUS = 0x0C,
+    /** Progress and retained terminal result for the write queue (read-only).
+     *
+     * Return: bits 63:32 safe-point sequence, 31:16 active/last transaction
+     * ID, 15:8 active/last command, 7:0 active queue phase while work is
+     * pending or terminal result code when empty. The active bit in STATUS
+     * distinguishes those interpretations. Terminal results remain valid
+     * until RESULT_ACK. Safe-point sequence is diagnostic liveness evidence,
+     * not completion or cancellation.
+     */
+    BLADERF_RFIC_COMMAND_PROGRESS = 0x0D,
+
+    /** Acknowledge a previously read terminal result. The transaction ID
+     * identifies the retired RFIC command and the payload carries its
+     * 32-bit retirement sequence. The ACK is idempotent. */
+    BLADERF_RFIC_COMMAND_RESULT_ACK = 0x0E,
+
+    /** Read the stable primary and cleanup result classes for the retained
+     * terminal transaction (FPGA >= 0.24.0). Return: bits 63:32 retirement
+     * sequence, 31:24 cleanup result, 23:16 primary result, 15:0 transaction
+     * ID. The record remains available until RESULT_ACK. */
+    BLADERF_RFIC_COMMAND_RESULT_DETAIL = 0x0F,
 
     /** Initialize the RFIC. (Read/Write)
      *
@@ -301,7 +324,11 @@ typedef enum {
  *  +===============+===================================================+
  *  |      63:32    | Sequence number of last retired write command.    |
  *  +---------------+---------------------------------------------------+
- *  |      31:17    | Reserved. Set to 0.                               |
+ *  |      31:30    | Queue-head state: 0 invalid, 1 new, 2 running,    |
+ *  |               | 3 complete (FPGA >= 0.18.0).                    |
+ *  |      29:26    | Queue-head channel.                               |
+ *  |      25:18    | Queue-head command.                               |
+ *  |       17      | Queue-head fields valid.                          |
  *  +---------------+---------------------------------------------------+
  *  |       16      | 1 if a write-queue command has retired since reset |
  *  +---------------+---------------------------------------------------+
@@ -327,6 +354,14 @@ typedef enum {
 #define BLADERF_RFIC_STATUS_WQLEN_MASK       0xff
 #define BLADERF_RFIC_STATUS_WQRESULT_VALID_SHIFT 16
 #define BLADERF_RFIC_STATUS_WQRESULT_VALID_MASK  0x1
+#define BLADERF_RFIC_STATUS_ACTIVE_VALID_SHIFT 17
+#define BLADERF_RFIC_STATUS_ACTIVE_VALID_MASK  0x1
+#define BLADERF_RFIC_STATUS_ACTIVE_CMD_SHIFT   18
+#define BLADERF_RFIC_STATUS_ACTIVE_CMD_MASK    0xff
+#define BLADERF_RFIC_STATUS_ACTIVE_CH_SHIFT    26
+#define BLADERF_RFIC_STATUS_ACTIVE_CH_MASK     0xf
+#define BLADERF_RFIC_STATUS_ACTIVE_STATE_SHIFT 30
+#define BLADERF_RFIC_STATUS_ACTIVE_STATE_MASK  0x3
 #define BLADERF_RFIC_STATUS_WQSEQUENCE_SHIFT 32
 #define BLADERF_RFIC_STATUS_WQSEQUENCE_MASK  0xffffffffu
 
@@ -346,6 +381,7 @@ typedef enum {
 #define BLADERF_RFIC_INIT_STAGE_IF_CLOCK_OK      13
 #define BLADERF_RFIC_INIT_STAGE_IF_CLOCK_TIMEOUT 14
 #define BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED   15
+#define BLADERF_RFIC_INIT_STAGE_DIG_TUNE_POLICY  16
 #define BLADERF_RFIC_INIT_STAGE_PER_MODULE   7
 #define BLADERF_RFIC_INIT_STAGE_PER_CHANNEL  8
 #define BLADERF_RFIC_INIT_STAGE_DONE         9

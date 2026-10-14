@@ -372,6 +372,25 @@ void async_tx_buffer_submitted(struct bladerf_stream *stream,
     }
 }
 
+int async_tx_submit_lease_acquire(struct bladerf_stream *stream,
+                                  uint64_t generation)
+{
+    if (stream == NULL || stream->dev == NULL || stream->dev->board == NULL ||
+        stream->dev->board->tx_async_submit_lease_acquire == NULL) {
+        return 0;
+    }
+    return stream->dev->board->tx_async_submit_lease_acquire(
+        stream->dev, generation);
+}
+
+void async_tx_submit_lease_release(struct bladerf_stream *stream)
+{
+    if (stream != NULL && stream->dev != NULL && stream->dev->board != NULL &&
+        stream->dev->board->tx_async_submit_lease_release != NULL) {
+        stream->dev->board->tx_async_submit_lease_release(stream->dev);
+    }
+}
+
 int async_request_stream_shutdown(struct bladerf_stream *stream)
 {
     int status = 0;

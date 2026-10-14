@@ -150,6 +150,11 @@ static void legacy_config_reset(void)
     legacy_config_write_reset();
 }
 
+void pkt_legacy_abort(void)
+{
+    legacy_config_reset();
+}
+
 static inline enum config_param lookup_param(uint8_t addr)
 {
     uint8_t i;

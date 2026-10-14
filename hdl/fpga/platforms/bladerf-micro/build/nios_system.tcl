@@ -94,6 +94,20 @@ set_instance_parameter_value jtag_uart {useRelativePathForSimFile} {0}
 set_instance_parameter_value jtag_uart {writeBufferDepth} {64}
 set_instance_parameter_value jtag_uart {writeIRQThreshold} {8}
 
+# Free-running system-clock timebase for RFIC operation deadlines. The BSP's
+# usleep() is a calibrated busy loop and this timer is deliberately not used
+# as the HAL system/timestamp tick; firmware snapshots it directly so timeout
+# decisions remain tied to sys_clock and independent of compiler optimization.
+add_instance rfic_monotonic_timer altera_avalon_timer
+set_instance_parameter_value rfic_monotonic_timer {alwaysRun} {1}
+set_instance_parameter_value rfic_monotonic_timer {counterSize} {64}
+set_instance_parameter_value rfic_monotonic_timer {fixedPeriod} {1}
+set_instance_parameter_value rfic_monotonic_timer {period} {18446744073709551615}
+set_instance_parameter_value rfic_monotonic_timer {periodUnits} {CLOCKS}
+set_instance_parameter_value rfic_monotonic_timer {resetOutput} {0}
+set_instance_parameter_value rfic_monotonic_timer {snapshot} {1}
+set_instance_parameter_value rfic_monotonic_timer {timeoutPulseOutput} {0}
+
 add_instance nios2 altera_nios2_gen2
 set_instance_parameter_value nios2 {tmr_enabled} {0}
 set_instance_parameter_value nios2 {setting_disable_tmr_inj} {0}
@@ -850,6 +864,11 @@ set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 arbit
 set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 baseAddress {0x9760}
 set_connection_parameter_value nios2.data_master/rfic_axi_timeout_clear.s1 defaultConnection {0}
 
+add_connection nios2.data_master rfic_monotonic_timer.avalon_slave
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave arbitrationPriority {1}
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave baseAddress {0x9840}
+set_connection_parameter_value nios2.data_master/rfic_monotonic_timer.avalon_slave defaultConnection {0}
+
 add_connection nios2.data_master wb_timeout_status.s1
 set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/wb_timeout_status.s1 baseAddress {0x9800}
@@ -1079,6 +1098,8 @@ add_connection system_clock.clk jtag_uart.clk
 
 add_connection system_clock.clk nios2.clk
 
+add_connection system_clock.clk rfic_monotonic_timer.clk
+
 add_connection system_clock.clk opencores_i2c.clock_sink
 
 add_connection system_clock.clk peripheral_spi.clk
@@ -1136,6 +1157,8 @@ add_connection system_clock.clk_reset gpio_rffe_0.reset
 add_connection system_clock.clk_reset jtag_uart.reset
 
 add_connection system_clock.clk_reset nios2.reset
+
+add_connection system_clock.clk_reset rfic_monotonic_timer.reset
 
 add_connection system_clock.clk_reset opencores_i2c.reset_sink
 

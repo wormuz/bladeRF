@@ -47,6 +47,13 @@
 #define BLADE_USB_CMD_SET_LOOPBACK            113
 #define BLADE_USB_CMD_GET_LOOPBACK            114
 #define BLADE_USB_CMD_READ_LOG_ENTRY          115
+#define BLADE_USB_CMD_PAUSE_TX_DMA            116
+#define BLADE_USB_CMD_QUERY_TX_DMA_PAUSE      117
+
+#define BLADE_TX_DMA_PAUSE_IDLE                0
+#define BLADE_TX_DMA_PAUSE_PENDING             1
+#define BLADE_TX_DMA_PAUSE_CONFIRMED           2
+#define BLADE_TX_DMA_PAUSE_FAILED              3
 
 /* String descriptor indices */
 #define BLADE_USB_STR_INDEX_MFR     1   /* Manufacturer */

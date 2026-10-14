@@ -29,6 +29,8 @@
 #include "i2c_status_policy.h"
 #include "spi_arbiter_policy.h"
 #include "nios_axi_address_policy.h"
+#include "rfic_scheduler_policy.h"
+#include "command_uart_fault_policy.h"
 #include "debug.h"
 #include "devices_inline.h"
 #include "fpga_version.h"
@@ -38,6 +40,17 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+static uint8_t command_uart_control_shadow = 1;
+static struct command_uart_fault_state command_uart_fault;
+#ifdef BOARD_BLADERF_MICRO
+#include "no_os_delay.h"
+extern void bladerf_platform_service(void);
+
+static void rfic_service_safe_point(void)
+{
+    bladerf_platform_service();
+}
+#endif
 
 /* Define a global variable containing the current VCTCXO DAC setting.
  * This is a 'cached' value of what is written to the DAC and is used
@@ -59,22 +72,111 @@ uint32_t adf400x_reg[4] = { 0 };
 /* Define the fast lock profile storage arrays */
 fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
 fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
+
+/* One profile upload owns the AD9361 SPI/profile port until its last write
+ * completes. The queue entry owns the terminal identity; this shadow owns the
+ * immutable bytes used by the multi-turn SPI sequence. */
+static struct {
+    bool active;
+    bladerf_module module;
+    fastlock_profile profile;
+    uint8_t write_index;
+} fastlock_load_job;
 #endif  // BOARD_BLADERF_MICRO
+
+static bool rfic_device_owned_for_external_write(void)
+{
+#ifdef BOARD_BLADERF_MICRO
+    bool owned = adi_fastlock_recall_active();
+#ifdef BLADERF_NIOS_LIBAD936X
+    owned = owned || rfic_command_owns_device();
+#endif
+    return owned;
+#else
+    return false;
+#endif
+}
 
 void command_uart_enable_isr(bool enable)
 {
-    uint32_t val = enable ? 1 : 0;
-    IOWR_32DIRECT(COMMAND_UART_BASE, 16, val);
+    /* Do not admit another request after a response was lost. The FPGA's
+     * response-overflow latch is cleared only by session_reset, so accepting
+     * commands in this session could execute mutations whose results cannot
+     * be reported. */
+    if (enable && command_uart_fault.latched) {
+        return;
+    }
+
+    if (enable) {
+        command_uart_control_shadow |= 0x01;
+    } else {
+        command_uart_control_shadow &= (uint8_t)~0x01;
+    }
+    IOWR_32DIRECT(COMMAND_UART_BASE, 16, command_uart_control_shadow);
     return;
+}
+
+void command_uart_set_worker_busy(bool busy)
+{
+    if (busy) {
+        command_uart_control_shadow |= 0x02;
+    } else {
+        command_uart_control_shadow &= (uint8_t)~0x02;
+    }
+    IOWR_32DIRECT(COMMAND_UART_BASE, 16, command_uart_control_shadow);
+}
+
+static bool command_uart_request_busy(void)
+{
+    /* Bit 0 is the worker state captured at final-byte receipt. Bit 1 is the
+     * live worker state, covering a frame completed just before worker entry
+     * whose IRQ is serviced only after entry. */
+    return (IORD_32DIRECT(COMMAND_UART_BASE, 28) & 0x03) != 0;
+}
+
+uint32_t command_uart_current_session_generation(void)
+{
+    return IORD_32DIRECT(COMMAND_UART_BASE, 24);
+}
+
+bool command_uart_publish_response(uint8_t *resp,
+                                   uint32_t session_generation)
+{
+    if (command_uart_write_response(resp, session_generation)) {
+        return true;
+    }
+
+    /* A response for a session that has already been reset is intentionally
+     * stale. Do not poison the newly connected session because of it. */
+    if (command_uart_fault_latch(
+            &command_uart_fault, session_generation,
+            command_uart_current_session_generation())) {
+        command_uart_enable_isr(false);
+    }
+    return false;
+}
+
+void command_uart_check_session_recovery(void)
+{
+    const uint32_t current_generation =
+        command_uart_current_session_generation();
+
+    if (command_uart_fault_recover(&command_uart_fault,
+                                   current_generation)) {
+        command_uart_enable_isr(true);
+    }
 }
 
 static void command_uart_isr(void *context)
 {
     struct pkt_buf *pkt = (struct pkt_buf *)context;
 
-    /* Reading the request should clear the interrupt */
-    command_uart_read_request((uint8_t *)pkt->req);
+    /* Snapshot arrival-time evidence before reading the request. Consuming
+     * the first request word releases the UART slot and clears its per-frame
+     * busy latch in FPGA logic. */
+    pkt->deferred_work_active_at_accept = command_uart_request_busy();
     pkt->session_generation = command_uart_request_session_generation();
+    command_uart_read_request((uint8_t *)pkt->req);
 
     /* Keep the UART's single request buffer stable while the synchronous
      * packet handler uses pkt->req. A complete next request is held in the
@@ -436,23 +538,41 @@ void bladerf_nios_init(struct pkt_buf *pkt,
                       VCTCXO_TAMER_0_IRQ);
 }
 
-/* Bounded for the same reason as spi_arbiter_lock() below: an I2C peripheral
- * that stops driving TIP or never acks must not cost us the main loop. A
- * device that misbehaves leaves a bad register read; a spinning Nios leaves a
- * board that answers nothing until power is cycled.
+/* Bound I2C completion independently of the peripheral. A device that
+ * misbehaves may leave a bad register result; a spinning Nios leaves a board
+ * that answers nothing until power is cycled. xA4 uses the monotonic deadline
+ * as the wall-time limit and the poll count as a stopped-timer fallback.
  *
  * Returns false if any phase timed out. */
+#ifdef BOARD_BLADERF_MICRO
+static bool bladerf_monotonic_deadline_expired(struct no_os_time start,
+                                                uint64_t timeout_us);
+#define BLADERF_I2C_TRANSFER_TIMEOUT_US 10000ULL
+#define BLADERF_I2C_TIMEOUT_CHECK_MASK  0xffu
+#endif
+
 static bool i2c_complete_transfer(uint8_t check_rxack)
 {
-    /* Arbitrary but bounded: at Nios speeds this is far longer than any
-     * legitimate transfer takes. */
+    /* Retain a finite fallback if the monotonic timer stops advancing. */
     uint32_t const TRIES = 100000;
     uint32_t count;
     uint8_t status;
+#ifdef BOARD_BLADERF_MICRO
+    struct no_os_time const start = no_os_get_time();
+#endif
 
     if ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
         count = 0;
         while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
+#ifdef BOARD_BLADERF_MICRO
+            if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
+                bladerf_monotonic_deadline_expired(
+                    start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+                DBG("%s: timed out waiting for TIP to assert\n",
+                    __FUNCTION__);
+                return false;
+            }
+#endif
             if (++count >= TRIES) {
                 DBG("%s: timed out waiting for TIP to assert\n", __FUNCTION__);
                 return false;
@@ -463,6 +583,14 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     count = 0;
     status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
     while (status & OC_I2C_TIP) {
+#ifdef BOARD_BLADERF_MICRO
+        if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
+            bladerf_monotonic_deadline_expired(
+                start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+            DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
+            return false;
+        }
+#endif
         if (++count >= TRIES) {
             DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
             return false;
@@ -488,9 +616,20 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
 static void i2c_abort_transfer(void)
 {
     uint32_t count = 0;
+#ifdef BOARD_BLADERF_MICRO
+    struct no_os_time const start = no_os_get_time();
+#endif
 
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STO);
     while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) != 0) {
+#ifdef BOARD_BLADERF_MICRO
+        if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
+            bladerf_monotonic_deadline_expired(
+                start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+            DBG("%s: timed out issuing I2C STOP\n", __FUNCTION__);
+            return;
+        }
+#endif
         if (++count >= 100000) {
             DBG("%s: timed out issuing I2C STOP\n", __FUNCTION__);
             return;
@@ -525,19 +664,60 @@ static uint8_t spi_arbiter_read_grant(void *context)
 #endif
 
 #define BLADERF_SPI_ARBITER_WAIT_ATTEMPTS 100000
+#define BLADERF_SPI_ARBITER_TIMEOUT_US    10000
+
+#ifdef BOARD_BLADERF_MICRO
+static bool bladerf_monotonic_deadline_expired(struct no_os_time start,
+                                         uint64_t timeout_us)
+{
+    struct no_os_time now = no_os_get_time();
+    uint64_t elapsed_us =
+        (uint64_t)(uint32_t)(now.s - start.s) * 1000000ULL;
+
+    if (now.us >= start.us) {
+        elapsed_us += now.us - start.us;
+    } else {
+        elapsed_us -= start.us - now.us;
+    }
+
+    return elapsed_us >= timeout_us;
+}
+
+static bool bladerf_spi_arbiter_deadline_expired(void *context)
+{
+    const struct no_os_time *start = context;
+
+    return start == NULL ||
+           bladerf_monotonic_deadline_expired(*start,
+                                        BLADERF_SPI_ARBITER_TIMEOUT_US);
+}
+#endif
 
 bool spi_arbiter_lock()
 {
 #ifdef ARBITER_0_BASE
-    /* Arbitrary but bounded: a grant that has not arrived after this many
-     * reads is not arriving. */
-    if (bladerf_spi_arbiter_acquire(
-                                    BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
-                                    spi_arbiter_set_request,
-                                    spi_arbiter_read_grant)) {
+#ifdef BOARD_BLADERF_MICRO
+    struct no_os_time start = no_os_get_time();
+
+    /* Use the sys_clock deadline; the finite read count remains a fallback
+     * if the timebase stops advancing. */
+    if (bladerf_spi_arbiter_acquire_until(
+            BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
+            spi_arbiter_set_request, spi_arbiter_read_grant,
+            bladerf_spi_arbiter_deadline_expired, &start)) {
         return true;
     }
+#else
+    if (bladerf_spi_arbiter_acquire(
+            BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
+            spi_arbiter_set_request, spi_arbiter_read_grant)) {
+        return true;
+    }
+#endif
 
+#ifdef BOARD_BLADERF_MICRO
+    rfic_service_safe_point();
+#endif
     DBG("%s: no SPI arbiter grant/release after %u tries\n", __FUNCTION__,
         BLADERF_SPI_ARBITER_WAIT_ATTEMPTS);
     return false;
@@ -550,10 +730,22 @@ bool spi_arbiter_unlock()
 {
 // Built only when this board exposes the shared SPI arbiter.
 #ifdef ARBITER_0_BASE
+#ifdef BOARD_BLADERF_MICRO
+    struct no_os_time start = no_os_get_time();
+
+    if (!bladerf_spi_arbiter_release_until(
+            BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
+            spi_arbiter_set_request, spi_arbiter_read_grant,
+            bladerf_spi_arbiter_deadline_expired, &start)) {
+#else
     if (!bladerf_spi_arbiter_release(
             BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
             spi_arbiter_set_request, spi_arbiter_read_grant)) {
+#endif
         DBG("%s: SPI arbiter did not confirm release\n", __FUNCTION__);
+#ifdef BOARD_BLADERF_MICRO
+        rfic_service_safe_point();
+#endif
         return false;
     }
 #endif  // ARBITER_0_BASE
@@ -591,9 +783,14 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
                                     alt_u32 read_length, alt_u8 *read_data,
                                     alt_u32 flags)
 {
-    /* This permits far more polling than a maximum-length AD9361 exchange
-     * needs, while bounding a stalled core. */
+    /* The iteration ceiling is a final fail-safe if the timebase itself
+     * stops. On xA4, the independent sys_clock timer provides the actual
+     * wall-time bound; CPU-loop counts vary with compiler and Nios timing. */
     const alt_u32 poll_limit = 1000000;
+#ifdef BOARD_BLADERF_MICRO
+    const uint64_t timeout_us = 10000;
+    const struct no_os_time start_time = no_os_get_time();
+#endif
     alt_u32 polls = 0;
     alt_u32 write_index = 0;
     alt_u32 read_index = 0;
@@ -617,6 +814,12 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
     IORD_ALTERA_AVALON_SPI_RXDATA(base);
 
     for (;;) {
+#ifdef BOARD_BLADERF_MICRO
+        if ((polls & 0xffu) == 0 &&
+            bladerf_monotonic_deadline_expired(start_time, timeout_us)) {
+            goto timeout;
+        }
+#endif
         if (++polls > poll_limit) {
             goto timeout;
         }
@@ -658,6 +861,12 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
 
     while ((IORD_ALTERA_AVALON_SPI_STATUS(base) &
             ALTERA_AVALON_SPI_STATUS_TMT_MSK) == 0) {
+#ifdef BOARD_BLADERF_MICRO
+        if ((polls & 0xffu) == 0 &&
+            bladerf_monotonic_deadline_expired(start_time, timeout_us)) {
+            goto timeout;
+        }
+#endif
         if (++polls > poll_limit) {
             goto timeout;
         }
@@ -667,6 +876,14 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
         IOWR_ALTERA_AVALON_SPI_CONTROL(base, 0);
     }
 
+#ifdef BOARD_BLADERF_MICRO
+    /* AD9361 can spend bounded CPU time between its delay calls (for
+     * example, phase-search setup and register sequences). Give the NIOS
+     * cooperative status hook a safe point after the SPI transaction has
+     * drained. The hook is restricted to status reads / duplicate ACKs and
+     * must never re-enter the RFIC SPI path. */
+    rfic_service_safe_point();
+#endif
     return (int)read_length;
 
 timeout:
@@ -675,6 +892,9 @@ timeout:
     IOWR_ALTERA_AVALON_SPI_STATUS(
         base, ALTERA_AVALON_SPI_STATUS_ROE_MSK |
               ALTERA_AVALON_SPI_STATUS_TOE_MSK);
+#ifdef BOARD_BLADERF_MICRO
+    rfic_service_safe_point();
+#endif
     return -1;
 }
 
@@ -858,7 +1078,10 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
         goto done;
     }
 
-    usleep(delay_us);
+    /* Keep this required table-write settling interval on the same no-OS
+     * delay path as the AD9361 driver so the restricted NIOS service hook
+     * gets a safe point after the SPI sequence. */
+    no_os_udelay(delay_us);
     success = true;
 
 done:
@@ -873,6 +1096,7 @@ bool adi_axi_read(uint32_t addr, uint32_t *data)
     defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
     defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
     uint32_t clear_toggle;
+    bool success;
 
     if (!data || !nios_axi_address_valid(addr)) {
         return false;
@@ -884,7 +1108,9 @@ bool adi_axi_read(uint32_t addr, uint32_t *data)
     clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
     IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
     *data = IORD_32DIRECT(AXI_AD9361_0_BASE, (uint16_t)addr);
-    return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+    success = (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+    rfic_service_safe_point();
+    return success;
 #else
     (void)addr;
     (void)data;
@@ -900,6 +1126,7 @@ bool adi_axi_write(uint32_t addr, uint32_t data)
     defined(RFIC_AXI_TIMEOUT_STATUS_BASE) && \
     defined(RFIC_AXI_TIMEOUT_CLEAR_BASE)
     uint32_t clear_toggle;
+    bool success;
 
     if (!nios_axi_address_valid(addr)) {
         return false;
@@ -910,7 +1137,9 @@ bool adi_axi_write(uint32_t addr, uint32_t data)
     clear_toggle = IORD_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0) ^ 1u;
     IOWR_32DIRECT(RFIC_AXI_TIMEOUT_CLEAR_BASE, 0, clear_toggle);
     IOWR_32DIRECT(AXI_AD9361_0_BASE, (uint16_t)addr, data);
-    return (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+    success = (IORD_32DIRECT(RFIC_AXI_TIMEOUT_STATUS_BASE, 0) & 1u) == 0;
+    rfic_service_safe_point();
+    return success;
 #else
     (void)addr;
     (void)data;
@@ -986,6 +1215,9 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
         rffe_profile >= NUM_RFFE_FASTLOCK_PROFILES) {
         return false;
     }
+    if (rfic_device_owned_for_external_write()) {
+        return false;
+    }
 
     /* Read out the profile data and save to Nios memory */
     for (i = 0; i < 16; i++) {
@@ -1022,6 +1254,131 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile, uint16_t nios_profile)
 #endif  // BOARD_BLADERF_MICRO
 
 #ifdef BOARD_BLADERF_MICRO
+bool adi_fastlock_load_active(void)
+{
+    return fastlock_load_job.active;
+}
+
+bladerf_module adi_fastlock_load_owner(void)
+{
+    return fastlock_load_job.module;
+}
+
+int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p)
+{
+    fastlock_profile *profiles;
+
+    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX) ||
+        fastlock_load_job.active || rfic_device_owned_for_external_write()) {
+        return -1;
+    }
+
+    if (BLADERF_CHANNEL_IS_TX(m)) {
+        profiles = fastlocks_tx;
+    } else {
+        profiles = fastlocks_rx;
+    }
+
+    if (p->state == FASTLOCK_STATE_RFFE ||
+        p->state == FASTLOCK_STATE_BBP_RFFE) {
+        return 1;
+    }
+
+    fastlock_cache_invalidate_slot(profiles, NUM_BBP_FASTLOCK_PROFILES,
+                                   p->profile_num);
+    fastlock_load_job.profile = *p;
+    fastlock_load_job.profile.state = FASTLOCK_STATE_BBP;
+    fastlock_load_job.module = m;
+    fastlock_load_job.write_index = 0;
+    fastlock_load_job.active = true;
+    return 0;
+}
+
+int32_t adi_fastlock_load_step(bladerf_module m)
+{
+    static const uint8_t fl_prog_write = 1 << 1;
+    static const uint8_t fl_prog_clken = 1 << 0;
+    uint16_t fl_prog_data_reg;
+    uint16_t fl_prog_ctrl_reg;
+    uint16_t addr;
+    uint64_t data;
+    uint8_t index;
+
+    if (!fastlock_load_job.active || fastlock_load_job.module != m) {
+        return -1;
+    }
+
+    if (BLADERF_CHANNEL_IS_TX(m)) {
+        fl_prog_data_reg = 0x29d;
+        fl_prog_ctrl_reg = 0x29f;
+    } else {
+        fl_prog_data_reg = 0x25d;
+        fl_prog_ctrl_reg = 0x25f;
+    }
+
+    index = fastlock_load_job.write_index;
+    if (index == 0) {
+        addr = (0x1 << 15) | (0x1 << 12) | (fl_prog_data_reg & 0x3ff);
+        data = (uint64_t)(fastlock_load_job.profile.profile_data[0]) << 56;
+        data |= (uint64_t)(((fastlock_load_job.profile.profile_num & 0x7) << 4)
+                           | (index & 0xf)) << 48;
+    } else if (index < 16) {
+        addr = (0x1 << 15) | (0x3 << 12) | (fl_prog_ctrl_reg & 0x3ff);
+        data = (uint64_t)(fl_prog_write | fl_prog_clken) << 56;
+        data |= (uint64_t)(fastlock_load_job.profile.profile_data[index]) << 40;
+        data |= (uint64_t)(((fastlock_load_job.profile.profile_num & 0x7) << 4)
+                           | (index & 0xf)) << 32;
+    } else {
+        addr = (0x1 << 15) | (0x0 << 12) | (fl_prog_ctrl_reg & 0x3ff);
+        data = index == 16 ?
+            (uint64_t)(fl_prog_write | fl_prog_clken) << 56 : 0;
+    }
+
+    if (!adi_spi_write(addr, data)) {
+        /* A failed transfer may have reached the RFIC. Keep every residency
+         * claim for this physical slot revoked and release only this owner. */
+        fastlock_load_job.active = false;
+        return -1;
+    }
+
+    ++fastlock_load_job.write_index;
+    if (fastlock_load_job.write_index == 18) {
+        fastlock_load_job.active = false;
+        return 1;
+    }
+    return 0;
+}
+
+bool adi_fastlock_load_cancel(bladerf_module m)
+{
+    if (!fastlock_load_job.active || fastlock_load_job.module != m) {
+        return false;
+    }
+
+    /* NIOS calls cancellation between worker turns, hence only after the
+     * previous bounded SPI transaction has returned. The physical slot stays
+     * nonresident because start revoked its cache claim. */
+    fastlock_load_job.active = false;
+    return true;
+}
+
+void adi_fastlock_profile_cache_commit(bladerf_module m,
+                                       uint16_t nios_profile,
+                                       fastlock_profile *p)
+{
+    fastlock_profile *profiles;
+
+    if (p == NULL || nios_profile >= NUM_BBP_FASTLOCK_PROFILES) {
+        return;
+    }
+
+    profiles = BLADERF_CHANNEL_IS_TX(m) ? fastlocks_tx : fastlocks_rx;
+    fastlock_cache_invalidate_slot(profiles, NUM_BBP_FASTLOCK_PROFILES,
+                                   p->profile_num);
+    p->state = FASTLOCK_STATE_BBP_RFFE;
+    profiles[nios_profile] = *p;
+}
+
 bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 {
     static const uint8_t fl_prog_write = 1 << 1;
@@ -1053,6 +1410,9 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
         /* Already loaded! */
         return true;
     } else {
+        if (rfic_device_owned_for_external_write()) {
+            return false;
+        }
         /* The first SPI write may already alter this physical slot, even if
          * a later write fails. Invalidate every cached residency before
          * starting the upload so a partial transfer cannot leave another
@@ -1110,67 +1470,133 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 #define AD9361_REG_RX_PLL_LOCK       0x247
 #define AD9361_REG_TX_PLL_LOCK       0x287
 #define AD9361_PLL_LOCK_MASK         (1 << 1)
-#define AD9361_PLL_LOCK_POLL_MAX     2000  /* SPI read ~кілька мкс кожен,
-                                            * запас проти 100мкс типового
-                                            * fastlock lock-часу */
+#define AD9361_PLL_LOCK_POLL_INTERVAL_US  10ULL
+#define AD9361_PLL_LOCK_TIMEOUT_US     20000ULL
+#define AD9361_PLL_LOCK_POLL_MAX         2000u
+#define AD9361_PLL_LOCK_DEFER_FALLBACK     16u
 
-static bool adi_wait_pll_lock(uint16_t lock_reg, uint8_t *failure_stage)
+static struct {
+    bool active;
+    bladerf_module owner;
+    uint16_t lock_reg;
+    uint32_t poll_count;
+    uint32_t defer_count;
+    struct no_os_time started;
+    struct no_os_time last_poll;
+} fastlock_recall_job;
+
+bool adi_fastlock_recall_active(void)
 {
-    uint16_t status_addr = (0x0 << 15) | (0x0 << 12) | (lock_reg & 0x3ff);
-    uint32_t i;
+    return fastlock_recall_job.active;
+}
 
-    for (i = 0; i < AD9361_PLL_LOCK_POLL_MAX; i++) {
-        uint64_t value;
-        uint8_t status;
+bladerf_module adi_fastlock_recall_owner(void)
+{
+    return fastlock_recall_job.owner;
+}
 
-        if (!adi_spi_read_checked(status_addr, &value)) {
-            if (failure_stage != NULL) {
-                *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ;
-            }
-            return false;
-        }
-        status = (uint8_t)(value >> 56);
-        if ((status & AD9361_PLL_LOCK_MASK) != 0) {
-            return true;
-        }
+bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
+                               uint8_t *failure_stage)
+{
+    bool is_tx = BLADERF_CHANNEL_IS_TX(m);
+    uint16_t fl_setup_reg = is_tx ? 0x29a : 0x25a;
+    uint64_t data;
+    uint16_t addr;
+
+    if (failure_stage != NULL)
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    if (fastlock_recall_job.active) {
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+        return false;
+    }
+    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
+        return false;
     }
 
-    if (failure_stage != NULL) {
-        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT;
+    addr = (0x1 << 15) | (0x0 << 12) | (fl_setup_reg & 0x3ff);
+    data = (uint64_t)(((p->profile_num & 0x7) << 5) | 0x1) << 8 * 7;
+    if (!adi_spi_write(addr, data)) {
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_FASTLOCK_SETUP_WRITE;
+        return false;
     }
-    return false;
+
+    fastlock_recall_job.active = true;
+    fastlock_recall_job.owner = m;
+    fastlock_recall_job.lock_reg = is_tx ? AD9361_REG_TX_PLL_LOCK
+                                         : AD9361_REG_RX_PLL_LOCK;
+    fastlock_recall_job.poll_count = 0;
+    fastlock_recall_job.defer_count = 0;
+    fastlock_recall_job.started = no_os_get_time();
+    fastlock_recall_job.last_poll = fastlock_recall_job.started;
+    return true;
+}
+
+/* Returns 1 while the RFPLL autonomously acquires lock, 0 on observed lock,
+ * and a negative error on timeout, SPI failure, or an owner mismatch. */
+int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
+{
+    struct no_os_time now;
+    uint16_t status_addr;
+    uint64_t value;
+
+    if (failure_stage != NULL)
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    if (!fastlock_recall_job.active || fastlock_recall_job.owner != m) {
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+        return -EINVAL;
+    }
+
+    now = no_os_get_time();
+    if (bladerf_monotonic_deadline_expired(
+            fastlock_recall_job.started, AD9361_PLL_LOCK_TIMEOUT_US) ||
+        fastlock_recall_job.poll_count >= AD9361_PLL_LOCK_POLL_MAX) {
+        fastlock_recall_job.active = false;
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT;
+        return -ETIMEDOUT;
+    }
+    if (!bladerf_monotonic_deadline_expired(
+            fastlock_recall_job.last_poll,
+            AD9361_PLL_LOCK_POLL_INTERVAL_US) &&
+        ++fastlock_recall_job.defer_count <
+            AD9361_PLL_LOCK_DEFER_FALLBACK)
+        return 1;
+
+    fastlock_recall_job.last_poll = now;
+    fastlock_recall_job.defer_count = 0;
+    ++fastlock_recall_job.poll_count;
+    status_addr = (0x0 << 15) | (0x0 << 12) |
+                  (fastlock_recall_job.lock_reg & 0x3ff);
+    if (!adi_spi_read_checked(status_addr, &value)) {
+        fastlock_recall_job.active = false;
+        if (failure_stage != NULL)
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ;
+        return -EIO;
+    }
+    if ((((uint8_t)(value >> 56)) & AD9361_PLL_LOCK_MASK) != 0) {
+        fastlock_recall_job.active = false;
+        return 0;
+    }
+    return 1;
 }
 
 bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
                          uint8_t *failure_stage)
 {
-    bool is_tx = BLADERF_CHANNEL_IS_TX(m);
-    uint16_t fl_setup_reg = is_tx ? 0x29a : 0x25a;
-    uint16_t pll_lock_reg = is_tx ? AD9361_REG_TX_PLL_LOCK
-                                  : AD9361_REG_RX_PLL_LOCK;
-    uint16_t addr;
-    uint64_t data = 0;
+    int32_t status;
 
-    if (failure_stage != NULL) {
-        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
-    }
-    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
-        if (failure_stage != NULL) {
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
-        }
+    if (!adi_fastlock_recall_start(m, p, failure_stage))
         return false;
-    }
-    addr = (0x1 << 15) | (0x0 << 12) | (fl_setup_reg & 0x3ff);
-    data = (uint64_t)(((p->profile_num & 0x7) << 5) | (0x1)) << 8 * 7;
-    if (!adi_spi_write(addr, data)) {
-        if (failure_stage != NULL) {
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_FASTLOCK_SETUP_WRITE;
-        }
-        return false;
-    }
-
-    /* Wait for the actual RFPLL lock bit and report a timeout as failure. */
-    return adi_wait_pll_lock(pll_lock_reg, failure_stage);
+    do {
+        no_os_udelay(AD9361_PLL_LOCK_POLL_INTERVAL_US);
+        status = adi_fastlock_recall_poll(m, failure_stage);
+    } while (status == 1);
+    return status == 0;
 }
 #endif  // BOARD_BLADERF_MICRO
 
@@ -1416,7 +1842,9 @@ bool vctcxo_trim_dac_write(uint8_t cmd, uint16_t val)
         val & 0xff,
     };
 
-    if (bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
+    if (!rfic_scheduler_reference_write_allowed(
+            rfic_device_owned_for_external_write()) ||
+        bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
                                     data, 0, NULL, 0) < 0) {
         return false;
     }
@@ -1450,7 +1878,9 @@ bool ad56x1_vctcxo_trim_dac_write(uint16_t val)
         val & 0xff,
     };
 
-    if (bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
+    if (!rfic_scheduler_reference_write_allowed(
+            rfic_device_owned_for_external_write()) ||
+        bladerf_spi_command_bounded(PERIPHERAL_SPI_BASE, 0, sizeof(data),
                                     data, 0, NULL, 0) < 0) {
         return false;
     }
@@ -1472,7 +1902,9 @@ void ad56x1_vctcxo_trim_dac_read(uint16_t *val)
 #ifdef BOARD_BLADERF_MICRO
 bool adf400x_spi_write(uint32_t val)
 {
-    if (val > 0x00ffffffu) {
+    if (val > 0x00ffffffu ||
+        !rfic_scheduler_reference_write_allowed(
+            rfic_device_owned_for_external_write())) {
         return false;
     }
 

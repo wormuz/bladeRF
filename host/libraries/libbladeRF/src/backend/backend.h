@@ -205,7 +205,8 @@ struct backend_fns {
     int (*wishbone_master_read)(struct bladerf *dev, uint32_t addr, uint32_t *data);
 
     /* RFIC command accessors */
-    int (*rfic_command_write)(struct bladerf *dev, uint16_t cmd, uint64_t data);
+    int (*rfic_command_write)(struct bladerf *dev, uint16_t cmd, uint64_t data,
+                              uint16_t transaction_id);
     int (*rfic_command_read)(struct bladerf *dev, uint16_t cmd, uint64_t *data);
 
     /* RFFE control accessors */
@@ -278,7 +279,8 @@ struct backend_fns {
                    uint16_t nios_profile,
                    uint8_t rffe_profile,
                    uint8_t port,
-                   uint8_t spdt);
+                   uint8_t spdt,
+                   uint16_t request_token);
 
     /* Load firmware from FX3 bootloader */
     int (*load_fw_from_bootloader)(bladerf_backend backend,

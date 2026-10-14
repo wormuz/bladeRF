@@ -247,7 +247,8 @@ int nios_rfic_command_read(struct bladerf *dev, uint16_t cmd, uint64_t *data);
  *
  * @return 0 on success, BLADERF_ERR_* code on error.
  */
-int nios_rfic_command_write(struct bladerf *dev, uint16_t cmd, uint64_t data);
+int nios_rfic_command_write(struct bladerf *dev, uint16_t cmd, uint64_t data,
+                            uint16_t transaction_id);
 
 /**
  * Read RFFE control register.
@@ -318,6 +319,8 @@ int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value);
 int nios_retune2_failure_count_read(struct bladerf *dev,
                                     bladerf_module module,
                                     uint32_t *value);
+int nios_command_session_generation_read(struct bladerf *dev,
+                                         uint32_t *generation);
 /** Read the cumulative successful NIOS retune2 activation counter. */
 int nios_retune2_success_count_read(struct bladerf *dev,
                                     bladerf_module module,
@@ -327,7 +330,17 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  uint32_t sequence,
                                  uint64_t *frequency_hz,
                                  uint64_t *scheduled_timestamp,
-                                 uint16_t *nios_profile);
+                                 uint16_t *nios_profile,
+                                 uint32_t *session_generation,
+                                 uint16_t *request_token);
+int nios_retune2_failure_completion_read(struct bladerf *dev,
+                                         bladerf_module module,
+                                         uint32_t sequence,
+                                         uint64_t *scheduled_timestamp,
+                                         uint16_t *nios_profile,
+                                         uint8_t *failure_stage,
+                                         uint32_t *session_generation,
+                                         uint16_t *request_token);
 
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
@@ -476,6 +489,14 @@ int nios_tx_retune_gate_cmd(struct bladerf *dev, uint8_t cmd);
 /* Return success only after FPGA reports ERROR and MUTED for ABORT. */
 int nios_tx_retune_gate_abort(struct bladerf *dev);
 int nios_tx_retune_gate_status_read(struct bladerf *dev, uint32_t *value);
+/* Fault-only barrier protocol. start/wait establish the PCLK write block and
+ * TX-parser idle state while FIFO clear stays asserted. The host then resets/
+ * rearms FX3 DMA and restores AD9361; release requires fresh TX-clock edges
+ * and both FIFO domains to confirm empty before returning success. */
+int nios_tx_fifo_fault_flush_start(struct bladerf *dev);
+int nios_tx_fifo_fault_flush_wait(struct bladerf *dev, unsigned int timeout_ms);
+int nios_tx_fifo_fault_flush_release(struct bladerf *dev,
+                                     unsigned int timeout_ms);
 
 /**
  * Save an RFFE fast lock profile to the Nios.
@@ -764,7 +785,8 @@ int nios_retune(struct bladerf *dev,
  */
 int nios_retune2(struct bladerf *dev, bladerf_channel ch,
                  uint64_t timestamp, uint16_t nios_profile,
-                 uint8_t rffe_profile, uint8_t port, uint8_t spdt);
+                 uint8_t rffe_profile, uint8_t port, uint8_t spdt,
+                 uint16_t request_token);
 
 /**
  * Read trigger register value

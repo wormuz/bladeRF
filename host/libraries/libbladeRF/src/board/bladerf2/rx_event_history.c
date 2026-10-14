@@ -11,6 +11,7 @@
 #include "bladeRF.h"
 #include "board/board.h"
 #include "common.h"
+#include "nios_pkt_retune2.h"
 #include "rf_transition_policy.h"
 #include "streaming/metadata.h"
 #include "helpers/timeout.h"
@@ -494,6 +495,44 @@ void bladerf2_tx_retune_event(struct bladerf *dev,
     MUTEX_LOCK(&board_data->rf_transition_event_lock);
     bladerf2_rf_event_append_locked(board_data, &event);
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+void bladerf2_tx_retune_failure_detail_event(
+    struct bladerf *dev, uint64_t scheduled_timestamp,
+    uint64_t requested_frequency_hz, uint8_t failure_stage,
+    int32_t error_code)
+{
+    struct bladerf_rf_event event = {0};
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL ||
+        failure_stage > NIOS_PKT_RETUNE2_FAILURE_INTERNAL) {
+        return;
+    }
+
+    board_data = dev->board_data;
+    event.host_monotonic_ns = monotonic_ns();
+    event.fpga_timestamp = scheduled_timestamp;
+    event.event_type = BLADERF_RF_EVT_TX_RETUNE_FAILED;
+    event.requested_rx_lo_hz = requested_frequency_hz;
+    event.rfic_status = failure_stage;
+    if (failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+        event.flags = BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID;
+    }
+    event.error_code = error_code;
+    event.fpga_state = BLADERF_RF_STATE_ERROR;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    event.epoch_id = board_data->tx_async_link_epoch_id;
+    if (board_data->tx_async_rfic_state_certified) {
+        board_data->tx_async_admission_generation++;
+    }
+    board_data->tx_async_rfic_state_certified = false;
+    MUTEX_LOCK(&board_data->rf_transition_event_lock);
+    bladerf2_rf_event_append_locked(board_data, &event);
+    MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
+    COND_SIGNAL(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 

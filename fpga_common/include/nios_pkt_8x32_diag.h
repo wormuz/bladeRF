@@ -49,7 +49,7 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
             return addr <= NIOS_PKT_8x32_RETUNE2_FAILURES_TX_ADDR;
 
         case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
-            return addr <= NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI;
+            return addr <= NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN;
 
         case NIOS_PKT_8x32_TARGET_LOSS_COUNTERS:
             return addr <= 3;
@@ -63,6 +63,7 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS:
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO:
         case NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_HI:
+        case NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION:
             return addr == 0;
 
         case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:

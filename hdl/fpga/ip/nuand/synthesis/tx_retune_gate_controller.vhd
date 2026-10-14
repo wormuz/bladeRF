@@ -19,7 +19,9 @@ entity tx_retune_gate_controller is
         arm_ack_toggle     : out std_logic := '0';
         target_timestamp   : out unsigned(63 downto 0) := (others => '0');
         complete           : out std_logic := '0';
-        abort              : out std_logic := '0'
+        abort              : out std_logic := '0';
+        fifo_flush_sys     : out std_logic := '0';
+        fifo_release_sys   : out std_logic := '0'
     );
 end entity;
 
@@ -34,7 +36,38 @@ architecture rtl of tx_retune_gate_controller is
     signal arm_pending : std_logic := '0';
     signal arm_pending_toggle : std_logic := '0';
     signal arm_compare_lead : std_logic := '0';
+    signal previous_flush_toggles_sys : std_logic_vector(1 downto 0) := "00";
+    signal flush_control_initialized_sys : std_logic := '0';
 begin
+    -- Fault flush has to remain commandable when tx_clock (AD9361 data clock)
+    -- is absent. Decode only these dedicated NIOS recovery toggles directly
+    -- in the source/system domain; normal ARM/COMPLETE/ABORT still use the
+    -- bundled TX-clock mailbox below.
+    decode_fault_flush_sys : process(source_clock, source_reset)
+    begin
+        if source_reset = '1' then
+            previous_flush_toggles_sys <= "00";
+            flush_control_initialized_sys <= '0';
+            fifo_flush_sys <= '0';
+            fifo_release_sys <= '0';
+        elsif rising_edge(source_clock) then
+            fifo_flush_sys <= '0';
+            fifo_release_sys <= '0';
+            if flush_control_initialized_sys = '0' then
+                previous_flush_toggles_sys <= source_control(5 downto 4);
+                flush_control_initialized_sys <= '1';
+            else
+                if source_control(4) /= previous_flush_toggles_sys(0) then
+                    fifo_flush_sys <= '1';
+                end if;
+                if source_control(5) /= previous_flush_toggles_sys(1) then
+                    fifo_release_sys <= '1';
+                end if;
+                previous_flush_toggles_sys <= source_control(5 downto 4);
+            end if;
+        end if;
+    end process;
+
     transfer : entity work.handshake
         generic map (DATA_WIDTH => 96)
         port map (

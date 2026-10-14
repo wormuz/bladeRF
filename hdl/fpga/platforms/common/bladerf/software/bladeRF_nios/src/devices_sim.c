@@ -40,6 +40,16 @@
 /* This global is used to flag the end of a simulation */
 bool run_nios = true;
 
+void command_uart_set_worker_busy(bool busy)
+{
+    (void)busy;
+}
+
+uint32_t command_uart_current_session_generation(void)
+{
+    return 0;
+}
+
 static size_t test_case_idx = 0;
 
 const char *module2str(bladerf_module m)
@@ -489,7 +499,7 @@ void command_uart_enable_isr(bool enable)
     (void)enable;
 }
 
-void command_uart_write_response(uint8_t *resp, uint32_t session_generation) {
+bool command_uart_write_response(uint8_t *resp, uint32_t session_generation) {
     (void)session_generation;
     print_bytes("Response data:", resp, NIOS_PKT_LEN);
 
@@ -505,6 +515,18 @@ void command_uart_write_response(uint8_t *resp, uint32_t session_generation) {
     } else {
         printf("Pass.\n\n");
     }
+    return true;
+}
+
+bool command_uart_publish_response(uint8_t *resp,
+                                   uint32_t session_generation)
+{
+    return command_uart_write_response(resp, session_generation);
+}
+
+void command_uart_check_session_recovery(void)
+{
+    /* The simulator has no asynchronous UART/session reset state. */
 }
 
 bool rfic_command_write(uint16_t addr, uint64_t data)

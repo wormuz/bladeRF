@@ -113,6 +113,14 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             }
             break;
 
+        case NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION:
+            if (addr != 0) {
+                *data = 0;
+                return false;
+            }
+            *data = command_uart_current_session_generation();
+            break;
+
         case NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES:
             switch (addr) {
                 case NIOS_PKT_8x32_RETUNE2_SUCCESSES_RX_ADDR:
@@ -128,7 +136,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             break;
 
         case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
-            if (addr > 5) {
+            if (addr > NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN) {
                 *data = 0;
                 return false;
             }
@@ -345,6 +353,12 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                        NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_TX) {
                 return pkt_retune2_completion_select(BLADERF_MODULE_TX,
                                                      data);
+            } else if (addr == NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_RX) {
+                return pkt_retune2_failure_completion_select(
+                    BLADERF_MODULE_RX, data);
+            } else if (addr == NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX) {
+                return pkt_retune2_failure_completion_select(
+                    BLADERF_MODULE_TX, data);
             } else {
                 return false;
             }
@@ -503,6 +517,16 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
 #else
                     return false;
 #endif
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_FLUSH:
+                    if (data != 0) {
+                        return false;
+                    }
+                    return tx_retune_gate_fifo_flush();
+                case NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_RELEASE:
+                    if (data != 0) {
+                        return false;
+                    }
+                    return tx_retune_gate_fifo_release();
                 default:
                     return false;
             }

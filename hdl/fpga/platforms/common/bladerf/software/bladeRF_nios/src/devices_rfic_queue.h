@@ -27,6 +27,8 @@
 
 #include <stdbool.h>
 
+#include "rfic_progress_policy.h"
+
 #define COMMAND_QUEUE_MAX 16
 #define COMMAND_QUEUE_FULL 0xff
 #define COMMAND_QUEUE_EMPTY 0xfe
@@ -50,7 +52,10 @@ struct rfic_queue_entry {
     uint8_t rv;                           /* Return value */
     uint8_t ch;                           /* Channel */
     uint8_t cmd;                          /* Command */
+    uint16_t transaction_id;              /* 0 for legacy untagged writes */
     uint64_t value;                       /* Value to pass to command */
+    uint8_t result_code;                   /* Stable RFIC protocol result */
+    uint8_t cleanup_result_code;           /* Secondary cleanup result */
 };
 
 /* A queue itself */
@@ -61,6 +66,19 @@ struct rfic_queue {
     uint8_t last_rv; /* Returned value from executing last command */
     bool last_rv_valid; /* At least one command retired since queue reset */
     uint32_t last_rv_sequence; /* Monotonic retirement token */
+    uint16_t last_rv_transaction_id;
+    uint8_t last_rv_ch;
+    uint8_t last_rv_cmd;
+    uint64_t last_rv_value;
+    uint8_t last_result_code;
+    uint8_t last_cleanup_result_code;
+    /* Retain the latest ACK identity across subsequent enqueue so a retry
+     * after a lost USB ACK response remains idempotent. Replaced only by a
+     * later terminal-result ACK; cleared on NIOS queue reset. */
+    uint16_t last_acked_transaction_id;
+    uint32_t last_acked_sequence;
+    bool tagged_protocol_enabled;
+    volatile uint32_t progress_sequence;
 
     struct rfic_queue_entry entries[COMMAND_QUEUE_MAX];
 };
@@ -84,7 +102,8 @@ struct rfic_queue {
 uint8_t rfic_enqueue(struct rfic_queue *q,
                      uint8_t ch,
                      uint8_t cmd,
-                     uint64_t value);
+                     uint64_t value,
+                     uint16_t transaction_id);
 
 /**
  * @brief       Dequeue a command
@@ -96,6 +115,7 @@ uint8_t rfic_enqueue(struct rfic_queue *q,
  *          the queue was empty.
  */
 uint8_t rfic_dequeue(struct rfic_queue *q, struct rfic_queue_entry *e);
+void rfic_queue_progress_tick(struct rfic_queue *q);
 
 /**
  * @brief       Get the state of the next item in the queue

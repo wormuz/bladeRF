@@ -4,9 +4,10 @@ project(libbladeRF_test_nios_rfic_calibration_policy C)
 set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../..)
 set(NIOS_SRC
     ${REPO_ROOT}/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src)
+set(FPGA_COMMON_INCLUDE ${REPO_ROOT}/fpga_common/include)
 
 add_executable(libbladeRF_test_nios_rfic_calibration_policy main.c)
 target_include_directories(libbladeRF_test_nios_rfic_calibration_policy PRIVATE
-    ${NIOS_SRC})
+    ${NIOS_SRC} ${FPGA_COMMON_INCLUDE})
 target_compile_options(libbladeRF_test_nios_rfic_calibration_policy PRIVATE
     -UNDEBUG)

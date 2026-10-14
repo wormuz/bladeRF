@@ -55,6 +55,8 @@ struct transfer {
     PUCHAR handle;              /* Handle for in-flight transfer */
     PUCHAR buffer;              /* Buffer associated with transfer */
     size_t length;              /* Requested transfer length */
+    uint64_t tx_generation;
+    bool tx_lease_active;
 };
 
 struct stream_data {
@@ -417,12 +419,21 @@ static CCyBulkEndPoint *get_ep(CCyUSBDevice *USBDevice, int id)
 }
 
 static int cyapi_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
-                              uint32_t buffer_len, uint32_t timeout_ms)
+                              uint32_t buffer_len, uint32_t timeout_ms,
+                              uint32_t *transferred,
+                              bool *transferred_valid)
 {
     bool success;
     int status = BLADERF_ERR_IO;
     CCyUSBDevice *dev = get_device(driver);
     CCyBulkEndPoint *ep = get_ep(dev, endpoint);
+
+    if (transferred != NULL) {
+        *transferred = 0;
+    }
+    if (transferred_valid != NULL) {
+        *transferred_valid = false;
+    }
 
     if (ep != NULL) {
         LONG len = buffer_len;
@@ -430,7 +441,17 @@ static int cyapi_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         success = ep->XferData((PUCHAR)buffer, len);
 
         if (success) {
+            if (transferred != NULL && len >= 0) {
+                *transferred = (uint32_t)len;
+            }
+            if (transferred_valid != NULL && len >= 0) {
+                *transferred_valid = true;
+            }
             if (len == buffer_len) {
+                status = 0;
+            } else if (transferred != NULL && len >= 0) {
+                /* The caller requested the actual length and can assemble a
+                 * short successful transfer with the following read. */
                 status = 0;
             } else {
                 log_debug("Transfer len mismatch: %u vs %u\n",
@@ -600,6 +621,13 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
     assert(data->transfers[data->avail_i].buffer == NULL);
     assert(data->num_avail != 0);
 
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        status = async_tx_submit_lease_acquire(stream, tx_generation);
+        if (status != 0) {
+            return status;
+        }
+    }
+
     xfer = data->ep->BeginDataXfer((PUCHAR) buffer, buffer_size,
                                    &data->transfers[data->avail_i].event);
 
@@ -607,6 +635,10 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
         data->transfers[data->avail_i].handle = xfer;
         data->transfers[data->avail_i].buffer = (PUCHAR) buffer;
         data->transfers[data->avail_i].length = len;
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            data->transfers[data->avail_i].tx_generation = tx_generation;
+            data->transfers[data->avail_i].tx_lease_active = true;
+        }
 
         log_verbose("Submitted buffer %p using transfer slot %u.\n",
                     buffer, (unsigned int) data->avail_i);
@@ -617,6 +649,9 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
         status = BLADERF_ERR_UNEXPECTED;
         log_debug("Failed to submit buffer %p in transfer slot %u.\n",
                   buffer, (unsigned int) data->avail_i);
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+            async_tx_submit_lease_release(stream);
+        }
     }
 
     if (status == 0 &&
@@ -806,6 +841,7 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
     while (!done) {
         struct transfer *xfer;
         size_t i;
+        bool retire_tx_lease = false;
 
         i = data->inflight_i;
         xfer = &data->transfers[i];
@@ -842,6 +878,11 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
         success = data->ep->FinishDataXfer(data->transfers[i].buffer, (LONG &)len,
                                            &data->transfers[i].event,
                                            xfer->handle);
+        if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+            data->transfers[i].tx_lease_active) {
+            data->transfers[i].tx_lease_active = false;
+            retire_tx_lease = true;
+        }
 
         if (success && stream->state == STREAM_SHUTTING_DOWN) {
             /* Do not run the application callback or resubmit while an
@@ -936,6 +977,10 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
             async_tx_buffer_submission_cancelled(stream);
         }
 
+        if (retire_tx_lease) {
+            async_tx_submit_lease_release(stream);
+        }
+
         data->inflight_i = next_idx(data, data->inflight_i);
         MUTEX_UNLOCK(&stream->lock);
     }
@@ -965,6 +1010,12 @@ out:
             data->ep->FinishDataXfer(data->transfers[i].buffer, (LONG &)len,
                                      &data->transfers[i].event,
                                      data->transfers[i].handle);
+
+            if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+                data->transfers[i].tx_lease_active) {
+                data->transfers[i].tx_lease_active = false;
+                async_tx_submit_lease_release(stream);
+            }
 
 
             data->transfers[i].buffer = NULL;

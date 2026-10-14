@@ -31,6 +31,23 @@
 #include "fpga_version.h"
 #include "pkt_handler.h"
 
+/* COMMAND_UART_BASE + 28 status bits. */
+#define COMMAND_UART_STATUS_REQUEST_BUSY       (1u << 0)
+#define COMMAND_UART_STATUS_WORKER_BUSY        (1u << 1)
+#define COMMAND_UART_STATUS_RESPONSE_PENDING  (1u << 2)
+#define COMMAND_UART_STATUS_RESPONSE_OVERFLOW (1u << 3)
+#define COMMAND_UART_STATUS_RESPONSE_ACTIVE   (1u << 4)
+
+/* Preserve the command UART's ISR-enable bit while controlling its worker
+ * admission marker. The FPGA snapshots worker_busy when a request frame ends. */
+void command_uart_set_worker_busy(bool busy);
+uint32_t command_uart_current_session_generation(void);
+/* Publish a response and fail closed for this session if the FPGA UART cannot
+ * accept it. A new session generation is required before request IRQs resume. */
+bool command_uart_publish_response(uint8_t *resp,
+                                   uint32_t session_generation);
+void command_uart_check_session_recovery(void);
+
 /* Compare free-running 64-bit FPGA timestamps using modulo ordering. The
  * caller must schedule within the unambiguous forward half-range (< 2^63).
  */
@@ -294,6 +311,19 @@ bool adi_fastlock_save(bool is_tx, uint8_t rffe_profile,
  * @param *p   Fast lock profile structure
  */
 bool adi_fastlock_load(bladerf_module m, fastlock_profile *p);
+/* Cooperative fastlock profile upload. Start copies the profile bytes and
+ * invalidates cached residency before any SPI write. Return 0 when a staged
+ * upload is active, 1 when the requested slot is already resident, or -1 on
+ * rejection. Each step performs at most one complete SPI transaction and
+ * returns 0 while pending, 1 on completion, or -1 on failure. */
+int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p);
+int32_t adi_fastlock_load_step(bladerf_module m);
+bool adi_fastlock_load_cancel(bladerf_module m);
+bool adi_fastlock_load_active(void);
+bladerf_module adi_fastlock_load_owner(void);
+void adi_fastlock_profile_cache_commit(bladerf_module m,
+                                       uint16_t nios_profile,
+                                       fastlock_profile *p);
 
 /**
  * Recall a stored fast lock profile.
@@ -303,6 +333,11 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p);
  */
 bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
                          uint8_t *failure_stage);
+bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
+                               uint8_t *failure_stage);
+int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage);
+bool adi_fastlock_recall_active(void);
+bladerf_module adi_fastlock_recall_owner(void);
 
 /**
  * Set the AD9361 port.
@@ -551,8 +586,8 @@ void command_uart_enable_isr(bool enable);
 /**
  * Write the command UART response buffer
  */
-INLINE void command_uart_write_response(uint8_t *command,
-                                        uint32_t session_generation);
+INLINE bool command_uart_write_response(uint8_t *command,
+                                       uint32_t session_generation);
 
 /**
  * Enable interrupts from the VCTCXO Tamer module
@@ -669,6 +704,12 @@ void rfic_command_init(void);
  * Do background RFIC command processing.
  */
 void rfic_command_work(void);
+bool rfic_command_worker_active(void);
+bool rfic_command_owns_device(void);
+bool rfic_tx_quad_retune_owner(void);
+void rfic_command_progress_tick(void);
+bool rfic_command_state_faulted(void);
+bool rfic_phy_present(void);
 
 /**
  * RFIC command write (queuing)
@@ -681,6 +722,11 @@ void rfic_command_work(void);
  * @return bool (true = success)
  */
 bool rfic_command_write(uint16_t addr, uint64_t data);
+bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
+                                            uint16_t transaction_id);
+bool rfic_command_transaction_is_duplicate(uint16_t addr, uint64_t data,
+                                           uint16_t transaction_id);
+bool rfic_command_ack_result(uint16_t transaction_id, uint32_t sequence);
 
 /**
  * RFIC command read

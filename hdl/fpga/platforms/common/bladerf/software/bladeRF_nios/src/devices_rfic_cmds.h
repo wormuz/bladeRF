@@ -32,7 +32,15 @@
 
 struct rfic_state;
 
+bool rfic_force_rf_path_off(void);
+
 bool _rfic_cmd_rd_status(struct rfic_state *, bladerf_channel, uint64_t *);
+bool _rfic_cmd_rd_transaction_status(struct rfic_state *, bladerf_channel,
+                                     uint64_t *);
+bool _rfic_cmd_rd_progress(struct rfic_state *, bladerf_channel,
+                           uint64_t *);
+bool _rfic_cmd_rd_result_detail(struct rfic_state *, bladerf_channel,
+                                uint64_t *);
 
 bool _rfic_cmd_wr_init(struct rfic_state *, bladerf_channel, uint32_t);
 

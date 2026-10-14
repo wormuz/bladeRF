@@ -1,5 +1,6 @@
 #include "nios_transaction.h"
 #include "nios_pkt_formats.h"
+#include "helpers/timeout.h"
 
 static uint64_t nios_read_le64(const uint8_t *buf, uint8_t offset)
 {
@@ -118,7 +119,9 @@ static bool nios_legacy_config_response_matches(const uint8_t *request,
  * response it could certify a different request. Keep this check inside the
  * peripheral transaction lock so a mismatch cannot race the next request. */
 static bool nios_response_matches_request(const uint8_t *request,
-                                          const uint8_t *response)
+                                          const uint8_t *response,
+                                          bool session_generation_valid,
+                                          uint32_t session_generation)
 {
     if (request[0] == NIOS_PKT_LEGACY_MAGIC) {
         uint8_t legacy_device;
@@ -238,23 +241,35 @@ static bool nios_response_matches_request(const uint8_t *request,
         uint64_t req_data, resp_data;
         bool req_write, resp_write;
 
-        /* These fields are reserved by the packet ABI and are always zero in
-         * firmware-generated responses. Reject malformed or stale framing
-         * before trusting the echoed request identity. */
-        if (!nios_response_flags_and_reserved_valid(
-                response, NIOS_PKT_16x64_IDX_FLAGS,
-                NIOS_PKT_16x64_IDX_RESV1) ||
-            !nios_response_has_zero_tail(
-                response, NIOS_PKT_16x64_IDX_RESV2)) {
-            return false;
-        }
-
         nios_pkt_16x64_unpack(request, &req_target, &req_write, &req_addr,
                               &req_data);
         nios_pkt_16x64_unpack(response, &resp_target, &resp_write, &resp_addr,
                               &resp_data);
+        /* BUSY is a response-only extension for tagged RFIC writes. All
+         * other flag bits and the reserved header byte remain zero. */
+        if ((response[NIOS_PKT_16x64_IDX_FLAGS] & 0xf8u) != 0 ||
+            response[NIOS_PKT_16x64_IDX_RESV1] != 0) {
+            return false;
+        }
+        if (req_target == NIOS_PKT_16x64_TARGET_RFIC && req_write) {
+            if (nios_pkt_16x64_transaction_id(request) !=
+                nios_pkt_16x64_transaction_id(response)) {
+                return false;
+            }
+        } else if (nios_pkt_16x64_transaction_id(request) != 0 ||
+                   !nios_response_has_zero_tail(
+                       response, NIOS_PKT_16x64_IDX_RESV2)) {
+            return false;
+        }
         if (req_target != resp_target || req_write != resp_write ||
             req_addr != resp_addr) {
+            return false;
+        }
+        if (nios_pkt_16x64_resp_is_busy(response) &&
+            (req_target != NIOS_PKT_16x64_TARGET_RFIC || !req_write ||
+             nios_pkt_16x64_transaction_id(request) == 0 ||
+             (response[NIOS_PKT_16x64_IDX_FLAGS] &
+              NIOS_PKT_16x64_FLAG_SUCCESS) != 0)) {
             return false;
         }
 
@@ -296,9 +311,13 @@ static bool nios_response_matches_request(const uint8_t *request,
 
         /* Valid tune time is NOW-only. Cancel failed/pending flags are valid
          * only on a queue-clear request and cannot accompany success. */
-        if ((flags & 0xf0u) != 0 ||
+        if ((flags & 0xe0u) != 0 ||
             !nios_response_has_zero_tail(
                 response, NIOS_PKT_RETUNERESP_IDX_RESV) ||
+            ((flags & NIOS_PKT_RETUNERESP_FLAG_BUSY) != 0 &&
+             (flags & (NIOS_PKT_RETUNERESP_FLAG_SUCCESS |
+                       NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED |
+                       NIOS_PKT_RETUNERESP_FLAG_CANCEL_PENDING)) != 0) ||
             ((flags & NIOS_PKT_RETUNERESP_FLAG_TSVTUNE_VALID) != 0 &&
              timestamp != NIOS_PKT_RETUNE_NOW) ||
             ((flags & NIOS_PKT_RETUNERESP_FLAG_CANCEL_FAILED) != 0 &&
@@ -317,12 +336,47 @@ static bool nios_response_matches_request(const uint8_t *request,
         const uint8_t flags = response[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS];
         const uint64_t timestamp =
             nios_read_le64(request, NIOS_PKT_RETUNE2_IDX_TIME);
+        const uint16_t request_token =
+            nios_pkt_retune2_unpack_request_token(request);
+        const uint32_t response_session_generation =
+            (uint32_t)response[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION] |
+            ((uint32_t)response[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 1]
+             << 8) |
+            ((uint32_t)response[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 2]
+             << 16) |
+            ((uint32_t)response[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 3]
+             << 24);
 
         /* Retune2's invalid-time bit only accompanies a failed scheduled
-         * request. The other response flags are similarly request-scoped. */
-        if ((flags & 0xe0u) != 0 ||
-            !nios_response_has_zero_tail(
-                response, NIOS_PKT_RETUNE2_RESP_IDX_RESV) ||
+         * request. Async-pending is an acceptance ACK for tokened NOW only;
+         * terminal outcome comes from the correlated completion record. */
+        if ((flags & 0x80u) != 0 ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING) != 0 &&
+             (timestamp != NIOS_PKT_RETUNE2_NOW || request_token == 0 ||
+              (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+              (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_BUSY)) != 0 ||
+              !nios_response_has_zero_tail(
+                  response, NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV))) ||
+            (request_token == 0 &&
+             !nios_response_has_zero_tail(
+                 response, NIOS_PKT_RETUNE2_RESP_IDX_RESV)) ||
+            (request_token != 0 &&
+             ((uint16_t)response[NIOS_PKT_RETUNE2_RESP_IDX_TOKEN] |
+              ((uint16_t)response[NIOS_PKT_RETUNE2_RESP_IDX_TOKEN + 1] << 8)) !=
+                 request_token) ||
+            (request_token != 0 &&
+             (!session_generation_valid ||
+              response_session_generation != session_generation)) ||
+            ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_BUSY) != 0 &&
+             (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+                       NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP |
+                       NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
+                       NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING |
+                       NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING)) != 0) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID) != 0 &&
              timestamp != NIOS_PKT_RETUNE2_NOW) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED) != 0 &&
@@ -331,13 +385,15 @@ static bool nios_response_matches_request(const uint8_t *request,
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING) != 0 &&
              (timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
               (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
-                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED)) != 0)) ||
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING)) != 0)) ||
             ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP) != 0 &&
              (timestamp == NIOS_PKT_RETUNE2_NOW ||
               timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE ||
               (flags & (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
                         NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
-                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)) != 0))) {
+                        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING |
+                        NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING)) != 0))) {
             return false;
         }
         return true;
@@ -350,37 +406,320 @@ static bool nios_response_matches_request(const uint8_t *request,
     }
 }
 
+static bool nios_is_tagged_rfic_write(const uint8_t *packet)
+{
+    return packet[NIOS_PKT_16x64_IDX_MAGIC] == NIOS_PKT_16x64_MAGIC &&
+           packet[NIOS_PKT_16x64_IDX_TARGET_ID] ==
+               NIOS_PKT_16x64_TARGET_RFIC &&
+           (packet[NIOS_PKT_16x64_IDX_FLAGS] &
+            NIOS_PKT_16x64_FLAG_WRITE) != 0 &&
+           nios_pkt_16x64_transaction_id(packet) != 0;
+}
+
+static bool nios_is_recovery_status_read(const uint8_t *packet)
+{
+    uint16_t address;
+
+    if (packet[NIOS_PKT_16x64_IDX_MAGIC] != NIOS_PKT_16x64_MAGIC ||
+        packet[NIOS_PKT_16x64_IDX_TARGET_ID] !=
+            NIOS_PKT_16x64_TARGET_RFIC ||
+        (packet[NIOS_PKT_16x64_IDX_FLAGS] &
+         NIOS_PKT_16x64_FLAG_WRITE) != 0) {
+        return false;
+    }
+
+    address = (uint16_t)packet[NIOS_PKT_16x64_IDX_ADDR] |
+              ((uint16_t)packet[NIOS_PKT_16x64_IDX_ADDR + 1] << 8);
+    return address == 0x0f00u || address == 0x0f0cu;
+}
+
+/* Only fixed-width request formats with a format-specific response identity
+ * can be retained for ordered recovery. Legacy and scheduled retune packets
+ * have separate response lifecycles. */
+static bool nios_is_fixed_read_request(const uint8_t *packet)
+{
+    uint8_t target, addr8;
+    uint8_t data8;
+    uint16_t addr16;
+    uint16_t data16;
+    uint32_t data32;
+    uint32_t addr32;
+    uint64_t data64;
+    bool write;
+
+    switch (packet[0]) {
+    case NIOS_PKT_8x8_MAGIC:
+        nios_pkt_8x8_unpack(packet, &target, &write, &addr8, &data8);
+        return !write;
+    case NIOS_PKT_8x16_MAGIC:
+        nios_pkt_8x16_unpack(packet, &target, &write, &addr8, &data16);
+        return !write;
+    case NIOS_PKT_8x32_MAGIC:
+        nios_pkt_8x32_unpack(packet, &target, &write, &addr8, &data32);
+        return !write;
+    case NIOS_PKT_8x64_MAGIC:
+        nios_pkt_8x64_unpack(packet, &target, &write, &addr8, &data64);
+        return !write;
+    case NIOS_PKT_16x64_MAGIC:
+        nios_pkt_16x64_unpack(packet, &target, &write, &addr16, &data64);
+        return !write && nios_pkt_16x64_transaction_id(packet) == 0;
+    case NIOS_PKT_32x32_MAGIC: {
+        nios_pkt_32x32_unpack(packet, &target, &write, &addr32, &data32);
+        return !write;
+    }
+    default:
+        return false;
+    }
+}
+
+/* A NIOS read may have executed even when its IN response did not arrive.
+ * Do not replay it: some reads have small side effects (for example enabling
+ * the TX monitor). Send a structurally distinct, side-effect-free 8x32 read
+ * as an ordered barrier, consume a late original response if present, then
+ * accept the barrier response. A zero-byte timeout leaves this identity pending;
+ * partial frames and mismatches remain fatal because framing is ambiguous. */
+static int nios_drain_pending_read_locked(
+    struct bladerf_usb *usb, struct usb_peripheral_state *state,
+    uint32_t timeout_ms, enum nios_transaction_stage *stage)
+{
+    uint8_t barrier[NIOS_PKT_LEN] = {0};
+    uint8_t response[NIOS_PKT_LEN];
+    uint64_t started_ns = 0;
+    bool pending_matches, pending_write_matches;
+    bool pending_retune2_matches, barrier_matches;
+    int status;
+
+    nios_pkt_8x32_pack(barrier, NIOS_PKT_8x32_TARGET_VERSION, false,
+                       0, 0);
+    /* The barrier identity must not alias the retained read, even when that
+     * read used the same packet format and target. CONTROL is also a safe
+     * read-only target and has no read side effect. */
+    if (state->pending_read_request[NIOS_PKT_8x32_IDX_MAGIC] ==
+            NIOS_PKT_8x32_MAGIC &&
+        state->pending_read_request[NIOS_PKT_8x32_IDX_TARGET_ID] ==
+            NIOS_PKT_8x32_TARGET_VERSION &&
+        state->pending_read_request[NIOS_PKT_8x32_IDX_ADDR] == 0) {
+        nios_pkt_8x32_pack(barrier, NIOS_PKT_8x32_TARGET_CONTROL, false,
+                           0, 0);
+    }
+
+    if (bladerf_monotonic_now_ns(&started_ns) != 0) {
+        state->desynchronized = true;
+        status = BLADERF_ERR_UNEXPECTED;
+        if (stage != NULL) {
+            *stage = NIOS_TRANSACTION_IN_FAILED;
+        }
+        return status;
+    }
+
+    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
+                                    barrier, sizeof(barrier),
+                                    PERIPHERAL_TIMEOUT_MS, NULL, NULL);
+    if (status != 0) {
+        state->desynchronized = true;
+        if (stage != NULL) {
+            *stage = NIOS_TRANSACTION_OUT_FAILED;
+        }
+        return status;
+    }
+
+    for (;;) {
+        unsigned int remaining_ms = 0;
+        uint32_t transferred = 0;
+        bool transferred_valid = false;
+        int deadline_status = bladerf_timeout_remaining_ms(
+            started_ns, timeout_ms, &remaining_ms);
+
+        if ((deadline_status != 0 && deadline_status != BLADERF_ERR_TIMEOUT) ||
+            deadline_status == BLADERF_ERR_TIMEOUT || remaining_ms == 0) {
+            if (deadline_status != BLADERF_ERR_TIMEOUT &&
+                deadline_status != 0) {
+                state->desynchronized = true;
+                status = BLADERF_ERR_UNEXPECTED;
+            } else {
+                /* This barrier itself may now have a late reply. Without
+                 * retaining its identity, another recovery attempt could
+                 * leave that reply queued behind the next barrier. */
+                state->desynchronized = true;
+                status = BLADERF_ERR_TIMEOUT;
+            }
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            return status;
+        }
+
+        status = usb->fn->bulk_transfer(
+            usb->driver, PERIPHERAL_EP_IN, response, sizeof(response),
+            remaining_ms, &transferred, &transferred_valid);
+        if (!transferred_valid || transferred > sizeof(response)) {
+            state->desynchronized = true;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (transferred != sizeof(response)) {
+            if (status == BLADERF_ERR_TIMEOUT && transferred == 0) {
+                state->desynchronized = true;
+                if (stage != NULL) {
+                    *stage = NIOS_TRANSACTION_IN_FAILED;
+                }
+                return BLADERF_ERR_TIMEOUT;
+            }
+            state->desynchronized = true;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            return status != 0 ? status : BLADERF_ERR_IO;
+        }
+        if (status != 0 && status != BLADERF_ERR_TIMEOUT) {
+            state->desynchronized = true;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            return status;
+        }
+
+        pending_matches = nios_response_matches_request(
+            state->pending_read_request, response,
+            state->command_session_generation_valid,
+            state->command_session_generation);
+        pending_write_matches = state->pending_rfic_write &&
+            nios_response_matches_request(
+                state->pending_rfic_request, response,
+                state->command_session_generation_valid,
+                state->command_session_generation);
+        pending_retune2_matches = state->pending_retune2_response &&
+            nios_response_matches_request(
+                state->pending_retune2_request, response, true,
+                state->pending_retune2_session_generation);
+        barrier_matches = nios_response_matches_request(
+            barrier, response, state->command_session_generation_valid,
+            state->command_session_generation);
+        if ((pending_matches && !barrier_matches) ||
+            pending_write_matches || pending_retune2_matches) {
+            /* Another request class may already have an ambiguous reply in
+             * flight. Consume those older ordered frames too, but retain its
+             * transaction identity until its own status/queue-clear barrier. */
+            continue;
+        }
+        if (barrier_matches && !pending_matches) {
+            state->pending_read_response = false;
+            memset(state->pending_read_request, 0,
+                   sizeof(state->pending_read_request));
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_COMPLETE;
+            }
+            return 0;
+        }
+
+        state->desynchronized = true;
+        if (stage != NULL) {
+            *stage = NIOS_TRANSACTION_RESPONSE_MISMATCH;
+        }
+        return BLADERF_ERR_UNEXPECTED;
+    }
+}
+
+static bool nios_is_retune2_recovery_request(const uint8_t *packet)
+{
+    uint8_t target;
+    uint8_t addr;
+    uint32_t data;
+    bool write;
+
+    if (packet[NIOS_PKT_8x32_IDX_MAGIC] == NIOS_PKT_8x32_MAGIC) {
+        nios_pkt_8x32_unpack(packet, &target, &write, &addr, &data);
+        if (!write) {
+            return true;
+        }
+        return target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION &&
+               addr <= NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX;
+    }
+    if (nios_is_recovery_status_read(packet)) {
+        return true;
+    }
+    if (packet[NIOS_PKT_RETUNE2_IDX_MAGIC] == NIOS_PKT_RETUNE2_MAGIC) {
+        return nios_read_le64(packet, NIOS_PKT_RETUNE2_IDX_TIME) ==
+               NIOS_PKT_RETUNE2_CLEAR_QUEUE;
+    }
+    return false;
+}
+
 int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
                          uint32_t buffer_len, uint32_t response_timeout_ms,
                          nios_transaction_out_complete_fn out_complete,
                          void *context,
                          enum nios_transaction_stage *stage)
 {
+    struct usb_peripheral_state *state = usb->peripheral;
     int status;
     uint8_t request[NIOS_PKT_LEN];
     bool validate_echo = buffer_len == sizeof(request);
+    bool recovering_pending_write = false;
+    bool recovering_pending_retune2 = false;
+    uint64_t response_started_ns = 0;
+    uint32_t response_bytes = 0;
 
     if (validate_echo) {
         memcpy(request, buffer, sizeof(request));
     }
 
-    MUTEX_LOCK(&usb->peripheral_lock);
-    if (usb->peripheral_desynchronized) {
+    MUTEX_LOCK(&state->lock);
+    if (state->desynchronized) {
         if (stage != NULL) {
             *stage = NIOS_TRANSACTION_DESYNCHRONIZED;
         }
-        MUTEX_UNLOCK(&usb->peripheral_lock);
+        MUTEX_UNLOCK(&state->lock);
         return BLADERF_ERR_UNEXPECTED;
     }
 
+    if (state->pending_read_response) {
+        status = nios_drain_pending_read_locked(
+            usb, state, response_timeout_ms, stage);
+        if (status != 0) {
+            MUTEX_UNLOCK(&state->lock);
+            return status;
+        }
+    }
+
+    if (state->pending_rfic_write) {
+        recovering_pending_write = true;
+        /* While one RFIC write may still have a late reply in the endpoint,
+         * allow only the two status reads used to resolve it or an exact
+         * retry of that same tagged write. */
+        if (!validate_echo ||
+            (!nios_is_recovery_status_read(request) &&
+             memcmp(request, state->pending_rfic_request,
+                    sizeof(request)) != 0)) {
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_PENDING_RESPONSE;
+            }
+            MUTEX_UNLOCK(&state->lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+    }
+    if (state->pending_retune2_response) {
+        recovering_pending_retune2 = true;
+        if (!validate_echo || !nios_is_retune2_recovery_request(request)) {
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_PENDING_RESPONSE;
+            }
+            MUTEX_UNLOCK(&state->lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+    }
+
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buffer,
-                                    buffer_len, PERIPHERAL_TIMEOUT_MS);
+                                    buffer_len, PERIPHERAL_TIMEOUT_MS,
+                                    NULL, NULL);
     if (status != 0) {
-        usb->peripheral_desynchronized = true;
+        state->desynchronized = true;
         if (stage != NULL) {
             *stage = NIOS_TRANSACTION_OUT_FAILED;
         }
-        MUTEX_UNLOCK(&usb->peripheral_lock);
+        MUTEX_UNLOCK(&state->lock);
         return status;
     }
 
@@ -388,24 +727,221 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
         out_complete(context);
     }
 
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN, buffer,
-                                    buffer_len, response_timeout_ms);
-    if (status != 0) {
-        usb->peripheral_desynchronized = true;
+    if (bladerf_monotonic_now_ns(&response_started_ns) != 0) {
+        state->desynchronized = true;
+        status = BLADERF_ERR_UNEXPECTED;
         if (stage != NULL) {
             *stage = NIOS_TRANSACTION_IN_FAILED;
         }
-    } else if (validate_echo &&
-               !nios_response_matches_request(request, buffer)) {
-        usb->peripheral_desynchronized = true;
-        status = BLADERF_ERR_UNEXPECTED;
-        if (stage != NULL) {
-            *stage = NIOS_TRANSACTION_RESPONSE_MISMATCH;
-        }
-    } else if (stage != NULL) {
-        *stage = NIOS_TRANSACTION_COMPLETE;
+        MUTEX_UNLOCK(&state->lock);
+        return status;
     }
 
-    MUTEX_UNLOCK(&usb->peripheral_lock);
+    for (;;) {
+        unsigned int remaining_ms = 0;
+        bool current_matches;
+        bool pending_matches = false;
+        bool pending_retune2_matches = false;
+        bool transferred_valid = false;
+        uint32_t transferred = 0;
+        uint32_t requested;
+        int deadline_status;
+
+        deadline_status = bladerf_timeout_remaining_ms(
+            response_started_ns, response_timeout_ms, &remaining_ms);
+        if (deadline_status != 0 && deadline_status != BLADERF_ERR_TIMEOUT) {
+            state->desynchronized = true;
+            status = BLADERF_ERR_UNEXPECTED;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            break;
+        } else if (deadline_status == BLADERF_ERR_TIMEOUT ||
+                   remaining_ms == 0) {
+            status = BLADERF_ERR_TIMEOUT;
+        } else {
+            requested = buffer_len - response_bytes;
+            status = usb->fn->bulk_transfer(
+                usb->driver, PERIPHERAL_EP_IN,
+                (uint8_t *)buffer + response_bytes, requested,
+                remaining_ms, &transferred, &transferred_valid);
+            if (!transferred_valid || transferred > requested) {
+                state->desynchronized = true;
+                status = BLADERF_ERR_UNEXPECTED;
+                if (stage != NULL) {
+                    *stage = NIOS_TRANSACTION_IN_FAILED;
+                }
+                break;
+            }
+            response_bytes += transferred;
+        }
+
+        if (response_bytes == buffer_len) {
+            if (status != 0 && status != BLADERF_ERR_TIMEOUT) {
+                state->desynchronized = true;
+                if (stage != NULL) {
+                    *stage = NIOS_TRANSACTION_IN_FAILED;
+                }
+                break;
+            }
+
+            current_matches = !validate_echo ||
+                nios_response_matches_request(
+                    request, buffer,
+                    state->command_session_generation_valid,
+                    state->command_session_generation);
+            if (recovering_pending_write &&
+                state->pending_rfic_write) {
+                pending_matches = nios_response_matches_request(
+                    state->pending_rfic_request, buffer,
+                    state->command_session_generation_valid,
+                    state->command_session_generation);
+            }
+            if (recovering_pending_retune2 &&
+                state->pending_retune2_response) {
+                pending_retune2_matches = nios_response_matches_request(
+                    state->pending_retune2_request, buffer, true,
+                    state->pending_retune2_session_generation);
+            }
+
+            /* A retry of the exact tagged RFIC write can produce two
+             * identical ACKs: the original response may still be in the
+             * command-UART serializer when NIOS handles the retry and emits
+             * its idempotent duplicate ACK. When one response matches both
+             * the pending request and the retry currently being issued, it
+             * is impossible to tell which copy arrived. Keep the pending
+             * identity until the next recovery status response proves that
+             * all older ordered responses have been drained. */
+            if (pending_retune2_matches) {
+                state->pending_retune2_response = false;
+                memset(state->pending_retune2_request, 0,
+                       sizeof(state->pending_retune2_request));
+                state->pending_retune2_session_generation = 0;
+            }
+            if (current_matches) {
+                if (recovering_pending_write &&
+                    nios_is_recovery_status_read(request)) {
+                    /* UART responses preserve commit order. A matching
+                     * status response cannot pass an older duplicate write
+                     * ACK, so reaching it resolves the ambiguous retry ACK. */
+                    state->pending_rfic_write = false;
+                    memset(state->pending_rfic_request, 0,
+                           sizeof(state->pending_rfic_request));
+                }
+                if (validate_echo &&
+                    request[NIOS_PKT_8x32_IDX_MAGIC] ==
+                        NIOS_PKT_8x32_MAGIC &&
+                    (request[NIOS_PKT_8x32_IDX_FLAGS] &
+                     NIOS_PKT_8x32_FLAG_WRITE) == 0 &&
+                    request[NIOS_PKT_8x32_IDX_TARGET_ID] ==
+                        NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION &&
+                    request[NIOS_PKT_8x32_IDX_ADDR] == 0 &&
+                    (response[NIOS_PKT_8x32_IDX_FLAGS] &
+                     NIOS_PKT_8x32_FLAG_SUCCESS) != 0) {
+                    uint32_t value;
+
+                    nios_pkt_8x32_unpack(buffer, NULL, NULL, NULL, &value);
+                    state->command_session_generation = value;
+                    state->command_session_generation_valid = true;
+                }
+                if (recovering_pending_retune2 &&
+                    state->pending_retune2_response &&
+                    request[NIOS_PKT_RETUNE2_IDX_MAGIC] ==
+                        NIOS_PKT_RETUNE2_MAGIC &&
+                    nios_read_le64(request, NIOS_PKT_RETUNE2_IDX_TIME) ==
+                        NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
+                    /* An acknowledged queue clear is the terminal recovery
+                     * barrier for the scheduled request with the missing ACK. */
+                    state->pending_retune2_response = false;
+                    memset(state->pending_retune2_request, 0,
+                           sizeof(state->pending_retune2_request));
+                    state->pending_retune2_session_generation = 0;
+                }
+                if (stage != NULL) {
+                    *stage = NIOS_TRANSACTION_COMPLETE;
+                }
+                status = 0;
+                break;
+            }
+            if (pending_matches || pending_retune2_matches) {
+                /* Consume old ordered responses before assembling this
+                 * request's response. Keep a tagged RFIC write identity until
+                 * the current status response is the ordering barrier: a
+                 * retry may have left multiple byte-identical ACKs queued. */
+                response_bytes = 0;
+                continue;
+            }
+
+            state->desynchronized = true;
+            status = BLADERF_ERR_UNEXPECTED;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_RESPONSE_MISMATCH;
+            }
+            break;
+        }
+
+        if (status != 0 && status != BLADERF_ERR_TIMEOUT) {
+            state->desynchronized = true;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            break;
+        }
+
+        if (status == BLADERF_ERR_TIMEOUT) {
+            if (response_bytes == 0 && validate_echo &&
+                request[NIOS_PKT_RETUNE2_IDX_MAGIC] ==
+                    NIOS_PKT_RETUNE2_MAGIC &&
+                nios_pkt_retune2_unpack_request_token(request) != 0) {
+                if (!state->command_session_generation_valid) {
+                    state->desynchronized = true;
+                    status = BLADERF_ERR_UNEXPECTED;
+                } else {
+                    memcpy(state->pending_retune2_request, request,
+                           sizeof(request));
+                    state->pending_retune2_session_generation =
+                        state->command_session_generation;
+                    state->pending_retune2_response = true;
+                }
+            } else if (response_bytes == 0 && validate_echo &&
+                nios_is_tagged_rfic_write(request) &&
+                (!state->pending_rfic_write ||
+                 memcmp(request, state->pending_rfic_request,
+                        sizeof(request)) == 0)) {
+                if (!state->pending_rfic_write) {
+                    memcpy(state->pending_rfic_request, request,
+                           sizeof(request));
+                    state->pending_rfic_write = true;
+                }
+            } else if (response_bytes == 0 && validate_echo &&
+                       nios_is_fixed_read_request(request)) {
+                memcpy(state->pending_read_request, request,
+                       sizeof(state->pending_read_request));
+                state->pending_read_response = true;
+            } else {
+                /* A partial response has consumed endpoint bytes and cannot
+                 * be reconstructed after the absolute deadline. */
+                state->desynchronized = true;
+            }
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            break;
+        }
+
+        if (transferred == 0) {
+            state->desynchronized = true;
+            status = BLADERF_ERR_IO;
+            if (stage != NULL) {
+                *stage = NIOS_TRANSACTION_IN_FAILED;
+            }
+            break;
+        }
+
+        /* Successful short packets also contribute to the same fixed frame;
+         * request only the remaining bytes on the next iteration. */
+    }
+
+    MUTEX_UNLOCK(&state->lock);
     return status;
 }

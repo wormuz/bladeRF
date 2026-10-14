@@ -393,11 +393,21 @@
 #define NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE  3u
 #define NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT     4u
 #define NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS    5u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_FLUSH 6u
+#define NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_RELEASE 7u
 #define NIOS_PKT_8x32_TX_RETUNE_STATUS_STATE_MASK 0x3u
 #define NIOS_PKT_8x32_TX_RETUNE_STATUS_MUTED (1u << 2)
 #define NIOS_PKT_8x32_TX_RETUNE_STATUS_MUTE_EVENT (1u << 3)
 #define NIOS_PKT_8x32_TX_RETUNE_STATUS_RESUME_EVENT (1u << 4)
 #define NIOS_PKT_8x32_TX_RETUNE_STATUS_ARM_ACK_TOGGLE (1u << 5)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_BUSY (1u << 6)
+/* Fault barrier is armed after sys_clock ACLR and PCLK writer-block ack;
+ * read-side clear completion is not implied. */
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_ARMED (1u << 7)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_FLUSH_ERROR (1u << 8)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFOS_EMPTY (1u << 9)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_RELEASED (1u << 10)
+#define NIOS_PKT_8x32_TX_RETUNE_STATUS_FIFO_DRAIN_READY (1u << 11)
 #define NIOS_PKT_8x32_TX_RETUNE_STATE_ACTIVE 0u
 #define NIOS_PKT_8x32_TX_RETUNE_STATE_ARMED 1u
 #define NIOS_PKT_8x32_TX_RETUNE_STATE_MUTED 2u
@@ -433,22 +443,36 @@
 #define NIOS_PKT_8x32_RETUNE2_SUCCESSES_RX_ADDR 0u
 #define NIOS_PKT_8x32_RETUNE2_SUCCESSES_TX_ADDR 1u
 
-/* Read a durable scheduled-retune completion record. Write target 0x8f with
- * addr=direction (RX=0/TX=1), data=completion sequence, then read fields:
- * 0 sequence, 1 frequency low, 2 frequency high, 3 NIOS profile index,
- * 4 scheduled timestamp low, 5 scheduled timestamp high.
- * The ring has RETUNE2_QUEUE_MAX entries; a sequence mismatch means the
- * requested record was overwritten and must be treated as a completion gap. */
+/* Read a durable scheduled-retune outcome record. Write target 0x8f with
+ * addr=success direction RX/TX (0/1) or failure direction RX/TX (2/3),
+ * data=outcome sequence, then read fields. Success records use words
+ * 0 sequence, 1/2 frequency, 3 NIOS profile, 4/5 scheduled timestamp,
+ * 6 command session generation, 7 host request token.
+ * Failure records use words 0 sequence, 1/2 scheduled timestamp,
+ * 3 NIOS profile, 4 failure stage, 5 command session generation,
+ * 6 host request token. Each ring has RETUNE2_QUEUE_MAX entries;
+ * a sequence mismatch means the requested record was overwritten. */
 #define NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION 0x8f
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX 0u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_TX 1u
+#define NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_RX 2u
+#define NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX 3u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_SEQUENCE 0u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_LO 1u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_FREQ_HI 2u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_PROFILE 3u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_LO 4u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI 5u
+#define NIOS_PKT_8x32_RETUNE2_FAILURE_STAGE 4u
+#define NIOS_PKT_8x32_RETUNE2_FAILURE_SESSION_GENERATION 5u
+#define NIOS_PKT_8x32_RETUNE2_FAILURE_REQUEST_TOKEN 6u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_SESSION_GENERATION 6u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN 7u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
+
+/* Current command-link session generation captured for each NIOS packet.
+ * Used to distinguish deferred outcomes retained across USB sessions. */
+#define NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION 0x90
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01

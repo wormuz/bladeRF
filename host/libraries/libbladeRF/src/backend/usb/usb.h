@@ -146,11 +146,16 @@ struct usb_fns {
                             uint32_t buffer_len,
                             uint32_t timeout_ms);
 
+    /* `transferred_valid` is false when a backend cannot prove the byte count
+     * (notably some Windows error paths). When true, `transferred` is valid
+     * even if the transfer status is an error such as timeout. */
     int (*bulk_transfer)(void *driver,
                          uint8_t endpoint,
                          void *buffer,
                          uint32_t buffer_len,
-                         uint32_t timeout_ms);
+                         uint32_t timeout_ms,
+                         uint32_t *transferred,
+                         bool *transferred_valid);
 
     int (*get_string_descriptor)(void *driver,
                                  uint8_t index,
@@ -187,14 +192,53 @@ struct usb_driver {
     bladerf_backend id;
 };
 
+/* NIOS protocol state belongs to the USB session. The POSIX registry below
+ * enforces one active handle per session and preserves ambiguous state across
+ * close/reopen; Windows already enforces exclusive device opens. */
+struct usb_peripheral_state {
+    MUTEX lock;
+    bool desynchronized;
+    /* A fixed-width read request was fully sent, but its IN response timed
+     * out before any bytes arrived. Keep its identity until a distinct
+     * ordered barrier response proves the endpoint has drained it. */
+    bool pending_read_response;
+    uint8_t pending_read_request[16];
+    bool pending_rfic_write;
+    uint8_t pending_rfic_request[16];
+    /* A scheduled RETUNE2 can be accepted even when its USB IN ACK is lost.
+     * Keep that request identity so later read-only telemetry can drain the
+     * late ACK without permitting a second state-changing request. */
+    bool pending_retune2_response;
+    uint8_t pending_retune2_request[16];
+    /* Retune replies are matched against the generation observed before OUT.
+     * Keep pending and currently observed generations separate so a late
+     * reply can be drained while a newer session read is in flight. */
+    uint32_t pending_retune2_session_generation;
+    bool command_session_generation_valid;
+    uint32_t command_session_generation;
+#if defined(USE_PTHREADS)
+    char serial[BLADERF_SERIAL_LENGTH];
+    uint8_t usb_bus;
+    uint8_t usb_addr;
+    unsigned int references;
+    struct usb_peripheral_state *next;
+#endif
+};
+
 struct bladerf_usb {
     const struct usb_fns *fn;
     void *driver;
-    /* Keep each NIOS OUT/IN request-response pair atomic across callers. */
-    MUTEX peripheral_lock;
-    /* Without NIOS transaction IDs, a failed pair can leave a late response
-     * that would be misattributed to the next request. */
-    bool peripheral_desynchronized;
+    struct usb_peripheral_state *peripheral;
+    /* Windows open already has a named exclusive device mutex. Use embedded
+     * storage there; pthread platforms attach a registry-owned session state. */
+    struct usb_peripheral_state peripheral_local;
 };
+
+/* Issue USB CLEAR_FEATURE(ENDPOINT_HALT). On bladeRF2 FX3 firmware this also
+ * resets and restarts the DMA channel bound to the endpoint. Caller must first
+ * ensure no stream transfers remain in flight. */
+int usb_clear_endpoint_halt(struct bladerf *dev, uint8_t endpoint);
+int usb_pause_tx_dma(struct bladerf *dev);
+int usb_query_tx_dma_pause(struct bladerf *dev, uint32_t *state);
 
 #endif

@@ -228,7 +228,23 @@ static int _bladerf2_initialize(struct bladerf *dev)
     CHECK_STATUS(
         dev->backend->set_fpga_protocol(dev, BACKEND_FPGA_PROTOCOL_NIOSII));
 
-    /* Initialize INA219 */
+    /* FX3 SYS_RST resets the command UART/session but deliberately leaves
+     * NIOS running. A process that exited without close may therefore leave
+     * an accepted RETUNE2 operation owning the AD9361. Reconcile both
+     * directions immediately after protocol/capability validation, before
+     * any further NIOS work or RFIC initialization. The clear path waits for
+     * an in-flight PLL/TXQ owner to reach its real terminal state, so its
+     * acknowledged completion is the ownership barrier. */
+    if (have_cap(board_data->capabilities, BLADERF_CAP_SCHEDULED_RETUNE)) {
+        CHECK_STATUS(dev->backend->retune2(
+            dev, BLADERF_CHANNEL_RX(0), NIOS_PKT_RETUNE2_CLEAR_QUEUE,
+            0, 0, 0, 0, 0));
+        CHECK_STATUS(dev->backend->retune2(
+            dev, BLADERF_CHANNEL_TX(0), NIOS_PKT_RETUNE2_CLEAR_QUEUE,
+            0, 0, 0, 0, 0));
+    }
+
+    /* Initialize INA219 after the NIOS work queue has been reconciled. */
     CHECK_STATUS(ina219_init(dev, ina219_r_shunt));
 
     /* Set tuning mode. This will trigger initialization of the RFIC.
@@ -244,8 +260,6 @@ static int _bladerf2_initialize(struct bladerf *dev)
     CHECK_STATUS(dev->board->set_tuning_mode(dev, default_tuning_mode(dev)));
 
     /* Update device state */
-    board_data->state = STATE_INITIALIZED;
-
     /* Initialize VCTCXO trim DAC to stored value */
     uint16_t *trimval = &(board_data->trimdac_stored_value);
 
@@ -278,6 +292,13 @@ static int _bladerf2_initialize(struct bladerf *dev)
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->rfic_frequency_model_known = true;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    /* Publish initialized only after every RFIC/clock/monitor setup stage is
+     * complete. FPGA reload uses STATE_FPGA_LOADED as its lifecycle fence, so
+     * thread-safe board APIs cannot enter during the tail of reinitialization. */
+    MUTEX_LOCK(&dev->lock);
+    board_data->state = STATE_INITIALIZED;
+    MUTEX_UNLOCK(&dev->lock);
 
     log_debug("%s: complete\n", __FUNCTION__);
 
@@ -372,6 +393,10 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         RETURN_ERROR_STATUS("calloc board_data", BLADERF_ERR_MEM);
     }
     dev->board_data = board_data;
+    /* calloc's zero value is HOST, but no RFIC owner has been adopted yet.
+     * Force set_tuning_mode() during first initialization to release any
+     * FPGA-side owner left by a prior process before host initialization. */
+    board_data->tuning_mode = (bladerf_tuning_mode)-1;
     status = MUTEX_INIT(&board_data->rx_async_epoch_lock);
     if (status != THREAD_SUCCESS) {
         free(board_data);
@@ -648,27 +673,9 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         }
     }
 
-    /* Initialize the board */
+    /* Initialize the board. _bladerf2_initialize() first selects and checks
+     * the FPGA protocol, then drains retained NIOS work before RFIC access. */
     CHECK_STATUS(_bladerf2_initialize(dev));
-
-    if (have_cap(board_data->capabilities, BLADERF_CAP_SCHEDULED_RETUNE)) {
-        /* Cancel any pending re-tunes that may have been left over as the
-         * result of a user application crashing or forgetting to call
-         * bladerf_close() */
-
-        bladerf_direction dir;
-
-        FOR_EACH_DIRECTION(dir)
-        {
-            size_t idx;
-            bladerf_channel ch;
-
-            FOR_EACH_CHANNEL(dir, 1, idx, ch)
-            {
-                CHECK_STATUS(dev->board->cancel_scheduled_retunes(dev, ch));
-            }
-        }
-    }
 
     CHECK_STATUS(bladerf2_rx_epoch_contract_probe(dev));
 
@@ -768,11 +775,20 @@ static void bladerf2_close(struct bladerf *dev)
                 }
             }
 
-            if (board_data->state >= STATE_INITIALIZED && rfic != NULL) {
+            if (rfic != NULL &&
+                (board_data->state >= STATE_INITIALIZED ||
+                 board_data->phy != NULL ||
+                 board_data->calibration_faulted)) {
                 int standby_status;
+                bool force_deinitialize =
+                    bladerf2_close_requires_rfic_deinitialize(
+                        board_data->rfic_reset_on_close,
+                        board_data->state >= STATE_INITIALIZED,
+                        board_data->phy != NULL,
+                        board_data->calibration_faulted);
 
                 log_debug("bladerf2_close: RFIC standby begin\n");
-                if (board_data->rfic_reset_on_close) {
+                if (force_deinitialize) {
                     /* We need to fully de-initialize the RFIC, so it can be
                      * reset on the next open. This seems to be necessary after
                      * doing direct SPI control of the RFIC.
@@ -787,7 +803,7 @@ static void bladerf2_close(struct bladerf *dev)
                 if (standby_status != 0) {
                     log_error("%s: RFIC %s failed during close: %s\n",
                               __FUNCTION__,
-                              board_data->rfic_reset_on_close
+                              force_deinitialize
                                   ? "deinitialization" : "standby",
                               bladerf_strerror(standby_status));
                     /* A failed standby/deinitialize leaves the RFFE state
@@ -1038,7 +1054,7 @@ static int bladerf2_get_fw_version(struct bladerf *dev,
 
 static int bladerf2_tx_snapshot_before_shared_start(
     struct bladerf *dev, struct bladerf2_board_data *board_data);
-static int bladerf2_tx_gate_abort_fail_closed(
+int bladerf2_tx_gate_abort_fail_closed(
     struct bladerf *dev, struct bladerf2_board_data *board_data,
     uint32_t link_status);
 
@@ -2643,7 +2659,7 @@ static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
     bladerf2_rx_reconfigure_complete(dev, ch);
 }
 
-static int bladerf2_tx_gate_abort_fail_closed(
+int bladerf2_tx_gate_abort_fail_closed(
     struct bladerf *dev, struct bladerf2_board_data *board_data,
     uint32_t link_status)
 {
@@ -2652,6 +2668,7 @@ static int bladerf2_tx_gate_abort_fail_closed(
     uint64_t transport_failure_generation;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_async_fault_flush_required = true;
     board_data->tx_retune2_completion_faulted = true;
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     board_data->tx_retune_recovery_pending = true;
@@ -2736,7 +2753,8 @@ static int bladerf2_tx_frequency_reconfigure_begin(
                     status = BLADERF_ERR_UNSUPPORTED;
                 } else {
                     status = dev->backend->retune2(
-                        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+                        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE,
+                        0, 0, 0, 0, 0);
                 }
             }
             if (status == 0) {
@@ -3187,6 +3205,113 @@ static uint64_t bladerf2_tx_async_buffer_generation(struct bladerf *dev)
     return generation;
 }
 
+static int bladerf2_tx_async_submit_lease_acquire(
+    struct bladerf *dev, uint64_t admission_generation)
+{
+    struct bladerf2_board_data *board_data;
+    bool admitted;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    admitted = board_data->tx_async_admission_generation ==
+                   admission_generation &&
+        !board_data->tx_async_fault_flush_required &&
+        bladerf2_tx_admission_allowed(
+            board_data->tx_async_link_certified,
+            board_data->tx_async_rfic_state_certified,
+            board_data->tx_stream_faulted_async,
+            board_data->tx_async_transport_faulted,
+            board_data->tx_gate_abort_pending,
+            board_data->tx_retune2_applied_waiting_rf_valid ||
+                board_data->tx_retune_gate_release_requested,
+            board_data->tx_retune2_pending_count,
+            board_data->tx_retune2_completion_faulted,
+            bladerf2_rfic_frequency_model_valid(
+                board_data->rfic_reference_clock_known,
+                board_data->rfic_frequency_model_known));
+    if (admitted) {
+        board_data->tx_async_submit_leases++;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return admitted ? 0 : BLADERF_ERR_WOULD_BLOCK;
+}
+
+static void bladerf2_tx_async_submit_lease_release(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (board_data->tx_async_submit_leases != 0) {
+        board_data->tx_async_submit_leases--;
+    } else {
+        log_error("TX async submit lease underflow\n");
+        board_data->tx_recovery_blocked = true;
+    }
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+}
+
+static int bladerf2_wait_tx_async_idle(struct bladerf *dev,
+                                       unsigned int timeout_ms)
+{
+    struct bladerf2_board_data *board_data;
+    uint64_t start_ns = 0;
+    int status = 0;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    if (timeout_ms != 0 && bladerf_monotonic_now_ns(&start_ns) != 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    /* Waiting for zero while admission is open is not a barrier: a producer
+     * could acquire another lease immediately after this function returns. */
+    if (!board_data->tx_async_fault_flush_required) {
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return BLADERF_ERR_INVAL;
+    }
+    while (board_data->tx_async_submit_leases != 0) {
+        if (timeout_ms == 0) {
+            status = COND_WAIT(&board_data->rx_async_epoch_cond,
+                               &board_data->rx_async_epoch_lock);
+        } else {
+            unsigned int remaining_ms;
+            status = bladerf_timeout_remaining_ms(
+                start_ns, timeout_ms, &remaining_ms);
+            if (status == BLADERF_ERR_TIMEOUT) {
+                break;
+            }
+            if (status == 0) {
+                status = COND_TIMED_WAIT(
+                    &board_data->rx_async_epoch_cond,
+                    &board_data->rx_async_epoch_lock, remaining_ms);
+            }
+        }
+        if (status == THREAD_TIMEOUT) {
+            status = BLADERF_ERR_TIMEOUT;
+            break;
+        }
+        if (status != 0) {
+            if (status != BLADERF_ERR_TIMEOUT) {
+                status = BLADERF_ERR_UNEXPECTED;
+            }
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return status;
+}
+
 static bool bladerf2_tx_note_first_data_admitted(
     struct bladerf *dev, uint64_t admission_generation)
 {
@@ -3202,7 +3327,8 @@ static bool bladerf2_tx_note_first_data_admitted(
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     const bool generation_matches =
         board_data->tx_async_admission_generation == admission_generation;
-    admitted = bladerf2_tx_admission_allowed(
+    admitted = !board_data->tx_async_fault_flush_required &&
+        bladerf2_tx_admission_allowed(
         board_data->tx_async_link_certified,
         board_data->tx_async_rfic_state_certified,
         board_data->tx_stream_faulted_async,
@@ -3234,7 +3360,8 @@ static bool bladerf2_tx_note_first_data_admitted(
     }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    admitted = bladerf2_tx_admission_allowed(
+    admitted = !board_data->tx_async_fault_flush_required &&
+        bladerf2_tx_admission_allowed(
         board_data->tx_async_link_certified,
         board_data->tx_async_rfic_state_certified,
         board_data->tx_stream_faulted_async,
@@ -3248,6 +3375,7 @@ static bool bladerf2_tx_note_first_data_admitted(
             board_data->rfic_reference_clock_known,
             board_data->rfic_frequency_model_known));
     if (board_data->tx_async_admission_generation != admission_generation ||
+        board_data->tx_async_fault_flush_required ||
         !admitted) {
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return false;
@@ -3366,7 +3494,8 @@ static bool bladerf2_tx_async_buffer_valid_now(struct bladerf *dev)
     frequency_model_valid = bladerf2_rfic_frequency_model_valid(
         board_data->rfic_reference_clock_known,
         board_data->rfic_frequency_model_known);
-    admitted = bladerf2_tx_admission_allowed(
+    admitted = !board_data->tx_async_fault_flush_required &&
+        bladerf2_tx_admission_allowed(
         board_data->tx_async_link_certified,
         board_data->tx_async_rfic_state_certified,
         board_data->tx_stream_faulted_async,
@@ -3515,6 +3644,7 @@ static int bladerf2_set_rf_port(struct bladerf *dev,
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         CHECK_AD936X(ad9361_set_tx_rf_port_output(phy, port_id));
+        CHECK_STATUS(bladerf2_tx_quad_calibration_finalize(dev));
     } else {
         CHECK_AD936X(ad9361_set_rx_rf_port_input(phy, port_id));
     }
@@ -3805,6 +3935,9 @@ static int bladerf2_quick_tune_readback(
         int status = ad9361_fastlock_sync_current_lo(
             board_data->phy, BLADERF_CHANNEL_IS_TX(ch), profile,
             expected_frequency, readback_frequency);
+        if (status == 0 && BLADERF_CHANNEL_IS_TX(ch)) {
+            status = bladerf2_tx_quad_calibration_finalize(dev);
+        }
         return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
     }
 
@@ -3825,6 +3958,40 @@ static int bladerf2_quick_tune_readback(
     }
 
     return 0;
+}
+
+/* Tokened NOW retunes consume their terminal record synchronously in the
+ * caller. Rebase the background monitor counters so it does not later treat
+ * that same record as an orphaned deferred transition. A timed-out wait keeps
+ * the old baseline so a late terminal record remains observable. */
+static void bladerf2_retune2_rebase_now_counters(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    bladerf_channel ch)
+{
+    bladerf_module const module = BLADERF_CHANNEL_IS_TX(ch)
+        ? BLADERF_MODULE_TX : BLADERF_MODULE_RX;
+    uint32_t success_count;
+    uint32_t failure_count;
+
+    if (nios_retune2_success_count_read(dev, module, &success_count) != 0 ||
+        nios_retune2_failure_count_read(dev, module, &failure_count) != 0) {
+        return;
+    }
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    if (module == BLADERF_MODULE_TX) {
+        board_data->tx_retune2_success_count_last = success_count;
+        board_data->tx_retune2_success_count_valid = true;
+        board_data->tx_retune2_failure_count_last = failure_count;
+        board_data->tx_retune2_failure_count_valid = true;
+    } else {
+        board_data->rx_retune2_success_count_last = success_count;
+        board_data->rx_retune2_success_count_valid = true;
+        board_data->rx_retune2_failure_count_last = failure_count;
+        board_data->rx_retune2_failure_count_valid = true;
+        board_data->rx_retune2_failure_watch_active = false;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
 static int bladerf2_schedule_retune(struct bladerf *dev,
@@ -3879,8 +4046,13 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     uint32_t tx_retune_failure_baseline = 0;
     uint32_t rx_retune_failure_baseline = 0;
     uint32_t rx_retune_success_baseline = 0;
+    uint32_t retune2_session_generation = 0;
+    uint16_t retune2_request_token = 0;
     bool watch_rx_retune_failure =
-        !BLADERF_CHANNEL_IS_TX(ch) && timestamp != BLADERF_RETUNE_NOW;
+        !BLADERF_CHANNEL_IS_TX(ch) &&
+        (timestamp != BLADERF_RETUNE_NOW ||
+         have_cap(board_data->capabilities,
+                  BLADERF_CAP_RETUNE2_REQUEST_TOKEN));
     uint8_t pending_slot = UINT8_MAX;
     uint8_t rx_pending_slot = UINT8_MAX;
     unsigned int i;
@@ -3910,6 +4082,18 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                   board_data->fpga_version.patch);
 
         return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    if (have_cap(board_data->capabilities,
+                 BLADERF_CAP_RETUNE2_REQUEST_TOKEN)) {
+        CHECK_STATUS(nios_command_session_generation_read(
+            dev, &retune2_session_generation));
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        retune2_request_token = ++board_data->retune2_request_token_next;
+        if (retune2_request_token == 0) {
+            retune2_request_token = ++board_data->retune2_request_token_next;
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
     /* A queued RX retune revokes the RX data certificate before reaching
@@ -3959,6 +4143,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             quick_tune->nios_profile;
         board_data->rx_retune2_pending[rx_pending_slot].rffe_profile =
             quick_tune->rffe_profile;
+        board_data->rx_retune2_pending[rx_pending_slot].request_token =
+            retune2_request_token;
+        board_data->rx_retune2_pending[rx_pending_slot].session_generation =
+            retune2_session_generation;
         board_data->rx_retune2_pending[rx_pending_slot].valid = true;
         board_data->rx_retune2_pending_count++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -4031,6 +4219,10 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             quick_tune->nios_profile;
         board_data->tx_retune2_pending[pending_slot].rffe_profile =
             quick_tune->rffe_profile;
+        board_data->tx_retune2_pending[pending_slot].request_token =
+            retune2_request_token;
+        board_data->tx_retune2_pending[pending_slot].session_generation =
+            retune2_session_generation;
         board_data->tx_retune2_pending[pending_slot].valid = true;
         board_data->tx_retune2_pending_count++;
         board_data->tx_retune2_completion_faulted = true;
@@ -4078,19 +4270,37 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
     int status = dev->backend->retune2(dev, ch, timestamp,
                                        quick_tune->nios_profile,
                                        quick_tune->rffe_profile,
-                                       quick_tune->port, quick_tune->spdt);
+                                       quick_tune->port, quick_tune->spdt,
+                                       retune2_request_token);
+    if (timestamp == BLADERF_RETUNE_NOW && retune2_request_token != 0 &&
+        dev->nios_retune_trace.valid &&
+        dev->nios_retune_trace.status == 0 &&
+        !dev->nios_retune_trace.retune2_terminal_unknown) {
+        bladerf2_retune2_rebase_now_counters(dev, board_data, ch);
+    }
     if (status != 0) {
         /* nios_access records the transport result before nios_retune2 maps
          * a completed NIOS rejection to a host error. A zero transport result
          * therefore proves the scheduled command was rejected explicitly;
          * it was not accepted into the NIOS queue. */
+        bool const request_response_complete =
+            dev->nios_retune_trace.valid &&
+            dev->nios_retune_trace.status == 0;
+        bool const request_terminal_unknown =
+            dev->nios_retune_trace.valid &&
+            dev->nios_retune_trace.retune2_terminal_unknown;
+        bool const request_outcome_known = request_response_complete &&
+                                           !request_terminal_unknown;
+        bool const request_now_outcome_known =
+            timestamp == BLADERF_RETUNE_NOW && request_outcome_known;
         bool const request_rejected = bladerf2_retune2_request_rejected(
-            watch_rx_retune_failure, dev->nios_retune_trace.valid,
+            timestamp != BLADERF_RETUNE_NOW,
+            dev->nios_retune_trace.valid,
             dev->nios_retune_trace.status == 0);
 
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             if (watch_rx_retune_failure) {
-                if (request_rejected) {
+                if (request_rejected || request_now_outcome_known) {
                     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                     if (rx_pending_slot <
                             NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH &&
@@ -4121,10 +4331,11 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
                         &board_data->rx_retune2_failure_watch_generation,
                         &board_data->rx_retune2_status_unavailable_reported);
                 }
-            } else {
+            } else if (!request_now_outcome_known) {
                 /* NOW has no deferred completion record. If its response was
-                 * lost, only a successful queue clear can prove that no
-                 * delayed command remains capable of changing the LO. */
+                 * lost or the terminal wait expired, only a successful queue
+                 * clear can prove that no delayed command remains capable of
+                 * changing the LO. */
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rx_retune2_outcome_unknown = true;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -4136,7 +4347,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
              * status. */
             struct bladerf_rf_event event = {0};
             event.host_monotonic_ns = bladerf2_monotonic_ns();
-            event.event_type = request_rejected
+            event.event_type = (request_rejected ||
+                                request_now_outcome_known)
                 ? BLADERF_RF_EVT_RX_RETUNE_FAILED
                 : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
             event.fpga_state = BLADERF_RF_STATE_ERROR;
@@ -4145,39 +4357,73 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             bladerf2_rf_event_append(board_data, &event);
             if (!request_rejected) {
                 ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
-                board_data->rx_retune2_status_unavailable_reported = true;
+                if (!request_now_outcome_known) {
+                    board_data->rx_retune2_status_unavailable_reported = true;
+                }
             }
         }
         if (BLADERF_CHANNEL_IS_TX(ch)) {
             (void)bladerf2_tx_gate_abort_fail_closed(
                 dev, board_data, 0);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-            board_data->tx_retune2_pending[pending_slot].valid = false;
-            board_data->tx_retune2_pending_count--;
+            if (request_outcome_known) {
+                board_data->tx_retune2_pending[pending_slot].valid = false;
+                if (board_data->tx_retune2_pending_count != 0) {
+                    board_data->tx_retune2_pending_count--;
+                }
+            }
             uint8_t pending_count = board_data->tx_retune2_pending_count;
             board_data->tx_retune2_completion_faulted = true;
             board_data->tx_retune2_applied_waiting_rf_valid = false;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            /* A failed USB request can be ambiguous after the OUT stage.
-             * Keep monitoring so an unexpectedly accepted command cannot
-             * become an unreported RF change. */
-            board_data->tx_retune2_failure_watch_active = true;
-            bladerf2_tx_retune_event(
-                dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                frequency, 0, pending_count, status);
+            /* A complete NIOS rejection is terminal and retires this
+             * request. If the USB outcome is ambiguous, retain its ledger
+             * identity so a later success/failure record can still be
+             * correlated exactly. */
+            board_data->tx_retune2_failure_watch_active =
+                board_data->tx_retune2_pending_count != 0 ||
+                !request_outcome_known;
+            if (request_outcome_known) {
+                bladerf2_tx_retune_failure_detail_event(
+                    dev, timestamp == BLADERF_RETUNE_NOW ? 0 : timestamp,
+                    frequency,
+                    dev->nios_retune_trace.device_failure_stage, status);
+            } else {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    frequency, 0, pending_count, status);
+            }
         }
         return status;
     }
     if (watch_rx_retune_failure) {
-        if (!board_data->rx_retune2_failure_count_valid) {
-            board_data->rx_retune2_failure_count_last =
-                rx_retune_failure_baseline;
-            board_data->rx_retune2_failure_count_valid = true;
+        if (timestamp == BLADERF_RETUNE_NOW &&
+            retune2_request_token != 0) {
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (rx_pending_slot <
+                    NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH &&
+                board_data->rx_retune2_pending[rx_pending_slot].valid) {
+                board_data->rx_retune2_pending[rx_pending_slot].valid = false;
+                if (board_data->rx_retune2_pending_count != 0) {
+                    board_data->rx_retune2_pending_count--;
+                }
+            }
+            if (board_data->rx_retune2_pending_count == 0) {
+                board_data->rx_retune2_failure_watch_active = false;
+                board_data->rx_retune2_status_unavailable_reported = false;
+            }
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        } else {
+            if (!board_data->rx_retune2_failure_count_valid) {
+                board_data->rx_retune2_failure_count_last =
+                    rx_retune_failure_baseline;
+                board_data->rx_retune2_failure_count_valid = true;
+            }
+            bladerf2_rx_retune_watch_begin(
+                &board_data->rx_retune2_failure_watch_active,
+                &board_data->rx_retune2_failure_watch_generation,
+                &board_data->rx_retune2_status_unavailable_reported);
         }
-        bladerf2_rx_retune_watch_begin(
-            &board_data->rx_retune2_failure_watch_active,
-            &board_data->rx_retune2_failure_watch_generation,
-            &board_data->rx_retune2_status_unavailable_reported);
     }
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         if (timestamp == BLADERF_RETUNE_NOW) {
@@ -4198,6 +4444,7 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             pending_count = board_data->tx_retune2_pending_count;
             board_data->tx_retune2_completion_faulted =
                 bladerf2_retune_completion_unresolved(pending_count);
+            board_data->tx_retune2_failure_watch_active = pending_count != 0;
             board_data->tx_retune2_applied_waiting_rf_valid =
                 readback_status == 0 &&
                 (frequency == 0 ||
@@ -4268,6 +4515,14 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
 {
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    struct {
+        uint64_t timestamp;
+        uint64_t requested_frequency_hz;
+        uint16_t nios_profile;
+        uint16_t request_token;
+        uint32_t session_generation;
+        bool valid;
+    } rx_pending_snapshot[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH] = {{0}};
     struct bladerf2_board_data *board_data = dev->board_data;
     bool epoch_contract_enabled;
     bool sync_epoch_filter_enabled;
@@ -4302,7 +4557,7 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
     }
 
     int status = dev->backend->retune2(
-        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+        dev, ch, NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0, 0);
     if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch)) {
         uint8_t pending_count;
         bool outcome_unknown;
@@ -4310,6 +4565,21 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         pending_count = board_data->rx_retune2_pending_count;
         outcome_unknown = board_data->rx_retune2_outcome_unknown;
+        for (unsigned int i = 0;
+             i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            rx_pending_snapshot[i].timestamp =
+                board_data->rx_retune2_pending[i].timestamp;
+            rx_pending_snapshot[i].requested_frequency_hz =
+                board_data->rx_retune2_pending[i].requested_frequency_hz;
+            rx_pending_snapshot[i].nios_profile =
+                board_data->rx_retune2_pending[i].nios_profile;
+            rx_pending_snapshot[i].request_token =
+                board_data->rx_retune2_pending[i].request_token;
+            rx_pending_snapshot[i].session_generation =
+                board_data->rx_retune2_pending[i].session_generation;
+            rx_pending_snapshot[i].valid =
+                board_data->rx_retune2_pending[i].valid;
+        }
         board_data->rx_retune2_pending_count = 0;
         board_data->rx_retune2_outcome_unknown = false;
         for (unsigned int i = 0;
@@ -4390,8 +4660,87 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
         } else {
             board_data->rx_retune2_status_unavailable_reported = false;
             if (watch_event == BLADERF2_RX_RETUNE_WATCH_FAILED) {
-                event.event_type = BLADERF_RF_EVT_RX_RETUNE_FAILED;
-                event.error_code = BLADERF_ERR_FPGA_OP;
+                bool exact_records = have_cap(
+                    board_data->capabilities,
+                    BLADERF_CAP_RETUNE2_REQUEST_TOKEN);
+                uint32_t failure_delta = failure_count -
+                    board_data->rx_retune2_failure_count_last;
+                bool exact_records_valid = exact_records &&
+                    failure_delta <=
+                        NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+
+                if (exact_records_valid) {
+                    for (uint32_t offset = 0; offset < failure_delta;
+                         ++offset) {
+                        uint64_t scheduled_timestamp = 0;
+                        uint16_t nios_profile = 0;
+                        uint8_t failure_stage =
+                            NIOS_PKT_RETUNE2_FAILURE_NONE;
+                        uint32_t session_generation = 0;
+                        uint16_t request_token = 0;
+                        int record_status =
+                            nios_retune2_failure_completion_read(
+                                dev, BLADERF_MODULE_RX,
+                                board_data->rx_retune2_failure_count_last +
+                                    1u + offset,
+                                &scheduled_timestamp, &nios_profile,
+                                &failure_stage, &session_generation,
+                                &request_token);
+                        bool request_found = false;
+                        for (unsigned int i = 0;
+                             record_status == 0 && i <
+                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+                             ++i) {
+                            if (rx_pending_snapshot[i].valid &&
+                                bladerf2_retune_failure_matches(
+                                    rx_pending_snapshot[i].timestamp,
+                                    rx_pending_snapshot[i].nios_profile,
+                                    rx_pending_snapshot[i].session_generation,
+                                    rx_pending_snapshot[i].request_token,
+                                    scheduled_timestamp, nios_profile,
+                                    session_generation, request_token)) {
+                                request_found = true;
+                                rx_pending_snapshot[i].valid = false;
+                                struct bladerf_rf_event failure_event = {0};
+                                failure_event.host_monotonic_ns =
+                                    bladerf2_monotonic_ns();
+                                failure_event.fpga_timestamp =
+                                    scheduled_timestamp;
+                                failure_event.requested_rx_lo_hz =
+                                    rx_pending_snapshot[i].
+                                        requested_frequency_hz;
+                                failure_event.rfic_status = failure_stage;
+                                failure_event.fpga_state =
+                                    BLADERF_RF_STATE_ERROR;
+                                failure_event.event_type =
+                                    BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                                failure_event.flags =
+                                    BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID;
+                                failure_event.error_code =
+                                    BLADERF_ERR_FPGA_OP;
+                                bladerf2_rf_event_append(board_data,
+                                                         &failure_event);
+                                break;
+                            }
+                        }
+                        if (record_status != 0 || !request_found) {
+                            exact_records_valid = false;
+                            event.error_code = record_status != 0
+                                ? record_status : BLADERF_ERR_UNEXPECTED;
+                            break;
+                        }
+                    }
+                }
+                if (!exact_records_valid) {
+                    event.event_type = exact_records
+                        ? BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
+                        : BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                    if (event.error_code == 0) {
+                        event.error_code = exact_records
+                            ? BLADERF_ERR_UNEXPECTED
+                            : BLADERF_ERR_FPGA_OP;
+                    }
+                }
             }
             if (count_status == 0) {
                 board_data->rx_retune2_failure_count_last = failure_count;
@@ -5676,6 +6025,7 @@ static int bladerf2_load_fpga(struct bladerf *dev,
     struct bladerf2_board_data *board_data;
     struct controller_fns const *rfic = NULL;
     bladerf_rfic_init_state rfic_state = BLADERF_RFIC_INIT_STATE_OFF;
+    int prior_board_state;
     uint32_t rffe_control;
     int restore_status;
     int fpga_status;
@@ -5687,6 +6037,9 @@ static int bladerf2_load_fpga(struct bladerf *dev,
     NULL_CHECK(buf);
 
     board_data = dev->board_data;
+    MUTEX_LOCK(&dev->lock);
+    prior_board_state = board_data->state;
+    MUTEX_UNLOCK(&dev->lock);
 
     if (!is_valid_fpga_size(dev, board_data->fpga_size, length)) {
         RETURN_INVAL("fpga file", "incorrect file size");
@@ -5701,11 +6054,25 @@ static int bladerf2_load_fpga(struct bladerf *dev,
             return BLADERF_ERR_WOULD_BLOCK;
         }
 
+        /* Publish the lifecycle boundary while holding the same mutex used
+         * by thread-safe RFIC getters/setters. The public load wrapper does
+         * not hold dev->lock across this callback because initialization
+         * re-enters board operations. Board APIs must nevertheless stop
+         * reaching the PHY while it is being removed/recreated. */
+        MUTEX_LOCK(&dev->lock);
+        board_data->state = STATE_FIRMWARE_LOADED;
+        board_data->rfic_lifecycle_active = true;
+        MUTEX_UNLOCK(&dev->lock);
+
+        monitor_was_started = board_data->rx_fault_monitor_started;
+        /* The monitor can reconcile fastlock state through board_data->phy.
+         * Join it before deinitialize can consume that PHY. */
+        bladerf2_rx_fault_monitor_stop(dev);
+
         /* FPGA reload resets RFIC-side state. Drop the old controller's
          * software cache before loading, otherwise _bladerf2_initialize()
          * sees a stale "already initialized" PHY and skips rebuilding it. */
         rfic = board_data->rfic;
-        monitor_was_started = board_data->rx_fault_monitor_started;
         if (rfic != NULL) {
             CHECK_STATUS(rfic->get_init_state(dev, &rfic_state));
             if (rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
@@ -5714,10 +6081,8 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         }
 
         /* _bladerf2_initialize() starts the RX fault monitor after a
-         * successful reload. Stop the current monitor first so its thread,
-         * mutex, and condition variable are not orphaned/reinitialized by
-         * that second initialization. */
-        bladerf2_rx_fault_monitor_stop(dev);
+         * successful reload. It has already been joined above so its thread,
+         * mutex, and condition variable can be initialized again safely. */
     }
 
     int status;
@@ -5747,7 +6112,9 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         }
 #endif
         if (fpga_status != 1) {
+            MUTEX_LOCK(&dev->lock);
             board_data->state = STATE_FIRMWARE_LOADED;
+            MUTEX_UNLOCK(&dev->lock);
             log_error("FPGA load failed and no configured image could be "
                       "confirmed (status=%d); device requires a fresh FPGA "
                       "load before RF operations.\n", fpga_status);
@@ -5759,11 +6126,19 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         if (rfic != NULL && rfic_state != BLADERF_RFIC_INIT_STATE_OFF) {
             restore_status = rfic->initialize(dev);
             if (restore_status != 0) {
+                MUTEX_LOCK(&dev->lock);
                 board_data->state = STATE_FIRMWARE_LOADED;
+                MUTEX_UNLOCK(&dev->lock);
                 recovery_ok = false;
                 log_error("Failed to restore RFIC controller after FPGA load "
                           "failure: %s\n", bladerf_strerror(restore_status));
             }
+        }
+
+        if (recovery_ok) {
+            MUTEX_LOCK(&dev->lock);
+            board_data->state = prior_board_state;
+            MUTEX_UNLOCK(&dev->lock);
         }
 
         if (recovery_ok && monitor_was_started) {
@@ -5790,20 +6165,45 @@ static int bladerf2_load_fpga(struct bladerf *dev,
                         }
                     }
                 }
+                MUTEX_LOCK(&dev->lock);
                 board_data->state = STATE_FIRMWARE_LOADED;
+                MUTEX_UNLOCK(&dev->lock);
                 log_error("Failed to restart RX fault monitor after FPGA "
                           "load failure: %s\n",
                           bladerf_strerror(monitor_status));
             }
         }
+        MUTEX_LOCK(&dev->lock);
+        if (board_data->state == prior_board_state) {
+            board_data->rfic_lifecycle_active = false;
+        }
+        MUTEX_UNLOCK(&dev->lock);
         return status;
     }
 
     /* Update device state */
+    MUTEX_LOCK(&dev->lock);
     board_data->state = STATE_FPGA_LOADED;
+    MUTEX_UNLOCK(&dev->lock);
 
-    CHECK_STATUS(_bladerf2_initialize(dev));
-    CHECK_STATUS(bladerf2_rx_epoch_contract_probe(dev));
+    status = _bladerf2_initialize(dev);
+    if (status != 0) {
+        MUTEX_LOCK(&dev->lock);
+        board_data->state = STATE_FIRMWARE_LOADED;
+        MUTEX_UNLOCK(&dev->lock);
+        return status;
+    }
+    status = bladerf2_rx_epoch_contract_probe(dev);
+    if (status != 0) {
+        MUTEX_LOCK(&dev->lock);
+        board_data->state = STATE_FIRMWARE_LOADED;
+        MUTEX_UNLOCK(&dev->lock);
+        return status;
+    }
+
+    MUTEX_LOCK(&dev->lock);
+    board_data->rfic_lifecycle_active = false;
+    MUTEX_UNLOCK(&dev->lock);
 
     return 0;
 }
@@ -6673,6 +7073,11 @@ struct board_fns const bladerf2_board_fns = {
                bladerf2_tx_async_buffer_timestamp_check),
     FIELD_INIT(.tx_async_buffer_generation,
                bladerf2_tx_async_buffer_generation),
+    FIELD_INIT(.tx_async_submit_lease_acquire,
+               bladerf2_tx_async_submit_lease_acquire),
+    FIELD_INIT(.tx_async_submit_lease_release,
+               bladerf2_tx_async_submit_lease_release),
+    FIELD_INIT(.wait_tx_async_idle, bladerf2_wait_tx_async_idle),
     FIELD_INIT(.tx_async_buffer_submitted,
                bladerf2_tx_async_buffer_submitted),
     FIELD_INIT(.tx_async_transport_failure,
@@ -6755,7 +7160,13 @@ int bladerf_get_bias_tee(struct bladerf *dev, bladerf_channel ch, bool *enable)
     }
     NULL_CHECK(enable);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t reg;
         uint32_t shift;
 
@@ -6850,6 +7261,13 @@ int bladerf_get_rfic_register(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         uint64_t data;
 
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+
         address |= (AD936X_READ | AD936X_CNT(1));
 
         CHECK_AD936X_LOCKED(dev->backend->ad9361_spi_read(dev, address, &data));
@@ -6867,6 +7285,12 @@ int bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value)
     NULL_CHECK(value);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, value));
     });
 
@@ -6889,6 +7313,12 @@ int bladerf_set_dwell_sync(struct bladerf *dev, bool value)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t reg;
 
         CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, &reg));
@@ -6928,6 +7358,12 @@ int bladerf_get_dwell_status(struct bladerf *dev, uint32_t *value)
     NULL_CHECK(value);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
         CHECK_STATUS_LOCKED(nios_dwell_status_read(dev, value));
     });
@@ -6945,6 +7381,12 @@ int bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
     }
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
         CHECK_STATUS_LOCKED(
             nios_dwell_cfg_write(dev, threshold, settle_sel));
@@ -6964,6 +7406,12 @@ int bladerf_get_dwell_summary(struct bladerf *dev,
     NULL_CHECK(summary);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         CHECK_STATUS_LOCKED(dwell_analyzer_present(dev));
         CHECK_STATUS_LOCKED(nios_dwell_summary_read(dev, words, &gen));
     });
@@ -7011,12 +7459,13 @@ static int bladerf2_tx_rf_config_change_begin(
     rx_pending_count = board_data->rx_retune2_pending_count;
     rx_outcome_unknown = board_data->rx_retune2_outcome_unknown;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    if (board_data->rf_transition_pending ||
-        board_data->tx_frequency_reconfigure_active ||
-        board_data->tx_rf_config_operation_active || recovery_was_blocked ||
-        gate_abort_pending ||
-        bladerf2_rx_retune_blocks_rf_tune(rx_pending_count,
-                                          rx_outcome_unknown)) {
+    if (bladerf2_tx_rf_config_change_blocked(
+            board_data->rfic_lifecycle_active,
+            board_data->rf_transition_pending,
+            board_data->tx_frequency_reconfigure_active,
+            board_data->tx_rf_config_operation_active,
+            recovery_was_blocked, gate_abort_pending, rx_pending_count,
+            rx_outcome_unknown)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -7043,7 +7492,7 @@ static int bladerf2_tx_rf_config_change_begin(
         } else {
             status = dev->backend->retune2(
                 dev, BLADERF_CHANNEL_TX(0),
-                NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0);
+                NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0, 0, 0);
         }
         if (status == 0 && pending_count != 0) {
             unsigned int i;
@@ -7218,15 +7667,24 @@ int bladerf_get_rfic_temperature(struct bladerf *dev, float *val)
     NULL_CHECK(val);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    struct ad9361_rf_phy *phy              = board_data->phy;
+    struct ad9361_rf_phy *phy;
     int32_t temperature;
 
-    IF_COMMAND_MODE(dev, RFIC_COMMAND_FPGA, {
-        log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
-        return BLADERF_ERR_UNSUPPORTED;
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED ||
+            board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        if (board_data->rfic->command_mode == RFIC_COMMAND_FPGA) {
+            log_debug("%s: FPGA command mode not supported\n", __FUNCTION__);
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_UNSUPPORTED;
+        }
+        phy = board_data->phy;
+        temperature = ad9361_get_temp(phy);
     });
-
-    WITH_MUTEX(&dev->lock, { temperature = ad9361_get_temp(phy); });
     CHECK_AD936X(temperature);
     *val = temperature / 1000.0F;
 
@@ -7251,9 +7709,14 @@ int bladerf_get_rfic_rssi(struct bladerf *dev,
     }
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    struct controller_fns const *rfic      = board_data->rfic;
 
     WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_INITIALIZED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        struct controller_fns const *rfic = board_data->rfic;
         CHECK_STATUS_LOCKED(rfic->get_rssi(dev, ch, pre_rssi, sym_rssi));
     });
 
@@ -7267,6 +7730,12 @@ int bladerf_get_rfic_ctrl_out(struct bladerf *dev, uint8_t *ctrl_out)
     NULL_CHECK(ctrl_out);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t reg;
 
         /* Read RFFE control register */
@@ -7285,10 +7754,15 @@ int bladerf_get_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir *rxfir)
     NULL_CHECK(rxfir);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    struct controller_fns const *rfic      = board_data->rfic;
     bladerf_channel const ch               = BLADERF_CHANNEL_RX(0);
 
     WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_INITIALIZED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        struct controller_fns const *rfic = board_data->rfic;
         CHECK_STATUS_LOCKED(rfic->get_filter(dev, ch, rxfir, NULL));
     });
 
@@ -7374,10 +7848,15 @@ int bladerf_get_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir *txfir)
     NULL_CHECK(txfir);
 
     struct bladerf2_board_data *board_data = dev->board_data;
-    struct controller_fns const *rfic      = board_data->rfic;
     bladerf_channel const ch               = BLADERF_CHANNEL_TX(0);
 
     WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_INITIALIZED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        struct controller_fns const *rfic = board_data->rfic;
         CHECK_STATUS_LOCKED(rfic->get_filter(dev, ch, NULL, txfir));
     });
 
@@ -7508,6 +7987,76 @@ static int bladerf2_write_pll_register_hw(struct bladerf *dev,
     return status;
 }
 
+/* These locked status reads are shared by public getters and by the internal
+ * clock initialization transaction. Public getters add the lifecycle fence;
+ * internal callers already own that transaction and must remain usable while
+ * FPGA reload is rebuilding the board. */
+static int bladerf2_get_pll_enable_locked(struct bladerf *dev, bool *enabled)
+{
+    uint32_t data;
+    int status = dev->backend->config_gpio_read(dev, &data);
+
+    if (status == 0) {
+        *enabled = (data >> CFG_GPIO_PLL_EN) & 0x01;
+    }
+    return status;
+}
+
+static int bladerf2_get_pll_lock_state_locked(struct bladerf *dev,
+                                               bool *locked)
+{
+    uint32_t reg;
+    int status = dev->backend->rffe_control_read(dev, &reg);
+
+    if (status == 0) {
+        *locked = (reg >> RFFE_CONTROL_ADF_MUXOUT) & 0x1;
+    }
+    return status;
+}
+
+static int bladerf2_get_clock_select_locked(struct bladerf *dev,
+                                             bladerf_clock_select *sel)
+{
+    uint32_t gpio;
+    int status = dev->backend->config_gpio_read(dev, &gpio);
+
+    if (status == 0) {
+        *sel = (gpio & (1u << CFG_GPIO_CLOCK_SELECT)) == 0
+                   ? CLOCK_SELECT_ONBOARD : CLOCK_SELECT_EXTERNAL;
+    }
+    return status;
+}
+
+static int bladerf2_get_pll_enable_internal(struct bladerf *dev,
+                                             bool *enabled)
+{
+    int status;
+    WITH_MUTEX(&dev->lock, {
+        status = bladerf2_get_pll_enable_locked(dev, enabled);
+    });
+    return status;
+}
+
+static int bladerf2_get_pll_lock_state_internal(struct bladerf *dev,
+                                                 bool *locked)
+{
+    int status;
+    WITH_MUTEX(&dev->lock, {
+        status = bladerf2_get_pll_lock_state_locked(dev, locked);
+    });
+    return status;
+}
+
+static int bladerf2_get_clock_select_internal(
+    struct bladerf *dev, bladerf_clock_select *sel)
+{
+    int status;
+    WITH_MUTEX(&dev->lock, {
+        status = bladerf2_get_clock_select_locked(dev, sel);
+    });
+    return status;
+}
+
 static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
@@ -7526,7 +8075,7 @@ static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
     }
 
     /* Get the present state... */
-    CHECK_STATUS(bladerf_get_pll_enable(dev, &is_enabled));
+    CHECK_STATUS(bladerf2_get_pll_enable_internal(dev, &is_enabled));
 
     /* Enable the chip if applicable */
     if (!is_enabled) {
@@ -7644,7 +8193,7 @@ static int bladerf2_wait_for_pll_lock(struct bladerf *dev)
 
     for (;;) {
         bool locked = false;
-        CHECK_STATUS(bladerf_get_pll_lock_state(dev, &locked));
+        CHECK_STATUS(bladerf2_get_pll_lock_state_internal(dev, &locked));
         if (locked) {
             return 0;
         }
@@ -7665,13 +8214,15 @@ int bladerf_get_pll_lock_state(struct bladerf *dev, bool *locked)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(locked);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
-        uint32_t reg;
-
-        /* Read RFFE control register */
-        CHECK_STATUS_LOCKED(dev->backend->rffe_control_read(dev, &reg));
-
-        *locked = (reg >> RFFE_CONTROL_ADF_MUXOUT) & 0x1;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        CHECK_STATUS_LOCKED(
+            bladerf2_get_pll_lock_state_locked(dev, locked));
     });
 
     return 0;
@@ -7683,12 +8234,15 @@ int bladerf_get_pll_enable(struct bladerf *dev, bool *enabled)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(enabled);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
-        uint32_t data;
-
-        CHECK_STATUS_LOCKED(dev->backend->config_gpio_read(dev, &data));
-
-        *enabled = (data >> CFG_GPIO_PLL_EN) & 0x01;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        CHECK_STATUS_LOCKED(
+            bladerf2_get_pll_enable_locked(dev, enabled));
     });
 
     return 0;
@@ -7713,7 +8267,8 @@ int bladerf_set_pll_enable(struct bladerf *dev, bool enable)
         status = bladerf2_set_pll_enable_hw(dev, enable);
         if (status == 0) {
             bladerf_clock_select clock_select;
-            status = bladerf_get_clock_select(dev, &clock_select);
+            status = bladerf2_get_clock_select_internal(dev,
+                                                         &clock_select);
             if (status == 0 &&
                 (!enable || clock_select == CLOCK_SELECT_EXTERNAL)) {
                 MUTEX_LOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
@@ -7825,7 +8380,7 @@ static int bladerf2_set_pll_refclk_internal(
     status = bladerf_pll_configure(dev, R, N);
     if (status == 0) {
         bladerf_clock_select clock_select;
-        status = bladerf_get_clock_select(dev, &clock_select);
+        status = bladerf2_get_clock_select_internal(dev, &clock_select);
         if (status == 0 && clock_select == CLOCK_SELECT_EXTERNAL) {
             /* CLKIN is the specified 38.4 MHz direct RFIC reference; the
              * ADF400x lock detector only describes the onboard VCTCXO path. */
@@ -7835,7 +8390,7 @@ static int bladerf2_set_pll_refclk_internal(
             MUTEX_UNLOCK(&((struct bladerf2_board_data *)dev->board_data)->rx_async_epoch_lock);
         } else if (status == 0) {
             bool pll_enabled = false;
-            status = bladerf_get_pll_enable(dev, &pll_enabled);
+            status = bladerf2_get_pll_enable_internal(dev, &pll_enabled);
             if (status == 0 && !pll_enabled) {
                 /* With the disciplining PLL disabled, the selected onboard
                  * VCTCXO still supplies the nominal 38.4 MHz reference. */
@@ -7883,7 +8438,13 @@ int bladerf_get_pll_register(struct bladerf *dev,
         return BLADERF_ERR_INVAL;
     }
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t data;
 
         CHECK_STATUS_LOCKED(dev->backend->adf400x_read(dev, address, &data));
@@ -7937,6 +8498,12 @@ int bladerf_get_power_source(struct bladerf *dev, bladerf_power_sources *src)
     NULL_CHECK(src);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t data;
 
         CHECK_STATUS_LOCKED(dev->backend->config_gpio_read(dev, &data));
@@ -7962,16 +8529,15 @@ int bladerf_get_clock_select(struct bladerf *dev, bladerf_clock_select *sel)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(sel);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
     WITH_MUTEX(&dev->lock, {
-        uint32_t gpio;
-
-        CHECK_STATUS_LOCKED(dev->backend->config_gpio_read(dev, &gpio));
-
-        if ((gpio & (1 << CFG_GPIO_CLOCK_SELECT)) == 0x0) {
-            *sel = CLOCK_SELECT_ONBOARD;
-        } else {
-            *sel = CLOCK_SELECT_EXTERNAL;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
         }
+        CHECK_STATUS_LOCKED(
+            bladerf2_get_clock_select_locked(dev, sel));
     });
 
     return 0;
@@ -8081,6 +8647,12 @@ int bladerf_get_clock_output(struct bladerf *dev, bool *state)
     NULL_CHECK(state);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t gpio;
 
         CHECK_STATUS_LOCKED(dev->backend->config_gpio_read(dev, &gpio));
@@ -8097,6 +8669,12 @@ int bladerf_set_clock_output(struct bladerf *dev, bool enable)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         uint32_t gpio;
 
         CHECK_STATUS_LOCKED(dev->backend->config_gpio_read(dev, &gpio));
@@ -8170,7 +8748,12 @@ int bladerf_get_rf_switch_config(struct bladerf *dev,
 
     WITH_MUTEX(&dev->lock, {
         struct bladerf2_board_data *board_data = dev->board_data;
-        struct ad9361_rf_phy *phy              = board_data->phy;
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_INITIALIZED) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        struct ad9361_rf_phy *phy = board_data->phy;
         struct controller_fns const *rfic      = board_data->rfic;
         uint32_t val;
         uint32_t reg;

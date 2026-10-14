@@ -106,5 +106,33 @@ uint64_t bladerf2_get_fpga_capabilities(
         capabilities |= BLADERF_CAP_RFIC_WQ_RESULT_VALID;
     }
 
+    if (version_fields_greater_or_equal(fpga_version, 0, 18, 0)) {
+        capabilities |= BLADERF_CAP_RFIC_WQ_ACTIVE;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 19, 0)) {
+        capabilities |= BLADERF_CAP_RFIC_PROGRESS;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 20, 0)) {
+        capabilities |= BLADERF_CAP_RFIC_RESULT_ACK;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 21, 0)) {
+        capabilities |= BLADERF_CAP_RFIC_BUSY_RESPONSE;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 22, 0)) {
+        capabilities |= BLADERF_CAP_RETUNE2_FAILURE_RECORDS;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 23, 0)) {
+        capabilities |= BLADERF_CAP_RETUNE2_REQUEST_TOKEN;
+    }
+
+    if (version_fields_greater_or_equal(fpga_version, 0, 24, 0)) {
+        capabilities |= BLADERF_CAP_RFIC_RESULT_DETAIL;
+    }
+
     return capabilities;
 }

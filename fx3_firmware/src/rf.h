@@ -32,4 +32,9 @@ void NuandRFLinkLoopBack(int);
 /* Check if FW sample loopback is enabled */
 int NuandRFLinkGetLoopBack();
 
+/* Stop and observe the RF-link TX DMA consumer without resetting shared RF
+ * fabric state. Pause completion is asynchronous and must be queried. */
+CyU3PReturnStatus_t NuandRFLinkPauseTxDma(void);
+uint32_t NuandRFLinkTxDmaPauseStatus(void);
+
 #endif /* _RF_H_ */

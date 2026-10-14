@@ -167,6 +167,17 @@
  */
 #define BLADERF_CAP_RFIC_WQ_RESULT_VALID (((uint64_t)1) << 40)
 
+/** FPGA v0.18.0 reports the active RFIC queue-head command. */
+#define BLADERF_CAP_RFIC_WQ_ACTIVE (((uint64_t)1) << 41)
+
+/** FPGA v0.19.0 reports cooperative RFIC callback progress. */
+#define BLADERF_CAP_RFIC_PROGRESS (((uint64_t)1) << 42)
+#define BLADERF_CAP_RFIC_RESULT_ACK (((uint64_t)1) << 43)
+#define BLADERF_CAP_RFIC_BUSY_RESPONSE (((uint64_t)1) << 44)
+#define BLADERF_CAP_RETUNE2_FAILURE_RECORDS (((uint64_t)1) << 45)
+#define BLADERF_CAP_RETUNE2_REQUEST_TOKEN   (((uint64_t)1) << 46)
+#define BLADERF_CAP_RFIC_RESULT_DETAIL      (((uint64_t)1) << 47)
+
 /**
  * Max number of gain calibration tables associated to max number of channels
  */
@@ -207,6 +218,7 @@ struct bladerf {
         int status;
         bool valid;
         bool device_duration_valid;
+        bool retune2_terminal_unknown;
     } nios_retune_trace;
 
     /* XB attached */
@@ -404,6 +416,14 @@ struct board_fns {
     /* Snapshot the TX admission generation for revalidation after a backend
      * waits for transfer capacity. */
     uint64_t (*tx_async_buffer_generation)(struct bladerf *dev);
+    /* Linearize TX transfer admission against RF fault revocation. A lease is
+     * held from the backend's final pre-submit point through completion
+     * callback retirement; wait_tx_async_idle drains those leases without
+     * canceling partial transfers. */
+    int (*tx_async_submit_lease_acquire)(struct bladerf *dev,
+                                         uint64_t admission_generation);
+    void (*tx_async_submit_lease_release)(struct bladerf *dev);
+    int (*wait_tx_async_idle)(struct bladerf *dev, unsigned int timeout_ms);
     /* Called only after the backend accepted a TX buffer for submission. */
     void (*tx_async_buffer_submitted)(struct bladerf *dev,
                                       uint64_t admission_generation);

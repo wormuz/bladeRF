@@ -13,6 +13,7 @@
 --   0  steady TX+RX traffic, no host interference   (control, must pass)
 --   1  meta_enable drops while a TX transaction is in flight
 --   2  meta_enable rises while a TX transaction is in flight
+--   9  fault barrier aborts an active TX parser and holds it idle
 --
 -- Pass criterion: the machine reaches IDLE again within WATCHDOG cycles of
 -- the disturbance. Failure is reported as a stuck state, which is the wedge.
@@ -54,6 +55,8 @@ architecture arch of fx3_gpif_wedge_tb is
     signal tx_meta_data  : std_logic_vector(31 downto 0);
     signal rx_fifo_read  : std_logic;
     signal rx_meta_read  : std_logic;
+    signal tx_fault_stop : std_logic := '0';
+    signal tx_fault_idle : std_logic;
 
     signal tx_timestamp  : unsigned(63 downto 0) := (others => '0');
     signal freeze        : std_logic := '0';
@@ -114,6 +117,9 @@ begin
             tx_meta_fifo_empty  => '1',
             tx_meta_fifo_usedw  => std_logic_vector(to_unsigned(0, USEDW)),
             tx_meta_fifo_data   => tx_meta_data,
+
+            tx_fault_stop       => tx_fault_stop,
+            tx_fault_idle       => tx_fault_idle,
 
             rx_fifo_read        => rx_fifo_read,
             rx_fifo_full        => '0',
@@ -259,6 +265,32 @@ begin
                     wait until rising_edge(pclk);
                 end loop;
                 rx_full <= '0';
+            end loop;
+        elsif SCENARIO = 9 then
+            -- Reproduce a fault while GPIF owns a host-to-FPGA TX DMA buffer.
+            -- Stop must terminate the parser on a PCLK edge, drop all TX
+            -- acknowledgements/writes and prevent another TX transaction.
+            wait until rising_edge(pclk) and dma3_tx_ack = '1';
+            wait until rising_edge(pclk);
+            tx_fault_stop <= '1';
+            waited := 0;
+            while tx_fault_idle = '0' and waited < 8 loop
+                wait until rising_edge(pclk);
+                waited := waited + 1;
+            end loop;
+            assert tx_fault_idle = '1'
+                report "fault barrier did not acknowledge GPIF TX parser idle"
+                severity failure;
+            assert dma3_tx_ack = '0' and tx_fifo_write = '0' and
+                   tx_meta_write = '0'
+                report "fault barrier left a TX ack or FIFO write active"
+                severity failure;
+            for i in 1 to 100 loop
+                wait until rising_edge(pclk);
+                assert dma3_tx_ack = '0' and tx_fifo_write = '0' and
+                       tx_meta_write = '0' and tx_fault_idle = '1'
+                    report "fault barrier restarted TX parsing before release"
+                    severity failure;
             end loop;
         elsif SCENARIO = 5 then
             -- same, but the drop lands during the metadata phase

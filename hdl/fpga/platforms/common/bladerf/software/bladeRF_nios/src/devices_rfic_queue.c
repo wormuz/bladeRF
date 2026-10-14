@@ -34,7 +34,8 @@
 uint8_t rfic_enqueue(struct rfic_queue *q,
                      uint8_t ch,
                      uint8_t cmd,
-                     uint64_t value)
+                     uint64_t value,
+                     uint16_t transaction_id)
 {
     if (q->count >= COMMAND_QUEUE_MAX) {
         return COMMAND_QUEUE_FULL;
@@ -42,9 +43,12 @@ uint8_t rfic_enqueue(struct rfic_queue *q,
 
     q->entries[q->ins_idx].ch    = ch;
     q->entries[q->ins_idx].cmd   = cmd;
+    q->entries[q->ins_idx].transaction_id = transaction_id;
     q->entries[q->ins_idx].value = value;
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].rv    = 0xFF;
+    q->entries[q->ins_idx].result_code = BLADERF_RFIC_RESULT_NO_RESULT;
+    q->entries[q->ins_idx].cleanup_result_code = BLADERF_RFIC_RESULT_SUCCESS;
 
     q->ins_idx = (q->ins_idx + 1) & (COMMAND_QUEUE_MAX - 1);
 
@@ -64,6 +68,15 @@ uint8_t rfic_dequeue(struct rfic_queue *q, struct rfic_queue_entry *e)
     q->rem_idx = (q->rem_idx + 1) & (COMMAND_QUEUE_MAX - 1);
 
     return --q->count;
+}
+
+void rfic_queue_progress_tick(struct rfic_queue *q)
+{
+    struct rfic_queue_entry *active = rfic_queue_peek(q);
+
+    if (active != NULL && active->state == ENTRY_STATE_RUNNING) {
+        q->progress_sequence++;
+    }
 }
 
 struct rfic_queue_entry *rfic_queue_peek(struct rfic_queue *q)
@@ -86,6 +99,16 @@ void rfic_queue_reset(struct rfic_queue *q)
     q->last_rv = 0xFF;
     q->last_rv_valid = false;
     q->last_rv_sequence = 0;
+    q->last_rv_transaction_id = 0;
+    q->last_rv_ch = 0;
+    q->last_rv_cmd = 0;
+    q->last_rv_value = 0;
+    q->last_result_code = BLADERF_RFIC_RESULT_NO_RESULT;
+    q->last_cleanup_result_code = BLADERF_RFIC_RESULT_NO_RESULT;
+    q->last_acked_transaction_id = 0;
+    q->last_acked_sequence = 0;
+    q->tagged_protocol_enabled = false;
+    q->progress_sequence = 0;
     q->rem_idx = 0;
     q->ins_idx = 0;
 }

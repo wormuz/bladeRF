@@ -585,11 +585,15 @@ static inline uint64_t rx_epoch_status_snapshot_read(void)
 }
 
 /* TX timestamped retune gate. Command toggles and both timestamp halves are
- * sampled together by the FPGA mailbox; write target first, then ARM. */
+ * sampled together by the FPGA mailbox; write target first, then ARM. Bits
+ * 4/5 request fault-only FIFO flush and post-DMA-reset release respectively.
+ * They are not part of normal scheduled-retune operation. */
 #define TX_RETUNE_CTRL_ARM_TOGGLE      (1u << 0)
 #define TX_RETUNE_CTRL_COMPLETE_TOGGLE (1u << 1)
 #define TX_RETUNE_CTRL_ABORT_TOGGLE    (1u << 2)
 #define TX_RETUNE_CTRL_IMMEDIATE       (1u << 3)
+#define TX_RETUNE_CTRL_FIFO_FLUSH_TOGGLE   (1u << 4)
+#define TX_RETUNE_CTRL_FIFO_RELEASE_TOGGLE (1u << 5)
 
 static inline uint32_t tx_retune_gate_ctrl_current(void)
 {
@@ -664,6 +668,30 @@ static inline bool tx_retune_gate_abort(void)
 #else
     return false;
 #endif
+}
+
+static inline bool tx_retune_gate_fifo_flush_command(bool release)
+{
+#ifdef TX_RETUNE_GATE_CTRL_BASE
+    uint32_t mask = release ? TX_RETUNE_CTRL_FIFO_RELEASE_TOGGLE :
+                              TX_RETUNE_CTRL_FIFO_FLUSH_TOGGLE;
+    uint32_t word = tx_retune_gate_ctrl_current() ^ mask;
+    IOWR_ALTERA_AVALON_PIO_DATA(TX_RETUNE_GATE_CTRL_BASE, word);
+    return tx_retune_gate_ctrl_current() == word;
+#else
+    (void)release;
+    return false;
+#endif
+}
+
+static inline bool tx_retune_gate_fifo_flush(void)
+{
+    return tx_retune_gate_fifo_flush_command(false);
+}
+
+static inline bool tx_retune_gate_fifo_release(void)
+{
+    return tx_retune_gate_fifo_flush_command(true);
 }
 
 static inline uint32_t tx_retune_gate_status_read(void)
@@ -753,16 +781,34 @@ INLINE uint32_t command_uart_request_session_generation(void) {
     return IORD_32DIRECT(COMMAND_UART_BASE, 20);
 }
 
-INLINE void command_uart_write_response(uint8_t *resp,
-                                        uint32_t session_generation) {
+INLINE bool command_uart_write_response(uint8_t *resp,
+                                       uint32_t session_generation) {
     int i ;
     uint32_t val ;
+    uint32_t attempts;
+    /* The FPGA has one active serializer snapshot and one pending snapshot.
+     * Do not start staging another frame while that pending slot is occupied.
+     * This is a short wire-time wait (one fixed 16-byte frame), and keeps the
+     * Avalon staging bank from silently overflowing the response queue. */
+    for (attempts = 0; attempts < 100000u; attempts++) {
+        const uint32_t status = IORD_32DIRECT(COMMAND_UART_BASE, 28);
+        if (status & COMMAND_UART_STATUS_RESPONSE_OVERFLOW) {
+            return false;
+        }
+        if (!(status & COMMAND_UART_STATUS_RESPONSE_PENDING)) {
+            break;
+        }
+    }
+    if (attempts == 100000u) {
+        /* Failure watchdog only: do not pretend a response was queued. */
+        return false;
+    }
     IOWR_32DIRECT(COMMAND_UART_BASE, 24, session_generation);
     for( i = 0 ; i < 16 ; i+=4 ) {
         val = ((uint32_t)resp[i+0]) | (((uint32_t)resp[i+1])<<8) | (((uint32_t)resp[i+2])<<16) | (((uint32_t)resp[i+3])<<24) ;
         IOWR_32DIRECT(COMMAND_UART_BASE, i, val) ;
     }
-    return ;
+    return true;
 }
 
 #endif

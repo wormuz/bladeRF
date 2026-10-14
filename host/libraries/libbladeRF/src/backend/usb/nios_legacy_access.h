@@ -251,7 +251,8 @@ int nios_legacy_rfic_command_read(struct bladerf *dev,
  */
 int nios_legacy_rfic_command_write(struct bladerf *dev,
                                    uint16_t cmd,
-                                   uint64_t data);
+                                   uint64_t data,
+                                   uint16_t transaction_id);
 
 /**
  * Read RFFE control register.

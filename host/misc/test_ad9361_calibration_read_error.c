@@ -6,13 +6,30 @@
 
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_util.c"
+#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_ext_band_ctrl.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_adc_core/axi_adc_core.c"
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/axi_core/axi_dac_core/axi_dac_core.c"
 
 static int32_t fake_clock_chain_status;
 static unsigned fake_bandwidth_update_count;
+static bool fake_sample_rate_transaction_enabled;
+static int32_t fake_sample_rate_calculate_status;
+static int32_t fake_sample_rate_clock_readback_status;
+static bool fake_sample_rate_corrupt_rollback_readback;
+static unsigned fake_sample_rate_clock_set_count;
+static unsigned fake_sample_rate_clock_set_attempt_count;
+static unsigned fake_sample_rate_clock_set_fail_attempt;
+static unsigned fake_sample_rate_bw_start_count;
+static unsigned fake_sample_rate_bw_poll_count;
+static unsigned fake_sample_rate_bw_fail_poll;
+static uint32_t fake_sample_rate_rx_clks[NUM_RX_CLOCKS];
+static uint32_t fake_sample_rate_tx_clks[NUM_TX_CLOCKS];
 static bool fake_mux_commit_parent;
 static int32_t fake_mux_parent_status;
+static int32_t fake_axi_adc_remove_status;
+static int32_t fake_axi_dac_remove_status;
+static unsigned fake_axi_adc_remove_count;
+static unsigned fake_axi_dac_remove_count;
 
 static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t tx_sample_rate,
@@ -20,12 +37,30 @@ static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t *rx_path_clks,
                                             uint32_t *tx_path_clks);
 static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
+                                        const uint32_t *rx_path_clks,
+                                        const uint32_t *tx_path_clks);
+static int32_t test_clock_chain_transaction_start(
+    struct ad9361_rf_phy *phy, const uint32_t *rx_path_clks,
+    const uint32_t *tx_path_clks,
+    struct ad9361_clock_chain_transaction *transaction);
+static int32_t test_clock_chain_transaction_poll(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_clock_chain_transaction *transaction);
+static int32_t test_get_trx_clock_chain(struct ad9361_rf_phy *phy,
                                         uint32_t *rx_path_clks,
                                         uint32_t *tx_path_clks);
+static int32_t test_rf_bandwidth_transaction_start(
+    struct ad9361_rf_phy *phy, uint32_t rx_bw, uint32_t tx_bw,
+    struct ad9361_rf_bandwidth_transaction *transaction);
+static int32_t test_rf_bandwidth_transaction_poll(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_rf_bandwidth_transaction *transaction);
 static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
                                         uint32_t rx_bw, uint32_t tx_bw);
 static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
                                        uint8_t index);
+static int32_t test_axi_adc_remove(struct axi_adc *adc);
+static int32_t test_axi_dac_remove(struct axi_dac *dac);
 
 static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
                                        uint8_t index)
@@ -37,13 +72,41 @@ static int32_t test_clk_mux_set_parent(struct refclk_scale *clk_priv,
 
 #define ad9361_calculate_rf_clock_chain test_calculate_rf_clock_chain
 #define ad9361_set_trx_clock_chain test_set_trx_clock_chain
+#define ad9361_clock_chain_transaction_start test_clock_chain_transaction_start
+#define ad9361_clock_chain_transaction_poll test_clock_chain_transaction_poll
+#define ad9361_get_trx_clock_chain test_get_trx_clock_chain
+#define ad9361_rf_bandwidth_transaction_start test_rf_bandwidth_transaction_start
+#define ad9361_rf_bandwidth_transaction_poll test_rf_bandwidth_transaction_poll
 #define ad9361_update_rf_bandwidth test_update_rf_bandwidth
 #define ad9361_clk_mux_set_parent test_clk_mux_set_parent
+#define axi_adc_remove test_axi_adc_remove
+#define axi_dac_remove test_axi_dac_remove
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_api.c"
 #undef ad9361_calculate_rf_clock_chain
 #undef ad9361_set_trx_clock_chain
+#undef ad9361_clock_chain_transaction_start
+#undef ad9361_clock_chain_transaction_poll
+#undef ad9361_get_trx_clock_chain
+#undef ad9361_rf_bandwidth_transaction_start
+#undef ad9361_rf_bandwidth_transaction_poll
 #undef ad9361_update_rf_bandwidth
 #undef ad9361_clk_mux_set_parent
+#undef axi_adc_remove
+#undef axi_dac_remove
+
+static int32_t test_axi_adc_remove(struct axi_adc *adc)
+{
+    (void)adc;
+    ++fake_axi_adc_remove_count;
+    return fake_axi_adc_remove_status;
+}
+
+static int32_t test_axi_dac_remove(struct axi_dac *dac)
+{
+    (void)dac;
+    ++fake_axi_dac_remove_count;
+    return fake_axi_dac_remove_status;
+}
 
 static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t tx_sample_rate,
@@ -51,6 +114,15 @@ static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
                                             uint32_t *rx_path_clks,
                                             uint32_t *tx_path_clks)
 {
+    if (fake_sample_rate_transaction_enabled) {
+        if (fake_sample_rate_calculate_status < 0)
+            return fake_sample_rate_calculate_status;
+        memset(rx_path_clks, 0, NUM_RX_CLOCKS * sizeof(*rx_path_clks));
+        memset(tx_path_clks, 0, NUM_TX_CLOCKS * sizeof(*tx_path_clks));
+        rx_path_clks[RX_SAMPL_FREQ] = tx_sample_rate;
+        tx_path_clks[TX_SAMPL_FREQ] = tx_sample_rate;
+        return 0;
+    }
     (void)phy;
     (void)tx_sample_rate;
     (void)rate_governor;
@@ -60,13 +132,171 @@ static int32_t test_calculate_rf_clock_chain(struct ad9361_rf_phy *phy,
 }
 
 static int32_t test_set_trx_clock_chain(struct ad9361_rf_phy *phy,
-                                        uint32_t *rx_path_clks,
-                                        uint32_t *tx_path_clks)
+                                        const uint32_t *rx_path_clks,
+                                        const uint32_t *tx_path_clks)
 {
+    if (fake_sample_rate_transaction_enabled) {
+        ++fake_sample_rate_clock_set_attempt_count;
+        if (fake_sample_rate_clock_set_fail_attempt ==
+            fake_sample_rate_clock_set_attempt_count)
+            return -EIO;
+        if (fake_clock_chain_status < 0)
+            return fake_clock_chain_status;
+        memcpy(fake_sample_rate_rx_clks, rx_path_clks,
+               sizeof(fake_sample_rate_rx_clks));
+        memcpy(fake_sample_rate_tx_clks, tx_path_clks,
+               sizeof(fake_sample_rate_tx_clks));
+        ++fake_sample_rate_clock_set_count;
+        phy->current_bw_valid = false;
+        if (fake_sample_rate_corrupt_rollback_readback &&
+            fake_sample_rate_clock_set_count == 2)
+            fake_sample_rate_rx_clks[RX_SAMPL_FREQ]++;
+        return 0;
+    }
     (void)phy;
     (void)rx_path_clks;
     (void)tx_path_clks;
     return fake_clock_chain_status;
+}
+
+static int32_t test_clock_chain_transaction_start(
+    struct ad9361_rf_phy *phy, const uint32_t *rx_path_clks,
+    const uint32_t *tx_path_clks,
+    struct ad9361_clock_chain_transaction *transaction)
+{
+    if (!phy || !transaction || !rx_path_clks || !tx_path_clks)
+        return -EINVAL;
+    if (transaction->active || ad9361_operation_busy(phy))
+        return -EBUSY;
+    memset(transaction, 0, sizeof(*transaction));
+    transaction->phy = phy;
+    memcpy(transaction->rx_path_clks, rx_path_clks,
+           sizeof(transaction->rx_path_clks));
+    memcpy(transaction->tx_path_clks, tx_path_clks,
+           sizeof(transaction->tx_path_clks));
+    transaction->active = true;
+    transaction->stage = AD9361_CLOCK_CHAIN_TRANSACTION_BBPLL;
+    phy->clock_chain_transaction = transaction;
+    return 0;
+}
+
+static int32_t test_clock_chain_transaction_poll(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_clock_chain_transaction *transaction)
+{
+    int32_t ret;
+
+    if (!phy || !transaction)
+        return -EINVAL;
+    if (transaction->terminal)
+        return transaction->terminal_status;
+    if (!transaction->active || transaction->phy != phy ||
+        phy->clock_chain_transaction != transaction) {
+        if (transaction->phy)
+            ad9361_mark_calibration_state_unknown(transaction->phy);
+        return -EIO;
+    }
+
+    ret = test_set_trx_clock_chain(phy, transaction->rx_path_clks,
+                                   transaction->tx_path_clks);
+    transaction->active = false;
+    transaction->terminal = true;
+    transaction->terminal_status = ret;
+    phy->clock_chain_transaction = NULL;
+    return ret;
+}
+
+static int32_t test_get_trx_clock_chain(struct ad9361_rf_phy *phy,
+                                        uint32_t *rx_path_clks,
+                                        uint32_t *tx_path_clks)
+{
+    if (fake_sample_rate_transaction_enabled) {
+        if (fake_sample_rate_clock_readback_status < 0)
+            return fake_sample_rate_clock_readback_status;
+        if (rx_path_clks != NULL)
+            memcpy(rx_path_clks, fake_sample_rate_rx_clks,
+                   sizeof(fake_sample_rate_rx_clks));
+        if (tx_path_clks != NULL)
+            memcpy(tx_path_clks, fake_sample_rate_tx_clks,
+                   sizeof(fake_sample_rate_tx_clks));
+        return 0;
+    }
+    return ad9361_get_trx_clock_chain(phy, rx_path_clks, tx_path_clks);
+}
+
+static int32_t test_rf_bandwidth_transaction_start(
+    struct ad9361_rf_phy *phy, uint32_t rx_bw, uint32_t tx_bw,
+    struct ad9361_rf_bandwidth_transaction *transaction)
+{
+    if (!fake_sample_rate_transaction_enabled)
+        return ad9361_rf_bandwidth_transaction_start(
+            phy, rx_bw, tx_bw, transaction);
+    memset(transaction, 0, sizeof(*transaction));
+    transaction->rx_bw = rx_bw;
+    transaction->tx_bw = tx_bw;
+    transaction->phy = phy;
+    transaction->active = true;
+    phy->rf_bandwidth_transaction = transaction;
+    ++fake_sample_rate_bw_start_count;
+    return 0;
+}
+
+static int32_t test_rf_bandwidth_transaction_poll(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_rf_bandwidth_transaction *transaction)
+{
+    if (!fake_sample_rate_transaction_enabled)
+        return ad9361_rf_bandwidth_transaction_poll(phy, transaction);
+    if (transaction->phy != phy ||
+        phy->rf_bandwidth_transaction != transaction)
+        return -EIO;
+    ++fake_sample_rate_bw_poll_count;
+    transaction->active = false;
+    transaction->terminal = true;
+    phy->rf_bandwidth_transaction = NULL;
+    if (fake_sample_rate_bw_fail_poll &
+        (1u << (fake_sample_rate_bw_poll_count - 1u))) {
+        phy->current_bw_valid = false;
+        transaction->terminal_status = -EIO;
+        return -EIO;
+    }
+    phy->current_rx_bw_Hz = transaction->rx_bw;
+    phy->current_tx_bw_Hz = transaction->tx_bw;
+    phy->current_bw_valid = true;
+    transaction->terminal_status = 0;
+    return 0;
+}
+
+static int32_t test_sample_rate_poll_until_stage(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_sample_rate_transaction *transaction, uint8_t stage)
+{
+    unsigned int polls;
+    int32_t ret;
+
+    for (polls = 0; polls < 64; polls++) {
+        if (transaction->stage == stage)
+            return 1;
+        ret = ad9361_sample_rate_transaction_poll(phy, transaction);
+        if (ret != 1)
+            return ret;
+    }
+    return -ETIMEDOUT;
+}
+
+static int32_t test_sample_rate_poll_to_terminal(
+    struct ad9361_rf_phy *phy,
+    struct ad9361_sample_rate_transaction *transaction)
+{
+    unsigned int polls;
+    int32_t ret;
+
+    for (polls = 0; polls < 64; polls++) {
+        ret = ad9361_sample_rate_transaction_poll(phy, transaction);
+        if (ret != 1)
+            return ret;
+    }
+    return -ETIMEDOUT;
 }
 
 static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
@@ -79,38 +309,35 @@ static int32_t test_update_rf_bandwidth(struct ad9361_rf_phy *phy,
     return 0;
 }
 
-int32_t ad9361_adjust_rx_ext_band_settings(struct ad9361_rf_phy *phy,
-                                           uint64_t freq)
-{
-    (void)phy;
-    (void)freq;
-    return 0;
-}
-int32_t ad9361_adjust_tx_ext_band_settings(struct ad9361_rf_phy *phy,
-                                           uint64_t freq)
-{
-    (void)phy;
-    (void)freq;
-    return 0;
-}
-
 #include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_conv.c"
 
 static unsigned read_count;
 static unsigned write_count;
 static unsigned delay_count;
+static unsigned gpio_set_count;
+static uint8_t gpio_set_values[8];
+static unsigned gpio_direction_count;
+static uint8_t gpio_direction_ops[32];
+static int32_t gpio_direction_status;
 static uint64_t fake_time_us;
 static int32_t spi_status;
 static int32_t fake_spi_remove_status;
 static int32_t fake_gpio_remove_status[4];
 static unsigned fake_spi_remove_count;
 static unsigned fake_gpio_remove_count;
+static unsigned no_os_free_count;
 static bool register_map_enabled;
 static bool fake_calibration_autocomplete;
+static int32_t fake_calibration_done_status;
+static unsigned fake_calibration_done_fail_call;
+static unsigned fake_calibration_done_call_count;
 static int32_t fail_read_reg = -1;
+static int32_t fail_read_once_reg = -1;
 static int32_t fail_write_reg = -1;
 static uint8_t last_fir_high_byte;
 static uint16_t last_spi_write_addr;
+static uint16_t spi_write_addr_log[512];
+static uint8_t spi_write_value_log[512];
 static int32_t fail_write_once_reg = -1;
 static unsigned fail_write_once_reg_occurrence = 1;
 static bool apply_failed_write_once;
@@ -124,6 +351,22 @@ static int32_t fake_axi_fail_write_offset = -1;
 static int32_t fake_axi_fail_write_once_offset = -1;
 static bool fake_axi_apply_failed_write_once;
 static int32_t fake_axi_fail_read_offset = -1;
+
+static int32_t fake_calibration_done(struct ad9361_rf_phy *phy, uint32_t mask,
+		bool *done)
+{
+	(void)phy;
+	(void)mask;
+	if (!done)
+		return -EINVAL;
+	++fake_calibration_done_call_count;
+	if (fake_calibration_done_status < 0 &&
+	    fake_calibration_done_call_count ==
+		fake_calibration_done_fail_call)
+		return fake_calibration_done_status;
+	*done = true;
+	return 0;
+}
 
 int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
 {
@@ -160,7 +403,7 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
 
 void *no_os_malloc(size_t size) { return malloc(size); }
 void *no_os_calloc(size_t nitems, size_t size) { return calloc(nitems, size); }
-void no_os_free(void *ptr) { free(ptr); }
+void no_os_free(void *ptr) { if (ptr) ++no_os_free_count; free(ptr); }
 int32_t no_os_gpio_get(struct no_os_gpio_desc **desc,
                        const struct no_os_gpio_init_param *param)
 {
@@ -187,13 +430,25 @@ int32_t no_os_gpio_direction_output(struct no_os_gpio_desc *desc,
                                     uint8_t value)
 {
     (void)desc;
-    (void)value;
-    return -ENOSYS;
+    if (gpio_direction_count < sizeof(gpio_direction_ops))
+        gpio_direction_ops[gpio_direction_count] = value ? 1 : 0;
+    ++gpio_direction_count;
+    return gpio_direction_status;
+}
+int32_t no_os_gpio_direction_input(struct no_os_gpio_desc *desc)
+{
+    (void)desc;
+    if (gpio_direction_count < sizeof(gpio_direction_ops))
+        gpio_direction_ops[gpio_direction_count] = 2;
+    ++gpio_direction_count;
+    return gpio_direction_status;
 }
 int32_t no_os_gpio_set_value(struct no_os_gpio_desc *desc, uint8_t value)
 {
     (void)desc;
-    (void)value;
+    if (gpio_set_count < sizeof(gpio_set_values) / sizeof(gpio_set_values[0]))
+        gpio_set_values[gpio_set_count] = value;
+    ++gpio_set_count;
     return 0;
 }
 int32_t no_os_spi_init(struct no_os_spi_desc **desc,
@@ -247,6 +502,11 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     command = (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
     reg = command & 0x3ff;
     if (command & AD_WRITE) {
+        if (write_count < sizeof(spi_write_addr_log) /
+                          sizeof(spi_write_addr_log[0])) {
+            spi_write_addr_log[write_count] = reg;
+            spi_write_value_log[write_count] = data[2];
+        }
         ++write_count;
         last_spi_write_addr = reg;
         if (register_map_enabled && reg == REG_RX_FILTER_COEF_DATA_2 &&
@@ -287,6 +547,10 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
     if (spi_status < 0) return spi_status;
     for (i = 0; i < bytes_number - 2; i++) {
         uint16_t read_reg = reg - i;
+        if ((int32_t)read_reg == fail_read_once_reg) {
+            fail_read_once_reg = -1;
+            return -EIO;
+        }
         if ((int32_t)read_reg == fail_read_reg)
             return -EIO;
         data[2 + i] = register_map_enabled ? fake_regs[read_reg] :
@@ -305,6 +569,680 @@ int main(void)
     int32_t ret;
     struct axi_adc calibration_adc = { .num_channels = 2 };
     struct axi_adc adc_init_error = { .name = "fake", .clock_hz = 123 };
+
+    /* Nested external-band pre/action/post traversal is inert at start,
+     * preserves depth-first order, and yields through the configured delay. */
+    {
+        struct ad9361_phy_platform_data band_pdata = {0};
+        struct ad9361_rf_phy band_phy = { .spi = &spi, .pdata = &band_pdata };
+        struct ad9361_ext_band_ctl band_ctl = { .ngpios = 1 };
+        struct no_os_gpio_desc band_gpio = {0};
+        uint32_t pre_gpio_op = AD9361_EXT_BAND_CTL_OP_LOW;
+        uint32_t root_gpio_op = AD9361_EXT_BAND_CTL_OP_HIGH;
+        uint32_t post_gpio_op = AD9361_EXT_BAND_CTL_OP_INPUT;
+        struct ad9361_band_setting pre = {
+            .gpio_values = &pre_gpio_op,
+            .ngpios = 1,
+            .rf_rx_input_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            .rf_tx_output_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            .delay_us = 40,
+        };
+        struct ad9361_band_setting post = {
+            .gpio_values = &post_gpio_op,
+            .ngpios = 1,
+            .rf_rx_input_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            .rf_tx_output_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+        };
+        struct ad9361_band_setting root = {
+            .freq_min = 1800000000ULL,
+            .freq_max = 1900000000ULL,
+            .gpio_values = &root_gpio_op,
+            .ngpios = 1,
+            .rf_rx_input_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            .rf_tx_output_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            .pre_seq = &pre,
+            .pre_seq_len = 1,
+            .post_seq = &post,
+            .post_seq_len = 1,
+        };
+        struct ad9361_band_setting *settings[] = { &root };
+        struct ad9361_ext_band_transaction band_job = {0};
+        struct ad9361_ext_band_ctl competing_ctl = {0};
+        unsigned gpio_before = gpio_direction_count;
+        unsigned polls = 0;
+
+        band_ctl.gpios[0] = &band_gpio;
+        band_ctl.rx_settings = settings;
+        band_ctl.rx_count = 1;
+        if (ad9361_register_ext_band_control(&band_phy, &band_ctl) != 0 ||
+            ad9361_register_ext_band_control(&band_phy, &competing_ctl) !=
+                -EBUSY ||
+            band_phy.ext_band_ctl != &band_ctl ||
+            ad9361_ext_band_transaction_start(
+                &band_phy, false, 1835000000ULL, &band_job) != 0 ||
+            !band_job.active || band_phy.ext_band_transaction != &band_job ||
+            gpio_direction_count != gpio_before) {
+            fprintf(stderr, "band transaction start mutated hardware or lost owner\n");
+            return EXIT_FAILURE;
+        }
+        while (polls++ < 32) {
+            unsigned gpio_at_start = gpio_direction_count;
+            uint32_t delay_us =
+                ad9361_ext_band_transaction_poll_delay_us(&band_job);
+            int32_t step;
+
+            if (delay_us)
+                fake_time_us += delay_us;
+            step = ad9361_ext_band_transaction_poll(&band_phy, &band_job);
+            if (step != 1 && step != 0) {
+                fprintf(stderr, "band transaction failed: %d\n", step);
+                return EXIT_FAILURE;
+            }
+            if (gpio_direction_count - gpio_at_start > 1) {
+                fprintf(stderr, "band poll performed multiple GPIO operations\n");
+                return EXIT_FAILURE;
+            }
+            if (step == 0)
+                break;
+        }
+        if (!band_job.terminal || band_job.terminal_status != 0 || polls >= 32 ||
+            gpio_direction_count != gpio_before + 3 ||
+            gpio_direction_ops[gpio_before] != 0 ||
+            gpio_direction_ops[gpio_before + 1] != 1 ||
+            gpio_direction_ops[gpio_before + 2] != 2 ||
+            band_ctl.current_rx_setting != &root ||
+            band_phy.ext_band_transaction != NULL) {
+            fprintf(stderr, "nested band transaction order/cache was not committed\n");
+            return EXIT_FAILURE;
+        }
+
+        /* A cycle is rejected before mutation and leaves the valid cache intact. */
+        {
+            struct ad9361_band_setting *saved_settings = settings[0];
+            settings[0] = &pre;
+            pre.freq_min = 1800000000ULL;
+            pre.freq_max = 1900000000ULL;
+            pre.pre_seq = &pre;
+            pre.pre_seq_len = 1;
+            memset(&band_job, 0, sizeof(band_job));
+            if (ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job) != -ELOOP ||
+                gpio_direction_count != gpio_before + 3 ||
+                band_ctl.current_rx_setting != &root) {
+                fprintf(stderr, "band cycle was not rejected before mutation\n");
+                return EXIT_FAILURE;
+            }
+            pre.pre_seq = NULL;
+            pre.pre_seq_len = 0;
+            settings[0] = saved_settings;
+        }
+
+        /* A GPIO failure invalidates only the external-band cache; the
+         * owning stream layer receives the terminal error and fences IQ. */
+        {
+            uint32_t failed_gpio_op = AD9361_EXT_BAND_CTL_OP_LOW;
+            struct ad9361_band_setting failed_target = {
+                .freq_min = 1800000000ULL,
+                .freq_max = 1900000000ULL,
+                .gpio_values = &failed_gpio_op,
+                .ngpios = 1,
+                .rf_rx_input_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+                .rf_tx_output_sel = AD9361_EXT_BAND_NO_PORT_SEL,
+            };
+            struct ad9361_band_setting *saved_target = settings[0];
+
+            settings[0] = &failed_target;
+            memset(&band_job, 0, sizeof(band_job));
+            gpio_direction_status = -EIO;
+            if (ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job) != 0 ||
+                ad9361_ext_band_transaction_poll(&band_phy, &band_job) !=
+                    -EIO ||
+                !band_job.terminal || band_job.terminal_status != -EIO ||
+                band_ctl.current_rx_setting != NULL ||
+                band_phy.ext_band_transaction != NULL ||
+                ad9361_calibration_state_unknown(&band_phy)) {
+                fprintf(stderr,
+                        "external band failure corrupted AD9361 state\n");
+                return EXIT_FAILURE;
+            }
+            gpio_direction_status = 0;
+            settings[0] = saved_target;
+        }
+
+        /* Unregister is an explicit cancel boundary: it must release both
+         * ownership markers and leave the external-band cache invalid. */
+        {
+            band_ctl.current_rx_setting = NULL;
+            memset(&band_job, 0, sizeof(band_job));
+            if (ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job) != 0 ||
+                ad9361_ext_band_transaction_poll(&band_phy, &band_job) != 1 ||
+                !band_job.mutation_started) {
+                fprintf(stderr, "band cancellation setup did not mutate once\n");
+                return EXIT_FAILURE;
+            }
+            ad9361_unregister_ext_band_control(&band_phy);
+            if (!band_job.terminal || band_job.terminal_status != -ECANCELED ||
+                ad9361_ext_band_transaction_poll(&band_phy, &band_job) !=
+                    -ECANCELED ||
+                band_phy.ext_band_transaction != NULL ||
+                band_ctl.active_transaction != NULL ||
+                ad9361_calibration_state_unknown(&band_phy)) {
+                fprintf(stderr, "band cancellation did not retire safely\n");
+                return EXIT_FAILURE;
+            }
+        }
+        ad9361_unregister_ext_band_control(&band_phy);
+    }
+
+    /* Recursive setting teardown must release nested descriptor members,
+     * sequence arrays, and the root object exactly once. */
+    {
+        struct ad9361_band_setting *root =
+            ad9361_band_setting_alloc("root", 1, 2, 1);
+        unsigned freed_before = no_os_free_count;
+
+        if (!root)
+            return EXIT_FAILURE;
+        root->pre_seq = no_os_calloc(1, sizeof(*root->pre_seq));
+        if (!root->pre_seq)
+            return EXIT_FAILURE;
+        root->pre_seq_len = 1;
+        root->pre_seq[0].name = no_os_calloc(1, 6);
+        root->pre_seq[0].gpio_values = no_os_calloc(1, sizeof(uint32_t));
+        root->pre_seq[0].ngpios = 1;
+        root->pre_seq[0].post_seq = no_os_calloc(
+            1, sizeof(*root->pre_seq[0].post_seq));
+        if (!root->pre_seq[0].name || !root->pre_seq[0].gpio_values ||
+            !root->pre_seq[0].post_seq)
+            return EXIT_FAILURE;
+        strcpy((char *)root->pre_seq[0].name, "child");
+        root->pre_seq[0].post_seq_len = 1;
+        root->pre_seq[0].post_seq[0].name = no_os_calloc(1, 6);
+        root->pre_seq[0].post_seq[0].gpio_values =
+            no_os_calloc(1, sizeof(uint32_t));
+        if (!root->pre_seq[0].post_seq[0].name ||
+            !root->pre_seq[0].post_seq[0].gpio_values)
+            return EXIT_FAILURE;
+        strcpy((char *)root->pre_seq[0].post_seq[0].name, "leaf");
+
+        ad9361_band_setting_free(root);
+        if (no_os_free_count - freed_before != 9) {
+            fprintf(stderr, "nested setting teardown missed owned allocations\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* The controller owns each setting pointer exactly once across RX/TX. */
+    {
+        struct ad9361_ext_band_ctl *ctl = ad9361_ext_band_ctl_alloc();
+        struct ad9361_band_setting *setting =
+            ad9361_band_setting_alloc("owned", 1, 2, 0);
+
+        if (!ctl || !setting ||
+            ad9361_ext_band_ctl_add_rx_setting(ctl, setting) != 0 ||
+            ad9361_ext_band_ctl_add_tx_setting(ctl, setting) != -EINVAL) {
+            fprintf(stderr, "controller accepted duplicate setting ownership\n");
+            return EXIT_FAILURE;
+        }
+        ad9361_ext_band_ctl_free(ctl);
+    }
+
+    /* Freeing a controller mid-transition cancels before releasing the
+     * target descriptor and clears the PHY back-pointer. */
+    {
+        struct ad9361_rf_phy free_phy = { .spi = &spi };
+        struct ad9361_ext_band_ctl *ctl = ad9361_ext_band_ctl_alloc();
+        struct ad9361_band_setting *setting =
+            ad9361_band_setting_alloc("active", 1, 2, 1);
+        struct no_os_gpio_desc gpio = {0};
+        struct ad9361_ext_band_transaction job = {0};
+
+        if (!ctl || !setting ||
+            ad9361_band_setting_set_gpio(
+                setting, 0, AD9361_EXT_BAND_CTL_OP_LOW) != 0 ||
+            ad9361_ext_band_ctl_add_gpio(ctl, &gpio) != 0 ||
+            ad9361_ext_band_ctl_add_rx_setting(ctl, setting) != 0 ||
+            ad9361_register_ext_band_control(&free_phy, ctl) != 0 ||
+            ad9361_ext_band_transaction_start(&free_phy, false, 1, &job) !=
+                0 ||
+            ad9361_ext_band_transaction_poll(&free_phy, &job) != 1 ||
+            !job.mutation_started) {
+            fprintf(stderr, "controller free cancellation setup failed\n");
+            return EXIT_FAILURE;
+        }
+        ad9361_ext_band_ctl_free(ctl);
+        if (free_phy.ext_band_ctl != NULL ||
+            free_phy.ext_band_transaction != NULL || !job.terminal ||
+            job.terminal_status != -ECANCELED ||
+            ad9361_ext_band_transaction_poll(&free_phy, &job) != -ECANCELED ||
+            ad9361_calibration_state_unknown(&free_phy)) {
+            fprintf(stderr, "free left a dangling band transaction\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* The retained constructor must preserve the legacy 1 ms RESETB
+     * intervals without sleeping inside poll(). */
+    {
+        struct ad9361_rf_phy reset_phy = {0};
+        struct no_os_spi_desc reset_spi = {0};
+        struct ad9361_init_transaction init_job = {0};
+        struct ad9361_rf_phy *published_phy = NULL;
+        AD9361_InitParam init_param = {0};
+        unsigned gpio_before = gpio_set_count;
+        unsigned reads_before = read_count;
+        unsigned delays_before = delay_count;
+
+        reset_phy.spi = &reset_spi;
+        reset_phy.gpio_desc_resetb =
+            (struct no_os_gpio_desc *)(uintptr_t)1;
+        init_job.candidate = &reset_phy;
+        init_job.phy_out = &published_phy;
+        init_job.init_param = &init_param;
+        init_job.active = true;
+        init_job.stage = AD9361_INIT_TXN_RESET_ASSERT;
+
+        if (ad9361_init_transaction_poll(&init_job) != 1 ||
+            init_job.stage != AD9361_INIT_TXN_RESET_LOW_WAIT ||
+            gpio_set_count != gpio_before + 1 ||
+            gpio_set_values[gpio_before] != 0 ||
+            delay_count != delays_before || read_count != reads_before ||
+            ad9361_init_transaction_poll_delay_us(&init_job) != 1000) {
+            fprintf(stderr, "retained RESETB assert blocked or lost its deadline\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_time_us += 999;
+        if (ad9361_init_transaction_poll(&init_job) != 1 ||
+            init_job.stage != AD9361_INIT_TXN_RESET_LOW_WAIT ||
+            gpio_set_count != gpio_before + 1 || read_count != reads_before) {
+            fprintf(stderr, "retained RESETB low wait ended before 1 ms\n");
+            return EXIT_FAILURE;
+        }
+
+        fake_time_us += 1;
+        if (ad9361_init_transaction_poll(&init_job) != 1 ||
+            init_job.stage != AD9361_INIT_TXN_RESET_RELEASE ||
+            gpio_set_count != gpio_before + 1) {
+            fprintf(stderr, "retained RESETB low deadline was not observed\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_init_transaction_poll(&init_job) != 1 ||
+            init_job.stage != AD9361_INIT_TXN_RESET_HIGH_WAIT ||
+            gpio_set_count != gpio_before + 2 ||
+            gpio_set_values[gpio_before + 1] != 1 ||
+            ad9361_init_transaction_poll_delay_us(&init_job) != 1000) {
+            fprintf(stderr, "retained RESETB release phase is incorrect\n");
+            return EXIT_FAILURE;
+        }
+        fake_time_us += 1000;
+        if (ad9361_init_transaction_poll(&init_job) != 1 ||
+            init_job.stage != AD9361_INIT_TXN_PRODUCT_ID ||
+            gpio_set_count != gpio_before + 2 || read_count != reads_before) {
+            fprintf(stderr, "retained RESETB high deadline was not observed\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* The Gm subtable is an ordered indirect write port. Its retained setup
+     * phase must preserve every address/data/commit operation while yielding
+     * after at most one SPI write and the original 2 us inter-row interval. */
+    {
+        struct ad9361_rf_phy gm_phy = { .spi = &spi };
+        struct ad9361_phy_platform_data gm_pdata = {0};
+        struct ad9361_setup_transaction gm_job = {0};
+        struct no_os_clk gm_rf_clock = { .rate = 30720000U };
+        struct no_os_clk gm_sample_clock = { .rate = 1000000U };
+        unsigned writes_before = write_count;
+        unsigned delays_before = delay_count;
+        unsigned expected_index = writes_before;
+        unsigned polls = 0;
+        unsigned empty_gc_polls = 0;
+        unsigned row;
+        int32_t step;
+
+        register_map_enabled = true;
+        gm_job.phy = &gm_phy;
+        gm_job.active = true;
+        gm_job.stage = AD9361_SETUP_TRANSACTION_GM_START;
+        gm_phy.pdata = &gm_pdata;
+        gm_phy.clks[CLKRF_CLK] = &gm_rf_clock;
+        gm_phy.clks[RX_SAMPL_CLK] = &gm_sample_clock;
+        gm_pdata.gain_ctrl.gain_update_interval_us = 100;
+        gm_pdata.gain_ctrl.dec_pow_measuremnt_duration = 16;
+        gm_pdata.gain_ctrl.f_agc_dec_pow_measuremnt_duration = 16;
+        gm_pdata.gain_ctrl.f_agc_power_measurement_duration_in_state5 = 16;
+        gm_pdata.gain_ctrl.lmt_overload_high_thresh = 16;
+        gm_pdata.gain_ctrl.lmt_overload_low_thresh = 16;
+        gm_phy.setup_transaction = &gm_job;
+
+        while (gm_job.stage != AD9361_SETUP_TRANSACTION_GC_SETUP &&
+               polls++ < 128) {
+            uint8_t prior_stage = gm_job.stage;
+            unsigned writes_at_start = write_count;
+            uint32_t delay_us =
+                ad9361_setup_transaction_poll_delay_us(&gm_job);
+
+            if (delay_us != 0)
+                fake_time_us += delay_us;
+            step = ad9361_setup_transaction_poll(&gm_phy, &gm_job);
+            if (step != 1 || write_count - writes_at_start > 1) {
+                fprintf(stderr, "Gm subtable poll exceeded its SPI budget\n");
+                return EXIT_FAILURE;
+            }
+            if (prior_stage == AD9361_SETUP_TRANSACTION_GM_ROW_WAIT ||
+                prior_stage == AD9361_SETUP_TRANSACTION_GM_CLEAR_WAIT) {
+                if (delay_us != 2 || write_count != writes_at_start ||
+                    delay_count != delays_before) {
+                    fprintf(stderr, "Gm subtable wait performed blocking work\n");
+                    return EXIT_FAILURE;
+                }
+            } else if (write_count != writes_at_start + 1) {
+                fprintf(stderr, "Gm subtable phase did not perform one write\n");
+                return EXIT_FAILURE;
+            }
+        }
+
+        if (gm_job.stage != AD9361_SETUP_TRANSACTION_GC_SETUP ||
+            write_count - writes_before != 83) {
+            fprintf(stderr, "Gm subtable did not reach GC in bounded phases\n");
+            return EXIT_FAILURE;
+        }
+        if (spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_CONFIG ||
+            spi_write_value_log[expected_index++] != START_GM_SUB_TABLE_CLOCK) {
+            fprintf(stderr, "Gm subtable clock start order changed\n");
+            return EXIT_FAILURE;
+        }
+        for (row = 0; row < NO_OS_ARRAY_SIZE(gm_st_ctrl); ++row) {
+            uint8_t address = (uint8_t)(NO_OS_ARRAY_SIZE(gm_st_ctrl) - 1U - row);
+
+            if (spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_ADDRESS ||
+                spi_write_value_log[expected_index++] != address ||
+                spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_BIAS_WRITE ||
+                spi_write_value_log[expected_index++] != 0 ||
+                spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_GAIN_WRITE ||
+                spi_write_value_log[expected_index++] != gm_st_gain[row] ||
+                spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_CTRL_WRITE ||
+                spi_write_value_log[expected_index++] != gm_st_ctrl[row] ||
+                spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_CONFIG ||
+                spi_write_value_log[expected_index++] !=
+                    (WRITE_GM_SUB_TABLE | START_GM_SUB_TABLE_CLOCK)) {
+                fprintf(stderr, "Gm subtable row %u register order changed\n", row);
+                return EXIT_FAILURE;
+            }
+        }
+        if (spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_CONFIG ||
+            spi_write_value_log[expected_index++] != START_GM_SUB_TABLE_CLOCK ||
+            spi_write_addr_log[expected_index] != REG_GM_SUB_TABLE_CONFIG ||
+            spi_write_value_log[expected_index++] != 0 ||
+            expected_index != write_count) {
+            fprintf(stderr, "Gm subtable final clear/stop sequence changed\n");
+            return EXIT_FAILURE;
+        }
+
+        /* The continuation must keep the full gain-control register setup
+         * and timing update bounded too; no poll may execute more than one
+         * register helper (writef may perform one read plus one write). */
+        polls = 0;
+        while (gm_job.stage != AD9361_SETUP_TRANSACTION_CALIBRATION_START &&
+               polls++ < 512) {
+            unsigned reads_at_start = read_count;
+            unsigned writes_at_start = write_count;
+
+            step = ad9361_setup_transaction_poll(&gm_phy, &gm_job);
+            if (step != 1 || read_count - reads_at_start > 1 ||
+                write_count - writes_at_start > 1) {
+                fprintf(stderr,
+                        "AGC setup/update poll exceeded its register-operation budget\n");
+                return EXIT_FAILURE;
+            }
+            if (read_count == reads_at_start &&
+                write_count == writes_at_start && ++empty_gc_polls > 2) {
+                fprintf(stderr,
+                        "AGC setup/update cursor stalled without register work\n");
+                return EXIT_FAILURE;
+            }
+        }
+        if (gm_job.stage != AD9361_SETUP_TRANSACTION_CALIBRATION_START ||
+            gm_job.gc_cursor != 0 || polls >= 512) {
+            fprintf(stderr,
+                    "AGC setup/update did not reach calibration in bounded polls\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* RX/TX synthesizer charge-pump calibration must be advanced by the
+     * setup owner, retaining order and yielding between the bounded SPI
+     * operations and status observations. */
+    {
+        struct ad9361_phy_platform_data cp_pdata = {0};
+        struct ad9361_rf_phy cp_phy = { .spi = &spi, .pdata = &cp_pdata };
+        struct ad9361_setup_transaction cp_job = {0};
+        unsigned writes_before = write_count;
+        unsigned delays_before = delay_count;
+        unsigned polls = 0;
+        bool rx_cp_completed = false;
+        bool tx_cp_completed = false;
+        int32_t step;
+
+        cp_job.phy = &cp_phy;
+        cp_job.active = true;
+        cp_job.synth_ref_freq_hz = 30720000U;
+        cp_job.stage = AD9361_SETUP_TRANSACTION_RX_CP_START;
+        cp_phy.setup_transaction = &cp_job;
+        register_map_enabled = true;
+
+        while (cp_job.stage != AD9361_SETUP_TRANSACTION_POST_CP_BEGIN &&
+               polls++ < 128) {
+            uint8_t prior_stage = cp_job.stage;
+            unsigned reads_at_start = read_count;
+            unsigned writes_at_start = write_count;
+
+            if ((cp_job.stage == AD9361_SETUP_TRANSACTION_RX_CP_WAIT ||
+                 cp_job.stage == AD9361_SETUP_TRANSACTION_TX_CP_WAIT) &&
+                cp_job.synth_cp_job.wait_started) {
+                uint32_t status_reg = REG_RX_CAL_STATUS +
+                    (cp_job.synth_cp_job.tx ? 0x40U : 0U);
+
+                fake_regs[status_reg] |= CP_CAL_VALID;
+                if (ad9361_setup_transaction_poll_delay_us(&cp_job) != 120U) {
+                    fprintf(stderr, "CP status wait did not expose its poll cadence\n");
+                    return EXIT_FAILURE;
+                }
+            }
+            step = ad9361_setup_transaction_poll(&cp_phy, &cp_job);
+            if (step != 1 || read_count - reads_at_start > 1 ||
+                write_count - writes_at_start > 1) {
+                fprintf(stderr, "CP setup poll exceeded one register operation\n");
+                return EXIT_FAILURE;
+            }
+            if (prior_stage == AD9361_SETUP_TRANSACTION_RX_CP_WAIT &&
+                cp_job.stage == AD9361_SETUP_TRANSACTION_TX_CP_START)
+                rx_cp_completed = true;
+            if (prior_stage == AD9361_SETUP_TRANSACTION_TX_CP_WAIT &&
+                cp_job.stage == AD9361_SETUP_TRANSACTION_POST_CP_BEGIN)
+                tx_cp_completed = true;
+        }
+        if (cp_job.stage != AD9361_SETUP_TRANSACTION_POST_CP_BEGIN ||
+            polls >= 128 || cp_phy.synth_cp_job != NULL ||
+            cp_job.synth_cp_job.tx != true ||
+            !rx_cp_completed || !tx_cp_completed ||
+            write_count <= writes_before || delay_count != delays_before) {
+            fprintf(stderr,
+                    "RX/TX CP jobs did not complete in retained ADI order\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* A failed post-CP RFPLL child start must retire the parent owner and
+     * restore the requested external-LO policy even though hardware is
+     * quarantined. */
+    {
+        struct ad9361_phy_platform_data post_cp_pdata = {
+            .use_ext_rx_lo = true,
+            .use_ext_tx_lo = true,
+        };
+        struct ad9361_rf_phy post_cp_phy = {
+            .spi = &spi,
+            .pdata = &post_cp_pdata,
+        };
+        struct ad9361_setup_transaction post_cp_job = {0};
+        int32_t step;
+
+        post_cp_job.phy = &post_cp_phy;
+        post_cp_job.active = true;
+        post_cp_job.stage = AD9361_SETUP_TRANSACTION_POST_CP_BEGIN;
+        post_cp_phy.setup_transaction = &post_cp_job;
+
+        step = ad9361_setup_transaction_poll(&post_cp_phy, &post_cp_job);
+        if (step != 1 || post_cp_pdata.use_ext_rx_lo ||
+            post_cp_pdata.use_ext_tx_lo ||
+            post_cp_job.stage !=
+                AD9361_SETUP_TRANSACTION_POST_CP_RX_RFPLL_START) {
+            fprintf(stderr, "post-CP did not enter internal-LO programming policy\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_setup_transaction_poll(&post_cp_phy, &post_cp_job);
+        if (step != -EINVAL || !post_cp_job.terminal ||
+            post_cp_job.terminal_status != -EINVAL ||
+            post_cp_phy.setup_transaction != NULL ||
+            !post_cp_pdata.use_ext_rx_lo || !post_cp_pdata.use_ext_tx_lo ||
+            !ad9361_calibration_state_unknown(&post_cp_phy)) {
+            fprintf(stderr,
+                    "post-CP RFPLL start failure did not retire/restore safely\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* Returning RX to an external LO advances ENSM, mux-register writes, and
+     * ENSM restore through separate setup polls. */
+    {
+        struct ad9361_phy_platform_data mux_pdata = {
+            .use_ext_rx_lo = true,
+        };
+        struct ad9361_rf_phy mux_phy = { .spi = &spi, .pdata = &mux_pdata };
+        struct no_os_clk rx_pll_clk = { .rate = 1835000000U };
+        struct refclk_scale rx_root = {
+            .spi = &spi, .phy = &mux_phy, .source = RX_RFPLL,
+        };
+        struct refclk_scale rx_internal = {
+            .spi = &spi, .phy = &mux_phy, .source = RX_RFPLL_INT,
+            .parent_source = RX_REFCLK,
+        };
+        struct ad9361_setup_transaction mux_job = {0};
+        unsigned writes_before = write_count;
+        unsigned polls = 0;
+        int32_t step = 1;
+
+        mux_phy.clks[RX_RFPLL] = &rx_pll_clk;
+        mux_phy.ref_clk_scale[RX_RFPLL] = &rx_root;
+        mux_phy.ref_clk_scale[RX_RFPLL_INT] = &rx_internal;
+        mux_phy.current_rx_lo_freq = 1835000000U;
+        mux_phy.prev_ensm_state = ENSM_STATE_INVALID;
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        mux_job.phy = &mux_phy;
+        mux_job.active = true;
+        mux_job.use_ext_rx_lo = true;
+        mux_job.stage = AD9361_SETUP_TRANSACTION_POST_CP_RX_MUX;
+        mux_phy.setup_transaction = &mux_job;
+        register_map_enabled = true;
+
+        while (mux_job.stage == AD9361_SETUP_TRANSACTION_POST_CP_RX_MUX &&
+               polls++ < 64) {
+            unsigned reads_at_start = read_count;
+            unsigned writes_at_start = write_count;
+            uint32_t delay_us =
+                ad9361_setup_transaction_poll_delay_us(&mux_job);
+
+            if (delay_us != 0)
+                no_os_udelay(delay_us);
+
+            step = ad9361_setup_transaction_poll(&mux_phy, &mux_job);
+            if (step != 1 || read_count - reads_at_start > 1 ||
+                write_count - writes_at_start > 1) {
+                fprintf(stderr, "RX LO mux poll exceeded one SPI helper\n");
+                return EXIT_FAILURE;
+            }
+        }
+        if (mux_job.stage != AD9361_SETUP_TRANSACTION_POST_CP_TX_MUX ||
+            polls >= 64 || write_count - writes_before != 8 ||
+            mux_job.prefix_cursor != 0 || rx_root.mult != 1 ||
+            !mux_phy.rfpll_source_valid[0] ||
+            mux_phy.rfpll_requested_valid[0] ||
+            mux_phy.setup_transaction != &mux_job) {
+            fprintf(stderr,
+                    "RX external-LO mux did not complete as retained phases\n");
+            return EXIT_FAILURE;
+        }
+        mux_phy.setup_transaction = NULL;
+        mux_job.active = false;
+    }
+
+    /* A failed RX CP programming write must terminate the parent setup,
+     * retain the concrete error, and quarantine the RFIC before TX begins. */
+    {
+        struct ad9361_phy_platform_data cp_pdata = {0};
+        struct ad9361_rf_phy cp_phy = { .spi = &spi, .pdata = &cp_pdata };
+        struct ad9361_setup_transaction cp_job = {0};
+        int32_t step;
+
+        cp_job.phy = &cp_phy;
+        cp_job.active = true;
+        cp_job.synth_ref_freq_hz = 30720000U;
+        cp_job.stage = AD9361_SETUP_TRANSACTION_RX_CP_START;
+        cp_phy.setup_transaction = &cp_job;
+        register_map_enabled = true;
+        fail_write_once_reg = REG_RX_CP_LEVEL_DETECT;
+        fail_write_once_reg_occurrence = 1;
+
+        step = ad9361_setup_transaction_poll(&cp_phy, &cp_job);
+        if (step != 1 || cp_job.stage != AD9361_SETUP_TRANSACTION_RX_CP_WAIT) {
+            fprintf(stderr, "RX CP child was not accepted by setup owner\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_setup_transaction_poll(&cp_phy, &cp_job);
+        if (step != -EIO || !cp_job.terminal || cp_job.terminal_status != -EIO ||
+            !ad9361_calibration_state_unknown(&cp_phy) ||
+            cp_phy.synth_cp_job != NULL ||
+            cp_job.stage == AD9361_SETUP_TRANSACTION_TX_CP_START ||
+            fail_write_once_reg != -1) {
+            fprintf(stderr,
+                    "RX CP write failure did not fail closed before TX CP\n");
+            return EXIT_FAILURE;
+        }
+    }
+
+    /* A failed indirect row write must keep the original error, attempt the
+     * same table-clock cleanup, and leave the PHY faulted if row state is
+     * uncertain. */
+    {
+        struct ad9361_rf_phy gm_phy = { .spi = &spi };
+        struct ad9361_setup_transaction gm_job = {0};
+        unsigned writes_before = write_count;
+        unsigned polls = 0;
+        int32_t step = 1;
+
+        gm_job.phy = &gm_phy;
+        gm_job.active = true;
+        gm_job.stage = AD9361_SETUP_TRANSACTION_GM_START;
+        gm_phy.setup_transaction = &gm_job;
+        fail_write_once_reg = REG_GM_SUB_TABLE_GAIN_WRITE;
+        fail_write_once_reg_occurrence = 1;
+        while (step == 1 && polls++ < 16)
+            step = ad9361_setup_transaction_poll(&gm_phy, &gm_job);
+        if (step != -EIO || !gm_job.terminal || gm_job.status != -EIO ||
+            gm_job.cleanup_status != 0 ||
+            !ad9361_calibration_state_unknown(&gm_phy) ||
+            gm_phy.setup_transaction != NULL ||
+            write_count - writes_before != 5 ||
+            last_spi_write_addr != REG_GM_SUB_TABLE_CONFIG ||
+            fake_regs[REG_GM_SUB_TABLE_CONFIG] != 0) {
+            fprintf(stderr, "Gm subtable failure lost primary error or cleanup\n");
+            return EXIT_FAILURE;
+        }
+    }
     struct axi_adc *initialized_adc = &calibration_adc;
     struct axi_adc_init invalid_adc_init = {0};
     struct axi_dac tx_dac = { .num_channels = 2, .clock_hz = 30000000 };
@@ -322,6 +1260,482 @@ int main(void)
     int32_t calib_fraction = INT32_MIN;
     uint64_t sampling_frequency = UINT64_MAX;
     uint32_t dds_frequency = UINT32_C(0x12345678);
+
+    /* ENSM force/restore is a retained FSM: start does no I/O, polls execute
+     * one SPI transaction each, and only status readback ends the transition. */
+    {
+        struct ad9361_rf_phy ensm_phy = { .spi = &spi };
+        struct ad9361_ensm_transition_job ensm_job = {0};
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+        uint64_t saved_time_us = fake_time_us;
+        int32_t step;
+
+        memset(fake_regs, 0, sizeof(fake_regs));
+        register_map_enabled = true;
+        fake_regs[REG_STATE] = ENSM_STATE_RX;
+        fake_regs[REG_ENSM_CONFIG_1] = ENABLE_ENSM_PIN_CTRL;
+        state_after_ensm_write = ENSM_STATE_ALERT;
+        ret = ad9361_ensm_transition_start(&ensm_phy, ENSM_STATE_ALERT,
+                                           true, &ensm_job);
+        if (ret != 0 || read_count != reads_before ||
+            write_count != writes_before ||
+            ensm_phy.ensm_transition_job != &ensm_job) {
+            fprintf(stderr, "ENSM start performed I/O or failed to reserve PHY\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_reg_write(&ensm_phy, REG_PRODUCT_ID, 0) != -EBUSY ||
+            ad9361_ensm_transition_start(&ensm_phy, ENSM_STATE_RX, true,
+                                         &ensm_job) != -EBUSY ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr, "Active ENSM job allowed competing RFIC access\n");
+            return EXIT_FAILURE;
+        }
+
+        /* Reads, Force Alert, ALERT wait, target write, target wait. */
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 1 ||
+            write_count != writes_before) {
+            fprintf(stderr, "ENSM state poll was not bounded\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 2 ||
+            write_count != writes_before) {
+            fprintf(stderr, "ENSM config poll was not bounded\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || write_count != writes_before + 1) {
+            fprintf(stderr, "ENSM Force Alert write was not bounded\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 2 ||
+            write_count != writes_before + 1) {
+            fprintf(stderr, "ENSM ALERT wait arm was not bounded\n");
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_STATE] = ENSM_STATE_RX_FLUSH;
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 3 ||
+            write_count != writes_before + 1) {
+            fprintf(stderr, "ENSM issued target command before RX FLUSH ended\n");
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 3 ||
+            write_count != writes_before + 1) {
+            fprintf(stderr, "ENSM ignored ALERT wait poll deadline\n");
+            return EXIT_FAILURE;
+        }
+        fake_time_us += 120U;
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 4 ||
+            write_count != writes_before + 1) {
+            fprintf(stderr, "ENSM target command preceded ALERT readback\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || write_count != writes_before + 2 ||
+            ensm_phy.ensm_pin_ctl_en != true) {
+            fprintf(stderr, "ENSM target-state poll was not bounded\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 1 || read_count != reads_before + 4) {
+            fprintf(stderr, "ENSM target wait arm unexpectedly performed I/O\n");
+            return EXIT_FAILURE;
+        }
+        {
+			struct ad9361_rf_phy other_phy = { .spi = &spi };
+			unsigned reads = read_count;
+
+			if (ad9361_status_wait_poll(&other_phy, &ensm_job.wait) != -EINVAL ||
+			    ensm_phy.status_wait != &ensm_job.wait ||
+			    read_count != reads) {
+				fprintf(stderr,
+					"Status wait accepted a foreign PHY poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 0 || read_count != reads_before + 5 ||
+            ensm_phy.ensm_transition_job != NULL || !ensm_job.terminal ||
+            ensm_job.terminal_status != 0 ||
+            ensm_phy.prev_ensm_state != ENSM_STATE_RX) {
+            fprintf(stderr, "ENSM transition did not finish on status evidence\n");
+            return EXIT_FAILURE;
+        }
+        step = ad9361_ensm_transition_poll(&ensm_phy, &ensm_job);
+        if (step != 0 || read_count != reads_before + 5 ||
+            write_count != writes_before + 2) {
+            fprintf(stderr, "ENSM terminal poll repeated hardware I/O\n");
+            return EXIT_FAILURE;
+        }
+		{
+			struct ad9361_rf_phy other_phy = { .spi = &spi };
+			if (ad9361_ensm_transition_poll(&other_phy, &ensm_job) != -EINVAL ||
+			    ensm_job.terminal_status != 0) {
+				fprintf(stderr,
+					"ENSM terminal result accepted a foreign PHY poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+
+        reads_before = read_count;
+        writes_before = write_count;
+        /* INVALID is the legacy restore no-op and is terminal at start. */
+        memset(&ensm_job, 0, sizeof(ensm_job));
+        ret = ad9361_ensm_transition_start(&ensm_phy, ENSM_STATE_INVALID,
+                                           false, &ensm_job);
+        if (ret != 0 || !ensm_job.terminal ||
+            ensm_phy.ensm_transition_job != NULL ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr, "ENSM INVALID restore was not a clean no-op\n");
+            return EXIT_FAILURE;
+        }
+
+		/* A failed REG_STATE read cannot leave the PHY looking usable: the
+		 * actual ENSM position is then unknown even though no write was sent. */
+		{
+			struct ad9361_rf_phy failed_read_phy = { .spi = &spi };
+			struct ad9361_ensm_transition_job failed_read_job = {0};
+
+			fail_read_reg = REG_STATE;
+			ret = ad9361_ensm_transition_start(&failed_read_phy,
+				ENSM_STATE_ALERT, true, &failed_read_job);
+			if (ret != 0 || ad9361_ensm_transition_poll(
+					&failed_read_phy, &failed_read_job) != -EIO ||
+			    !ad9361_calibration_state_unknown(&failed_read_phy) ||
+			    failed_read_phy.ensm_transition_job != NULL ||
+			    !failed_read_job.terminal ||
+			    failed_read_job.terminal_status != -EIO) {
+				fprintf(stderr,
+					"ENSM read failure did not fail-close RFIC state\n");
+				return EXIT_FAILURE;
+			}
+			fail_read_reg = -1;
+		}
+
+		/* The retained TXQ parent must return from start with its ENSM child
+		 * pending, rather than synchronously forcing ALERT inside the caller. */
+		{
+			struct ad9361_rf_phy txq_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+				.current_rx_bw_Hz = 18000000U,
+				.current_tx_bw_Hz = 18000000U,
+				.current_bw_valid = true,
+				.rfpll_source_valid = { true, true },
+			};
+			struct ad9361_tx_quad_calibration_transaction txq = {0};
+
+			memset(fake_regs, 0, sizeof(fake_regs));
+			fake_regs[REG_STATE] = ENSM_STATE_RX;
+			fake_regs[REG_ENSM_CONFIG_1] = 0;
+			state_after_ensm_write = ENSM_STATE_ALERT;
+			ret = ad9361_tx_quad_calibration_transaction_start(
+				&txq_phy, -1, &txq);
+			if (ret != 0 || !txq.active ||
+			    txq.stage != AD9361_TX_QUAD_TRANSACTION_ENSM_ALERT ||
+			    !txq.ensm_job.active ||
+			    txq_phy.tx_quad_transaction != &txq ||
+			    txq_phy.ensm_transition_job != &txq.ensm_job ||
+			    fake_regs[REG_STATE] != ENSM_STATE_RX) {
+				fprintf(stderr,
+					"TXQ start did not retain its ENSM transition child\n");
+				return EXIT_FAILURE;
+			}
+			ad9361_mark_calibration_state_unknown(&txq_phy);
+			if (ad9361_tx_quad_calibration_transaction_poll(
+					&txq_phy, &txq) != 1 ||
+			    ad9361_tx_quad_calibration_transaction_poll(
+					&txq_phy, &txq) != -EIO ||
+			    txq_phy.tx_quad_transaction != NULL || !txq.terminal) {
+				fprintf(stderr,
+					"TXQ parent did not retire a failed ENSM child\n");
+				return EXIT_FAILURE;
+			}
+		}
+
+		/* RFDC is also a retained parent: start only establishes tracking
+		 * state and arms its ENSM child; it must not wait through ALERT inline. */
+		{
+			struct refclk_scale rx_rfpll = { .rate = 2400000000ULL };
+			struct ad9361_rf_phy rfdc_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+				.clks = { [RX_RFPLL] = &rx_rfpll },
+				.rfpll_source_valid = { true, false },
+			};
+			struct ad9361_rfdc_calibration_job rfdc = {0};
+			uint8_t state_before = fake_regs[REG_STATE];
+
+			ret = ad9361_rfdc_calibration_start_timeout(
+				&rfdc_phy, 1000U, &rfdc);
+			if (ret != 0 || !rfdc.active ||
+			    rfdc.stage != AD9361_RFDC_JOB_ENSM_ALERT ||
+			    !rfdc.ensm_job.active ||
+			    rfdc_phy.rfdc_transaction != &rfdc ||
+			    rfdc_phy.ensm_transition_job != &rfdc.ensm_job ||
+			    !ad9361_operation_busy(&rfdc_phy) ||
+			    ad9361_reg_write(&rfdc_phy, REG_PRODUCT_ID, 0) != -EBUSY ||
+			    fake_regs[REG_STATE] != state_before) {
+				fprintf(stderr,
+					"RFDC start did not retain its ENSM child\n");
+				return EXIT_FAILURE;
+			}
+			ad9361_mark_calibration_state_unknown(&rfdc_phy);
+			if (ad9361_rfdc_calibration_poll(&rfdc_phy, &rfdc) != -EIO ||
+			    rfdc_phy.rfdc_transaction != NULL || !rfdc.terminal ||
+			    rfdc.terminal_status != -EIO) {
+				fprintf(stderr,
+					"RFDC parent did not retire failed ENSM child\n");
+				return EXIT_FAILURE;
+			}
+		}
+		/* Exercise the complete retained RFDC path through calibration and
+		 * both restoration phases; the parent owner must survive every yield. */
+		{
+			struct refclk_scale rx_rfpll = { .rate = 2400000000ULL };
+			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct ad9361_rf_phy rfdc_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+				.clks = { [RX_RFPLL] = &rx_rfpll, [CLKRF_CLK] = &clkrf },
+				.rfpll_source_valid = { true, false },
+			};
+			struct ad9361_rfdc_calibration_job rfdc = {0};
+			bool saved_autocomplete = fake_calibration_autocomplete;
+			unsigned poll;
+
+			memset(fake_regs, 0, sizeof(fake_regs));
+			register_map_enabled = true;
+			fake_calibration_autocomplete = true;
+			fake_regs[REG_STATE] = ENSM_STATE_RX;
+			state_after_ensm_write = ENSM_STATE_ALERT;
+			ret = ad9361_rfdc_calibration_start_timeout(
+				&rfdc_phy, 50000U, &rfdc);
+			if (ret != 0 || !ad9361_operation_busy(&rfdc_phy)) {
+				fprintf(stderr, "RFDC full-path transaction failed to start\n");
+				return EXIT_FAILURE;
+			}
+			for (poll = 0; poll < 256; ++poll) {
+				ret = ad9361_rfdc_calibration_poll(&rfdc_phy, &rfdc);
+				if (ret != 1)
+					break;
+				if (rfdc.stage == AD9361_RFDC_JOB_ENSM_RESTORE &&
+				    rfdc.ensm_job.stage ==
+					AD9361_ENSM_TRANSITION_WAIT_TARGET &&
+				    rfdc.ensm_job.target_state == ENSM_STATE_RX)
+					fake_regs[REG_STATE] = ENSM_STATE_RX;
+				fake_time_us += 120U;
+			}
+			if (ret != 0 || !rfdc.terminal ||
+			    rfdc.terminal_status != 0 ||
+			    rfdc_phy.rfdc_transaction != NULL ||
+			    rfdc_phy.ensm_transition_job != NULL ||
+			    rfdc_phy.calibration_wait != NULL ||
+			    rfdc_phy.status_wait != NULL ||
+			    ad9361_operation_busy(&rfdc_phy) ||
+			    ad9361_calibration_state_unknown(&rfdc_phy) ||
+			    !rfdc_phy.tracking_config_valid ||
+			    fake_regs[REG_STATE] != ENSM_STATE_RX) {
+				fprintf(stderr,
+					"RFDC did not complete calibration and restore: ret=%" PRId32
+					" stage=%u active=%d terminal=%d status=%" PRId32
+					" unknown=%d tracking=%d ENSM=%u\n",
+					ret, rfdc.stage, rfdc.active, rfdc.terminal,
+					rfdc.terminal_status,
+					ad9361_calibration_state_unknown(&rfdc_phy),
+					rfdc_phy.tracking_config_valid,
+					fake_regs[REG_STATE]);
+				return EXIT_FAILURE;
+			}
+			fake_calibration_autocomplete = saved_autocomplete;
+			state_after_ensm_write = -1;
+			register_map_enabled = false;
+		}
+		/* A known calibration failure still restores tracking/ENSM and keeps
+		 * its primary errno. If ENSM cleanup also fails, retain that second
+		 * failure separately while fail-closing the PHY. */
+		{
+			unsigned failure_case;
+			for (failure_case = 0; failure_case < 2; ++failure_case) {
+				struct refclk_scale rx_rfpll = {
+					.rate = 2400000000ULL
+				};
+			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct ad9361_rf_phy rfdc_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+				.clks = { [RX_RFPLL] = &rx_rfpll,
+					  [CLKRF_CLK] = &clkrf },
+				.rfpll_source_valid = { true, false },
+				.read_cal_done = fake_calibration_done,
+			};
+			struct ad9361_rfdc_calibration_job rfdc = {0};
+			bool saved_autocomplete = fake_calibration_autocomplete;
+			unsigned poll;
+
+			memset(fake_regs, 0, sizeof(fake_regs));
+			register_map_enabled = true;
+			fake_calibration_autocomplete = true;
+			fake_calibration_done_status = -EAGAIN;
+			fake_calibration_done_fail_call = 2;
+			fake_calibration_done_call_count = 0;
+			fail_write_reg = -1;
+			fake_regs[REG_STATE] = ENSM_STATE_RX;
+			state_after_ensm_write = ENSM_STATE_ALERT;
+			ret = ad9361_rfdc_calibration_start_timeout(
+				&rfdc_phy, 50000U, &rfdc);
+			if (ret != 0) {
+				fprintf(stderr,
+					"RFDC known-failure transaction failed to start\n");
+				return EXIT_FAILURE;
+			}
+			for (poll = 0; poll < 256; ++poll) {
+				if (failure_case == 1 &&
+				    rfdc.stage == AD9361_RFDC_JOB_ENSM_RESTORE &&
+				    rfdc.ensm_job.stage ==
+					AD9361_ENSM_TRANSITION_WRITE_STATE)
+					fail_write_reg = REG_ENSM_CONFIG_1;
+				ret = ad9361_rfdc_calibration_poll(&rfdc_phy, &rfdc);
+				if (ret != 1)
+					break;
+				if (rfdc.stage == AD9361_RFDC_JOB_ENSM_RESTORE &&
+				    rfdc.ensm_job.stage ==
+					AD9361_ENSM_TRANSITION_WAIT_TARGET &&
+				    rfdc.ensm_job.target_state == ENSM_STATE_RX)
+					fake_regs[REG_STATE] = ENSM_STATE_RX;
+				fake_time_us += 120U;
+			}
+			if (ret != -EAGAIN || !rfdc.terminal ||
+			    rfdc.terminal_status != -EAGAIN ||
+			    rfdc_phy.rfdc_transaction != NULL ||
+			    ad9361_operation_busy(&rfdc_phy) ||
+			    !rfdc_phy.tracking_config_valid ||
+			    (failure_case == 0 &&
+			     (rfdc.cleanup_status != 0 ||
+			      ad9361_calibration_state_unknown(&rfdc_phy) ||
+			      fake_regs[REG_STATE] != ENSM_STATE_RX)) ||
+			    (failure_case == 1 &&
+			     (rfdc.cleanup_status != -EIO ||
+			      !ad9361_calibration_state_unknown(&rfdc_phy) ||
+			      rfdc.ensm_job.terminal_status != -EIO))) {
+				fprintf(stderr,
+					"RFDC primary/cleanup failure precedence incorrect: "
+					"case=%u ret=%" PRId32 " primary=%" PRId32
+					" cleanup=%" PRId32 " ensm=%" PRId32
+					" unknown=%d tracking=%d\n",
+					failure_case, ret, rfdc.terminal_status,
+					rfdc.cleanup_status, rfdc.ensm_job.terminal_status,
+					ad9361_calibration_state_unknown(&rfdc_phy),
+					rfdc_phy.tracking_config_valid);
+				return EXIT_FAILURE;
+			}
+			fake_calibration_done_status = 0;
+			fake_calibration_done_fail_call = 0;
+			fake_calibration_done_call_count = 0;
+			fake_calibration_autocomplete = saved_autocomplete;
+			fail_write_reg = -1;
+			state_after_ensm_write = -1;
+			register_map_enabled = false;
+			}
+		}
+        /* The runtime bandwidth parent must retain itself while the ENSM
+         * child owns/polls the same PHY, without running the child inline. */
+        {
+            struct ad9361_rf_phy parent_phy = { .spi = &spi };
+            struct ad9361_rf_bandwidth_transaction parent = {0};
+            unsigned poll;
+            bool reached_filter_start = false;
+
+            memset(fake_regs, 0, sizeof(fake_regs));
+            fake_regs[REG_STATE] = ENSM_STATE_RX_FLUSH;
+            state_after_ensm_write = ENSM_STATE_ALERT;
+            if (ad9361_ensm_transition_start(
+                    &parent_phy, ENSM_STATE_ALERT, true,
+                    &parent.ensm_job) != 0) {
+                fprintf(stderr, "Bandwidth ENSM child did not start\n");
+                return EXIT_FAILURE;
+            }
+            parent.phy = &parent_phy;
+            parent.active = true;
+            parent.stage = AD9361_RF_BANDWIDTH_TRANSACTION_ENSM_ALERT;
+            parent_phy.rf_bandwidth_transaction = &parent;
+            {
+                unsigned reads = read_count;
+                unsigned writes = write_count;
+                unsigned i;
+
+                for (i = 0; i < 3; ++i) {
+                    ret = ad9361_rf_bandwidth_transaction_poll(
+                        &parent_phy, &parent);
+                    if (ret != 1 || write_count != writes ||
+                        parent_phy.rf_bandwidth_transaction != &parent) {
+                        fprintf(stderr,
+                                "ENSM command was issued from RX FLUSH state\n");
+                        return EXIT_FAILURE;
+                    }
+                }
+                if (read_count != reads + 2 ||
+                    parent.ensm_job.stage !=
+                        AD9361_ENSM_TRANSITION_WAIT_STABLE) {
+                    fprintf(stderr, "ENSM stable-state wait was not entered\n");
+                    return EXIT_FAILURE;
+                }
+                fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+                ret = ad9361_rf_bandwidth_transaction_poll(
+                    &parent_phy, &parent);
+                if (ret != 1 || read_count != reads + 2 ||
+                    write_count != writes) {
+                    fprintf(stderr, "ENSM stable-state poll ignored its deadline\n");
+                    return EXIT_FAILURE;
+                }
+                fake_time_us += 120U;
+                ret = ad9361_rf_bandwidth_transaction_poll(
+                    &parent_phy, &parent);
+                if (ret != 1 || read_count != reads + 3 ||
+                    write_count != writes) {
+                    fprintf(stderr, "ENSM did not observe stable state before command\n");
+                    return EXIT_FAILURE;
+                }
+            }
+            for (poll = 0; poll < 16; ++poll) {
+                unsigned reads = read_count;
+                unsigned writes = write_count;
+                ret = ad9361_rf_bandwidth_transaction_poll(
+                    &parent_phy, &parent);
+                if (ret != 1 || parent_phy.rf_bandwidth_transaction != &parent ||
+                    read_count - reads > 1 || write_count - writes > 1 ||
+                    read_count - reads + write_count - writes > 1) {
+                    fprintf(stderr,
+                            "Bandwidth parent/ENSM handoff lost ownership or exceeded one SPI op\n");
+                    return EXIT_FAILURE;
+                }
+                if (parent.stage ==
+                    AD9361_RF_BANDWIDTH_TRANSACTION_FILTER_START) {
+                    reached_filter_start = true;
+                    break;
+                }
+            }
+            if (!reached_filter_start || parent.ensm_job.active ||
+                !parent.ensm_job.terminal ||
+                parent_phy.ensm_transition_job != NULL) {
+                fprintf(stderr,
+                        "Bandwidth parent did not consume terminal ENSM event\n");
+                return EXIT_FAILURE;
+            }
+            (void)ad9361_rf_bandwidth_transaction_finish(&parent, 0);
+        }
+
+        state_after_ensm_write = -1;
+        fake_time_us = saved_time_us;
+        register_map_enabled = false;
+    }
 
     /* A 300 kHz RX BBF at a 1.024 GHz BBPLL needs divider 269. The
      * divider's high bit is in 0x1F9[0], so its low byte must still be
@@ -382,6 +1796,359 @@ int main(void)
     struct rf_rssi rx_rssi = { .ant = UINT8_MAX };
     AD9361_RXFIRConfig rx_fir = {0};
     AD9361_TXFIRConfig tx_fir = {0};
+
+    /* Synthesizer CP start must be inert. Each subsequent poll performs one
+     * complete ordered SPI write, then status arming and one completion
+     * observation are separate queue turns. */
+    {
+        struct ad9361_rf_phy cp_phy = { .spi = &spi };
+        struct ad9361_rf_phy other_phy = { .spi = &spi };
+        struct ad9361_phy_platform_data cp_pdata = { .fdd = true };
+        struct ad9361_phy_platform_data other_pdata = { .fdd = true };
+        struct ad9361_synth_cp_calibration_job cp_job = {0};
+        struct refclk_scale rx_lo_scale = {0};
+        struct refclk_scale tx_lo_scale = {0};
+        struct refclk_scale factor_scale = {0};
+        struct refclk_scale dummy_lo_scale = {0};
+        struct no_os_clk dummy_lo_clock = {0};
+        struct rf_rx_gain rx_gain = {0};
+        struct rf_gain_ctrl gain_ctrl = {0};
+        uint32_t rx_path_rates[NUM_RX_CLOCKS] = {0};
+        uint32_t tx_path_rates[NUM_TX_CLOCKS] = {0};
+        uint8_t fastlock_values[RX_FAST_LOCK_CONFIG_WORD_NUM] = {0};
+        char fir_data[] = "x";
+        unsigned initial_write_count = write_count;
+        unsigned initial_read_count = read_count;
+        unsigned fake_write_count_snapshot[sizeof(fake_write_counts) /
+                                           sizeof(fake_write_counts[0])];
+        int32_t saved_spi_status = spi_status;
+        int32_t saved_fail_write_reg = fail_write_reg;
+        int32_t saved_fail_write_once_reg = fail_write_once_reg;
+        unsigned saved_fail_write_once_occurrence =
+            fail_write_once_reg_occurrence;
+        uint16_t saved_last_spi_write_addr = last_spi_write_addr;
+        bool saved_register_map = register_map_enabled;
+        uint32_t raw_reg_value = UINT32_MAX;
+        uint32_t ensm_mode = UINT32_MAX;
+        uint8_t ensm_state = UINT8_MAX;
+        uint32_t tx_rssi = UINT32_MAX;
+        int32_t temperature = INT32_MAX;
+        unsigned index;
+
+        cp_phy.pdata = &cp_pdata;
+        other_phy.pdata = &other_pdata;
+        cp_phy.ref_clk_scale[RX_RFPLL] = &rx_lo_scale;
+        cp_phy.ref_clk_scale[TX_RFPLL] = &tx_lo_scale;
+        rx_lo_scale.phy = &cp_phy;
+        rx_lo_scale.spi = &spi;
+        rx_lo_scale.source = RX_RFPLL;
+        tx_lo_scale.phy = &cp_phy;
+        tx_lo_scale.spi = &spi;
+        tx_lo_scale.source = TX_RFPLL;
+        factor_scale.phy = &cp_phy;
+        factor_scale.spi = &spi;
+        factor_scale.source = ADC_CLK;
+        factor_scale.mult = 1;
+        factor_scale.div = 1;
+        dummy_lo_scale.phy = &cp_phy;
+        dummy_lo_scale.source = RX_RFPLL_DUMMY;
+        cp_phy.clks[RX_RFPLL_DUMMY] = &dummy_lo_clock;
+        dummy_lo_clock.rate = 1234;
+        cp_phy.current_table = UINT32_MAX;
+        memcpy(fake_write_count_snapshot, fake_write_counts,
+               sizeof(fake_write_count_snapshot));
+        register_map_enabled = false;
+        spi_status = CP_CAL_VALID;
+        fail_write_reg = -1;
+        fail_write_once_reg = -1;
+
+        ret = ad9361_synth_cp_calibration_start(
+            &cp_phy, 40000000, true, &cp_job);
+        if (ret != 0 || write_count != initial_write_count ||
+            cp_phy.synth_cp_job != &cp_job ||
+            !ad9361_operation_busy(&cp_phy) || cp_job.write_count != 12) {
+            fprintf(stderr,
+                    "synth CP start performed I/O or failed to reserve PHY: ret=%" PRId32
+                    " writes=%u count=%u\n",
+                    ret, write_count - initial_write_count,
+                    cp_job.write_count);
+            return EXIT_FAILURE;
+        }
+
+        if (ad9361_synth_cp_calibration_start(
+                &other_phy, 40000000, false, &cp_job) != -EBUSY ||
+            write_count != initial_write_count) {
+            fprintf(stderr,
+                    "active synth CP context was rebound across PHYs\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_reg_read(&cp_phy, REG_PRODUCT_ID, &raw_reg_value) !=
+                -EBUSY ||
+            ad9361_reg_write(&cp_phy, REG_PRODUCT_ID, 0) != -EBUSY ||
+            read_count != initial_read_count ||
+            write_count != initial_write_count ||
+            raw_reg_value != UINT32_MAX) {
+            fprintf(stderr,
+                    "raw register API bypassed retained CP PHY ownership\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_reset(&cp_phy) != -EBUSY ||
+            ad9361_remove(&cp_phy) != -EBUSY ||
+            ad9361_init_gain_tables(&cp_phy) != -EBUSY ||
+            ad9361_register_clocks(&cp_phy) != -EBUSY ||
+            ad9361_unregister_clocks(&cp_phy) != -EBUSY ||
+            ad9361_post_setup(&cp_phy) != -EBUSY ||
+            cp_phy.synth_cp_job != &cp_job ||
+            cp_phy.current_table != UINT32_MAX || cp_phy.gt_info != NULL ||
+            read_count != initial_read_count ||
+            write_count != initial_write_count) {
+            fprintf(stderr,
+                    "lifecycle/clock/post-setup API bypassed retained CP PHY ownership\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_bist_loopback(&cp_phy, 0) != -EBUSY ||
+            ad9361_bist_prbs(&cp_phy, BIST_DISABLE) != -EBUSY ||
+            ad9361_bist_tone(&cp_phy, BIST_DISABLE, 0, 0, 0) != -EBUSY ||
+            ad9361_en_dis_tx(&cp_phy, TX_1 | TX_2, TX_1) != -EBUSY ||
+            ad9361_en_dis_rx(&cp_phy, RX_1 | RX_2, RX_1) != -EBUSY ||
+            ad9361_txmon_control(&cp_phy, 0) != -EBUSY ||
+            ad9361_rf_port_setup(&cp_phy, true, 0, 0) != -EBUSY ||
+            ad9361_mcs(&cp_phy, 0) != -EBUSY ||
+            ad9361_set_rx_gain(&cp_phy, 1, &rx_gain) != -EBUSY ||
+            ad9361_set_gain_ctrl_mode(&cp_phy, &gain_ctrl) != -EBUSY ||
+            ad9361_set_rx_gain_control_mode(&cp_phy, 0,
+                                             RF_GAIN_MGC) != -EBUSY ||
+            ad9361_get_en_state_machine_mode(&cp_phy, &ensm_mode) !=
+                -EBUSY ||
+            ad9361_ensm_get_state(&cp_phy) != -EBUSY ||
+            ad9361_ensm_read_state_checked(&cp_phy, &ensm_state) != -EBUSY ||
+            ad9361_get_rx_rssi(&cp_phy, 0, &rx_rssi) != -EBUSY ||
+            ad9361_get_tx_rssi(&cp_phy, 0, &tx_rssi) != -EBUSY ||
+            ad9361_get_temperature(&cp_phy, &temperature) != -EBUSY ||
+            ad9361_get_temp(&cp_phy) != -EBUSY ||
+            ad9361_get_auxadc(&cp_phy) != -EBUSY ||
+            ad9361_rssi_gain_step_calib(&cp_phy) != -EBUSY ||
+            ad9361_rssi_program_lna_gain(&cp_phy) != -EBUSY ||
+            ad9361_rssi_write_err_tbl(&cp_phy) != -EBUSY ||
+            ad9361_read_clock_data_delays(&cp_phy) != -EBUSY ||
+            ad9361_write_clock_data_delays(&cp_phy) != -EBUSY ||
+            ad9361_write_bist_reg(&cp_phy, 0) != -EBUSY ||
+            ad9361_dig_interface_timing_analysis(&cp_phy, NULL, 0) !=
+                -EBUSY ||
+            ad9361_dig_tune(&cp_phy, 61440000, 0) != -EBUSY ||
+            ad9361_set_rx_fir_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_tx_fir_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_trx_fir_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_get_rx_fir_config(&cp_phy, 0, &rx_fir) != -EBUSY ||
+            ad9361_get_tx_fir_config(&cp_phy, 0, &tx_fir) != -EBUSY ||
+            ad9361_trx_load_enable_fir(&cp_phy, rx_fir, tx_fir) != -EBUSY ||
+            ad9361_set_rx_rf_port_input(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_tx_rf_port_output(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_tx_auto_cal_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_trx_rate_gov(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_trx_path_clks(&cp_phy, rx_path_rates,
+                                      tx_path_rates) != -EBUSY ||
+            ad9361_do_mcs(&cp_phy, &other_phy) != -EBUSY ||
+            ad9361_do_calib(&cp_phy, RFDC_CAL, 0) != -EBUSY ||
+            ad9361_set_tx_atten(&cp_phy, 10000, true, false, true) !=
+                -EBUSY ||
+            ad9361_get_tx_atten(&cp_phy, 1) != -EBUSY ||
+            ad9361_tx_mute(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_dcxo_tune(&cp_phy, 0, 0) != -EBUSY ||
+            ad9361_set_en_state_machine_mode(&cp_phy, ENSM_MODE_RX) !=
+                -EBUSY ||
+            ad9361_set_rx_lo_int_ext(&cp_phy, EXT_LO) != -EBUSY ||
+            ad9361_set_tx_lo_int_ext(&cp_phy, EXT_LO) != -EBUSY ||
+            ad9361_clk_factor_set_rate(&factor_scale, 2, 1) != -EBUSY ||
+            ad9361_rfpll_set_rate(&rx_lo_scale,
+                                  ad9361_to_clk(915000000)) != -EBUSY ||
+            ad9361_clk_mux_set_parent(&rx_lo_scale, 1) != -EBUSY ||
+            ad9361_rfpll_dummy_set_rate(&dummy_lo_scale, 2) != -EBUSY ||
+            ad9361_set_rx_rfdc_track_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_rx_bbdc_track_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_rx_quad_track_en_dis(&cp_phy, 1) != -EBUSY ||
+            ad9361_set_no_ch_mode(&cp_phy, 2) != -EBUSY ||
+            ad9361_fastlock_load(&cp_phy, false, 0, fastlock_values) !=
+                -EBUSY ||
+            ad9361_fastlock_exit_foreign(&cp_phy, false) != -EBUSY ||
+            ad9361_fastlock_store(&cp_phy, false, 0) != -EBUSY ||
+            ad9361_fastlock_recall(&cp_phy, false, 0) != -EBUSY ||
+            ad9361_fastlock_save(&cp_phy, false, 0, fastlock_values) !=
+                -EBUSY ||
+            ad9361_ensm_set_state(&cp_phy, ENSM_STATE_RX, false) !=
+                -EBUSY ||
+            ad9361_set_ensm_mode(&cp_phy, true, false) != -EBUSY ||
+            ad9361_parse_fir(&cp_phy, fir_data, sizeof(fir_data)) != -EBUSY ||
+            ad9361_validate_enable_fir(&cp_phy) != -EBUSY ||
+            read_count != initial_read_count ||
+            write_count != initial_write_count ||
+            cp_phy.tx_mute_restore_valid || cp_pdata.fdd_independent_mode ||
+            cp_pdata.use_ext_rx_lo || cp_pdata.use_ext_tx_lo ||
+            cp_phy.rfdc_track_en || cp_phy.bbdc_track_en ||
+            cp_phy.quad_track_en || cp_pdata.rx2tx2 ||
+            cp_phy.bypass_rx_fir || cp_phy.bypass_tx_fir ||
+            cp_phy.auto_cal_en || cp_phy.rate_governor != 0 ||
+            cp_pdata.rf_rx_input_sel != 0 || cp_pdata.rf_tx_output_sel != 0 ||
+            cp_phy.agc_mode[0] != 0 || ensm_mode != UINT32_MAX ||
+            tx_rssi != UINT32_MAX || temperature != INT32_MAX ||
+            ensm_state != UINT8_MAX ||
+            factor_scale.mult != 1 || factor_scale.div != 1 ||
+            dummy_lo_clock.rate != 1234) {
+            fprintf(stderr,
+                    "high-level RFIC API bypassed retained CP PHY ownership\n");
+            return EXIT_FAILURE;
+        }
+
+        for (index = 0; index < cp_job.write_count; ++index) {
+            unsigned before_poll = write_count;
+
+            ret = ad9361_synth_cp_calibration_poll(&cp_phy, &cp_job);
+            if (ret != 1 || write_count != before_poll + 1) {
+                fprintf(stderr,
+                        "synth CP poll did not perform one write: index=%u ret=%" PRId32
+                        " writes=%u\n",
+                        index, ret, write_count - before_poll);
+                return EXIT_FAILURE;
+            }
+            if (index == 0 &&
+                last_spi_write_addr != REG_RX_CP_LEVEL_DETECT + 0x40) {
+                fprintf(stderr,
+                        "TX synth CP sequence started at wrong register: 0x%x\n",
+                        last_spi_write_addr);
+                return EXIT_FAILURE;
+            }
+        }
+
+        {
+            unsigned writes_before = write_count;
+
+            ret = ad9361_synth_cp_calibration_poll(&cp_phy, &cp_job);
+            if (ret != 1 || write_count != writes_before ||
+                !cp_job.wait_started ||
+                cp_job.wait.reg != REG_RX_CAL_STATUS + 0x40 ||
+                cp_job.wait.start_us != cp_job.trigger_time_us ||
+                !cp_job.trigger_observed) {
+                fprintf(stderr,
+                        "synth CP wait arm was not a separate poll: ret=%" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+        }
+
+        ret = ad9361_synth_cp_calibration_poll(&cp_phy, &cp_job);
+        if (ret != 0 || cp_phy.synth_cp_job != NULL ||
+            ad9361_operation_busy(&cp_phy) ||
+            ad9361_synth_cp_calibration_poll(&cp_phy, &cp_job) != 0) {
+            fprintf(stderr,
+                    "synth CP completion did not retire idempotently: ret=%" PRId32
+                    "\n", ret);
+            return EXIT_FAILURE;
+        }
+
+        /* Non-FDD mode has one atomic HALF_DUPLEX_MODE RMW in the preserved
+         * sequence. It remains one poll operation even though the SPI helper
+         * performs a read followed by a write. */
+        {
+            struct ad9361_rf_phy tdd_phy = { .spi = &spi };
+            struct ad9361_phy_platform_data tdd_pdata = { .fdd = false };
+            struct ad9361_synth_cp_calibration_job tdd_job = {0};
+
+            tdd_phy.pdata = &tdd_pdata;
+            ret = ad9361_synth_cp_calibration_start(
+                &tdd_phy, 40000000, false, &tdd_job);
+            if (ret != 0 || tdd_job.write_count != 13) {
+                fprintf(stderr,
+                        "non-FDD synth CP sequence setup failed: ret=%" PRId32
+                        " count=%u\n", ret, tdd_job.write_count);
+                return EXIT_FAILURE;
+            }
+            for (index = 0; index < tdd_job.write_count; ++index) {
+                unsigned reads_before_poll = read_count;
+                unsigned writes_before_poll = write_count;
+
+                ret = ad9361_synth_cp_calibration_poll(&tdd_phy, &tdd_job);
+                if (ret != 1 || write_count != writes_before_poll + 1 ||
+                    read_count != reads_before_poll +
+                        (tdd_job.write_is_field[index] ? 1U : 0U) ||
+                    (index == 8 && last_spi_write_addr !=
+                        REG_PARALLEL_PORT_CONF_3)) {
+                    fprintf(stderr,
+                            "non-FDD CP poll boundary failed at index=%u ret=%" PRId32
+                            "\n", index, ret);
+                    return EXIT_FAILURE;
+                }
+            }
+            if (ad9361_synth_cp_calibration_poll(&tdd_phy, &tdd_job) != 1 ||
+                ad9361_synth_cp_calibration_poll(&tdd_phy, &tdd_job) != 0 ||
+                tdd_phy.synth_cp_job != NULL) {
+                fprintf(stderr,
+                        "non-FDD synth CP completion failed\n");
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* Every staged write is a possible transport-failure boundary. Fail
+         * each one in turn and require fail-closed state plus owner retirement;
+         * do not run a compensating write sequence after an ambiguous SPI
+         * completion. */
+        for (index = 0; index < 12; ++index) {
+            struct ad9361_rf_phy failed_phy = { .spi = &spi };
+            struct ad9361_phy_platform_data failed_pdata = { .fdd = true };
+            struct ad9361_synth_cp_calibration_job failed_job = {0};
+            unsigned occurrence = 0;
+            unsigned step;
+
+            failed_phy.pdata = &failed_pdata;
+            ret = ad9361_synth_cp_calibration_start(
+                &failed_phy, 40000000, true, &failed_job);
+            if (ret != 0) {
+                fprintf(stderr,
+                        "synth CP fault case failed to start at step=%u\n",
+                        index);
+                return EXIT_FAILURE;
+            }
+            for (step = 0; step <= index; ++step) {
+                if (failed_job.write_reg[step] ==
+                    failed_job.write_reg[index])
+                    ++occurrence;
+            }
+            fail_write_once_reg = (int32_t)failed_job.write_reg[index];
+            fail_write_once_reg_occurrence = occurrence;
+
+            for (step = 0; step <= index; ++step) {
+                ret = ad9361_synth_cp_calibration_poll(
+                    &failed_phy, &failed_job);
+                if ((step < index && ret != 1) ||
+                    (step == index && ret != -EIO)) {
+                    fprintf(stderr,
+                            "synth CP fault was mishandled at step=%u poll=%u ret=%" PRId32
+                            "\n", index, step, ret);
+                    return EXIT_FAILURE;
+                }
+            }
+            if (!ad9361_calibration_state_unknown(&failed_phy) ||
+                failed_phy.synth_cp_job != NULL ||
+                failed_phy.status_wait != NULL ||
+                ad9361_synth_cp_calibration_poll(
+                    &failed_phy, &failed_job) != -EIO) {
+                fprintf(stderr,
+                        "synth CP write failure leaked owner at step=%u\n",
+                        index);
+                return EXIT_FAILURE;
+            }
+        }
+
+        register_map_enabled = saved_register_map;
+        spi_status = saved_spi_status;
+        fail_write_reg = saved_fail_write_reg;
+        fail_write_once_reg = saved_fail_write_once_reg;
+        fail_write_once_reg_occurrence = saved_fail_write_once_occurrence;
+        last_spi_write_addr = saved_last_spi_write_addr;
+        write_count = initial_write_count;
+        read_count = initial_read_count;
+        memcpy(fake_write_counts, fake_write_count_snapshot,
+               sizeof(fake_write_count_snapshot));
+    }
 
     /* AXI calibration helpers must reject invalid channels and pointers
      * before touching register space; bias is integer-only and initializes
@@ -626,16 +2393,16 @@ int main(void)
         }
     }
 
-    /* An init failure must still attempt every acquired-resource teardown,
-     * and a failed teardown must be returned instead of hiding behind the
-     * original GPIO-init error. */
+	/* An init failure must still attempt every acquired-resource teardown.
+	 * If teardown also fails, return the primary init error and report cleanup
+	 * independently; cleanup must not replace the initiating failure. */
     {
         AD9361_InitParam init_param = {0};
         unsigned failure_site;
 
         for (failure_site = 0; failure_site <= 4; ++failure_site) {
             struct ad9361_rf_phy *init_result = NULL;
-            int32_t expected = failure_site == 0 ? -ENOSYS : -EIO;
+			int32_t expected = -ENOSYS;
 
             memset(fake_gpio_remove_status, 0,
                    sizeof(fake_gpio_remove_status));
@@ -656,8 +2423,8 @@ int main(void)
     }
 
     /* Teardown must attempt every platform cleanup and report the first
-     * failure. ad9361_remove() consumes/frees the PHY even on failure, which
-     * the NIOS owner must account for before propagating the status. */
+     * failure. The extended API reports consumption separately from errno,
+     * including when a platform cleanup callback itself returns -EBUSY. */
     {
         unsigned failure_site;
 
@@ -692,6 +2459,102 @@ int main(void)
                         failure_site);
                 return EXIT_FAILURE;
             }
+        }
+    }
+
+    /* A teardown callback may itself return -EBUSY after ownership has
+     * crossed the preflight boundary. The consumed flag distinguishes that
+     * cleanup result from a preflight -EBUSY that leaves the PHY alive. */
+    {
+        struct ad9361_rf_phy *remove_phy = calloc(1, sizeof(*remove_phy));
+        bool consumed = false;
+
+        if (!remove_phy)
+            return EXIT_FAILURE;
+        remove_phy->spi = (struct no_os_spi_desc *)(uintptr_t)1;
+        fake_spi_remove_status = -EBUSY;
+        memset(fake_gpio_remove_status, 0, sizeof(fake_gpio_remove_status));
+        fake_spi_remove_count = 0;
+        fake_gpio_remove_count = 0;
+        if (ad9361_remove_ex(remove_phy, false, &consumed) != -EBUSY ||
+            !consumed || fake_spi_remove_count != 1 ||
+            fake_gpio_remove_count != 4) {
+            fprintf(stderr,
+                    "remove API did not distinguish consumed cleanup -EBUSY\n");
+            return EXIT_FAILURE;
+        }
+        fake_spi_remove_status = 0;
+    }
+
+    /* Removing a PHY detaches a caller-owned external-band controller before
+     * the PHY allocation is consumed, so the controller can be reused/freed. */
+    {
+        struct ad9361_rf_phy *remove_phy = calloc(1, sizeof(*remove_phy));
+        struct ad9361_ext_band_ctl *ctl = ad9361_ext_band_ctl_alloc();
+        bool consumed = false;
+
+        if (!remove_phy || !ctl)
+            return EXIT_FAILURE;
+        remove_phy->spi = &spi;
+        if (ad9361_register_ext_band_control(remove_phy, ctl) != 0) {
+            fprintf(stderr, "failed to register teardown controller\n");
+            return EXIT_FAILURE;
+        }
+        fake_spi_remove_status = 0;
+        memset(fake_gpio_remove_status, 0, sizeof(fake_gpio_remove_status));
+        fake_spi_remove_count = 0;
+        fake_gpio_remove_count = 0;
+        if (ad9361_remove_ex(remove_phy, false, &consumed) != 0 ||
+            !consumed || ctl->registered_phy != NULL ||
+            fake_spi_remove_count != 1 || fake_gpio_remove_count != 4) {
+            fprintf(stderr, "PHY teardown left a dangling controller owner\n");
+            return EXIT_FAILURE;
+        }
+        ad9361_ext_band_ctl_free(ctl);
+    }
+
+    /* AXI ADC/DAC teardown failures are part of the same cleanup contract.
+     * Both resources must be attempted, and the first cleanup errno wins. */
+    {
+        struct ad9361_rf_phy *remove_phy = calloc(1, sizeof(*remove_phy));
+
+        if (!remove_phy) {
+            fprintf(stderr, "failed to allocate AXI teardown test PHY\n");
+            return EXIT_FAILURE;
+        }
+        remove_phy->rx_adc = (struct axi_adc *)(uintptr_t)1;
+        remove_phy->tx_dac = (struct axi_dac *)(uintptr_t)1;
+        fake_axi_adc_remove_status = -ENOMEM;
+        fake_axi_dac_remove_status = -EIO;
+        fake_axi_adc_remove_count = 0;
+        fake_axi_dac_remove_count = 0;
+
+        if (ad9361_remove(remove_phy) != -ENOMEM ||
+            fake_axi_adc_remove_count != 1 ||
+            fake_axi_dac_remove_count != 1) {
+            fprintf(stderr,
+                    "AD9361 teardown lost first AXI cleanup error or skipped a resource\n");
+            return EXIT_FAILURE;
+        }
+
+        remove_phy = calloc(1, sizeof(*remove_phy));
+        if (!remove_phy) {
+            fprintf(stderr, "failed to allocate AXI teardown test PHY\n");
+            return EXIT_FAILURE;
+        }
+        remove_phy->rx_adc = (struct axi_adc *)(uintptr_t)1;
+        remove_phy->tx_dac = (struct axi_dac *)(uintptr_t)1;
+        fake_axi_adc_remove_status = 0;
+        fake_axi_dac_remove_status = -EIO;
+        fake_axi_adc_remove_count = 0;
+        fake_axi_dac_remove_count = 0;
+
+        if (ad9361_remove(remove_phy) != -EIO ||
+            fake_axi_adc_remove_count != 1 ||
+            fake_axi_dac_remove_count != 1) {
+            fprintf(stderr,
+                    "AD9361 teardown lost DAC cleanup error or skipped a resource\n");
+            return EXIT_FAILURE;
         }
     }
 
@@ -1280,6 +3143,51 @@ int main(void)
         write_count = 0;
     }
 
+    /* Setup's retained divider preparation must not publish a candidate
+     * before readback, and mismatched readback must leave confirmed cache
+     * untouched. */
+    {
+        struct ad9361_rf_phy rate_phy = {0};
+        struct no_os_clk parent = {.rate = 40000000};
+        struct no_os_clk child = {.rate = 40000000};
+        struct refclk_scale rate_scale = {
+            .spi = &spi,
+            .phy = &rate_phy,
+            .mult = 1,
+            .div = 1,
+            .source = RX_REFCLK,
+        };
+        uint8_t candidate = 0xff;
+
+        rate_phy.clk_refin = &parent;
+        rate_phy.clks[RX_REFCLK] = &child;
+        rate_phy.ref_clk_scale[RX_REFCLK] = &rate_scale;
+        ret = ad9361_setup_refclk_rate_prepare(
+            &rate_phy, RX_REFCLK, 20000000, &candidate);
+        if (ret < 0 || candidate != 1 || rate_scale.mult != 1 ||
+            rate_scale.div != 1 || child.rate != 40000000) {
+            fprintf(stderr,
+                    "Retained refclk prepare published unconfirmed cache\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_setup_refclk_rate_commit_readback(
+            &rate_phy, RX_REFCLK, 0, candidate);
+        if (ret != -EIO || rate_scale.mult != 1 || rate_scale.div != 1 ||
+            child.rate != 40000000) {
+            fprintf(stderr,
+                    "Mismatched refclk readback changed confirmed cache\n");
+            return EXIT_FAILURE;
+        }
+        ret = ad9361_setup_refclk_rate_commit_readback(
+            &rate_phy, RX_REFCLK, candidate, candidate);
+        if (ret < 0 || rate_scale.mult != 1 || rate_scale.div != 2 ||
+            child.rate != 20000000) {
+            fprintf(stderr,
+                    "Confirmed refclk readback did not publish cache\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* VCO-table selection is cache state: a failed partial RFPLL setup must
      * not publish the selected table as if every SPI write had completed. */
     {
@@ -1330,6 +3238,329 @@ int main(void)
                 return EXIT_FAILURE;
             }
             fail_write_reg = -1;
+        }
+
+        /* The retained RFPLL API must hold the PHY between polls, reject a
+         * competing mutation without SPI, and latch the first programming
+         * error at terminal poll. */
+        {
+            /* The clock-framework wrapper must reject a partially built PHY
+             * before inspecting platform data. This is reachable during
+             * constructor/error cleanup and must fail as an API error rather
+             * than dereference a missing pdata pointer. */
+            {
+                struct ad9361_rf_phy incomplete_phy = {0};
+                struct no_os_clk incomplete_lo = {0};
+                struct refclk_scale incomplete_rfpll = {
+                    .spi = &spi,
+                    .phy = &incomplete_phy,
+                    .source = RX_RFPLL,
+                };
+                struct ad9361_rfpll_clock_transaction transaction = {0};
+                unsigned reads_before = read_count;
+                unsigned writes_before = write_count;
+
+                incomplete_phy.spi = &spi;
+                incomplete_phy.clks[RX_RFPLL] = &incomplete_lo;
+                if (ad9361_rfpll_clock_transaction_start(
+                        &incomplete_phy, &incomplete_rfpll,
+                        ad9361_to_clk(1900000000ULL), &transaction) !=
+                        -EINVAL || read_count != reads_before ||
+                    write_count != writes_before) {
+                    fprintf(stderr,
+                            "RFPLL clock wrapper did not reject missing PHY data\n");
+                    return EXIT_FAILURE;
+                }
+            }
+
+            struct refclk_scale rxpll = {
+                .spi = &spi,
+                .phy = &phy,
+                .source = RX_RFPLL_INT,
+                .parent_source = RX_REFCLK,
+            };
+            struct ad9361_rf_phy other_phy = {
+                .spi = &spi,
+                .pdata = &pdata,
+            };
+            struct refclk_scale other_rxpll = {
+                .spi = &spi,
+                .phy = &other_phy,
+                .source = RX_RFPLL_INT,
+                .parent_source = RX_REFCLK,
+            };
+            struct ad9361_rfpll_rate_transaction transaction = {0};
+            unsigned writes_after_start;
+
+            phy.calibration_state_unknown = false;
+            phy.rfpll_rate_transaction = NULL;
+            fail_write_reg = -1;
+            ret = ad9361_rfpll_rate_transaction_start(
+                &rxpll, ad9361_to_clk(1900000000), 40000000,
+                &transaction);
+            if (ret != 0 || !transaction.active ||
+                phy.rfpll_rate_transaction != &transaction ||
+                !ad9361_operation_busy(&phy)) {
+                fprintf(stderr,
+                        "RFPLL retained start did not reserve PHY: %" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+            writes_after_start = write_count;
+            if (ad9361_rfpll_rate_transaction_start(
+                    &other_rxpll, ad9361_to_clk(1800000000), 40000000,
+                    &transaction) != -EBUSY ||
+                transaction.phy != &phy || !transaction.active ||
+                phy.rfpll_rate_transaction != &transaction ||
+                other_phy.rfpll_rate_transaction != NULL ||
+                write_count != writes_after_start) {
+                fprintf(stderr,
+                        "RFPLL start rebound a live context to another PHY\n");
+                return EXIT_FAILURE;
+            }
+            if (ad9361_tracking_control(&phy, true, true, true) != -EBUSY ||
+                write_count != writes_after_start) {
+                fprintf(stderr,
+                        "RFPLL retained owner allowed a competing mutation\n");
+                return EXIT_FAILURE;
+            }
+
+            fail_write_reg = REG_RX_VCO_OUTPUT;
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != -EIO || !transaction.terminal ||
+                transaction.terminal_status != -EIO ||
+                phy.rfpll_rate_transaction != NULL ||
+                !ad9361_calibration_state_unknown(&phy)) {
+                fprintf(stderr,
+                        "RFPLL retained poll did not latch programming failure: %" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+            writes_after_start = write_count;
+            if (ad9361_rfpll_rate_transaction_poll(&phy, &transaction) !=
+                    -EIO || write_count != writes_after_start) {
+                fprintf(stderr,
+                        "RFPLL terminal poll was not idempotent\n");
+                return EXIT_FAILURE;
+            }
+            fail_write_reg = -1;
+        }
+
+        /* Exercise both lock phases of the paired-FDD path. Different RX/TX
+         * LOs require the counterpart synth to move from its old TDD LUT to
+         * the FDD LUT; the caller-owned transaction must retain ownership
+         * across both programming and lock observations, then publish cache. */
+        {
+            struct no_os_clk refclk = { .rate = 40000000 };
+            struct refclk_scale rxpll = {
+                .spi = &spi,
+                .phy = &phy,
+                .source = RX_RFPLL_INT,
+                .parent_source = RX_REFCLK,
+            };
+            struct ad9361_rfpll_rate_transaction transaction = {0};
+            struct no_os_clk *saved_refclk = phy.clk_refin;
+            uint64_t saved_rx_lo = phy.current_rx_lo_freq;
+            uint64_t saved_tx_lo = phy.current_tx_lo_freq;
+            uint32_t saved_rx_div = phy.cached_rx_rfpll_div;
+            uint32_t saved_tx_div = phy.cached_tx_rfpll_div;
+            bool saved_calibration_unknown =
+                phy.calibration_state_unknown;
+            bool saved_rx_table = phy.current_rx_use_tdd_table;
+            bool saved_tx_table = phy.current_tx_use_tdd_table;
+            unsigned tx_vco_writes = fake_write_counts[REG_TX_VCO_OUTPUT];
+
+            memset(fake_regs, 0, sizeof(fake_regs));
+            phy.clk_refin = &refclk;
+            phy.calibration_state_unknown = false;
+            phy.status_wait = NULL;
+            phy.calibration_wait = NULL;
+            phy.bbpll_rate_transaction = NULL;
+            phy.rfpll_rate_transaction = NULL;
+            phy.current_rx_lo_freq = 1800000000ULL;
+            phy.current_tx_lo_freq = 900000000ULL;
+            phy.cached_rx_rfpll_div = 0;
+            phy.current_rx_use_tdd_table = false;
+            phy.current_tx_use_tdd_table = true;
+            pdata.fdd = true;
+            pdata.fdd_independent_mode = false;
+            fake_time_us = 0;
+            ret = ad9361_rfpll_rate_transaction_start(
+                &rxpll, ad9361_to_clk(1900000000ULL), 40000000,
+                &transaction);
+            if (ret != 0 ||
+                ad9361_rfpll_rate_transaction_poll(&phy, &transaction) != 1 ||
+                transaction.stage != AD9361_RFPLL_TRANSACTION_WAIT ||
+                phy.rfpll_rate_transaction != &transaction) {
+                fprintf(stderr,
+                        "RFPLL success test failed to enter first lock wait: %" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != 1 || transaction.stage != AD9361_RFPLL_TRANSACTION_WAIT ||
+                !transaction.wait.active || phy.current_rx_lo_freq != 0) {
+                fprintf(stderr,
+                        "RFPLL lock-pending poll published an unconfirmed LO\n");
+                return EXIT_FAILURE;
+            }
+
+            fake_regs[REG_RX_CP_OVERRANGE_VCO_LOCK] |= VCO_LOCK;
+            fake_time_us = transaction.wait.poll_not_before_us;
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != 1 || transaction.stage != AD9361_RFPLL_TRANSACTION_PROGRAM ||
+                transaction.fixup_passes != 1) {
+                fprintf(stderr,
+                        "RFPLL paired-FDD fixup was not scheduled after RX lock: ret=%" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != 1 || transaction.stage != AD9361_RFPLL_TRANSACTION_WAIT ||
+                fake_write_counts[REG_TX_VCO_OUTPUT] <= tx_vco_writes) {
+                fprintf(stderr,
+                        "RFPLL paired-FDD pass did not program TX counterpart: ret=%" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+            fake_regs[REG_TX_CP_OVERRANGE_VCO_LOCK] |= VCO_LOCK;
+            fake_time_us = transaction.wait.poll_not_before_us;
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != 1 || transaction.stage != AD9361_RFPLL_TRANSACTION_RESTORE ||
+                transaction.fixup_passes != 2) {
+                fprintf(stderr,
+                        "RFPLL paired-FDD second lock did not finish: ret=%" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+            ret = ad9361_rfpll_rate_transaction_poll(&phy, &transaction);
+            if (ret != 0 || !transaction.terminal || transaction.active ||
+                phy.rfpll_rate_transaction != NULL ||
+                phy.current_rx_lo_freq != ad9361_to_clk(1900000000ULL) ||
+                phy.cached_rx_rfpll_div != transaction.target_vco_div ||
+                phy.current_rx_use_tdd_table || phy.current_tx_use_tdd_table ||
+                ad9361_calibration_state_unknown(&phy)) {
+                fprintf(stderr,
+                        "RFPLL paired-FDD success did not commit confirmed state: ret=%" PRId32 "\n",
+                        ret);
+                return EXIT_FAILURE;
+            }
+
+            /* Exercise the opposite entry direction independently: TX is
+             * requested, so only the TX lock register and TX LO/divider cache
+             * may authorize completion. */
+            {
+                struct refclk_scale txpll = {
+                    .spi = &spi,
+                    .phy = &phy,
+                    .source = TX_RFPLL_INT,
+                    .parent_source = TX_REFCLK,
+                };
+                struct ad9361_rfpll_rate_transaction tx_transaction = {0};
+
+                memset(fake_regs, 0, sizeof(fake_regs));
+                pdata.fdd = false;
+                phy.calibration_state_unknown = false;
+                phy.current_tx_lo_freq = 0;
+                phy.rfpll_rate_transaction = NULL;
+                fake_time_us = 0;
+                ret = ad9361_rfpll_rate_transaction_start(
+                    &txpll, ad9361_to_clk(1900000000ULL), 40000000,
+                    &tx_transaction);
+                if (ret != 0 ||
+                    ad9361_rfpll_rate_transaction_poll(
+                        &phy, &tx_transaction) != 1 ||
+                    tx_transaction.stage != AD9361_RFPLL_TRANSACTION_WAIT ||
+                    tx_transaction.wait.reg !=
+                        REG_TX_CP_OVERRANGE_VCO_LOCK) {
+                    fprintf(stderr,
+                            "TX RFPLL request did not arm the TX lock wait: %" PRId32 "\n",
+                            ret);
+                    return EXIT_FAILURE;
+                }
+                fake_regs[REG_TX_CP_OVERRANGE_VCO_LOCK] |= VCO_LOCK;
+                ret = ad9361_rfpll_rate_transaction_poll(
+                    &phy, &tx_transaction);
+                if (ret != 1 ||
+                    tx_transaction.stage != AD9361_RFPLL_TRANSACTION_RESTORE ||
+                    phy.current_tx_lo_freq != 0) {
+                    fprintf(stderr,
+                            "TX RFPLL lock observation committed too early: %" PRId32 "\n",
+                            ret);
+                    return EXIT_FAILURE;
+                }
+                ret = ad9361_rfpll_rate_transaction_poll(
+                    &phy, &tx_transaction);
+                if (ret != 0 ||
+                    phy.current_tx_lo_freq !=
+                        ad9361_to_clk(1900000000ULL) ||
+                    phy.cached_tx_rfpll_div !=
+                        tx_transaction.target_vco_div ||
+                    phy.rfpll_rate_transaction != NULL ||
+                    ad9361_calibration_state_unknown(&phy)) {
+                    fprintf(stderr,
+                            "TX RFPLL lock success did not commit TX cache: %" PRId32 "\n",
+                            ret);
+                    return EXIT_FAILURE;
+                }
+            }
+
+            /* A TX lock timeout is terminal failure, never a successful
+             * cache commit. The fake clock advances to the hardware-derived
+             * deadline without running a wall-clock wait. */
+            {
+                struct refclk_scale txpll = {
+                    .spi = &spi,
+                    .phy = &phy,
+                    .source = TX_RFPLL_INT,
+                    .parent_source = TX_REFCLK,
+                };
+                struct ad9361_rfpll_rate_transaction tx_timeout = {0};
+
+                memset(fake_regs, 0, sizeof(fake_regs));
+                phy.calibration_state_unknown = false;
+                phy.current_tx_lo_freq = 0;
+                phy.rfpll_rate_transaction = NULL;
+                fake_time_us = 0;
+                ret = ad9361_rfpll_rate_transaction_start(
+                    &txpll, ad9361_to_clk(1900000000ULL), 40000000,
+                    &tx_timeout);
+                if (ret != 0 ||
+                    ad9361_rfpll_rate_transaction_poll(
+                        &phy, &tx_timeout) != 1 ||
+                    ad9361_rfpll_rate_transaction_poll(
+                        &phy, &tx_timeout) != 1 ||
+                    !tx_timeout.wait.active) {
+                    fprintf(stderr,
+                            "TX RFPLL timeout case did not enter lock wait: %" PRId32 "\n",
+                            ret);
+                    return EXIT_FAILURE;
+                }
+                fake_time_us = tx_timeout.wait.start_us +
+                    tx_timeout.wait.timeout_us;
+                ret = ad9361_rfpll_rate_transaction_poll(
+                    &phy, &tx_timeout);
+                if (ret != -ETIMEDOUT || !tx_timeout.terminal ||
+                    phy.rfpll_rate_transaction != NULL ||
+                    !ad9361_calibration_state_unknown(&phy) ||
+                    phy.current_tx_lo_freq != 0) {
+                    fprintf(stderr,
+                            "TX RFPLL timeout was not fail-closed: ret=%" PRId32 "\n",
+                            ret);
+                    return EXIT_FAILURE;
+                }
+            }
+
+            phy.clk_refin = saved_refclk;
+            phy.current_rx_lo_freq = saved_rx_lo;
+            phy.current_tx_lo_freq = saved_tx_lo;
+            phy.cached_rx_rfpll_div = saved_rx_div;
+            phy.cached_tx_rfpll_div = saved_tx_div;
+            phy.current_rx_use_tdd_table = saved_rx_table;
+            phy.current_tx_use_tdd_table = saved_tx_table;
+            phy.calibration_state_unknown = saved_calibration_unknown;
+            phy.rfpll_rate_transaction = NULL;
         }
 
         register_map_enabled = false;
@@ -1505,7 +3736,72 @@ int main(void)
                 return EXIT_FAILURE;
             }
         }
+
+        /* One live wait context cannot be rebound to another PHY: doing so
+         * would orphan the first PHY's status owner and completion record. */
+        {
+            struct ad9361_rf_phy owner_phy = { .spi = &spi };
+            struct ad9361_rf_phy contender_phy = { .spi = &spi };
+            struct ad9361_status_wait shared_wait = {0};
+            unsigned reads_before;
+
+            fake_regs[REG_STATE] = 0;
+            fake_time_us = 3000;
+            if (ad9361_status_wait_start(&owner_phy, REG_STATE, 1, 1,
+                                         100, 10, &shared_wait) != 0)
+                return EXIT_FAILURE;
+            reads_before = read_count;
+            if (ad9361_status_wait_start(&contender_phy, REG_STATE, 1, 1,
+                                         100, 10, &shared_wait) != -EBUSY ||
+                owner_phy.status_wait != &shared_wait ||
+                contender_phy.status_wait != NULL || !shared_wait.active ||
+                read_count != reads_before) {
+                fprintf(stderr,
+                        "status-wait start rebound a live context across PHYs\n");
+                return EXIT_FAILURE;
+            }
+            fake_regs[REG_STATE] = 1;
+            if (ad9361_status_wait_poll(&owner_phy, &shared_wait) != 0 ||
+                owner_phy.status_wait != NULL ||
+                ad9361_calibration_state_unknown(&owner_phy)) {
+                fprintf(stderr,
+                        "original status-wait owner could not retire after rejected rebind\n");
+                return EXIT_FAILURE;
+            }
+        }
         register_map_enabled = false;
+    }
+
+    /* Composite transaction contexts also remain bound to their original
+     * PHY until terminal retirement. A second PHY must not overwrite it. */
+    {
+        struct ad9361_rf_phy owner_phy = {
+            .spi = &spi,
+            .pdata = &pdata,
+        };
+        struct ad9361_rf_phy contender_phy = {
+            .spi = &spi,
+            .pdata = &pdata,
+        };
+        struct ad9361_rf_bandwidth_transaction transaction = {
+            .phy = &owner_phy,
+            .active = true,
+        };
+        unsigned reads_before = read_count;
+        unsigned writes_before = write_count;
+
+        owner_phy.rf_bandwidth_transaction = &transaction;
+        if (ad9361_rf_bandwidth_transaction_start(
+                &contender_phy, 5000000, 5000000, &transaction) != -EBUSY ||
+            transaction.phy != &owner_phy || !transaction.active ||
+            owner_phy.rf_bandwidth_transaction != &transaction ||
+            contender_phy.rf_bandwidth_transaction != NULL ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "bandwidth start rebound a live context across PHYs\n");
+            return EXIT_FAILURE;
+        }
+        owner_phy.rf_bandwidth_transaction = NULL;
     }
 
     /* A failed start write can have reached the RFIC and completed before a
@@ -1526,6 +3822,7 @@ int main(void)
         if (ret != -EIO ||
             fake_regs[REG_CALIBRATION_CTRL] != 0 ||
             !ad9361_calibration_state_unknown(&start_fault_phy) ||
+            !start_fault_phy.calibration_wait_quarantined ||
             start_fault_phy.calibration_wait != NULL) {
             fprintf(stderr,
                     "ambiguous completed calibration start was accepted: ret=%" PRId32
@@ -1554,11 +3851,19 @@ int main(void)
             .spi = &spi,
             .pdata = &pdata,
         };
+        struct no_os_clk wait_owner_bbpll = { .rate = 983040000 };
+        struct refclk_scale wait_owner_bbpll_scale = {
+            .source = BBPLL_CLK,
+            .phy = &wait_owner_phy,
+        };
         struct ad9361_status_wait status_wait = {0};
+        struct ad9361_calibration_wait calibration_wait = {0};
         struct ad9361_bbdc_calibration_job job = {0};
+        uint32_t checked_rate;
         unsigned writes_before;
 
         register_map_enabled = true;
+        wait_owner_phy.clks[BBPLL_CLK] = &wait_owner_bbpll;
         if (ad9361_status_wait_start(&wait_owner_phy, REG_STATE, 1, 1,
                                      1000, 10, &status_wait) != 0)
             return EXIT_FAILURE;
@@ -1566,15 +3871,36 @@ int main(void)
         if (ad9361_bbdc_calibration_start(&wait_owner_phy, &job) != -EBUSY ||
             ad9361_tracking_control(&wait_owner_phy, false, false, false) !=
                 -EBUSY ||
+            clk_get_rate_checked(&wait_owner_phy,
+                                 &wait_owner_bbpll_scale,
+                                 &checked_rate) != -EBUSY ||
             write_count != writes_before) {
             fprintf(stderr,
-                    "RFIC mutation overlapped an active status-wait owner\n");
+                    "clock read or RFIC mutation overlapped status-wait owner\n");
             return EXIT_FAILURE;
         }
         fake_regs[REG_STATE] = 1;
         if (ad9361_status_wait_poll(&wait_owner_phy, &status_wait) != 0 ||
             wait_owner_phy.status_wait != NULL) {
             fprintf(stderr, "status-wait owner did not retire cleanly\n");
+            return EXIT_FAILURE;
+        }
+
+        if (ad9361_calibration_wait_start(&wait_owner_phy, BBDC_CAL,
+                                          1000, &calibration_wait) != 0 ||
+            clk_get_rate_checked(&wait_owner_phy,
+                                 &wait_owner_bbpll_scale,
+                                 &checked_rate) != -EBUSY) {
+            fprintf(stderr,
+                    "checked clock read escaped active calibration owner\n");
+            return EXIT_FAILURE;
+        }
+        fake_regs[REG_CALIBRATION_CTRL] = 0;
+        if (ad9361_calibration_wait_poll(&wait_owner_phy,
+                                         &calibration_wait) != 0 ||
+            wait_owner_phy.calibration_wait != NULL) {
+            fprintf(stderr,
+                    "calibration-wait owner did not retire cleanly\n");
             return EXIT_FAILURE;
         }
 
@@ -1591,6 +3917,208 @@ int main(void)
                 lost_wait_phy.status_wait != &lost_wait) {
                 fprintf(stderr,
                         "lost status-wait context was not quarantined\n");
+                return EXIT_FAILURE;
+            }
+        }
+        register_map_enabled = false;
+    }
+
+    /* Calibration wait contexts are equally single-owner. Reject cross-PHY
+     * reuse before the contender can issue a second start write. */
+    {
+        struct ad9361_rf_phy owner_phy = { .spi = &spi };
+        struct ad9361_rf_phy contender_phy = { .spi = &spi };
+        struct ad9361_calibration_wait shared_wait = {0};
+        unsigned writes_before;
+
+        register_map_enabled = true;
+        fake_calibration_autocomplete = true;
+        fake_regs[REG_CALIBRATION_CTRL] = 0;
+        if (ad9361_calibration_wait_start(
+                &owner_phy, BBDC_CAL, 1000, &shared_wait) != 0)
+            return EXIT_FAILURE;
+        writes_before = write_count;
+        if (ad9361_calibration_wait_start(
+                &contender_phy, RFDC_CAL, 1000, &shared_wait) != -EBUSY ||
+            owner_phy.calibration_wait != &shared_wait ||
+            contender_phy.calibration_wait != NULL || !shared_wait.active ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "calibration-wait start rebound a live context across PHYs\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_calibration_wait_poll(&owner_phy, &shared_wait) != 0 ||
+            owner_phy.calibration_wait != NULL ||
+            ad9361_calibration_state_unknown(&owner_phy)) {
+            fprintf(stderr,
+                    "original calibration-wait owner could not retire after rejected rebind\n");
+            return EXIT_FAILURE;
+        }
+        fake_calibration_autocomplete = false;
+        register_map_enabled = false;
+    }
+
+    /* An uncertain calibration must become a PHY-owned quarantine rather
+     * than leave a pointer to a stack wait or make ordinary remove succeed.
+     * A confirmed-clear fallback may report the read error but safely retire. */
+    {
+        struct ad9361_rf_phy *quarantined = calloc(1, sizeof(*quarantined));
+        struct ad9361_calibration_wait timeout_wait = {0};
+        struct ad9361_calibration_wait read_error_wait = {0};
+        struct ad9361_calibration_wait idle_error_wait = {0};
+        bool consumed = false;
+
+        if (!quarantined)
+            return EXIT_FAILURE;
+        register_map_enabled = true;
+        fake_calibration_autocomplete = false;
+        fake_regs[REG_CALIBRATION_CTRL] = 0;
+        fake_time_us = 10000;
+        quarantined->spi = &spi;
+        if (ad9361_calibration_wait_start(quarantined, BBDC_CAL, 100,
+                                          &timeout_wait) != 0)
+            return EXIT_FAILURE;
+        fake_time_us = timeout_wait.start_us + timeout_wait.timeout_us +
+                       timeout_wait.poll_delay_us;
+        if (ad9361_calibration_wait_poll(quarantined, &timeout_wait) !=
+                -ETIMEDOUT ||
+            !quarantined->calibration_wait_quarantined ||
+            quarantined->calibration_wait != NULL ||
+            !ad9361_operation_busy(quarantined) ||
+            ad9361_remove_ex(quarantined, false, &consumed) != -EBUSY ||
+            consumed) {
+            fprintf(stderr,
+                    "busy calibration timeout lost PHY quarantine/ownership\n");
+            return EXIT_FAILURE;
+        }
+        if (ad9361_bbdc_calibration_start(quarantined,
+                                          &(struct ad9361_bbdc_calibration_job){0}) != -EIO) {
+            fprintf(stderr, "quarantined PHY accepted a later calibration\n");
+            return EXIT_FAILURE;
+        }
+
+        /* Reset is a board-level assertion: the no-OS test records that
+         * precondition by passing true, then checks removal reports consumption. */
+        quarantined->spi = NULL;
+        fake_gpio_remove_count = 0;
+        memset(fake_gpio_remove_status, 0, sizeof(fake_gpio_remove_status));
+        if (ad9361_remove_ex(quarantined, true, &consumed) < 0 || !consumed) {
+            fprintf(stderr, "RESETB recovery did not retire quarantined PHY\n");
+            return EXIT_FAILURE;
+        }
+
+        {
+            struct ad9361_rf_phy idle_phy = { .spi = &spi };
+
+            fake_time_us = 20000;
+            fake_calibration_autocomplete = true;
+            fake_regs[REG_CALIBRATION_CTRL] = 0;
+            if (ad9361_calibration_wait_start(&idle_phy, BBDC_CAL, 1000,
+                                              &idle_error_wait) != 0)
+                return EXIT_FAILURE;
+            fail_read_once_reg = REG_CALIBRATION_CTRL;
+            if (ad9361_calibration_wait_poll(&idle_phy, &idle_error_wait) !=
+                    -EIO ||
+                idle_phy.calibration_wait != NULL ||
+                idle_phy.calibration_wait_quarantined ||
+                ad9361_calibration_state_unknown(&idle_phy)) {
+                fprintf(stderr,
+                        "confirmed-idle read error was not retired safely\n");
+                return EXIT_FAILURE;
+            }
+            fake_calibration_autocomplete = false;
+        }
+
+        {
+            struct ad9361_rf_phy gpio_idle_phy = {
+                .spi = &spi,
+                .read_cal_done = fake_calibration_done,
+            };
+            struct ad9361_calibration_wait gpio_idle_wait = {0};
+
+            fake_time_us = 30000;
+            fake_calibration_done_status = 0;
+            fake_calibration_done_fail_call = 0;
+            fake_calibration_done_call_count = 0;
+            fake_calibration_autocomplete = true;
+            fake_regs[REG_CALIBRATION_CTRL] = 0;
+            if (ad9361_calibration_wait_start(
+                    &gpio_idle_phy, BBDC_CAL, 1000,
+                    &gpio_idle_wait) != 0)
+                return EXIT_FAILURE;
+            fail_read_once_reg = REG_CALIBRATION_CTRL;
+            if (ad9361_calibration_wait_poll(
+                    &gpio_idle_phy, &gpio_idle_wait) != -EIO ||
+                gpio_idle_phy.calibration_wait != NULL ||
+                gpio_idle_phy.calibration_wait_quarantined ||
+                ad9361_calibration_state_unknown(&gpio_idle_phy)) {
+                fprintf(stderr,
+                        "GPIO-done fallback failed to confirm idle status\n");
+                return EXIT_FAILURE;
+            }
+            fake_calibration_autocomplete = false;
+        }
+
+        {
+            struct ad9361_rf_phy unreadable_phy = { .spi = &spi };
+
+            fake_regs[REG_CALIBRATION_CTRL] = 0;
+            if (ad9361_calibration_wait_start(&unreadable_phy, BBDC_CAL,
+                                              1000, &read_error_wait) != 0)
+                return EXIT_FAILURE;
+            fail_read_reg = REG_CALIBRATION_CTRL;
+            if (ad9361_calibration_wait_poll(&unreadable_phy,
+                                             &read_error_wait) != -EIO ||
+                !unreadable_phy.calibration_wait_quarantined ||
+                unreadable_phy.calibration_wait != NULL ||
+                !ad9361_operation_busy(&unreadable_phy)) {
+                fprintf(stderr,
+                        "unreadable calibration status did not quarantine PHY\n");
+                return EXIT_FAILURE;
+            }
+            fail_read_reg = -1;
+        }
+
+        {
+            struct ad9361_rf_phy *mismatched_phy =
+                calloc(1, sizeof(*mismatched_phy));
+            struct ad9361_calibration_wait active_owner = {
+                .active = true,
+            };
+            struct ad9361_calibration_wait wrong_context = {
+                .active = true,
+                .timeout_us = 1000,
+                .poll_delay_us = 100,
+            };
+            struct ad9361_rfdc_calibration_job retained_parent = {0};
+
+            if (!mismatched_phy)
+                return EXIT_FAILURE;
+            mismatched_phy->spi = &spi;
+            wrong_context.phy = mismatched_phy;
+            mismatched_phy->calibration_wait = &active_owner;
+            if (ad9361_calibration_wait_poll(mismatched_phy,
+                                             &wrong_context) != -EIO ||
+                !mismatched_phy->calibration_wait_quarantined ||
+                mismatched_phy->calibration_wait != NULL) {
+                fprintf(stderr,
+                        "mismatched wait context left a stale PHY owner\n");
+                return EXIT_FAILURE;
+            }
+            mismatched_phy->spi = NULL;
+            mismatched_phy->rfdc_transaction = &retained_parent;
+            if (ad9361_remove_ex(mismatched_phy, true, &consumed) != -EBUSY ||
+                consumed ||
+                !mismatched_phy->calibration_wait_quarantined) {
+                fprintf(stderr,
+                        "RESETB discarded a still-owned calibration parent\n");
+                return EXIT_FAILURE;
+            }
+            mismatched_phy->rfdc_transaction = NULL;
+            if (ad9361_remove_ex(mismatched_phy, true, &consumed) < 0 ||
+                !consumed) {
+                fprintf(stderr,
+                        "RESETB did not clear mismatched wait quarantine\n");
                 return EXIT_FAILURE;
             }
         }
@@ -1694,6 +4222,36 @@ int main(void)
     {
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
+		{
+			struct ad9361_bbf_calibration_job job = {0};
+			struct ad9361_rf_bandwidth_transaction transaction = {0};
+			unsigned writes_before = write_count;
+
+			fake_regs[REG_STATE] = CALIBRATION_SEQUENCE_STATE(2);
+			ret = ad9361_bbf_calibration_start(
+				&phy, false, 10000000, 983040000, &job);
+			if (ret != -EBUSY || write_count != writes_before ||
+			    phy.calibration_state_unknown || job.active) {
+				fprintf(stderr,
+					"BBF calibration started while AD9361 sequencer was active: "
+					"ret=%" PRId32 " writes=%u/%u unknown=%u\n",
+					ret, write_count, writes_before,
+					phy.calibration_state_unknown);
+				return EXIT_FAILURE;
+			}
+			ret = ad9361_rf_bandwidth_transaction_start(
+				&phy, 20000000, 20000000, &transaction);
+			if (ret != -EBUSY || write_count != writes_before ||
+			    phy.rf_bandwidth_transaction != NULL ||
+			    phy.calibration_state_unknown) {
+				fprintf(stderr,
+					"Bandwidth transaction mutated RFIC while calibration sequencer was active: "
+					"ret=%" PRId32 " writes=%u/%u\n",
+					ret, write_count, writes_before);
+				return EXIT_FAILURE;
+			}
+			memset(fake_regs, 0, sizeof(fake_regs));
+		}
         fail_write_reg = -1;
         fail_write_once_reg = REG_RX1_TUNE_CTRL;
         ret = ad9361_rx_bb_analog_filter_calib(&phy, 20000000, 983040000);
@@ -1720,6 +4278,337 @@ int main(void)
         register_map_enabled = false;
         read_count = write_count = 0;
     }
+
+	/* The shared filter child performs at most one register read/write per
+	 * poll, preserves TIA -> TX second filter -> ADC order, and keeps the
+	 * enclosing bandwidth owner through all 40 ADC writes. */
+	{
+		struct ad9361_rf_bandwidth_transaction transaction = {0};
+		struct ad9361_rf_bandwidth_transaction *saved_owner =
+			phy.rf_bandwidth_transaction;
+		struct ad9361_rf_bandwidth_filter_transaction *saved_filter_owner =
+			phy.rf_bandwidth_filter_transaction;
+		struct no_os_clk bbpll_clock = { .rate = 983040000 };
+		struct refclk_scale adc_scale = {
+			.spi = &spi, .phy = &phy, .source = ADC_CLK,
+			.parent_source = BBPLL_CLK,
+		};
+		struct no_os_clk *saved_bbpll_clock = phy.clks[BBPLL_CLK];
+		struct refclk_scale *saved_adc_scale = phy.ref_clk_scale[ADC_CLK];
+		uint8_t saved_regs[sizeof(fake_regs)];
+		uint32_t saved_rxbbf_div = phy.rxbbf_div;
+		bool saved_manual_tx_quad_cal_en = phy.manual_tx_quad_cal_en;
+		unsigned i, before;
+
+		memcpy(saved_regs, fake_regs, sizeof(fake_regs));
+		memset(fake_regs, 0, sizeof(fake_regs));
+		fake_regs[REG_RX_BBF_C3_MSB] = 1;
+		fake_regs[REG_RX_BBF_C3_LSB] = 0;
+		fake_regs[REG_RX_BBF_R2346] = 1;
+		register_map_enabled = true;
+		phy.clks[BBPLL_CLK] = &bbpll_clock;
+		phy.ref_clk_scale[ADC_CLK] = &adc_scale;
+		fake_regs[REG_BBPLL] = 1;
+		phy.rxbbf_div = 8;
+		phy.manual_tx_quad_cal_en = true;
+		transaction.phy = &phy;
+		transaction.rx_bw = 10000000;
+		transaction.tx_bw = 10000000;
+		transaction.filter_job.bbpll_freq = 983040000;
+		transaction.filter_job.adc_freq = 491520000;
+		transaction.filter_job.adc_freq_valid = true;
+		transaction.stage = AD9361_RF_BANDWIDTH_TRANSACTION_FILTER;
+		transaction.filter_job.stage = AD9361_RF_BANDWIDTH_FILTER_TIA_READ;
+		transaction.active = true;
+		transaction.filter_job.active = true;
+		transaction.filter_job.phy = &phy;
+		phy.rf_bandwidth_transaction = &transaction;
+		phy.rf_bandwidth_filter_transaction = &transaction.filter_job;
+
+		/* Exercise the real uncached ADC_CLK path while the filter child owns
+		 * the PHY. Its checked public accessor would reject its own owner; the
+		 * owner-validated low-level scaler must perform one REG_BBPLL read. */
+		transaction.filter_job.adc_freq_valid = false;
+		before = read_count;
+		if (ad9361_rf_bandwidth_transaction_poll(
+			    &phy, &transaction) != 1 || read_count != before + 1 ||
+		    transaction.filter_job.adc_freq != 491520000 ||
+		    !transaction.filter_job.adc_freq_valid) {
+			fprintf(stderr,
+				"Owned ADC clock read failed or exceeded one SPI read per poll\n");
+			return EXIT_FAILURE;
+		}
+		for (i = 0; i < 3; i++) {
+			before = read_count;
+			if (ad9361_rf_bandwidth_transaction_poll(
+				    &phy, &transaction) != 1 || read_count != before + 1 ||
+			    write_count != 0) {
+				fprintf(stderr,
+					"TIA retained read exceeded one SPI operation per poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+		if (transaction.filter_job.stage != AD9361_RF_BANDWIDTH_FILTER_TIA_WRITE)
+			return EXIT_FAILURE;
+		for (i = 0; i < 5; i++) {
+			before = write_count;
+			if (ad9361_rf_bandwidth_transaction_poll(
+				    &phy, &transaction) != 1 || write_count != before + 1) {
+				fprintf(stderr,
+					"TIA retained write exceeded one SPI operation per poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+		if (transaction.filter_job.stage != AD9361_RF_BANDWIDTH_FILTER_TX_SECOND)
+			return EXIT_FAILURE;
+		for (i = 0; i < 3; i++) {
+			before = write_count;
+			if (ad9361_rf_bandwidth_transaction_poll(
+				    &phy, &transaction) != 1 || write_count != before + 1) {
+				fprintf(stderr,
+					"TX second-filter step exceeded one SPI write per poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+		for (i = 0; i < 3; i++) {
+			before = read_count;
+			if (ad9361_rf_bandwidth_transaction_poll(
+				    &phy, &transaction) != 1 || read_count != before + 1) {
+				fprintf(stderr,
+					"ADC retained read exceeded one SPI operation per poll\n");
+				return EXIT_FAILURE;
+			}
+		}
+		if (transaction.filter_job.stage != AD9361_RF_BANDWIDTH_FILTER_ADC_WRITE)
+			return EXIT_FAILURE;
+		for (i = 0; i < NO_OS_ARRAY_SIZE(transaction.filter_job.adc_values); i++) {
+			before = write_count;
+			if (ad9361_rf_bandwidth_transaction_poll(
+				    &phy, &transaction) != 1 || write_count != before + 1 ||
+			    phy.rf_bandwidth_transaction != &transaction) {
+				fprintf(stderr,
+					"ADC retained write/owner invariant failed at index %u\n", i);
+				return EXIT_FAILURE;
+			}
+		}
+		if (transaction.stage != AD9361_RF_BANDWIDTH_TRANSACTION_RESTORE)
+			return EXIT_FAILURE;
+		phy.rf_bandwidth_transaction = saved_owner;
+		phy.rf_bandwidth_filter_transaction = saved_filter_owner;
+		phy.clks[BBPLL_CLK] = saved_bbpll_clock;
+		phy.ref_clk_scale[ADC_CLK] = saved_adc_scale;
+		phy.rxbbf_div = saved_rxbbf_div;
+		phy.manual_tx_quad_cal_en = saved_manual_tx_quad_cal_en;
+		memcpy(fake_regs, saved_regs, sizeof(fake_regs));
+		register_map_enabled = false;
+		read_count = write_count = 0;
+	}
+
+	/* TXQ temporary-bandwidth work must poll the filter-only child instead of
+	 * entering the synchronous full-bandwidth helper. Inject an ADC write
+	 * failure and prove one bus operation, terminal child retirement, and a
+	 * fail-closed parent result. */
+	{
+		struct ad9361_tx_quad_calibration_job job = {0};
+		struct ad9361_rf_bandwidth_filter_transaction *saved_filter_owner =
+			phy.rf_bandwidth_filter_transaction;
+		bool saved_unknown = phy.calibration_state_unknown;
+		unsigned before = write_count;
+
+		memset(&job.bandwidth_job, 0, sizeof(job.bandwidth_job));
+		job.active = true;
+		job.bandwidth_changed = true;
+		job.stage = AD9361_TX_QUAD_JOB_BANDWIDTH_SETUP;
+		job.bandwidth_job.phy = &phy;
+		job.bandwidth_job.active = true;
+		job.bandwidth_job.stage = AD9361_RF_BANDWIDTH_FILTER_ADC_WRITE;
+		job.bandwidth_job.adc_index = 0;
+		phy.rf_bandwidth_filter_transaction = &job.bandwidth_job;
+		phy.calibration_state_unknown = false;
+		register_map_enabled = true;
+		fail_write_once_reg = 0x200;
+		ret = ad9361_tx_quad_calibration_job_poll(&phy, &job);
+		if (ret != 1 || write_count != before + 1 ||
+		    job.stage != AD9361_TX_QUAD_JOB_CLEANUP || job.status >= 0 ||
+		    !phy.calibration_state_unknown ||
+		    phy.rf_bandwidth_filter_transaction != NULL) {
+			fprintf(stderr,
+				"TXQ filter child did not fail closed on one ADC write\\n");
+			return EXIT_FAILURE;
+		}
+		ret = ad9361_tx_quad_calibration_job_poll(&phy, &job);
+		if (ret >= 0 || !job.terminal) {
+			fprintf(stderr, "TXQ filter child failure was not terminal\\n");
+			return EXIT_FAILURE;
+		}
+		phy.rf_bandwidth_filter_transaction = saved_filter_owner;
+		phy.calibration_state_unknown = saved_unknown;
+		register_map_enabled = false;
+		fail_write_once_reg = -1;
+		read_count = write_count = 0;
+	}
+
+	/* Run the real TXQ job through temporary filter setup, one successful
+	 * calibration attempt, and restoration of the caller's bandwidth pair. */
+	{
+		struct ad9361_tx_quad_calibration_job job = {0};
+		struct no_os_clk bb_ref = { .rate = 40000000 };
+		struct no_os_clk bbpll = { .rate = 960000000 };
+		struct no_os_clk adc = { .rate = 240000000 };
+		struct no_os_clk r1 = { .rate = 30720000 };
+		struct no_os_clk clkrf = { .rate = 30720000 };
+		struct no_os_clk t1 = { .rate = 30720000 };
+		struct no_os_clk clktf = { .rate = 30720000 };
+		struct refclk_scale bbpll_scale = {
+			.spi = &spi, .phy = &phy, .source = BBPLL_CLK,
+			.parent_source = BB_REFCLK,
+		};
+		struct refclk_scale adc_scale = {
+			.spi = &spi, .phy = &phy, .source = ADC_CLK,
+			.parent_source = BBPLL_CLK,
+		};
+		struct refclk_scale clkrf_scale = {
+			.spi = &spi, .phy = &phy, .source = CLKRF_CLK,
+			.parent_source = R1_CLK,
+		};
+		struct refclk_scale clktf_scale = {
+			.spi = &spi, .phy = &phy, .source = CLKTF_CLK,
+			.parent_source = T1_CLK,
+		};
+		struct no_os_clk *saved_clks[] = {
+			phy.clks[BB_REFCLK], phy.clks[BBPLL_CLK], phy.clks[ADC_CLK],
+			phy.clks[R1_CLK], phy.clks[CLKRF_CLK], phy.clks[T1_CLK],
+			phy.clks[CLKTF_CLK],
+		};
+		struct refclk_scale *saved_scales[] = {
+			phy.ref_clk_scale[BBPLL_CLK], phy.ref_clk_scale[ADC_CLK],
+			phy.ref_clk_scale[CLKRF_CLK], phy.ref_clk_scale[CLKTF_CLK],
+		};
+		struct ad9361_calibration_wait *saved_calibration_wait =
+			phy.calibration_wait;
+		struct ad9361_rf_bandwidth_filter_transaction *saved_filter_owner =
+			phy.rf_bandwidth_filter_transaction;
+		int32_t (*saved_read_cal_done)(struct ad9361_rf_phy *, uint32_t,
+					      bool *) = phy.read_cal_done;
+		bool saved_auto_complete = fake_calibration_autocomplete;
+		bool saved_unknown = phy.calibration_state_unknown;
+		uint32_t saved_rxbbf_div = phy.rxbbf_div;
+		uint8_t saved_last_phase = phy.last_tx_quad_cal_phase;
+		uint8_t saved_regs[sizeof(fake_regs)];
+		unsigned saved_fake_write_counts[NO_OS_ARRAY_SIZE(fake_write_counts)];
+		struct ad9361_tx_quad_calibration_transaction *saved_txq_owner =
+			phy.tx_quad_transaction;
+		unsigned i;
+		unsigned rx_mhz_write_base =
+			fake_write_counts[REG_RX_BBBW_MHZ];
+		bool saw_restore = false;
+		bool saw_expansion_before_txq = false;
+		bool saw_cal_done_before_restore = false;
+
+		register_map_enabled = true;
+		fake_calibration_autocomplete = true;
+		memcpy(saved_regs, fake_regs, sizeof(fake_regs));
+		memcpy(saved_fake_write_counts, fake_write_counts,
+		       sizeof(fake_write_counts));
+		memset(fake_regs, 0, sizeof(fake_regs));
+		/* The TXQ job is a child of an ALERT-owning transaction. */
+		fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+		fake_regs[REG_INTEGER_BB_FREQ_WORD] = 24;
+		fake_regs[REG_BBPLL] = 2;
+		fake_regs[REG_QUAD_CAL_STATUS_TX1] =
+			TX1_LO_CONV | TX1_SSB_CONV;
+		phy.clks[BB_REFCLK] = &bb_ref;
+		phy.clks[BBPLL_CLK] = &bbpll;
+		phy.clks[ADC_CLK] = &adc;
+		phy.clks[R1_CLK] = &r1;
+		phy.clks[CLKRF_CLK] = &clkrf;
+		phy.clks[T1_CLK] = &t1;
+		phy.clks[CLKTF_CLK] = &clktf;
+		phy.ref_clk_scale[BBPLL_CLK] = &bbpll_scale;
+		phy.ref_clk_scale[ADC_CLK] = &adc_scale;
+		phy.ref_clk_scale[CLKRF_CLK] = &clkrf_scale;
+		phy.ref_clk_scale[CLKTF_CLK] = &clktf_scale;
+		phy.read_cal_done = fake_calibration_done;
+		phy.calibration_state_unknown = false;
+		ret = ad9361_tx_quad_calibration_job_start_with_restore_bw(
+			&phy, 500000, 500000, -1, 5000000, 5000000, &job);
+		if (ret != 0 || !job.bandwidth_changed ||
+		    job.stage != AD9361_TX_QUAD_JOB_BANDWIDTH_SETUP ||
+		    job.bandwidth_job.rx_bw != 7680000 ||
+		    job.bandwidth_job.tx_bw != 7680000) {
+			fprintf(stderr,
+				"TXQ did not start expected temporary bandwidth: ret=%" PRId32
+				" stage=%u temp=(%" PRIu32 ",%" PRIu32 ")\n",
+				ret, job.stage, job.bandwidth_job.rx_bw,
+				job.bandwidth_job.tx_bw);
+			return EXIT_FAILURE;
+		}
+		for (i = 0; i < 512 && !job.terminal; i++) {
+			ret = ad9361_tx_quad_calibration_job_poll(&phy, &job);
+			if (ret < 0)
+				break;
+			if (job.stage == AD9361_TX_QUAD_JOB_INITIAL &&
+			    phy.calibration_wait == &job.attempt.wait) {
+				saw_expansion_before_txq =
+					fake_regs[REG_RX_BBBW_MHZ] == 3 &&
+					fake_regs[REG_RX_BBBW_KHZ] == 108;
+			}
+			if (job.stage == AD9361_TX_QUAD_JOB_BANDWIDTH_RESTORE) {
+				saw_restore = true;
+				saw_cal_done_before_restore =
+					job.attempt.terminal &&
+					job.attempt.terminal_status == 0 &&
+					fake_regs[REG_RX_BBBW_MHZ] == 3 &&
+					fake_regs[REG_RX_BBBW_KHZ] == 108;
+				if (job.bandwidth_job.rx_bw != 5000000 ||
+				    job.bandwidth_job.tx_bw != 5000000) {
+					fprintf(stderr,
+						"TXQ restore child lost caller bandwidth pair\n");
+					return EXIT_FAILURE;
+				}
+			}
+		}
+		if (!job.terminal || ret != 0 || !saw_restore ||
+		    !saw_expansion_before_txq || !saw_cal_done_before_restore ||
+		    !job.bandwidth_restore_complete || job.status != 0 ||
+		    phy.calibration_state_unknown ||
+		    fake_write_counts[REG_RX_BBBW_MHZ] != rx_mhz_write_base + 2 ||
+		    fake_regs[REG_RX_BBBW_MHZ] != 2 ||
+		    fake_regs[REG_RX_BBBW_KHZ] != 64) {
+			fprintf(stderr,
+				"TXQ temporary bandwidth setup/restore failed: ret=%" PRId32
+				" stage=%u terminal=%u restored=%u status=%" PRId32
+				" unknown=%u polls=%u\n",
+				ret, job.stage, job.terminal,
+				job.bandwidth_restore_complete, job.status,
+				phy.calibration_state_unknown, i);
+			return EXIT_FAILURE;
+		}
+		phy.clks[BB_REFCLK] = saved_clks[0];
+		phy.clks[BBPLL_CLK] = saved_clks[1];
+		phy.clks[ADC_CLK] = saved_clks[2];
+		phy.clks[R1_CLK] = saved_clks[3];
+		phy.clks[CLKRF_CLK] = saved_clks[4];
+		phy.clks[T1_CLK] = saved_clks[5];
+		phy.clks[CLKTF_CLK] = saved_clks[6];
+		phy.ref_clk_scale[BBPLL_CLK] = saved_scales[0];
+		phy.ref_clk_scale[ADC_CLK] = saved_scales[1];
+		phy.ref_clk_scale[CLKRF_CLK] = saved_scales[2];
+		phy.ref_clk_scale[CLKTF_CLK] = saved_scales[3];
+		phy.read_cal_done = saved_read_cal_done;
+		phy.calibration_state_unknown = saved_unknown;
+		phy.calibration_wait = saved_calibration_wait;
+		phy.rf_bandwidth_filter_transaction = saved_filter_owner;
+		phy.tx_quad_transaction = saved_txq_owner;
+		phy.rxbbf_div = saved_rxbbf_div;
+		phy.last_tx_quad_cal_phase = saved_last_phase;
+		fake_calibration_autocomplete = saved_auto_complete;
+		memcpy(fake_regs, saved_regs, sizeof(fake_regs));
+		memcpy(fake_write_counts, saved_fake_write_counts,
+		       sizeof(fake_write_counts));
+		register_map_enabled = false;
+		read_count = write_count = 0;
+	}
 
     fail_write_reg = -1;
 
@@ -2052,6 +4941,88 @@ int main(void)
         phy.current_table = TBL_200_1300_MHZ;
         fail_read_reg = -1;
         register_map_enabled = false;
+    }
+
+    /* Gain-table loading is a retained row transaction: start is inert, each
+     * poll is bus-bounded, and partial-row failure retires ownership and
+     * invalidates the active table. */
+    {
+        struct ad9361_rf_phy gain_phy = phy;
+        struct ad9361_gain_table_transaction gain_job = {0};
+        unsigned polls = 0;
+        unsigned writes_before;
+        unsigned reads_before;
+        int32_t poll_status = -EIO;
+
+        register_map_enabled = true;
+        fail_read_reg = -1;
+        fail_write_reg = -1;
+        gain_phy.gain_table_transaction = NULL;
+        gain_phy.current_table = TBL_200_1300_MHZ;
+        fake_regs[REG_RX1_MANUAL_LMT_FULL_GAIN] = 0;
+        fake_regs[REG_RX2_MANUAL_LMT_FULL_GAIN] = 0;
+        writes_before = write_count;
+        reads_before = read_count;
+        ret = ad9361_gain_table_transaction_start(
+            &gain_phy, 1800000000ULL, GT_RX1 | GT_RX2, &gain_job);
+        if (ret < 0 || write_count != writes_before ||
+            read_count != reads_before ||
+            gain_phy.gain_table_transaction != &gain_job ||
+            !ad9361_operation_busy(&gain_phy)) {
+            fprintf(stderr, "Gain-table start performed I/O or lost ownership\n");
+            return EXIT_FAILURE;
+        }
+        do {
+            unsigned poll_reads = read_count;
+            unsigned poll_writes = write_count;
+            uint32_t delay;
+
+            poll_status = ad9361_gain_table_transaction_poll(
+                &gain_phy, &gain_job);
+            if (read_count - poll_reads > 1 ||
+                write_count - poll_writes > 1) {
+                fprintf(stderr,
+                        "Gain-table poll exceeded one read/write helper\n");
+                return EXIT_FAILURE;
+            }
+            delay = ad9361_gain_table_transaction_poll_delay_us(&gain_job);
+            if (delay)
+                no_os_udelay(delay);
+            if (++polls > 1024) {
+                fprintf(stderr, "Gain-table transaction did not terminate\n");
+                return EXIT_FAILURE;
+            }
+        } while (poll_status == 1);
+        if (poll_status != 0 || gain_phy.current_table !=
+            TBL_1300_4000_MHZ || gain_phy.gain_table_transaction != NULL) {
+            fprintf(stderr,
+                    "Gain-table transaction failed or published wrong table\n");
+            return EXIT_FAILURE;
+        }
+
+        gain_job = (struct ad9361_gain_table_transaction){0};
+        gain_phy.current_table = TBL_200_1300_MHZ;
+        fail_write_reg = REG_GAIN_TABLE_WRITE_DATA2;
+        writes_before = write_count;
+        ret = ad9361_gain_table_transaction_start(
+            &gain_phy, 1800000000ULL, GT_RX1 | GT_RX2, &gain_job);
+        while (ret >= 0 &&
+               (poll_status = ad9361_gain_table_transaction_poll(
+                    &gain_phy, &gain_job)) == 1)
+            ret = 0;
+        if (ret >= 0)
+            ret = poll_status;
+        if (ret != -EIO || gain_phy.current_table != NO_GAIN_TABLE ||
+            gain_phy.gain_table_transaction != NULL ||
+            write_count == writes_before) {
+            fprintf(stderr,
+                    "Gain-table partial write failure did not fail closed\n");
+            return EXIT_FAILURE;
+        }
+        fail_write_reg = -1;
+        gain_phy.calibration_state_unknown = false;
+        register_map_enabled = false;
+        read_count = write_count = 0;
     }
 
     /* Both FIR coefficient readers must propagate setup, address, data, and
@@ -2555,8 +5526,6 @@ int main(void)
     }
 
     {
-        struct auxdac_control auxdac = {0};
-        struct gpo_control gpo = {0};
         struct ctrl_outs_control ctrl_outs = {0};
         struct gain_control gain = {0};
         struct tx_monitor_control txmon = {0};
@@ -2581,23 +5550,32 @@ int main(void)
         pdata.gain_ctrl = gain;
 
         fail_write_reg = REG_AUXDAC_ENABLE_CTRL;
-        ret = ad9361_auxdac_setup(&phy, &auxdac);
+        {
+            uint8_t cursor = 0;
+            ret = ad9361_setup_auxdac_step(&phy, &cursor);
+        }
         if (ret != -EIO) {
-            fprintf(stderr, "AuxDAC setup hid enable write failure: ret=%" PRId32
+            fprintf(stderr, "AuxDAC setup step hid enable write failure: ret=%" PRId32
                     "\n", ret);
             return EXIT_FAILURE;
         }
 
         fail_write_reg = REG_AUTO_GPO;
-        ret = ad9361_gpo_setup(&phy, &gpo);
+        {
+            uint8_t cursor = 0;
+            ret = ad9361_setup_gpo_step(&phy, &cursor);
+        }
         if (ret != -EIO) {
-            fprintf(stderr, "GPO setup hid auto-mode write failure: ret=%" PRId32
+            fprintf(stderr, "GPO setup step hid auto-mode write failure: ret=%" PRId32
                     "\n", ret);
             return EXIT_FAILURE;
         }
 
         fail_write_reg = REG_CTRL_OUTPUT_POINTER;
-        ret = ad9361_ctrl_outs_setup(&phy, &ctrl_outs);
+        {
+            uint8_t cursor = 0;
+            ret = ad9361_ctrl_outs_setup_step(&phy, &ctrl_outs, &cursor);
+        }
         if (ret != -EIO) {
             fprintf(stderr, "Control-output setup hid pointer write failure: ret=%" PRId32
                     "\n", ret);
@@ -2630,11 +5608,94 @@ int main(void)
         }
 
         fail_write_reg = REG_EXTERNAL_LNA_CTRL;
-        ret = ad9361_setup_ext_lna(&phy, &elna);
+        {
+            uint8_t cursor = 0;
+            ret = ad9361_setup_ext_lna_step(&phy, &elna, &cursor);
+        }
         if (ret != -EIO) {
             fprintf(stderr, "External-LNA setup hid control write failure: ret=%" PRId32
                     "\n", ret);
             return EXIT_FAILURE;
+        }
+
+        /* The retained parallel-port cursor emits one ordered SPI helper per
+         * poll, including both optional RX phase-inversion writes. */
+        {
+            struct ad9361_phy_platform_data pp_pdata = {0};
+            struct ad9361_rf_phy pp_phy = {0};
+            static const uint32_t expected_regs[] = {
+                REG_PARALLEL_PORT_CONF_1, REG_PARALLEL_PORT_CONF_2,
+                REG_PARALLEL_PORT_CONF_3, REG_RX_CLOCK_DATA_DELAY,
+                REG_TX_CLOCK_DATA_DELAY, REG_LVDS_BIAS_CTRL,
+                REG_DIGITAL_IO_CTRL, REG_DIGITAL_IO_CTRL,
+                REG_DIGITAL_IO_CTRL, REG_DIGITAL_IO_CTRL,
+                REG_LVDS_INVERT_CTRL1, REG_LVDS_INVERT_CTRL2,
+                REG_PARALLEL_PORT_CONF_2, REG_INVERT_BITS,
+            };
+            uint8_t saved_regs[sizeof(fake_regs)];
+            unsigned saved_counts[sizeof(fake_write_counts) /
+                                  sizeof(fake_write_counts[0])];
+            uint16_t saved_addr_log[sizeof(spi_write_addr_log) /
+                                    sizeof(spi_write_addr_log[0])];
+            uint8_t saved_value_log[sizeof(spi_write_value_log) /
+                                    sizeof(spi_write_value_log[0])];
+            unsigned saved_read_count = read_count;
+            unsigned saved_write_count = write_count;
+            uint16_t saved_last_write = last_spi_write_addr;
+            uint16_t cursor = 0;
+            unsigned polls = 0;
+            unsigned i;
+
+            memcpy(saved_regs, fake_regs, sizeof(fake_regs));
+            memcpy(saved_counts, fake_write_counts, sizeof(fake_write_counts));
+            memcpy(saved_addr_log, spi_write_addr_log,
+                   sizeof(spi_write_addr_log));
+            memcpy(saved_value_log, spi_write_value_log,
+                   sizeof(spi_write_value_log));
+            write_count = 0;
+            pp_phy.spi = &spi;
+            pp_phy.pdata = &pp_pdata;
+            pp_pdata.rx1rx2_phase_inversion_en = true;
+
+            do {
+                unsigned reads_before = read_count;
+                unsigned writes_before = write_count;
+
+                ret = ad9361_pp_port_setup_step(&pp_phy, false, &cursor);
+                if (ret < 0 || read_count - reads_before > 1 ||
+                    write_count - writes_before > 1) {
+                    fprintf(stderr,
+                            "Parallel-port retained step exceeded its SPI bound\n");
+                    return EXIT_FAILURE;
+                }
+                polls++;
+            } while (ret == 1 && polls < 20);
+            if (ret != 0 || polls != sizeof(expected_regs) /
+                                      sizeof(expected_regs[0]) ||
+                write_count != sizeof(expected_regs) /
+                               sizeof(expected_regs[0])) {
+                fprintf(stderr,
+                        "Parallel-port retained cursor did not terminate at expected count\n");
+                return EXIT_FAILURE;
+            }
+            for (i = 0; i < sizeof(expected_regs) /
+                            sizeof(expected_regs[0]); ++i) {
+                if (spi_write_addr_log[i] != expected_regs[i]) {
+                    fprintf(stderr,
+                            "Parallel-port retained register order changed at %u\n",
+                            i);
+                    return EXIT_FAILURE;
+                }
+            }
+            memcpy(fake_regs, saved_regs, sizeof(fake_regs));
+            memcpy(fake_write_counts, saved_counts, sizeof(fake_write_counts));
+            memcpy(spi_write_addr_log, saved_addr_log,
+                   sizeof(spi_write_addr_log));
+            memcpy(spi_write_value_log, saved_value_log,
+                   sizeof(spi_write_value_log));
+            read_count = saved_read_count;
+            write_count = saved_write_count;
+            last_spi_write_addr = saved_last_write;
         }
 
         fail_write_reg = REG_GM_SUB_TABLE_CONFIG;
@@ -3099,10 +6160,12 @@ int main(void)
         fail_write_once_reg_occurrence = 1;
         apply_failed_write_once = true;
         ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
-        if (ret != -EIO || fake_regs[REG_SDM_CTRL_1] != BBPLL_RESET_BAR ||
-            fake_write_counts[REG_SDM_CTRL_1] != 2) {
+        if (ret != -EIO ||
+            fake_regs[REG_SDM_CTRL_1] !=
+                (INIT_BB_FO_CAL | BBPLL_RESET_BAR) ||
+            fake_write_counts[REG_SDM_CTRL_1] != 1) {
             fprintf(stderr,
-                    "BBPLL start cleanup mismatch: ret=%" PRId32
+                    "BBPLL ambiguous start failure issued cleanup: ret=%" PRId32
                     " reg=0x%02x writes=%u\n", ret,
                     fake_regs[REG_SDM_CTRL_1],
                     fake_write_counts[REG_SDM_CTRL_1]);
@@ -3115,9 +6178,9 @@ int main(void)
         apply_failed_write_once = true;
         ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
         if (ret != -EIO || fake_regs[REG_SDM_CTRL_1] != BBPLL_RESET_BAR ||
-            fake_write_counts[REG_SDM_CTRL_1] != 3) {
+            fake_write_counts[REG_SDM_CTRL_1] != 2) {
             fprintf(stderr,
-                    "BBPLL failed calibration-clear write skipped cleanup\n");
+                    "BBPLL failed calibration-clear write issued cleanup\n");
             return EXIT_FAILURE;
         }
         fail_write_once_reg = -1;
@@ -3166,6 +6229,116 @@ int main(void)
         }
         memcpy(fake_regs, saved_fake_regs, sizeof(fake_regs));
         register_map_enabled = saved_register_map_enabled;
+    }
+
+    /* The retained BBPLL transaction must not monopolize its caller with
+     * the register-programming burst or the lock wait. One poll performs at
+     * most one SPI register write/status observation and never sleeps. */
+    {
+        struct ad9361_rf_phy bbpll_phy = { .spi = &spi, .pdata = &pdata };
+        struct no_os_clk refclk = { .rate = 40000000 };
+        struct refclk_scale bbpll = { .spi = &spi, .phy = &bbpll_phy };
+        struct ad9361_bbpll_rate_transaction transaction = {0};
+        struct ad9361_sample_rate_transaction competing_rate_change = {0};
+        unsigned previous_writes;
+        unsigned previous_reads;
+        unsigned previous_delays;
+        unsigned polls = 0;
+
+        bbpll_phy.clk_refin = &refclk;
+        register_map_enabled = true;
+        memset(fake_regs, 0, sizeof(fake_regs));
+        fake_regs[REG_CH_1_OVERFLOW] = BBPLL_LOCK;
+        fake_time_us = 0;
+        previous_writes = write_count;
+        previous_delays = delay_count;
+        ret = ad9361_bbpll_rate_transaction_start(
+            &bbpll, 737280000, refclk.rate, &transaction);
+        if (ret != 0 || !transaction.active || write_count != previous_writes) {
+            fprintf(stderr,
+                    "BBPLL transaction start performed hardware work: "
+                    "ret=%" PRId32 " active=%d writes=%u->%u\n",
+                    ret, transaction.active, previous_writes, write_count);
+            return EXIT_FAILURE;
+        }
+        if (!ad9361_operation_busy(&bbpll_phy) ||
+            ad9361_ensm_force_state_checked(&bbpll_phy, ENSM_STATE_ALERT) !=
+                -EBUSY ||
+            ad9361_sample_rate_transaction_start(
+                &bbpll_phy, 30720000, false, &competing_rate_change) !=
+                -EBUSY) {
+            fprintf(stderr,
+                    "BBPLL transaction did not reserve exclusive PHY ownership\n");
+            return EXIT_FAILURE;
+        }
+        do {
+            previous_writes = write_count;
+            previous_reads = read_count;
+            previous_delays = delay_count;
+            ret = ad9361_bbpll_rate_transaction_poll(&bbpll_phy,
+                                                       &transaction);
+            polls++;
+            if (write_count - previous_writes > 1 ||
+                read_count - previous_reads > 1 ||
+                delay_count != previous_delays) {
+                fprintf(stderr,
+                        "BBPLL transaction poll exceeded cooperative step: "
+                        "writes=%u reads=%u delays=%u\n",
+                        write_count - previous_writes,
+                        read_count - previous_reads,
+                        delay_count - previous_delays);
+                return EXIT_FAILURE;
+            }
+        } while (ret == 1 && polls < 64);
+        if (ret != 0 || transaction.active || !transaction.terminal ||
+            transaction.terminal_status != 0 ||
+            bbpll_phy.status_wait != NULL ||
+            ad9361_operation_busy(&bbpll_phy) || polls < 15 ||
+            fake_regs[REG_LOOP_FILTER_3] != 0x35 ||
+            fake_regs[REG_LOOP_FILTER_3 - 1] != 0x5B ||
+            fake_regs[REG_LOOP_FILTER_3 - 2] != 0xE8) {
+            fprintf(stderr,
+                    "BBPLL transaction sequence mismatch: ret=%" PRId32
+                    " active=%d terminal=%d polls=%u filter=%02x:%02x:%02x\n",
+                    ret, transaction.active, transaction.terminal, polls,
+                    fake_regs[REG_LOOP_FILTER_3],
+                    fake_regs[REG_LOOP_FILTER_3 - 1],
+                    fake_regs[REG_LOOP_FILTER_3 - 2]);
+            return EXIT_FAILURE;
+        }
+
+        /* A failed write before calibration launch must stop the retained
+         * sequence, poison the PHY, and never issue later launch/cleanup I/O. */
+        memset(&transaction, 0, sizeof(transaction));
+        bbpll_phy.calibration_state_unknown = false;
+        fake_write_counts[REG_SDM_CTRL_1] = 0;
+        fail_write_reg = REG_INTEGER_BB_FREQ_WORD;
+        if (ad9361_bbpll_rate_transaction_start(
+                &bbpll, 737280000, refclk.rate, &transaction) != 0) {
+            fprintf(stderr, "BBPLL fault-injection start rejected\n");
+            return EXIT_FAILURE;
+        }
+        do {
+            ret = ad9361_bbpll_rate_transaction_poll(&bbpll_phy,
+                                                       &transaction);
+            polls++;
+        } while (ret == 1 && polls < 128);
+        fail_write_reg = -1;
+        if (ret != -EIO || transaction.active || !transaction.terminal ||
+            !ad9361_calibration_state_unknown(&bbpll_phy) ||
+            fake_write_counts[REG_SDM_CTRL_1] != 0 ||
+            bbpll_phy.status_wait != NULL ||
+            ad9361_operation_busy(&bbpll_phy)) {
+            fprintf(stderr,
+                    "BBPLL write failure did not stop/fail closed: "
+                    "ret=%" PRId32 " active=%d terminal=%d poisoned=%d "
+                    "launch_writes=%u\n", ret, transaction.active,
+                    transaction.terminal,
+                    ad9361_calibration_state_unknown(&bbpll_phy),
+                    fake_write_counts[REG_SDM_CTRL_1]);
+            return EXIT_FAILURE;
+        }
+        register_map_enabled = false;
     }
 
     {
@@ -3217,15 +6390,22 @@ int main(void)
             uint64_t saved_rx_freq = pdata.rx_synth_freq;
             uint64_t saved_tx_freq = pdata.tx_synth_freq;
             unsigned writes_before = write_count;
+            struct ad9361_setup_transaction setup_transaction = {0};
 
             pdata.rx_synth_freq = 18000000000ULL;
             pdata.tx_synth_freq = 1800000000ULL;
-            ret = ad9361_setup(&phy);
-            if (ret != -EINVAL || write_count != writes_before) {
+            ret = ad9361_setup_transaction_start(
+                &phy, &setup_transaction);
+            if (ret != -EINVAL || write_count != writes_before ||
+                setup_transaction.active ||
+                setup_transaction.terminal_status != -EINVAL) {
                 fprintf(stderr,
-                        "Invalid RX startup LO was not rejected before SPI: "
-                        "ret=%" PRId32 " writes=%u->%u\n",
-                        ret, writes_before, write_count);
+                        "Retained setup accepted invalid RX startup LO: "
+                        "ret=%" PRId32 " active=%d terminal=%" PRId32
+                        " writes=%u->%u\n",
+                        ret, setup_transaction.active,
+                        setup_transaction.terminal_status,
+                        writes_before, write_count);
                 return EXIT_FAILURE;
             }
             pdata.rx_synth_freq = 1800000000ULL;
@@ -3240,6 +6420,213 @@ int main(void)
             }
             pdata.rx_synth_freq = saved_rx_freq;
             pdata.tx_synth_freq = saved_tx_freq;
+        }
+
+        /* Retained setup start performs validation and captures state only;
+         * the first RFIC mutation belongs to the first poll. */
+        {
+            struct ad9361_setup_transaction setup_transaction = {0};
+            unsigned writes_before = write_count;
+            unsigned reads_before = read_count;
+
+            ret = ad9361_setup_transaction_start(&phy, &setup_transaction);
+            if (ret != 0 || !setup_transaction.active ||
+                setup_transaction.terminal ||
+                setup_transaction.stage != AD9361_SETUP_TRANSACTION_PRE_AUXDAC ||
+                phy.setup_transaction != &setup_transaction ||
+                write_count != writes_before || read_count != reads_before) {
+                fprintf(stderr,
+                        "Retained setup start performed I/O or failed to reserve PHY: "
+                        "ret=%" PRId32 " stage=%u reads=%u->%u writes=%u->%u\n",
+                        ret, setup_transaction.stage, reads_before, read_count,
+                        writes_before, write_count);
+                return EXIT_FAILURE;
+            }
+            /* This test intentionally stops before poll, so retire only the
+             * software reservation; no hardware state has changed. */
+            phy.setup_transaction = NULL;
+            setup_transaction.active = false;
+        }
+
+        /* A failure in the first retained mutation must preserve its errno,
+         * poison the partially programmed PHY, and retire the owner. */
+        {
+            struct ad9361_phy_platform_data fault_pdata = {0};
+            struct ad9361_rf_phy fault_phy = {0};
+            struct ad9361_setup_transaction setup_transaction = {0};
+            int32_t expected_error = -EIO;
+
+            fault_pdata.rx_synth_freq = 1800000000ULL;
+            fault_pdata.tx_synth_freq = 1800000000ULL;
+            fault_phy.spi = &spi;
+            fault_phy.pdata = &fault_pdata;
+            fault_phy.clk_refin = &clock_nodes[BB_REFCLK];
+            fault_phy.clks[BB_REFCLK] = &clock_nodes[BB_REFCLK];
+            fault_phy.ref_clk_scale[BB_REFCLK] =
+                &clock_scales[BB_REFCLK];
+            if (ad9361_setup_transaction_start(
+                    &fault_phy, &setup_transaction) != 0) {
+                fprintf(stderr, "Setup fault-injection transaction did not start\n");
+                return EXIT_FAILURE;
+            }
+            fail_write_once_reg = REG_AUXDAC_ENABLE_CTRL;
+            fail_write_once_reg_occurrence = 1;
+            ret = ad9361_setup_transaction_poll(&fault_phy,
+                                                &setup_transaction);
+            fail_write_once_reg = -1;
+            if (ret != expected_error || !setup_transaction.terminal ||
+                setup_transaction.terminal_status != expected_error ||
+                fault_phy.setup_transaction != NULL ||
+                !ad9361_calibration_state_unknown(&fault_phy)) {
+                fprintf(stderr,
+                        "Setup prefix failure lost errno/poison/retirement: "
+                        "ret=%" PRId32 " terminal=%" PRId32 " unknown=%d\n",
+                        ret, setup_transaction.terminal_status,
+                        ad9361_calibration_state_unknown(&fault_phy));
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* Drive only the retained pre-clock prefix. Every poll must stay
+         * within one complete register helper before ownership reaches the
+         * clock-chain child. */
+        {
+            struct ad9361_phy_platform_data prefix_pdata = pdata;
+            struct ad9361_rf_phy prefix_phy = {0};
+            struct ad9361_setup_transaction setup_transaction = {0};
+            struct no_os_clk prefix_bb_ref = clock_nodes[BB_REFCLK];
+            struct refclk_scale prefix_bb_scale =
+                clock_scales[BB_REFCLK];
+            static const uint32_t prefix_registers[] = {
+                REG_AUXDAC_ENABLE_CTRL, REG_AUXDAC_1_WORD,
+                REG_AUXDAC_1_CONFIG, REG_AUXDAC_ENABLE_CTRL,
+                REG_AUXDAC_2_WORD, REG_AUXDAC_2_CONFIG,
+                REG_AUXDAC_ENABLE_CTRL, REG_EXTERNAL_LNA_CTRL,
+                REG_AUXDAC1_RX_DELAY, REG_AUXDAC1_TX_DELAY,
+                REG_AUXDAC2_RX_DELAY, REG_AUXDAC2_TX_DELAY,
+                REG_AUTO_GPO, REG_GPO_FORCE_AND_INIT,
+                REG_GPO0_RX_DELAY, REG_GPO0_TX_DELAY,
+                REG_GPO1_RX_DELAY, REG_GPO1_TX_DELAY,
+                REG_GPO2_RX_DELAY, REG_GPO2_TX_DELAY,
+                REG_GPO3_RX_DELAY, REG_GPO3_TX_DELAY,
+                REG_EXTERNAL_LNA_CTRL,
+            };
+            static const uint32_t reference_registers[] = {
+                REG_CTRL, REG_BANDGAP_CONFIG0, REG_BANDGAP_CONFIG1,
+                REG_DCXO_COARSE_TUNE, REG_DCXO_FINE_TUNE_LOW,
+                REG_DCXO_FINE_TUNE_HIGH, REG_REF_DIVIDE_CONFIG_1,
+                REG_REF_DIVIDE_CONFIG_2, REG_REF_DIVIDE_CONFIG_2,
+                REG_REF_DIVIDE_CONFIG_2, REG_CLOCK_ENABLE,
+            };
+            uint8_t saved_fake_regs[sizeof(fake_regs)];
+            unsigned saved_fake_write_counts[sizeof(fake_write_counts) /
+                                             sizeof(fake_write_counts[0])];
+            uint16_t saved_write_addr_log[sizeof(spi_write_addr_log) /
+                                          sizeof(spi_write_addr_log[0])];
+            uint8_t saved_write_value_log[sizeof(spi_write_value_log) /
+                                          sizeof(spi_write_value_log[0])];
+            unsigned polls = 0;
+            unsigned saved_write_count = write_count;
+            unsigned saved_read_count = read_count;
+            unsigned writes_before;
+            uint16_t saved_last_write_addr = last_spi_write_addr;
+            unsigned i;
+
+            memcpy(saved_fake_regs, fake_regs, sizeof(fake_regs));
+            memcpy(saved_fake_write_counts, fake_write_counts,
+                   sizeof(fake_write_counts));
+            memcpy(saved_write_addr_log, spi_write_addr_log,
+                   sizeof(spi_write_addr_log));
+            memcpy(saved_write_value_log, spi_write_value_log,
+                   sizeof(spi_write_value_log));
+            write_count = 0; /* Keep the bounded trace inside the log array. */
+            writes_before = write_count;
+            prefix_phy.spi = &spi;
+            prefix_phy.pdata = &prefix_pdata;
+            prefix_phy.clk_refin = &prefix_bb_ref;
+            prefix_phy.clks[BB_REFCLK] = &prefix_bb_ref;
+            prefix_phy.ref_clk_scale[BB_REFCLK] = &prefix_bb_scale;
+            prefix_bb_scale.phy = &prefix_phy;
+            prefix_bb_scale.spi = &spi;
+            prefix_bb_scale.source = BB_REFCLK;
+            prefix_bb_scale.parent_source = EXT_REF_CLK;
+
+            ret = ad9361_setup_transaction_start(&prefix_phy,
+                                                 &setup_transaction);
+            if (ret != 0)
+                return EXIT_FAILURE;
+            while (setup_transaction.stage !=
+                       AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_START &&
+                   polls++ < 128) {
+                unsigned reads_before = read_count;
+                unsigned writes_before = write_count;
+
+                ret = ad9361_setup_transaction_poll(&prefix_phy,
+                                                    &setup_transaction);
+                if (ret != 1 || read_count - reads_before > 1 ||
+                    write_count - writes_before > 1) {
+                    fprintf(stderr,
+                            "Retained pre-clock setup exceeded one register helper per poll: "
+                            "ret=%" PRId32 " reads=%u writes=%u stage=%u\n",
+                            ret, read_count - reads_before,
+                            write_count - writes_before,
+                            setup_transaction.stage);
+                    return EXIT_FAILURE;
+                }
+            }
+            if (setup_transaction.stage !=
+                    AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_START ||
+                polls >= 128) {
+                fprintf(stderr,
+                        "Retained pre-clock setup failed to reach clock-chain phase\n");
+                return EXIT_FAILURE;
+            }
+            for (i = 0; i < sizeof(prefix_registers) /
+                            sizeof(prefix_registers[0]); ++i) {
+                if (spi_write_addr_log[writes_before + i] !=
+                    prefix_registers[i]) {
+                    fprintf(stderr,
+                            "AuxDAC/GPO retained prefix order changed at write %u\n",
+                            i);
+                    return EXIT_FAILURE;
+                }
+            }
+            for (i = 0; i < sizeof(reference_registers) /
+                            sizeof(reference_registers[0]); ++i) {
+                if (spi_write_addr_log[writes_before +
+                        sizeof(prefix_registers) /
+                        sizeof(prefix_registers[0]) + i] !=
+                    reference_registers[i]) {
+                    fprintf(stderr,
+                            "Analog/reference retained prefix order changed at step %u\n",
+                            i);
+                    return EXIT_FAILURE;
+                }
+            }
+            i = writes_before +
+                sizeof(prefix_registers) / sizeof(prefix_registers[0]) +
+                sizeof(reference_registers) / sizeof(reference_registers[0]);
+            if (spi_write_addr_log[i] == REG_CLOCK_CTRL)
+                ++i;
+            if (spi_write_addr_log[i] != REG_FRACT_BB_FREQ_WORD_2 ||
+                spi_write_addr_log[i + 1] != REG_FRACT_BB_FREQ_WORD_3) {
+                fprintf(stderr, "BBPLL seed writes moved in retained prefix\n");
+                return EXIT_FAILURE;
+            }
+            /* The fake device has no reset/recovery behavior here. This test
+             * owns the synthetic PHY, so release its software reservation. */
+            prefix_phy.setup_transaction = NULL;
+            setup_transaction.active = false;
+            memcpy(fake_regs, saved_fake_regs, sizeof(fake_regs));
+            memcpy(fake_write_counts, saved_fake_write_counts,
+                   sizeof(fake_write_counts));
+            memcpy(spi_write_addr_log, saved_write_addr_log,
+                   sizeof(spi_write_addr_log));
+            memcpy(spi_write_value_log, saved_write_value_log,
+                   sizeof(spi_write_value_log));
+            write_count = saved_write_count;
+            read_count = saved_read_count;
+            last_spi_write_addr = saved_last_write_addr;
         }
 
         /* Legacy round-rate returns the high-band encoded rate through a
@@ -3373,6 +6760,82 @@ int main(void)
                         "BBPLL recovery request was skipped after readback "
                         "failure: ret=%" PRId32 " writes=%u->%u rate=%" PRIu32
                         " initialized=%d\n", ret, writes_before, write_count,
+                        clock_nodes[BBPLL_CLK].rate, phy.bbpll_initialized);
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* The clock-framework transaction must retain the low-level BBPLL
+         * owner through lock, reject stale rate reads while pending, then
+         * publish the divider-readback cache only at terminal success. */
+        {
+            struct ad9361_bbpll_clock_transaction transaction = {0};
+            unsigned int polls = 0;
+
+            register_map_enabled = true;
+            fake_regs[REG_CH_1_OVERFLOW] = BBPLL_LOCK;
+            fake_time_us = 0;
+            ret = ad9361_bbpll_clock_transaction_start(
+                &phy, bbpll, 1000000000, &transaction);
+            if (ret != 0 || !transaction.active ||
+                !ad9361_operation_busy(&phy) ||
+                clock_nodes[BBPLL_CLK].rate != 0 ||
+                clock_nodes[ADC_CLK].rate != 0 ||
+                phy.bbpll_initialized) {
+                fprintf(stderr,
+                        "BBPLL clock transaction did not close cached tree: "
+                        "ret=%" PRId32 " active=%d busy=%d bbpll=%" PRIu32
+                        " adc=%" PRIu32 " initialized=%d\n",
+                        ret, transaction.active, ad9361_operation_busy(&phy),
+                        clock_nodes[BBPLL_CLK].rate,
+                        clock_nodes[ADC_CLK].rate, phy.bbpll_initialized);
+                return EXIT_FAILURE;
+            }
+            if (clk_get_rate_checked(&phy, bbpll, &clock_nodes[BBPLL_CLK]) !=
+                    -EBUSY ||
+                ad9361_bbpll_clock_transaction_start(
+                    &phy, bbpll, 983040000, &transaction) != -EBUSY) {
+                fprintf(stderr,
+                        "BBPLL pending owner allowed read/replacement request\n");
+                return EXIT_FAILURE;
+            }
+
+            do {
+                unsigned writes_before = write_count;
+                unsigned reads_before = read_count;
+                unsigned delays_before = delay_count;
+
+                ret = ad9361_bbpll_clock_transaction_poll(&phy,
+                                                           &transaction);
+                polls++;
+                if (write_count - writes_before > 1 ||
+                    read_count - reads_before > 1 ||
+                    delay_count != delays_before) {
+                    fprintf(stderr,
+                            "BBPLL clock poll exceeded one-bus-op slice: "
+                            "writes=%u reads=%u delays=%u\n",
+                            write_count - writes_before,
+                            read_count - reads_before,
+                            delay_count - delays_before);
+                    return EXIT_FAILURE;
+                }
+                if (transaction.verify_pending &&
+                    !ad9361_operation_busy(&phy)) {
+                    fprintf(stderr,
+                            "BBPLL owner released before divider readback\n");
+                    return EXIT_FAILURE;
+                }
+            } while (ret == 1 && polls < 64);
+
+            if (ret != 0 || !transaction.terminal || transaction.active ||
+                ad9361_operation_busy(&phy) ||
+                clock_nodes[BBPLL_CLK].rate != 1000000000 ||
+                !phy.bbpll_initialized || polls < 15) {
+                fprintf(stderr,
+                        "BBPLL clock transaction did not commit readback: "
+                        "ret=%" PRId32 " terminal=%d active=%d polls=%u "
+                        "rate=%" PRIu32 " initialized=%d\n",
+                        ret, transaction.terminal, transaction.active, polls,
                         clock_nodes[BBPLL_CLK].rate, phy.bbpll_initialized);
                 return EXIT_FAILURE;
             }
@@ -3715,6 +7178,406 @@ int main(void)
         fprintf(stderr, "TX sample-rate setter hid clock-chain failure: ret=%" PRId32
                 " bandwidth_updates=%u\n", ret, fake_bandwidth_update_count);
         return EXIT_FAILURE;
+    }
+
+    /* Exercise the real ADI sample-rate transaction state machine while
+     * isolating clock programming and BBF/TXQ completion behind deterministic
+     * fakes. This covers preflight preservation, successful commit, verified
+     * rollback, and a rollback clock readback mismatch. */
+    {
+        struct ad9361_rf_phy sample_phy = {
+            .spi = &spi,
+            .pdata = &pdata,
+            .current_bw_valid = true,
+            .current_rx_bw_Hz = 18000000,
+            .current_tx_bw_Hz = 18000000,
+        };
+        struct no_os_clk sample_clkrf = { .rate = 30720000 };
+        struct refclk_scale sample_rate_scale = {
+            .spi = &spi,
+            .phy = &sample_phy,
+            .source = RX_SAMPL_CLK,
+            .parent_source = CLKRF_CLK,
+        };
+        struct refclk_scale clkrf_scale = {
+            .spi = &spi,
+            .phy = &sample_phy,
+            .source = CLKRF_CLK,
+            .parent_source = R1_CLK,
+        };
+        struct ad9361_sample_rate_transaction transaction = {0};
+        struct ad9361_sample_rate_transaction competing_transaction = {0};
+        unsigned clock_sets_before;
+        uint32_t checked_sample_rate;
+        int32_t transaction_status;
+
+        sample_phy.ref_clk_scale[RX_SAMPL_CLK] = &sample_rate_scale;
+        sample_phy.ref_clk_scale[CLKRF_CLK] = &clkrf_scale;
+        sample_phy.clks[CLKRF_CLK] = &sample_clkrf;
+        memset(fake_sample_rate_rx_clks, 0,
+               sizeof(fake_sample_rate_rx_clks));
+        memset(fake_sample_rate_tx_clks, 0,
+               sizeof(fake_sample_rate_tx_clks));
+        fake_sample_rate_rx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_rx_clks[ADC_FREQ] = 491520000;
+        fake_sample_rate_rx_clks[RX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_tx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_tx_clks[DAC_FREQ] = 491520000;
+        fake_sample_rate_tx_clks[TX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_clock_readback_status = 0;
+        fake_sample_rate_calculate_status = 0;
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_clock_set_attempt_count = 0;
+        fake_sample_rate_clock_set_fail_attempt = 0;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 0;
+        fake_sample_rate_corrupt_rollback_readback = false;
+        fake_clock_chain_status = 0;
+        fake_sample_rate_transaction_enabled = true;
+        register_map_enabled = true;
+        fake_regs[REG_RX_ENABLE_FILTER_CTRL] = 0;
+
+        /* A rejected calculation occurs before any clock write and leaves
+         * the old known-good bandwidth cache intact. */
+        clock_sets_before = fake_sample_rate_clock_set_count;
+        fake_sample_rate_calculate_status = -EINVAL;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != -EINVAL || transaction.active ||
+            fake_sample_rate_clock_set_count != clock_sets_before ||
+            !sample_phy.current_bw_valid) {
+            fprintf(stderr,
+                    "Sample-rate preflight mutated state: status=%" PRId32
+                    " active=%d clock_sets=%u bw_valid=%d\n",
+                    transaction_status, transaction.active,
+                    fake_sample_rate_clock_set_count,
+                    sample_phy.current_bw_valid);
+            return EXIT_FAILURE;
+        }
+
+        /* Start accepts a retained clock child without touching hardware;
+         * later polls complete clock programming then bandwidth/TXQ. */
+        fake_sample_rate_calculate_status = 0;
+        memset(&transaction, 0, sizeof(transaction));
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0 || !transaction.active ||
+            transaction.stage != AD9361_SAMPLE_RATE_TRANSACTION_NEW_CLOCK ||
+            fake_sample_rate_clock_set_count != 0 ||
+            fake_sample_rate_bw_start_count != 0 ||
+            !ad9361_operation_busy(&sample_phy)) {
+            fprintf(stderr,
+                    "Sample-rate transaction failed to start: status=%" PRId32
+                    " active=%d clock_sets=%u bw_starts=%u\n",
+                    transaction_status, transaction.active,
+                    fake_sample_rate_clock_set_count,
+                    fake_sample_rate_bw_start_count);
+            return EXIT_FAILURE;
+        }
+        transaction_status = ad9361_sample_rate_transaction_poll(
+            &sample_phy, &transaction);
+        if (transaction_status != 1 ||
+            transaction.stage != AD9361_SAMPLE_RATE_TRANSACTION_NEW_BANDWIDTH ||
+            sample_phy.sample_rate_transaction != NULL ||
+            sample_phy.rf_bandwidth_transaction != &transaction.bandwidth_job ||
+            !ad9361_operation_busy(&sample_phy) ||
+            ad9361_sample_rate_transaction_start(
+                &sample_phy, 30720000, false,
+                &competing_transaction) != -EBUSY) {
+            fprintf(stderr,
+                    "Bandwidth child did not retain sample-rate exclusion\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = test_sample_rate_poll_to_terminal(
+            &sample_phy, &transaction);
+        if (transaction_status != 0 || !transaction.terminal ||
+            !sample_phy.current_bw_valid || transaction.rollback_complete ||
+            ad9361_operation_busy(&sample_phy)) {
+            fprintf(stderr,
+                    "Sample-rate commit failed: status=%" PRId32
+                    " terminal=%d bw_valid=%d rollback=%d\n",
+                    transaction_status, transaction.terminal,
+                    sample_phy.current_bw_valid,
+                    transaction.rollback_complete);
+            return EXIT_FAILURE;
+        }
+
+        /* A failed new bandwidth stage must restore and read back the old
+         * clock plan before the second bandwidth job can validate rollback. */
+        memset(&transaction, 0, sizeof(transaction));
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 1;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0 || !transaction.active) {
+            fprintf(stderr, "Sample-rate rollback case did not start\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = test_sample_rate_poll_until_stage(
+            &sample_phy, &transaction,
+            AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK);
+        if (transaction_status != 1 ||
+            transaction.stage != AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK ||
+            sample_phy.sample_rate_transaction != &transaction ||
+            !ad9361_operation_busy(&sample_phy) ||
+            clk_get_rate_checked(&sample_phy, &sample_rate_scale,
+                                 &checked_sample_rate) != -EBUSY ||
+            ad9361_sample_rate_transaction_start(
+                &sample_phy, 30720000, false,
+                &competing_transaction) != -EBUSY) {
+            fprintf(stderr,
+                    "Sample-rate failure did not retain rollback ownership: "
+                    "status=%" PRId32 " stage=%u owner=%d busy=%d\n",
+                    transaction_status, transaction.stage,
+                    sample_phy.sample_rate_transaction == &transaction,
+                    ad9361_operation_busy(&sample_phy));
+            return EXIT_FAILURE;
+        }
+        transaction_status = ad9361_sample_rate_transaction_poll(
+            &sample_phy, &transaction);
+        if (transaction_status != 1 ||
+            !transaction.rollback_clock_started ||
+            fake_sample_rate_clock_set_count != 1) {
+            fprintf(stderr, "Sample-rate rollback clock child did not start\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = ad9361_sample_rate_transaction_poll(
+            &sample_phy, &transaction);
+        if (transaction_status != 1 || fake_sample_rate_clock_set_count != 2 ||
+            fake_sample_rate_bw_start_count != 2 ||
+            !ad9361_operation_busy(&sample_phy)) {
+            fprintf(stderr,
+                    "Sample-rate rollback did not restore clocks/start BW: "
+                    "status=%" PRId32 " clock_sets=%u bw_starts=%u\n",
+                    transaction_status, fake_sample_rate_clock_set_count,
+                    fake_sample_rate_bw_start_count);
+            return EXIT_FAILURE;
+        }
+        transaction_status = ad9361_sample_rate_transaction_poll(
+            &sample_phy, &transaction);
+        if (transaction_status != -EIO || !transaction.rollback_complete ||
+            !sample_phy.current_bw_valid ||
+            fake_sample_rate_rx_clks[RX_SAMPL_FREQ] != 30720000 ||
+            fake_sample_rate_tx_clks[TX_SAMPL_FREQ] != 30720000) {
+            fprintf(stderr,
+                    "Verified rollback outcome incorrect: status=%" PRId32
+                    " rollback=%d bw_valid=%d rx_rate=%u tx_rate=%u\n",
+                    transaction_status, transaction.rollback_complete,
+                    sample_phy.current_bw_valid,
+                    fake_sample_rate_rx_clks[RX_SAMPL_FREQ],
+                    fake_sample_rate_tx_clks[TX_SAMPL_FREQ]);
+            return EXIT_FAILURE;
+        }
+        {
+            unsigned bw_polls = fake_sample_rate_bw_poll_count;
+            unsigned clock_sets = fake_sample_rate_clock_set_count;
+            unsigned bw_starts = fake_sample_rate_bw_start_count;
+
+            if (ad9361_sample_rate_transaction_poll(
+                    &sample_phy, &transaction) != -EIO ||
+                fake_sample_rate_bw_poll_count != bw_polls ||
+                fake_sample_rate_clock_set_count != clock_sets ||
+                fake_sample_rate_bw_start_count != bw_starts) {
+                fprintf(stderr,
+                        "Terminal sample-rate poll repeated side effects\n");
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* If the restored clock plan is confirmed but the old-bandwidth
+         * recalibration fails, the original operation error is returned
+         * while the rollback/cache remain explicitly incomplete. */
+        memset(&transaction, 0, sizeof(transaction));
+        fake_sample_rate_rx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_rx_clks[ADC_FREQ] = 491520000;
+        fake_sample_rate_rx_clks[RX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_tx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_tx_clks[DAC_FREQ] = 491520000;
+        fake_sample_rate_tx_clks[TX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 3;
+        fake_sample_rate_corrupt_rollback_readback = false;
+        sample_phy.calibration_state_unknown = false;
+        sample_phy.current_bw_valid = true;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0) {
+            fprintf(stderr, "Sample-rate rollback-bandwidth case did not start\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = test_sample_rate_poll_to_terminal(
+            &sample_phy, &transaction);
+        if (transaction_status != -EIO || transaction.rollback_complete ||
+            !transaction.terminal || sample_phy.current_bw_valid ||
+            fake_sample_rate_bw_start_count != 2) {
+            fprintf(stderr,
+                    "Failed rollback bandwidth falsely committed: status=%" PRId32
+                    " rollback=%d terminal=%d bw_valid=%d bw_starts=%u\n",
+                    transaction_status, transaction.rollback_complete,
+                    transaction.terminal, sample_phy.current_bw_valid,
+                    fake_sample_rate_bw_start_count);
+            return EXIT_FAILURE;
+        }
+        {
+            unsigned bw_polls = fake_sample_rate_bw_poll_count;
+            unsigned clock_sets = fake_sample_rate_clock_set_count;
+            unsigned bw_starts = fake_sample_rate_bw_start_count;
+
+            if (ad9361_sample_rate_transaction_poll(
+                    &sample_phy, &transaction) != -EIO ||
+                fake_sample_rate_bw_poll_count != bw_polls ||
+                fake_sample_rate_clock_set_count != clock_sets ||
+                fake_sample_rate_bw_start_count != bw_starts) {
+                fprintf(stderr,
+                        "Failed terminal sample-rate poll repeated side effects\n");
+                return EXIT_FAILURE;
+            }
+        }
+
+        /* A side-effect-free clock rollback rejection must short-circuit
+         * before the old-bandwidth job starts. The observed clock plan stays
+         * at the accepted new plan and cache admission remains closed. */
+        memset(&transaction, 0, sizeof(transaction));
+        fake_sample_rate_rx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_rx_clks[ADC_FREQ] = 491520000;
+        fake_sample_rate_rx_clks[RX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_tx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_tx_clks[DAC_FREQ] = 491520000;
+        fake_sample_rate_tx_clks[TX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_clock_set_attempt_count = 0;
+        fake_sample_rate_clock_set_fail_attempt = 2;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 1;
+        fake_sample_rate_corrupt_rollback_readback = false;
+        sample_phy.calibration_state_unknown = false;
+        sample_phy.current_bw_valid = true;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0 ||
+            test_sample_rate_poll_until_stage(
+                &sample_phy, &transaction,
+                AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK) != 1) {
+            fprintf(stderr,
+                    "Sample-rate clock-rollback fault did not reach rollback\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = test_sample_rate_poll_to_terminal(
+            &sample_phy, &transaction);
+        if (transaction_status != -EIO || !transaction.terminal ||
+            transaction.rollback_complete || sample_phy.current_bw_valid ||
+            fake_sample_rate_clock_set_attempt_count != 2 ||
+            fake_sample_rate_clock_set_count != 1 ||
+            fake_sample_rate_bw_start_count != 1 ||
+            fake_sample_rate_rx_clks[RX_SAMPL_FREQ] != 15360000) {
+            fprintf(stderr,
+                    "Clock rollback failure did not fail closed: status=%" PRId32
+                    " terminal=%d rollback=%d bw_valid=%d attempts=%u"
+                    " writes=%u bw_starts=%u observed_rate=%u\n",
+                    transaction_status, transaction.terminal,
+                    transaction.rollback_complete, sample_phy.current_bw_valid,
+                    fake_sample_rate_clock_set_attempt_count,
+                    fake_sample_rate_clock_set_count,
+                    fake_sample_rate_bw_start_count,
+                    fake_sample_rate_rx_clks[RX_SAMPL_FREQ]);
+            return EXIT_FAILURE;
+        }
+        fake_sample_rate_clock_set_fail_attempt = 0;
+
+        /* A failed SPI-backed clock readback after the rollback write is not
+         * a preflight rejection: the restored plan cannot be certified, so
+         * poison state and do not launch bandwidth restoration. */
+        memset(&transaction, 0, sizeof(transaction));
+        fake_sample_rate_rx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_rx_clks[ADC_FREQ] = 491520000;
+        fake_sample_rate_rx_clks[RX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_tx_clks[BBPLL_FREQ] = 983040000;
+        fake_sample_rate_tx_clks[DAC_FREQ] = 491520000;
+        fake_sample_rate_tx_clks[TX_SAMPL_FREQ] = 30720000;
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_clock_set_attempt_count = 0;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 1;
+        fake_sample_rate_clock_readback_status = 0;
+        fake_sample_rate_corrupt_rollback_readback = false;
+        sample_phy.calibration_state_unknown = false;
+        sample_phy.current_bw_valid = true;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0 ||
+            test_sample_rate_poll_until_stage(
+                &sample_phy, &transaction,
+                AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK) != 1) {
+            fprintf(stderr,
+                    "Sample-rate readback-transport case did not reach rollback\n");
+            return EXIT_FAILURE;
+        }
+        fake_sample_rate_clock_readback_status = -EIO;
+        transaction_status = test_sample_rate_poll_to_terminal(
+            &sample_phy, &transaction);
+        if (transaction_status != -EIO || !transaction.terminal ||
+            transaction.rollback_complete ||
+            !ad9361_calibration_state_unknown(&sample_phy) ||
+            sample_phy.current_bw_valid ||
+            fake_sample_rate_bw_start_count != 1) {
+            fprintf(stderr,
+                    "Clock readback transport failure was not fenced: "
+                    "status=%" PRId32 " terminal=%d rollback=%d unknown=%d"
+                    " bw_valid=%d bw_starts=%u\n",
+                    transaction_status, transaction.terminal,
+                    transaction.rollback_complete,
+                    ad9361_calibration_state_unknown(&sample_phy),
+                    sample_phy.current_bw_valid,
+                    fake_sample_rate_bw_start_count);
+            return EXIT_FAILURE;
+        }
+        fake_sample_rate_clock_readback_status = 0;
+
+        /* Successful SPI writes do not authorize cache restoration if the
+         * clock-chain readback contradicts the saved plan. */
+        memset(&transaction, 0, sizeof(transaction));
+        fake_sample_rate_clock_set_count = 0;
+        fake_sample_rate_bw_start_count = 0;
+        fake_sample_rate_bw_poll_count = 0;
+        fake_sample_rate_bw_fail_poll = 1;
+        fake_sample_rate_corrupt_rollback_readback = true;
+        sample_phy.calibration_state_unknown = false;
+        sample_phy.current_bw_valid = true;
+        transaction_status = ad9361_sample_rate_transaction_start(
+            &sample_phy, 15360000, false, &transaction);
+        if (transaction_status != 0 ||
+            test_sample_rate_poll_until_stage(
+                &sample_phy, &transaction,
+                AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK) != 1) {
+            fprintf(stderr, "Sample-rate readback-mismatch case did not start\n");
+            return EXIT_FAILURE;
+        }
+        transaction_status = test_sample_rate_poll_to_terminal(
+            &sample_phy, &transaction);
+        if (transaction_status != -EIO || transaction.rollback_complete ||
+            !ad9361_calibration_state_unknown(&sample_phy) ||
+            sample_phy.current_bw_valid || fake_sample_rate_bw_start_count != 1) {
+            fprintf(stderr,
+                    "Clock readback mismatch falsely restored cache: status=%" PRId32
+                    " rollback=%d unknown=%d bw_valid=%d bw_starts=%u\n",
+                    transaction_status, transaction.rollback_complete,
+                    ad9361_calibration_state_unknown(&sample_phy),
+                    sample_phy.current_bw_valid,
+                    fake_sample_rate_bw_start_count);
+            return EXIT_FAILURE;
+        }
+
+        fake_sample_rate_transaction_enabled = false;
+        fake_sample_rate_corrupt_rollback_readback = false;
+        fake_sample_rate_bw_fail_poll = 0;
+        register_map_enabled = false;
     }
 
     /* Checked clock-rate reads preserve the SPI error, and the public clock
@@ -4166,9 +8029,96 @@ int main(void)
                     fake_regs[REG_FAST_ENERGY_DETECT_COUNT]);
             return EXIT_FAILURE;
         }
+		{
+			struct ad9361_clock_chain_transaction clock_job = {0};
+			unsigned int writes_at_start = write_count;
+			unsigned int polls = 0;
+
+			clock_job.phy = &agc_phy;
+			clock_job.active = true;
+			clock_job.stage = AD9361_CLOCK_CHAIN_TRANSACTION_POST_CHANGE;
+			clock_job.post_change_stage =
+				AD9361_CLOCK_CHAIN_POST_CHANGE_GC_UPDATE;
+			agc_phy.clock_chain_transaction = &clock_job;
+			do {
+				unsigned int writes_before_step = write_count;
+
+				ret = ad9361_clock_chain_transaction_poll(
+					&agc_phy, &clock_job);
+				polls++;
+				if (ret != 1 || write_count - writes_before_step > 1 ||
+				    !ad9361_operation_busy(&agc_phy) || polls > 16) {
+					fprintf(stderr,
+						"Clock-chain post-change GC did not yield per register\n");
+					return EXIT_FAILURE;
+				}
+			} while (clock_job.post_change_stage ==
+				 AD9361_CLOCK_CHAIN_POST_CHANGE_GC_UPDATE);
+			if (clock_job.post_change_stage !=
+				AD9361_CLOCK_CHAIN_POST_CHANGE_RSSI ||
+			    clock_job.post_change_cursor != 0 ||
+			    write_count - writes_at_start != 8 ||
+			    polls != 9) {
+				fprintf(stderr,
+					"Clock-chain GC phase lost writes/cursor state\n");
+				return EXIT_FAILURE;
+			}
+			agc_phy.clock_chain_transaction = NULL;
+			clock_job.active = false;
+		}
+		{
+			struct ad9361_clock_chain_transaction clock_job = {0};
+			unsigned int writes_at_start = write_count;
+
+			agc_phy.calibration_state_unknown = false;
+			clock_job.phy = &agc_phy;
+			clock_job.active = true;
+			clock_job.stage = AD9361_CLOCK_CHAIN_TRANSACTION_POST_CHANGE;
+			clock_job.post_change_stage =
+				AD9361_CLOCK_CHAIN_POST_CHANGE_GC_UPDATE;
+			agc_phy.clock_chain_transaction = &clock_job;
+			fail_write_once_reg = REG_AGC_ATTACK_DELAY;
+			fail_write_once_reg_occurrence = 1;
+			ret = ad9361_clock_chain_transaction_poll(&agc_phy, &clock_job);
+			if (ret != -EIO || !clock_job.terminal ||
+			    clock_job.terminal_status != -EIO ||
+			    !ad9361_calibration_state_unknown(&agc_phy) ||
+			    agc_phy.clock_chain_transaction != NULL ||
+			    write_count != writes_at_start + 1 ||
+			    fail_write_once_reg != -1) {
+				fprintf(stderr,
+					"Clock-chain post-change error lost failure/owner state\n");
+				return EXIT_FAILURE;
+			}
+		}
         register_map_enabled = true;
         spi_status = 0;
         fail_write_reg = -1;
+		{
+			uint16_t cursor = 0;
+			unsigned int writes_at_start = write_count;
+			unsigned int polls = 0;
+			int32_t step;
+
+		do {
+			unsigned int writes_before_step = write_count;
+
+			step = ad9361_rssi_setup_step(&agc_phy, &rssi, false,
+						      &cursor);
+			polls++;
+			if ((step != 0 && step != 1) ||
+			    write_count - writes_before_step > 1 || polls > 10) {
+				fprintf(stderr,
+					"RSSI setup step exceeded one-register bound\n");
+				return EXIT_FAILURE;
+			}
+		} while (step == 1);
+		if (cursor != 9 || write_count - writes_at_start != 9) {
+			fprintf(stderr,
+				"RSSI setup cursor did not cover its nine ordered writes\n");
+			return EXIT_FAILURE;
+		}
+		}
         ret = ad9361_rssi_setup(&agc_phy, &rssi, false);
         if (ret != 0 || fake_regs[REG_RSSI_DELAY] != 255 ||
             fake_regs[REG_RSSI_WAIT_TIME] != 255) {
@@ -4180,6 +8130,32 @@ int main(void)
             return EXIT_FAILURE;
         }
         writes_before = write_count;
+		{
+			uint16_t cursor = 0;
+			unsigned int writes_at_start = write_count;
+			unsigned int polls = 0;
+			int32_t step;
+
+		do {
+			unsigned int writes_before_step = write_count;
+
+			step = ad9361_auxadc_setup_step(&phy, &auxadc, 983040000,
+							&cursor);
+			polls++;
+			if ((step != 0 && step != 1) ||
+			    write_count - writes_before_step > 1 || polls > 7) {
+				fprintf(stderr,
+					"AuxADC setup step exceeded one-register bound\n");
+				return EXIT_FAILURE;
+			}
+		} while (step == 1);
+		if (cursor != 6 || write_count - writes_at_start != 6) {
+			fprintf(stderr,
+				"AuxADC setup cursor did not cover its six ordered writes\n");
+			return EXIT_FAILURE;
+		}
+		}
+		writes_before = write_count;
         ret = ad9361_auxadc_setup(&phy, &auxadc, 983040000);
         if (ret != 0 || write_count != writes_before + 6 ||
             fake_regs[REG_TEMP_SENSOR_CONFIG] != 7 ||

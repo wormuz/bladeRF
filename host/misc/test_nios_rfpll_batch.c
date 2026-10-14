@@ -37,6 +37,43 @@ static unsigned int read_calls;
 static bool read_success = true;
 static unsigned int gain_row_calls;
 static unsigned int epoch_snapshot_calls;
+static bool nios_phy_present;
+static bool rfic_faulted;
+static bool rfic_device_owned;
+
+bool rfic_command_state_faulted(void)
+{
+    return rfic_faulted;
+}
+
+bool rfic_command_owns_device(void)
+{
+    return rfic_device_owned;
+}
+
+bool rfic_phy_present(void)
+{
+    return nios_phy_present;
+}
+
+bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
+                                             uint16_t transaction_id)
+{
+    (void)addr;
+    (void)data;
+    (void)transaction_id;
+    return false;
+}
+
+bool rfic_command_read(uint16_t addr, uint64_t *data)
+{
+    (void)addr;
+    (void)data;
+    return false;
+}
+
+void rfic_command_init(void) {}
+void rfic_command_work(void) {}
 
 bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
                             uint8_t data3, uint8_t config,
@@ -133,6 +170,27 @@ static int run_invalid_ad9361_read(uint16_t request_addr)
     return target == NIOS_PKT_16x64_TARGET_AD9361 && !write &&
            addr == request_addr && !success && read_calls == calls_before
         ? 0 : 1;
+}
+
+static int run_nios_phy_gain_row_rejected(void)
+{
+    struct pkt_buf packet = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW, true, 7, UINT64_C(0x44332211));
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false;
+    bool success = true;
+    unsigned int calls_before = gain_row_calls;
+
+    nios_phy_present = true;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &write, &addr,
+                               &response, &success);
+    nios_phy_present = false;
+
+    return target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW && write &&
+           addr == 7 && !success && gain_row_calls == calls_before ? 0 : 1;
 }
 
 uint64_t rx_epoch_status_snapshot_read(void)
@@ -285,6 +343,64 @@ static int run_update_bits_value_outside_mask(void)
            update_calls == calls_before ? 0 : 1;
 }
 
+static int run_nios_phy_raw_writes_rejected(void)
+{
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool write = false;
+    bool success = true;
+    unsigned int writes_before = write_calls;
+    unsigned int batches_before = calls;
+    unsigned int updates_before = update_calls;
+    struct pkt_buf single = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_AD9361, true, 0x035, 0);
+    struct pkt_buf single_lo = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_AD9361, true, 0x247, 0);
+    struct pkt_buf batch = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH, true, 1, 0x436);
+    struct pkt_buf update = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS, true, 0x036,
+        ((uint64_t)NIOS_PKT_16x64_UPDATE_BITS_MARKER << 56) |
+            (UINT64_C(1) << 48) | (UINT64_C(1) << 40));
+
+    nios_phy_present = true;
+    pkt_16x64(&single);
+    nios_pkt_16x64_resp_unpack(single.resp, &target, &write, &addr,
+                               &response, &success);
+    if (target != NIOS_PKT_16x64_TARGET_AD9361 || !write ||
+        addr != 0x035 || success || write_calls != writes_before) {
+        return 1;
+    }
+
+    pkt_16x64(&single_lo);
+    nios_pkt_16x64_resp_unpack(single_lo.resp, &target, &write, &addr,
+                               &response, &success);
+    if (target != NIOS_PKT_16x64_TARGET_AD9361 || !write ||
+        addr != 0x247 || success || write_calls != writes_before) {
+        return 1;
+    }
+
+    pkt_16x64(&batch);
+    nios_pkt_16x64_resp_unpack(batch.resp, &target, &write, &addr,
+                               &response, &success);
+    if (target != NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH || !write ||
+        addr != 1 || success || response != 0 || calls != batches_before) {
+        return 1;
+    }
+
+    pkt_16x64(&update);
+    nios_pkt_16x64_resp_unpack(update.resp, &target, &write, &addr,
+                               &response, &success);
+    if (target != NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS || !write ||
+        addr != 0x036 || success || update_calls != updates_before) {
+        return 1;
+    }
+
+    nios_phy_present = false;
+    return 0;
+}
+
 static int run_epoch_snapshot_case(uint16_t request_addr,
                                    bool expected_success,
                                    unsigned int expected_calls)
@@ -356,8 +472,10 @@ int main(void)
         run_malformed_batch_case(3, UINT64_C(1) << 54) ||
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
+        run_nios_phy_gain_row_rejected() ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
+        run_nios_phy_raw_writes_rejected() ||
         run_ad9361_write(false, false) ||
         run_ad9361_write(true, true) || write_calls != 2 ||
         run_update_bits_value_outside_mask() || update_calls != 2 ||
@@ -370,6 +488,6 @@ int main(void)
         return 1;
     }
 
-    puts("NIOS RFPLL batch and atomic RMW packet paths: PASS");
+    puts("NIOS RFPLL batch, atomic RMW, and raw-write policy paths: PASS");
     return 0;
 }

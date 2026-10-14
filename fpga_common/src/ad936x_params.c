@@ -266,6 +266,10 @@ AD9361_InitParam bladerf2_rfic_init_params = {
     .elna_gaintable_all_index_enable = 0,	// N/A when elna_rx(1,2)_gpo(0,1)_control_enable = 0                // elna_gaintable_all_index_enable *** adi,elna-gaintable-all-index-enable
 
     /* Digital Interface Control */
+#if defined(ENABLE_AD9361_DIGITAL_INTERFACE_TIMING_VERIFICATION) && \
+    defined(BLADERF_NIOS_BUILD)
+#error "AD9361 digital-interface timing verification requires the AXI ADC capture handle, which the NIOS firmware does not own"
+#endif
 #ifdef ENABLE_AD9361_DIGITAL_INTERFACE_TIMING_VERIFICATION
     /* Calibrate the digital interface delay (hardware validation) */
     .digital_interface_tune_skip_mode = 0,	// Don't skip digital interface tuning                              // digital_interface_tune_skip_mode *** adi,digital-interface-tune-skip-mode

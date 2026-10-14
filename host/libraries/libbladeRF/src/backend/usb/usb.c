@@ -40,6 +40,7 @@
 #include "helpers/version.h"
 
 #include "bladeRF.h"
+#include "devinfo.h"
 #include "nios_pkt_formats.h"
 #include "nios_legacy_access.h"
 #include "nios_access.h"
@@ -49,6 +50,141 @@ bool bladerf_usb_reset_device_on_open = true;
 #endif
 
 static const struct usb_driver *usb_driver_list[] = BLADERF_USB_BACKEND_LIST;
+
+#ifdef USE_PTHREADS
+/* POSIX libusb may allow two handles in one process to claim the same
+ * interface. Enforce the same one-open-per-device rule as the Windows
+ * backends. The session state also preserves ambiguous endpoint replies across
+ * a same-session close/reopen. */
+static MUTEX usb_peripheral_registry_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct usb_peripheral_state *usb_peripheral_registry;
+#endif
+
+static int usb_peripheral_attach(struct bladerf_usb *usb,
+                                 const struct bladerf_devinfo *ident)
+{
+#ifdef USE_PTHREADS
+    struct usb_peripheral_state *state;
+    const char *serial;
+
+    if (ident == NULL || ident->usb_bus == DEVINFO_BUS_ANY ||
+        ident->usb_addr == DEVINFO_ADDR_ANY) {
+        return BLADERF_ERR_INVAL;
+    }
+    serial = ident->serial;
+
+    MUTEX_LOCK(&usb_peripheral_registry_lock);
+    /* A changed USB address for this serial is a new observed session. Never
+     * carry that session's poisoned endpoint state into the new enumeration. */
+    {
+        struct usb_peripheral_state **link = &usb_peripheral_registry;
+        while (*link != NULL) {
+            state = *link;
+            if (serial[0] != '\0' &&
+                strncmp(state->serial, serial, sizeof(state->serial)) == 0 &&
+                state->references == 0 &&
+                (state->usb_bus != ident->usb_bus ||
+                 state->usb_addr != ident->usb_addr)) {
+                *link = state->next;
+                MUTEX_DESTROY(&state->lock);
+                free(state);
+            } else {
+                link = &state->next;
+            }
+        }
+    }
+
+    for (state = usb_peripheral_registry; state != NULL; state = state->next) {
+        if (state->usb_bus == ident->usb_bus &&
+            state->usb_addr == ident->usb_addr &&
+            ((serial[0] != '\0' &&
+              strncmp(state->serial, serial, sizeof(state->serial)) == 0) ||
+             (serial[0] == '\0' && state->serial[0] == '\0'))) {
+            if (state->references != 0) {
+                MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+                return BLADERF_ERR_NODEV;
+            }
+            state->references = 1;
+            usb->peripheral = state;
+            MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+            return 0;
+        }
+    }
+
+    state = calloc(1, sizeof(*state));
+    if (state == NULL) {
+        MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+        return BLADERF_ERR_MEM;
+    }
+    if (MUTEX_INIT(&state->lock) != THREAD_SUCCESS) {
+        free(state);
+        MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    memcpy(state->serial, serial, sizeof(state->serial));
+    state->usb_bus = ident->usb_bus;
+    state->usb_addr = ident->usb_addr;
+    state->references = 1;
+    state->next = usb_peripheral_registry;
+    usb_peripheral_registry = state;
+    usb->peripheral = state;
+    MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+    return 0;
+#else
+    int status;
+
+    (void)ident;
+    memset(&usb->peripheral_local, 0, sizeof(usb->peripheral_local));
+    status = MUTEX_INIT(&usb->peripheral_local.lock);
+    if (status != THREAD_SUCCESS) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    usb->peripheral = &usb->peripheral_local;
+    return 0;
+#endif
+}
+
+static void usb_peripheral_detach(struct bladerf_usb *usb)
+{
+    struct usb_peripheral_state *state = usb->peripheral;
+
+    if (state == NULL) {
+        return;
+    }
+
+#ifdef USE_PTHREADS
+    MUTEX_LOCK(&usb_peripheral_registry_lock);
+    assert(state->references > 0);
+    state->references--;
+    if (state->references == 0) {
+        /* Keep ambiguous endpoint state across a host close/reopen. A later
+         * handle for this serial must reconcile it or fail closed rather than
+         * forgetting a possibly outstanding NIOS response. */
+        if (state->pending_read_response || state->pending_rfic_write ||
+            state->pending_retune2_response || state->desynchronized) {
+            MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+            usb->peripheral = NULL;
+            return;
+        }
+
+        struct usb_peripheral_state **link = &usb_peripheral_registry;
+        while (*link != state) {
+            assert(*link != NULL);
+            link = &(*link)->next;
+        }
+        *link = state->next;
+        MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+        MUTEX_DESTROY(&state->lock);
+        free(state);
+    } else {
+        MUTEX_UNLOCK(&usb_peripheral_registry_lock);
+    }
+#else
+    MUTEX_DESTROY(&state->lock);
+#endif
+    usb->peripheral = NULL;
+}
 
 /* FW declaration of fn table declared at the end of this file */
 const struct backend_fns backend_fns_usb_legacy;
@@ -239,8 +375,10 @@ static void usb_close(struct bladerf *dev)
                     bladerf_strerror(status));
         }
 
+        usb_peripheral_detach(usb);
+        /* Keep the POSIX session lease until shared protocol state has been
+         * detached, so a new open cannot reset/claim between those steps. */
         usb->fn->close(usb->driver);
-        MUTEX_DESTROY(&usb->peripheral_lock);
         free(usb);
         dev->backend_data = NULL;
     }
@@ -349,12 +487,11 @@ static int usb_open(struct bladerf *dev, struct bladerf_devinfo *info)
         return BLADERF_ERR_NODEV;
     }
 
-    usb->peripheral_desynchronized = false;
-    status = MUTEX_INIT(&usb->peripheral_lock);
-    if (status != THREAD_SUCCESS) {
+    status = usb_peripheral_attach(usb, &dev->ident);
+    if (status != 0) {
         usb->fn->close(usb->driver);
         free(usb);
-        return BLADERF_ERR_UNEXPECTED;
+        return status;
     }
 
     /* Default to legacy-mode access until we determine the FPGA is
@@ -448,7 +585,8 @@ static int usb_load_fpga(struct bladerf *dev, const uint8_t *image, size_t image
         const uint32_t prefix_len = image_size < 4096U
             ? (uint32_t)image_size : 4096U;
         status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
-                                        (void *)image, prefix_len, timeout_ms);
+                                        (void *)image, prefix_len, timeout_ms,
+                                        NULL, NULL);
         if (status < 0) {
             return status;
         }
@@ -463,7 +601,7 @@ static int usb_load_fpga(struct bladerf *dev, const uint8_t *image, size_t image
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
                                     (void *)image,
                                     (uint32_t)image_size,
-                                    timeout_ms);
+                                    timeout_ms, NULL, NULL);
     if (status < 0) {
         log_debug("Failed to write FPGA bitstream to FPGA: %s\n",
                   bladerf_strerror(status));
@@ -987,6 +1125,75 @@ int usb_submit_stream_buffer(struct bladerf_stream *stream, void *buffer,
     struct bladerf_usb *usb = stream->dev->backend_data;
     return usb->fn->submit_stream_buffer(usb->driver, stream, buffer,
                                  length, timeout_ms, nonblock, tx_generation);
+}
+
+int usb_clear_endpoint_halt(struct bladerf *dev, uint8_t endpoint)
+{
+    struct bladerf_usb *usb;
+
+    if (dev == NULL || dev->backend_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    usb = dev->backend_data;
+    if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    /* FX3's endpoint CLEAR_FEATURE handler resets the endpoint's DMA channel,
+     * flushes endpoint memory, resets the USB endpoint, then restarts transfer
+     * on the channel. Keep the request backend-neutral so libusb and Cypress
+     * share this device-side recovery contract. */
+    return usb->fn->control_transfer(
+        usb->driver, USB_TARGET_ENDPOINT, USB_REQUEST_STANDARD,
+        USB_DIR_HOST_TO_DEVICE, 0x01 /* CLEAR_FEATURE */, 0 /* ENDPOINT_HALT */,
+        endpoint, NULL, 0, CTRL_TIMEOUT_MS);
+}
+
+int usb_pause_tx_dma(struct bladerf *dev)
+{
+    struct bladerf_usb *usb;
+    int status;
+
+    if (dev == NULL || dev->backend_data == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    usb = dev->backend_data;
+    if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    /* The caller must have revoked TX admission before requesting the pause.
+     * Drain accepted submissions and their completion callbacks first; do
+     * not cancel partial transfers because FX3 AUTO-DMA may still own their
+     * payload. This function must be called without dev->lock or a stream
+     * lock held so the callback pump can retire leases. */
+    if (dev->board != NULL && dev->board->wait_tx_async_idle != NULL) {
+        status = dev->board->wait_tx_async_idle(dev, CTRL_TIMEOUT_MS);
+        if (status != 0) {
+            return status;
+        }
+    }
+    return usb->fn->control_transfer(
+        usb->driver, USB_TARGET_DEVICE, USB_REQUEST_VENDOR,
+        USB_DIR_HOST_TO_DEVICE, BLADE_USB_CMD_PAUSE_TX_DMA,
+        0, 0, NULL, 0, CTRL_TIMEOUT_MS);
+}
+
+int usb_query_tx_dma_pause(struct bladerf *dev, uint32_t *state)
+{
+    struct bladerf_usb *usb;
+
+    if (dev == NULL || dev->backend_data == NULL || state == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    usb = dev->backend_data;
+    if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return usb->fn->control_transfer(
+        usb->driver, USB_TARGET_DEVICE, USB_REQUEST_VENDOR,
+        USB_DIR_DEVICE_TO_HOST, BLADE_USB_CMD_QUERY_TX_DMA_PAUSE,
+        0, 0, state, sizeof(*state), CTRL_TIMEOUT_MS);
 }
 
 static void usb_deinit_stream(struct bladerf_stream *stream)

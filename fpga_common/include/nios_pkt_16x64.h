@@ -50,15 +50,17 @@
  * +----------------+---------------------------------------------------------+
  * |      13:6      | 64-bit data, little-endian                              |
  * +----------------+---------------------------------------------------------+
- * |      15:14     | Reserved. Set to 0.                                     |
+ * |      15:14     | RFIC-write transaction ID on FPGA >= 0.18.0; otherwise 0. |
  * +----------------+---------------------------------------------------------+
  *
  *
  *                              Response
  *                      ----------------------
  *
- * The response packet contains the same information as the request.
- * A status flag will be set if the operation completed successfully.
+ * The response packet contains the same information as the request. Tagged
+ * RFIC writes echo their transaction ID in bytes 15:14. Response bit 2
+ * reports BUSY for a tagged RFIC write rejected while another callback owns
+ * the RFIC; bit 1 reports success and is clear for BUSY.
  *
  * In the case of a read request, the data field will contain the read data, if
  * the read succeeded.
@@ -73,7 +75,9 @@
  *    +================+========================+
  *    |      Bit(s)    |         Value          |
  *    +================+========================+
- *    |       7:2      | Reserved. Set to 0.    |
+ *    |       7:3      | Reserved. Set to 0.    |
+ *    +----------------+------------------------+
+ *    |        2       |   1 = RFIC busy        |
  *    +----------------+------------------------+
  *    |                | Status. Only used in   |
  *    |                | response packet.       |
@@ -98,6 +102,7 @@
 #define NIOS_PKT_16x64_IDX_ADDR       4
 #define NIOS_PKT_16x64_IDX_DATA       6
 #define NIOS_PKT_16x64_IDX_RESV2      14
+#define NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID 14
 
 /* Target IDs */
 #define NIOS_PKT_16x64_TARGET_AD9361  0x00
@@ -126,6 +131,7 @@
 /* Flag bits */
 #define NIOS_PKT_16x64_FLAG_WRITE     (1 << 0)
 #define NIOS_PKT_16x64_FLAG_SUCCESS   (1 << 1)
+#define NIOS_PKT_16x64_FLAG_BUSY      (1 << 2)
 
 /**
  * Sub-addresses for rfic target.
@@ -173,6 +179,23 @@ static inline void nios_pkt_16x64_pack(uint8_t *buf, uint8_t target, bool write,
     buf[NIOS_PKT_16x64_IDX_RESV2 + 1] = 0x00;
 }
 
+/* RFIC writes on FPGA >= 0.18.0 may carry a host transaction token in the
+ * otherwise-reserved trailing 16 bits. All other packet forms keep zeroes. */
+static inline void nios_pkt_16x64_pack_with_transaction_id(
+    uint8_t *buf, uint8_t target, bool write, uint16_t addr, uint64_t data,
+    uint16_t transaction_id)
+{
+    nios_pkt_16x64_pack(buf, target, write, addr, data);
+    buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID] = transaction_id & 0xff;
+    buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID + 1] = transaction_id >> 8;
+}
+
+static inline uint16_t nios_pkt_16x64_transaction_id(const uint8_t *buf)
+{
+    return (uint16_t)buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID] |
+           ((uint16_t)buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID + 1] << 8);
+}
+
 /* Unpack the request buffer */
 static inline void nios_pkt_16x64_unpack(const uint8_t *buf, uint8_t *target,
                                          bool *write, uint16_t *addr,
@@ -213,6 +236,32 @@ static inline void nios_pkt_16x64_resp_pack(uint8_t *buf, uint8_t target,
     if (success) {
         buf[NIOS_PKT_16x64_IDX_FLAGS] |= NIOS_PKT_16x64_FLAG_SUCCESS;
     }
+}
+
+static inline void nios_pkt_16x64_resp_pack_with_transaction_id(
+    uint8_t *buf, uint8_t target, bool write, uint16_t addr, uint64_t data,
+    bool success, uint16_t transaction_id)
+{
+    nios_pkt_16x64_resp_pack(buf, target, write, addr, data, success);
+    buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID] = transaction_id & 0xff;
+    buf[NIOS_PKT_16x64_IDX_RFIC_TRANSACTION_ID + 1] = transaction_id >> 8;
+}
+
+/* A tagged RFIC request observed while another ADI callback owns the RFIC
+ * can be rejected without entering the ADI driver. BUSY is response-only;
+ * callers may retry the same transaction after the active operation retires. */
+static inline void nios_pkt_16x64_resp_pack_busy(
+    uint8_t *buf, uint8_t target, uint16_t addr, uint64_t data,
+    uint16_t transaction_id)
+{
+    nios_pkt_16x64_resp_pack_with_transaction_id(
+        buf, target, true, addr, data, false, transaction_id);
+    buf[NIOS_PKT_16x64_IDX_FLAGS] |= NIOS_PKT_16x64_FLAG_BUSY;
+}
+
+static inline bool nios_pkt_16x64_resp_is_busy(const uint8_t *buf)
+{
+    return (buf[NIOS_PKT_16x64_IDX_FLAGS] & NIOS_PKT_16x64_FLAG_BUSY) != 0;
 }
 
 /* Unpack the response buffer */

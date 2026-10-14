@@ -58,7 +58,7 @@
  * |                | Bits [3:2]: External RX2 SPDT switch setting            |
  * |                | Bits [1:0]: External RX1 SPDT switch setting            |
  * +----------------+---------------------------------------------------------+
- * |       14-15    | 8-bit reserved words. Should be set to 0x00.            |
+ * |       14-15    | 16-bit host request token (zero on legacy protocol).    |
  * +----------------+---------------------------------------------------------+
  *
  * (Note 1) Special Timestamp Values:
@@ -87,7 +87,7 @@
 #define NIOS_PKT_RETUNE2_IDX_RFFE_PROFILE 11
 #define NIOS_PKT_RETUNE2_IDX_RFFE_PORT    12
 #define NIOS_PKT_RETUNE2_IDX_SPDT         13
-#define NIOS_PKT_RETUNE2_IDX_RESV         14
+#define NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN 14
 
 #define NIOS_PKT_RETUNE2_MAGIC            'U'
 
@@ -122,14 +122,16 @@ static inline bool nios_pkt_retune2_route_valid(bladerf_module module,
     return false;
 }
 
-static inline bool nios_pkt_retune2_reserved_valid(const uint8_t *buf)
-{
-    return buf != NULL &&
-           buf[NIOS_PKT_RETUNE2_IDX_RESV] == 0 &&
-           buf[NIOS_PKT_RETUNE2_IDX_RESV + 1] == 0;
-}
-
 /* Pack the retune2 request buffer with the provided parameters */
+static inline void nios_pkt_retune2_pack_token(uint8_t *buf,
+                                               bladerf_module module,
+                                               uint64_t timestamp,
+                                               uint16_t nios_profile,
+                                               uint8_t rffe_profile,
+                                               uint8_t port,
+                                               uint8_t spdt,
+                                               uint16_t request_token);
+
 static inline void nios_pkt_retune2_pack(uint8_t *buf,
                                          bladerf_module module,
                                          uint64_t timestamp,
@@ -137,6 +139,19 @@ static inline void nios_pkt_retune2_pack(uint8_t *buf,
                                          uint8_t rffe_profile,
                                          uint8_t port,
                                          uint8_t spdt)
+{
+    nios_pkt_retune2_pack_token(buf, module, timestamp, nios_profile,
+                                rffe_profile, port, spdt, 0);
+}
+
+static inline void nios_pkt_retune2_pack_token(uint8_t *buf,
+                                               bladerf_module module,
+                                               uint64_t timestamp,
+                                               uint16_t nios_profile,
+                                               uint8_t rffe_profile,
+                                               uint8_t port,
+                                               uint8_t spdt,
+                                               uint16_t request_token)
 {
     uint8_t pkt_port;
 
@@ -167,11 +182,16 @@ static inline void nios_pkt_retune2_pack(uint8_t *buf,
 
     buf[NIOS_PKT_RETUNE2_IDX_SPDT] = spdt & 0xff;
 
-    buf[NIOS_PKT_RETUNE2_IDX_RESV + 0] = 0x00;
-    buf[NIOS_PKT_RETUNE2_IDX_RESV + 1] = 0x00;
+    buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN + 0] = request_token & 0xff;
+    buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN + 1] = request_token >> 8;
 }
 
 /* Unpack a retune request */
+static inline void nios_pkt_retune2_unpack_token(
+    const uint8_t *buf, bladerf_module *module, uint64_t *timestamp,
+    uint16_t *nios_profile, uint8_t *rffe_profile, uint8_t *port,
+    uint8_t *spdt, uint16_t *request_token);
+
 static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
                                            bladerf_module *module,
                                            uint64_t *timestamp,
@@ -179,6 +199,15 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
                                            uint8_t *rffe_profile,
                                            uint8_t *port,
                                            uint8_t *spdt)
+{
+    nios_pkt_retune2_unpack_token(buf, module, timestamp, nios_profile,
+                                  rffe_profile, port, spdt, NULL);
+}
+
+static inline void nios_pkt_retune2_unpack_token(
+    const uint8_t *buf, bladerf_module *module, uint64_t *timestamp,
+    uint16_t *nios_profile, uint8_t *rffe_profile, uint8_t *port,
+    uint8_t *spdt, uint16_t *request_token)
 {
     *timestamp  = ( ((uint64_t)buf[NIOS_PKT_RETUNE2_IDX_TIME + 0]) <<  0 );
     *timestamp |= ( ((uint64_t)buf[NIOS_PKT_RETUNE2_IDX_TIME + 1]) <<  8 );
@@ -200,10 +229,23 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
 
     *spdt = buf[NIOS_PKT_RETUNE2_IDX_SPDT];
 
+    if (request_token != NULL) {
+        *request_token =
+            (uint16_t)buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN] |
+            ((uint16_t)buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN + 1] << 8);
+    }
+
     *module = ( (buf[NIOS_PKT_RETUNE2_IDX_RFFE_PORT] &
                  NIOS_PKT_RETUNE2_PORT_IS_RX_MASK) ? BLADERF_MODULE_RX :
                 BLADERF_MODULE_TX );
 
+}
+
+static inline uint16_t nios_pkt_retune2_unpack_request_token(
+    const uint8_t *buf)
+{
+    return (uint16_t)buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN] |
+           ((uint16_t)buf[NIOS_PKT_RETUNE2_IDX_REQUEST_TOKEN + 1] << 8);
 }
 
 
@@ -221,13 +263,20 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
  * +----------------+---------------------------------------------------------+
  * |        9       | Status Flags (Note 2)                                   |
  * +----------------+---------------------------------------------------------+
- * |      10-15     | Reserved. All bits set to 0.                            |
+ * |      10-11     | Host request token echoed when nonzero.                  |
+ * +----------------+---------------------------------------------------------+
+ * |      12-15     | Captured command-session generation (token-aware only). |
  * +----------------+---------------------------------------------------------+
  *
  * (Note 1) This value will be zero if timestamps are not running for the
  *          associated module.
  *
- * (Note 2) Description of Status Flags:
+ * (Note 2) Token zero preserves the legacy all-zero response tail. A
+ *          nonzero request token is echoed with the FPGA-captured command
+ *          session generation so a late ACK cannot be mistaken for the ACK
+ *          to a later scheduled request.
+ *
+ * (Note 3) Description of Status Flags:
  *
  *      flags[0]: 1 = Timestamp is valid. This is only the case for "Tune NOW"
  *                    requests. It is not possible to return this information
@@ -256,19 +305,34 @@ static inline void nios_pkt_retune2_unpack(const uint8_t *buf,
  *                    acknowledge cancellation of its armed compare.
  *      flags[4]: 1 = Queue clear is pending its timestamp-domain cancel ACK.
  *
- *      flags[7:5]    Reserved. Set to 0.
+ *      flags[5]: 1 = Request rejected because an RFIC callback owns the
+ *                    NIOS command processor. Request was not queued.
+ *
+ *      flags[7]      Reserved. Set to 0.
+ *      flags[6]      Async NOW accepted; tokened request completes through
+ *                    the correlated RETUNE2 completion/failure record.
+ *                    Response bytes 16-23 contain the success/failure ring
+ *                    sequence baselines captured atomically with acceptance;
+ *                    bytes 24-31 are zero.
  */
 
 #define NIOS_PKT_RETUNE2_RESP_IDX_MAGIC   0
 #define NIOS_PKT_RETUNE2_RESP_IDX_TIME    1
 #define NIOS_PKT_RETUNE2_RESP_IDX_FLAGS   9
 #define NIOS_PKT_RETUNE2_RESP_IDX_RESV    10
+#define NIOS_PKT_RETUNE2_RESP_IDX_TOKEN   10
+#define NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION 12
+#define NIOS_PKT_RETUNE2_RESP_IDX_SUCCESS_COUNT 16
+#define NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT 20
+#define NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV 24
 
 #define NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID (1 << 0)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS       (1 << 1)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP (1 << 2)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED  (1 << 3)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING (1 << 4)
+#define NIOS_PKT_RETUNE2_RESP_FLAG_BUSY           (1 << 5)
+#define NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING  (1 << 6)
 
 /* Detailed device-side cause for a failed RETUNE2 NOW request. It is encoded
  * in the otherwise unused duration field for an immediate failure, preserving
@@ -288,6 +352,12 @@ typedef enum {
     NIOS_PKT_RETUNE2_FAILURE_RF_PORT_SELECT,
     NIOS_PKT_RETUNE2_FAILURE_SPDT_SELECT,
     NIOS_PKT_RETUNE2_FAILURE_LO_READBACK,
+    NIOS_PKT_RETUNE2_FAILURE_TX_QUAD_CALIBRATION,
+    NIOS_PKT_RETUNE2_FAILURE_RFIC_FAULTED,
+    NIOS_PKT_RETUNE2_FAILURE_SCHEDULE,
+    NIOS_PKT_RETUNE2_FAILURE_TIMER_STOPPED,
+    NIOS_PKT_RETUNE2_FAILURE_INTERNAL,
+    NIOS_PKT_RETUNE2_FAILURE_CANCELLED,
 } nios_pkt_retune2_failure;
 
 #define NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG UINT64_C(0xa75c000000000000)
@@ -296,7 +366,9 @@ typedef enum {
 static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
                                               uint64_t duration,
                                               uint8_t flags,
-                                              uint8_t failure)
+                                              uint8_t failure,
+                                              uint16_t request_token,
+                                              uint32_t session_generation)
 {
     if (failure != NIOS_PKT_RETUNE2_FAILURE_NONE &&
         (flags & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0) {
@@ -315,12 +387,18 @@ static inline void nios_pkt_retune2_resp_pack(uint8_t *buf,
 
     buf[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] = flags;
 
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 0] = 0x00;
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 1] = 0x00;
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 2] = 0x00;
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 3] = 0x00;
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 4] = 0x00;
-    buf[NIOS_PKT_RETUNE2_RESP_IDX_RESV + 5] = 0x00;
+    /* Token zero is reserved for legacy requests. Keep the old all-zero
+     * response tail for old hosts and untracked NOW/queue-clear commands. */
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_TOKEN + 0] = request_token & 0xff;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_TOKEN + 1] = request_token >> 8;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 0] =
+        request_token != 0 ? session_generation & 0xff : 0;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 1] =
+        request_token != 0 ? (session_generation >> 8) & 0xff : 0;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 2] =
+        request_token != 0 ? (session_generation >> 16) & 0xff : 0;
+    buf[NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION + 3] =
+        request_token != 0 ? (session_generation >> 24) & 0xff : 0;
 }
 
 static inline void nios_pkt_retune2_resp_unpack(const uint8_t *buf,
@@ -357,8 +435,41 @@ static inline uint8_t nios_pkt_retune2_resp_failure(const uint8_t *buf)
         return NIOS_PKT_RETUNE2_FAILURE_NONE;
     }
     failure = (uint8_t)duration;
-    return failure <= NIOS_PKT_RETUNE2_FAILURE_LO_READBACK
+    return failure <= NIOS_PKT_RETUNE2_FAILURE_INTERNAL
         ? failure : NIOS_PKT_RETUNE2_FAILURE_NONE;
+}
+
+static inline void nios_pkt_retune2_resp_set_async_baseline(
+    uint8_t *buf, uint32_t success_count, uint32_t failure_count)
+{
+    unsigned int i;
+
+    for (i = 0; i < 4; ++i) {
+        buf[NIOS_PKT_RETUNE2_RESP_IDX_SUCCESS_COUNT + i] =
+            (uint8_t)(success_count >> (8u * i));
+        buf[NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT + i] =
+            (uint8_t)(failure_count >> (8u * i));
+    }
+    for (i = NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV; i < NIOS_PKT_LEN; ++i) {
+        buf[i] = 0;
+    }
+}
+
+static inline void nios_pkt_retune2_resp_get_async_baseline(
+    const uint8_t *buf, uint32_t *success_count, uint32_t *failure_count)
+{
+    unsigned int i;
+
+    *success_count = 0;
+    *failure_count = 0;
+    for (i = 0; i < 4; ++i) {
+        *success_count |=
+            (uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_SUCCESS_COUNT + i]
+            << (8u * i);
+        *failure_count |=
+            (uint32_t)buf[NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT + i]
+            << (8u * i);
+    }
 }
 
 #endif

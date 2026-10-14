@@ -1,8 +1,27 @@
 #include <stdint.h>
 #include <unistd.h>
 
+#include "io.h"
+#include "system.h"
+#include "altera_avalon_timer_regs.h"
+
 #include "devices.h"
 #include "platform.h"
+#include "no_os_delay.h"
+
+static bladerf_platform_service_fn service_hook;
+
+void bladerf_platform_set_service_hook(bladerf_platform_service_fn hook)
+{
+    service_hook = hook;
+}
+
+void bladerf_platform_service(void)
+{
+    if (service_hook != NULL) {
+        service_hook();
+    }
+}
 
 /* SPI, GPIO and AXI IO now reach the driver through the no-OS platform ops
  * tables and no_os_axi_io, implemented in bladerf2_headless_spi.c,
@@ -42,11 +61,40 @@ void mdelay(unsigned long msecs)
 void no_os_udelay(uint32_t usecs)
 {
     udelay(usecs);
+    bladerf_platform_service();
 }
 
 void no_os_mdelay(uint32_t msecs)
 {
     mdelay(msecs);
+    bladerf_platform_service();
+}
+
+/* Return elapsed time from a free-running 64-bit Avalon timer on sys_clock.
+ * This clock is intentionally independent of usleep()/alt_busy_sleep(): the
+ * latter is a calibrated CPU loop and cannot be used as an operation
+ * deadline. The timer snapshot makes the four 16-bit reads atomic. */
+struct no_os_time no_os_get_time(void)
+{
+    uint64_t ticks_down;
+    uint64_t ticks;
+    struct no_os_time now;
+
+    IOWR_ALTERA_AVALON_TIMER_SNAP_0(RFIC_MONOTONIC_TIMER_BASE, 0);
+    ticks_down = (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_0(
+                     RFIC_MONOTONIC_TIMER_BASE);
+    ticks_down |= (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_1(
+                      RFIC_MONOTONIC_TIMER_BASE) << 16;
+    ticks_down |= (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_2(
+                      RFIC_MONOTONIC_TIMER_BASE) << 32;
+    ticks_down |= (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_3(
+                      RFIC_MONOTONIC_TIMER_BASE) << 48;
+
+    ticks = UINT64_MAX - ticks_down;
+    now.s = (unsigned int)(ticks / ALT_CPU_FREQ);
+    now.us = (unsigned int)(((ticks % ALT_CPU_FREQ) * 1000000ULL) /
+                            ALT_CPU_FREQ);
+    return now;
 }
 
 /*******************************************************************************

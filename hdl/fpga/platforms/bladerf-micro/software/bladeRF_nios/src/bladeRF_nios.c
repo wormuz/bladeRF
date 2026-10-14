@@ -45,7 +45,11 @@
 #include "pkt_32x32.h"
 #include "pkt_retune2.h"
 #include "pkt_legacy.h"
+#include "rfic_scheduler_policy.h"
 #include "debug.h"
+#ifdef BLADERF_NIOS_LIBAD936X
+void bladerf_platform_set_service_hook(void (*hook)(void));
+#endif
 
 #define BLADERF_DEVICE_NAME "Nuand bladeRF 2.0 Micro"
 
@@ -94,16 +98,292 @@ static const struct pkt_handler pkt_handlers[] = {
     PKT_LEGACY,
 };
 
+#ifdef BLADERF_NIOS_LIBAD936X
+static struct pkt_buf *cooperative_pkt;
+#endif
+
 static void run_deferred_packet_work(void)
 {
     size_t i;
 
+#ifdef BLADERF_NIOS_LIBAD936X
+    /* Close the gap between HAVE_REQUEST and worker entry. If the ISR
+     * already accepted a packet in that gap, fence it here. */
+    command_uart_set_worker_busy(true);
+    if (cooperative_pkt != NULL && cooperative_pkt->ready) {
+        cooperative_pkt->deferred_work_active_at_accept = true;
+    }
+#endif
+
+#ifdef BLADERF_NIOS_LIBAD936X
+    /* A scheduled TXQ continuation belongs to RETUNE2 rather than the RFIC
+     * command queue. Route exactly that owner's poll and keep every other
+     * RFIC-capable worker out until the transaction terminates. */
+    if (adi_fastlock_load_active() || adi_fastlock_recall_active() ||
+        rfic_tx_quad_retune_owner()) {
+        for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
+            if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
+                if (pkt_handlers[i].do_work != NULL) {
+                    pkt_handlers[i].do_work();
+                }
+                break;
+            }
+        }
+        return;
+    }
+
+    /* The RFIC queue has exclusive ownership of AD9361 across yielded
+     * calibration polls. Service it before any other deferred handler, then
+     * keep unrelated work out until the queue has retired. In particular,
+     * RETUNE2 can read/program RFIC state and must not run between polls. */
+    for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
+        if (pkt_handlers[i].magic == NIOS_PKT_16x64_MAGIC) {
+            if (pkt_handlers[i].do_work != NULL) {
+                pkt_handlers[i].do_work();
+            }
+            break;
+        }
+    }
+
+    if (rfic_command_owns_device()) {
+        if (rfic_tx_quad_retune_owner()) {
+            for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
+                if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
+                    if (pkt_handlers[i].do_work != NULL) {
+                        pkt_handlers[i].do_work();
+                    }
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
+        if (pkt_handlers[i].magic != NIOS_PKT_16x64_MAGIC &&
+            pkt_handlers[i].do_work != NULL) {
+            pkt_handlers[i].do_work();
+        }
+    }
+#else
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
         if (pkt_handlers[i].do_work != NULL) {
             pkt_handlers[i].do_work();
         }
     }
+#endif
+
+#ifdef BLADERF_NIOS_LIBAD936X
+    /* RFIC work can now yield between resumable calibration polls. Keep the
+     * UART's logical ownership fence asserted across those main-loop turns,
+     * not merely while this C function happens to be on the stack. */
+    command_uart_set_worker_busy(rfic_command_worker_active() ||
+                                 rfic_command_owns_device());
+#endif
 }
+
+#ifdef BLADERF_NIOS_LIBAD936X
+/* A synchronous RFIC callback owns the NIOS execution context. Reject every
+ * queued non-whitelisted packet using its normal response encoding, without
+ * invoking the packet handler (which could touch RFIC, RFFE, clocks, or queue
+ * state). This makes rejection terminal instead of allowing the request to
+ * execute after the caller has timed out. */
+static bool reject_packet_during_rfic_operation(struct pkt_buf *b)
+{
+    uint8_t target;
+    uint8_t addr8;
+    uint8_t data8;
+    uint16_t data16;
+    uint32_t addr32;
+    uint32_t data32;
+    uint64_t data64;
+    bool write;
+    bool response_packed = true;
+
+    switch (b->req[PKT_MAGIC_IDX]) {
+        case NIOS_PKT_8x8_MAGIC:
+            nios_pkt_8x8_unpack(b->req, &target, &write, &addr8, &data8);
+            nios_pkt_8x8_resp_pack(b->resp, target, write, addr8, data8,
+                                   false);
+            break;
+        case NIOS_PKT_8x16_MAGIC:
+            nios_pkt_8x16_unpack(b->req, &target, &write, &addr8, &data16);
+            nios_pkt_8x16_resp_pack(b->resp, target, write, addr8, data16,
+                                    false);
+            break;
+        case NIOS_PKT_8x32_MAGIC:
+            nios_pkt_8x32_unpack(b->req, &target, &write, &addr8, &data32);
+            nios_pkt_8x32_resp_pack(b->resp, target, write, addr8, data32,
+                                    false);
+            break;
+        case NIOS_PKT_8x64_MAGIC:
+            nios_pkt_8x64_unpack(b->req, &target, &write, &addr8, &data64);
+            nios_pkt_8x64_resp_pack(b->resp, target, write, addr8, data64,
+                                    false);
+            break;
+        case NIOS_PKT_32x32_MAGIC:
+            nios_pkt_32x32_unpack(b->req, &target, &write, &addr32, &data32);
+            nios_pkt_32x32_resp_pack(b->resp, target, write, addr32, data32,
+                                     false);
+            break;
+        case NIOS_PKT_RETUNE_MAGIC:
+            nios_pkt_retune_resp_pack(
+                b->resp, 0, 0, NIOS_PKT_RETUNERESP_FLAG_BUSY);
+            break;
+        case NIOS_PKT_RETUNE2_MAGIC:
+            nios_pkt_retune2_resp_pack(
+                b->resp, 0, NIOS_PKT_RETUNE2_RESP_FLAG_BUSY,
+                NIOS_PKT_RETUNE2_FAILURE_NONE,
+                nios_pkt_retune2_unpack_request_token(b->req),
+                b->session_generation);
+            break;
+        case NIOS_PKT_LEGACY_MAGIC:
+            pkt_legacy_abort();
+            memset(b->resp, 0, sizeof(b->resp));
+            b->resp[PKT_MAGIC_IDX] = NIOS_PKT_LEGACY_ERROR_MAGIC;
+            b->resp[PKT_CFG_IDX] = b->req[PKT_CFG_IDX];
+            break;
+        default:
+            /* The command UART only presents registered packet magics. Keep
+             * an unknown frame pending for the normal parser/error path. */
+            response_packed = false;
+            break;
+    }
+    return response_packed;
+}
+
+/* AD9361 wait loops call this after platform delays and completed NIOS SPI
+ * transfers. Besides read-only RFIC STATUS and exact duplicate tagged writes,
+ * service scheduled RETUNE2 admission and deferred queue-clear intent. All
+ * scheduled requests only snapshot/append queue state; their profile SPI
+ * writes belong to the cooperative RETUNE2 worker. Reject every other
+ * recognized packet normally so it cannot execute after timeout. */
+static void service_rfic_status_request(void)
+{
+    bladerf_module retune_module;
+    uint64_t retune_timestamp;
+    uint16_t retune_nios_profile;
+    uint16_t retune_token;
+    uint8_t retune_rffe_profile;
+    uint8_t retune_port;
+    uint8_t retune_spdt;
+    uint8_t target;
+    uint16_t addr;
+    uint16_t transaction_id;
+    uint64_t data;
+    bool is_write;
+
+    rfic_command_progress_tick();
+
+    if (cooperative_pkt == NULL || !cooperative_pkt->ready) {
+        return;
+    }
+
+    if (cooperative_pkt->session_generation !=
+        command_uart_current_session_generation()) {
+        /* USB reconnect invalidated this request's response session. Retire
+         * it without allowing a stale command to run in the new session. */
+        cooperative_pkt->ready = false;
+        cooperative_pkt->deferred_work_active_at_accept = false;
+        command_uart_enable_isr(true);
+        return;
+    }
+
+    /* A late-dispatch request also comes through this path. Its captured
+     * arrival-time fence, not the worker's now-idle state, makes rejection
+     * mandatory. Clear it once the response is consumed. */
+    cooperative_pkt->deferred_work_active_at_accept = false;
+
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_RETUNE2_MAGIC) {
+        nios_pkt_retune2_unpack_token(
+            cooperative_pkt->req, &retune_module, &retune_timestamp,
+            &retune_nios_profile, &retune_rffe_profile, &retune_port,
+            &retune_spdt, &retune_token);
+        if (retune_timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE &&
+            pkt_retune2_defer_clear(retune_module)) {
+            nios_pkt_retune2_resp_pack(
+                cooperative_pkt->resp, 0,
+                NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING,
+                NIOS_PKT_RETUNE2_FAILURE_NONE, retune_token,
+                cooperative_pkt->session_generation);
+        } else if (retune_timestamp != NIOS_PKT_RETUNE2_NOW &&
+                   retune_timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
+            /* Scheduled RETUNE2 is queue-only for both protocol generations;
+             * the worker performs profile upload and timer arming later. */
+            pkt_retune2(cooperative_pkt);
+        } else if (!reject_packet_during_rfic_operation(cooperative_pkt)) {
+            return;
+        }
+        cooperative_pkt->ready = false;
+        if (!command_uart_publish_response(cooperative_pkt->resp,
+                                           cooperative_pkt->session_generation)) {
+            DBG("Command UART response failed; request admission fenced until session reset\n");
+        }
+        command_uart_enable_isr(true);
+        return;
+    }
+
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] != NIOS_PKT_16x64_MAGIC) {
+        if (!reject_packet_during_rfic_operation(cooperative_pkt)) {
+            return;
+        }
+        cooperative_pkt->ready = false;
+        if (!command_uart_publish_response(cooperative_pkt->resp,
+                                           cooperative_pkt->session_generation)) {
+            DBG("Command UART response failed; request admission fenced until session reset\n");
+        }
+        command_uart_enable_isr(true);
+        return;
+    }
+
+    nios_pkt_16x64_unpack(cooperative_pkt->req, &target, &is_write, &addr,
+                          &data);
+    transaction_id =
+        nios_pkt_16x64_transaction_id(cooperative_pkt->req);
+    if (target != NIOS_PKT_16x64_TARGET_RFIC) {
+        /* Direct AD9361 SPI, gain-table and batch operations bypass the RFIC
+         * command queue. Never let one run reentrantly while an ADI callback
+         * owns the device. */
+        cooperative_pkt->ready = false;
+        nios_pkt_16x64_resp_pack(
+            cooperative_pkt->resp, target, is_write, addr, data, false);
+    } else if (is_write && transaction_id != 0 &&
+        rfic_command_transaction_is_duplicate(addr, data, transaction_id)) {
+        cooperative_pkt->ready = false;
+        nios_pkt_16x64_resp_pack_with_transaction_id(
+            cooperative_pkt->resp, target, true, addr, data, true,
+            transaction_id);
+    } else if (is_write) {
+        /* Do not leave a new RFIC mutation parked in the one-entry command
+         * UART slot until this synchronous callback returns: the host could
+         * time out, then the supposedly unacknowledged request would execute
+         * later. Reject it now without touching SPI or the RFIC queue. */
+        cooperative_pkt->ready = false;
+        if (transaction_id != 0) {
+            nios_pkt_16x64_resp_pack_busy(
+                cooperative_pkt->resp, target, addr, data, transaction_id);
+        } else {
+            nios_pkt_16x64_resp_pack_with_transaction_id(
+                cooperative_pkt->resp, target, true, addr, data, false, 0);
+        }
+    } else if (!is_write && transaction_id == 0 &&
+               (addr == 0x0f00u || addr == 0x0f0cu ||
+                addr == 0x0f0du)) {
+        cooperative_pkt->ready = false;
+        pkt_16x64(cooperative_pkt);
+    } else {
+        cooperative_pkt->ready = false;
+        nios_pkt_16x64_resp_pack_with_transaction_id(
+            cooperative_pkt->resp, target, false, addr, data, false, 0);
+    }
+
+    if (!command_uart_publish_response(cooperative_pkt->resp,
+                                       cooperative_pkt->session_generation)) {
+        DBG("Command UART response failed; request admission fenced until session reset\n");
+    }
+    command_uart_enable_isr(true);
+}
+#endif
 
 /* A structure that represents a point on a line. Used for calibrating
  * the VCTCXO */
@@ -186,6 +466,10 @@ int main(void)
     memset(&pkt, 0, sizeof(pkt));
     pkt.ready = false;
     bladerf_nios_init(&pkt, &vctcxo_tamer_pkt);
+#ifdef BLADERF_NIOS_LIBAD936X
+    cooperative_pkt = &pkt;
+    bladerf_platform_set_service_hook(service_rfic_status_request);
+#endif
 
     /* Initialize packet handlers */
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
@@ -302,6 +586,9 @@ int main(void)
     DBG("=== System Ready ===\n");
 
     while (run_nios) {
+        /* A response enqueue failure poisons the current command transport.
+         * Only the FPGA's session reset clears its sticky overflow state. */
+        command_uart_check_session_recovery();
         have_request = HAVE_REQUEST();
 
 #ifdef BLADERF_NIOS_DEBUG
@@ -331,6 +618,27 @@ int main(void)
 
         /* We have a command in the UART */
         if (have_request) {
+            if (pkt.session_generation !=
+                command_uart_current_session_generation()) {
+                /* Do not execute a frame retained from a previous FX3
+                 * session after reconnect. Its reply would be discarded, but
+                 * its side effects would otherwise still happen. */
+                pkt.ready = false;
+                command_uart_enable_isr(true);
+                have_request = false;
+            }
+        }
+
+        if (have_request) {
+#ifdef BLADERF_NIOS_LIBAD936X
+            if (pkt.deferred_work_active_at_accept) {
+                service_rfic_status_request();
+                have_request = false;
+            }
+#endif
+        }
+
+        if (have_request) {
             pkt.ready = false;
             handler = NULL;
 
@@ -357,15 +665,34 @@ int main(void)
             RESET_RESPONSE_BUF();
 
             /* Process data and execute requested actions */
+#ifdef BLADERF_NIOS_LIBAD936X
+            /* Keep newly admitted commands fenced across this response and
+             * the worker pass immediately following it. */
+            command_uart_set_worker_busy(true);
+#endif
             handler->exec(&pkt);
 
             /* Write response to host */
-            command_uart_write_response(pkt.resp, pkt.session_generation);
+            if (!command_uart_publish_response(pkt.resp,
+                                               pkt.session_generation)) {
+                DBG("Command UART response failed; request admission fenced until session reset\n");
+            }
             command_uart_enable_isr(true);
         } else {
 
             /* Temporarily putting the VCTCXO Calibration stuff here. */
-            if( vctcxo_tamer_pkt.ready ) {
+            /* The tamer changes the reference oscillator trim. Defer its
+             * buffered sample while an AD9361 callback/calibration owns the
+             * RFIC, so CLKRF cannot move during a hardware calibration. The
+             * ISR is already disabled and the sample remains in this packet. */
+            if (rfic_scheduler_reference_tune_allowed(
+                    vctcxo_tamer_pkt.ready,
+#ifdef BLADERF_NIOS_LIBAD936X
+                    rfic_command_owns_device()
+#else
+                    false
+#endif
+                    )) {
 
                 vctcxo_tamer_pkt.ready = false;
 
@@ -456,9 +783,10 @@ int main(void)
 
         }
 
-        /* A sustained command stream must not starve deferred RFIC/retune
-         * work. Service one bounded handler step after each request response
-         * as well as on idle iterations; response ordering remains unchanged. */
+        /* Deferred RFIC/retune work runs after every request response and on
+         * idle iterations. A RUNNING callback may still perform synchronous
+         * ADI work; yielded calibration polls retain RFIC ownership while
+         * unrelated RFIC-capable deferred work is suppressed. */
         run_deferred_packet_work();
     }
 

@@ -27,16 +27,32 @@
 #include "pkt_16x64.h"
 #include "devices.h"
 #include "debug.h"
+#include "rfic_calibration_policy.h"
 
-static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data)
+static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
+                                 uint16_t transaction_id)
 {
     bool success = true;
 
     switch (id) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         case NIOS_PKT_16x64_TARGET_AD9361:
+#ifdef BLADERF_NIOS_LIBAD936X
+            if (!rfic_direct_ad9361_write_allowed(
+                    rfic_command_state_faulted(),
+                    rfic_command_owns_device(), rfic_phy_present())) {
+                return false;
+            }
+#endif
             return adi_spi_write(addr, data);
         case NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW:
+#ifdef BLADERF_NIOS_LIBAD936X
+            if (!rfic_direct_gain_table_write_allowed(
+                    rfic_command_state_faulted(),
+                    rfic_command_owns_device(), rfic_phy_present())) {
+                return false;
+            }
+#endif
             /* The command payload encodes exactly four bytes. Reject a
              * non-zero upper word instead of silently programming the row
              * with a truncated payload. */
@@ -53,7 +69,8 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data)
 
 #ifdef BLADERF_NIOS_LIBAD936X
         case NIOS_PKT_16x64_TARGET_RFIC:
-            success = rfic_command_write(addr, data);
+            success = rfic_command_write_with_transaction_id(
+                addr, data, transaction_id);
             break;
 #endif  // BLADERF_NIOS_LIBAD936X
 
@@ -118,16 +135,28 @@ void pkt_16x64(struct pkt_buf *b)
     uint64_t data;
     bool     is_write;
     bool     success;
+    uint16_t transaction_id;
 
     nios_pkt_16x64_unpack(b->req, &id, &is_write, &addr, &data);
+    transaction_id = nios_pkt_16x64_transaction_id(b->req);
 
-    if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH) {
+    if (transaction_id != 0 &&
+        (!is_write || id != NIOS_PKT_16x64_TARGET_RFIC)) {
+        success = false;
+    } else if (is_write && id == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
         uint8_t completed = 0;
+        bool state_allows_write = true;
+#ifdef BLADERF_NIOS_LIBAD936X
+        state_allows_write = rfic_direct_ad9361_batch_allowed(
+            rfic_command_state_faulted(), rfic_command_owns_device(),
+            rfic_phy_present(), addr, data);
+#endif
         /* Each batch entry occupies 18 bits (10-bit register plus 8-bit
          * value). Reject payload bits outside the entries selected by the
          * count instead of silently accepting malformed/truncated commands. */
-        if (addr >= 1 && addr <= 3 && (data >> (18 * addr)) == 0) {
+        if (state_allows_write && addr >= 1 && addr <= 3 &&
+            (data >> (18 * addr)) == 0) {
             success = adi_spi_write_register_batch(addr, data, &completed);
             data = completed;
         } else {
@@ -160,11 +189,19 @@ void pkt_16x64(struct pkt_buf *b)
         const uint8_t value = (uint8_t)(data >> 40);
         uint8_t result = 0;
 
-        success = marker == NIOS_PKT_16x64_UPDATE_BITS_MARKER &&
-                  mask != 0 && (value & (uint8_t)~mask) == 0 &&
-                  addr <= 0x03ff &&
-                  (data & NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK) == 0 &&
-                  adi_spi_update_bits(addr, mask, value, &result);
+        success = false;
+#ifdef BLADERF_NIOS_LIBAD936X
+        if (rfic_direct_ad9361_write_allowed(
+                rfic_command_state_faulted(), rfic_command_owns_device(),
+                rfic_phy_present()))
+#endif
+        {
+            success = marker == NIOS_PKT_16x64_UPDATE_BITS_MARKER &&
+                      mask != 0 && (value & (uint8_t)~mask) == 0 &&
+                      addr <= 0x03ff &&
+                      (data & NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK) == 0 &&
+                      adi_spi_update_bits(addr, mask, value, &result);
+        }
         if (success) {
             data = result;
         } else {
@@ -176,12 +213,17 @@ void pkt_16x64(struct pkt_buf *b)
         success = false;
 #endif
     } else if (is_write) {
-        success = perform_write(id, addr, data);
+        success = perform_write(id, addr, data, transaction_id);
     } else {
         success = perform_read(id, addr, &data);
     }
 
-    nios_pkt_16x64_resp_pack(b->resp, id, is_write, addr, data, success);
+    if (is_write && id == NIOS_PKT_16x64_TARGET_RFIC) {
+        nios_pkt_16x64_resp_pack_with_transaction_id(
+            b->resp, id, is_write, addr, data, success, transaction_id);
+    } else {
+        nios_pkt_16x64_resp_pack(b->resp, id, is_write, addr, data, success);
+    }
 }
 
 void pkt_16x64_init(void)

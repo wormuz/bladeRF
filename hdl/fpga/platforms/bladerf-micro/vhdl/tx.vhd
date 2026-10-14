@@ -31,6 +31,9 @@ entity tx is
         NUM_STREAMS          : natural := 2
     );
     port (
+        sys_clock            : in    std_logic := '0';
+        sys_reset            : in    std_logic := '0';
+        fault_gpif_idle_sys  : in    std_logic := '0';
         tx_reset             : in    std_logic;
         tx_clock             : in    std_logic;
         tx_enable            : in    std_logic;
@@ -55,7 +58,11 @@ entity tx is
         retune_gate_target   : in unsigned(63 downto 0) := (others => '0');
         retune_gate_complete : in std_logic := '0';
         retune_gate_abort    : in std_logic := '0';
+        retune_gate_fifo_flush_sys : in std_logic := '0';
+        retune_gate_fifo_flush_release_sys : in std_logic := '0';
         retune_gate_status   : out std_logic_vector(31 downto 0) := (others => '0');
+        fault_flush_status_sys : out std_logic_vector(5 downto 0) := (others => '0');
+        fault_stop_pclk       : out std_logic := '0';
 
         -- Link status (host register RF_LINK_STATUS)
         link_start_toggle          : in    std_logic := '0';
@@ -144,6 +151,15 @@ architecture arch of tx is
     signal retune_gate_muted_sample_count  : unsigned(63 downto 0);
     signal retune_gate_mute_seen           : std_logic := '0';
     signal retune_gate_resume_seen         : std_logic := '0';
+    signal tx_fifo_flush_aclr              : std_logic;
+    signal tx_fifo_write_block             : std_logic;
+    signal tx_fifo_reader_block            : std_logic;
+    signal tx_fifo_flush_busy              : std_logic;
+    signal tx_fifo_flush_done              : std_logic;
+    signal tx_fifo_flush_error             : std_logic;
+    signal tx_fifo_flush_empty_confirmed   : std_logic;
+    signal tx_fifo_flush_release_complete  : std_logic;
+    signal tx_fifo_flush_write_drain_ready : std_logic;
 
 begin
 
@@ -160,8 +176,34 @@ begin
         end if;
     end process;
 
-    -- TX sample fifo
-    sample_fifo.aclr   <= tx_reset;
+    U_tx_fifo_fault_flush : entity work.tx_fifo_fault_flush
+        port map (
+            sys_clock       => sys_clock,
+            sys_reset       => sys_reset,
+            tx_clock        => tx_clock,
+            tx_reset        => tx_reset,
+            write_clock     => sample_fifo_wclock,
+            start           => retune_gate_fifo_flush_sys,
+            release_request => retune_gate_fifo_flush_release_sys,
+            gpif_idle       => fault_gpif_idle_sys,
+            sample_wempty   => sample_fifo.wempty,
+            meta_wempty     => meta_fifo.wempty,
+            sample_rempty   => sample_fifo_rempty_untriggered,
+            meta_rempty     => meta_fifo.rempty,
+            fifo_aclr       => tx_fifo_flush_aclr,
+            write_block     => tx_fifo_write_block,
+            reader_block    => tx_fifo_reader_block,
+            busy            => tx_fifo_flush_busy,
+            done            => tx_fifo_flush_done,
+            error           => tx_fifo_flush_error,
+            empty_confirmed => tx_fifo_flush_empty_confirmed,
+            release_complete => tx_fifo_flush_release_complete,
+            write_drain_ready => tx_fifo_flush_write_drain_ready
+        );
+
+    -- TX sample fifo. This private clear is scoped to TX; tx_reset remains
+    -- the shared fabric reset and is never pulsed for this recovery operation.
+    sample_fifo.aclr   <= tx_fifo_flush_aclr;
     sample_fifo.rclock <= tx_clock;
     U_tx_sample_fifo : entity work.tx_fifo
         generic map (
@@ -170,7 +212,7 @@ begin
             aclr                => sample_fifo.aclr,
 
             wrclk               => sample_fifo_wclock,
-            wrreq               => sample_fifo_wreq,
+            wrreq               => sample_fifo_wreq and not tx_fifo_write_block,
             data                => sample_fifo_wdata,
             wrempty             => sample_fifo_wempty,
             wrfull              => sample_fifo_wfull,
@@ -185,7 +227,7 @@ begin
         );
 
     -- TX metadata fifo
-    meta_fifo.aclr   <= tx_reset;
+    meta_fifo.aclr   <= tx_fifo_flush_aclr;
     meta_fifo.rclock <= tx_clock;
     U_tx_meta_fifo : entity work.tx_meta_fifo
         generic map (
@@ -194,7 +236,7 @@ begin
             aclr                => meta_fifo.aclr,
 
             wrclk               => meta_fifo_wclock,
-            wrreq               => meta_fifo_wreq,
+            wrreq               => meta_fifo_wreq and not tx_fifo_write_block,
             data                => meta_fifo_wdata,
             wrempty             => meta_fifo_wempty,
             wrfull              => meta_fifo_wfull,
@@ -267,6 +309,7 @@ begin
             clock               =>  tx_clock,
             reset               =>  tx_reset,
             enable              =>  tx_enable,
+            fifo_flush          =>  tx_fifo_reader_block,
 
             usb_speed           =>  usb_speed,
             meta_en             =>  meta_en,
@@ -324,10 +367,10 @@ begin
             clock                => tx_clock,
             reset                => tx_reset,
             timestamp            => tx_timestamp,
-            arm                  => retune_gate_arm,
+            arm                  => retune_gate_arm and not tx_fifo_flush_busy,
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
-            complete             => retune_gate_complete,
+            complete             => retune_gate_complete and not tx_fifo_flush_busy,
             -- A one-clock underflow event feeds the gate directly; the
             -- stretched underflow LED is only for front-panel visibility.
             abort                => retune_gate_abort,
@@ -378,10 +421,20 @@ begin
     retune_gate_muted_status <= '1' when retune_gate_state = "10" or
                                          retune_gate_state = "11" else '0';
 
+    -- Only TX-clock-owned gate state crosses through the status handshake.
+    -- Fault-flush state is exported separately from sys_clock by the core,
+    -- so a stopped AD9361 clock cannot freeze its host-visible status.
     retune_gate_status <= (31 downto 6 => '0') & retune_gate_arm_ack_seen &
                           retune_gate_resume_seen &
                           retune_gate_mute_seen & retune_gate_muted_status &
                           std_logic_vector(retune_gate_state);
+
+    fault_flush_status_sys <= tx_fifo_flush_write_drain_ready &
+                              tx_fifo_flush_release_complete &
+                              tx_fifo_flush_empty_confirmed &
+                              tx_fifo_flush_error & tx_fifo_flush_done &
+                              tx_fifo_flush_busy;
+    fault_stop_pclk <= tx_fifo_write_block;
 
     txtrig : entity work.trigger(async)
         generic map (

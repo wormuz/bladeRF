@@ -159,9 +159,10 @@ void bladerf2_tx_stream_set_faulted(
     }
     if (faulted || !board_data->tx_async_transport_faulted) {
         board_data->tx_stream_faulted_async = faulted;
-        board_data->tx_async_link_certified = !faulted;
+        board_data->tx_async_link_certified =
+            !faulted && !board_data->tx_async_fault_flush_required;
     }
-    if (faulted) {
+    if (faulted || board_data->tx_async_fault_flush_required) {
         board_data->tx_async_rfic_state_certified = false;
     }
     COND_SIGNAL(&board_data->rx_async_epoch_cond);
@@ -218,6 +219,10 @@ int bladerf2_tx_wait_for_validity(struct bladerf *dev,
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (;;) {
+        if (board_data->tx_async_fault_flush_required) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
         const bool frequency_model_valid =
             bladerf2_rfic_frequency_model_valid(
                 board_data->rfic_reference_clock_known,
@@ -304,6 +309,17 @@ bool bladerf2_tx_stream_new_epoch(struct bladerf *dev,
         /* A USB failure arrived while START was in flight. Its invalidation
          * event is already in history and must remain newer than any positive
          * claim for the generation being started. */
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        return false;
+    }
+
+    /* A transport/link START after a fault does not prove the FX3 endpoint
+     * and FPGA sample/META queues were purged. Keep TX invalid and suppress
+     * the positive event until the explicit recovery coordinator clears the
+     * fault-flush latch after its complete hardware barrier. */
+    if (board_data->tx_async_fault_flush_required) {
+        board_data->tx_stream_faulted_async = true;
+        board_data->tx_async_link_certified = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return false;
     }
@@ -802,6 +818,50 @@ static void _revoke_rx_fault_and_publish_event(void *context)
         publish->board_data, &publish->event, publish->channel_flags);
 }
 
+/* A poisoned AD9361 invalidates the shared RX signal chain regardless of
+ * which channel or API caused the failure. This path deliberately does not
+ * take dev->lock: RFIC callbacks can reach it while the public operation
+ * already owns that mutex. The RX epoch lock linearizes event de-duplication
+ * with async admission revocation; the sync generation callback makes the
+ * invalidity visible before a buffered sync reader can return more IQ. */
+void bladerf2_rx_rfic_state_invalid(struct bladerf *dev, int error_code)
+{
+    struct bladerf2_board_data *board_data;
+    struct rx_fault_event_publish_context publish = {0};
+    bool report_event;
+
+    if (dev == NULL || dev->board_data == NULL) {
+        return;
+    }
+    board_data = dev->board_data;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    report_event = !board_data->rx_rfic_fault_event_reported;
+    board_data->rx_rfic_fault_event_reported = true;
+    if (report_event) {
+        publish.event.host_monotonic_ns = _monotonic_ns();
+        publish.event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
+        publish.event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
+        publish.event.flags = BLADERF_RF_INVALIDATE_RFIC_REG;
+        publish.event.error_code = error_code;
+        publish.board_data = board_data;
+        /* No transition/epoch attribution is claimed: this may be a legacy
+         * ADI/IIO operation or a shared-clock mutation outside an RX epoch. */
+        publish.channel_flags = 0;
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (report_event) {
+        sync_rx_epoch_revoke_delivery_with_callback(
+            &board_data->sync[BLADERF_RX],
+            _revoke_rx_fault_and_publish_event, &publish);
+    } else {
+        /* Event delivery is coalesced per poison episode, but keep admission
+         * revoked if another entry point observes the already-latched fault. */
+        bladerf2_rx_epoch_revoke_admission(board_data);
+    }
+}
+
 /* Revoke exactly the epoch whose sticky hardware fault was observed. The
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */
@@ -944,11 +1004,14 @@ static bool tx_retune_completion_batch_matches_pending(
         uint64_t readback_frequency_hz = 0;
         uint64_t scheduled_timestamp = 0;
         uint16_t nios_profile = 0;
+        uint32_t session_generation = 0;
+        uint16_t request_token = 0;
         bool request_found = false;
         uint32_t i;
         int status = nios_retune2_completion_read(
             dev, BLADERF_MODULE_TX, ++sequence, &readback_frequency_hz,
-            &scheduled_timestamp, &nios_profile);
+            &scheduled_timestamp, &nios_profile, &session_generation,
+            &request_token);
         if (status != 0) {
             *read_status_out = status;
             return false;
@@ -961,8 +1024,10 @@ static bool tx_retune_completion_batch_matches_pending(
                     board_data->tx_retune2_pending[i].timestamp,
                     board_data->tx_retune2_pending[i].requested_frequency_hz,
                     board_data->tx_retune2_pending[i].nios_profile,
+                    board_data->tx_retune2_pending[i].session_generation,
+                    board_data->tx_retune2_pending[i].request_token,
                     scheduled_timestamp, readback_frequency_hz,
-                    nios_profile)) {
+                    nios_profile, session_generation, request_token)) {
                 matched[i] = true;
                 request_found = true;
                 break;
@@ -974,6 +1039,82 @@ static bool tx_retune_completion_batch_matches_pending(
         }
     }
 
+    return true;
+}
+
+/* Drain TX failure records while the device mutex serializes the NIOS
+ * selector/read sequence against every other 8x32 transaction. A counter
+ * delta is only a hint: every record must still match one pending request
+ * across timestamp, profile, command session, and host token. */
+static bool tx_retune_failure_batch_consume(
+    struct bladerf *dev, struct bladerf2_board_data *board_data,
+    uint32_t baseline, uint32_t observed, int32_t *error_out)
+{
+    uint32_t delta = observed - baseline;
+    bool matched[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH] = { false };
+    uint8_t pending_count;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    pending_count = board_data->tx_retune2_pending_count;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    *error_out = BLADERF_ERR_UNEXPECTED;
+    if (!have_cap(board_data->capabilities,
+                  BLADERF_CAP_RETUNE2_REQUEST_TOKEN) ||
+        !bladerf2_retune_completion_batch_valid(
+            delta, pending_count, NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH)) {
+        return false;
+    }
+
+    for (uint32_t offset = 0; offset < delta; ++offset) {
+        const uint32_t sequence = baseline + offset + 1u;
+        uint64_t timestamp = 0;
+        uint16_t profile = 0;
+        uint8_t stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+        uint32_t session_generation = 0;
+        uint16_t request_token = 0;
+        uint64_t requested_frequency_hz = 0;
+        bool found = false;
+        int status = nios_retune2_failure_completion_read(
+            dev, BLADERF_MODULE_TX, sequence, &timestamp, &profile, &stage,
+            &session_generation, &request_token);
+        if (status != 0) {
+            *error_out = status;
+            return false;
+        }
+
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        for (uint32_t i = 0;
+             i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+            if (!matched[i] && board_data->tx_retune2_pending[i].valid &&
+                bladerf2_retune_failure_matches(
+                    board_data->tx_retune2_pending[i].timestamp,
+                    board_data->tx_retune2_pending[i].nios_profile,
+                    board_data->tx_retune2_pending[i].session_generation,
+                    board_data->tx_retune2_pending[i].request_token,
+                    timestamp, profile, session_generation, request_token)) {
+                matched[i] = true;
+                requested_frequency_hz =
+                    board_data->tx_retune2_pending[i].requested_frequency_hz;
+                board_data->tx_retune2_pending[i].valid = false;
+                if (board_data->tx_retune2_pending_count != 0) {
+                    board_data->tx_retune2_pending_count--;
+                }
+                found = true;
+                break;
+            }
+        }
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (!found) {
+            return false;
+        }
+
+        bladerf2_tx_retune_failure_detail_event(
+            dev, timestamp, requested_frequency_hz, stage,
+            BLADERF_ERR_FPGA_OP);
+    }
+
+    *error_out = 0;
     return true;
 }
 
@@ -1324,6 +1465,8 @@ static void *rx_fault_monitor_task(void *arg)
                                 uint64_t readback_frequency_hz = 0;
                                 uint64_t scheduled_timestamp = 0;
                                 uint16_t nios_profile = 0;
+                                uint32_t session_generation = 0;
+                                uint16_t request_token = 0;
                                 uint16_t rffe_profile = 0;
                                 uint64_t requested_frequency_hz = 0;
                                 uint32_t i;
@@ -1337,7 +1480,8 @@ static void *rx_fault_monitor_task(void *arg)
                                     nios_retune2_completion_read(
                                         dev, BLADERF_MODULE_RX, sequence,
                                         &readback_frequency_hz,
-                                        &scheduled_timestamp, &nios_profile);
+                                        &scheduled_timestamp, &nios_profile,
+                                        &session_generation, &request_token);
                                 if (completion_status != 0) {
                                     completion_lost = true;
                                     break;
@@ -1351,7 +1495,12 @@ static void *rx_fault_monitor_task(void *arg)
                                         board_data->rx_retune2_pending[i].timestamp ==
                                             scheduled_timestamp &&
                                         board_data->rx_retune2_pending[i].nios_profile ==
-                                            nios_profile) {
+                                            nios_profile &&
+                                        board_data->rx_retune2_pending[i].
+                                            session_generation ==
+                                                session_generation &&
+                                        board_data->rx_retune2_pending[i].
+                                            request_token == request_token) {
                                         request_found = true;
                                         if (!bladerf2_retune_completion_matches(
                                                 board_data->rx_retune2_pending[i].
@@ -1360,9 +1509,15 @@ static void *rx_fault_monitor_task(void *arg)
                                                     requested_frequency_hz,
                                                 board_data->rx_retune2_pending[i].
                                                     nios_profile,
+                                                board_data->rx_retune2_pending[i].
+                                                    session_generation,
+                                                board_data->rx_retune2_pending[i].
+                                                    request_token,
                                                 scheduled_timestamp,
                                                 readback_frequency_hz,
-                                                nios_profile)) {
+                                                nios_profile,
+                                                session_generation,
+                                                request_token)) {
                                             completion_lost = true;
                                         } else {
                                             requested_frequency_hz =
@@ -1430,6 +1585,8 @@ static void *rx_fault_monitor_task(void *arg)
         if (should_poll_rx_retune) {
             bool report_rx_retune_failure = false;
             bool report_rx_retune_status_unavailable = false;
+            uint32_t first_rx_retune_failure_sequence = 0;
+            uint32_t rx_retune_failure_delta = 0;
             int32_t rx_retune_event_error = 0;
 
             WITH_MUTEX(&dev->lock, {
@@ -1453,16 +1610,22 @@ static void *rx_fault_monitor_task(void *arg)
                             board_data->rx_retune2_failure_count_valid = true;
                         } else if (rx_retune2_failure_count !=
                                    board_data->rx_retune2_failure_count_last) {
-                            report_rx_retune_failure = true;
                             report_rx_retune_status_unavailable =
                                 rx_retune2_failure_count <
                                 board_data->rx_retune2_failure_count_last;
                             if (report_rx_retune_status_unavailable) {
-                                report_rx_retune_failure = false;
                                 rx_retune_event_error =
                                     BLADERF_ERR_UNEXPECTED;
                             } else {
-                                rx_retune_event_error = BLADERF_ERR_FPGA_OP;
+                                report_rx_retune_failure = true;
+                                rx_retune_failure_delta =
+                                    rx_retune2_failure_count -
+                                    board_data->rx_retune2_failure_count_last;
+                                first_rx_retune_failure_sequence =
+                                    board_data->rx_retune2_failure_count_last +
+                                    1u;
+                                rx_retune_event_error =
+                                    BLADERF_ERR_FPGA_OP;
                             }
                             board_data->rx_retune2_failure_count_last =
                                 rx_retune2_failure_count;
@@ -1470,15 +1633,123 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                     if (report_rx_retune_failure ||
                         report_rx_retune_status_unavailable) {
-                        struct bladerf_rf_event event = {0};
-                        event.host_monotonic_ns = _monotonic_ns();
-                        event.event_type = report_rx_retune_failure
-                            ? BLADERF_RF_EVT_RX_RETUNE_FAILED
-                            : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
-                        event.fpga_state = BLADERF_RF_STATE_ERROR;
-                        event.flags = rx_retune2_failure_count;
-                        event.error_code = rx_retune_event_error;
-                        bladerf2_rf_event_append(board_data, &event);
+                        bool exact_failure_records =
+                            have_cap(board_data->capabilities,
+                                     BLADERF_CAP_RETUNE2_REQUEST_TOKEN);
+                        bool exact_records_valid = exact_failure_records &&
+                            report_rx_retune_failure &&
+                            rx_retune_failure_delta <=
+                                NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+
+                        if (exact_records_valid) {
+                            uint32_t offset;
+                            for (offset = 0;
+                                 offset < rx_retune_failure_delta; ++offset) {
+                                uint32_t sequence =
+                                    first_rx_retune_failure_sequence + offset;
+                                uint64_t scheduled_timestamp = 0;
+                                uint16_t nios_profile = 0;
+                                uint8_t failure_stage =
+                                    NIOS_PKT_RETUNE2_FAILURE_NONE;
+                                uint32_t session_generation = 0;
+                                uint16_t request_token = 0;
+                                int record_status =
+                                    nios_retune2_failure_completion_read(
+                                        dev, BLADERF_MODULE_RX, sequence,
+                                        &scheduled_timestamp, &nios_profile,
+                                        &failure_stage, &session_generation,
+                                        &request_token);
+                                uint64_t requested_frequency_hz = 0;
+                                bool request_found = false;
+                                unsigned int i;
+
+                                if (record_status == 0) {
+                                    MUTEX_LOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                    for (i = 0; i <
+                                         NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH;
+                                         ++i) {
+                                        if (board_data->
+                                                rx_retune2_pending[i].valid &&
+                                            bladerf2_retune_failure_matches(
+                                                board_data->
+                                                    rx_retune2_pending[i].
+                                                        timestamp,
+                                                board_data->
+                                                    rx_retune2_pending[i].
+                                                        nios_profile,
+                                                board_data->
+                                                    rx_retune2_pending[i].
+                                                        session_generation,
+                                                board_data->
+                                                    rx_retune2_pending[i].
+                                                        request_token,
+                                                scheduled_timestamp,
+                                                nios_profile,
+                                                session_generation,
+                                                request_token)) {
+                                            request_found = true;
+                                            requested_frequency_hz =
+                                                board_data->
+                                                    rx_retune2_pending[i].
+                                                        requested_frequency_hz;
+                                            board_data->
+                                                rx_retune2_pending[i].valid =
+                                                    false;
+                                            if (board_data->
+                                                    rx_retune2_pending_count != 0) {
+                                                board_data->
+                                                    rx_retune2_pending_count--;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                    MUTEX_UNLOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                }
+
+                                if (record_status != 0 || !request_found) {
+                                    exact_records_valid = false;
+                                    rx_retune_event_error = record_status != 0
+                                        ? record_status
+                                        : BLADERF_ERR_UNEXPECTED;
+                                    break;
+                                }
+
+                                struct bladerf_rf_event event = {0};
+                                event.host_monotonic_ns = _monotonic_ns();
+                                event.fpga_timestamp = scheduled_timestamp;
+                                event.requested_rx_lo_hz =
+                                    requested_frequency_hz;
+                                event.rfic_status = failure_stage;
+                                event.fpga_state = BLADERF_RF_STATE_ERROR;
+                                event.event_type =
+                                    BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                                event.flags =
+                                    BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID;
+                                event.error_code = BLADERF_ERR_FPGA_OP;
+                                bladerf2_rf_event_append(board_data, &event);
+                            }
+                        }
+
+                        if (!exact_records_valid) {
+                            struct bladerf_rf_event event = {0};
+                            event.host_monotonic_ns = _monotonic_ns();
+                            event.event_type =
+                                report_rx_retune_failure &&
+                                !exact_failure_records
+                                    ? BLADERF_RF_EVT_RX_RETUNE_FAILED
+                                    : BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE;
+                            event.fpga_state = BLADERF_RF_STATE_ERROR;
+                            event.flags = rx_retune2_failure_count;
+                            event.error_code = exact_failure_records
+                                ? (rx_retune_event_error != 0
+                                       ? rx_retune_event_error
+                                       : BLADERF_ERR_UNEXPECTED)
+                                : rx_retune_event_error;
+                            bladerf2_rf_event_append(board_data, &event);
+                        }
+
                         if (report_rx_retune_failure) {
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->rx_retune2_pending_count = 0;
@@ -1552,6 +1823,10 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_rfic_valid = false;
             bool report_tx_rfic_invalid = false;
             bool report_tx_retune_failure = false;
+            bool report_tx_retune_failure_detailed = false;
+            bool report_tx_retune_failure_record_lost = false;
+            uint32_t tx_retune_failure_baseline = 0;
+            int32_t tx_retune_failure_read_error = BLADERF_ERR_UNEXPECTED;
             bool report_tx_retune_counter_reset = false;
             bool abort_tx_retune_gate = false;
             bool abort_tx_gate_pending = false;
@@ -1701,6 +1976,8 @@ static void *rx_fault_monitor_task(void *arg)
                     if (tx_retune2_watch_active &&
                         tx_link_status_error == 0 &&
                         tx_retune2_status == 0) {
+                        tx_retune_failure_baseline =
+                            board_data->tx_retune2_failure_count_last;
                         const enum
                             bladerf2_tx_retune_failure_counter_observation
                                 failure_observation =
@@ -1725,6 +2002,18 @@ static void *rx_fault_monitor_task(void *arg)
                         }
                         if (report_tx_retune_failure ||
                             report_tx_retune_counter_reset) {
+                            if (report_tx_retune_failure) {
+                                report_tx_retune_failure_detailed =
+                                    tx_retune_failure_batch_consume(
+                                        dev, board_data,
+                                        tx_retune_failure_baseline,
+                                        tx_retune2_failure_count,
+                                        &tx_retune_failure_read_error);
+                                report_tx_retune_failure_record_lost =
+                                    have_cap(board_data->capabilities,
+                                             BLADERF_CAP_RETUNE2_REQUEST_TOKEN) &&
+                                    !report_tx_retune_failure_detailed;
+                            }
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
                             abort_tx_retune_gate = true;
@@ -1785,6 +2074,8 @@ static void *rx_fault_monitor_task(void *arg)
                                 uint64_t readback_frequency_hz;
                                 uint64_t scheduled_timestamp;
                                 uint16_t nios_profile;
+                                uint32_t session_generation;
+                                uint16_t request_token;
                                 uint32_t i;
                                 bool request_found = false;
                                 uint64_t requested_frequency_hz = 0;
@@ -1804,7 +2095,9 @@ static void *rx_fault_monitor_task(void *arg)
                                         dev, BLADERF_MODULE_TX, sequence,
                                         &readback_frequency_hz,
                                         &scheduled_timestamp,
-                                        &nios_profile);
+                                        &nios_profile,
+                                        &session_generation,
+                                        &request_token);
                                 if (completion_read_status != 0) {
                                     completion_lost = true;
                                     break;
@@ -1817,7 +2110,12 @@ static void *rx_fault_monitor_task(void *arg)
                                         board_data->tx_retune2_pending[i].timestamp ==
                                             scheduled_timestamp &&
                                         board_data->tx_retune2_pending[i].nios_profile ==
-                                            nios_profile) {
+                                            nios_profile &&
+                                        board_data->tx_retune2_pending[i].
+                                            session_generation ==
+                                                session_generation &&
+                                        board_data->tx_retune2_pending[i].
+                                            request_token == request_token) {
                                         request_found = true;
                                         if (!bladerf2_retune_completion_matches(
                                                 board_data->tx_retune2_pending[i].
@@ -1826,9 +2124,15 @@ static void *rx_fault_monitor_task(void *arg)
                                                     requested_frequency_hz,
                                                 board_data->tx_retune2_pending[i].
                                                     nios_profile,
+                                                board_data->tx_retune2_pending[i].
+                                                    session_generation,
+                                                board_data->tx_retune2_pending[i].
+                                                    request_token,
                                                 scheduled_timestamp,
                                                 readback_frequency_hz,
-                                                nios_profile)) {
+                                                nios_profile,
+                                                session_generation,
+                                                request_token)) {
                                             completion_lost = true;
                                         } else {
                                             requested_frequency_hz =
@@ -2259,10 +2563,21 @@ static void *rx_fault_monitor_task(void *arg)
                             BLADERF_ERR_FPGA_OP);
                     }
                     if (report_tx_retune_failure) {
-                        bladerf2_tx_stream_event(
-                            dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
-                            tx_retune2_failure_count, rf_link_status,
-                            BLADERF_ERR_FPGA_OP);
+                        if (!report_tx_retune_failure_detailed) {
+                            bladerf2_tx_stream_event(
+                                dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                                tx_retune2_failure_count, rf_link_status,
+                                have_cap(board_data->capabilities,
+                                         BLADERF_CAP_RETUNE2_REQUEST_TOKEN)
+                                    ? tx_retune_failure_read_error
+                                    : BLADERF_ERR_FPGA_OP);
+                        }
+                    }
+                    if (report_tx_retune_failure_record_lost) {
+                        bladerf2_tx_retune_event(
+                            dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                            0, 0, tx_retune2_failure_count,
+                            tx_retune_failure_read_error);
                     }
                     if (report_tx_rfic_valid) {
                         bladerf2_tx_stream_event(
@@ -2361,6 +2676,10 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_counter_reset = false;
             bool report_unavailable = false;
             bool report_completion_lost = false;
+            bool report_failure_record_lost = false;
+            bool report_failure_detailed = false;
+            uint32_t failure_baseline = 0;
+            int32_t failure_read_error = BLADERF_ERR_UNEXPECTED;
             uint32_t unpaired_completion_count = 0;
             int32_t completion_lost_error = BLADERF_ERR_UNEXPECTED;
             WITH_MUTEX(&dev->lock, {
@@ -2388,6 +2707,8 @@ static void *rx_fault_monitor_task(void *arg)
                         board_data->tx_retune_recovery_pending = true;
                     } else if (tx_retune2_status == 0 &&
                                tx_retune2_success_status == 0) {
+                        failure_baseline =
+                            board_data->tx_retune2_failure_count_last;
                         const enum
                             bladerf2_tx_retune_failure_counter_observation
                                 failure_observation =
@@ -2410,6 +2731,17 @@ static void *rx_fault_monitor_task(void *arg)
                             board_data->tx_retune2_failure_count_valid = true;
                         }
                         if (report_failure || report_counter_reset) {
+                            if (report_failure) {
+                                report_failure_detailed =
+                                    tx_retune_failure_batch_consume(
+                                        dev, board_data, failure_baseline,
+                                        tx_retune2_failure_count,
+                                        &failure_read_error);
+                                report_failure_record_lost =
+                                    have_cap(board_data->capabilities,
+                                             BLADERF_CAP_RETUNE2_REQUEST_TOKEN) &&
+                                    !report_failure_detailed;
+                            }
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = true;
                             board_data->tx_retune2_pending_count = 0;
@@ -2494,10 +2826,19 @@ static void *rx_fault_monitor_task(void *arg)
                         ? tx_retune2_status : tx_retune2_success_status);
             }
             if (report_failure) {
-                bladerf2_tx_stream_event(
-                    dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
-                    tx_retune2_failure_count, 0,
-                    BLADERF_ERR_FPGA_OP);
+                if (!report_failure_detailed) {
+                    bladerf2_tx_stream_event(
+                        dev, BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                        tx_retune2_failure_count, 0,
+                        have_cap(board_data->capabilities,
+                                 BLADERF_CAP_RETUNE2_REQUEST_TOKEN)
+                            ? failure_read_error : BLADERF_ERR_FPGA_OP);
+                }
+            }
+            if (report_failure_record_lost) {
+                bladerf2_tx_retune_event(
+                    dev, BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
+                    0, 0, tx_retune2_failure_count, failure_read_error);
             }
             if (report_counter_reset) {
                 bladerf2_tx_retune_event(

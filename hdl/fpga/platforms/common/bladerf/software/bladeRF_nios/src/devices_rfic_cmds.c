@@ -28,13 +28,18 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <errno.h>
 
 #include "ad936x_helpers.h"
+#include "devices_inline.h"
 #include "devices_rfic.h"
+#include "no_os_delay.h"
 #include "rfic_cache_validity.h"
 #include "rfic_calibration_policy.h"
+#include "rfic_cal_done_policy.h"
 #include "rfic_frequency_policy.h"
 #include "rfic_init_policy.h"
+#include "rfic_tx_output_policy.h"
 
 /* REG_CALIBRATION_CTRL mask bit for RF DC offset calibration
  * (ad9361.h RFDC_CAL == 1<<1, thirdparty/analogdevicesinc/no-OS/
@@ -61,10 +66,33 @@ static bool _wait_for_ad9361_if_clock(void)
         if ((control_reg_read() & CONTROL_AD9361_RX_IF_CLOCK_ALIVE) != 0) {
             return true;
         }
-        usleep(BLADERF_AD9361_IF_CLOCK_POLL_US);
+        no_os_udelay(BLADERF_AD9361_IF_CLOCK_POLL_US);
     }
 
     return false;
+}
+
+/* AD9361 CTRL_OUT[7] carries Cal Done for CTRL_OUT pointer 0 (UG-570 Table
+ * 44). The xA4 RFFE GPIO input bus routes CTRL_OUT[7] to bit 31 and clocks it
+ * through a synchronizer into sys_clock. */
+static int32_t _rfic_read_cal_done(struct ad9361_rf_phy *phy, uint32_t mask,
+				   bool *done)
+{
+    uint32_t gpio;
+    uint8_t output_bit;
+
+    if (phy == NULL || phy->pdata == NULL || done == NULL ||
+        phy->pdata->ctrl_outs_ctrl.index != 0 ||
+        !rfic_cal_done_output_bit(mask, &output_bit) ||
+        (phy->pdata->ctrl_outs_ctrl.en_mask & (1u << output_bit)) == 0) {
+        return -ENOTSUP;
+    }
+    if (!rffe_csr_read_checked(&gpio)) {
+        return -EIO;
+    }
+
+    *done = (gpio & (1u << (RFFE_CONTROL_CTRL_OUT + output_bit))) != 0;
+    return 0;
 }
 
 /* An LO jump of this size or more invalidates the RF DC offset
@@ -85,6 +113,8 @@ static bool _wait_for_ad9361_if_clock(void)
 
 extern int32_t ad9361_do_calib(struct ad9361_rf_phy *phy, uint32_t cal,
                                int32_t arg);
+extern int32_t ad9361_do_calib_bounded(struct ad9361_rf_phy *phy,
+                                       uint32_t cal, int32_t arg);
 
 extern AD9361_InitParam bladerf2_rfic_init_params;
 extern AD9361_RXFIRConfig bladerf2_rfic_rx_fir_config;
@@ -97,7 +127,46 @@ extern AD9361_TXFIRConfig bladerf2_rfic_tx_fir_config_int4;
 static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
                                             bladerf_channel channel,
                                             uint64_t frequency,
-                                            bool init_sequence);
+                                            bool init_sequence,
+                                            bool allow_async_calibration);
+
+static bool _rfic_ensure_rx_rfdc_calibrated(
+    struct rfic_state *state, bladerf_frequency frequency,
+    bool init_sequence, bool allow_async)
+{
+    uint32_t rx_port;
+
+    CHECK_BOOL(ad9361_get_rx_rf_port_input(state->phy, &rx_port));
+    if (rx_port >= RFIC_RX_RF_PORT_COUNT) {
+        RFIC_ERR("invalid RX RF port for RFDC history", -EINVAL);
+        return false;
+    }
+
+    if (!rfic_rfdc_port_calibration_required(
+            state->last_rfdc_calib_freq[BLADERF_RX], rx_port, frequency,
+            BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ, init_sequence,
+            RESET_FREQUENCY)) {
+        return true;
+    }
+
+    if (allow_async) {
+        int32_t status = ad9361_rfdc_calibration_start(state->phy,
+                                                       &state->rfdc_job);
+        if (status < 0) {
+            RFIC_ERR("ad9361_rfdc_calibration_start", status);
+            return false;
+        }
+        state->rfdc_job_pending = true;
+        state->rfdc_job_port = (uint8_t)rx_port;
+        state->rfdc_job_frequency = frequency;
+        return true;
+    }
+
+    CHECK_BOOL(ad9361_do_calib_bounded(
+        state->phy, BLADERF_AD9361_RFDC_CAL_MASK, -1));
+    state->last_rfdc_calib_freq[BLADERF_RX][rx_port] = frequency;
+    return true;
+}
 
 
 /******************************************************************************/
@@ -125,7 +194,55 @@ static bool _clear_rffe_ctrl(void)
     reg &= ~(1 << RFFE_CONTROL_MIMO_RX_EN_1);
     reg &= ~(1 << RFFE_CONTROL_MIMO_TX_EN_1);
     return rffe_csr_write_checked(
-        reg, (1u << RFFE_CONTROL_ADF_MUXOUT) - 1u);
+        reg, rfic_disconnect_verify_mask(
+                 (1u << RFFE_CONTROL_ADF_MUXOUT) - 1u,
+                 1u << RFFE_CONTROL_RESET_N));
+}
+
+/* A failed RF-port/ENSM/RFFE sequence can leave the board path different from
+ * the last committed host state. Do not allow another RF mutation to build on
+ * that partial state. INIT/ON will deinitialize, pulse RESETB, and establish
+ * a new complete state. The second disconnect attempt is best-effort; the
+ * fault latch remains set even if the RFFE readback still disagrees. */
+static void _rfic_fail_closed_after_path_mutation(struct rfic_state *state,
+                                                  const char *reason)
+{
+    state->calibration_faulted = true;
+    state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    state->frequency_invalid[BLADERF_RX] = true;
+    state->frequency_invalid[BLADERF_TX] = true;
+    rfic_cache_invalidate_all(state->samplerate_invalid, NUM_MODULES);
+    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+    rfic_cache_invalidate_all(state->filter_invalid, NUM_MODULES);
+
+    RFIC_ERR(reason, -EIO);
+    if (!rfic_force_rf_path_off()) {
+        DBG("%s: RFFE disconnect readback failed; reset remains required\n",
+            __FUNCTION__);
+    }
+}
+
+bool rfic_force_rf_path_off(void)
+{
+    return _clear_rffe_ctrl();
+}
+
+/* Disconnect only the TX side so a failed post-retune calibration cannot
+ * leave an unqualified RF path active. RX state is preserved. */
+bool rfic_disable_tx_output(void)
+{
+    uint32_t reg;
+
+    if (!rffe_csr_read_checked(&reg)) {
+        return false;
+    }
+    reg = rfic_tx_disconnect_value(
+        reg, 1u << RFFE_CONTROL_TXNRX,
+        (1u << RFFE_CONTROL_MIMO_TX_EN_0) |
+            (1u << RFFE_CONTROL_MIMO_TX_EN_1),
+        (RFFE_CONTROL_SPDT_MASK << RFFE_CONTROL_TX_SPDT_1) |
+            (RFFE_CONTROL_SPDT_MASK << RFFE_CONTROL_TX_SPDT_2));
+    return rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK);
 }
 
 /**
@@ -160,7 +277,8 @@ static bool _reset_rfic(bool state)
  *
  * @return     true if successful, false if not
  */
-static bool _rfic_deinitialize(struct rfic_state *state)
+static bool _rfic_deinitialize(struct rfic_state *state,
+                               bool board_reset_asserted)
 {
     state->frequency_invalid[BLADERF_RX] = true;
     state->frequency_invalid[BLADERF_TX] = true;
@@ -170,13 +288,17 @@ static bool _rfic_deinitialize(struct rfic_state *state)
 
     /* Unset RFFE bits controlling RFIC */
     const bool rffe_cleared = _clear_rffe_ctrl();
+    if (board_reset_asserted && !_reset_rfic(true)) {
+        RFIC_ERR("AD9361 RESETB lost before PHY teardown", -EIO);
+        return false;
+    }
     /* RFFE is already unavailable. If ADI teardown fails, do not keep
      * advertising the previous ON/STANDBY state as usable. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
     rfic_rfdc_calibration_history_reset(
-        &state->last_rfdc_calib_freq[BLADERF_RX]);
+        state->last_rfdc_calib_freq[BLADERF_RX]);
     rfic_rfdc_calibration_history_reset(
-        &state->last_rfdc_calib_freq[BLADERF_TX]);
+        state->last_rfdc_calib_freq[BLADERF_TX]);
 
     /* Deinitialize AD9361
      *
@@ -187,12 +309,47 @@ static bool _rfic_deinitialize(struct rfic_state *state)
     if (NULL != state->phy) {
         struct ad9361_rf_phy *phy = state->phy;
 
-        /* ad9361_remove() releases the PHY even when a platform descriptor
-         * reports a teardown error. Clear ownership before calling it so a
-         * reported failure cannot leave a dangling pointer for the next OFF
-         * or recovery command. The RFIC state is already fail-closed above. */
-        state->phy = NULL;
-        CHECK_BOOL(ad9361_remove(phy));
+        {
+            bool consumed = false;
+            int32_t remove_status = ad9361_remove_ex(
+                phy, board_reset_asserted, &consumed);
+
+            if (consumed)
+                state->phy = NULL;
+            if (remove_status < 0) {
+                state->calibration_faulted = true;
+                RFIC_ERR("ad9361_remove", remove_status);
+                if (!rffe_cleared) {
+                    _rfic_fail_closed_after_path_mutation(
+                        state, "RFFE disconnect also failed during deinit");
+                }
+                return false;
+            }
+        }
+    }
+
+    if (!rffe_cleared) {
+        _rfic_fail_closed_after_path_mutation(
+            state, "RFFE did not confirm RF disconnect during deinit");
+    }
+
+    /* A terminal constructor context may be reused only after its candidate
+     * PHY has been consumed. Preserve it if removal failed and ownership is
+     * still with this state object. */
+    if (state->phy == NULL) {
+        state->init_job_pending = false;
+        state->init_job_started = false;
+        state->init_job_status = 0;
+        state->init_tail_phase = RFIC_INIT_TAIL_IDLE;
+        state->init_tail_pending = false;
+        state->init_module_index = 0;
+        state->init_channel_index = 0;
+        state->init_restore_standby = false;
+        state->init_nested_complete = false;
+        state->init_nested_status = 0;
+        state->rfpll_job_pending = false;
+        state->frequency_rfpll_resume_command = false;
+        state->frequency_rfpll_status = 0;
     }
 
     /* The chip is deliberately left out of hardware reset, matching
@@ -207,6 +364,19 @@ static bool _rfic_deinitialize(struct rfic_state *state)
     return rffe_cleared;
 }
 
+static void _rfic_init_tail_advance_module(struct rfic_state *state,
+                                          bool restore_standby_state)
+{
+    state->init_module_index++;
+    if (state->init_module_index >= NUM_MODULES) {
+        state->init_channel_index = 0;
+        state->init_tail_phase = restore_standby_state
+            ? RFIC_INIT_TAIL_TX_MUTE : RFIC_INIT_TAIL_TX_GAIN;
+    } else {
+        state->init_tail_phase = RFIC_INIT_TAIL_RESET_LO;
+    }
+}
+
 /**
  * @brief      Initializes RFIC and RFFE
  *
@@ -217,17 +387,47 @@ static bool _rfic_initialize(struct rfic_state *state)
     AD9361_InitParam *init_param = &bladerf2_rfic_init_params;
     bladerf_direction dir;
     bladerf_channel ch;
-    bladerf_frequency init_freq;
-    bladerf_sample_rate init_samprate;
-    size_t i;
-    bool const restore_standby_state = rfic_init_restore_standby_state(
-        state->init_state == BLADERF_RFIC_INIT_STATE_STANDBY,
-        state->phy != NULL);
+    bool const ad9361_init_resume = rfic_init_adi_resume(
+        state->init_job_started, state->init_job_pending,
+        state->init_job_status, state->phy != NULL);
+    bool const restore_standby_state = state->init_tail_phase !=
+                                               RFIC_INIT_TAIL_IDLE
+        ? state->init_restore_standby
+        : rfic_init_restore_standby_state(
+              state->init_state == BLADERF_RFIC_INIT_STATE_STANDBY,
+              state->phy != NULL);
+
+    if (state->init_job_started && !state->init_job_pending &&
+        state->init_job_status < 0) {
+        state->calibration_faulted = true;
+        rfic_command_record_cleanup_error(state->init_job.cleanup_status);
+        state->init_stage = rfic_init_cleanup_stage(
+            state->init_job.cleanup_status, state->init_stage,
+            BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED);
+        RFIC_ERR("AD9361 init transaction", state->init_job_status);
+        return false;
+    }
+
+    /* Do not replay the RFFE disconnect, cache invalidation, clock preflight,
+     * or reset release after the ADI candidate has completed. In particular,
+     * _clear_rffe_ctrl() would drop ENABLE after the setup cursor just used
+     * the datapath. Resume at the common PHY validation/tail boundary. */
+    if (ad9361_init_resume)
+        goto ad9361_init_ready;
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_ENTER;
     /* Initialization can mutate clocks, ports, FIR and LO in stages. Until
      * every stage completes, neither ON nor STANDBY is a valid status. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    if (state->phy == NULL &&
+        !rfic_init_digital_tune_policy_valid(
+            init_param->digital_interface_tune_skip_mode,
+            init_param->digital_interface_tune_fir_disable != 0)) {
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_DIG_TUNE_POLICY;
+        RFIC_ERR("NIOS requires preset digital-interface delays",
+                 -EINVAL);
+        return false;
+    }
     /* A new PHY has its own RFDC calibration baseline. Never reuse the
      * previous instance's frequency when deciding whether a retune needs
      * calibration. */
@@ -240,18 +440,44 @@ static bool _rfic_initialize(struct rfic_state *state)
         rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
         rfic_cache_invalidate_all(state->filter_invalid, NUM_MODULES);
         rfic_rfdc_calibration_history_reset(
-            &state->last_rfdc_calib_freq[BLADERF_RX]);
+            state->last_rfdc_calib_freq[BLADERF_RX]);
         rfic_rfdc_calibration_history_reset(
-            &state->last_rfdc_calib_freq[BLADERF_TX]);
+            state->last_rfdc_calib_freq[BLADERF_TX]);
     }
 
     /* Unset RFFE bits controlling RFIC */
-    CHECK_TRUE(_clear_rffe_ctrl());
+    if (!_clear_rffe_ctrl()) {
+        _rfic_fail_closed_after_path_mutation(
+            state, "RFFE did not confirm RF disconnect before init");
+        return false;
+    }
     state->init_stage = BLADERF_RFIC_INIT_STAGE_RFFE_CLEARED;
 
     /* Initialize AD9361 if it isn't initialized */
     if (NULL == state->phy) {
         state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
+
+        if (state->init_job_started) {
+            /* The queue worker has completed the retained ADI constructor.
+             * Its exact status and candidate ownership survive until this
+             * callback continuation handles success or cleanup. */
+            if (state->init_job_pending) {
+                RFIC_ERR("INIT callback resumed while ADI job is pending",
+                         -EBUSY);
+                return false;
+            }
+            if (state->init_job_status < 0) {
+                state->calibration_faulted = true;
+                RFIC_ERR("ad9361_init_transaction_poll",
+                         state->init_job_status);
+                return false;
+            }
+            if (state->init_job_status != 0 || state->phy == NULL) {
+                state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
+                RFIC_ERR("ADI init transaction completed without PHY", -EIO);
+                return false;
+            }
+        } else {
 
         DBG("--- Initializing AD9361 ---\n");
 
@@ -268,7 +494,7 @@ static bool _rfic_initialize(struct rfic_state *state)
          * be held in reset, and it has to be running before ad9361_init
          * touches the AXI core. */
         CHECK_TRUE(_reset_rfic(false));
-        usleep(1000);
+        no_os_mdelay(1);
         state->init_stage = BLADERF_RFIC_INIT_STAGE_RESET_OUT;
 
         /* ad9361_init() initializes the FPGA's AD9361 datapath. Keep the
@@ -290,6 +516,7 @@ static bool _rfic_initialize(struct rfic_state *state)
             uint32_t reg;
 
             if (!rffe_csr_read_checked(&reg)) {
+                RFIC_ERR("RFFE read before AD9361 init", -EIO);
                 return false;
             }
 
@@ -306,6 +533,7 @@ static bool _rfic_initialize(struct rfic_state *state)
         state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_WAIT;
         if (!_wait_for_ad9361_if_clock()) {
             state->init_stage = BLADERF_RFIC_INIT_STAGE_IF_CLOCK_TIMEOUT;
+            RFIC_ERR("AD9361 RX interface clock preflight", -ETIMEDOUT);
             DBG("%s: AD9361 RX interface clock did not start\n",
                 __FUNCTION__);
             return false;
@@ -320,91 +548,216 @@ static bool _rfic_initialize(struct rfic_state *state)
          * host side fix in rfic_host.c, minus the .extra wiring host needs
          * for its USB backend. */
         state->init_stage = BLADERF_RFIC_INIT_STAGE_AD9361_INIT;
-        CHECK_BOOL(ad9361_init(&state->phy, init_param));
+        {
+            int32_t init_status = ad9361_init_transaction_start(
+                &state->init_job, &state->phy, init_param);
+
+            if (init_status < 0) {
+                RFIC_ERR("ad9361_init_transaction_start", init_status);
+                return false;
+            }
+
+            state->init_job_started = true;
+            state->init_job_pending = true;
+            state->init_job_status = 0;
+        }
+        /* Keep the same queue item RUNNING. The worker polls one retained
+         * ADI phase on each later pass and re-enters this callback only at
+         * the constructor's terminal result. */
+        return true;
+        }
         state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_OK;
 
         if (NULL == state->phy) {
             state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
+            RFIC_ERR("ad9361_init returned NULL PHY", -EIO);
             DBG("%s: ad9361_init returned ok but left phy NULL\n",
                 __FUNCTION__);
             return false;
         }
 
-        if (NULL == state->phy->pdata) {
-            state->init_stage = BLADERF_RFIC_INIT_STAGE_PDATA_NULL;
-            DBG("%s: ad9361_init failed silently\n", __FUNCTION__);
-            struct ad9361_rf_phy *phy = state->phy;
-            state->phy = NULL;
-            int remove_status = ad9361_remove(phy);
-            state->init_stage = rfic_init_cleanup_stage(
-                remove_status, state->init_stage,
-                BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED);
-            if (remove_status < 0) {
-                DBG("%s: cleanup of invalid AD9361 context failed (%d)\n",
-                    __FUNCTION__, remove_status);
-            }
-            return false;
-        }
+    }
 
-        /* ad9361_setup() completed RFDC calibration at the configured RX
-         * synthesizer frequency. Preserve that verified baseline so the
-         * cold-init staging tune and return to this LO do not repeat the
-         * long calibration unnecessarily. */
-        state->last_rfdc_calib_freq[BLADERF_RX] =
+ad9361_init_ready:
+    state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_OK;
+
+    if (NULL == state->phy) {
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
+        RFIC_ERR("ad9361_init returned NULL PHY", -EIO);
+        return false;
+    }
+
+    if (NULL == state->phy->pdata) {
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_PDATA_NULL;
+        RFIC_ERR("ad9361_init returned PHY without platform data", -EIO);
+        DBG("%s: ad9361_init failed silently\n", __FUNCTION__);
+        struct ad9361_rf_phy *phy = state->phy;
+        bool consumed = false;
+        int remove_status = ad9361_remove_ex(phy, false, &consumed);
+        if (consumed)
+            state->phy = NULL;
+        state->init_stage = rfic_init_cleanup_stage(
+            remove_status, state->init_stage,
+            BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED);
+        if (remove_status < 0) {
+            rfic_command_record_cleanup_error(remove_status);
+            DBG("%s: cleanup of invalid AD9361 context failed (%d)\n",
+                __FUNCTION__, remove_status);
+        }
+        return false;
+    }
+
+    /* Use the board-routed AD9361 completion signal after constructor
+     * completion, then seed the RFDC history from setup's verified RX LO. */
+    state->phy->read_cal_done = _rfic_read_cal_done;
+    if (init_param->rx_rf_port_input_select < RFIC_RX_RF_PORT_COUNT) {
+        state->last_rfdc_calib_freq[BLADERF_RX]
+                                   [init_param->rx_rf_port_input_select] =
             init_param->rx_synthesizer_frequency_hz;
     }
 
-    state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_MODULE;
+    if (state->init_tail_phase == RFIC_INIT_TAIL_IDLE) {
+        state->init_restore_standby = restore_standby_state;
+        state->init_module_index = 0;
+        state->init_channel_index = 0;
+        state->init_nested_complete = false;
+        state->init_nested_status = 0;
+        state->init_tail_phase = restore_standby_state
+            ? RFIC_INIT_TAIL_TX_MUTE : RFIC_INIT_TAIL_RESET_LO;
+    }
 
-    /* Per-module initialization */
-    FOR_EACH_DIRECTION(dir)
-    {
-        if (!restore_standby_state) {
-            ch = CHANNEL_IDX(dir, 0);
+    state->init_tail_pending = false;
+    if (state->init_nested_complete) {
+        state->init_nested_complete = false;
+        if (state->init_nested_status < 0)
+            return false;
 
-            if (BLADERF_CHANNEL_IS_TX(ch)) {
-                init_freq     = init_param->tx_synthesizer_frequency_hz;
-                init_samprate = init_param->tx_path_clock_frequencies[5];
-            } else {
-                init_freq     = init_param->rx_synthesizer_frequency_hz;
-                init_samprate = init_param->rx_path_clock_frequencies[5];
+        /* The LO was already programmed before its retained calibration
+         * started. Resume after that LO phase; never replay the setter. */
+        if (state->init_tail_phase == RFIC_INIT_TAIL_RESET_LO) {
+            state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
+        } else if (state->init_tail_phase == RFIC_INIT_TAIL_FINAL_LO) {
+            _rfic_init_tail_advance_module(state, restore_standby_state);
+        } else {
+            RFIC_ERR("unexpected INIT nested-job continuation", -EIO);
+            return false;
+        }
+    }
+
+    if (state->init_tail_phase <= RFIC_INIT_TAIL_FINAL_LO) {
+        bladerf_frequency target_frequency;
+        bladerf_sample_rate target_sample_rate;
+
+        state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_MODULE;
+        dir = (bladerf_direction)state->init_module_index;
+        ch = CHANNEL_IDX(dir, 0);
+        target_frequency = dir == BLADERF_TX
+            ? init_param->tx_synthesizer_frequency_hz
+            : init_param->rx_synthesizer_frequency_hz;
+        target_sample_rate = dir == BLADERF_TX
+            ? init_param->tx_path_clock_frequencies[5]
+            : init_param->rx_path_clock_frequencies[5];
+
+        switch (state->init_tail_phase) {
+        case RFIC_INIT_TAIL_RESET_LO:
+            state->init_nested_status = 0;
+            if (!_rfic_cmd_wr_frequency_internal(
+                    state, ch, RESET_FREQUENCY, true, true))
+                return false;
+            if (state->rfdc_job_pending || state->tx_quad_job_pending) {
+                state->init_tail_pending = true;
+                return true;
             }
+            state->init_tail_phase = RFIC_INIT_TAIL_FILTER;
+            state->init_tail_pending = true;
+            return true;
 
-            /* Switching the frequency twice seems essential for calibration
-             * to be successful. */
-            CHECK_TRUE(_rfic_cmd_wr_frequency_internal(
-                state, ch, RESET_FREQUENCY, true));
+        case RFIC_INIT_TAIL_FILTER:
+            if (!_rfic_cmd_wr_filter(
+                    state, ch, dir == BLADERF_TX
+                        ? BLADERF_RFIC_TXFIR_DEFAULT
+                        : BLADERF_RFIC_RXFIR_DEFAULT))
+                return false;
+            state->init_tail_phase = RFIC_INIT_TAIL_SAMPLE_RATE;
+            state->init_tail_pending = true;
+            return true;
 
-            CHECK_TRUE(_rfic_cmd_wr_filter(state, ch,
-                                           (BLADERF_TX == dir)
-                                               ? BLADERF_RFIC_TXFIR_DEFAULT
-                                               : BLADERF_RFIC_RXFIR_DEFAULT));
+        case RFIC_INIT_TAIL_SAMPLE_RATE:
+            if (!_rfic_cmd_wr_samplerate(state, ch, target_sample_rate))
+                return false;
+            if (state->sample_rate_job_pending) {
+                state->init_tail_pending = true;
+                return true;
+            }
+            state->init_tail_phase = RFIC_INIT_TAIL_FINAL_LO;
+            state->init_tail_pending = true;
+            return true;
 
-            CHECK_TRUE(_rfic_cmd_wr_samplerate(state, ch, init_samprate));
+        case RFIC_INIT_TAIL_FINAL_LO:
+            state->init_nested_status = 0;
+            if (!_rfic_cmd_wr_frequency_internal(
+                    state, ch, target_frequency, true, true))
+                return false;
+            if (state->rfdc_job_pending || state->tx_quad_job_pending) {
+                state->init_tail_pending = true;
+                return true;
+            }
+            _rfic_init_tail_advance_module(state, restore_standby_state);
+            state->init_tail_pending = true;
+            return true;
 
-            CHECK_TRUE(_rfic_cmd_wr_frequency_internal(
-                state, ch, init_freq, true));
+        default:
+            RFIC_ERR("invalid INIT module phase", -EIO);
+            return false;
         }
     }
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_PER_CHANNEL;
+    switch (state->init_tail_phase) {
+    case RFIC_INIT_TAIL_TX_GAIN:
+        ch = CHANNEL_IDX(BLADERF_TX, state->init_channel_index);
+        if (!txmute_set_cached(state->phy, ch,
+                               init_param->tx_attenuation_mdB))
+            return false;
+        state->init_tail_phase = RFIC_INIT_TAIL_TX_MUTE;
+        state->init_tail_pending = true;
+        return true;
 
-    /* Per-channel initialization */
-    FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
-    {
+    case RFIC_INIT_TAIL_TX_MUTE:
+        ch = CHANNEL_IDX(BLADERF_TX, state->init_channel_index);
         if (restore_standby_state) {
-            /* Restore saved TX Mute state from the warm standby session. */
-            CHECK_BOOL(txmute_set(state->phy, ch, state->tx_mute_state[i]));
+            CHECK_BOOL(txmute_set(state->phy, ch,
+                                  state->tx_mute_state[
+                                      state->init_channel_index]));
         } else {
-            /* A cold/recovered init starts with the configured defaults. */
-            CHECK_BOOL(txmute_set_cached(state->phy, ch,
-                                         init_param->tx_attenuation_mdB));
             CHECK_BOOL(txmute_set(state->phy, ch, false));
         }
+        state->init_channel_index++;
+        if (state->init_channel_index >= 2) {
+            state->init_tail_phase = RFIC_INIT_TAIL_DONE;
+        } else if (!restore_standby_state) {
+            state->init_tail_phase = RFIC_INIT_TAIL_TX_GAIN;
+        }
+        state->init_tail_pending = true;
+        return true;
+
+    case RFIC_INIT_TAIL_DONE:
+        state->init_tail_pending = false;
+        break;
+
+    default:
+        RFIC_ERR("invalid INIT channel phase", -EIO);
+        return false;
     }
 
     /* Update state */
     state->init_state = BLADERF_RFIC_INIT_STATE_ON;
+    state->init_job_started = false;
+    state->init_job_pending = false;
+    state->init_job_status = 0;
+    state->init_tail_phase = RFIC_INIT_TAIL_IDLE;
+    state->init_tail_pending = false;
+    state->init_nested_complete = false;
     if (!restore_standby_state) {
         rfic_cache_validate_all(state->samplerate_invalid, NUM_MODULES);
         rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
@@ -430,14 +783,18 @@ static bool _rfic_standby(struct rfic_state *state)
 
     /* If we aren't initialized, just go directly to deinitialization */
     if (NULL == state->phy) {
-        return _rfic_deinitialize(state);
+        return _rfic_deinitialize(state, false);
     }
 
     /* Unset RFFE bits controlling RFIC */
     /* A failed mute snapshot/write must not leave status reporting ON after
      * the RF enable path has already been cleared. */
     state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
-    CHECK_TRUE(_clear_rffe_ctrl());
+    if (!_clear_rffe_ctrl()) {
+        _rfic_fail_closed_after_path_mutation(
+            state, "RFFE did not confirm standby disconnect");
+        return false;
+    }
 
     /* Cache current txmute state and put it aside */
     FOR_EACH_CHANNEL(BLADERF_TX, 2, i, ch)
@@ -483,6 +840,9 @@ bool _rfic_cmd_rd_status(struct rfic_state *state,
                          bladerf_channel channel,
                          uint64_t *status)
 {
+    struct rfic_queue_entry *active =
+        rfic_queue_peek(&state->write_queue);
+
     *status = ((_rfic_is_initialized(state) & BLADERF_RFIC_STATUS_INIT_MASK)
                << BLADERF_RFIC_STATUS_INIT_SHIFT) |
 
@@ -503,6 +863,126 @@ bool _rfic_cmd_rd_status(struct rfic_state *state,
               ((state->init_stage & BLADERF_RFIC_STATUS_STAGE_MASK)
                << BLADERF_RFIC_STATUS_STAGE_SHIFT);
 
+    if (active != NULL && active->state != ENTRY_STATE_INVALID) {
+        *status |= UINT64_C(1) << BLADERF_RFIC_STATUS_ACTIVE_VALID_SHIFT;
+        *status |= ((uint64_t)active->cmd &
+                    BLADERF_RFIC_STATUS_ACTIVE_CMD_MASK)
+                   << BLADERF_RFIC_STATUS_ACTIVE_CMD_SHIFT;
+        *status |= ((uint64_t)active->ch &
+                    BLADERF_RFIC_STATUS_ACTIVE_CH_MASK)
+                   << BLADERF_RFIC_STATUS_ACTIVE_CH_SHIFT;
+        *status |= ((uint64_t)active->state &
+                    BLADERF_RFIC_STATUS_ACTIVE_STATE_MASK)
+                   << BLADERF_RFIC_STATUS_ACTIVE_STATE_SHIFT;
+    }
+
+    return true;
+}
+
+/* Read-only transaction identity is separate from STATUS so its 32-bit
+ * retirement sequence and active queue fields retain their existing layout.
+ * [15:0]=active ID, [31:16]=last retired ID, [63:32]=retire sequence. */
+bool _rfic_cmd_rd_transaction_status(struct rfic_state *state,
+                                     bladerf_channel channel,
+                                     uint64_t *status)
+{
+    struct rfic_queue_entry *active =
+        rfic_queue_peek(&state->write_queue);
+    uint16_t active_id = active == NULL ? 0 : active->transaction_id;
+
+    *status = (uint64_t)active_id |
+              ((uint64_t)state->write_queue.last_rv_transaction_id << 16) |
+              ((uint64_t)state->write_queue.last_rv_sequence << 32);
+    return true;
+}
+
+/* Diagnostic heartbeat for a tagged active callback. The counter advances
+ * only at cooperative safe points (delays, SPI/AXI completion) and on entry /
+ * return from the callback. It proves that firmware reached a boundary; it
+ * does not imply hardware calibration completion or cancellation. */
+bool _rfic_cmd_rd_progress(struct rfic_state *state,
+                           bladerf_channel channel,
+                           uint64_t *status)
+{
+    struct rfic_queue_entry *active =
+        rfic_queue_peek(&state->write_queue);
+    uint16_t transaction_id = active == NULL
+                                  ? state->write_queue.last_rv_transaction_id
+                                  : active->transaction_id;
+    uint8_t command = active == NULL
+                          ? state->write_queue.last_rv_cmd
+                          : active->cmd;
+    uint8_t phase_or_result = active == NULL
+                                  ? state->write_queue.last_result_code
+                                  : (uint8_t)active->state;
+
+    /* A heartbeat proves that NIOS reached a cooperative safe point, but by
+     * itself it cannot distinguish a long calibration from a stuck callback.
+     * Report the retained sub-transaction phase in the existing phase byte
+     * whenever one owns the RFIC. This is diagnostic only: it does not imply
+     * hardware completion and does not alter command retirement semantics. */
+    if (active != NULL && active->state == ENTRY_STATE_RUNNING) {
+        if (state->rfpll_job_pending) {
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_RFPLL,
+                state->rfpll_job.rate_transaction.stage);
+        } else if (active->cmd == BLADERF_RFIC_COMMAND_INIT) {
+            uint8_t init_step = state->init_job_pending
+                ? state->init_job.stage
+                : (uint8_t)state->init_tail_phase;
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_INIT, init_step);
+        } else if (state->rfdc_job_pending) {
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_RFDC,
+                state->rfdc_job.stage);
+        } else if (state->tx_quad_job_pending) {
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_TXQ,
+                state->tx_quad_job.stage);
+        } else if (state->sample_rate_job_pending) {
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_SAMPLE_RATE,
+                state->sample_rate_job.stage);
+        } else if (state->bandwidth_job_pending) {
+            phase_or_result = bladerf_rfic_progress_phase_encode(
+                BLADERF_RFIC_PROGRESS_PHASE_BANDWIDTH,
+                state->bandwidth_job.stage);
+        }
+    }
+    struct bladerf_rfic_progress progress = {
+        .sequence = state->write_queue.progress_sequence,
+        .transaction_id = transaction_id,
+        .command = command,
+        .phase_or_result = phase_or_result,
+    };
+
+    (void)channel;
+    *status = bladerf_rfic_progress_pack(&progress);
+    return true;
+}
+
+/* Extended terminal detail is read-only and bound to the same transaction ID
+ * and retirement sequence as PROGRESS/RESULT_ACK. Never expose toolchain errno
+ * values on the wire; both failure fields are stable result classes. */
+bool _rfic_cmd_rd_result_detail(struct rfic_state *state,
+                                bladerf_channel channel,
+                                uint64_t *status)
+{
+    struct rfic_queue const *q = &state->write_queue;
+    struct bladerf_rfic_result_detail detail = {
+        .sequence = q->last_rv_sequence,
+        .transaction_id = q->last_rv_valid
+                              ? q->last_rv_transaction_id : 0,
+        .primary_result = q->last_rv_valid
+                              ? q->last_result_code
+                              : BLADERF_RFIC_RESULT_NO_RESULT,
+        .cleanup_result = q->last_rv_valid
+                              ? q->last_cleanup_result_code
+                              : BLADERF_RFIC_RESULT_NO_RESULT,
+    };
+
+    *status = bladerf_rfic_result_detail_pack(&detail);
     return true;
 }
 
@@ -531,20 +1011,52 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
 
     switch (new_state) {
         case BLADERF_RFIC_INIT_STATE_OFF:
-            return _rfic_deinitialize(state);
+            return _rfic_deinitialize(state, false);
 
         case BLADERF_RFIC_INIT_STATE_ON:
+            if (state->calibration_faulted) {
+                /* An ambiguous calibration may still be in flight. Assert
+                 * board RESETB before releasing its PHY/resources; no AD9361
+                 * SPI is issued until the fresh initialization begins. */
+                if (!_clear_rffe_ctrl()) {
+                    RFIC_ERR("failed to disconnect RFFE before RESETB", -EIO);
+                    return false;
+                }
+                if (!_reset_rfic(true)) {
+                    RFIC_ERR("failed to assert AD9361 RESETB", -EIO);
+                    return false;
+                }
+                if (!_rfic_deinitialize(state, true)) {
+                    DBG("%s: teardown failed before calibration recovery\n",
+                        __FUNCTION__);
+                    return false;
+                }
+                /* Hold the chip in reset only for the documented minimum;
+                 * release it before any AXI access because the AD9361
+                 * interface clock is derived from the transceiver. */
+                no_os_udelay(2);
+                if (!_reset_rfic(false)) {
+                    RFIC_ERR("failed to release AD9361 RESETB", -EIO);
+                    DBG("%s: failed to release AD9361 RESETB\n",
+                        __FUNCTION__);
+                    return false;
+                }
+                /* UG-570 requires at least 1 us after RESETB rises before
+                 * programming. Give the interface clock additional startup
+                 * margin before ad9361_init() touches AXI. */
+                no_os_mdelay(1);
+            }
+
             if (_rfic_initialize(state)) {
+                state->calibration_faulted = false;
                 return true;
             }
 
-            /* Initialization can fail after ad9361_init() has allocated a
-             * PHY and partially programmed the device. Leave init_state OFF
-             * and remove that partial instance so a later INIT request starts
-             * from a fresh ADI context instead of treating non-NULL phy as
-             * proof that initialization completed. _rfic_deinitialize()
-             * preserves init_stage, which remains available to STATUS. */
-            if (!_rfic_deinitialize(state)) {
+            /* Any failed initialization can leave partially programmed RF
+             * state, whether its partial PHY was consumed or retained. Keep a
+             * board-level fault so the next ON resets before retrying. */
+            state->calibration_faulted = true;
+            if (!_rfic_deinitialize(state, false)) {
                 DBG("%s: cleanup after failed initialization also failed\n",
                     __FUNCTION__);
             }
@@ -554,6 +1066,7 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
             return _rfic_standby(state);
     }
 
+    RFIC_ERR("invalid RFIC initialization state", -EINVAL);
     return false;
 }
 
@@ -600,8 +1113,57 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
     bladerf_frequency freq = 0;
     size_t i;
 
+    if (state->rfdc_resume_enable_command) {
+        bool continuation_matches =
+            state->rfdc_resume_enable_channel == channel &&
+            state->rfdc_resume_enable_value == (enable > 0);
+        bool commit_allowed = rfic_rx_enable_resume_commit_allowed(
+            state->rfdc_resume_enable_status, continuation_matches,
+            state->phy != NULL &&
+                !ad9361_calibration_state_unknown(state->phy));
+        uint32_t resume_reg = state->rfdc_resume_enable_rffe_reg;
+
+        state->rfdc_resume_enable_command = false;
+        state->rfdc_resume_enable_status = 0;
+        if (!commit_allowed) {
+            _rfic_fail_closed_after_path_mutation(
+                state, "RX enable RFDC continuation failed or mismatched");
+            return false;
+        }
+        if (!rffe_csr_write_checked(resume_reg, RFFE_CSR_OUTPUT_MASK)) {
+            _rfic_fail_closed_after_path_mutation(
+                state, "RFFE enable commit failed after RX RFDC");
+            return false;
+        }
+        return true;
+    }
+
+    if (state->tx_quad_resume_command) {
+        /* TXQ has completed and restored the AD9361 transaction. Continue at
+         * the single deferred board commit; do not replay RFIC port setup,
+         * register reads, or calibration initiation. */
+        if (!rfic_tx_enable_continuation_matches(
+                state->tx_quad_resume_channel,
+                state->tx_quad_resume_value, channel, enable)) {
+            state->tx_quad_resume_command = false;
+            _rfic_fail_closed_after_path_mutation(
+                state, "TX enable continuation identity mismatch");
+            return false;
+        }
+
+        reg = state->tx_quad_resume_rffe_reg;
+        state->tx_quad_resume_command = false;
+        if (!rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK)) {
+            _rfic_fail_closed_after_path_mutation(
+                state, "RFFE enable commit failed after TXQ");
+            return false;
+        }
+        return true;
+    }
+
     /* Read RFFE control register */
     if (!rffe_csr_read_checked(&reg)) {
+        RFIC_ERR("RFFE read before enable-state update", -EIO);
         return false;
     }
 
@@ -663,16 +1225,68 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
         /* Look up the port configuration for this frequency */
         port_map = _get_band_port_map_by_freq(channel, ch_enable ? freq : 0);
         if (NULL == port_map) {
+            RFIC_ERR("no RF port mapping for requested frequency", -ERANGE);
             return false;
         }
 
         /* Set the AD9361 port accordingly */
         if (BLADERF_CHANNEL_IS_TX(channel)) {
-            CHECK_BOOL(
-                ad9361_set_tx_rf_port_output(state->phy, port_map->rfic_port));
+            if (ad9361_set_tx_rf_port_output(
+                    state->phy, port_map->rfic_port) < 0) {
+                _rfic_fail_closed_after_path_mutation(
+                    state, "AD9361 TX port update failed");
+                return false;
+            }
         } else {
-            CHECK_BOOL(
-                ad9361_set_rx_rf_port_input(state->phy, port_map->rfic_port));
+            if (ad9361_set_rx_rf_port_input(
+                    state->phy, port_map->rfic_port) < 0) {
+                _rfic_fail_closed_after_path_mutation(
+                    state, "AD9361 RX port update failed");
+                return false;
+            }
+            if (ch_enable) {
+                /* Enabling RX can select a different AD9361 input without
+                 * a corresponding LO write. Calibrate that input before
+                 * committing the RFFE enable so its own RFDC correction is
+                 * present when samples resume. */
+                if (!_rfic_ensure_rx_rfdc_calibrated(state, freq, false,
+                                                      true)) {
+                    _rfic_fail_closed_after_path_mutation(
+                        state, "RX RFDC calibration failed after port update");
+                    return false;
+                }
+                if (state->rfdc_job_pending) {
+                    state->rfdc_commit_rx_frequency = false;
+                    state->rfdc_resume_enable_command = true;
+                    state->rfdc_resume_enable_channel = channel;
+                    state->rfdc_resume_enable_value = ch_enable;
+                    state->rfdc_resume_enable_rffe_reg = reg;
+                    state->rfdc_resume_enable_status = 1;
+                    return true;
+                }
+            }
+        }
+    }
+
+    /* Do not publish the TX enable until calibration history is valid for
+     * the final RFIC TXA/TXB selector and current LO. */
+    if (ch_enable && BLADERF_CHANNEL_IS_TX(channel)) {
+        bool tx_quad_pending;
+
+        if (!rfic_start_tx_quad_calibration_for_command(
+                &tx_quad_pending, NULL)) {
+            _rfic_fail_closed_after_path_mutation(
+                state, "TX quadrature calibration failed before RFFE enable");
+            return false;
+        }
+        if (tx_quad_pending) {
+            /* The NIOS worker retains this queue entry and RFIC ownership.
+             * Save the exact post-calibration commit; its continuation must
+             * not replay the earlier RFIC port mutations. */
+            state->tx_quad_resume_channel = channel;
+            state->tx_quad_resume_value = ch_enable;
+            state->tx_quad_resume_rffe_reg = reg;
+            return true;
         }
     }
 
@@ -683,8 +1297,14 @@ bool _rfic_cmd_wr_enable(struct rfic_state *state,
         dir_pending, reg_old, reg);
 #endif
 
-    /* Write RFFE control register */
-    CHECK_TRUE(rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK));
+    /* The AD9361 port selector is global and was already changed above. A
+     * failed final RFFE commit therefore leaves the effective RF path
+     * ambiguous even if the AD9361 SPI writes themselves all succeeded. */
+    if (!rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK)) {
+        _rfic_fail_closed_after_path_mutation(
+            state, "RFFE enable state failed readback after RFIC port update");
+        return false;
+    }
 
     return true;
 }
@@ -704,6 +1324,7 @@ bool _rfic_cmd_rd_enable(struct rfic_state *state,
     uint32_t reg;
 
     if (!rffe_csr_read_checked(&reg)) {
+        RFIC_ERR("RFFE read for enable-state query", -EIO);
         return false;
     }
     *enabled = _rffe_ch_enabled(reg, channel) ? 1 : 0;
@@ -724,17 +1345,52 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
                              uint32_t rate)
 {
     bool converter_available = false;
+    bool resumed = state->sample_rate_resume_command;
+    int32_t status;
 
-    /* Either ADI setter regenerates both clock chains and reapplies both
-     * bandwidth filters. An interrupted transaction makes both readbacks
-     * uncertain until a subsequent complete setter commits. */
-    rfic_cache_invalidate_all(state->samplerate_invalid, NUM_MODULES);
-    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
-
-    if (BLADERF_CHANNEL_IS_TX(channel)) {
-        CHECK_BOOL(ad9361_set_tx_sampling_freq(state->phy, rate));
+    if (resumed) {
+        state->sample_rate_resume_command = false;
     } else {
-        CHECK_BOOL(ad9361_set_rx_sampling_freq(state->phy, rate));
+        for (unsigned int i = 0; i < NUM_MODULES; i++) {
+            state->sample_rate_saved_samplerate_invalid[i] =
+                state->samplerate_invalid[i];
+            state->sample_rate_saved_bandwidth_invalid[i] =
+                state->bandwidth_invalid[i];
+        }
+
+        status = ad9361_sample_rate_transaction_start(
+            state->phy, rate, BLADERF_CHANNEL_IS_TX(channel),
+            &state->sample_rate_job);
+        if (status < 0) {
+            enum rfic_sample_rate_cache_action cache_action =
+                rfic_sample_rate_cache_action(
+                    state->sample_rate_job.active, true,
+                    state->phy->current_bw_valid &&
+                    !ad9361_calibration_state_unknown(state->phy));
+
+            if (cache_action == RFIC_SAMPLE_RATE_CACHE_INVALIDATE) {
+                rfic_cache_invalidate_all(state->samplerate_invalid,
+                                          NUM_MODULES);
+                rfic_cache_invalidate_all(state->bandwidth_invalid,
+                                          NUM_MODULES);
+            }
+            rfic_command_record_error(status);
+            return false;
+        }
+        if (state->sample_rate_job.active) {
+            /* RX/TX share the AD9361 clock tree. Close both readbacks once
+             * the plan has mutated and keep them closed through TXQ, restore
+             * and final transaction completion. */
+            rfic_cache_invalidate_all(state->samplerate_invalid,
+                                      NUM_MODULES);
+            rfic_cache_invalidate_all(state->bandwidth_invalid,
+                                      NUM_MODULES);
+            state->sample_rate_job_pending = true;
+            return true;
+        }
+    }
+
+    if (!BLADERF_CHANNEL_IS_TX(channel)) {
 
         /* Only a PHY with an AXI ADC handle can execute the BIST timing
          * sweep. The NIOS-owned PHY intentionally omits that handle and uses
@@ -749,6 +1405,8 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
             CHECK_BOOL(ad9361_dig_tune(state->phy, 61440000,
                                        DO_IDELAY | DO_ODELAY));
         } else if (state->phy->pdata->dig_interface_tune_skipmode != 2) {
+            RFIC_ERR("digital interface tune unavailable without AXI ADC",
+                     -ENOTSUP);
             DBG("%s: digital interface tuning requires an AXI ADC handle\n",
                 __FUNCTION__);
             return false;
@@ -777,6 +1435,7 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
 
     if (!rfic_cache_read_is_valid(state->samplerate_invalid, NUM_MODULES,
                                   direction)) {
+        RFIC_ERR("sample-rate cache is invalid", -EIO);
         return false;
     }
 
@@ -800,7 +1459,8 @@ bool _rfic_cmd_rd_samplerate(struct rfic_state *state,
 static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
                                             bladerf_channel channel,
                                             uint64_t frequency,
-                                            bool init_sequence)
+                                            bool init_sequence,
+                                            bool allow_async_calibration)
 {
     bladerf_direction dir =
         BLADERF_CHANNEL_IS_TX(channel) ? BLADERF_TX : BLADERF_RX;
@@ -808,6 +1468,7 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
     bladerf_channel other_ch;
     uint32_t reg;
     size_t i;
+    bool resumed_rfpll = state->frequency_rfpll_resume_command;
 
     /* A failed port, LO, or calibration step must not leave the cached RFIC
      * frequency readable as a successful transition. Publish validity only
@@ -820,19 +1481,45 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
             rfic_frequency_peer_unknown(
                 BLADERF_CHANNEL_IS_TX(channel)
                     ? BLADERF_MODULE_TX : BLADERF_MODULE_RX))) {
+        RFIC_ERR("peer LO frequency is unknown", -EINVAL);
         return false;
     }
     state->frequency_invalid[dir] = true;
 
+    if (resumed_rfpll) {
+        if (state->frequency_rfpll_channel != channel ||
+            state->frequency_rfpll_target != frequency ||
+            state->frequency_rfpll_init_sequence != init_sequence) {
+            state->frequency_rfpll_resume_command = false;
+            RFIC_ERR("RFPLL continuation does not match active command",
+                     -EINVAL);
+            return false;
+        }
+        state->frequency_rfpll_resume_command = false;
+        if (state->frequency_rfpll_status < 0) {
+            RFIC_ERR("RFPLL clock transaction",
+                     state->frequency_rfpll_status);
+            _rfic_fail_closed_after_path_mutation(
+                state, "LO update failed after RF path preselection");
+            return false;
+        }
+        goto lo_programmed;
+    }
+
     /* Scheduled fastlock recalls bypass ADI's recall API. Exit that external
      * mode explicitly before the ordinary LO setter relies on current_profile
      * to run its ALC/VCO cleanup sequence. */
-    if (ad9361_fastlock_exit_foreign(
-            state->phy, BLADERF_CHANNEL_IS_TX(channel)) < 0) {
-        return false;
+    {
+        int32_t status = ad9361_fastlock_exit_foreign(
+            state->phy, BLADERF_CHANNEL_IS_TX(channel));
+        if (status < 0) {
+            RFIC_ERR("ad9361_fastlock_exit_foreign", status);
+            return false;
+        }
     }
 
     if (!rffe_csr_read_checked(&reg)) {
+        RFIC_ERR("RFFE read before frequency update", -EIO);
         return false;
     }
 
@@ -852,35 +1539,66 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
 
     CHECK_TRUE(rffe_csr_write_checked(reg, RFFE_CSR_OUTPUT_MASK));
 
+    /* Preselect the target TX output even when TX is currently disabled.
+     * The finalizer below must key calibration to the path the next enable
+     * will use; RX still defers selector changes until its enable path. */
     CHECK_BOOL(set_ad9361_port_by_freq(
-        state->phy, port_ch, _rffe_ch_enabled(reg, port_ch), frequency));
+        state->phy, port_ch,
+        BLADERF_CHANNEL_IS_TX(channel) || _rffe_ch_enabled(reg, port_ch),
+        frequency));
 
-    if (BLADERF_CHANNEL_IS_TX(channel)) {
-        CHECK_BOOL(ad9361_set_tx_lo_freq(state->phy, frequency));
-    } else {
-        CHECK_BOOL(ad9361_set_rx_lo_freq(state->phy, frequency));
+    {
+        uint32_t source = BLADERF_CHANNEL_IS_TX(channel)
+            ? TX_RFPLL : RX_RFPLL;
+        int32_t status = ad9361_rfpll_clock_transaction_start(
+            state->phy, state->phy->ref_clk_scale[source],
+            ad9361_to_clk(frequency), &state->rfpll_job);
 
-        /* Rerun RF DC offset calibration when this tune moved far
-         * enough from the last point it was calibrated at (see
-         * BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ above). Guarded
-         * on distance, not run unconditionally on every tune, since
-         * RFDC_CAL takes measurably longer than a plain LO write and
-         * most retunes in a sweep are small hops within the same
-         * calibrated neighborhood. */
-        {
-            bladerf_frequency last = state->last_rfdc_calib_freq[BLADERF_RX];
-
-            if (rfic_rfdc_calibration_required_for_tune(
-                    last, frequency,
-                    BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ,
-                    init_sequence,
-                    RESET_FREQUENCY)) {
-                CHECK_BOOL(ad9361_do_calib(state->phy,
-                                          BLADERF_AD9361_RFDC_CAL_MASK, -1));
-                state->last_rfdc_calib_freq[BLADERF_RX] = frequency;
-            }
+        /* External-LO callbacks do not yet expose a retained contract. Keep
+         * their established path explicit; the xA4 NIOS configuration uses
+         * the internal synthesizers and always takes the retained path. */
+        if (status == -ENOTSUP) {
+            status = BLADERF_CHANNEL_IS_TX(channel)
+                ? ad9361_set_tx_lo_freq(state->phy, frequency)
+                : ad9361_set_rx_lo_freq(state->phy, frequency);
         }
+        if (status < 0) {
+            RFIC_ERR("RFPLL clock transaction start", status);
+            _rfic_fail_closed_after_path_mutation(
+                state, "LO update failed after RF path preselection");
+            return false;
+        }
+        if (state->rfpll_job.active) {
+            state->rfpll_job_pending = true;
+            state->frequency_rfpll_channel = channel;
+            state->frequency_rfpll_target = frequency;
+            state->frequency_rfpll_init_sequence = init_sequence;
+            state->frequency_rfpll_status = 0;
+            return true;
+        }
+    }
 
+lo_programmed:
+    if (BLADERF_CHANNEL_IS_TX(channel)) {
+        if (allow_async_calibration) {
+            bool tx_quad_pending;
+
+            CHECK_TRUE(rfic_start_tx_quad_calibration_for_frequency(
+                &tx_quad_pending, NULL));
+            if (tx_quad_pending)
+                return true;
+        } else {
+            CHECK_TRUE(rfic_finalize_tx_quad_calibration(NULL));
+        }
+    } else {
+        /* RFDC history is indexed by the actual AD9361 input selector, not
+         * frequency alone. */
+        CHECK_TRUE(_rfic_ensure_rx_rfdc_calibrated(
+            state, frequency, init_sequence, allow_async_calibration));
+        if (state->rfdc_job_pending) {
+            state->rfdc_commit_rx_frequency = true;
+            return true;
+        }
     }
 
     state->frequency_invalid[dir] = false;
@@ -891,7 +1609,8 @@ bool _rfic_cmd_wr_frequency(struct rfic_state *state,
                             bladerf_channel channel,
                             uint64_t frequency)
 {
-    return _rfic_cmd_wr_frequency_internal(state, channel, frequency, false);
+    return _rfic_cmd_wr_frequency_internal(state, channel, frequency, false,
+                                           true);
 }
 
 /**
@@ -908,11 +1627,13 @@ bool _rfic_cmd_rd_frequency(struct rfic_state *state,
 {
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         if (state->frequency_invalid[BLADERF_TX]) {
+            RFIC_ERR("TX LO frequency is invalid", -EIO);
             return false;
         }
         CHECK_BOOL(ad9361_get_tx_lo_freq(state->phy, frequency));
     } else {
         if (state->frequency_invalid[BLADERF_RX]) {
+            RFIC_ERR("RX LO frequency is invalid", -EIO);
             return false;
         }
         CHECK_BOOL(ad9361_get_rx_lo_freq(state->phy, frequency));
@@ -933,35 +1654,50 @@ bool _rfic_cmd_wr_bandwidth(struct rfic_state *state,
                             bladerf_channel channel,
                             uint32_t bandwidth)
 {
+    bool resumed = state->bandwidth_resume_command;
     bool bandwidth_cache_invalid =
         state->bandwidth_invalid[BLADERF_RX] ||
         state->bandwidth_invalid[BLADERF_TX];
+    uint32_t rx_bandwidth, tx_bandwidth;
+    int32_t status;
 
-    /* The ADI bandwidth transaction updates RX and TX analog filters and
-     * may also run TX quadrature calibration. On any failed SPI step, neither
-     * direction has a trustworthy readback until a complete update succeeds. */
-    rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+    if (resumed) {
+        state->bandwidth_resume_command = false;
+        rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
+        return true;
+    }
 
-    if (bandwidth_cache_invalid) {
-        /* Public per-direction setters short-circuit when their requested
-         * value matches the last committed cache. After a failed partial
-         * write that cache is not proof of hardware state, so force the full
-         * two-direction filter/calibration transaction to recover it. */
-        uint32_t rx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
-                                    ? state->phy->current_rx_bw_Hz
-                                    : ad9361_validate_rf_bw(state->phy,
-                                                            bandwidth);
-        uint32_t tx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
-                                    ? ad9361_validate_rf_bw(state->phy,
-                                                            bandwidth)
-                                    : state->phy->current_tx_bw_Hz;
+    rx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
+                       ? state->phy->current_rx_bw_Hz
+                       : ad9361_validate_rf_bw(state->phy, bandwidth);
+    tx_bandwidth = BLADERF_CHANNEL_IS_TX(channel)
+                       ? ad9361_validate_rf_bw(state->phy, bandwidth)
+                       : state->phy->current_tx_bw_Hz;
 
-        CHECK_BOOL(ad9361_update_rf_bandwidth(state->phy, rx_bandwidth,
-                                              tx_bandwidth));
-    } else if (BLADERF_CHANNEL_IS_TX(channel)) {
-        CHECK_BOOL(ad9361_set_tx_rf_bandwidth(state->phy, bandwidth));
-    } else {
-        CHECK_BOOL(ad9361_set_rx_rf_bandwidth(state->phy, bandwidth));
+    /* Preserve the old no-op behavior when the requested pair is already
+     * committed and both NIOS readback caches are known. */
+    if (!bandwidth_cache_invalid && state->phy->current_bw_valid &&
+        rx_bandwidth == state->phy->current_rx_bw_Hz &&
+        tx_bandwidth == state->phy->current_tx_bw_Hz) {
+        return true;
+    }
+
+    /* ADI updates both analog filter chains and may run TXQ. Keep this queue
+     * entry resident while the operation yields between completion polls. */
+    status = ad9361_rf_bandwidth_transaction_start(
+        state->phy, rx_bandwidth, tx_bandwidth, &state->bandwidth_job);
+    if (status < 0) {
+        if (!state->phy->current_bw_valid ||
+            ad9361_calibration_state_unknown(state->phy)) {
+            rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+        }
+        rfic_command_record_error(status);
+        return false;
+    }
+    if (state->bandwidth_job.active) {
+        rfic_cache_invalidate_all(state->bandwidth_invalid, NUM_MODULES);
+        state->bandwidth_job_pending = true;
+        return true;
     }
 
     rfic_cache_validate_all(state->bandwidth_invalid, NUM_MODULES);
@@ -986,6 +1722,7 @@ bool _rfic_cmd_rd_bandwidth(struct rfic_state *state,
 
     if (!rfic_cache_read_is_valid(state->bandwidth_invalid, NUM_MODULES,
                                   direction)) {
+        RFIC_ERR("bandwidth cache is invalid", -EIO);
         return false;
     }
 
@@ -1026,6 +1763,8 @@ bool _rfic_cmd_wr_gainmode(struct rfic_state *state,
                     break;
 
                 default:
+                    RFIC_ERR("invalid channel for default gain mode",
+                             -EINVAL);
                     return false;
             }
             break;
@@ -1042,6 +1781,7 @@ bool _rfic_cmd_wr_gainmode(struct rfic_state *state,
             gc_mode = RF_GAIN_HYBRID_AGC;
             break;
         default:
+            RFIC_ERR("invalid gain mode", -EINVAL);
             return false;
     }
 
@@ -1084,6 +1824,7 @@ bool _rfic_cmd_rd_gainmode(struct rfic_state *state,
             *gainmode = BLADERF_GAIN_HYBRID_AGC;
             break;
         default:
+            RFIC_ERR("unknown RFIC gain mode readback", -EIO);
             return false;
     }
 
@@ -1261,6 +2002,7 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
                 enable     = 1;
                 break;
             default:
+                RFIC_ERR("invalid TX FIR setting", -EINVAL);
                 return false;
         }
 
@@ -1300,6 +2042,7 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
                 enable     = 1;
                 break;
             default:
+                RFIC_ERR("invalid RX FIR setting", -EINVAL);
                 return false;
         }
 
@@ -1313,6 +2056,7 @@ bool _rfic_cmd_wr_filter(struct rfic_state *state,
         return true;
     }
 
+    RFIC_ERR("invalid RFIC filter channel", -EINVAL);
     return false;
 }
 
@@ -1330,11 +2074,13 @@ bool _rfic_cmd_rd_filter(struct rfic_state *state,
 {
     if (BLADERF_CHANNEL_IS_TX(channel)) {
         if (state->filter_invalid[BLADERF_TX]) {
+            RFIC_ERR("TX FIR cache is invalid", -EIO);
             return false;
         }
         *filter = (uint32_t)state->txfir;
     } else {
         if (state->filter_invalid[BLADERF_RX]) {
+            RFIC_ERR("RX FIR cache is invalid", -EIO);
             return false;
         }
         *filter = (uint32_t)state->rxfir;

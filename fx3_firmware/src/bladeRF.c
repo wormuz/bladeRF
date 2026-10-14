@@ -697,6 +697,33 @@ CyBool_t NuandHandleVendorRequest(
         CyU3PUsbSendRetCode(logger_read());
     break;
 
+    case BLADE_USB_CMD_PAUSE_TX_DMA:
+        if (glUsbAltInterface != USB_IF_RF_LINK || wValue != 0 ||
+            wIndex != 0 || wLength != 0) {
+            CyU3PUsbStall(0, CyTrue, CyFalse);
+            break;
+        }
+        apiRetStatus = NuandRFLinkPauseTxDma();
+        if (apiRetStatus == CY_U3P_SUCCESS) {
+            CyU3PUsbAckSetup();
+        } else {
+            CyU3PUsbStall(0, CyTrue, CyFalse);
+        }
+    break;
+
+    case BLADE_USB_CMD_QUERY_TX_DMA_PAUSE:
+        if (glUsbAltInterface != USB_IF_RF_LINK || wValue != 0 ||
+            wIndex != 0 || wLength != sizeof(uint32_t)) {
+            CyU3PUsbStall(0x80, CyTrue, CyFalse);
+            break;
+        }
+        ret = NuandRFLinkTxDmaPauseStatus();
+        apiRetStatus = CyU3PUsbSendEP0Data(sizeof(uint32_t), &ret);
+        if (apiRetStatus != CY_U3P_SUCCESS) {
+            LOG_ERROR(apiRetStatus);
+        }
+    break;
+
     default:
         isHandled = CyFalse;
     }

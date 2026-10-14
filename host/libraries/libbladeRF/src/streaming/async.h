@@ -131,6 +131,9 @@ bool async_tx_buffer_generation_is_current(struct bladerf_stream *stream,
 void async_tx_buffer_submission_cancelled(struct bladerf_stream *stream);
 void async_tx_buffer_submitted(struct bladerf_stream *stream,
                                uint64_t generation);
+int async_tx_submit_lease_acquire(struct bladerf_stream *stream,
+                                  uint64_t generation);
+void async_tx_submit_lease_release(struct bladerf_stream *stream);
 
 /* Request backend-aware termination of an active stream. */
 int async_request_stream_shutdown(struct bladerf_stream *stream);

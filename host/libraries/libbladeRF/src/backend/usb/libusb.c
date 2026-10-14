@@ -61,10 +61,78 @@ struct bladerf_lusb {
     libusb_device           *dev;
     libusb_device_handle    *handle;
     libusb_context          *context;
+    bool                     session_lease;
+    char                     session_serial[BLADERF_SERIAL_LENGTH];
+    uint8_t                  session_bus;
 #if 1 == BLADERF_OS_WINDOWS
     HANDLE                  mutex;
 #endif // BLADERF_OS_WINDOWS
 };
+
+#ifdef USE_PTHREADS
+struct lusb_session_lease {
+    char serial[BLADERF_SERIAL_LENGTH];
+    uint8_t bus;
+    struct lusb_session_lease *next;
+};
+
+/* Claim before the optional USB reset in lusb_open. This makes duplicate-open
+ * rejection happen before reset can disrupt an already active handle. */
+static MUTEX lusb_session_lease_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct lusb_session_lease *lusb_session_leases;
+
+static int lusb_session_lease_acquire(const struct bladerf_devinfo *ident)
+{
+    struct lusb_session_lease *lease;
+    const char *serial;
+
+    if (ident == NULL || ident->usb_bus == DEVINFO_BUS_ANY) {
+        return BLADERF_ERR_NODEV;
+    }
+    serial = ident->serial;
+
+    MUTEX_LOCK(&lusb_session_lease_lock);
+    for (lease = lusb_session_leases; lease != NULL; lease = lease->next) {
+        if ((serial[0] != '\0' && strcmp(lease->serial, serial) == 0) ||
+            (serial[0] == '\0' && lease->serial[0] == '\0' &&
+             lease->bus == ident->usb_bus)) {
+            MUTEX_UNLOCK(&lusb_session_lease_lock);
+            return BLADERF_ERR_NODEV;
+        }
+    }
+
+    lease = calloc(1, sizeof(*lease));
+    if (lease == NULL) {
+        MUTEX_UNLOCK(&lusb_session_lease_lock);
+        return BLADERF_ERR_MEM;
+    }
+    memcpy(lease->serial, serial, sizeof(lease->serial));
+    lease->bus = ident->usb_bus;
+    lease->next = lusb_session_leases;
+    lusb_session_leases = lease;
+    MUTEX_UNLOCK(&lusb_session_lease_lock);
+    return 0;
+}
+
+static void lusb_session_lease_release(const char *serial, uint8_t bus)
+{
+    struct lusb_session_lease **link;
+
+    MUTEX_LOCK(&lusb_session_lease_lock);
+    for (link = &lusb_session_leases; *link != NULL;
+         link = &(*link)->next) {
+        if ((serial[0] != '\0' && strcmp((*link)->serial, serial) == 0) ||
+            (serial[0] == '\0' && (*link)->serial[0] == '\0' &&
+             (*link)->bus == bus)) {
+            struct lusb_session_lease *lease = *link;
+            *link = lease->next;
+            free(lease);
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&lusb_session_lease_lock);
+}
+#endif
 
 typedef enum {
     TRANSFER_UNINITIALIZED = 0,
@@ -80,6 +148,7 @@ struct lusb_stream_data {
     struct libusb_transfer **transfers; /* Array of transfer metadata */
     transfer_status *transfer_status;   /* Status of each transfer */
     uint64_t *tx_generation;             /* TX admission generation per slot */
+    bool *tx_lease_active;               /* Host TX lease until callback retires */
 
    /* Warn the first time we get a transfer callback out of order.
     * This shouldn't happen normally, but we've seen it intermittently on
@@ -550,7 +619,9 @@ out:
 static int find_and_open_device(libusb_context *context,
                                 const struct bladerf_devinfo *info_in,
                                 struct bladerf_lusb **dev_out,
-                                struct bladerf_devinfo *info_out)
+                                struct bladerf_devinfo *info_out,
+                                const char *reserved_serial,
+                                uint8_t reserved_bus)
 {
     int status = BLADERF_ERR_NODEV;
     int i, n;
@@ -559,6 +630,10 @@ static int find_and_open_device(libusb_context *context,
     struct bladerf_devinfo curr_info;
     bool printed_access_warning = false;
 
+#ifndef USE_PTHREADS
+    (void)reserved_serial;
+    (void)reserved_bus;
+#endif
     *dev_out = NULL;
 
     count = libusb_get_device_list(context, &list);
@@ -599,12 +674,36 @@ static int find_and_open_device(libusb_context *context,
 
             /* Check to see if this matches the info struct */
             if (bladerf_devinfo_matches(&curr_info, info_in)) {
+#ifdef USE_PTHREADS
+                bool acquired_here = reserved_serial == NULL;
+                if (acquired_here) {
+                    status = lusb_session_lease_acquire(&curr_info);
+                    if (status != 0) {
+                        continue;
+                    }
+                    reserved_serial = curr_info.serial;
+                    reserved_bus = curr_info.usb_bus;
+                }
+#endif
                 status = open_device(&curr_info, context, list[i], dev_out);
                 if (status < 0) {
+#ifdef USE_PTHREADS
+                    if (acquired_here) {
+                        lusb_session_lease_release(reserved_serial,
+                                                   reserved_bus);
+                        reserved_serial = NULL;
+                    }
+#endif
                     status = BLADERF_ERR_NODEV;
                     continue; /* Continue trying the next matching device */
                 } else {
                     memcpy(info_out, &curr_info, sizeof(info_out[0]));
+#ifdef USE_PTHREADS
+                    (*dev_out)->session_lease = true;
+                    memcpy((*dev_out)->session_serial, reserved_serial,
+                           sizeof((*dev_out)->session_serial));
+                    (*dev_out)->session_bus = reserved_bus;
+#endif
                 }
             } else {
                 status = BLADERF_ERR_NODEV;
@@ -633,6 +732,9 @@ static int reset_and_reopen(libusb_context *context,
                             struct bladerf_devinfo *info)
 {
     int status;
+    bool session_lease;
+    char session_serial[BLADERF_SERIAL_LENGTH];
+    uint8_t session_bus;
 
     status = libusb_reset_device((*dev)->handle);
     if (status == 0) {
@@ -640,6 +742,11 @@ static int reset_and_reopen(libusb_context *context,
         return 0;
     } else if (status == LIBUSB_ERROR_NO_DEVICE) {
         struct bladerf_devinfo new_info;
+
+        session_lease = (*dev)->session_lease;
+        memcpy(session_serial, (*dev)->session_serial,
+               sizeof(session_serial));
+        session_bus = (*dev)->session_bus;
 
         /* The reset has caused the device to drop out and re-enumerate.
          *
@@ -663,7 +770,15 @@ static int reset_and_reopen(libusb_context *context,
         new_info.usb_bus  = DEVINFO_BUS_ANY;
         new_info.usb_addr = DEVINFO_ADDR_ANY;
 
-        status = find_and_open_device(context, &new_info, dev, info);
+        status = find_and_open_device(context, &new_info, dev, info,
+                                      session_serial, session_bus);
+#ifdef USE_PTHREADS
+        if (status != 0 && session_lease) {
+            lusb_session_lease_release(session_serial, session_bus);
+        }
+#else
+        (void)session_lease;
+#endif
 
     } else {
         status = BLADERF_ERR_IO;
@@ -674,6 +789,8 @@ static int reset_and_reopen(libusb_context *context,
     return status;
 }
 #endif
+
+static void lusb_close(void *driver);
 
 static int lusb_open(void **driver,
                      struct bladerf_devinfo *info_in,
@@ -701,7 +818,8 @@ static int lusb_open(void **driver,
     }
 #   endif
 
-    status = find_and_open_device(context, info_in, &lusb, info_out);
+    status = find_and_open_device(context, info_in, &lusb, info_out, NULL,
+                                  DEVINFO_BUS_ANY);
     if (status != 0) {
         libusb_exit(context);
 
@@ -720,13 +838,19 @@ static int lusb_open(void **driver,
          * trying to use the device.
          */
 #       if ENABLE_USB_DEV_RESET_ON_OPEN
-        if (bladerf_usb_reset_device_on_open) {
+        if (status == 0 && bladerf_usb_reset_device_on_open) {
             status = reset_and_reopen(context, &lusb, info_out);
         }
 #       endif
 
         if (status == 0) {
             *driver = (void *) lusb;
+        } else {
+            if (lusb != NULL) {
+                lusb_close(lusb);
+            } else {
+                libusb_exit(context);
+            }
         }
     }
 
@@ -755,6 +879,11 @@ static void lusb_close(void *driver)
 
     libusb_close(lusb->handle);
     libusb_exit(lusb->context);
+#ifdef USE_PTHREADS
+    if (lusb->session_lease) {
+        lusb_session_lease_release(lusb->session_serial, lusb->session_bus);
+    }
+#endif
 #if 1 == BLADERF_OS_WINDOWS
     ReleaseMutex(lusb->mutex);
     CloseHandle(lusb->mutex);
@@ -1012,17 +1141,27 @@ static int lusb_control_transfer(void *driver,
 }
 
 static int lusb_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
-                              uint32_t buffer_len, uint32_t timeout_ms)
+                              uint32_t buffer_len, uint32_t timeout_ms,
+                              uint32_t *transferred,
+                              bool *transferred_valid)
 {
     int status;
-    int n_transferred;
+    int n_transferred = 0;
     struct bladerf_lusb *lusb = (struct bladerf_lusb *) driver;
 
     status = libusb_bulk_transfer(lusb->handle, endpoint, buffer, buffer_len,
                                   &n_transferred, timeout_ms);
 
+    if (transferred != NULL) {
+        *transferred = n_transferred < 0 ? 0u : (uint32_t)n_transferred;
+    }
+    if (transferred_valid != NULL) {
+        *transferred_valid = n_transferred >= 0;
+    }
+
     status = error_conv(status);
-    if (status == 0 && ((uint32_t)n_transferred != buffer_len)) {
+    if (status == 0 && ((uint32_t)n_transferred != buffer_len) &&
+        transferred == NULL) {
         log_debug("Short bulk transfer: requested=%u, transferred=%u\n",
                   buffer_len, n_transferred);
         status = BLADERF_ERR_IO;
@@ -1210,6 +1349,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     size_t transfer_i;
     bool unexpected_cancel;
     bool stale_tx_generation = false;
+    bool retire_tx_lease = false;
 
     /* Currently unused - zero out for out own debugging sanity... */
     memset(&metadata, 0, sizeof(metadata));
@@ -1239,6 +1379,14 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
     assert(stream_data->transfer_status[transfer_i] == TRANSFER_IN_FLIGHT ||
            stream_data->transfer_status[transfer_i] == TRANSFER_CANCEL_PENDING);
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+        stream_data->tx_lease_active[transfer_i]) {
+        /* Keep the ownership lease through all callback work, including any
+         * attempted replacement submission. A replacement acquires its own
+         * lease before USB submission. */
+        stream_data->tx_lease_active[transfer_i] = false;
+        retire_tx_lease = true;
+    }
 
 #ifdef BLADERF_ENABLE_TEST_LIBUSB_RX_FAULT_INJECTION
     /* Exercise the real libusb completion callback and terminal-error path on
@@ -1373,6 +1521,9 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                                        async_stream_buf_bytes(stream),
                                        stream_data->tx_generation[transfer_i]);
             if (resubmit == 0) {
+                if (retire_tx_lease) {
+                    async_tx_submit_lease_release(stream);
+                }
                 MUTEX_UNLOCK(&stream->lock);
                 return;
             }
@@ -1380,6 +1531,20 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             log_debug("Could not requeue stalled TX transfer: %s\n",
                       bladerf_strerror(resubmit));
         }
+    }
+
+    /* A completed transfer is already committed to the USB/FX3 path. Its
+     * callback must not snapshot the new admission generation and continue
+     * producing buffers across an RF transition. Still deliver this
+     * completion to the caller so it can reclaim the completed buffer, then
+     * stop the stream and reject any replacement buffer. */
+    if (transfer->status == LIBUSB_TRANSFER_COMPLETED &&
+        libusb_tx_completion_generation_is_stale(
+            (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX,
+            true,
+            async_tx_buffer_generation_is_current(
+                stream, stream_data->tx_generation[transfer_i]))) {
+        stale_tx_generation = true;
     }
 
     /* Check to see if the transfer has been cancelled or errored */
@@ -1485,7 +1650,10 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 
     if (stream->state == STREAM_RUNNING) {
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
-            async_tx_buffer_generation_snapshot(stream);
+            /* Preserve the generation carried by THIS submitted transfer.
+             * Taking a fresh snapshot here would hide a stale completion. */
+            stream->tx_admission_generation =
+                stream_data->tx_generation[transfer_i];
         }
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
             next_buffer = async_rx_process_buffer(
@@ -1508,18 +1676,53 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 bytes_to_samples(stream->format, transfer->actual_length), stream->user_data);
         }
 
+        /* The generation may have changed while the application callback
+         * was running. Recheck the generation captured by the completed USB
+         * transfer, never the stream's newer snapshot. */
+        if (transfer->status == LIBUSB_TRANSFER_COMPLETED &&
+            libusb_tx_completion_generation_is_stale(
+                (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX,
+                true,
+                async_tx_buffer_generation_is_current(
+                    stream, stream_data->tx_generation[transfer_i]))) {
+            stale_tx_generation = true;
+        }
+
+        if (stale_tx_generation && stream->state == STREAM_RUNNING) {
+            if (next_buffer != NULL &&
+                next_buffer != BLADERF_STREAM_SHUTDOWN &&
+                next_buffer != BLADERF_STREAM_NO_DATA) {
+                stream->tx_buffer_rejected = next_buffer;
+            }
+            stream->error_code = BLADERF_ERR_WOULD_BLOCK;
+            async_tx_buffer_submission_cancelled(stream);
+            stream->state = STREAM_SHUTTING_DOWN;
+            next_buffer = BLADERF_STREAM_SHUTDOWN;
+        }
+
         if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
             next_buffer != BLADERF_STREAM_SHUTDOWN &&
             next_buffer != BLADERF_STREAM_NO_DATA) {
+            const uint64_t submitted_generation =
+                stream_data->tx_generation[transfer_i];
             int validation_status = async_tx_buffer_validate(
                 stream, &metadata, next_buffer,
                 async_stream_buf_bytes(stream));
-            if (validation_status != 0 ||
-                !async_tx_buffer_generation_matches(stream)) {
+            if (validation_status == 0 &&
+                !async_tx_buffer_generation_is_current(
+                    stream, submitted_generation)) {
+                validation_status = BLADERF_ERR_WOULD_BLOCK;
+            }
+            if (validation_status != 0) {
                 stream->error_code = validation_status != 0
                     ? validation_status : BLADERF_ERR_WOULD_BLOCK;
                 stream->tx_buffer_rejected = next_buffer;
                 next_buffer = BLADERF_STREAM_SHUTDOWN;
+            } else {
+                /* A callback replacement inherits the completed transfer's
+                 * generation. Never let validation's internal current-state
+                 * snapshot rebase this chain across a concurrent RF change. */
+                stream->tx_admission_generation = submitted_generation;
             }
         }
 
@@ -1536,7 +1739,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                if (status == 0) {
                    status = submit_transfer(stream, next_buffer,
                                             packet_length,
-                                            stream->tx_admission_generation);
+                                            stream_data->tx_generation[transfer_i]);
                } else {
                    stream->error_code = status;
                    stream->state = STREAM_SHUTTING_DOWN;
@@ -1544,7 +1747,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
             } else {
                status = submit_transfer(stream, next_buffer,
                                         async_stream_buf_bytes(stream),
-                                        stream->tx_admission_generation);
+                                        stream_data->tx_generation[transfer_i]);
             }
             if (status != 0) {
                 async_tx_buffer_submission_cancelled(stream);
@@ -1573,6 +1776,10 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         } else {
             cancel_all_transfers(stream);
         }
+    }
+
+    if (retire_tx_lease) {
+        async_tx_submit_lease_release(stream);
     }
 
     MUTEX_UNLOCK(&stream->lock);
@@ -1645,6 +1852,17 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
     assert(stream_data->num_avail != 0);
     stream_data->num_avail--;
 
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        status = async_tx_submit_lease_acquire(stream, tx_generation);
+        if (status != 0) {
+            stream_data->transfer_status[prev_idx] = TRANSFER_AVAIL;
+            stream_data->num_avail++;
+            stream_data->i = prev_idx;
+            return status;
+        }
+        stream_data->tx_lease_active[prev_idx] = true;
+    }
+
     /* FIXME We have an inherent issue here with lock ordering between
      *       stream->lock and libusb's underlying event lock, so we
      *       have to drop the stream->lock as a workaround.
@@ -1699,6 +1917,11 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
          * get_next_available_transfer() had already pointed stream_data->i at
          * it, so this restores exactly what we found. */
         stream_data->i = prev_idx;
+        if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX &&
+            stream_data->tx_lease_active[prev_idx]) {
+            stream_data->tx_lease_active[prev_idx] = false;
+            async_tx_submit_lease_release(stream);
+        }
         MUTEX_UNLOCK(&stream->lock);
     } else if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
         /* This hook samples the NIOS loss counter over the peripheral USB
@@ -1736,6 +1959,7 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
     stream_data->transfers = NULL;
     stream_data->transfer_status = NULL;
     stream_data->tx_generation = NULL;
+    stream_data->tx_lease_active = NULL;
     stream_data->num_transfers = num_transfers;
     stream_data->num_avail = 0;
     stream_data->i = 0;
@@ -1777,6 +2001,13 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
         goto error;
     }
 
+    stream_data->tx_lease_active = calloc(num_transfers, sizeof(bool));
+    if (stream_data->tx_lease_active == NULL) {
+        log_error("Failed to allocate libusb TX lease array\n");
+        status = BLADERF_ERR_MEM;
+        goto error;
+    }
+
     /* Create the libusb transfers */
     for (i = 0; i < stream_data->num_transfers; i++) {
         stream_data->transfers[i] = libusb_alloc_transfer(0);
@@ -1803,6 +2034,7 @@ error:
         }
         free(stream_data->transfer_status);
         free(stream_data->tx_generation);
+        free(stream_data->tx_lease_active);
         free(stream_data->transfers);
         free(stream_data);
         stream->backend_data = NULL;
@@ -2163,6 +2395,7 @@ static int lusb_deinit_stream(void *driver, struct bladerf_stream *stream)
     free(stream_data->transfers);
     free(stream_data->transfer_status);
     free(stream_data->tx_generation);
+    free(stream_data->tx_lease_active);
     free(stream->backend_data);
 
     stream->backend_data = NULL;

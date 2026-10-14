@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include <libbladeRF.h>
+#include <no_os_delay.h>
 
 #include "ad936x_helpers.h"
 #include "bladerf2_common.h"
@@ -31,6 +32,7 @@
 #include "iterators.h"
 #include "log.h"
 #include "rfic_fir_policy.h"
+#include "rfic_tx_output_policy.h"
 #include "rf_transition_policy.h"
 
 // #define BLADERF_HOSTED_C_DEBUG
@@ -43,6 +45,93 @@ extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
 /******************************************************************************/
 /* Initialization */
 /******************************************************************************/
+
+static int _rfic_host_deinitialize(struct bladerf *dev);
+static int _rfic_host_deinitialize_internal(struct bladerf *dev,
+                                           bool board_reset_asserted);
+static int _rfic_host_clear_rffe_control(struct bladerf *dev);
+
+static bool _rfic_host_calibration_faulted(
+    struct bladerf2_board_data *board_data)
+{
+    if (board_data == NULL) {
+        return true;
+    }
+    if (board_data->phy != NULL &&
+        ad9361_calibration_state_unknown(board_data->phy)) {
+        board_data->calibration_faulted = true;
+    }
+    if (board_data->calibration_faulted) {
+        board_data->rxfir_known = false;
+        board_data->txfir_known = false;
+    }
+    return board_data->calibration_faulted;
+}
+
+static void _rfic_host_fail_closed(struct bladerf *dev,
+                                   struct bladerf2_board_data *board_data)
+{
+    int status;
+    bool report_tx_fault;
+
+    if (!_rfic_host_calibration_faulted(board_data)) {
+        return;
+    }
+
+    /* Calibration/partial-mutation poison applies to the shared AD9361, so
+     * both RX channels lose validity even when this was reached from TX or a
+     * clock/configuration API. Publish RX invalidation before RF cleanup. */
+    bladerf2_rx_rfic_state_invalid(dev, BLADERF_ERR_UNEXPECTED);
+
+    /* The RFIC fault invalidates TX even when the failing operation was
+     * initiated through RX or a shared-clock API. Revoke async admission
+     * before touching hardware so no concurrent producer can pass the stale
+     * certificate while RFFE isolation is being attempted. */
+    bladerf2_tx_stream_set_faulted(board_data, true);
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    report_tx_fault = !board_data->tx_rfic_fault_event_reported;
+    board_data->tx_rfic_fault_event_reported = true;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (report_tx_fault) {
+        bladerf2_tx_stream_event(
+            dev, BLADERF_RF_EVT_TX_RFIC_STATE_INVALID, 0, 0,
+            BLADERF_ERR_UNEXPECTED);
+    }
+
+    /* The caller is reporting an RFIC operation whose calibration state is
+     * unknown. Disconnect every external RF route immediately; keep the
+     * primary ADI error and report RFFE cleanup separately. */
+    status = _rfic_host_clear_rffe_control(dev);
+    {
+        int gate_status = bladerf2_tx_gate_abort_fail_closed(
+            dev, board_data, 0);
+        if (status < 0 || gate_status < 0) {
+            log_error("RFIC fault containment incomplete: RFFE isolation=%s; "
+                      "FPGA TX gate abort=%s\n",
+                      status < 0 ? bladerf_strerror(status) : "confirmed",
+                      gate_status == 0 ? "confirmed" :
+                                         bladerf_strerror(gate_status));
+        }
+    }
+}
+
+/* Every AD9361 access in this controller must first establish that a prior
+ * calibration did not leave the chip in an unknown active state. */
+#undef CHECK_AD936X
+#define CHECK_AD936X(_fn)                                                   \
+    do {                                                                    \
+        int _cal_state_status = BLADERF_ERR_UNEXPECTED;                     \
+        if (_rfic_host_calibration_faulted((dev)->board_data)) {            \
+            _rfic_host_fail_closed((dev), (dev)->board_data);                \
+            RETURN_ERROR_STATUS("AD9361 calibration state unknown",        \
+                                _cal_state_status);                         \
+        }                                                                   \
+        int _s = (_fn);                                                     \
+        if (_s < 0) {                                                       \
+            _rfic_host_fail_closed((dev), (dev)->board_data);                \
+            RETURN_ERROR_AD9361(#_fn, _s);                                 \
+        }                                                                   \
+    } while (0)
 
 static bool _rfic_host_is_present(struct bladerf *dev)
 {
@@ -57,7 +146,8 @@ static bool _rfic_host_is_initialized(struct bladerf *dev)
 
     struct bladerf2_board_data *board_data = dev->board_data;
 
-    return (NULL != board_data->phy);
+    return (NULL != board_data->phy) &&
+           !_rfic_host_calibration_faulted(board_data);
 }
 
 static int _rfic_host_get_init_state(struct bladerf *dev,
@@ -97,6 +187,50 @@ static int _rfic_host_clear_rffe_control(struct bladerf *dev)
     return dev->backend->rffe_control_write(dev, reg);
 }
 
+int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data;
+    int status, cleanup_status;
+    uint32_t reg;
+
+    if (dev == NULL || dev->board_data == NULL || dev->backend == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    board_data = dev->board_data;
+    if (board_data->phy == NULL) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    status = ad9361_ensure_tx_quad_calib(board_data->phy);
+    if (status >= 0) {
+        return 0;
+    }
+
+    if (ad9361_calibration_state_unknown(board_data->phy)) {
+        _rfic_host_fail_closed(dev, board_data);
+        return errno_ad9361_to_bladerf(status);
+    }
+
+    /* A failed calibration after retune must not leave an active TX route.
+     * Preserve RX and disconnect both TX SPDTs/lanes at the RFFE boundary. */
+    cleanup_status = dev->backend->rffe_control_read(dev, &reg);
+    if (cleanup_status == 0) {
+        reg = rfic_tx_disconnect_value(
+            reg, 1u << RFFE_CONTROL_TXNRX,
+            (1u << RFFE_CONTROL_MIMO_TX_EN_0) |
+                (1u << RFFE_CONTROL_MIMO_TX_EN_1),
+            (RFFE_CONTROL_SPDT_MASK << RFFE_CONTROL_TX_SPDT_1) |
+                (RFFE_CONTROL_SPDT_MASK << RFFE_CONTROL_TX_SPDT_2));
+        cleanup_status = dev->backend->rffe_control_write(dev, reg);
+    }
+    if (cleanup_status < 0) {
+        log_error("TX calibration failed (%s); TX RFFE disconnect also failed (%s)\n",
+                  bladerf_strerror(errno_ad9361_to_bladerf(status)),
+                  bladerf_strerror(cleanup_status));
+    }
+    return errno_ad9361_to_bladerf(status);
+}
+
 static int _rfic_host_initialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -108,8 +242,29 @@ static int _rfic_host_initialize(struct bladerf *dev)
     uint32_t config_gpio;
     int status;
     int cleanup_status;
+    bool calibration_recovery = _rfic_host_calibration_faulted(board_data);
 
     log_debug("%s: initializating\n", __FUNCTION__);
+
+    if (calibration_recovery) {
+        uint32_t reset_reg;
+
+        /* A timed-out calibration has no documented abort. Assert board
+         * RESETB first; only then may the quarantined PHY resources retire. */
+        CHECK_STATUS(_rfic_host_clear_rffe_control(dev));
+        CHECK_STATUS(dev->backend->rffe_control_read(dev, &reset_reg));
+        reset_reg &= ~(1u << RFFE_CONTROL_RESET_N);
+        CHECK_STATUS(dev->backend->rffe_control_write(dev, reset_reg));
+        no_os_udelay(2);
+        status = _rfic_host_deinitialize_internal(dev, true);
+        if (status < 0) {
+            return status;
+        }
+        reset_reg |= 1u << RFFE_CONTROL_RESET_N;
+        CHECK_STATUS(dev->backend->rffe_control_write(dev, reset_reg));
+        /* UG-570 requires at least 1 us after RESETB rises before programming. */
+        no_os_mdelay(1);
+    }
 
     /* Reinitialization may replace RFIC state before both filters are
      * reapplied. Do not preserve an enum cache from a prior owner/session. */
@@ -151,6 +306,12 @@ static int _rfic_host_initialize(struct bladerf *dev)
 
         init_status = ad9361_init(&phy, &init_params);
         if (init_status < 0) {
+            /* A quarantined start can make cleanup return ownership of a
+             * partial PHY. Retain it so the next INIT can assert RESETB
+             * before releasing its resources. */
+            board_data->calibration_faulted = true;
+            if (phy != NULL)
+                board_data->phy = phy;
             bladerf2_axi_io_set_dev(NULL);
             RETURN_ERROR_AD9361("ad9361_init(&phy, &init_params)",
                                 init_status);
@@ -160,8 +321,14 @@ static int _rfic_host_initialize(struct bladerf *dev)
     if (NULL == phy || NULL == phy->pdata) {
         status = BLADERF_ERR_UNEXPECTED;
         if (NULL != phy) {
-            int remove_status = ad9361_remove(phy);
+            bool consumed = false;
+            int remove_status = ad9361_remove_ex(phy, false, &consumed);
+            if (!consumed) {
+                board_data->phy = phy;
+                board_data->calibration_faulted = true;
+            }
             if (remove_status < 0) {
+                board_data->calibration_faulted = true;
                 log_error("Failed to remove invalid AD9361 context: %s\n",
                           bladerf_strerror(
                               errno_ad9361_to_bladerf(remove_status)));
@@ -243,6 +410,12 @@ static int _rfic_host_initialize(struct bladerf *dev)
 
     log_debug("%s: initialization complete\n", __FUNCTION__);
 
+    board_data->calibration_faulted = false;
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    board_data->tx_rfic_fault_event_reported = false;
+    board_data->rx_rfic_fault_event_reported = false;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
     bladerf2_axi_io_set_dev(NULL);
     return 0;
 
@@ -252,13 +425,25 @@ init_fail:
      * the partial ADI context, and make a later INIT start from OFF. Keep the
      * original error unless cleanup fails: that leaves hardware state less
      * certain and must be visible to the caller. */
+    board_data->calibration_faulted = true;
     cleanup_status = _rfic_host_clear_rffe_control(dev);
     if (cleanup_status < 0) {
         log_error("Failed to disconnect RFFE after AD9361 init error %d: %s\n",
                   status, bladerf_strerror(cleanup_status));
     }
     if (NULL != board_data->phy) {
-        int remove_status = ad9361_remove(board_data->phy);
+        int remove_status;
+
+        if (ad9361_calibration_state_unknown(board_data->phy)) {
+            board_data->calibration_faulted = true;
+        }
+        {
+            bool consumed = false;
+            remove_status = ad9361_remove_ex(board_data->phy, false,
+                                              &consumed);
+            if (consumed)
+                board_data->phy = NULL;
+        }
         if (remove_status < 0) {
             log_error("Failed to remove partial AD9361 context after init "
                       "error %d: %s\n", status,
@@ -267,7 +452,6 @@ init_fail:
                 cleanup_status = remove_status;
             }
         }
-        board_data->phy = NULL;
     }
     board_data->rxfir_known = false;
     board_data->txfir_known = false;
@@ -275,7 +459,8 @@ init_fail:
     return cleanup_status < 0 ? cleanup_status : status;
 }
 
-static int _rfic_host_deinitialize(struct bladerf *dev)
+static int _rfic_host_deinitialize_internal(struct bladerf *dev,
+                                            bool board_reset_asserted)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     int status;
@@ -284,26 +469,77 @@ static int _rfic_host_deinitialize(struct bladerf *dev)
 
     log_debug("%s: deinitializing\n", __FUNCTION__);
 
+    (void)_rfic_host_calibration_faulted(board_data);
+
     status = _rfic_host_clear_rffe_control(dev);
+
+    if (status >= 0 && board_reset_asserted) {
+        uint32_t reset_reg;
+
+        status = dev->backend->rffe_control_read(dev, &reset_reg);
+        if (status >= 0 &&
+            (reset_reg & (1u << RFFE_CONTROL_RESET_N)) != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+        }
+    }
 
     /* Keep the PHY alive if the RF path could not be disconnected. */
     if (status >= 0 && NULL != board_data->phy) {
         struct ad9361_rf_phy *phy = board_data->phy;
 
-        /* ad9361_deinit() was a local addition; upstream provides
-         * ad9361_remove(), which frees more: the clocks, the SPI and all four
-         * GPIO descriptors on top of the data. It does not drive the part into
-         * reset, but _rfic_host_clear_rffe_control() above already cleared the
-         * reset bit. The object is consumed even if a descriptor teardown
-         * reports an error, so clear its owner before propagating that error. */
-        board_data->phy = NULL;
-        status = ad9361_remove(phy);
+        bool consumed = false;
+
+        status = ad9361_remove_ex(phy, board_reset_asserted, &consumed);
+        if (consumed)
+            board_data->phy = NULL;
     }
 
     board_data->rxfir_known = false;
     board_data->txfir_known = false;
     bladerf2_axi_io_set_dev(NULL);
     return status;
+}
+
+static int _rfic_host_deinitialize(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    if (_rfic_host_calibration_faulted(board_data)) {
+        uint32_t reset_reg;
+        int status;
+
+        /* A quarantined calibration has no software abort. Use board RESETB
+         * as the hardware retirement barrier before freeing its PHY. */
+        status = _rfic_host_clear_rffe_control(dev);
+        if (status < 0) {
+            return status;
+        }
+        status = dev->backend->rffe_control_read(dev, &reset_reg);
+        if (status < 0) {
+            return status;
+        }
+        reset_reg &= ~(1u << RFFE_CONTROL_RESET_N);
+        status = dev->backend->rffe_control_write(dev, reset_reg);
+        if (status < 0) {
+            return status;
+        }
+        no_os_udelay(2);
+
+        status = _rfic_host_deinitialize_internal(dev, true);
+        if (status < 0) {
+            return status;
+        }
+
+        reset_reg |= 1u << RFFE_CONTROL_RESET_N;
+        status = dev->backend->rffe_control_write(dev, reset_reg);
+        if (status == 0) {
+            /* Match UG-570's minimum RESETB-to-SPI startup interval. */
+            no_os_mdelay(1);
+        }
+        return status;
+    }
+
+    return _rfic_host_deinitialize_internal(dev, false);
 }
 
 static int _rfic_host_standby(struct bladerf *dev)
@@ -336,6 +572,13 @@ static int _rfic_host_enable_module(struct bladerf *dev,
     bool dir_pending;   /* Requested direction state differs */
     bool backend_clear; /* Backend requires reset */
     bool mimo_enabled;
+    bool const rfic_faulted = _rfic_host_calibration_faulted(board_data);
+
+    if (enable && rfic_faulted) {
+        _rfic_host_fail_closed(dev, board_data);
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
 
     /* Look up the RFFE bits affecting this channel */
     ch_bit  = _get_rffe_control_bit_for_ch(ch);
@@ -419,7 +662,7 @@ static int _rfic_host_enable_module(struct bladerf *dev,
         }
 
         /* Set/unset TX mute */
-        if (BLADERF_CHANNEL_IS_TX(ch)) {
+        if (BLADERF_CHANNEL_IS_TX(ch) && !rfic_faulted) {
             /* A failed mute/unmute must stop channel setup. In particular,
              * don't publish the RFFE enable bit or start the FPGA stream if
              * the RFIC did not confirm the requested TX mute state. */
@@ -440,13 +683,21 @@ static int _rfic_host_enable_module(struct bladerf *dev,
         }
 
         /* Select RFIC port */
-        CHECK_STATUS(set_ad9361_port_by_freq(phy, ch, dir_enable, freq));
+        if (!rfic_faulted) {
+            CHECK_AD936X(set_ad9361_port_by_freq(phy, ch, dir_enable, freq));
+        }
 
         /* Tear down sync interface if required */
         if (!dir_enable) {
             sync_deinit(&board_data->sync[dir]);
             perform_format_deconfig(dev, dir);
         }
+    }
+
+    /* TX calibration depends on the final RFIC output selector as well as
+     * the LO. Recheck after port selection, before RFFE makes TX available. */
+    if (enable && BLADERF_CHANNEL_IS_TX(ch)) {
+        CHECK_STATUS(bladerf2_tx_quad_calibration_finalize(dev));
     }
 
     /* Reset FIFO if we are enabling an additional RX channel */
@@ -645,6 +896,9 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
     /* Change LO frequency */
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         CHECK_AD936X(ad9361_set_tx_lo_freq(phy, frequency));
+        /* The LO setter can itself switch the AD9361 TX output on a band
+         * crossing. Calibrate only after that final selector is established. */
+        CHECK_STATUS(bladerf2_tx_quad_calibration_finalize(dev));
     } else {
         lo_status = ad9361_set_rx_lo_freq(phy, frequency);
         CHECK_AD936X(lo_status);
@@ -664,6 +918,12 @@ static int _rfic_host_select_band(struct bladerf *dev,
     uint32_t reg;
     uint32_t reg_orig;
     size_t i;
+
+    if (_rfic_host_calibration_faulted(board_data)) {
+        _rfic_host_fail_closed(dev, board_data);
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
 
     /* Read RFFE control register */
     CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
@@ -715,8 +975,14 @@ static int _rfic_host_select_band(struct bladerf *dev,
     }
 
     /* Set AD9361 port */
-    CHECK_STATUS(
-        set_ad9361_port_by_freq(phy, port_ch, _rffe_ch_enabled(reg, port_ch), frequency));
+    /* TX calibration is finalized after the LO write. Select the target TX
+     * output even while RFFE is disabled so that finalizer sees the path the
+     * next enable will actually use. RX retains its existing disabled-port
+     * behavior and calibrates on enable. */
+    CHECK_AD936X(set_ad9361_port_by_freq(
+        phy, port_ch,
+        BLADERF_CHANNEL_IS_TX(ch) || _rffe_ch_enabled(reg, port_ch),
+        frequency));
 
     return 0;
 }
@@ -871,12 +1137,17 @@ static int _rfic_host_get_gain(struct bladerf *dev,
     int val;
     float offset;
 
+    if (_rfic_host_calibration_faulted(board_data)) {
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
+
     CHECK_STATUS(get_gain_offset(dev, ch, &offset));
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         bool muted;
 
-        CHECK_STATUS(txmute_get(phy, ch, &muted));
+        CHECK_AD936X(txmute_get(phy, ch, &muted));
 
         if (muted) {
             struct bladerf_range const *range = NULL;
@@ -908,6 +1179,12 @@ static int _rfic_host_set_gain(struct bladerf *dev,
     int val;
     float offset;
 
+    if (_rfic_host_calibration_faulted(board_data)) {
+        _rfic_host_fail_closed(dev, board_data);
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
+
     CHECK_STATUS(get_gain_offset(dev, ch, &offset));
 
     val = gain - offset;
@@ -915,7 +1192,7 @@ static int _rfic_host_set_gain(struct bladerf *dev,
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         bool muted;
 
-        CHECK_STATUS(txmute_get(phy, ch, &muted));
+        CHECK_AD936X(txmute_get(phy, ch, &muted));
 
         if (muted) {
             struct bladerf_range const *range = NULL;
@@ -1094,6 +1371,11 @@ static int _rfic_host_get_filter(struct bladerf *dev,
     bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
 
+    if (_rfic_host_calibration_faulted(board_data)) {
+        RETURN_ERROR_STATUS("AD9361 calibration state unknown",
+                            BLADERF_ERR_UNEXPECTED);
+    }
+
     if (rxfir != NULL && !board_data->rxfir_known) {
         log_error("%s: RX FIR configuration is unknown after an incomplete update\n",
                   __FUNCTION__);
@@ -1226,7 +1508,8 @@ static int _rfic_host_get_txmute(struct bladerf *dev,
     struct ad9361_rf_phy *phy              = board_data->phy;
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
-        return txmute_get(phy, ch, state);
+        CHECK_AD936X(txmute_get(phy, ch, state));
+        return 0;
     }
 
     return BLADERF_ERR_UNSUPPORTED;
@@ -1241,7 +1524,8 @@ static int _rfic_host_set_txmute(struct bladerf *dev,
     struct ad9361_rf_phy *phy              = board_data->phy;
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
-        return txmute_set(phy, ch, state);
+        CHECK_AD936X(txmute_set(phy, ch, state));
+        return 0;
     }
 
     return BLADERF_ERR_UNSUPPORTED;

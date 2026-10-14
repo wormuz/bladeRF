@@ -180,15 +180,41 @@ bladerf2_tx_retune_failure_counter_observation(
         : BLADERF2_TX_RETUNE_FAILURE_COUNTER_RESET;
 }
 
+static inline bool bladerf2_retune_failure_matches(
+    uint64_t pending_timestamp, uint16_t pending_profile,
+    uint32_t pending_session_generation, uint16_t pending_request_token,
+    uint64_t failure_timestamp, uint16_t failure_profile,
+    uint32_t failure_session_generation, uint16_t failure_request_token);
+
 static inline bool bladerf2_retune_completion_matches(
     uint64_t requested_timestamp, uint64_t requested_frequency_hz,
-    uint16_t requested_profile, uint64_t completed_timestamp,
-    uint64_t readback_frequency_hz, uint16_t completed_profile)
+    uint16_t requested_profile, uint32_t requested_session_generation,
+    uint16_t requested_token, uint64_t completed_timestamp,
+    uint64_t readback_frequency_hz, uint16_t completed_profile,
+    uint32_t completed_session_generation, uint16_t completed_token)
 {
-    return requested_timestamp == completed_timestamp &&
+    return bladerf2_retune_failure_matches(
+               requested_timestamp, requested_profile,
+               requested_session_generation, requested_token,
+               completed_timestamp, completed_profile,
+               completed_session_generation, completed_token) &&
            bladerf2_rfic_frequency_matches(requested_frequency_hz,
-                                           readback_frequency_hz) &&
-           requested_profile == completed_profile;
+                                           readback_frequency_hz);
+}
+
+/* Failure records have no RFIC readback frequency because the operation
+ * failed before a certified post-retune readback. Correlate them only by the
+ * scheduled timestamp and NIOS profile captured in the host pending ledger. */
+static inline bool bladerf2_retune_failure_matches(
+    uint64_t pending_timestamp, uint16_t pending_profile,
+    uint32_t pending_session_generation, uint16_t pending_request_token,
+    uint64_t failure_timestamp, uint16_t failure_profile,
+    uint32_t failure_session_generation, uint16_t failure_request_token)
+{
+    return pending_timestamp == failure_timestamp &&
+           pending_profile == failure_profile &&
+           pending_session_generation == failure_session_generation &&
+           pending_request_token == failure_request_token;
 }
 
 enum bladerf2_rx_retune_watch_event {
@@ -222,6 +248,28 @@ static inline bool bladerf2_rx_config_invalidation_blocked(
     return transition_pending || setter_active || retune_outcome_unknown;
 }
 
+/* TX-only public controls can bypass RX invalidation, but they still mutate
+ * the shared AD9361. Reject them while its owner is being torn down/rebuilt. */
+static inline bool bladerf2_tx_rf_config_change_blocked(
+    bool rfic_lifecycle_active, bool rx_transition_pending,
+    bool tx_frequency_reconfigure_active, bool tx_rf_config_active,
+    bool tx_recovery_blocked, bool gate_abort_pending,
+    uint8_t rx_retune_pending_count, bool rx_retune_outcome_unknown)
+{
+    return rfic_lifecycle_active || rx_transition_pending ||
+           tx_frequency_reconfigure_active || tx_rf_config_active ||
+           tx_recovery_blocked || gate_abort_pending ||
+           rx_retune_pending_count != 0 || rx_retune_outcome_unknown;
+}
+
+static inline bool bladerf2_close_requires_rfic_deinitialize(
+    bool reset_on_close, bool rfic_initialized, bool partial_phy_owned,
+    bool calibration_faulted)
+{
+    return reset_on_close || !rfic_initialized || partial_phy_owned ||
+           calibration_faulted;
+}
+
 /* RFIC tuning-owner changes must not strand an RX fastlock request in NIOS.
  * A live failure watch also needs retirement at the acknowledged queue-clear
  * boundary before its counters can be interpreted by the next owner. */
@@ -242,13 +290,13 @@ static inline bool bladerf2_retune2_blocks_schedule(
            (rx_pending_count != 0 && (tx_target || immediate));
 }
 
-/* A complete NIOS response can prove that a scheduled RX request was
+/* A complete NIOS response can prove that a scheduled RX or TX request was
  * rejected before queue insertion. A missing/mismatched response cannot. */
 static inline bool bladerf2_retune2_request_rejected(
-    bool scheduled_rx_request, bool transport_trace_valid,
+    bool scheduled_request, bool transport_trace_valid,
     bool transport_succeeded)
 {
-    return scheduled_rx_request && transport_trace_valid &&
+    return scheduled_request && transport_trace_valid &&
            transport_succeeded;
 }
 
