@@ -5198,9 +5198,12 @@ typedef enum {
  * BLADERF_RF_REQUIRE_FIRST_HOST_DATA and EPOCH_VALID. RX_X1 streams are
  * rejected while this requirement is active. */
 #define BLADERF_RF_REQUIRE_RX_X2_HOST_DATA (1U << 6)
-/** Force the AD9361 RX RF DC offset calibration and require its hardware
- * completion before the FPGA opens a new RX epoch, even when the LO delta is
- * small. Calibration moves
+/** Force a fresh AD9361 RX RF DC offset calibration and require its hardware
+ * completion before the FPGA opens a new RX epoch, even when calibration
+ * history is current. EPOCH_VALID transitions also derive this requirement
+ * automatically when the selected input has no recorded successful RFDC
+ * result or the LO moves more than 100 MHz from that input's last calibration.
+ * Calibration moves
  * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
  * signal content is present. Event-driven transitions, including this
  * explicit operation, are supported only in host tuning mode; FPGA/NIOS

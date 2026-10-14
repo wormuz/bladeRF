@@ -5,6 +5,9 @@
 
 int main(void)
 {
+    const uint64_t rfdc_history[3] = {
+        UINT64_C(2400000000), 0, 0,
+    };
     bool watch_active = false;
     bool status_unavailable_reported = true;
     uint64_t generation = 4;
@@ -45,5 +48,16 @@ int main(void)
     assert(bladerf2_rx_retune_watch_observation(
                true, 1, 2, true, true, 7, 8) ==
            BLADERF2_RX_RETUNE_WATCH_NONE);
+
+    /* An epoch on a never-calibrated input needs RFDC even at the same LO;
+     * same-port moves up to 100 MHz do not, larger moves do. */
+    assert(bladerf2_rx_rfdc_calibration_required(
+        rfdc_history, 1u << 0, 1, UINT64_C(2400000000)));
+    assert(!bladerf2_rx_rfdc_calibration_required(
+        rfdc_history, 1u << 0, 0, UINT64_C(2499999999)));
+    assert(!bladerf2_rx_rfdc_calibration_required(
+        rfdc_history, 1u << 0, 0, UINT64_C(2500000000)));
+    assert(bladerf2_rx_rfdc_calibration_required(
+        rfdc_history, 1u << 0, 0, UINT64_C(2500000001)));
     return 0;
 }

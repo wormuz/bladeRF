@@ -6,6 +6,29 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define BLADERF2_RX_RF_PORT_COUNT 3u
+#define BLADERF2_RFDC_RETUNE_THRESHOLD_HZ UINT64_C(100000000)
+
+/* RFDC results are retained per AD9361 RX input. Force calibration when the
+ * selected input has no successful result or its last result is more than
+ * the documented 100 MHz away from this transition target. */
+static inline bool bladerf2_rx_rfdc_calibration_required(
+    const uint64_t history_hz[BLADERF2_RX_RF_PORT_COUNT], uint8_t valid_mask,
+    uint8_t port, uint64_t target_hz)
+{
+    uint64_t delta_hz;
+
+    if (history_hz == NULL || port >= BLADERF2_RX_RF_PORT_COUNT ||
+        (valid_mask & (1u << port)) == 0 || target_hz == 0) {
+        return true;
+    }
+
+    delta_hz = target_hz > history_hz[port]
+        ? target_hz - history_hz[port]
+        : history_hz[port] - target_hz;
+    return delta_hz > BLADERF2_RFDC_RETUNE_THRESHOLD_HZ;
+}
+
 #include <libbladeRF.h>
 
 static inline bool bladerf2_rfic_frequency_model_valid(

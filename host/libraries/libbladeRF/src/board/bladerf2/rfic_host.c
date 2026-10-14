@@ -81,6 +81,7 @@ static void _rfic_host_fail_closed(struct bladerf *dev,
     /* Calibration/partial-mutation poison applies to the shared AD9361, so
      * both RX channels lose validity even when this was reached from TX or a
      * clock/configuration API. Publish RX invalidation before RF cleanup. */
+    board_data->rx_rfdc_calibration_valid_mask = 0;
     bladerf2_rx_rfic_state_invalid(dev, BLADERF_ERR_UNEXPECTED);
 
     /* The RFIC fault invalidates TX even when the failing operation was
@@ -113,6 +114,11 @@ static void _rfic_host_fail_closed(struct bladerf *dev,
                                          bladerf_strerror(gate_status));
         }
     }
+}
+
+void bladerf2_rfic_host_fail_closed(struct bladerf *dev)
+{
+    _rfic_host_fail_closed(dev, dev != NULL ? dev->board_data : NULL);
 }
 
 /* Every AD9361 access in this controller must first establish that a prior
@@ -245,6 +251,10 @@ static int _rfic_host_initialize(struct bladerf *dev)
 
     log_debug("%s: initializating\n", __FUNCTION__);
 
+    board_data->rx_rfdc_calibration_valid_mask = 0;
+    memset(board_data->rx_rfdc_calibration_frequency_hz, 0,
+           sizeof(board_data->rx_rfdc_calibration_frequency_hz));
+
     if (calibration_recovery) {
         uint32_t reset_reg;
 
@@ -351,6 +361,19 @@ static int _rfic_host_initialize(struct bladerf *dev)
     log_verbose("%s: ad9361 initialized @ %p\n", __FUNCTION__, phy);
 
     board_data->phy = phy;
+
+    /* ADI setup completes RFDC after programming this configured input and
+     * RX LO. Seed only that exact result; the bladeRF band mapper may select
+     * another AD9361 input before the first RX epoch. */
+    {
+        const AD9361_InitParam *init_param = board_data->rfic_init_params;
+        const uint32_t port = init_param->rx_rf_port_input_select;
+        if (port < 3 && init_param->rx_synthesizer_frequency_hz != 0) {
+            board_data->rx_rfdc_calibration_frequency_hz[port] =
+                init_param->rx_synthesizer_frequency_hz;
+            board_data->rx_rfdc_calibration_valid_mask |= 1u << port;
+        }
+    }
 
     /* ad9361_init() programs both configured operating LOs and completes its
      * setup calibrations there. A temporary reset-frequency hop adds no

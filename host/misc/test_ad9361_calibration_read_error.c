@@ -1877,6 +1877,47 @@ int main(void)
 			register_map_enabled = false;
 			}
 		}
+		/* The blocking timeout wrapper must preserve a distinct cleanup error
+		 * from the retained RFDC job instead of returning calibration success. */
+		{
+			struct refclk_scale rx_rfpll = {
+				.rate = 2400000000ULL
+			};
+			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct ad9361_rf_phy rfdc_phy = {
+				.spi = &spi,
+				.pdata = &pdata,
+				.clks = { [RX_RFPLL] = &rx_rfpll,
+					  [CLKRF_CLK] = &clkrf },
+				.rfpll_source_valid = { true, false },
+			};
+			int32_t cleanup_status = 123;
+
+			memset(fake_regs, 0, sizeof(fake_regs));
+			register_map_enabled = true;
+			fake_calibration_autocomplete = true;
+			fake_regs[REG_STATE] = ENSM_STATE_RX;
+			state_after_ensm_write = ENSM_STATE_ALERT;
+			fail_write_once_reg = REG_ENSM_CONFIG_1;
+			fail_write_once_reg_occurrence = 2;
+			apply_failed_write_once = false;
+			ret = ad9361_do_calib_timeout_with_cleanup(
+				&rfdc_phy, RFDC_CAL, 0, 50000U, &cleanup_status);
+			if (ret != -EIO || cleanup_status != -EIO ||
+			    !ad9361_calibration_state_unknown(&rfdc_phy)) {
+				fprintf(stderr,
+					"RFDC timeout wrapper lost cleanup failure: ret=%" PRId32
+					" cleanup=%" PRId32 " unknown=%d\n",
+					ret, cleanup_status,
+					ad9361_calibration_state_unknown(&rfdc_phy));
+				return EXIT_FAILURE;
+			}
+			fake_calibration_autocomplete = false;
+			state_after_ensm_write = -1;
+			fail_write_once_reg = -1;
+			fail_write_once_reg_occurrence = 1;
+			register_map_enabled = false;
+		}
         /* The runtime bandwidth parent must retain itself while the ENSM
          * child owns/polls the same PHY, without running the child inline. */
         {

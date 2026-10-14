@@ -376,6 +376,10 @@ struct bladerf2_board_data {
     uint32_t tx_channel_state_generation;
     uint32_t rf_transition_required_events_mask;
     uint8_t rf_transition_epoch_id;
+    /* AD9361 RFDC results are indexed by RX input selector and retained only
+     * after calibration plus ENSM/tracking cleanup has succeeded. */
+    uint64_t rx_rfdc_calibration_frequency_hz[3];
+    uint8_t rx_rfdc_calibration_valid_mask;
     bool rx_epoch_snapshot_capability_checked;
     bool rx_epoch_snapshot_supported;
     /* Async USB callback threads must snapshot epoch policy without taking
@@ -444,6 +448,9 @@ struct bladerf2_board_data {
     bool rf_transition_test_fault_consumed;
 #endif
 };
+
+/* Shared host/transition containment for an AD9361 calibration fault. */
+void bladerf2_rfic_host_fail_closed(struct bladerf *dev);
 
 /* Internal sync-RX hook: record when the first post-epoch META samples pass
  * host validation. Optional RF transition waits may require this event before

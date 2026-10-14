@@ -3576,6 +3576,7 @@ static int _bladerf_rx_transition_begin(
     int rx_source_status = 0;
     uint32_t required_events_mask;
     bladerf_rx_mux rx_mux = BLADERF_RX_MUX_INVALID;
+    const struct band_port_map *target_rx_port_map = NULL;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
     bool rx_source_unsupported = false;
@@ -3630,8 +3631,32 @@ static int _bladerf_rx_transition_begin(
             &required_events_mask)) {
         return BLADERF_ERR_INVAL;
     }
+    if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+        target_rx_port_map = _get_band_port_map_by_freq(
+            ch, request->target_frequency_hz);
+        if (target_rx_port_map == NULL ||
+            target_rx_port_map->rfic_port >= BLADERF2_RX_RF_PORT_COUNT) {
+            return BLADERF_ERR_RANGE;
+        }
+    }
 
     WITH_MUTEX(&dev->lock, {
+        /* An epoch-valid request promises usable RX data. Derive the RFDC
+         * requirement from the actual board-selected AD9361 input and its
+         * last successful calibration instead of relying on each wrapper to
+         * remember the optional flag. Explicit RFDC requests still force a
+         * fresh calibration below even when this history is current. */
+        if ((required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
+            bladerf2_rx_rfdc_calibration_required(
+                board_data->rx_rfdc_calibration_frequency_hz,
+                board_data->rx_rfdc_calibration_valid_mask,
+                (uint8_t)target_rx_port_map->rfic_port,
+                request->target_frequency_hz)) {
+            required_events_mask |= BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE;
+            (void)bladerf2_rf_transition_normalize_requirements(
+                required_events_mask, request->require_rx_data_valid,
+                &required_events_mask);
+        }
         if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
             rx_source_status = dev->board->get_rx_mux != NULL
                 ? dev->board->get_rx_mux(dev, &rx_mux)
@@ -4471,16 +4496,52 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                   (_monotonic_ns() - wait_started_ns) / 1000ULL);
     }
 
-    /* Optional ADI calibration contract. The ADI API starts the
-     * RFDC calibration and returns only after its calibration-done bit clears;
-     * it enters ALERT and restores the previous ENSM state internally. Keep
-     * the FPGA epoch fenced across this operation and reject a late result.
-     * This is explicit opt-in: an LO-frequency change alone never forces
-     * RFDC calibration. */
+    /* Required ADI calibration contract. Epoch-valid transitions derive this
+     * automatically for an uncalibrated input or large LO move; callers may
+     * also request an unconditional refresh. The ADI API returns only after
+     * its calibration-done bit clears and restores the prior ENSM state. Keep
+     * the FPGA epoch fenced across this operation and reject a late result. */
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) {
         int adi_status;
+        int adi_cleanup_status = 0;
+        uint32_t rx_port;
+        const uint64_t target_hz =
+            board_data->rf_transition_readback_frequency_hz;
+        const bladerf_channel transition_channel =
+            board_data->rf_transition_current_channel;
+        const struct band_port_map *target_port_map =
+            _get_band_port_map_by_freq(transition_channel, target_hz);
         const uint64_t calibration_begin_ns = _monotonic_ns();
+        if (target_port_map == NULL || target_hz == 0 ||
+            target_port_map->rfic_port >= BLADERF2_RX_RF_PORT_COUNT) {
+            return _fail_transition(dev, board_data,
+                                    BLADERF_ERR_RANGE, final_event);
+        }
+        adi_status = ad9361_get_rx_rf_port_input(board_data->phy, &rx_port);
+        if (adi_status < 0) {
+            const int status = errno_ad9361_to_bladerf(adi_status);
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR, 0, 0, 0, status,
+                        expected_epoch_id);
+            bladerf2_rfic_host_fail_closed(dev);
+            return _fail_transition(dev, board_data, status, final_event);
+        }
+        if (rx_port != target_port_map->rfic_port) {
+            /* The host tune path intentionally defers input selection while
+             * RX is disabled. This event-backed calibration must nevertheless
+             * cover the input that the requested frequency maps to. */
+            adi_status = ad9361_set_rx_rf_port_input(
+                board_data->phy, target_port_map->rfic_port);
+            if (adi_status < 0) {
+                const int status = errno_ad9361_to_bladerf(adi_status);
+                _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                            BLADERF_RF_STATE_ERROR, 0, 0, 0, status,
+                            expected_epoch_id);
+                bladerf2_rfic_host_fail_closed(dev);
+                return _fail_transition(dev, board_data, status, final_event);
+            }
+        }
         if (calibration_begin_ns == 0) {
             return _fail_transition(dev, board_data,
                                     BLADERF_ERR_UNEXPECTED, final_event);
@@ -4497,18 +4558,23 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
         }
-        adi_status = ad9361_do_calib_timeout(
+        adi_status = ad9361_do_calib_timeout_with_cleanup(
             board_data->phy, RFDC_CAL, 0,
-            remaining_us > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining_us);
+            remaining_us > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining_us,
+            &adi_cleanup_status);
         log_debug("%s: RFDC calibration result transaction=%u status=%d "
-                  "elapsed=%" PRIu64 " us\n", __FUNCTION__,
-                  transaction_id, adi_status,
+                  "cleanup=%d elapsed=%" PRIu64 " us\n", __FUNCTION__,
+                  transaction_id, adi_status, adi_cleanup_status,
                   (_monotonic_ns() - calibration_begin_ns) / 1000ULL);
-        if (adi_status < 0) {
-            const int status = errno_ad9361_to_bladerf(adi_status);
+        if (adi_status < 0 || adi_cleanup_status < 0) {
+            const int status = errno_ad9361_to_bladerf(
+                adi_status < 0 ? adi_status : adi_cleanup_status);
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
-                        (uint32_t)adi_status, status, expected_epoch_id);
+                        (uint32_t)(adi_status < 0 ? adi_status
+                                                 : adi_cleanup_status),
+                        status, expected_epoch_id);
+            bladerf2_rfic_host_fail_closed(dev);
             return _fail_transition(dev, board_data, status, final_event);
         }
         if (_deadline_expired(deadline_ns)) {
@@ -4523,6 +4589,12 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
         if (_rx_transition_close_requested(board_data)) {
             return _fail_transition_for_close(dev, board_data, final_event);
         }
+        WITH_MUTEX(&dev->lock, {
+            board_data->rx_rfdc_calibration_frequency_hz[
+                target_port_map->rfic_port] = target_hz;
+            board_data->rx_rfdc_calibration_valid_mask |=
+                1u << target_port_map->rfic_port;
+        });
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
                     BLADERF_RF_STATE_CALIBRATING, 0, 0, 0, 0,
                     expected_epoch_id);
