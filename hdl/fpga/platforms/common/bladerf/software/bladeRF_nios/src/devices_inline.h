@@ -811,4 +811,27 @@ INLINE bool command_uart_write_response(uint8_t *resp,
     return true;
 }
 
+INLINE enum command_uart_try_publish_result
+command_uart_write_response_try(uint8_t *resp, uint32_t session_generation) {
+    int i;
+    uint32_t val;
+    const uint32_t status = IORD_32DIRECT(COMMAND_UART_BASE, 28);
+    const enum command_uart_try_publish_result slot_result =
+        command_uart_response_slot_result(status);
+
+    if (slot_result != COMMAND_UART_TRY_PUBLISH_OK) {
+        return slot_result;
+    }
+
+    IOWR_32DIRECT(COMMAND_UART_BASE, 24, session_generation);
+    for (i = 0; i < 16; i += 4) {
+        val = ((uint32_t)resp[i + 0]) |
+              (((uint32_t)resp[i + 1]) << 8) |
+              (((uint32_t)resp[i + 2]) << 16) |
+              (((uint32_t)resp[i + 3]) << 24);
+        IOWR_32DIRECT(COMMAND_UART_BASE, i, val);
+    }
+    return COMMAND_UART_TRY_PUBLISH_OK;
+}
+
 #endif

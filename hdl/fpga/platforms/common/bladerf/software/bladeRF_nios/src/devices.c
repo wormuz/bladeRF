@@ -156,6 +156,34 @@ bool command_uart_publish_response(uint8_t *resp,
     return false;
 }
 
+enum command_uart_try_publish_result command_uart_try_publish_response(
+    uint8_t *resp, uint32_t session_generation)
+{
+    enum command_uart_try_publish_result result;
+    const uint32_t current_generation =
+        command_uart_current_session_generation();
+
+    if (session_generation != current_generation) {
+        return COMMAND_UART_TRY_PUBLISH_STALE;
+    }
+
+    result = command_uart_write_response_try(resp, session_generation);
+    if (result == COMMAND_UART_TRY_PUBLISH_ERROR) {
+        const uint32_t generation_after_failure =
+            command_uart_current_session_generation();
+
+        if (session_generation != generation_after_failure) {
+            return COMMAND_UART_TRY_PUBLISH_STALE;
+        }
+        if (command_uart_fault_latch(&command_uart_fault,
+                                     session_generation,
+                                     generation_after_failure)) {
+            command_uart_enable_isr(false);
+        }
+    }
+    return result;
+}
+
 void command_uart_check_session_recovery(void)
 {
     const uint32_t current_generation =
@@ -177,6 +205,7 @@ static void command_uart_isr(void *context)
     pkt->deferred_work_active_at_accept = command_uart_request_busy();
     pkt->session_generation = command_uart_request_session_generation();
     command_uart_read_request((uint8_t *)pkt->req);
+    pkt->response_prepared = false;
 
     /* Keep the UART's single request buffer stable while the synchronous
      * packet handler uses pkt->req. A complete next request is held in the

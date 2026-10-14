@@ -43,6 +43,9 @@ struct pkt_buf {
      * handler/deferred callback cannot execute later if it misses the last
      * cooperative service point. */
     volatile bool deferred_work_active_at_accept;
+    /* Safe-point processing may prepare once and retry UART publication
+     * without repeating packet side effects while the response slot is full. */
+    volatile bool response_prepared;
     volatile bool ready;                  /* Ready flag */
 };
 

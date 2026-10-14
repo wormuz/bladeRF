@@ -524,6 +524,15 @@ bool command_uart_publish_response(uint8_t *resp,
     return command_uart_write_response(resp, session_generation);
 }
 
+enum command_uart_try_publish_result command_uart_try_publish_response(
+    uint8_t *resp, uint32_t session_generation)
+{
+    (void)session_generation;
+    return command_uart_write_response(resp, session_generation)
+               ? COMMAND_UART_TRY_PUBLISH_OK
+               : COMMAND_UART_TRY_PUBLISH_ERROR;
+}
+
 void command_uart_check_session_recovery(void)
 {
     /* The simulator has no asynchronous UART/session reset state. */

@@ -285,6 +285,7 @@ static void service_rfic_status_request(void)
          * it without allowing a stale command to run in the new session. */
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
+        cooperative_pkt->response_prepared = false;
         command_uart_enable_isr(true);
         return;
     }
@@ -293,6 +294,13 @@ static void service_rfic_status_request(void)
      * arrival-time fence, not the worker's now-idle state, makes rejection
      * mandatory. Clear it once the response is consumed. */
     cooperative_pkt->deferred_work_active_at_accept = false;
+
+    /* Retry only the immutable response when backpressured. The request's
+     * queue or RFIC side effects must never run twice. */
+    if (!command_uart_response_should_prepare(
+            cooperative_pkt->response_prepared)) {
+        goto publish_cooperative_response;
+    }
 
     if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_RETUNE2_MAGIC) {
         nios_pkt_retune2_unpack_token(
@@ -314,26 +322,14 @@ static void service_rfic_status_request(void)
         } else if (!reject_packet_during_rfic_operation(cooperative_pkt)) {
             return;
         }
-        cooperative_pkt->ready = false;
-        if (!command_uart_publish_response(cooperative_pkt->resp,
-                                           cooperative_pkt->session_generation)) {
-            DBG("Command UART response failed; request admission fenced until session reset\n");
-        }
-        command_uart_enable_isr(true);
-        return;
+        goto publish_cooperative_response;
     }
 
     if (cooperative_pkt->req[PKT_MAGIC_IDX] != NIOS_PKT_16x64_MAGIC) {
         if (!reject_packet_during_rfic_operation(cooperative_pkt)) {
             return;
         }
-        cooperative_pkt->ready = false;
-        if (!command_uart_publish_response(cooperative_pkt->resp,
-                                           cooperative_pkt->session_generation)) {
-            DBG("Command UART response failed; request admission fenced until session reset\n");
-        }
-        command_uart_enable_isr(true);
-        return;
+        goto publish_cooperative_response;
     }
 
     nios_pkt_16x64_unpack(cooperative_pkt->req, &target, &is_write, &addr,
@@ -344,12 +340,10 @@ static void service_rfic_status_request(void)
         /* Direct AD9361 SPI, gain-table and batch operations bypass the RFIC
          * command queue. Never let one run reentrantly while an ADI callback
          * owns the device. */
-        cooperative_pkt->ready = false;
         nios_pkt_16x64_resp_pack(
             cooperative_pkt->resp, target, is_write, addr, data, false);
     } else if (is_write && transaction_id != 0 &&
         rfic_command_transaction_is_duplicate(addr, data, transaction_id)) {
-        cooperative_pkt->ready = false;
         nios_pkt_16x64_resp_pack_with_transaction_id(
             cooperative_pkt->resp, target, true, addr, data, true,
             transaction_id);
@@ -358,7 +352,6 @@ static void service_rfic_status_request(void)
          * UART slot until this synchronous callback returns: the host could
          * time out, then the supposedly unacknowledged request would execute
          * later. Reject it now without touching SPI or the RFIC queue. */
-        cooperative_pkt->ready = false;
         if (transaction_id != 0) {
             nios_pkt_16x64_resp_pack_busy(
                 cooperative_pkt->resp, target, addr, data, transaction_id);
@@ -369,19 +362,33 @@ static void service_rfic_status_request(void)
     } else if (!is_write && transaction_id == 0 &&
                (addr == 0x0f00u || addr == 0x0f0cu ||
                 addr == 0x0f0du)) {
-        cooperative_pkt->ready = false;
         pkt_16x64(cooperative_pkt);
     } else {
-        cooperative_pkt->ready = false;
         nios_pkt_16x64_resp_pack_with_transaction_id(
             cooperative_pkt->resp, target, false, addr, data, false, 0);
     }
 
-    if (!command_uart_publish_response(cooperative_pkt->resp,
-                                       cooperative_pkt->session_generation)) {
+publish_cooperative_response:
+    cooperative_pkt->response_prepared = true;
+    switch (command_uart_try_publish_response(
+        cooperative_pkt->resp, cooperative_pkt->session_generation)) {
+    case COMMAND_UART_TRY_PUBLISH_OK:
+    case COMMAND_UART_TRY_PUBLISH_STALE:
+        cooperative_pkt->ready = false;
+        cooperative_pkt->response_prepared = false;
+        command_uart_enable_isr(true);
+        break;
+    case COMMAND_UART_TRY_PUBLISH_BACKPRESSURE:
+        /* Keep the request slot fenced. The main loop and later safe points
+         * retry publication without re-running the packet handler. */
+        break;
+    case COMMAND_UART_TRY_PUBLISH_ERROR:
+    default:
+        cooperative_pkt->ready = false;
+        cooperative_pkt->response_prepared = false;
         DBG("Command UART response failed; request admission fenced until session reset\n");
+        break;
     }
-    command_uart_enable_isr(true);
 }
 #endif
 
@@ -672,12 +679,22 @@ int main(void)
 #endif
             handler->exec(&pkt);
 
-            /* Write response to host */
+            /* Response publication may be backpressured by the FPGA's
+             * active+pending serializer slots. Preserve the already-computed
+             * response and route retries through the same nonblocking pump
+             * used by RFIC safe points. */
+#ifdef BLADERF_NIOS_LIBAD936X
+            pkt.response_prepared = true;
+            pkt.ready = true;
+            pkt.deferred_work_active_at_accept = true;
+            service_rfic_status_request();
+#else
             if (!command_uart_publish_response(pkt.resp,
                                                pkt.session_generation)) {
                 DBG("Command UART response failed; request admission fenced until session reset\n");
             }
             command_uart_enable_isr(true);
+#endif
         } else {
 
             /* Temporarily putting the VCTCXO Calibration stuff here. */

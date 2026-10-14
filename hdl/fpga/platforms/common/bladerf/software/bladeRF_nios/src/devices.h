@@ -30,13 +30,11 @@
 #include "libbladeRF_nios_compat.h"
 #include "fpga_version.h"
 #include "pkt_handler.h"
+#include "command_uart_response_policy.h"
 
 /* COMMAND_UART_BASE + 28 status bits. */
 #define COMMAND_UART_STATUS_REQUEST_BUSY       (1u << 0)
 #define COMMAND_UART_STATUS_WORKER_BUSY        (1u << 1)
-#define COMMAND_UART_STATUS_RESPONSE_PENDING  (1u << 2)
-#define COMMAND_UART_STATUS_RESPONSE_OVERFLOW (1u << 3)
-#define COMMAND_UART_STATUS_RESPONSE_ACTIVE   (1u << 4)
 
 /* Preserve the command UART's ISR-enable bit while controlling its worker
  * admission marker. The FPGA snapshots worker_busy when a request frame ends. */
@@ -46,6 +44,9 @@ uint32_t command_uart_current_session_generation(void);
  * accept it. A new session generation is required before request IRQs resume. */
 bool command_uart_publish_response(uint8_t *resp,
                                    uint32_t session_generation);
+/* One status-register read at most; intended for cooperative safe points. */
+enum command_uart_try_publish_result command_uart_try_publish_response(
+    uint8_t *resp, uint32_t session_generation);
 void command_uart_check_session_recovery(void);
 
 /* Compare free-running 64-bit FPGA timestamps using modulo ordering. The
