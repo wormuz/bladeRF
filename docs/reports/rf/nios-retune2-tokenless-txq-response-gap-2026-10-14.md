@@ -26,6 +26,10 @@ The source now routes every tokenless `NOW` direction through the retained queue
 
 Regression source now covers tokenless RX deferred success and PLL failure as well as TXQ terminal success/failure, and host tests assert both directions select an extended timeout. These tests have not been built or run.
 
+## Host regression fixture API drift found and corrected
+
+Reviewing the host-side timeout coverage against the current `usb.h` found that `test_nios_rfpll_batch_host.c` still referenced removed `bladerf_usb.peripheral_lock`/`peripheral_desynchronized` members, never bound `usb->peripheral` to its embedded local session state, and implemented the older five-argument `bulk_transfer` callback. The current transaction layer requires the seven-argument callback to report `transferred` and `transferred_valid`; successful mock responses without these values are rejected. The fixture now binds and initializes `peripheral_local`, uses the current callback signature and transfer counts, and has explicit tokenless-timeout fail-closed/no-resend coverage. This is a source/API consistency correction only; it remains uncompiled and unrun.
+
 ## Source anchors
 
 - `hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c`: current source enqueues all tokenless `NOW` requests; older source called `profile_activate()` with `allow_txq_yield=false`.
