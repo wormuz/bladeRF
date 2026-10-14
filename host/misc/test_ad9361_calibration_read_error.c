@@ -99,6 +99,7 @@ int32_t ad9361_adjust_tx_ext_band_settings(struct ad9361_rf_phy *phy,
 static unsigned read_count;
 static unsigned write_count;
 static unsigned delay_count;
+static uint64_t fake_time_us;
 static int32_t spi_status;
 static int32_t fake_spi_remove_status;
 static int32_t fake_gpio_remove_status[4];
@@ -214,8 +215,23 @@ uint64_t no_os_do_div(uint64_t *n, uint64_t base)
     *n /= base;
     return remainder;
 }
-void no_os_udelay(uint32_t usecs) { (void)usecs; ++delay_count; }
-void no_os_mdelay(uint32_t msecs) { (void)msecs; ++delay_count; }
+struct no_os_time no_os_get_time(void)
+{
+    struct no_os_time now;
+    now.s = (unsigned int)(fake_time_us / 1000000ULL);
+    now.us = (unsigned int)(fake_time_us % 1000000ULL);
+    return now;
+}
+void no_os_udelay(uint32_t usecs)
+{
+    fake_time_us += usecs;
+    ++delay_count;
+}
+void no_os_mdelay(uint32_t msecs)
+{
+    fake_time_us += (uint64_t)msecs * 1000ULL;
+    ++delay_count;
+}
 
 int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
                                  uint16_t bytes_number)
@@ -1445,6 +1461,51 @@ int main(void)
         fprintf(stderr, "completed calibration mishandled: ret=%" PRId32
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
         return EXIT_FAILURE;
+    }
+
+    /* A completion status observed after a delayed cooperative poll is still
+     * hardware completion evidence. The deadline fails only while the status
+     * remains absent; scheduling latency alone must not poison a completed
+     * transceiver. */
+    {
+        struct ad9361_rf_phy late_done_phy = { .spi = &spi };
+        struct ad9361_status_wait wait = {0};
+
+        register_map_enabled = true;
+        fake_time_us = 0;
+        fake_regs[REG_STATE] = 1;
+        if (ad9361_status_wait_start(&late_done_phy, REG_STATE, 1, 1,
+                                     100, 10, &wait) != 0)
+            return EXIT_FAILURE;
+        fake_time_us = 1000;
+        if (ad9361_status_wait_poll(&late_done_phy, &wait) != 0 ||
+            ad9361_calibration_state_unknown(&late_done_phy) ||
+            late_done_phy.status_wait != NULL) {
+            fprintf(stderr,
+                    "late but confirmed status was treated as timeout\n");
+            return EXIT_FAILURE;
+        }
+
+        {
+            struct ad9361_rf_phy overdue_phy = { .spi = &spi };
+            struct ad9361_status_wait overdue_wait = {0};
+
+            fake_regs[REG_STATE] = 0;
+            fake_time_us = 2000;
+            if (ad9361_status_wait_start(&overdue_phy, REG_STATE, 1, 1,
+                                         100, 10, &overdue_wait) != 0)
+                return EXIT_FAILURE;
+            fake_time_us = 2200;
+            if (ad9361_status_wait_poll(&overdue_phy, &overdue_wait) !=
+                    -ETIMEDOUT ||
+                !ad9361_calibration_state_unknown(&overdue_phy) ||
+                overdue_phy.status_wait != NULL) {
+                fprintf(stderr,
+                        "absent status did not fail at watchdog deadline\n");
+                return EXIT_FAILURE;
+            }
+        }
+        register_map_enabled = false;
     }
 
     /* A failed start write can have reached the RFIC and completed before a
