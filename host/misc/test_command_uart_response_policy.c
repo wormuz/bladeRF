@@ -6,7 +6,7 @@
 
 int main(void)
 {
-    bool prepared = false;
+    volatile bool prepared = false;
     unsigned int packet_actions = 0;
 
     if (command_uart_response_slot_result(0) !=
@@ -27,7 +27,7 @@ int main(void)
 
     if (command_uart_response_should_prepare(prepared)) {
         ++packet_actions;
-        prepared = true;
+        command_uart_response_mark_prepared(&prepared);
     }
     if (command_uart_response_slot_result(
             COMMAND_UART_STATUS_RESPONSE_PENDING) !=
@@ -44,7 +44,7 @@ int main(void)
         return 1;
     }
 
-    prepared = false;
+    command_uart_response_retire(&prepared);
     if (!command_uart_response_should_prepare(prepared)) {
         fputs("retired response state blocked the next request\n", stderr);
         return 1;

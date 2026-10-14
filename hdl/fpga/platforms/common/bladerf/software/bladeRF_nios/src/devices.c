@@ -205,7 +205,7 @@ static void command_uart_isr(void *context)
     pkt->deferred_work_active_at_accept = command_uart_request_busy();
     pkt->session_generation = command_uart_request_session_generation();
     command_uart_read_request((uint8_t *)pkt->req);
-    pkt->response_prepared = false;
+    command_uart_response_retire(&pkt->response_prepared);
 
     /* Keep the UART's single request buffer stable while the synchronous
      * packet handler uses pkt->req. A complete next request is held in the

@@ -35,4 +35,14 @@ static inline bool command_uart_response_should_prepare(bool prepared)
     return !prepared;
 }
 
+static inline void command_uart_response_mark_prepared(volatile bool *prepared)
+{
+    *prepared = true;
+}
+
+static inline void command_uart_response_retire(volatile bool *prepared)
+{
+    *prepared = false;
+}
+
 #endif

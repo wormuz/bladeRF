@@ -285,7 +285,7 @@ static void service_rfic_status_request(void)
          * it without allowing a stale command to run in the new session. */
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
-        cooperative_pkt->response_prepared = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
         command_uart_enable_isr(true);
         return;
     }
@@ -369,13 +369,13 @@ static void service_rfic_status_request(void)
     }
 
 publish_cooperative_response:
-    cooperative_pkt->response_prepared = true;
+    command_uart_response_mark_prepared(&cooperative_pkt->response_prepared);
     switch (command_uart_try_publish_response(
         cooperative_pkt->resp, cooperative_pkt->session_generation)) {
     case COMMAND_UART_TRY_PUBLISH_OK:
     case COMMAND_UART_TRY_PUBLISH_STALE:
         cooperative_pkt->ready = false;
-        cooperative_pkt->response_prepared = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
         command_uart_enable_isr(true);
         break;
     case COMMAND_UART_TRY_PUBLISH_BACKPRESSURE:
@@ -385,7 +385,7 @@ publish_cooperative_response:
     case COMMAND_UART_TRY_PUBLISH_ERROR:
     default:
         cooperative_pkt->ready = false;
-        cooperative_pkt->response_prepared = false;
+        command_uart_response_retire(&cooperative_pkt->response_prepared);
         DBG("Command UART response failed; request admission fenced until session reset\n");
         break;
     }
@@ -684,7 +684,7 @@ int main(void)
              * response and route retries through the same nonblocking pump
              * used by RFIC safe points. */
 #ifdef BLADERF_NIOS_LIBAD936X
-            pkt.response_prepared = true;
+            command_uart_response_mark_prepared(&pkt.response_prepared);
             pkt.ready = true;
             pkt.deferred_work_active_at_accept = true;
             service_rfic_status_request();
