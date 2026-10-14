@@ -58,16 +58,37 @@ void mdelay(unsigned long msecs)
  * implementations rather than duplicating them.
  ******************************************************************************/
 
+#define BLADERF_PLATFORM_SERVICE_SLICE_US 1000U
+
+static void bladerf_serviceable_delay_us(uint64_t usecs)
+{
+	/* A single ADI delay must not starve the NIOS command/status path for its
+	 * full duration. Keep service opportunities bounded even for callers that
+	 * request long waits (for example, multi-device synchronization). */
+	if (usecs == 0) {
+		bladerf_platform_service();
+		return;
+	}
+
+	while (usecs != 0) {
+		uint32_t slice = usecs > BLADERF_PLATFORM_SERVICE_SLICE_US
+				 ? BLADERF_PLATFORM_SERVICE_SLICE_US
+				 : (uint32_t)usecs;
+
+		usleep(slice);
+		bladerf_platform_service();
+		usecs -= slice;
+	}
+}
+
 void no_os_udelay(uint32_t usecs)
 {
-    udelay(usecs);
-    bladerf_platform_service();
+	bladerf_serviceable_delay_us(usecs);
 }
 
 void no_os_mdelay(uint32_t msecs)
 {
-    mdelay(msecs);
-    bladerf_platform_service();
+	bladerf_serviceable_delay_us((uint64_t)msecs * 1000ULL);
 }
 
 /* Return elapsed time from a free-running 64-bit Avalon timer on sys_clock.
