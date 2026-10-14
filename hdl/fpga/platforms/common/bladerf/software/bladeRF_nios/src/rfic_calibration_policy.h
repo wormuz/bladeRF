@@ -1,6 +1,7 @@
 #ifndef BLADERF_NIOS_RFIC_CALIBRATION_POLICY_H_
 #define BLADERF_NIOS_RFIC_CALIBRATION_POLICY_H_
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -17,6 +18,7 @@ enum rfic_rfdc_poll_action {
     RFIC_RFDC_POLL_AGAIN,
     RFIC_RFDC_POLL_RESUME_RX_ENABLE,
     RFIC_RFDC_POLL_COMPLETE,
+    RFIC_RFDC_POLL_INVALID_STATUS,
 };
 
 enum rfic_sample_rate_cache_action {
@@ -31,6 +33,15 @@ static inline int32_t rfic_operation_status_with_cleanup(
     int32_t operation_status, int32_t cleanup_status)
 {
     return operation_status < 0 ? operation_status : cleanup_status;
+}
+
+/* Retained ADI poll APIs have a closed result set: 1 means pending, 0 means
+ * complete, and negative values are errors. Treat any other positive value
+ * as a protocol/state failure rather than retrying forever or committing it.
+ */
+static inline int32_t rfic_retained_poll_status(int32_t status)
+{
+    return status > 1 ? -EIO : status;
 }
 
 /* A rejected, side-effect-free preflight must not erase valid readback
@@ -58,10 +69,10 @@ static inline bool rfic_sample_rate_restore_cache_after_rollback(
 static inline enum rfic_calibration_poll_action
 rfic_calibration_poll_action(int32_t status, bool resume_command)
 {
-    if (status > 0) {
+    if (status == 1) {
         return RFIC_CALIBRATION_POLL_AGAIN;
     }
-    if (status < 0) {
+    if (status < 0 || status > 1) {
         return RFIC_CALIBRATION_POLL_FAIL_COMMAND;
     }
     return resume_command ? RFIC_CALIBRATION_POLL_RESUME_COMMAND
@@ -93,6 +104,9 @@ static inline enum rfic_rfdc_poll_action rfic_rfdc_poll_action(
 {
     if (calibration_status == 1) {
         return RFIC_RFDC_POLL_AGAIN;
+    }
+    if (calibration_status > 1) {
+        return RFIC_RFDC_POLL_INVALID_STATUS;
     }
     return resume_rx_enable ? RFIC_RFDC_POLL_RESUME_RX_ENABLE
                             : RFIC_RFDC_POLL_COMPLETE;

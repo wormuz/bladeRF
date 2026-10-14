@@ -84,6 +84,12 @@ int main(void)
      * after TXQ has completed; failure must retire as failure. */
     assert(rfic_calibration_poll_action(1, false) ==
            RFIC_CALIBRATION_POLL_AGAIN);
+    assert(rfic_retained_poll_status(1) == 1);
+    assert(rfic_retained_poll_status(0) == 0);
+    assert(rfic_retained_poll_status(-ETIMEDOUT) == -ETIMEDOUT);
+    assert(rfic_retained_poll_status(2) == -EIO);
+    assert(rfic_calibration_poll_action(2, false) ==
+           RFIC_CALIBRATION_POLL_FAIL_COMMAND);
     assert(rfic_calibration_poll_action(0, false) ==
            RFIC_CALIBRATION_POLL_FINISH_COMMAND);
     assert(rfic_calibration_poll_action(0, true) ==
@@ -91,6 +97,10 @@ int main(void)
     assert(rfic_calibration_poll_action(-EIO, true) ==
            RFIC_CALIBRATION_POLL_FAIL_COMMAND);
     assert(rfic_rfdc_poll_action(1, true) == RFIC_RFDC_POLL_AGAIN);
+    assert(rfic_rfdc_poll_action(2, true) ==
+           RFIC_RFDC_POLL_INVALID_STATUS);
+    assert(rfic_rfdc_poll_action(rfic_retained_poll_status(2), true) ==
+           RFIC_RFDC_POLL_RESUME_RX_ENABLE);
     assert(rfic_rfdc_poll_action(0, true) ==
            RFIC_RFDC_POLL_RESUME_RX_ENABLE);
     assert(rfic_rfdc_poll_action(-EIO, true) ==

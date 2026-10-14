@@ -44,6 +44,14 @@ static struct rfic_state state;
 
 static bool rfic_latch_calibration_fault(void);
 
+static int32_t rfic_checked_poll_status(int32_t status)
+{
+    if (status > 1 && state.phy != NULL) {
+        ad9361_mark_calibration_state_unknown(state.phy);
+    }
+    return rfic_retained_poll_status(status);
+}
+
 bool rfic_frequency_state_available(void)
 {
     return state.phy != NULL && !state.calibration_faulted;
@@ -300,6 +308,7 @@ int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage)
     }
     status = ad9361_tx_quad_calibration_transaction_poll(
         state.phy, &state.tx_quad_job);
+    status = rfic_checked_poll_status(status);
     if (status == 1) {
         return 1;
     }
@@ -606,6 +615,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
             if (state.init_job_pending) {
                 step_status = ad9361_init_transaction_poll(&state.init_job);
+                step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
                     break;
@@ -624,6 +634,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             } else if (state.fir_enable_job_pending) {
                 step_status = ad9361_fir_enable_transaction_poll(
                     state.phy, &state.fir_enable_job);
+                step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
                     break;
@@ -655,6 +666,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             } else if (state.rfpll_job_pending) {
                 step_status = ad9361_rfpll_clock_transaction_poll(
                     state.phy, &state.rfpll_job);
+                step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
                     break;
@@ -673,6 +685,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             } else if (state.sample_rate_job_pending) {
                 step_status = ad9361_sample_rate_transaction_poll(
                     state.phy, &state.sample_rate_job);
+                step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
                     break;
@@ -718,6 +731,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
             } else if (state.bandwidth_job_pending) {
                 step_status = ad9361_rf_bandwidth_transaction_poll(
                     state.phy, &state.bandwidth_job);
+                step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
                     break;
@@ -748,6 +762,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
                 step_status = ad9361_tx_quad_calibration_transaction_poll(
                     state.phy, &state.tx_quad_job);
+                step_status = rfic_checked_poll_status(step_status);
                 action = rfic_calibration_poll_action(
                     step_status, state.tx_quad_resume_command);
                 if (action == RFIC_CALIBRATION_POLL_AGAIN) {
@@ -805,8 +820,15 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
                 step_status = ad9361_rfdc_calibration_poll(
                     state.phy, &state.rfdc_job);
+                step_status = rfic_checked_poll_status(step_status);
                 action = rfic_rfdc_poll_action(
                     step_status, state.rfdc_resume_enable_command);
+                if (action == RFIC_RFDC_POLL_INVALID_STATUS) {
+                    step_status = -EIO;
+                    ad9361_mark_calibration_state_unknown(state.phy);
+                    action = rfic_rfdc_poll_action(
+                        step_status, state.rfdc_resume_enable_command);
+                }
                 if (action == RFIC_RFDC_POLL_AGAIN) {
                     q->progress_sequence++;
                     break;
