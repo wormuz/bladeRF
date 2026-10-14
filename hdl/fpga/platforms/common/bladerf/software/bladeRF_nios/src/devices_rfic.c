@@ -647,6 +647,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
                 rfic_command_record_cleanup_error(
                     state.sample_rate_job.bandwidth_job.tracking_restore_status);
+                rfic_command_record_cleanup_error(
+                    state.sample_rate_job.cleanup_status);
                 state.sample_rate_job_pending = false;
                 if (step_status < 0) {
                     if (rfic_sample_rate_restore_cache_after_rollback(
