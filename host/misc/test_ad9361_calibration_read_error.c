@@ -2570,6 +2570,32 @@ int main(void)
         pdata.use_ext_tx_lo = INT_LO;
     }
 
+    /* Tracking writes poison RFIC state on partial SPI failure. The public
+     * setter must restore only its software request and must not retry SPI
+     * through that unknown state as a speculative rollback. */
+    {
+        struct ad9361_rf_phy tracking_phy = phy;
+        uint8_t old_tracking = tracking_phy.rfdc_track_en;
+        unsigned writes_before = fake_write_counts[REG_CALIBRATION_CONFIG_2];
+
+        tracking_phy.calibration_state_unknown = false;
+        tracking_phy.tracking_config_valid = true;
+        fail_write_once_reg = REG_CALIBRATION_CONFIG_2;
+        fail_write_once_reg_occurrence = 1;
+        apply_failed_write_once = false;
+        ret = ad9361_set_rx_rfdc_track_en_dis(
+            &tracking_phy, (uint8_t)!old_tracking);
+        fail_write_once_reg = -1;
+        if (ret != -EIO || tracking_phy.rfdc_track_en != old_tracking ||
+            !ad9361_calibration_state_unknown(&tracking_phy) ||
+            tracking_phy.tracking_config_valid ||
+            fake_write_counts[REG_CALIBRATION_CONFIG_2] != writes_before + 1) {
+            fprintf(stderr,
+                    "RX tracking attempted rollback after state poisoning\n");
+            return EXIT_FAILURE;
+        }
+    }
+
     /* Channel selectors and enable masks must not silently truncate bits. */
     {
         unsigned writes_before = write_count;
