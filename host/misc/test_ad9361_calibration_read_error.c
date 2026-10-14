@@ -5538,6 +5538,61 @@ int main(void)
             };
             AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 777 };
             uint32_t old_filter_conf = fake_regs[REG_RX_FILTER_CONFIG];
+            unsigned writes_before =
+                fake_write_counts[REG_RX_FILTER_CONFIG];
+            int32_t cleanup_status = 123;
+
+            fake_regs[REG_RX_FILTER_CONFIG] = 0;
+            fail_write_once_reg = REG_RX_FILTER_CONFIG;
+            fail_write_once_reg_occurrence = 1;
+            apply_failed_write_once = false;
+            ret = ad9361_get_rx_fir_config_with_cleanup(
+                &fir_get_phy, 0, &fir_cfg, &cleanup_status);
+            fail_write_once_reg = -1;
+            if (ret != -EIO || cleanup_status != 0 ||
+                !fir_get_phy.calibration_state_unknown ||
+                fir_cfg.rx_coef_size != 777 ||
+                fake_write_counts[REG_RX_FILTER_CONFIG] != writes_before + 1) {
+                fprintf(stderr,
+                        "RX FIR getter wrote after failed selection or changed output\n");
+                return EXIT_FAILURE;
+            }
+            fake_regs[REG_RX_FILTER_CONFIG] = old_filter_conf;
+        }
+	{
+		struct ad9361_rf_phy fir_get_phy = {
+			.spi = &spi,
+			.pdata = &pdata,
+		};
+		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 777 };
+		uint32_t old_filter_conf = fake_regs[REG_TX_FILTER_CONF];
+		unsigned writes_before = fake_write_counts[REG_TX_FILTER_CONF];
+		int32_t cleanup_status = 123;
+
+		fake_regs[REG_TX_FILTER_CONF] = 0;
+		fail_write_once_reg = REG_TX_FILTER_CONF;
+		fail_write_once_reg_occurrence = 1;
+		apply_failed_write_once = false;
+		ret = ad9361_get_tx_fir_config_with_cleanup(
+			&fir_get_phy, 0, &fir_cfg, &cleanup_status);
+		fail_write_once_reg = -1;
+		if (ret != -EIO || cleanup_status != 0 ||
+		    !fir_get_phy.calibration_state_unknown ||
+		    fir_cfg.tx_coef_size != 777 ||
+		    fake_write_counts[REG_TX_FILTER_CONF] != writes_before + 1) {
+			fprintf(stderr,
+				"TX FIR getter wrote after failed selection or changed output\n");
+			return EXIT_FAILURE;
+		}
+		fake_regs[REG_TX_FILTER_CONF] = old_filter_conf;
+	}
+        {
+            struct ad9361_rf_phy fir_get_phy = {
+                .spi = &spi,
+                .pdata = &pdata,
+            };
+            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 777 };
+            uint32_t old_filter_conf = fake_regs[REG_RX_FILTER_CONFIG];
 			uint32_t old_filter_gain = fake_regs[REG_RX_FILTER_GAIN];
             int32_t cleanup_status = 0;
 
