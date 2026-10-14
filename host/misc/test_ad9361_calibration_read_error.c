@@ -9063,6 +9063,48 @@ int main(void)
                     (void *)post_phy.status_wait);
             return EXIT_FAILURE;
         }
+
+        /* A missing target-state event must fail at the status deadline and
+         * retire both nested and parent owners without accepting setup. */
+        memset(&setup_job, 0, sizeof(setup_job));
+        setup_job.phy = &post_phy;
+        setup_job.active = true;
+        setup_job.stage = AD9361_SETUP_TRANSACTION_CALIBRATION;
+        setup_job.calibration_job.phy = &post_phy;
+        setup_job.calibration_job.terminal = true;
+        setup_job.calibration_job.terminal_status = 0;
+        post_phy.setup_transaction = &setup_job;
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        state_after_ensm_write = ENSM_STATE_ALERT;
+        fake_time_us += 1000;
+
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        if (ret != 1 || !setup_job.post_calibration_wait.active ||
+            setup_job.terminal) {
+            fprintf(stderr,
+                    "Setup did not retain missing ENSM event: ret=%" PRId32
+                    " terminal=%d\n", ret, setup_job.terminal);
+            return EXIT_FAILURE;
+        }
+        fake_time_us = setup_job.post_calibration_wait.start_us +
+                       setup_job.post_calibration_wait.timeout_us;
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        state_after_ensm_write = -1;
+        register_map_enabled = false;
+        if (ret != -ETIMEDOUT || !setup_job.terminal ||
+            setup_job.terminal_status != -ETIMEDOUT ||
+            post_phy.status_wait != NULL ||
+            post_phy.setup_transaction != NULL ||
+            !ad9361_calibration_state_unknown(&post_phy)) {
+            fprintf(stderr,
+                    "Missing ENSM event was not terminal timeout: ret=%" PRId32
+                    " terminal=%" PRId32 " wait=%p setup=%p unknown=%d\n",
+                    ret, setup_job.terminal_status,
+                    (void *)post_phy.status_wait,
+                    (void *)post_phy.setup_transaction,
+                    ad9361_calibration_state_unknown(&post_phy));
+            return EXIT_FAILURE;
+        }
     }
 
     puts("AD9361 calibration, clock, ENSM, AGC, RSSI, and FIR SPI-error propagation: PASS");
