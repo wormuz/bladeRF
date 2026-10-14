@@ -120,7 +120,11 @@ static void retry_prepared_cooperative_response(void)
         command_uart_current_session_generation()) {
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
+        cooperative_pkt->response_deferred = false;
         command_uart_response_retire(&cooperative_pkt->response_prepared);
+        command_uart_set_worker_busy(rfic_command_worker_active() ||
+                                     rfic_command_owns_device() ||
+                                     rfic_tx_quad_retune_owner());
         command_uart_enable_isr(true);
         return;
     }
@@ -132,7 +136,11 @@ static void retry_prepared_cooperative_response(void)
     case COMMAND_UART_TRY_PUBLISH_STALE:
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
+        cooperative_pkt->response_deferred = false;
         command_uart_response_retire(&cooperative_pkt->response_prepared);
+        command_uart_set_worker_busy(rfic_command_worker_active() ||
+                                     rfic_command_owns_device() ||
+                                     rfic_tx_quad_retune_owner());
         command_uart_enable_isr(true);
         break;
     case COMMAND_UART_TRY_PUBLISH_BACKPRESSURE:
@@ -141,6 +149,7 @@ static void retry_prepared_cooperative_response(void)
     default:
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
+        cooperative_pkt->response_deferred = false;
         command_uart_response_retire(&cooperative_pkt->response_prepared);
         DBG("Command UART response failed; request admission fenced until session reset\n");
         break;
@@ -226,7 +235,10 @@ static void run_deferred_packet_work(void)
      * UART's logical ownership fence asserted across those main-loop turns,
      * not merely while this C function happens to be on the stack. */
     command_uart_set_worker_busy(rfic_command_worker_active() ||
-                                 rfic_command_owns_device());
+                                 rfic_command_owns_device() ||
+                                 rfic_tx_quad_retune_owner() ||
+                                 (cooperative_pkt != NULL &&
+                                  cooperative_pkt->response_deferred));
     retry_prepared_cooperative_response();
 #endif
 }
@@ -334,7 +346,11 @@ static void service_rfic_status_request(void)
          * it without allowing a stale command to run in the new session. */
         cooperative_pkt->ready = false;
         cooperative_pkt->deferred_work_active_at_accept = false;
+        cooperative_pkt->response_deferred = false;
         command_uart_response_retire(&cooperative_pkt->response_prepared);
+        command_uart_set_worker_busy(rfic_command_worker_active() ||
+                                     rfic_command_owns_device() ||
+                                     rfic_tx_quad_retune_owner());
         command_uart_enable_isr(true);
         return;
     }
@@ -663,6 +679,7 @@ int main(void)
                  * its side effects would otherwise still happen. */
                 pkt.ready = false;
                 pkt.deferred_work_active_at_accept = false;
+                pkt.response_deferred = false;
                 command_uart_response_retire(&pkt.response_prepared);
                 command_uart_enable_isr(true);
                 have_request = false;
@@ -717,10 +734,17 @@ int main(void)
              * response and route retries through the same nonblocking pump
              * used by RFIC safe points. */
 #ifdef BLADERF_NIOS_LIBAD936X
-            command_uart_response_mark_prepared(&pkt.response_prepared);
-            pkt.ready = true;
-            pkt.deferred_work_active_at_accept = true;
-            service_rfic_status_request();
+            if (pkt.response_deferred) {
+                /* The worker owns the final result. Do not publish an
+                 * acceptance ACK or make this request dispatchable again. */
+                pkt.ready = false;
+                pkt.deferred_work_active_at_accept = false;
+            } else {
+                command_uart_response_mark_prepared(&pkt.response_prepared);
+                pkt.ready = true;
+                pkt.deferred_work_active_at_accept = true;
+                service_rfic_status_request();
+            }
 #else
             if (!command_uart_publish_response(pkt.resp,
                                                pkt.session_generation)) {

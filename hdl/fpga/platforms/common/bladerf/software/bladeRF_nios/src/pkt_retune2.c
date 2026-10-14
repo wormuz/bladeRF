@@ -94,6 +94,7 @@ struct queue_entry {
     uint64_t readback_frequency_hz;
     uint32_t session_generation;
     uint16_t request_token;
+    struct pkt_buf *deferred_response_pkt;
     bool immediate;
     bool cancel_recovery_seen;
     bool cancel_request_pending;
@@ -360,6 +361,16 @@ static void record_retune2_entry_failure(bladerf_module module,
     if (entry != NULL && !entry->failure_reported) {
         record_retune2_failure(module, entry, failure_stage);
         entry->failure_reported = true;
+        if (entry->deferred_response_pkt != NULL) {
+            struct pkt_buf *pkt = entry->deferred_response_pkt;
+            nios_pkt_retune2_resp_pack(
+                pkt->resp, 0, 0, failure_stage, entry->request_token,
+                entry->session_generation);
+            command_uart_response_mark_prepared(&pkt->response_prepared);
+            pkt->ready = true;
+            pkt->deferred_work_active_at_accept = true;
+            entry->deferred_response_pkt = NULL;
+        }
     }
 }
 
@@ -404,6 +415,7 @@ static inline uint8_t enqueue_retune_with_identity(
     q->entries[q->ins_idx].timestamp = timestamp;
     q->entries[q->ins_idx].session_generation = session_generation;
     q->entries[q->ins_idx].request_token = request_token;
+    q->entries[q->ins_idx].deferred_response_pkt = NULL;
     q->entries[q->ins_idx].immediate = false;
     q->entries[q->ins_idx].cancel_recovery_seen = false;
     q->entries[q->ins_idx].cancel_request_pending = false;
@@ -442,6 +454,7 @@ static inline uint8_t enqueue_retune_now_with_identity(
     entry->readback_frequency_hz = 0;
     entry->session_generation = session_generation;
     entry->request_token = request_token;
+    entry->deferred_response_pkt = NULL;
     entry->immediate = true;
     entry->cancel_recovery_seen = false;
     entry->cancel_request_pending = false;
@@ -1015,6 +1028,19 @@ static void publish_retune2_success(bladerf_module module,
         rx_retune2_success_count = sequence;
     } else {
         tx_retune2_success_count = sequence;
+    }
+    if (entry->deferred_response_pkt != NULL) {
+        struct pkt_buf *pkt = entry->deferred_response_pkt;
+        nios_pkt_retune2_resp_pack(
+            pkt->resp, 0,
+            NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+                NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID,
+            NIOS_PKT_RETUNE2_FAILURE_NONE, entry->request_token,
+            entry->session_generation);
+        command_uart_response_mark_prepared(&pkt->response_prepared);
+        pkt->ready = true;
+        pkt->deferred_work_active_at_accept = true;
+        entry->deferred_response_pkt = NULL;
     }
 }
 
@@ -1704,17 +1730,25 @@ void pkt_retune2(struct pkt_buf *b)
             requested_profile.state = profile_already_in_target_slot
                 ? FASTLOCK_STATE_BBP_RFFE : FASTLOCK_STATE_BBP;
             if (timestamp == NIOS_PKT_RETUNE2_NOW) {
-                /* Tokened NOW uses the normal worker/completion lifecycle;
-                 * token zero preserves the legacy synchronous response. */
+                /* TX NOW always uses the retained worker so TXQ cannot
+                 * monopolize the packet-dispatch context. Tokened callers
+                 * receive the existing acceptance/completion protocol;
+                 * tokenless callers retain their synchronous response by
+                 * keeping this packet buffer until the worker is terminal. */
                 uint64_t readback_frequency_hz = 0;
                 struct queue *q = module == BLADERF_MODULE_TX
                     ? &tx_queue : &rx_queue;
                 struct queue *other_q = module == BLADERF_MODULE_TX
                     ? &rx_queue : &tx_queue;
                 bool async_now = request_token != 0;
+                bool deferred_legacy_tx_now = false;
+                bool queued_now = async_now || deferred_legacy_tx_now;
                 bool owner_busy = false;
 
 #ifdef BLADERF_NIOS_LIBAD936X
+                deferred_legacy_tx_now =
+                    module == BLADERF_MODULE_TX && request_token == 0;
+                queued_now = async_now || deferred_legacy_tx_now;
                 owner_busy = rfic_command_worker_active() ||
                              rfic_command_owns_device();
 #endif
@@ -1732,8 +1766,8 @@ void pkt_retune2(struct pkt_buf *b)
                     status = -1;
                 } else
 #endif
-                if (async_now && (owner_busy || q->count != 0 ||
-                                  other_q->count != 0)) {
+                if (queued_now && (owner_busy || q->count != 0 ||
+                                   other_q->count != 0)) {
                     INCREMENT_ERROR_COUNT();
                     failure_stage =
                         NIOS_PKT_RETUNE2_FAILURE_PROFILE_SLOT_BUSY;
@@ -1747,7 +1781,7 @@ void pkt_retune2(struct pkt_buf *b)
                     switch (module) {
                         case BLADERF_MODULE_RX:
                         case BLADERF_MODULE_TX:
-                            if (async_now) {
+                            if (queued_now) {
                                 uint8_t queue_size =
                                     enqueue_retune_now_with_identity(
                                         q, &requested_profile, nios_profile,
@@ -1767,9 +1801,17 @@ void pkt_retune2(struct pkt_buf *b)
                                      * profile port can be modified. */
                                     entry->state =
                                         ENTRY_STATE_PROFILE_LOAD_PENDING;
+                                    if (deferred_legacy_tx_now) {
+                                        entry->deferred_response_pkt = b;
+                                        b->response_deferred = true;
+                                    }
                                     load_status = adi_fastlock_load_start(
                                         module, &entry->profile);
                                     if (load_status < 0) {
+                                        if (deferred_legacy_tx_now) {
+                                            entry->deferred_response_pkt = NULL;
+                                            b->response_deferred = false;
+                                        }
                                         dequeue_retune(q, NULL);
                                         INCREMENT_ERROR_COUNT();
                                         failure_stage =
@@ -1782,13 +1824,15 @@ void pkt_retune2(struct pkt_buf *b)
                                                 &entry->profile);
                                             entry->state = ENTRY_STATE_READY;
                                         }
-                                        flags |= NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING;
+                                        if (async_now) {
+                                            flags |= NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING;
+                                        }
                                         status = 0;
                                     }
                                 }
                             } else {
-                                /* Preserve the tokenless synchronous
-                                 * completion contract. */
+                                /* RX has no TXQ continuation and keeps the
+                                 * existing fast synchronous path. */
                                 if (!profile_load(module,
                                                  &requested_profile)) {
                                     INCREMENT_ERROR_COUNT();

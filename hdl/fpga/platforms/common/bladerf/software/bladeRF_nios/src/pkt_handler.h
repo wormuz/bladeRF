@@ -46,6 +46,9 @@ struct pkt_buf {
     /* Safe-point processing may prepare once and retry UART publication
      * without repeating packet side effects while the response slot is full. */
     volatile bool response_prepared;
+    /* A packet handler retained this buffer until deferred work has produced
+     * its terminal response. Keep the request ISR fenced until publication. */
+    volatile bool response_deferred;
     volatile bool ready;                  /* Ready flag */
 };
 

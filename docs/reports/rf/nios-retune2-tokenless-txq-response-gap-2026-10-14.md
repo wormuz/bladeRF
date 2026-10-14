@@ -12,11 +12,11 @@ The host sends RETUNE2 through `nios_access()`, which uses `PERIPHERAL_TIMEOUT_M
 
 This is a concrete source-level liveness and response-correlation gap. It is not evidence that this path caused the preserved hardware no-response incident. The current host allocates request tokens when the FPGA advertises `BLADERF_CAP_RETUNE2_REQUEST_TOKEN`; the tokenless path remains relevant to older host libraries and images without that capability.
 
-## Required correction
+## Source correction now implemented (unverified)
 
-Make tokenless TX `NOW` use the same retained TXQ worker instead of calling the blocking ADI wrapper. Preserve its synchronous API meaning by deferring the packet's final success/failure response until the worker reaches a terminal result; never return early success and never replay the RF operation to recover a response. Keep request/session identity attached to the deferred response, retire stale-session responses, and prove that packet dispatch cannot execute the original request again while its final response is pending.
+Tokenless TX `NOW` now uses the same retained queue as tokened `NOW`. The queue entry retains the original packet buffer, and TXQ success/failure prepares the legacy response only after the worker reaches a terminal result. The NIOS main loop keeps the request ISR fenced while that response is pending and routes the completed packet through the existing immutable-response retry path. This prevents early success and prevents request-side effects from being replayed when UART publication is backpressured.
 
-The host response watchdog must then be derived from the bounded worker operation and transport behavior, or the compatibility path must use a correlated completion protocol. Do not merely raise the global 250 ms timeout: USB OUT and IN stages have distinct needs, and late tokenless response recovery currently has no request identity. Establish a source-grounded worst-case TXQ completion bound, including ADI attempt/phase limits, ENSM transitions, SPI transfer bounds, cleanup, scheduler service gaps, and transport deadlines before selecting a watchdog.
+The host now uses a scoped 120 s IN-response watchdog only for tokenless TX `NOW`; all other NIOS requests retain the 250 ms deadline. This matches the existing tokened terminal-result watchdog and is much longer than the source-derived TXQ calibration cycle budget (35 attempts, approximately 3.22 s at the locally derived minimum CLKRF). It is a transport failure watchdog, not a calibration-completion predicate. Whole-command setup/restore, SPI transfer, and scheduler-service upper bounds still need source closure; if they invalidate the 120 s ceiling, revise it from those bounds rather than enlarging it by guesswork. A zero-byte timeout still fails closed and desynchronizes the host channel; it never reports RF success.
 
 ## Source anchors
 
@@ -26,15 +26,18 @@ The host response watchdog must then be derived from the bounded worker operatio
 - `host/libraries/libbladeRF/src/backend/usb/nios_access.c`: NIOS packet transaction uses the 250 ms peripheral response timeout.
 - `host/libraries/libbladeRF/src/backend/usb/nios_transaction.c`: timeout recovery retains RETUNE2 only for nonzero request tokens.
 
-## Required source regressions
+## Regression source added; verification pending
 
-- Tokenless TX `NOW` with TXQ required returns no final response before terminal completion, then exactly one correct success/failure response.
+- Tokenless TX `NOW` with TXQ required returns no final response before terminal completion, then exactly one correct success/failure response. Added to `host/misc/test_nios_retune2_queue.c`.
 - Repeated worker turns advance TXQ without blocking other NIOS status/progress servicing.
 - Backpressure after terminal completion retries the prepared immutable response without rerunning fastlock or calibration.
 - Session reset/reopen retires the old response and cannot associate it with a later request.
 - Host timeout/retry and late response preserve request identity and never report an unknown result as success.
 - No-capability legacy host/image and token-capable current host/image both follow explicit, tested contracts.
+- Host-side regression asserts tokenless TX `NOW` gets the scoped extended IN timeout while ordinary transactions remain at 250 ms (`host/misc/test_nios_rfpll_batch_host.c`).
 
 ## Verification status
 
-Source inspection only. No build, test, simulation, synthesis, image load, or hardware qualification was run. The grouped source audit remains open; this defect must be fixed and covered before the single planned verification/image cycle.
+Source change and regression source only; `git diff --check` is the only verification so far. No build, test, simulation, synthesis, image load, or hardware qualification was run. Review the full deferred-response/session lifecycle and the watchdog bound with the surrounding NIOS dispatcher before the single planned verification/image cycle.
+
+ADI's UG-570 Eq. 11 defines maximum TX quadrature calibration duration as `TX channels × 94,464 CLKRF cycles`: [AD9361 Reference Manual UG-570](https://www.analog.com/media/en/technical-documentation/user-guides/AD9361_Reference_Manual_UG-570.pdf). The 3.22 s aggregate is the local xA4 cycle-budget calculation for the current 35-start source path; it is not an observed runtime measurement.

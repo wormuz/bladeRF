@@ -40,6 +40,17 @@
 #include "nios_deadline_policy.h"
 #include "nios_pkt_formats.h"
 
+/* A tokenless TX NOW response preserves the legacy synchronous API while
+ * NIOS yields through the TXQ phase-search worker. Source has 32 sweep
+ * attempts, one verification, and up to initial + cached-phase attempts:
+ * 35 calibration starts total. UG-570's 94,464 CLKRF cycles per TX channel
+ * and the locally derived minimum CLKRF give about 3.22 s of worst-case TXQ
+ * calibration wait. Use the existing 120 s terminal-result watchdog as a
+ * per-command compatibility ceiling while whole-command service-gap bounds
+ * remain under audit; leave ordinary peripheral operations at 250 ms.
+ */
+#define NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS 120000u
+
 #include "board/board.h"
 #include "helpers/have_cap.h"
 #include "helpers/version.h"
@@ -84,7 +95,8 @@ static void nios_trace_out_complete(void *context)
 }
 
 /* Buf is assumed to be NIOS_PKT_LEN bytes */
-static int nios_access(struct bladerf *dev, uint8_t *buf)
+static int nios_access_with_response_timeout(struct bladerf *dev, uint8_t *buf,
+                                             uint32_t response_timeout_ms)
 {
     struct bladerf_usb *usb = dev->backend_data;
     int status;
@@ -109,7 +121,7 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
     status = nios_usb_transaction(usb, buf, NIOS_PKT_LEN,
-                                  PERIPHERAL_TIMEOUT_MS,
+                                  response_timeout_ms,
                                   nios_trace_out_complete, &trace, &stage);
     if (status != 0) {
         if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
@@ -143,6 +155,12 @@ static int nios_access(struct bladerf *dev, uint8_t *buf)
     print_buf("NIOS II res:", buf, NIOS_PKT_LEN);
 
     return status;
+}
+
+static int nios_access(struct bladerf *dev, uint8_t *buf)
+{
+    return nios_access_with_response_timeout(
+        dev, buf, PERIPHERAL_TIMEOUT_MS);
 }
 
 static int nios_8x8_read(struct bladerf *dev, uint8_t id,
@@ -2515,7 +2533,12 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     status = timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE
         ? nios_retune_clear_wait(dev, buf, NIOS_PKT_RETUNE2_RESP_IDX_FLAGS,
                                  NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING)
-        : nios_access(dev, buf);
+        : (timestamp == NIOS_PKT_RETUNE2_NOW &&
+           BLADERF_CHANNEL_IS_TX(ch) && !tokened_async_now)
+              ? nios_access_with_response_timeout(
+                    dev, buf,
+                    NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS)
+              : nios_access(dev, buf);
     if (status != 0) {
         return status;
     }

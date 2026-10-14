@@ -32,6 +32,7 @@ enum response_mode {
     RESPONSE_RETUNE_CLEAR_PENDING_THEN_SUCCESS,
     RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS,
     RESPONSE_RETUNE2_FAILURE_STAGE,
+    RESPONSE_RETUNE2_SUCCESS,
 };
 
 static enum response_mode response_mode;
@@ -40,6 +41,17 @@ static unsigned int out_count;
 static unsigned int in_count;
 static unsigned int timeout_on_in_count;
 static unsigned int pending_replies_remaining;
+static uint32_t last_in_timeout_ms;
+
+static uint64_t mock_no_capabilities(struct bladerf *dev)
+{
+    (void)dev;
+    return 0;
+}
+
+static const struct board_fns mock_board = {
+    .get_capabilities = mock_no_capabilities,
+};
 
 static int check_8x32_packet_round_trip(void)
 {
@@ -67,7 +79,9 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     uint64_t data;
     uint32_t data8;
     (void)driver;
-    (void)timeout_ms;
+    if (endpoint == PERIPHERAL_EP_IN) {
+        last_in_timeout_ms = timeout_ms;
+    }
 
     if (length != NIOS_PKT_LEN) {
         return BLADERF_ERR_UNEXPECTED;
@@ -119,6 +133,15 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         response_mode == RESPONSE_RETUNE2_FAILURE_STAGE) {
         nios_pkt_retune2_resp_pack(
             bytes, 0, 0, NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT, 0, 0);
+        return 0;
+    }
+    if (request[0] == NIOS_PKT_RETUNE2_MAGIC &&
+        response_mode == RESPONSE_RETUNE2_SUCCESS) {
+        nios_pkt_retune2_resp_pack(
+            bytes, 0,
+            NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+                NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID,
+            NIOS_PKT_RETUNE2_FAILURE_NONE, 0, 0);
         return 0;
     }
     if (request[0] == NIOS_PKT_8x32_MAGIC) {
@@ -356,6 +379,28 @@ static int expect_retune2_failure_stage(void)
     return 0;
 }
 
+static int expect_tokenless_tx_retune_uses_extended_response_deadline(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    struct bladerf dev = { .backend_data = &usb, .board = &mock_board };
+    int status;
+
+    MUTEX_INIT(&usb.peripheral_lock);
+    response_mode = RESPONSE_RETUNE2_SUCCESS;
+    last_in_timeout_ms = 0;
+    status = nios_retune2(&dev, BLADERF_CHANNEL_TX(0), NIOS_PKT_RETUNE2_NOW,
+                          0, 1, 0x83, 0, 0);
+    if (status != 0 || last_in_timeout_ms <= PERIPHERAL_TIMEOUT_MS) {
+        fprintf(stderr, "tokenless TX RETUNE2 did not use its scoped response "
+                        "deadline: status=%d timeout=%u\n",
+                status, last_in_timeout_ms);
+        MUTEX_DESTROY(&usb.peripheral_lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_lock);
+    return 0;
+}
+
 static int expect_rfic_read_timeout_clears_output(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
@@ -531,14 +576,15 @@ int main(void)
         expect_retune_clear_pending(
             RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS, true) ||
         expect_retune2_failure_stage() ||
+        expect_tokenless_tx_retune_uses_extended_response_deadline() ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_mismatched_response_poisoned_channel() ||
         expect_legacy_error_marker_is_completed_response() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
         expect_partial_dwell_summary_timeout_is_atomic() ||
-        out_count != 14 || in_count != 14) {
-        if (out_count != 14 || in_count != 14) {
+        out_count != 15 || in_count != 15) {
+        if (out_count != 15 || in_count != 15) {
             fprintf(stderr, "NIOS transaction count mismatch: out=%u in=%u\n",
                     out_count, in_count);
         }

@@ -816,6 +816,82 @@ static int check_tokened_now_uses_terminal_completion(void)
     return 0;
 }
 
+static int check_tokenless_tx_now_defers_terminal_response(void)
+{
+    struct pkt_buf request = { 0 };
+
+    pkt_retune2_init();
+    simulated_fastlock_active = false;
+    simulated_rfic_worker_active = false;
+    simulated_rfic_device_owned = false;
+    simulated_rfic_phy_present = true;
+    simulated_rfic_faulted = false;
+    simulated_fastlock_terminal_status = 0;
+    simulated_txq_owner = false;
+    simulated_txq_pending_polls = 0;
+    simulated_txq_terminal_status = 0;
+    simulate_txq_yield = true;
+    memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
+    fastlocks_tx[0].profile_num = 1;
+    fastlocks_tx[0].port = 0x83;
+    fastlocks_tx[0].spdt = 0x00;
+    fastlocks_tx[0].state = FASTLOCK_STATE_BBP_RFFE;
+
+    request.session_generation = 0x12345678;
+    nios_pkt_retune2_pack(
+        request.req, BLADERF_MODULE_TX, NIOS_PKT_RETUNE2_NOW,
+        0, 1, 0x83, 0x00);
+    pkt_retune2(&request);
+    if (!request.response_deferred || request.response_prepared ||
+        request.ready || tx_queue.count != 1 ||
+        tx_queue.entries[tx_queue.rem_idx].deferred_response_pkt != &request ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING) != 0) {
+        fputs("tokenless TX NOW returned before worker terminal result\n",
+              stderr);
+        return 1;
+    }
+
+    if (!run_until_queue_empty(&tx_queue, 8) || !request.response_deferred ||
+        !request.response_prepared || !request.ready ||
+        pkt_retune2_success_count(BLADERF_MODULE_TX) != 1 ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+          NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID)) !=
+            (NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS |
+             NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID)) {
+        fputs("tokenless TX NOW did not prepare one terminal success\n",
+              stderr);
+        return 1;
+    }
+
+    pkt_retune2_init();
+    memset(&request, 0, sizeof(request));
+    request.session_generation = 0x87654321;
+    nios_pkt_retune2_pack(
+        request.req, BLADERF_MODULE_TX, NIOS_PKT_RETUNE2_NOW,
+        0, 1, 0x83, 0x00);
+    fastlocks_tx[0].profile_num = 1;
+    fastlocks_tx[0].state = FASTLOCK_STATE_BBP_RFFE;
+    simulated_txq_owner = false;
+    simulated_txq_pending_polls = 0;
+    simulated_txq_terminal_status = -5;
+    pkt_retune2(&request);
+    if (!request.response_deferred || !run_until_queue_empty(&tx_queue, 8) ||
+        !request.response_deferred || !request.response_prepared ||
+        (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
+         NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
+        nios_pkt_retune2_resp_failure(request.resp) !=
+            NIOS_PKT_RETUNE2_FAILURE_TX_QUAD_CALIBRATION) {
+        fputs("tokenless TX NOW did not prepare its terminal failure\n",
+              stderr);
+        return 1;
+    }
+
+    simulate_txq_yield = false;
+    return 0;
+}
+
 static int check_tokened_now_clear_preserves_terminal_identity(void)
 {
     struct pkt_buf request = { 0 };
@@ -3140,6 +3216,9 @@ int main(void)
         return 1;
     }
     if (check_tokened_now_uses_terminal_completion() != 0) {
+        return 1;
+    }
+    if (check_tokenless_tx_now_defers_terminal_response() != 0) {
         return 1;
     }
     if (check_tokened_now_clear_preserves_terminal_identity() != 0) {
