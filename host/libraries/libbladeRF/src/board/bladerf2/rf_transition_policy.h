@@ -7,6 +7,9 @@
 #include <stdint.h>
 
 #define BLADERF2_RX_RF_PORT_COUNT 3u
+#define BLADERF2_RX_RF_PORT_A 0u
+#define BLADERF2_RX_RF_PORT_B 1u
+#define BLADERF2_RX_RF_PORT_C 2u
 #define BLADERF2_RFDC_RETUNE_THRESHOLD_HZ UINT64_C(100000000)
 
 /* RFDC results are retained per AD9361 RX input. Force calibration when the
@@ -27,6 +30,28 @@ static inline bool bladerf2_rx_rfdc_calibration_required(
         ? target_hz - history_hz[port]
         : history_hz[port] - target_hz;
     return delta_hz > BLADERF2_RFDC_RETUNE_THRESHOLD_HZ;
+}
+
+/* UG-570 describes separate RFDC result storage for input A and shared
+ * storage for inputs B/C. A successful calibration on B or C replaces the
+ * shared bank, so the other selector's frequency history is no longer proof
+ * that its correction table is resident. */
+static inline void bladerf2_rx_rfdc_calibration_record(
+    uint64_t history_hz[BLADERF2_RX_RF_PORT_COUNT], uint8_t *valid_mask,
+    uint8_t port, uint64_t calibrated_hz)
+{
+    if (history_hz == NULL || valid_mask == NULL ||
+        port >= BLADERF2_RX_RF_PORT_COUNT || calibrated_hz == 0) {
+        return;
+    }
+
+    history_hz[port] = calibrated_hz;
+    *valid_mask |= (uint8_t)(1u << port);
+    if (port == BLADERF2_RX_RF_PORT_B) {
+        *valid_mask &= (uint8_t)~(1u << BLADERF2_RX_RF_PORT_C);
+    } else if (port == BLADERF2_RX_RF_PORT_C) {
+        *valid_mask &= (uint8_t)~(1u << BLADERF2_RX_RF_PORT_B);
+    }
 }
 
 #include <libbladeRF.h>

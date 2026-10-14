@@ -376,8 +376,9 @@ struct bladerf2_board_data {
     uint32_t tx_channel_state_generation;
     uint32_t rf_transition_required_events_mask;
     uint8_t rf_transition_epoch_id;
-    /* AD9361 RFDC results are indexed by RX input selector and retained only
-     * after calibration plus ENSM/tracking cleanup has succeeded. */
+    /* AD9361 RFDC history is retained only after calibration plus
+     * ENSM/tracking cleanup. Policy invalidates the peer selector because
+     * UG-570 says RX inputs B and C share one RFDC result LUT. */
     uint64_t rx_rfdc_calibration_frequency_hz[3];
     uint8_t rx_rfdc_calibration_valid_mask;
     bool rx_epoch_snapshot_capability_checked;

@@ -5,9 +5,10 @@
 
 int main(void)
 {
-    const uint64_t rfdc_history[3] = {
+    uint64_t rfdc_history[3] = {
         UINT64_C(2400000000), 0, 0,
     };
+    uint8_t rfdc_valid_mask = 1u << BLADERF2_RX_RF_PORT_A;
     bool watch_active = false;
     bool status_unavailable_reported = true;
     uint64_t generation = 4;
@@ -59,5 +60,20 @@ int main(void)
         rfdc_history, 1u << 0, 0, UINT64_C(2500000000)));
     assert(bladerf2_rx_rfdc_calibration_required(
         rfdc_history, 1u << 0, 0, UINT64_C(2500000001)));
+
+    /* Inputs B/C share one RFDC LUT: calibrating either invalidates the
+     * other selector's cached-frequency proof, while input A stays separate. */
+    bladerf2_rx_rfdc_calibration_record(
+        rfdc_history, &rfdc_valid_mask, BLADERF2_RX_RF_PORT_B,
+        UINT64_C(2400000000));
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_B)) != 0);
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_C)) == 0);
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_A)) != 0);
+    bladerf2_rx_rfdc_calibration_record(
+        rfdc_history, &rfdc_valid_mask, BLADERF2_RX_RF_PORT_C,
+        UINT64_C(2400000000));
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_B)) == 0);
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_C)) != 0);
+    assert((rfdc_valid_mask & (1u << BLADERF2_RX_RF_PORT_A)) != 0);
     return 0;
 }

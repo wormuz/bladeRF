@@ -4590,10 +4590,10 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
             return _fail_transition_for_close(dev, board_data, final_event);
         }
         WITH_MUTEX(&dev->lock, {
-            board_data->rx_rfdc_calibration_frequency_hz[
-                target_port_map->rfic_port] = target_hz;
-            board_data->rx_rfdc_calibration_valid_mask |=
-                1u << target_port_map->rfic_port;
+            bladerf2_rx_rfdc_calibration_record(
+                board_data->rx_rfdc_calibration_frequency_hz,
+                &board_data->rx_rfdc_calibration_valid_mask,
+                (uint8_t)target_port_map->rfic_port, target_hz);
         });
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
                     BLADERF_RF_STATE_CALIBRATING, 0, 0, 0, 0,
