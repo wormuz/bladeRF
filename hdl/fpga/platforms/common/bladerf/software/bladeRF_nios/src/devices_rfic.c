@@ -182,6 +182,7 @@ void rfic_fail_tx_quad_calibration(int32_t status,
                                    uint8_t *failure_stage)
 {
     RFIC_ERR("TX quadrature calibration", status);
+    rfic_command_record_cleanup_error(state.tx_quad_job.cleanup_status);
     state.tx_quad_job_pending = false;
     state.tx_quad_commit_tx_frequency = false;
     state.tx_quad_resume_command = false;
@@ -644,6 +645,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     break;
                 }
 
+                rfic_command_record_cleanup_error(
+                    state.sample_rate_job.bandwidth_job.tracking_restore_status);
                 state.sample_rate_job_pending = false;
                 if (step_status < 0) {
                     if (rfic_sample_rate_restore_cache_after_rollback(
@@ -683,6 +686,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     break;
                 }
 
+                rfic_command_record_cleanup_error(
+                    state.bandwidth_job.tracking_restore_status);
                 state.bandwidth_job_pending = false;
                 if (step_status < 0) {
                     rfic_command_record_error(step_status);
@@ -711,6 +716,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     break;
                 }
 
+                rfic_command_record_cleanup_error(
+                    state.tx_quad_job.cleanup_status);
                 state.tx_quad_job_pending = false;
                 if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
                     if (step_status == 0 &&
@@ -766,6 +773,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     break;
                 }
 
+                rfic_command_record_cleanup_error(
+                    state.rfdc_job.cleanup_status);
                 state.rfdc_job_pending = false;
                 if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
                     if (step_status == 0 &&
