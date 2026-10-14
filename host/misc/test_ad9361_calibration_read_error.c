@@ -2892,6 +2892,13 @@ int main(void)
     {
         int32_t cleanup_status = 123;
 
+        if (ad9361_rssi_gain_step_calib_with_cleanup(
+                NULL, &cleanup_status) != -EINVAL || cleanup_status != 0) {
+            fprintf(stderr,
+                    "RSSI calibration left stale cleanup status on rejection\n");
+            return EXIT_FAILURE;
+        }
+        cleanup_status = 123;
         if (ad9361_validate_enable_fir_with_cleanup(
                 NULL, &cleanup_status) != -EINVAL || cleanup_status != 0) {
             fprintf(stderr,
