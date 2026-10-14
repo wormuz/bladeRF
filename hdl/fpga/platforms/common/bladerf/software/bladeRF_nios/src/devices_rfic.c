@@ -645,7 +645,10 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     /* The next callback pass publishes the filter cache (or
                      * advances the INIT tail) without replaying coefficient
                      * writes or starting another calibration. */
-                    state.fir_enable_resume_command = true;
+                    if (e->cmd == BLADERF_RFIC_COMMAND_INIT)
+                        state.fir_enable_init_pair_resume = true;
+                    else
+                        state.fir_enable_resume_command = true;
                     q->progress_sequence++;
                     break;
                 }

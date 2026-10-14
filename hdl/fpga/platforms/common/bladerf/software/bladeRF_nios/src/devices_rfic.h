@@ -148,8 +148,11 @@ struct rfic_state {
     struct ad9361_fir_enable_transaction fir_enable_job;
     bool fir_enable_job_pending;
     bool fir_enable_resume_command;
+    bool fir_enable_init_pair_resume;
     bladerf_channel fir_enable_channel;
     uint32_t fir_enable_filter;
+    bladerf_rfic_rxfir fir_enable_init_rx_filter;
+    bladerf_rfic_txfir fir_enable_init_tx_filter;
 
     /* RFDC calibration history is per selected RX RF input. AD9361 keeps
      * separate RFDC values for input A and inputs B/C, so frequency-only

@@ -3172,6 +3172,29 @@ int main(void)
         }
 
         memset(&fir_job, 0, sizeof(fir_job));
+        ret = ad9361_fir_enable_pair_transaction_start(
+            &fir_phy, 0, 0, &fir_job);
+        if (ret != 0 || !fir_job.terminal || fir_job.active ||
+            ad9361_fir_enable_transaction_poll(&fir_phy, &fir_job) != 0 ||
+            ad9361_operation_busy(&fir_phy) || read_count != reads_before ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR pair retained no-op performed work or held ownership\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(&fir_job, 0, sizeof(fir_job));
+        ret = ad9361_fir_enable_pair_transaction_start(
+            &fir_phy, 2, 1, &fir_job);
+        if (ret != -EINVAL || fir_job.active ||
+            !fir_phy.bypass_rx_fir || !fir_phy.bypass_tx_fir ||
+            read_count != reads_before || write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR pair accepted invalid RX enable or mutated state\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(&fir_job, 0, sizeof(fir_job));
         fir_phy.fir_config_valid = false;
         fir_pdata.dig_interface_tune_fir_disable = 0;
         ret = ad9361_fir_enable_transaction_start(
@@ -3194,6 +3217,20 @@ int main(void)
             write_count != writes_before) {
             fprintf(stderr,
                     "FIR async API accepted blocking clock-change tune\n");
+            return EXIT_FAILURE;
+        }
+
+        memset(&fir_job, 0, sizeof(fir_job));
+        fir_pdata.bb_clk_change_dig_tune_en = false;
+        fir_pdata.dig_interface_tune_fir_disable = 1;
+        ret = ad9361_fir_enable_pair_transaction_start(
+            &fir_phy, 1, 1, &fir_job);
+        if (ret != -EINVAL || fir_job.active ||
+            !fir_phy.bypass_rx_fir || !fir_phy.bypass_tx_fir ||
+            fir_phy.fir_config_valid || read_count != reads_before ||
+            write_count != writes_before) {
+            fprintf(stderr,
+                    "FIR pair preflight failure did not restore both bypass states\n");
             return EXIT_FAILURE;
         }
     }
