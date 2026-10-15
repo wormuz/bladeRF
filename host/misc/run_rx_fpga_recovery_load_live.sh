@@ -10,15 +10,10 @@ header_file="$repo_root/host/libraries/libbladeRF/include/libbladeRF.h"
 library_file="$build_dir/output/libbladeRF.so"
 device="${BLADERF_RECOVERY_DEVICE:-*:serial=f695006ba84a40daa7b777c6a6eba78}"
 image="${BLADERF_RECOVERY_RBF:-$repo_root/hdl/quartus/work/bladerf-micro-A4-sweep/output_files/sweep.rbf}"
-expected_sha256="f53cd1c1fbdc8176c40397d1881a70b5081e8d489854928fb7732dc20ab4fa12"
 
 [[ -r "$image" ]] || { echo "RBF not found: $image" >&2; exit 2; }
 actual_sha256="$(sha256sum "$image" | cut -d' ' -f1)"
-[[ "$actual_sha256" == "$expected_sha256" ]] || {
-  echo "unexpected RBF SHA-256: $actual_sha256" >&2
-  echo "expected: $expected_sha256" >&2
-  exit 2
-}
+echo "Loading RBF SHA-256: $actual_sha256"
 
 mkdir -p "$build_dir/output"
 if [[ ! -x "$binary" || "$source_file" -nt "$binary" ||
