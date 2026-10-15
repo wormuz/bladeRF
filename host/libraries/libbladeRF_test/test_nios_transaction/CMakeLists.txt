@@ -14,6 +14,7 @@ set(REPO_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../..)
 add_executable(libbladeRF_test_nios_transaction
     main.c
     ${SRC_ROOT}/backend/usb/nios_transaction.c
+    ${SRC_ROOT}/helpers/timeout.c
 )
 
 target_include_directories(libbladeRF_test_nios_transaction PRIVATE

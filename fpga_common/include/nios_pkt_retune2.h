@@ -318,9 +318,8 @@ static inline uint16_t nios_pkt_retune2_unpack_request_token(
  *      flags[7]      Reserved. Set to 0.
  *      flags[6]      Async NOW accepted; tokened request completes through
  *                    the correlated RETUNE2 completion/failure record.
- *                    Response bytes 16-23 contain the success/failure ring
- *                    sequence baselines captured atomically with acceptance;
- *                    bytes 24-31 are zero.
+ *                    For this response only, bytes 1-8 carry the success and
+ *                    failure ring sequence baselines. Duration is unused.
  */
 
 #define NIOS_PKT_RETUNE2_RESP_IDX_MAGIC   0
@@ -329,9 +328,8 @@ static inline uint16_t nios_pkt_retune2_unpack_request_token(
 #define NIOS_PKT_RETUNE2_RESP_IDX_RESV    10
 #define NIOS_PKT_RETUNE2_RESP_IDX_TOKEN   10
 #define NIOS_PKT_RETUNE2_RESP_IDX_SESSION_GENERATION 12
-#define NIOS_PKT_RETUNE2_RESP_IDX_SUCCESS_COUNT 16
-#define NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT 20
-#define NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV 24
+#define NIOS_PKT_RETUNE2_RESP_IDX_SUCCESS_COUNT NIOS_PKT_RETUNE2_RESP_IDX_TIME
+#define NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT (NIOS_PKT_RETUNE2_RESP_IDX_TIME + 4)
 
 #define NIOS_PKT_RETUNE2_RESP_FLAG_TSVTUNE_VALID (1 << 0)
 #define NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS       (1 << 1)
@@ -456,9 +454,6 @@ static inline void nios_pkt_retune2_resp_set_async_baseline(
             (uint8_t)(success_count >> (8u * i));
         buf[NIOS_PKT_RETUNE2_RESP_IDX_FAILURE_COUNT + i] =
             (uint8_t)(failure_count >> (8u * i));
-    }
-    for (i = NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV; i < NIOS_PKT_LEN; ++i) {
-        buf[i] = 0;
     }
 }
 

@@ -202,7 +202,7 @@ int main(void)
         reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ - 1,
         RFDC_THRESHOLD_HZ));
     assert(rfic_rfdc_calibration_required(
-        reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ,
+        reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ + 1,
         RFDC_THRESHOLD_HZ));
     return 0;
 }

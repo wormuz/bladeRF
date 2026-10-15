@@ -358,9 +358,7 @@ static bool nios_response_matches_request(const uint8_t *request,
                         NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP |
                         NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_FAILED |
                         NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING |
-                        NIOS_PKT_RETUNE2_RESP_FLAG_BUSY)) != 0 ||
-              !nios_response_has_zero_tail(
-                  response, NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV))) ||
+                        NIOS_PKT_RETUNE2_RESP_FLAG_BUSY)) != 0)) ||
             (request_token == 0 &&
              !nios_response_has_zero_tail(
                  response, NIOS_PKT_RETUNE2_RESP_IDX_RESV)) ||

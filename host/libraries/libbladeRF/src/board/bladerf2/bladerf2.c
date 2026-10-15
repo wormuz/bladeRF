@@ -6174,7 +6174,7 @@ static int bladerf2_load_fpga(struct bladerf *dev,
             }
         }
         MUTEX_LOCK(&dev->lock);
-        if (board_data->state == prior_board_state) {
+        if ((int)board_data->state == prior_board_state) {
             board_data->rfic_lifecycle_active = false;
         }
         MUTEX_UNLOCK(&dev->lock);
@@ -8063,7 +8063,7 @@ static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     uint32_t init_array[3];
-    bool is_enabled;
+    bool is_enabled = false;
     uint8_t i;
 
     if (R < 1 || R > 16383) {

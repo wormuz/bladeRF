@@ -458,12 +458,12 @@ static int nios_16x64_write_with_transaction_id(struct bladerf *dev,
         log_debug("%s: response packet reported failure.\n", __FUNCTION__);
         return BLADERF_ERR_FPGA_OP;
     }
+}
 
 static int nios_16x64_write(struct bladerf *dev, uint8_t id, uint16_t addr,
                             uint64_t data)
 {
     return nios_16x64_write_with_transaction_id(dev, id, addr, data, 0);
-}
 }
 
 static int nios_32x32_read(struct bladerf *dev, uint32_t id,
@@ -2515,7 +2515,6 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
     bool tokened_async_now = timestamp == NIOS_PKT_RETUNE2_NOW &&
         request_token != 0 &&
         have_cap_dev(dev, BLADERF_CAP_RETUNE2_REQUEST_TOKEN);
-
     if (timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
         log_verbose("Clearing %s retune queue.\n", channel2str(ch));
     } else {

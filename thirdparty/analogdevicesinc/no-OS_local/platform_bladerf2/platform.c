@@ -1,8 +1,10 @@
 #include <stdint.h>
+#include <sys/time.h>
 
 #include "board/board.h"
 
 #include "platform.h"
+#include "no_os_delay.h"
 
 
 /***************************************************************************//**
@@ -49,6 +51,21 @@ unsigned long msleep_interruptible(unsigned int msecs)
 {
     usleep(msecs * 1000);
     return 0;
+}
+
+/* ADI's logging helpers reference this hook even in host builds. The NIOS
+ * platform supplies a monotonic Avalon timer; host diagnostics only need a
+ * timestamp, so use the platform wall clock here. */
+struct no_os_time no_os_get_time(void)
+{
+    struct timeval now;
+    struct no_os_time result = {0, 0};
+
+    if (gettimeofday(&now, NULL) == 0) {
+        result.s = (unsigned int)now.tv_sec;
+        result.us = (unsigned int)now.tv_usec;
+    }
+    return result;
 }
 
 /*

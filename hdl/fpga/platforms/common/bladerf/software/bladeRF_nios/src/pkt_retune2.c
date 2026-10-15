@@ -1943,10 +1943,8 @@ void pkt_retune2(struct pkt_buf *b)
     nios_pkt_retune2_resp_pack(b->resp, duration, flags, failure_stage,
                                request_token, b->session_generation);
     if ((flags & NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING) != 0) {
-        /* These counters are captured in the same NIOS command turn that
-         * accepts the queue entry. A host-side pre-request snapshot can race
-         * autonomous scheduled completions and is not a valid correlation
-         * boundary. */
+        /* Async ACK duration is unused; carry the atomic completion-ring
+         * boundary in those eight bytes without changing the packet size. */
         nios_pkt_retune2_resp_set_async_baseline(
             b->resp, pkt_retune2_success_count(module),
             pkt_retune2_failure_count(module));

@@ -468,7 +468,7 @@ static void test_retune2_new_failure_stages_round_trip(void)
 static void test_retune2_response_echoes_request_token(void)
 {
     struct bladerf_usb usb;
-    struct bladerf_usb_fn *fns;
+    struct usb_fns fns;
     struct fake_usb fake;
     enum nios_transaction_stage stage;
     uint8_t request[NIOS_PKT_LEN];
@@ -551,7 +551,7 @@ static void test_retune2_response_echoes_request_token(void)
 static void test_tokened_now_async_acceptance_response(void)
 {
     struct bladerf_usb usb;
-    struct bladerf_usb_fn *fns;
+    struct usb_fns fns;
     struct fake_usb fake;
     enum nios_transaction_stage stage;
     uint8_t request[NIOS_PKT_LEN];
@@ -616,11 +616,10 @@ static void test_tokened_now_async_acceptance_response(void)
             NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING,
         NIOS_PKT_RETUNE2_FAILURE_NONE, request_token,
         session_generation);
-    fake.scripted_responses[1][NIOS_PKT_RETUNE2_RESP_IDX_ASYNC_RESV] = 1;
     fake.scripted_response_count = 2;
     assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
-                                NULL, &stage) == BLADERF_ERR_UNEXPECTED);
-    assert(stage == NIOS_TRANSACTION_RESPONSE_MISMATCH);
+                                NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
     teardown(&usb);
 
     setup(&usb, &fns, &fake);
@@ -715,8 +714,8 @@ static void test_tokenless_retune2_timeout_recovers_after_session_reset(void)
                                 NULL, &stage) == 0);
 
     fake.fail_call = fake.calls + 2;
-    nios_pkt_retune2_pack(request, BLADERF_MODULE_RX,
-                          NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0, 0x44);
+    nios_pkt_retune2_pack_token(request, BLADERF_MODULE_RX,
+                                NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0, 0x44);
     assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
                                 NULL, &stage) == BLADERF_ERR_TIMEOUT);
     assert(usb.peripheral->pending_retune2_response);

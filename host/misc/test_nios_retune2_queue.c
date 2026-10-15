@@ -750,9 +750,8 @@ static int check_tokened_now_uses_terminal_completion(void)
         return 1;
     }
 
-    /* The acceptance packet must carry the NIOS-side ring boundary. A host
-     * snapshot taken before this packet can race completions from old queued
-     * work and cannot serve as the transaction's baseline. */
+    /* The acceptance ACK packs an atomic ring boundary into its unused
+     * duration bytes while preserving the 16-byte wire packet. */
     pkt_retune2_init();
     rx_retune2_success_count = 0x10203040;
     rx_retune2_failure_count = 0x50607080;

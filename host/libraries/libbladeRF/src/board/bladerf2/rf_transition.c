@@ -66,6 +66,7 @@ static void _test_rx_transition_late_observation(const char *stage)
 #include "ad936x.h"
 #include "backend/usb/nios_access.h"
 #include "board/board.h"
+#include "board/bladerf2/capabilities.h"
 #include "bladerf2_common.h"
 #include "common.h"
 #include <ad9361.h>
