@@ -29,6 +29,13 @@ ALT_INCLUDE_DIRS    += ./src
 # never reset downstream and flows into APP_LDFLAGS as-is.
 LDFLAGS             += -Wl,--gc-sections
 
+# LTO is required to keep the NIOS image within the available FPGA RAM.
+# Keep the single partition and disable jump tables based on measured map
+# results; the non-LTO BSP remains a normal archive.
+NIOS_SIZE_CFLAGS    := -flto -fno-inline-functions -flto-partition=one \
+                       -fno-jump-tables
+LDFLAGS             += $(NIOS_SIZE_CFLAGS)
+
 C_SRCS              += ./src/bladeRF_nios.c
 C_SRCS              += $(FPGA_COMMON_DIR)/src/ad936x_helpers.c
 C_SRCS              += $(FPGA_COMMON_DIR)/src/bladerf2_common.c
@@ -38,7 +45,8 @@ C_SRCS              += $(BLADERF_COMMON_DIR)/src/devices_rfic_queue.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/pkt_retune2.c
 C_SRCS              += $(HOST_COMMON_DIR)/src/range.c
 
-CFLAGS              += -DBOARD_BLADERF_MICRO -ffunction-sections -fdata-sections
+CFLAGS              += $(NIOS_SIZE_CFLAGS) -DBOARD_BLADERF_MICRO \
+                       -ffunction-sections -fdata-sections
 
 # libad936x build configuration and lib inclusion
 # These variables need to be set before including the common Makefile.
@@ -99,6 +107,7 @@ $(LIBAD936X_BUILDDIR)/Makefile: $(LIBAD936X_MAKE_DEP)
 	@mkdir -p $(LIBAD936X_BUILDDIR)
 	@cd $(LIBAD936X_BUILDDIR) && \
 		cmake -G"Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=$(LIBAD936X_DIR)/cmake/nios-toolchain.cmake \
+			-DCMAKE_C_FLAGS='$(NIOS_SIZE_CFLAGS) -DBOARD_BLADERF_MICRO' \
 			-DNIOS_HAS_HARDWARE_MULTIPLY_DIVIDE=ON \
 			-DBLADERF_NIOS_ABLATE_AXI_ADC=$(BLADERF_NIOS_ABLATE_AXI_ADC) $(LIBAD936X_DIR)
 

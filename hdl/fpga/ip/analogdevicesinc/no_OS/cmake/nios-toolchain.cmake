@@ -38,6 +38,11 @@ endif()
 
 find_program(CMAKE_C_COMPILER nios2-elf-gcc ${QUARTUS_ROOTDIR}/nios2eds/)
 find_program(CMAKE_CXX_COMPILER nios2-elf-g++ ${QUARTUS_ROOTDIR}/nios2eds/)
+get_filename_component(NIOS_GCC_BIN "${CMAKE_C_COMPILER}" DIRECTORY)
+set(CMAKE_AR "${NIOS_GCC_BIN}/nios2-elf-gcc-ar" CACHE FILEPATH
+	"NIOS LTO-aware archiver" FORCE)
+set(CMAKE_RANLIB "${NIOS_GCC_BIN}/nios2-elf-gcc-ranlib" CACHE FILEPATH
+	"NIOS LTO-aware archive indexer" FORCE)
 set(CMAKE_C_COMPILER_WORKS 1)
 set(CMAKE_CXX_COMPILER_WORKS 1)
 

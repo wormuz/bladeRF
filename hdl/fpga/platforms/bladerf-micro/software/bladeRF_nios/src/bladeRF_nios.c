@@ -461,7 +461,7 @@ typedef enum state {
     DO_NOTHING
 } state_t;
 
-int main(void)
+int main(int argc, char **argv, char **envp)
 {
     DBG(BLADERF_DEVICE_NAME " FPGA v%x.%x.%x\n",
         FPGA_VERSION_MAJOR, FPGA_VERSION_MINOR, FPGA_VERSION_PATCH);
