@@ -45,6 +45,9 @@ bool pkt_retune2_completion_select(bladerf_module module, uint32_t sequence)
 { (void)module; (void)sequence; return true; }
 uint32_t pkt_retune2_completion_word(uint8_t addr)
 { return UINT32_C(0xc0000000) | addr; }
+bool pkt_retune2_failure_completion_select(bladerf_module module,
+                                           uint32_t sequence)
+{ (void)module; (void)sequence; return true; }
 uint32_t rf_link_status_read(void) { return 0; }
 uint32_t rx_fault_causes_read(void) { return 0; }
 static bool loss_counter_available = true;
@@ -59,6 +62,7 @@ bool loss_counter_half_read(loss_counter_half_t which, uint32_t *value)
 uint32_t dwell_status_read(void) { return 0; }
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
+uint32_t command_uart_current_session_generation(void) { return 0; }
 static bool dwell_cfg_success;
 static unsigned int dwell_cfg_calls;
 bool dwell_cfg_write(uint32_t value)
@@ -69,6 +73,8 @@ bool dwell_cfg_write(uint32_t value)
 }
 uint32_t pretrig_read(uint16_t index) { return index; }
 static bool gate_command_success;
+static unsigned int gate_fifo_flush_calls;
+static unsigned int gate_fifo_release_calls;
 static bool pio_write_success = true;
 static uint32_t pio_values[10];
 uint32_t xa4_test_pio_read(uint32_t base)
@@ -102,6 +108,10 @@ bool tx_retune_gate_arm(uint64_t timestamp, bool immediate)
 { (void)timestamp; (void)immediate; return gate_command_success; }
 bool tx_retune_gate_complete(void) { return gate_command_success; }
 bool tx_retune_gate_abort(void) { return gate_command_success; }
+bool tx_retune_gate_fifo_flush(void)
+{ gate_fifo_flush_calls++; return gate_command_success; }
+bool tx_retune_gate_fifo_release(void)
+{ gate_fifo_release_calls++; return gate_command_success; }
 uint32_t tx_retune_gate_status_read(void) { return 0; }
 
 #define CHECK_READ(target_value, addr_value, expected_success, expected_data) \
@@ -195,9 +205,13 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, 2, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, 1, true, 404);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, 2, false, 0);
-    CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, 5, true,
-               UINT32_C(0xc0000005));
-    CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, 6, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+               NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN, true,
+               UINT32_C(0xc0000000) |
+                   NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+               NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN + 1, false,
+               0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 3, true,
                UINT32_C(0xa0000003));
     CHECK_READ(NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, 4, false, 0);
@@ -321,6 +335,20 @@ int main(void)
                 NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 1, false);
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
                 NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT, 1, false);
+    gate_command_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_FLUSH, 0, false);
+    gate_command_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_FLUSH, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_RELEASE, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE,
+                NIOS_PKT_8x32_TX_RETUNE_CMD_FIFO_RELEASE, 1, false);
+    if (gate_fifo_flush_calls != 2 || gate_fifo_release_calls != 1) {
+        fputs("TX FIFO fault barrier command dispatch mismatch\n", stderr);
+        return 1;
+    }
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0, 0, false);
 
     /* Legacy fastlock packets must validate the full fields before any

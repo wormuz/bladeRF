@@ -77,7 +77,7 @@ void rfic_invalidate_frequency(bladerf_module module)
 bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
                               uint64_t *frequency_hz,
                               uint8_t *failure_stage,
-                              bool allow_txq_yield, bool *txq_pending)
+                              bool *txq_pending)
 {
     (void)profile;
     if (failure_stage != NULL) {
@@ -90,8 +90,7 @@ bool rfic_read_frequency_live(bladerf_module module, uint8_t profile,
     if (txq_pending != NULL) {
         *txq_pending = false;
     }
-    if (module == BLADERF_MODULE_TX && allow_txq_yield &&
-        simulate_txq_yield) {
+    if (module == BLADERF_MODULE_TX && simulate_txq_yield) {
         return rfic_start_tx_quad_calibration_for_retune(txq_pending,
                                                          failure_stage);
     }
@@ -1192,6 +1191,11 @@ static int check_host_fastlock_owner_is_not_fault_inference(void)
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
                           NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0x00);
     pkt_retune2(&request);
+    /* Tokenless NOW retains its response buffer until the nonblocking worker
+     * finishes the RFIC recall and publishes the terminal result. */
+    for (unsigned i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
     if ((request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
          NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 || recall_count != 1) {
         fputs("healthy HOST-mode immediate fastlock was not admitted\n",
@@ -1242,10 +1246,15 @@ static int check_fault_retires_unarmed_and_ready_retunes(void)
      * fault cleanup must retain ownership until cancellation completes. */
     setup_rfic_fault_retune_test();
     fail_tamer_schedule_ack = true;
-    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX, 100, 0, 1,
-                          0x83, 0x00);
+    request.session_generation = 0x12345678;
+    nios_pkt_retune2_pack_token(request.req, BLADERF_MODULE_RX, 100, 0, 1,
+                                0x83, 0x00, 0x1111);
     pkt_retune2(&request);
-    pkt_retune2_work();
+    for (unsigned i = 0; i < 64 && rx_queue.count != 0 &&
+         rx_queue.entries[rx_queue.rem_idx].state !=
+             ENTRY_STATE_SCHEDULE_PENDING; i++) {
+        pkt_retune2_work();
+    }
     if (rx_queue.count != 1 || rx_queue.entries[rx_queue.rem_idx].state !=
             ENTRY_STATE_SCHEDULE_PENDING) {
         fputs("test setup failed to create unacknowledged schedule\n", stderr);
@@ -1266,7 +1275,11 @@ static int check_fault_retires_unarmed_and_ready_retunes(void)
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX, 100, 0, 1,
                           0x83, 0x00);
     pkt_retune2(&request);
-    pkt_retune2_work();
+    for (unsigned i = 0; i < 64 && rx_queue.count != 0 &&
+         rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED;
+         i++) {
+        pkt_retune2_work();
+    }
     simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
     simulated_rfic_faulted = true;
     pkt_retune2_work();
@@ -1284,10 +1297,15 @@ static int check_fault_cancels_armed_queue_once(void)
     struct pkt_buf request = { 0 };
 
     setup_rfic_fault_retune_test();
-    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX, 100, 0, 1,
-                          0x83, 0x00);
+    request.session_generation = 0x12345678;
+    nios_pkt_retune2_pack_token(request.req, BLADERF_MODULE_RX, 100, 0, 1,
+                                0x83, 0x00, 0x1111);
     pkt_retune2(&request);
-    pkt_retune2_work();
+    for (unsigned i = 0; i < 64 && rx_queue.count != 0 &&
+         rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED;
+         i++) {
+        pkt_retune2_work();
+    }
     nios_pkt_retune2_pack_token(request.req, BLADERF_MODULE_RX, 200, 1, 2,
                                 0x83, 0x00, 0x2222);
     pkt_retune2(&request);
@@ -1572,6 +1590,24 @@ static int check_schedule_ready_lifecycle(void)
 
     pkt_retune2_init();
     load_count = 0;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = false;
+    fail_tamer_schedule_status = false;
+    fail_tamer_cancel = false;
+    fail_tamer_cancel_status = false;
+    simulated_txq_owner = false;
+    simulated_fastlock_active = false;
+    fire_during_schedule = false;
+    staged_profile_load_active = false;
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_read = false;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    simulated_fastlock_pending_polls = 0;
+    simulated_fastlock_terminal_status = 0;
+    compare_fired_rx = false;
+    compare_fired_tx = false;
+    tamer_timestamp = 0;
     rx_profile.profile_num = 1;
     rx_profile.port = 0x11;
     rx_profile.spdt = 0x02;
@@ -1598,8 +1634,14 @@ static int check_schedule_ready_lifecycle(void)
     tx_profile.port = 0x77;
     tx_profile.spdt = 0x07;
 
-    /* NEW schedules once; repeated worker passes must wait for the ISR. */
-    pkt_retune2_work();
+    /* Each module receives its own worker turn; after scheduling, repeated
+     * passes wait for the ISR instead of performing an RFIC recall. */
+    for (unsigned i = 0; i < 8 &&
+         (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
+          tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED);
+         i++) {
+        pkt_retune2_work();
+    }
     if (rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
         tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
         load_count != 0 || schedule_count != 2 ||

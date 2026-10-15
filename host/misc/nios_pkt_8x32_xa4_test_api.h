@@ -39,6 +39,9 @@ uint32_t rx_fault_causes_read(void);
 bool loss_counter_half_read(loss_counter_half_t which, uint32_t *value);
 uint32_t dwell_status_read(void);
 uint32_t dwell_word_read(uint8_t word);
+uint32_t command_uart_current_session_generation(void);
+bool pkt_retune2_failure_completion_select(bladerf_module module,
+                                           uint32_t sequence);
 bool dwell_cfg_write(uint32_t value);
 uint32_t pretrig_read(uint16_t index);
 bool rf_link_cfg_set_speed(bool high_speed);
@@ -55,6 +58,8 @@ uint32_t rx_epoch_ts_hi_read(void);
 bool tx_retune_gate_arm(uint64_t timestamp, bool immediate);
 bool tx_retune_gate_complete(void);
 bool tx_retune_gate_abort(void);
+bool tx_retune_gate_fifo_flush(void);
+bool tx_retune_gate_fifo_release(void);
 uint32_t tx_retune_gate_status_read(void);
 
 #endif

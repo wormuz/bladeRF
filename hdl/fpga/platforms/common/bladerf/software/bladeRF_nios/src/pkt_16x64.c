@@ -160,6 +160,10 @@ void pkt_16x64(struct pkt_buf *b)
             success = adi_spi_write_register_batch(addr, data, &completed);
             data = completed;
         } else {
+            /* The response payload reports completed entries. A request
+             * rejected before the SPI operation completed none, so do not
+             * echo the caller's packed request as a plausible count. */
+            data = 0;
             success = false;
         }
 #else

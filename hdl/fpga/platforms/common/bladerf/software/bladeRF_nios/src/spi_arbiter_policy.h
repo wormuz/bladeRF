@@ -86,8 +86,7 @@ static inline bool bladerf_spi_arbiter_acquire_until(
         if (expired != 0 && (count & 0x3fu) == 0 &&
             expired(deadline_context)) {
             (void)bladerf_spi_arbiter_release_until(
-                1, context, set_request, read_grant, expired,
-                deadline_context);
+                1, context, set_request, read_grant, 0, 0);
             return false;
         }
     }

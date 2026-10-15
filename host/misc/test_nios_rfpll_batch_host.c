@@ -461,7 +461,7 @@ static int expect_tokenless_now_retunes_use_extended_response_deadline(void)
     return 0;
 }
 
-static int expect_tokenless_now_timeout_poisoned_channel(void)
+static int expect_tokenless_now_unknown_generation_fails_closed(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
     usb.peripheral = &usb.peripheral_local;
@@ -475,9 +475,13 @@ static int expect_tokenless_now_timeout_poisoned_channel(void)
     status = nios_retune2(&dev, BLADERF_CHANNEL_RX(0), NIOS_PKT_RETUNE2_NOW,
                           0, 1, 0x83, 0, 0);
     timeout_on_in_count = 0;
-    if (status != BLADERF_ERR_TIMEOUT ||
+    /* No correlated session generation is available to identify a late
+     * tokenless reply. A timeout must therefore poison this handle and be
+     * reported as an unexpected transport state. */
+    if (status != BLADERF_ERR_UNEXPECTED ||
         !usb.peripheral_local.desynchronized) {
-        fprintf(stderr, "tokenless RETUNE2 timeout was not fail-closed: "
+        fprintf(stderr, "tokenless RETUNE2 timeout without generation "
+                        "was not fail-closed: "
                         "status=%d desynchronized=%u\n",
                 status, usb.peripheral_local.desynchronized);
         MUTEX_DESTROY(&usb.peripheral_local.lock);
@@ -681,15 +685,15 @@ int main(void)
             RESPONSE_RETUNE2_CLEAR_PENDING_THEN_SUCCESS, true) ||
         expect_retune2_failure_stage() ||
         expect_tokenless_now_retunes_use_extended_response_deadline() ||
-        expect_tokenless_now_timeout_poisoned_channel() ||
+        expect_tokenless_now_unknown_generation_fails_closed() ||
         expect_rfic_read_timeout_clears_output() ||
         expect_link_status_timeout_clears_output() ||
         expect_mismatched_response_poisoned_channel() ||
         expect_legacy_error_marker_is_completed_response() ||
         expect_epoch_snapshot_timeout_clears_outputs() ||
         expect_partial_dwell_summary_timeout_is_atomic() ||
-        out_count != 15 || in_count != 15) {
-        if (out_count != 15 || in_count != 15) {
+        out_count != 17 || in_count != 17) {
+        if (out_count != 17 || in_count != 17) {
             fprintf(stderr, "NIOS transaction count mismatch: out=%u in=%u\n",
                     out_count, in_count);
         }

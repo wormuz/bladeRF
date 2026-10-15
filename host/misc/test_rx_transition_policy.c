@@ -374,21 +374,32 @@ int main(void)
     assert(!bladerf2_quick_tune_creation_blocked(false));
     assert(bladerf2_quick_tune_creation_blocked(true));
     assert(bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840000000ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1235, 1840000000ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1235, 1840000000ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1841000000ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1841000000ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 4));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840000000ULL, 4, 17, 41));
     assert(bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840000001ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840000001ULL, 3, 17, 41));
     assert(bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840001000ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840001000ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840001001ULL, 3));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840001001ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
-        1234, 1840000000ULL, 3, 1234, 1840000000ULL, 4));
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840000000ULL, 3, 18, 41));
+    assert(!bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 17, 41,
+        1234, 1840000000ULL, 3, 17, 42));
     assert(bladerf2_rfic_frequency_matches(1840000000ULL, 1840001000ULL));
     assert(!bladerf2_rfic_frequency_matches(1840000000ULL, 1840001001ULL));
     assert(nios_retune_profile_word_valid(UINT16_MAX));
