@@ -261,6 +261,24 @@ static bool reject_packet_during_rfic_operation(struct pkt_buf *b)
     bool write;
     bool response_packed = true;
 
+    /* FPGA version discovery runs immediately after configuration and may
+     * overlap a synchronous RFIC operation. It is a read-only value owned by
+     * the NIOS image, so allow only the legacy byte reads that expose that
+     * value. All other legacy requests remain rejected while RFIC is owned. */
+    if (b->req[PKT_MAGIC_IDX] == NIOS_PKT_LEGACY_MAGIC &&
+        (b->req[PKT_CFG_IDX] & NIOS_PKT_LEGACY_MODE_DIR_MASK) ==
+            NIOS_PKT_LEGACY_MODE_DIR_READ &&
+        (b->req[PKT_CFG_IDX] & NIOS_PKT_LEGACY_MODE_DEV_MASK) ==
+            NIOS_PKT_LEGACY_DEV_CONFIG &&
+        (b->req[PKT_CFG_IDX] & NIOS_PKT_LEGACY_MODE_CNT_MASK) == 1 &&
+        b->req[2] >= NIOS_PKT_LEGACY_PIO_ADDR_FPGA_VERSION &&
+        b->req[2] < NIOS_PKT_LEGACY_PIO_ADDR_FPGA_VERSION +
+                        NIOS_PKT_LEGACY_PIO_LEN_FPGA_VERSION &&
+        b->req[3] == 0xff) {
+        pkt_legacy(b);
+        return true;
+    }
+
     switch (b->req[PKT_MAGIC_IDX]) {
         case NIOS_PKT_8x8_MAGIC:
             nios_pkt_8x8_unpack(b->req, &target, &write, &addr8, &data8);
