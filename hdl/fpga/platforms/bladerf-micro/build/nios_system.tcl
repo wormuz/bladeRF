@@ -33,8 +33,8 @@ if { [info exists platform_revision] == 0 } {
     puts "platform revision: ${platform_revision}"
 }
 
-# RAM base address is equal to the RAM size
-set ram_base_addr "0x[format %08x $ram_size]"
+# Leave the low peripheral window clear and allocate the RAM size reported by platform.conf.
+set ram_base_addr "0x00040000"
 puts "RAM size: ${ram_size}, base address: ${ram_base_addr}"
 
 # Instances and instance parameters

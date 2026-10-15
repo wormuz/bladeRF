@@ -308,6 +308,7 @@ architecture core_bladerf of bladerf_core is
     signal tx_retune_gate_fifo_release_sys : std_logic := '0';
     signal tx_retune_gate_status_tx      : std_logic_vector(31 downto 0);
     signal tx_fault_flush_status_sys    : std_logic_vector(5 downto 0);
+    signal tx_fault_flush_aclr          : std_logic;
     signal tx_fault_stop_pclk           : std_logic;
     signal tx_fault_gpif_idle_pclk      : std_logic;
     signal tx_fault_gpif_idle_sys       : std_logic;
@@ -1748,6 +1749,7 @@ begin
             retune_gate_fifo_flush_release_sys => tx_retune_gate_fifo_release_sys,
             retune_gate_status   => tx_retune_gate_status_tx,
             fault_flush_status_sys => tx_fault_flush_status_sys,
+            fault_flush_aclr      => tx_fault_flush_aclr,
             fault_stop_pclk       => tx_fault_stop_pclk,
 
             -- Link status
@@ -1927,7 +1929,7 @@ begin
             loopback_fifo_wenabled => tx_loopback_enabled,
             -- Fault recovery clears TX samples already copied into the
             -- digital-loopback FIFO as well as the source sample/META queues.
-            loopback_fifo_wreset   => tx_reset or tx_fifo_flush_aclr,
+            loopback_fifo_wreset   => tx_reset or tx_fault_flush_aclr,
             loopback_fifo_wclock   => tx_loopback_fifo.wclock,
             loopback_fifo_wdata    => tx_loopback_fifo.wdata,
             loopback_fifo_wreq     => tx_loopback_fifo.wreq,

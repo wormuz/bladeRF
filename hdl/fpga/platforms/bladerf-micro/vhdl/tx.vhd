@@ -62,6 +62,7 @@ entity tx is
         retune_gate_fifo_flush_release_sys : in std_logic := '0';
         retune_gate_status   : out std_logic_vector(31 downto 0) := (others => '0');
         fault_flush_status_sys : out std_logic_vector(5 downto 0) := (others => '0');
+        fault_flush_aclr      : out std_logic := '0';
         fault_stop_pclk       : out std_logic := '0';
 
         -- Link status (host register RF_LINK_STATUS)
@@ -162,6 +163,8 @@ architecture arch of tx is
     signal tx_fifo_flush_write_drain_ready : std_logic;
 
 begin
+
+    fault_flush_aclr <= tx_fifo_flush_aclr;
 
     set_timestamp_reset : process(tx_clock, tx_reset)
     begin

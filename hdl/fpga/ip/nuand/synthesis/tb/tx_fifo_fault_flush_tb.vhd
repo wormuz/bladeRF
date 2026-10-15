@@ -120,6 +120,7 @@ begin
         wait until rising_edge(sys_clock);
         start <= '0';
         wait until write_drain_ready = '1' for 1 us;
+        wait until done = '1' for 1 us;
         assert write_drain_ready = '1' and busy = '1' and done = '1'
             report "system-clock flush did not establish independent PCLK drain"
             severity failure;
@@ -143,6 +144,7 @@ begin
 
         tx_clock_enable <= '1';
         wait until release_complete = '1' for 1 us;
+        wait until write_block = '0' and reader_block = '0' for 1 us;
         assert release_complete = '1' and empty_confirmed = '1' and
                busy = '0' and write_block = '0' and reader_block = '0'
             report "recovered TX clock did not complete both-domain empty proof"
