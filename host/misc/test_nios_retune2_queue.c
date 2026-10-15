@@ -109,7 +109,6 @@ bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
     *pending = simulate_txq_yield;
     simulated_txq_owner = *pending;
     simulated_txq_pending_polls = 1;
-    simulated_txq_terminal_status = 0;
     return true;
 }
 
@@ -574,9 +573,12 @@ static int check_immediate_upload_failure_preserves_profile(void)
     fastlocks_tx[0].spdt = 0x04;
     fastlocks_tx[0].state = FASTLOCK_STATE_BBP;
 
-    fail_profile_load = true;
+    staged_profile_fail_after_write = 0;
     pkt_retune2(&request);
-    fail_profile_load = false;
+    for (unsigned i = 0; i < 8 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
+    staged_profile_fail_after_write = -1;
 
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
         fastlocks_tx[0].profile_num != 1 ||
@@ -620,6 +622,10 @@ static int check_immediate_failure_stage_response(void)
         nios_pkt_retune2_pack(request.req, BLADERF_MODULE_RX,
                               NIOS_PKT_RETUNE2_NOW, 0, 1, 0x83, 0x00);
         pkt_retune2(&request);
+        for (unsigned work = 0; work < 64 && request.response_deferred;
+             work++) {
+            pkt_retune2_work();
+        }
         *failures[i].failure_switch = false;
 
         if ((request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
@@ -794,7 +800,7 @@ static int check_tokened_now_uses_terminal_completion(void)
               stderr);
         return 1;
     }
-    for (unsigned i = 0; i < 4; ++i) {
+    for (unsigned i = 0; i < 6; ++i) {
         pkt_retune2_work();
     }
     staged_profile_fail_after_write = -1;
@@ -803,8 +809,8 @@ static int check_tokened_now_uses_terminal_completion(void)
         !pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
         pkt_retune2_completion_word(4) !=
             NIOS_PKT_RETUNE2_FAILURE_PROFILE_LOAD ||
-        pkt_retune2_completion_word(6) != session ||
-        pkt_retune2_completion_word(7) != (uint8_t)(token + 1) ||
+        pkt_retune2_completion_word(5) != session ||
+        pkt_retune2_completion_word(6) != (uint8_t)(token + 1) ||
         fastlocks_rx[0].state != FASTLOCK_STATE_BBP ||
         simulated_rffe_rx_valid[1]) {
         fputs("partial fastlock upload lost its terminal failure or cache fence\n",
@@ -831,14 +837,14 @@ static int check_tokenless_now_defers_terminal_response(void)
     simulate_txq_yield = true;
     memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
     fastlocks_tx[0].profile_num = 1;
-    fastlocks_tx[0].port = 0x83;
+    fastlocks_tx[0].port = 0x00;
     fastlocks_tx[0].spdt = 0x00;
     fastlocks_tx[0].state = FASTLOCK_STATE_BBP_RFFE;
 
     request.session_generation = 0x12345678;
     nios_pkt_retune2_pack(
         request.req, BLADERF_MODULE_TX, NIOS_PKT_RETUNE2_NOW,
-        0, 1, 0x83, 0x00);
+        0, 1, 0x00, 0x00);
     pkt_retune2(&request);
     if (!request.response_deferred || request.response_prepared ||
         request.ready || tx_queue.count != 1 ||
@@ -868,7 +874,7 @@ static int check_tokenless_now_defers_terminal_response(void)
     request.session_generation = 0x87654321;
     nios_pkt_retune2_pack(
         request.req, BLADERF_MODULE_TX, NIOS_PKT_RETUNE2_NOW,
-        0, 1, 0x83, 0x00);
+        0, 1, 0x00, 0x00);
     fastlocks_tx[0].profile_num = 1;
     fastlocks_tx[0].state = FASTLOCK_STATE_BBP_RFFE;
     simulated_txq_owner = false;
@@ -1017,6 +1023,7 @@ static int check_tokened_now_clear_preserves_terminal_identity(void)
         request.req, BLADERF_MODULE_RX, NIOS_PKT_RETUNE2_CLEAR_QUEUE,
         0, 0, 0, 0, 0);
     pkt_retune2(&request);
+    pkt_retune2_work();
     if ((request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
          NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
         rx_queue.count != 0 || pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
@@ -1059,7 +1066,7 @@ static int check_tokened_now_clear_preserves_terminal_identity(void)
         !pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
         pkt_retune2_completion_word(4) !=
             NIOS_PKT_RETUNE2_FAILURE_CANCELLED ||
-        pkt_retune2_completion_word(7) != (uint8_t)(token + 1) ||
+        pkt_retune2_completion_word(6) != (uint8_t)(token + 1) ||
         simulated_rffe_rx_valid[1]) {
         fputs("profile upload clear did not stop at a safe transaction boundary\n",
               stderr);
@@ -1096,7 +1103,7 @@ static int check_tokened_now_clear_preserves_terminal_identity(void)
         !pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
         pkt_retune2_completion_word(4) !=
             NIOS_PKT_RETUNE2_FAILURE_CANCELLED ||
-        pkt_retune2_completion_word(7) != (uint8_t)(token + 2)) {
+        pkt_retune2_completion_word(6) != (uint8_t)(token + 2)) {
         fputs("worker did not consume deferred clear at SPI boundary\n",
               stderr);
         return 1;
@@ -1387,10 +1394,13 @@ static int check_immediate_retune_reloads_reassigned_rffe_slot(void)
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
                           NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
     pkt_retune2(&request);
+    for (unsigned i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
     track_rffe_fastlock_slots = false;
 
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
-        load_count != 1 || recall_count != 1 ||
+        load_count != 18 || recall_count != 1 ||
         !simulated_rffe_tx_valid[3] ||
         simulated_rffe_tx[3].profile_data[0] != 0xa5 ||
         profile->profile_num != 3 ||
@@ -1424,6 +1434,9 @@ static int check_immediate_retune_reuses_matching_rffe_slot(void)
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
                           NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
     pkt_retune2(&request);
+    for (unsigned i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
     track_rffe_fastlock_slots = false;
 
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
@@ -1458,28 +1471,34 @@ static int check_partial_upload_invalidates_slot_residency(void)
     load_count = 0;
     recall_count = 0;
     fail_profile_load = false;
-    fail_profile_load_after_slot_write = true;
+    staged_profile_fail_after_write = 1;
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
                           NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
     pkt_retune2(&request);
+    for (unsigned i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
         old_profile->state != FASTLOCK_STATE_BBP ||
         simulated_rffe_tx_valid[3]) {
         fputs("partial fastlock upload left a stale RFFE residency cache\n",
               stderr);
         track_rffe_fastlock_slots = false;
-        fail_profile_load_after_slot_write = false;
+        staged_profile_fail_after_write = -1;
         return 1;
     }
 
-    fail_profile_load_after_slot_write = false;
+    staged_profile_fail_after_write = -1;
     memset(&request, 0, sizeof(request));
     nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
                           NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
     pkt_retune2(&request);
+    for (unsigned i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
     track_rffe_fastlock_slots = false;
     if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
-        load_count != 2 || recall_count != 1 ||
+        load_count != 19 || recall_count != 1 ||
         !simulated_rffe_tx_valid[3] ||
         simulated_rffe_tx[3].profile_data[0] != 0xa5) {
         fprintf(stderr, "profile reload after partial corruption failed: "
@@ -1590,6 +1609,9 @@ static int check_schedule_ready_lifecycle(void)
 
     pkt_retune2_init();
     load_count = 0;
+    schedule_count = 0;
+    simulated_rfic_phy_present = true;
+    simulated_rfic_faulted = false;
     fail_tamer_schedule = false;
     fail_tamer_schedule_ack = false;
     fail_tamer_schedule_status = false;
@@ -1680,7 +1702,7 @@ static int check_schedule_ready_lifecycle(void)
     }
     if (!pkt_retune2_completion_select(BLADERF_MODULE_RX, 1) ||
         pkt_retune2_completion_word(0) != 1 ||
-        pkt_retune2_completion_word(1) != 0 ||
+        pkt_retune2_completion_word(1) != UINT32_C(1840000000) ||
         pkt_retune2_completion_word(2) != 0 ||
         pkt_retune2_completion_word(3) != 5 ||
         pkt_retune2_completion_word(4) != 0x23456789u ||
@@ -1705,7 +1727,7 @@ static int check_schedule_ready_lifecycle(void)
 
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX, 1) ||
         pkt_retune2_completion_word(0) != 1 ||
-        pkt_retune2_completion_word(1) != 0 ||
+        pkt_retune2_completion_word(1) != UINT32_C(1835000000) ||
         pkt_retune2_completion_word(2) != 0 ||
         pkt_retune2_completion_word(3) != 7 ||
         pkt_retune2_completion_word(4) != 0x3456789au ||
@@ -1720,6 +1742,10 @@ static int check_schedule_ready_lifecycle(void)
                        UINT64_C(0x56789abcd)) != 1) {
         fputs("failed to enqueue TX RF switch readback failure case\n",
               stderr);
+        return 1;
+    }
+    if (!run_until_queue_head_state(&tx_queue, ENTRY_STATE_SCHEDULED, 24)) {
+        fputs("TX RF switch failure request was not armed\n", stderr);
         return 1;
     }
     simulate_tamer_irq(&tx_queue, BLADERF_MODULE_TX);
@@ -2405,8 +2431,11 @@ static int check_schedule_ack_wait_is_nonblocking(void)
         return 1;
     }
     compare_fired_rx = true;
-    pkt_retune2_work();
-    pkt_retune2_work();
+    if (!run_until_queue_empty(&rx_queue, 8)) {
+        fputs("acknowledged scheduled request worker did not drain\n",
+              stderr);
+        return 1;
+    }
     compare_fired_rx = false;
     if (rx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
@@ -2736,10 +2765,6 @@ static int check_failed_schedule_retains_timer_ownership(void)
      * failed schedule still owns the comparator. */
     compare_fired_rx = true;
     simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
-    if (!run_until_queue_empty(&rx_queue, 8)) {
-        fputs("recovered schedule did not finish RFPLL polling\n", stderr);
-        return 1;
-    }
     if (rx_queue.count != 2 ||
         rx_queue.entries[rx_queue.rem_idx].state !=
             ENTRY_STATE_CANCEL_PENDING ||
@@ -2975,6 +3000,12 @@ static int check_txq_yield_preserves_retune_identity(void)
 
     pkt_retune2_init();
     simulate_txq_yield = true;
+    staged_profile_fail_after_write = -1;
+    staged_profile_load_active = false;
+    defer_clear_during_staged_step = false;
+    simulated_fastlock_active = false;
+    simulated_rfic_worker_active = false;
+    simulated_rfic_device_owned = false;
     simulated_txq_owner = false;
     simulated_txq_terminal_status = 0;
     simulated_rfic_faulted = false;
@@ -2983,6 +3014,9 @@ static int check_txq_yield_preserves_retune_identity(void)
     fail_tamer_schedule = false;
     fail_tamer_schedule_ack = false;
     fail_tamer_schedule_status = false;
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_read = false;
+    tamer_timestamp = 0;
     profile.profile_num = 2;
     profile.port = 0x22;
     profile.spdt = 0x03;
@@ -2992,7 +3026,10 @@ static int check_txq_yield_preserves_retune_identity(void)
         fputs("failed to enqueue TXQ continuation case\n", stderr);
         return 1;
     }
-    if (!run_until_queue_head_state(&tx_queue, ENTRY_STATE_SCHEDULED, 24)) {
+    tx_queue.entries[(tx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
+    if (!run_until_queue_head_state(&tx_queue, ENTRY_STATE_SCHEDULED, 64)) {
         fputs("TXQ test profile did not reach scheduled state\n", stderr);
         return 1;
     }
@@ -3050,12 +3087,13 @@ static int check_txq_yield_preserves_retune_identity(void)
         fputs("failed to enqueue TXQ failure case\n", stderr);
         return 1;
     }
+    tx_queue.entries[(tx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
     pkt_retune2_work();
     simulate_tamer_irq(&tx_queue, BLADERF_MODULE_TX);
-    pkt_retune2_work();
-    pkt_retune2_work();
-    pkt_retune2_work();
-    if (simulated_txq_owner || tx_queue.count != 0 ||
+    if (!run_until_queue_empty(&tx_queue, 16) ||
+        simulated_txq_owner || tx_queue.count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_TX) != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_TX) != 1 ||
         !pkt_retune2_failure_completion_select(BLADERF_MODULE_TX, 1) ||
@@ -3107,6 +3145,12 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
         fputs("failed to enqueue PLL-owner regression requests\n", stderr);
         return 1;
     }
+    rx_queue.entries[(rx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
+    tx_queue.entries[(tx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
     if (!run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24)) {
         fputs("PLL-owner RX profile did not reach scheduled state\n", stderr);
         return 1;
@@ -3118,7 +3162,7 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
         rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_PLL_PENDING ||
         port_count != 0 || spdt_count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
-        tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_NEW) {
+        tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED) {
         fputs("PLL recall was not yielded under exclusive owner\n", stderr);
         return 1;
     }
@@ -3132,13 +3176,13 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
     }
     pkt_retune2_work();
     if (!simulated_fastlock_active || port_count != 0 || spdt_count != 0 ||
-        tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_NEW ||
+        tx_queue.entries[tx_queue.rem_idx].state != ENTRY_STATE_SCHEDULED ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0) {
         fputs("PLL pending poll released owner or routed RF early\n", stderr);
         return 1;
     }
-    pkt_retune2_work();
-    if (simulated_fastlock_active || rx_queue.count != 0 ||
+    if (!run_until_queue_empty(&rx_queue, 8) ||
+        simulated_fastlock_active || rx_queue.count != 0 ||
         rx_queue.clear_complete == false || port_count != 1 || spdt_count != 1 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
         !pkt_retune2_completion_select(BLADERF_MODULE_RX, 1) ||
@@ -3154,8 +3198,7 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
      * never performs port/SPDT changes or publishes success. */
     pkt_retune2_init();
     simulated_fastlock_active = false;
-    simulated_fastlock_terminal_status = -EIO;
-    simulated_fastlock_pending_polls = 1;
+    fail_profile_recall = true;
     port_count = 0;
     spdt_count = 0;
     compare_fired_rx = false;
@@ -3164,12 +3207,13 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
         fputs("failed to enqueue PLL failure regression request\n", stderr);
         return 1;
     }
+    rx_queue.entries[(rx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
     pkt_retune2_work();
     simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
-    pkt_retune2_work();
-    pkt_retune2_work();
-    pkt_retune2_work();
-    if (simulated_fastlock_active || rx_queue.count != 0 ||
+    if (!run_until_queue_empty(&rx_queue, 8) ||
+        simulated_fastlock_active || rx_queue.count != 0 ||
         port_count != 0 || spdt_count != 0 ||
         pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
         pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
@@ -3183,6 +3227,7 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
               stderr);
         return 1;
     }
+    fail_profile_recall = false;
     simulated_fastlock_terminal_status = 0;
     return 0;
 }
