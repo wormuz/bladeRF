@@ -172,6 +172,7 @@ set(LIBAD936X_UPSTREAM_FILES
     ad9361_api.c
     ad9361_api.h
     ad9361_conv.c
+    ad9361_tx_quad_cal_policy.h
     common.h
     ad9361_util.c
     ad9361_util.h

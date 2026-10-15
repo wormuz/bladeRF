@@ -23,6 +23,13 @@
 #ifndef BLADERF_NIOS_PKT_RETUNE2_H_
 #define BLADERF_NIOS_PKT_RETUNE2_H_
 
+/* The retune2 helpers are included directly by host and FPGA translation
+ * units as well as through nios_pkt_formats.h. Keep their legacy packet
+ * bound available in either include path. */
+#ifndef NIOS_PKT_LEN
+#define NIOS_PKT_LEN 16
+#endif
+
 #ifndef BLADERF_NIOS_BUILD
 #   include <libbladeRF.h>
 #else
