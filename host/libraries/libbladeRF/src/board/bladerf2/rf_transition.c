@@ -819,50 +819,6 @@ static void _revoke_rx_fault_and_publish_event(void *context)
         publish->board_data, &publish->event, publish->channel_flags);
 }
 
-/* A poisoned AD9361 invalidates the shared RX signal chain regardless of
- * which channel or API caused the failure. This path deliberately does not
- * take dev->lock: RFIC callbacks can reach it while the public operation
- * already owns that mutex. The RX epoch lock linearizes event de-duplication
- * with async admission revocation; the sync generation callback makes the
- * invalidity visible before a buffered sync reader can return more IQ. */
-void bladerf2_rx_rfic_state_invalid(struct bladerf *dev, int error_code)
-{
-    struct bladerf2_board_data *board_data;
-    struct rx_fault_event_publish_context publish = {0};
-    bool report_event;
-
-    if (dev == NULL || dev->board_data == NULL) {
-        return;
-    }
-    board_data = dev->board_data;
-
-    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    report_event = !board_data->rx_rfic_fault_event_reported;
-    board_data->rx_rfic_fault_event_reported = true;
-    if (report_event) {
-        publish.event.host_monotonic_ns = _monotonic_ns();
-        publish.event.event_type = BLADERF_RF_EVT_RX_DATA_INVALIDATED;
-        publish.event.fpga_state = BLADERF_RF_STATE_RX_DATA_INVALID;
-        publish.event.flags = BLADERF_RF_INVALIDATE_RFIC_REG;
-        publish.event.error_code = error_code;
-        publish.board_data = board_data;
-        /* No transition/epoch attribution is claimed: this may be a legacy
-         * ADI/IIO operation or a shared-clock mutation outside an RX epoch. */
-        publish.channel_flags = 0;
-    }
-    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-
-    if (report_event) {
-        sync_rx_epoch_revoke_delivery_with_callback(
-            &board_data->sync[BLADERF_RX],
-            _revoke_rx_fault_and_publish_event, &publish);
-    } else {
-        /* Event delivery is coalesced per poison episode, but keep admission
-         * revoked if another entry point observes the already-latched fault. */
-        bladerf2_rx_epoch_revoke_admission(board_data);
-    }
-}
-
 /* Revoke exactly the epoch whose sticky hardware fault was observed. The
  * device lock serializes this reservation against setters and transitions;
  * the epoch lock is the async admission linearization point. */

@@ -20,6 +20,7 @@ add_executable(libbladeRF_test_sync_epoch_traversal
     ${SRC_ROOT}/helpers/timeout.c
     ${SRC_ROOT}/board/bladerf2/rx_event_history.c
     ${SRC_ROOT}/board/bladerf2/rx_transition_lifecycle.c
+    ${SRC_ROOT}/board/bladerf2/rfic_fault.c
     ${SRC_ROOT}/board/bladerf2/tx_status_event.c
     ${BLADERF_HOST_COMMON_SOURCE_DIR}/log.c
 )
