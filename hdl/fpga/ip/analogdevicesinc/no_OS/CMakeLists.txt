@@ -79,6 +79,7 @@ add_library(ad936x STATIC
     ${LIBAD936X_UPSTREAM_BUILD_DIR}/no_os_gpio.c
     ${LIBAD936X_UPSTREAM_BUILD_DIR}/no_os_spi.c
     ${LIBAD936X_PLATFORM_DIR}/platform.c
+    ${LIBAD936X_PLATFORM_DIR}/nios_u64_arith.c
     ${LIBAD936X_PLATFORM_DIR}/bladerf2_headless_spi.c
     ${LIBAD936X_PLATFORM_DIR}/bladerf2_headless_gpio.c
     # FPGA AXI ad9361 core: axi_adc_init/ad9361_post_setup deassert its
@@ -94,6 +95,14 @@ target_compile_options(ad936x PRIVATE
     -DBLADERF_NIOS_BUILD -DNUAND_MODIFICATIONS -Wall -Os
     -ffunction-sections -fdata-sections
     -include ${LIBAD936X_PLATFORM_DIR}/nios_stdio_guard.h
+)
+
+# Keep these GCC runtime entry points in a regular object file. If they enter
+# an LTO partition, GCC may leave runtime division references unresolved
+# while lowering the helper bodies themselves.
+set_source_files_properties(
+    ${LIBAD936X_PLATFORM_DIR}/nios_u64_arith.c
+    PROPERTIES COMPILE_OPTIONS "-fno-lto"
 )
 
 # Diagnostic only: AXI_ADC_NOT_PRESENT stubs the converter/digital-tuning
