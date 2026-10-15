@@ -5,7 +5,7 @@ message(STATUS "libad936x: Configuring build...")
 
 option(NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE
        "Use hardware multiply/divide in Nios II/f"
-       OFF
+       ON
 )
 
 option(BUILD_AD936X_PRINTF

@@ -38,7 +38,7 @@ C_SRCS              += $(BLADERF_COMMON_DIR)/src/devices_rfic_queue.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/pkt_retune2.c
 C_SRCS              += $(HOST_COMMON_DIR)/src/range.c
 
-CFLAGS              += -DBOARD_BLADERF_MICRO
+CFLAGS              += -DBOARD_BLADERF_MICRO -ffunction-sections -fdata-sections
 
 # libad936x build configuration and lib inclusion
 # These variables need to be set before including the common Makefile.
@@ -77,10 +77,12 @@ include $(BLADERF_COMMON_DIR)/Makefile
 # when it moved from ad9361/sw/ to drivers/rf-transceiver/ad9361/, see
 # CMakeLists.txt above).
 NO_OS_DIR           := ../../../../../../thirdparty/analogdevicesinc/no-OS
-LIBAD936X_MAKE_DEP  :=  ../../../../ip/analogdevicesinc/no_OS/CMakeLists.txt \
+LIBAD936X_MAKE_DEP  :=  Makefile \
+                        ../../../../ip/analogdevicesinc/no_OS/CMakeLists.txt \
                         $(NO_OS_DIR)/.git \
                         $(NO_OS_DIR)/drivers/rf-transceiver/ad9361/ad9361.c \
                         $(NO_OS_DIR)/drivers/rf-transceiver/ad9361/ad9361_api.c \
+                        $(NO_OS_DIR)/drivers/rf-transceiver/ad9361/ad9361_tx_quad_cal_policy.h \
                         ../../../../../../thirdparty/analogdevicesinc/no-OS_local/platform_bladerf2_headless/*
 
 LIBAD936X_BUILD_DEP :=  $(LIBAD936X_BUILDDIR)/Makefile
@@ -97,6 +99,7 @@ $(LIBAD936X_BUILDDIR)/Makefile: $(LIBAD936X_MAKE_DEP)
 	@mkdir -p $(LIBAD936X_BUILDDIR)
 	@cd $(LIBAD936X_BUILDDIR) && \
 		cmake -G"Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=$(LIBAD936X_DIR)/cmake/nios-toolchain.cmake \
+			-DNIOS_HAS_HARDWARE_MULTIPLY_DIVIDE=ON \
 			-DBLADERF_NIOS_ABLATE_AXI_ADC=$(BLADERF_NIOS_ABLATE_AXI_ADC) $(LIBAD936X_DIR)
 
 $(LIBAD936X_BUILDDIR)/libad936x.a: $(LIBAD936X_BUILD_DEP)
