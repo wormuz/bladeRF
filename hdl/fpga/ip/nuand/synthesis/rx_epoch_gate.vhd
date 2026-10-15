@@ -358,6 +358,8 @@ begin
     out_discard_active <= ((state(1) xor state(0)) or state(2)) or
                           epoch_arm or epoch_abort;
 
-    out_fault <= '1' when state = STATE_ERROR else '0';
+    -- STATE_ERROR is the only encoding with bit 2 set. Decode that dedicated
+    -- bit directly so state(0) does not feed the sample FIFO write mask.
+    out_fault <= state(2);
 
 end architecture;

@@ -281,6 +281,7 @@ architecture simple of fifo_writer is
     signal fifo_current : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
     signal fifo_future  : fifo_fsm_t := FIFO_FSM_RESET_VALUE;
     signal packed_write_cycle_sel_i : std_logic_vector(3 downto 0) := "0001";
+    signal highly_packed_mode_en_r   : std_logic := '0';
 
     signal sync_mini_exp: std_logic_vector(1 downto 0);
 
@@ -301,6 +302,20 @@ architecture simple of fifo_writer is
     end function;
 
 begin
+
+    -- Keep the wide sample formatter's mode select local to this clock
+    -- domain. The synchronized control bit otherwise fans into the full
+    -- sample-pack mux and misses the 8 ns RX-clock setup requirement. The
+    -- TX reader registers the same mode before packed consumption, so both
+    -- sides apply a control update on the same local edge.
+    packed_mode_select : process(clock, reset)
+    begin
+        if reset = '1' then
+            highly_packed_mode_en_r <= '0';
+        elsif rising_edge(clock) then
+            highly_packed_mode_en_r <= highly_packed_mode_en;
+        end if;
+    end process;
 
     -- Decode the packed-word phase one cycle ahead with the FSM state. The
     -- binary write_cycle previously selected a 64-bit SC12 slice through a
@@ -1128,7 +1143,7 @@ begin
                             fifo_future.eight_bit_delay <= not fifo_current.eight_bit_delay;
                         end if;
 
-                        if( highly_packed_mode_en = '1' ) then
+                        if( highly_packed_mode_en_r = '1' ) then
                             fifo_future.write_cycle <= (fifo_current.write_cycle + 1) mod 4;
                             if fifo_current.write_cycle = 0 then
                                 fifo_future.fifo_write <= '0';
@@ -1162,7 +1177,7 @@ begin
                                            fifo_current.in_samples_r,
                                            fifo_current.fifo_data);
 
-            if( highly_packed_mode_en = '1' ) then
+            if( highly_packed_mode_en_r = '1' ) then
                 fifo_future.fifo_12b_buf <= pack_sc12q11(
                     sc => in_sample_controls,
                     ss => in_samples,

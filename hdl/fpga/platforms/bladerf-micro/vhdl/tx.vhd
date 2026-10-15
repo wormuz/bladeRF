@@ -155,6 +155,7 @@ architecture arch of tx is
     signal tx_fifo_flush_aclr              : std_logic;
     signal tx_fifo_write_block             : std_logic;
     signal tx_fifo_reader_block            : std_logic;
+    signal tx_fifo_reader_block_tx         : std_logic;
     signal tx_fifo_flush_busy              : std_logic;
     signal tx_fifo_flush_done              : std_logic;
     signal tx_fifo_flush_error             : std_logic;
@@ -202,6 +203,17 @@ begin
             empty_confirmed => tx_fifo_flush_empty_confirmed,
             release_complete => tx_fifo_flush_release_complete,
             write_drain_ready => tx_fifo_flush_write_drain_ready
+        );
+
+    -- busy is generated in sys_clock. Assert the TX reader barrier
+    -- asynchronously, then release it only on tx_clock edges so it cannot
+    -- form a timed cross-domain path into FIFO read control and address logic.
+    U_tx_fifo_reader_block_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => tx_clock,
+            async => tx_reset or tx_fifo_reader_block,
+            sync => tx_fifo_reader_block_tx
         );
 
     -- TX sample fifo. This private clear is scoped to TX; tx_reset remains
@@ -312,7 +324,7 @@ begin
             clock               =>  tx_clock,
             reset               =>  tx_reset,
             enable              =>  tx_enable,
-            fifo_flush          =>  tx_fifo_reader_block,
+            fifo_flush          =>  tx_fifo_reader_block_tx,
 
             usb_speed           =>  usb_speed,
             meta_en             =>  meta_en,
@@ -370,10 +382,10 @@ begin
             clock                => tx_clock,
             reset                => tx_reset,
             timestamp            => tx_timestamp,
-            arm                  => retune_gate_arm and not tx_fifo_flush_busy,
+            arm                  => retune_gate_arm and not tx_fifo_reader_block_tx,
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
-            complete             => retune_gate_complete and not tx_fifo_flush_busy,
+            complete             => retune_gate_complete and not tx_fifo_reader_block_tx,
             -- A one-clock underflow event feeds the gate directly; the
             -- stretched underflow LED is only for front-panel visibility.
             abort                => retune_gate_abort,

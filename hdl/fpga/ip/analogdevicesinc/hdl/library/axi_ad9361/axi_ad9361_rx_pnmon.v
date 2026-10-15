@@ -79,6 +79,18 @@ module axi_ad9361_rx_pnmon (
 
   // internal registers
 
+  // Keep this diagnostic monitor's wide-fanout ADC-valid input local. Delay
+  // valid and its sample tuple together; PN status moves by one adc_clk while
+  // the RX sample datapath and its public timing remain unchanged.
+  reg             adc_valid_local = 'd0;
+  reg     [11:0]  adc_data_i_local = 'd0;
+  reg     [11:0]  adc_data_q_local = 'd0;
+  always @(posedge adc_clk) begin
+    adc_valid_local <= adc_valid;
+    adc_data_i_local <= adc_data_i;
+    adc_data_q_local <= adc_data_q;
+  end
+
   reg             adc_pn0_valid = 'd0;
   reg     [15:0]  adc_pn0_data = 'd0;
   reg             adc_pn0_valid_in = 'd0;
@@ -255,15 +267,15 @@ module axi_ad9361_rx_pnmon (
 
   // device specific, assuming lower nibble is lost-
 
-  assign adc_pn0_data_i_s = (Q_OR_I_N == 1) ? adc_data_q : adc_data_i;
-  assign adc_pn0_data_q_s = (Q_OR_I_N == 1) ? adc_data_i : adc_data_q;
+  assign adc_pn0_data_i_s = (Q_OR_I_N == 1) ? adc_data_q_local : adc_data_i_local;
+  assign adc_pn0_data_q_s = (Q_OR_I_N == 1) ? adc_data_i_local : adc_data_q_local;
   assign adc_pn0_data_q_rev_s = brfn(adc_pn0_data_q_s);
   assign adc_pn0_data_s = {adc_pn0_data_i_s, adc_pn0_data_q_rev_s[3:0]};
   assign adc_pn0_iq_match_s = (adc_pn0_data_i_s[7:0] == adc_pn0_data_q_rev_s[11:4]) ? 1'b1 : 1'b0;
   assign adc_pn0_data_pn_s = (adc_pn_oos == 1'b1) ? adc_pn0_data_in : adc_pn0_data_pn;
 
   always @(posedge adc_clk) begin
-    adc_pn0_valid <= adc_valid;
+    adc_pn0_valid <= adc_valid_local;
     adc_pn0_data <= (adc_pn0_iq_match_s == 1'b0) ? 16'hdead : adc_pn0_data_s;
     adc_pn0_valid_in <= adc_pn0_valid;
     if (adc_pn0_valid == 1'b1) begin
@@ -274,17 +286,17 @@ module axi_ad9361_rx_pnmon (
 
   // standard, runs on 24bit
 
-  assign adc_pn1_valid_s = adc_pn1_valid_t & adc_valid;
+  assign adc_pn1_valid_s = adc_pn1_valid_t & adc_valid_local;
   assign adc_pn1_data_pn_s = (adc_pn_oos == 1'b1) ? adc_pn1_data_in : adc_pn1_data_pn;
 
   always @(posedge adc_clk) begin
-    if (adc_valid == 1'b1) begin
+    if (adc_valid_local == 1'b1) begin
       adc_pn1_valid_t <= ~adc_pn1_valid_t;
-      adc_pn1_data_d <= adc_data_i;
+      adc_pn1_data_d <= adc_data_i_local;
     end
     adc_pn1_valid_in <= adc_pn1_valid_s;
     if (adc_pn1_valid_s == 1'b1) begin
-      adc_pn1_data_in <= {adc_pn1_data_d, adc_data_i};
+      adc_pn1_data_in <= {adc_pn1_data_d, adc_data_i_local};
       adc_pn1_data_pn <= pn1fn(adc_pn1_data_pn_s);
     end
   end

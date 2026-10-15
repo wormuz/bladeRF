@@ -1,5 +1,6 @@
 library ieee;
     use ieee.std_logic_1164.all;
+    use std.env.all;
 
 entity tx_fifo_fault_flush_tb is
 end entity;
@@ -119,8 +120,7 @@ begin
         start <= '1';
         wait until rising_edge(sys_clock);
         start <= '0';
-        wait until write_drain_ready = '1' for 1 us;
-        wait until done = '1' for 1 us;
+        wait until done = '1' and write_drain_ready = '1' for 1 us;
         assert write_drain_ready = '1' and busy = '1' and done = '1'
             report "system-clock flush did not establish independent PCLK drain"
             severity failure;
@@ -154,7 +154,7 @@ begin
             report "stale sample or metadata entries remain after recovery"
             severity failure;
 
-        report "tx_fifo_fault_flush_tb passed" severity note;
-        wait;
+        report "tx_fifo_fault_flush_tb: PASS" severity note;
+        stop;
     end process;
 end architecture;

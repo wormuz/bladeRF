@@ -136,7 +136,13 @@ architecture arch of common_dcfifo is
 
     attribute ALTERA_ATTRIBUTE  : string;
 
-    attribute ALTERA_ATTRIBUTE of arch  : architecture is "-name SDC_STATEMENT ""set_false_path -to [get_registers {*fifo_gen:U_dcfifo_mixed_widths|dcfifo_*:auto_generated|dffpipe_*:wraclr|dffe*a[0]}] """;
+    -- The vendor DCFIFO reset-release pipelines asynchronously clear their
+    -- first stage and then release locally in each clock domain. Do not time
+    -- asynchronous recovery into only those first stages; subsequent stages
+    -- and all functional paths remain timed.
+    attribute ALTERA_ATTRIBUTE of arch : architecture is
+        "-name SDC_STATEMENT ""set_false_path -to [get_pins -compatibility_mode -nowarn {*|dffpipe_*:wraclr|dffe*a[0]|clrn}] "" ; " &
+        "-name SDC_STATEMENT ""set_false_path -to [get_pins -compatibility_mode -nowarn {*|dffpipe_*:rdaclr|dffe*a[0]|clrn}] """;
 
     function valid_width_ratio( width : natural; width_r : natural ) return boolean is
         variable r  : natural := 0;

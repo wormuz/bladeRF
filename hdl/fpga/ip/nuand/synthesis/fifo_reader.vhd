@@ -221,6 +221,7 @@ architecture simple of fifo_reader is
         meta_fifo_data  : std_logic_vector(META_FIFO_DATA_WIDTH-1 downto 0);
         meta_header     : unsigned(63 downto 0);
         meta_header_valid : std_logic;
+        meta_header_is_now : std_logic;
         -- Sign of the modulo-2^64 timestamp delta, split at 32 bits so the
         -- subtract carry chain stays short. Registered one cycle ahead using
         -- the raw header. Scheduled targets must be within
@@ -228,6 +229,7 @@ architecture simple of fifo_reader is
         due_time        : std_logic;
         due_sentinel    : std_logic;
         due_low_borrow  : unsigned(0 downto 0);
+        due_high_time   : unsigned(31 downto 0);
         -- Time reached or TX_NOW sentinel, precomputed in the same cycle.
         due_combined    : std_logic;
     end record;
@@ -247,9 +249,11 @@ architecture simple of fifo_reader is
         meta_fifo_data  => (others => '0'),
         meta_header     => (others => '0'),
         meta_header_valid => '0',
+        meta_header_is_now => '0',
         due_time        => '0',
         due_sentinel    => '0',
         due_low_borrow  => (others => '0'),
+        due_high_time   => (others => '0'),
         due_combined    => '0'
     );
 
@@ -743,8 +747,8 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
-        variable  ts_next       : unsigned(63 downto 0);
         variable  ts_load_next  : unsigned(63 downto 0);
+        variable  ts_load_high  : unsigned(31 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
         variable  v_fifo_borrow : std_logic;
@@ -785,11 +789,21 @@ begin
         -- timestamp+3 in the high stage. This preserves the original
         -- three-tick launch compensation and continues updating while
         -- META_WAIT is active. A raw zero header is the TX_NOW sentinel.
-        ts_next := timestamp + 3;
         cmp_tgt := meta_current.meta_header;
         v_due_time := '0';
 
         ts_load_next := timestamp + 4;
+        -- Align the high word of timestamp+4 with the low-word borrow below.
+        -- On the next sample-clock edge it is the high word of timestamp+3.
+        -- Register it here so the META_EVAL path only subtracts high words;
+        -- it no longer includes a 64-bit increment from the time-tamer bus.
+        if timestamp(31 downto 0) >= unsigned'(x"FFFFFFFC") then
+            ts_load_high := timestamp(63 downto 32) + 1;
+        else
+            ts_load_high := timestamp(63 downto 32);
+        end if;
+        meta_future.due_high_time <= ts_load_high;
+
         if ts_load_next(31 downto 0) <
            unsigned(meta_current.meta_fifo_data(63 downto 32)) then
             v_fifo_borrow := '1';
@@ -810,7 +824,7 @@ begin
             meta_future.due_low_borrow <= (0 => v_header_borrow);
         end if;
 
-        v_high_delta := ('0' & ts_next(63 downto 32)) -
+        v_high_delta := ('0' & meta_current.due_high_time) -
                         ('0' & cmp_tgt(63 downto 32)) -
                         resize(meta_current.due_low_borrow,
                                v_high_delta'length);
@@ -824,7 +838,8 @@ begin
         -- critical chain. cmp_tgt is now the raw header, so "transmit now" is
         -- a header of zero here, not MAX_TIMESTAMP -- MAX_TIMESTAMP is what
         -- zero becomes after the -1 that produces meta_p_time.
-        if( meta_current.meta_header_valid = '1' and cmp_tgt = 0 ) then
+        if( meta_current.meta_header_valid = '1' and
+            meta_current.meta_header_is_now = '1' ) then
             v_due_sentinel := '1';
         else
             v_due_sentinel := '0';
@@ -850,6 +865,11 @@ begin
                        meta_future.meta_read <= '1';
                        meta_future.meta_header <= unsigned(meta_current.meta_fifo_data(95 downto 32));
                        meta_future.meta_header_valid <= '1';
+                       if unsigned(meta_current.meta_fifo_data(95 downto 32)) = 0 then
+                           meta_future.meta_header_is_now <= '1';
+                       else
+                           meta_future.meta_header_is_now <= '0';
+                       end if;
                        meta_future.state     <= META_EVAL;
                        meta_future.meta_time_go <= '0';
                     else

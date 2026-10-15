@@ -37,15 +37,19 @@ architecture rtl of tx_fifo_fault_flush is
                      WAIT_TX_CLOCK, RELEASE_WAIT);
     signal state                : state_t := IDLE;
     signal reset_hold           : std_logic := '0';
+    signal fifo_aclr_i          : std_logic;
     signal busy_i               : std_logic := '0';
     signal done_i               : std_logic := '0';
     signal error_i              : std_logic := '0';
     signal released_i           : std_logic := '0';
     signal write_block_i        : std_logic;
     signal write_block_seen     : std_logic := '0';
+    signal write_block_seen_reset : std_logic;
     signal write_block_seen_sys: std_logic;
     signal write_release_pipe   : std_logic_vector(2 downto 0) := (others => '0');
     signal read_release_pipe    : std_logic_vector(2 downto 0) := (others => '0');
+    signal write_release_reset  : std_logic;
+    signal read_release_reset   : std_logic;
     signal write_empty_ready    : std_logic;
     signal write_empty_ready_sys: std_logic;
     signal read_empty_ready     : std_logic;
@@ -62,7 +66,8 @@ begin
     -- requests release. The read-side ready pipeline is asynchronously reset
     -- by this same signal, so a stopped tx_clock can never leave a stale
     -- "empty and ready" indication accepted as post-clear evidence.
-    fifo_aclr <= tx_reset or reset_hold;
+    fifo_aclr_i <= tx_reset or reset_hold;
+    fifo_aclr <= fifo_aclr_i;
     write_block <= write_block_i;
     reader_block <= busy_i;
     busy <= busy_i;
@@ -80,9 +85,18 @@ begin
             async => sys_reset or tx_reset or busy_i,
             sync => write_block_i
         );
-    process(write_clock, sys_reset)
+
+    U_write_block_seen_reset_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => write_clock,
+            async => sys_reset,
+            sync => write_block_seen_reset
+        );
+
+    process(write_clock, write_block_seen_reset)
     begin
-        if sys_reset = '1' then
+        if write_block_seen_reset = '1' then
             write_block_seen <= '0';
         elsif rising_edge(write_clock) then
             write_block_seen <= write_block_i;
@@ -98,9 +112,21 @@ begin
             sync => write_block_seen_sys
         );
 
-    process(write_clock, fifo_aclr)
+    -- The FIFO clear is released in sys_clock. Keep the local evidence
+    -- pipeline in reset until its own clock domain has safely observed that
+    -- release; otherwise the async reset deassertion itself has recovery
+    -- violations at these status flops.
+    U_write_release_reset_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => write_clock,
+            async => fifo_aclr_i,
+            sync => write_release_reset
+        );
+
+    process(write_clock, write_release_reset)
     begin
-        if fifo_aclr = '1' then
+        if write_release_reset = '1' then
             write_release_pipe <= (others => '0');
         elsif rising_edge(write_clock) then
             write_release_pipe <= write_release_pipe(1 downto 0) & '1';
@@ -120,9 +146,17 @@ begin
             sync => write_empty_ready_sys
         );
 
-    process(tx_clock, fifo_aclr)
+    U_read_release_reset_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => tx_clock,
+            async => fifo_aclr_i,
+            sync => read_release_reset
+        );
+
+    process(tx_clock, read_release_reset)
     begin
-        if fifo_aclr = '1' then
+        if read_release_reset = '1' then
             read_release_pipe <= (others => '0');
         elsif rising_edge(tx_clock) then
             read_release_pipe <= read_release_pipe(1 downto 0) & '1';
