@@ -116,12 +116,17 @@ if(BLADERF_NIOS_ABLATE_AXI_ADC)
     target_compile_options(ad936x PRIVATE -DAXI_ADC_NOT_PRESENT)
 endif()
 
-if(NOT NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE)
-    message(STATUS "libad936x: building with software mul/mulx/div operations")
-    target_compile_options(ad936x PRIVATE
-        -mno-hw-div -mno-hw-mul -mno-hw-mulx
-    )
-endif(NOT NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE)
+if(NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE)
+	message(STATUS "libad936x: building with hardware mul/mulx/div operations")
+	target_compile_options(ad936x PRIVATE
+		-mhw-div -mhw-mul -mhw-mulx
+	)
+else()
+	message(STATUS "libad936x: building with software mul/mulx/div operations")
+	target_compile_options(ad936x PRIVATE
+		-mno-hw-div -mno-hw-mul -mno-hw-mulx
+	)
+endif()
 
 if(NOT MSVC)
     target_compile_options(ad936x PRIVATE
