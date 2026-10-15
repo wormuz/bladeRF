@@ -836,11 +836,9 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
                     request[NIOS_PKT_8x32_IDX_TARGET_ID] ==
                         NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION &&
                     request[NIOS_PKT_8x32_IDX_ADDR] == 0 &&
-                    (response[NIOS_PKT_8x32_IDX_FLAGS] &
+                    (((uint8_t *)buffer)[NIOS_PKT_8x32_IDX_FLAGS] &
                      NIOS_PKT_8x32_FLAG_SUCCESS) != 0) {
                     uint32_t value;
-                    uint32_t previous_generation =
-                        state->command_session_generation;
                     bool previous_generation_valid =
                         state->command_session_generation_valid;
 

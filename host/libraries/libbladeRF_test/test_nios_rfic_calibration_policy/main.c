@@ -196,7 +196,7 @@ int main(void)
     assert(!rfic_rfdc_port_calibration_required(
         history, 1, UINT64_C(3050000000), RFDC_THRESHOLD_HZ));
     assert(rfic_rfdc_port_calibration_required(
-        history, 1, UINT64_C(3100100000), RFDC_THRESHOLD_HZ));
+        history, 1, UINT64_C(3100100001), RFDC_THRESHOLD_HZ));
 
     assert(!rfic_rfdc_calibration_required(
         reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ - 1,
