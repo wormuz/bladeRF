@@ -377,8 +377,6 @@ static int32_t test_update_rf_bandwidth_with_cleanup(
     return ret;
 }
 
-#include "../../thirdparty/analogdevicesinc/no-OS/drivers/rf-transceiver/ad9361/ad9361_conv.c"
-
 static unsigned read_count;
 static unsigned write_count;
 static unsigned delay_count;
