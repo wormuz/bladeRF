@@ -115,6 +115,9 @@ static size_t const num_count_suffixes =
 static bool do_shutdown    = false;
 static uint64_t good_count = 0;
 static uint64_t bad_count  = 0;
+/* Each stream thread owns one status; main reads them after both joins. */
+static int tx_stream_status;
+static int rx_stream_status;
 
 /******************************************************************************
  * TX Sample Generation
@@ -209,6 +212,7 @@ void *tx_streamer(void *context)
     int status;
 
     status = bladerf_stream(tx_stream, BLADERF_TX_X1);
+    tx_stream_status = status;
     if (status < 0) {
         log_error("tx bladerf_stream(): %s\n", bladerf_strerror(status));
         do_shutdown = true;
@@ -382,6 +386,7 @@ void *rx_streamer(void *context)
     int status;
 
     status = bladerf_stream(rx_stream, BLADERF_RX_X1);
+    rx_stream_status = status;
     if (status < 0) {
         log_error("rx bladerf_stream(): %s\n", bladerf_strerror(status));
         do_shutdown = true;
@@ -740,6 +745,7 @@ int main(int argc, char *argv[])
 
     log_info("IQ Matches: %zu / %zu (%.1f%%)\n", good_count,
              good_count + bad_count,
+             good_count + bad_count == 0 ? 0.0 :
              100.0 * ((double)good_count) / ((double)(good_count + bad_count)));
 
     bladerf_deinit_stream(tx_stream);
@@ -758,6 +764,14 @@ int main(int argc, char *argv[])
     }
 
     bladerf_close(dev);
+    if (tx_stream_status != 0 || rx_stream_status != 0 ||
+        good_count == 0 || bad_count != 0 ||
+        (max_count > 0 && good_count < max_count)) {
+        log_error("Loopback failed: TX status=%d, RX status=%d; "
+                  "sample count and IQ matches must satisfy the request.\n",
+                  tx_stream_status, rx_stream_status);
+        return 1;
+    }
     return 0;
 
 error:

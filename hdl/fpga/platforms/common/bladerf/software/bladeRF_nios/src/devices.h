@@ -321,6 +321,7 @@ int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p);
 int32_t adi_fastlock_load_step(bladerf_module m);
 bool adi_fastlock_load_cancel(bladerf_module m);
 bool adi_fastlock_load_active(void);
+void adi_fastlock_jobs_init(void);
 bladerf_module adi_fastlock_load_owner(void);
 void adi_fastlock_profile_cache_commit(bladerf_module m,
                                        uint16_t nios_profile,
@@ -707,6 +708,8 @@ void rfic_command_init(void);
 void rfic_command_work(void);
 bool rfic_command_worker_active(void);
 bool rfic_command_owns_device(void);
+uint8_t rfic_command_pending_mask(void);
+bool rfic_command_has_orphaned_jobs(void);
 bool rfic_tx_quad_retune_owner(void);
 void rfic_command_progress_tick(void);
 bool rfic_command_state_faulted(void);

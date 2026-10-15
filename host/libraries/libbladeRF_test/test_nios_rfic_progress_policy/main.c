@@ -107,6 +107,9 @@ int main(void)
         assert(bladerf_rfic_progress_phase_encode(0, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(8, 0) == 0);
         assert(bladerf_rfic_progress_phase_encode(1, 16) == 0);
+        assert(bladerf_rfic_progress_phase_encode(
+                   BLADERF_RFIC_PROGRESS_PHASE_FIR,
+                   BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK) == 0);
 
         /* INIT's nested constructor/tail uses stable step codes in the same
          * four-bit field; every named stage must remain representable and

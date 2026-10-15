@@ -325,6 +325,10 @@ static bool _rfic_deinitialize(struct rfic_state *state,
      * PHY has been consumed. Preserve it if removal failed and ownership is
      * still with this state object. */
     if (state->phy == NULL) {
+        /* A failed/aborted retained operation can leave scheduler flags
+         * behind after its PHY has been consumed. There is no ADI object
+         * left to poll, so retire every orphaned continuation before host
+         * owned SPI access is admitted. */
         state->init_job_pending = false;
         state->init_job_started = false;
         state->init_job_status = 0;
@@ -338,6 +342,14 @@ static bool _rfic_deinitialize(struct rfic_state *state,
         state->rfpll_job_pending = false;
         state->frequency_rfpll_resume_command = false;
         state->frequency_rfpll_status = 0;
+        state->sample_rate_job_pending = false;
+        state->sample_rate_resume_command = false;
+        state->bandwidth_job_pending = false;
+        state->bandwidth_resume_command = false;
+        state->rfdc_job_pending = false;
+        state->tx_quad_job_pending = false;
+        state->tx_quad_retune_owner = false;
+        state->tx_quad_resume_command = false;
         state->fir_enable_job_pending = false;
         state->fir_enable_resume_command = false;
         state->fir_enable_init_pair_resume = false;
@@ -1056,6 +1068,28 @@ bool _rfic_cmd_wr_init(struct rfic_state *state,
 
     switch (new_state) {
         case BLADERF_RFIC_INIT_STATE_OFF:
+            if (state->calibration_faulted) {
+                /* Host-owned RFIC initialization follows OFF by issuing
+                 * direct AD9361 SPI writes. A faulted NIOS context with no
+                 * active PHY still blocks those writes, so retire the fault
+                 * only after an explicit board RESETB pulse and teardown. */
+                if (!_clear_rffe_ctrl() || !_reset_rfic(true)) {
+                    RFIC_ERR("failed to assert RESETB for faulted OFF", -EIO);
+                    return false;
+                }
+                if (!_rfic_deinitialize(state, true, false)) {
+                    return false;
+                }
+                no_os_udelay(2);
+                if (!_reset_rfic(false)) {
+                    RFIC_ERR("failed to release RESETB after faulted OFF",
+                             -EIO);
+                    return false;
+                }
+                no_os_mdelay(1);
+                state->calibration_faulted = false;
+                return true;
+            }
             return _rfic_deinitialize(state, false, false);
 
         case BLADERF_RFIC_INIT_STATE_ON:

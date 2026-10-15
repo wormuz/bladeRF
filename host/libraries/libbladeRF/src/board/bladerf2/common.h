@@ -545,8 +545,7 @@ int bladerf2_get_loss_event_count_with_sequence(
     uint64_t *observation_sequence);
 bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
                                        uint32_t link_status);
-int bladerf2_tx_wait_for_validity(struct bladerf *dev,
-                                         uint32_t timeout_ms);
+int bladerf2_tx_wait_for_validity(struct bladerf *dev);
 void bladerf2_rx_previous_link_fault_event(struct bladerf *dev,
                                            uint32_t link_status);
 void bladerf2_rf_event_append_locked(

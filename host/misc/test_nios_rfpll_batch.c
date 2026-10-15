@@ -202,7 +202,7 @@ uint64_t rx_epoch_status_snapshot_read(void)
 bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
                                   uint8_t *completed)
 {
-    const uint64_t expected = UINT64_C(0x000e3d0228f0463b);
+    const uint64_t expected = UINT64_C(0xa50e3d0228f0463b);
     calls++;
 
     if (count != 3 || data != expected || completed == NULL) {
@@ -240,7 +240,7 @@ static int run_case(enum batch_mode requested_mode, bool expected_success,
 {
     struct pkt_buf packet = {
         .req = { 0x45, 0x03, 0x01, 0x00, 0x03, 0x00,
-                 0x3b, 0x46, 0xf0, 0x28, 0x02, 0x3d, 0x0e, 0x00,
+                 0x3b, 0x46, 0xf0, 0x28, 0x02, 0x3d, 0x0e, 0xa5,
                  0x00, 0x00 },
         .resp = { 0 },
         .ready = false,
@@ -287,6 +287,23 @@ static int run_malformed_batch_case(uint16_t count, uint64_t data)
 
     return target == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH && write &&
            addr == count && !success && calls == calls_before ? 0 : 1;
+}
+
+static int run_batch_payload_marker_policy(void)
+{
+    const uint64_t marker =
+        (uint64_t)NIOS_PKT_16x64_BATCH_UNSUPPORTED_MARKER << 56;
+
+    if (!nios_pkt_16x64_batch_payload_valid(1, marker | 0x1234u) ||
+        !nios_pkt_16x64_batch_payload_valid(2, marker | 0x123456789u) ||
+        !nios_pkt_16x64_batch_payload_valid(3, marker | 0x123456789abcdu) ||
+        nios_pkt_16x64_batch_payload_valid(3, marker | (UINT64_C(1) << 54)) ||
+        nios_pkt_16x64_batch_payload_valid(3,
+                                            (UINT64_C(0x5a) << 56) | 0x1234u)) {
+        fprintf(stderr, "batch payload marker/reserved-bit policy mismatch\n");
+        return 1;
+    }
+    return 0;
 }
 
 static int run_update_bits_case(bool requested_success,
@@ -466,6 +483,7 @@ int main(void)
     if (run_case(BATCH_SUCCESS, true, 3) ||
         run_case(BATCH_FAILURE, false, 0) ||
         run_case(BATCH_PARTIAL, false, 1) || calls != 3 ||
+        run_batch_payload_marker_policy() ||
         run_malformed_batch_case(0, 0) ||
         run_malformed_batch_case(4, 0) ||
         run_malformed_batch_case(1, UINT64_C(1) << 18) ||

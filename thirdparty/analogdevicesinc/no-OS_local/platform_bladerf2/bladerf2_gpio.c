@@ -42,6 +42,7 @@
 
 #include "no_os_gpio.h"
 #include "bladerf2_status.h"
+#include "log.h"
 
 static int32_t bladerf2_gpio_get(struct no_os_gpio_desc **desc,
                                  const struct no_os_gpio_init_param *param)
@@ -140,6 +141,8 @@ static int32_t bladerf2_gpio_set_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_read(dev, &reg);
     if (status < 0) {
+        log_error("AD9361 GPIO read failed (line=%d, status=%d)\n",
+                  desc->number, status);
         return bladerf2_status_to_errno(status);
     }
 
@@ -151,6 +154,8 @@ static int32_t bladerf2_gpio_set_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_write(dev, reg);
     if (status < 0) {
+        log_error("AD9361 GPIO write failed (line=%d, value=%u, status=%d)\n",
+                  desc->number, value, status);
         return bladerf2_status_to_errno(status);
     }
 
@@ -175,6 +180,8 @@ static int32_t bladerf2_gpio_get_value(struct no_os_gpio_desc *desc,
 
     status = dev->backend->rffe_control_read(dev, &reg);
     if (status < 0) {
+        log_error("AD9361 GPIO read failed (line=%d, status=%d)\n",
+                  desc->number, status);
         return bladerf2_status_to_errno(status);
     }
 

@@ -320,15 +320,16 @@ begin
                     end if ;
 
                 when WAIT_FOR_READ =>
-                    if( read = '1' ) then
+                    -- NIOS reads the status CSR before consuming the request
+                    -- buffer in its ISR. Keep the request latched and IRQ
+                    -- asserted until one of the request data words is read;
+                    -- a status/session read must not discard the frame.
+                    if( read = '1' and
+                        to_integer(unsigned(addr)) <= 15 ) then
                         irq <= '0' ;
                         -- The NIOS ISR snapshots request_busy before reading
-                        -- this request word. Clear the per-request latch only
-                        -- when the request buffer is consumed; status/session
-                        -- reads must not erase the evidence prematurely.
-                        if( to_integer(unsigned(addr)) <= 15 ) then
-                            request_busy <= '0';
-                        end if;
+                        -- this request word, so clear the latch on consumption.
+                        request_busy <= '0';
                         state := WAIT_FOR_MAGIC ;
                     end if ;
             end case ;

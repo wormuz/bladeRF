@@ -112,6 +112,26 @@
 #define NIOS_PKT_16x64_TARGET_AD9361_UPDATE_BITS 0x04 /* Atomic byte RMW */
 #define NIOS_PKT_16x64_TARGET_RX_EPOCH_SNAPSHOT 0x05 /* status + first-valid TS low */
 
+/* Host batch writers reserve the high byte as an old-firmware fallback
+ * marker. The three 18-bit entries occupy bits 0..53; bits 54..55 remain
+ * reserved even when all three entries are present. */
+#define NIOS_PKT_16x64_BATCH_UNSUPPORTED_MARKER 0xa5u
+
+static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
+                                                       uint64_t data)
+{
+    uint64_t entry_mask;
+    uint8_t marker = (uint8_t)(data >> 56);
+
+    if (count == 0 || count > 3 ||
+        (marker != 0 && marker != NIOS_PKT_16x64_BATCH_UNSUPPORTED_MARKER)) {
+        return false;
+    }
+
+    entry_mask = (UINT64_C(1) << (18u * count)) - 1u;
+    return (data & ~(entry_mask | (UINT64_C(0xff) << 56))) == 0;
+}
+
 /* UPDATE_BITS request data: marker[63:56]=0xa6, mask[55:48], masked value
  * [47:40], reserved[39:0]=0. Success response data is the resulting byte.
  * Older firmware echoes the request with success clear, allowing host-side

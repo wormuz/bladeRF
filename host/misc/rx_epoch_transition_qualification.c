@@ -350,8 +350,8 @@ int main(int argc, char **argv) {
     if (transition_timeout_env != NULL && transition_timeout_env[0] != '\0') {
         char *end = NULL;
         unsigned long parsed = strtoul(transition_timeout_env, &end, 10);
-        if (end == transition_timeout_env || *end != '\0' || parsed < 100 ||
-            parsed > 120000) {
+        if (end == transition_timeout_env || *end != '\0' ||
+            (parsed != 0 && parsed < 100) || parsed > 120000) {
             fprintf(stderr, "invalid BLADERF_QUAL_TRANSITION_TIMEOUT_MS\n");
             return 2;
         }

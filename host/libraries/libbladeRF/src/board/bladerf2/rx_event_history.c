@@ -128,7 +128,7 @@ void bladerf2_tx_async_transport_failure(struct bladerf *dev,
     if (board_data->rx_fault_monitor_sync_initialized) {
         COND_SIGNAL(&board_data->rx_fault_monitor_cond);
     }
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     if (report) {
         event.host_monotonic_ns = monotonic_ns();
         event.event_type = BLADERF_RF_EVT_TX_TRANSPORT_ERROR;
@@ -198,7 +198,7 @@ void bladerf2_rx_transition_fail_first_host_data_locked(
     }
 
     board_data->rf_transition_first_host_data_failure = status;
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
 }
 
 void bladerf2_rx_epoch_revoke_admission(void *context)
@@ -212,7 +212,7 @@ void bladerf2_rx_epoch_revoke_admission(void *context)
     board_data->rf_transition_epoch_certified = false;
     board_data->rx_async_have_expected_timestamp = false;
     board_data->rf_transition_first_host_data_reported = false;
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -239,7 +239,7 @@ static void revoke_failed_transition_admission(void *context)
         board_data->rf_transition_first_host_data_failure =
             revoke->status != 0 ? revoke->status : BLADERF_ERR_UNEXPECTED;
     }
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -322,7 +322,7 @@ int bladerf2_rx_epoch_admission_prepare(
         bladerf2_rf_event_append_locked(
             board_data, &board_data->rf_transition_certified_epoch_event);
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-        COND_SIGNAL(&board_data->rx_async_epoch_cond);
+        COND_BROADCAST(&board_data->rx_async_epoch_cond);
     } else {
         *admission_lock_held = false;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -448,7 +448,7 @@ void bladerf2_tx_stream_event(struct bladerf *dev,
     /* TX stream workers can be waiting for the first RFIC certificate after
      * a successful link START. Wake them on both certification and
      * revocation so they either submit on positive evidence or fail closed. */
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -532,7 +532,7 @@ void bladerf2_tx_retune_failure_detail_event(
     MUTEX_LOCK(&board_data->rf_transition_event_lock);
     bladerf2_rf_event_append_locked(board_data, &event);
     MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -1105,7 +1105,7 @@ void bladerf2_rx_data_note_first_packet_at_locked(
         board_data->rf_transition_first_host_data_reported = true;
         board_data->rx_async_data_withheld_active = false;
         if (!already_reported) {
-            COND_SIGNAL(&board_data->rx_async_epoch_cond);
+            COND_BROADCAST(&board_data->rx_async_epoch_cond);
         }
     }
     bladerf2_rx_data_rearm_notifications_locked(board_data);

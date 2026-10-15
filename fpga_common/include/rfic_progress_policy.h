@@ -222,7 +222,9 @@ static inline uint8_t bladerf_rfic_progress_phase_encode(uint8_t phase_class,
 {
     if (phase_class == 0 ||
         phase_class > BLADERF_RFIC_PROGRESS_PHASE_FIR ||
-        phase_step > BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK) {
+        phase_step > BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK ||
+        (phase_class == BLADERF_RFIC_PROGRESS_PHASE_FIR &&
+         phase_step == BLADERF_RFIC_PROGRESS_PHASE_STEP_MASK)) {
         return 0;
     }
 
@@ -238,7 +240,8 @@ static inline bool bladerf_rfic_progress_phase_is_tagged(uint8_t phase)
         (phase >> BLADERF_RFIC_PROGRESS_PHASE_CLASS_SHIFT) &
         BLADERF_RFIC_PROGRESS_PHASE_CLASS_MASK);
 
-    return (phase & BLADERF_RFIC_PROGRESS_PHASE_TAG) != 0 &&
+    return phase != BLADERF_RFIC_RESULT_NO_RESULT &&
+           (phase & BLADERF_RFIC_PROGRESS_PHASE_TAG) != 0 &&
            phase_class >= BLADERF_RFIC_PROGRESS_PHASE_INIT &&
            phase_class <= BLADERF_RFIC_PROGRESS_PHASE_FIR;
 }

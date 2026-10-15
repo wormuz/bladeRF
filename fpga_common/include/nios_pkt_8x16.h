@@ -114,6 +114,9 @@
 /* Flag bits */
 #define NIOS_PKT_8x16_FLAG_WRITE     (1 << 0)
 #define NIOS_PKT_8x16_FLAG_SUCCESS   (1 << 1)
+/* Response-only: request was rejected before execution because NIOS owned
+ * synchronous RFIC work. The host may retry the unchanged peripheral access. */
+#define NIOS_PKT_8x16_FLAG_BUSY      (1 << 2)
 
 /* Sub-addresses for the IQ Correction target block */
 #define NIOS_PKT_8x16_ADDR_IQ_CORR_RX_GAIN  0x00

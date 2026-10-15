@@ -20,8 +20,9 @@
  * channel 1 uses BLADERF_RX_X2 / BLADERF_TX_X2 (MIMO) layouts: per
  * libbladeRF.h (BLADERF_FORMAT_SC16_Q11 docs), samples are interleaved
  * per channel (ch0 I/Q, ch1 I/Q, ch0 I/Q, ...) and num_samples passed to
- * bladerf_sync_rx()/bladerf_sync_tx() is a PER-CHANNEL count (buffer_size_min
- * = 2 * num_samples * num_channels * sizeof(int16_t)). Channel 0 is left
+ * bladerf_sync_rx()/bladerf_sync_tx() counts all interleaved IQ samples.
+ * The constants below count frames per channel, so X2 calls multiply by two.
+ * Channel 0 is left
  * silent on TX and ignored on RX detection; only channel 1 carries the tone
  * and is analyzed. Per doc/examples/sync_rx_meta.c, X2 layout requires
  * enabling BOTH channel 0 and channel 1 modules (not just channel 1).
@@ -169,6 +170,7 @@ int main(int argc, char *argv[])
     bladerf_timestamp search_limit;
     bladerf_timestamp search_start_ts;
     bool overrun_seen  = false;
+    uint8_t observer_epoch_id = 0;
     bool burst_found    = false;
     unsigned int bursts_found_count = 0;
     double first_chunk_median = 0.0;
@@ -184,10 +186,8 @@ int main(int argc, char *argv[])
     }
 
     tone_buf = make_tone(BURST_SAMPLES);
-    /* tx_buf/rx_buf hold `samples_per_frame` interleaved channels; buffer
-     * size follows libbladeRF.h buffer_size_min = 2 * num_samples *
-     * num_channels * sizeof(int16_t), i.e. BUFFER_SIZE/BURST_SAMPLES is a
-     * PER-CHANNEL sample count multiplied here by samples_per_frame. */
+    /* Constants count frames per channel; storage and API sample counts
+     * include every interleaved IQ pair in the selected layout. */
     tx_buf = malloc((size_t)BURST_SAMPLES * samples_per_frame * 2u * sizeof(int16_t));
     rx_buf  = malloc((size_t)BUFFER_SIZE * samples_per_frame * 2u * sizeof(int16_t));
     if (tone_buf == NULL || tx_buf == NULL || rx_buf == NULL) {
@@ -342,14 +342,16 @@ int main(int argc, char *argv[])
 
     status = bladerf_sync_config(dev, mimo ? BLADERF_RX_X2 : BLADERF_RX_X1,
                                  BLADERF_FORMAT_SC16_Q11_META,
-                                 NUM_BUFFERS, BUFFER_SIZE, NUM_XFERS, TIMEOUT_MS);
+                                 NUM_BUFFERS, BUFFER_SIZE * samples_per_frame,
+                                 NUM_XFERS, TIMEOUT_MS);
     if (status != 0) {
         fprintf(stderr, "sync_config rx: %s\n", bladerf_strerror(status));
         goto out_close;
     }
     status = bladerf_sync_config(dev, mimo ? BLADERF_TX_X2 : BLADERF_TX_X1,
                                  BLADERF_FORMAT_SC16_Q11_META,
-                                 NUM_BUFFERS, BUFFER_SIZE, NUM_XFERS, TIMEOUT_MS);
+                                 NUM_BUFFERS, BUFFER_SIZE * samples_per_frame,
+                                 NUM_XFERS, TIMEOUT_MS);
     if (status != 0) {
         fprintf(stderr, "sync_config tx: %s\n", bladerf_strerror(status));
         goto out_close;
@@ -425,6 +427,7 @@ int main(int argc, char *argv[])
                     bladerf_strerror(status));
             goto out_disable_tx;
         }
+        observer_epoch_id = final_event.epoch_id;
         printf("rx_observer_epoch=%u first_valid_timestamp=%llu\n",
                final_event.epoch_id,
                (unsigned long long)final_event.fpga_timestamp);
@@ -483,7 +486,8 @@ int main(int argc, char *argv[])
 
         for (k = 0; k < nbursts; k++) {
             fprintf(stderr, "TX_PROBE before sync_tx burst=%u\n", k);
-            status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES, &tx_meta[k], 5000);
+            status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES * samples_per_frame,
+                                     &tx_meta[k], 5000);
             fprintf(stderr, "TX_PROBE after sync_tx burst=%u status=%d\n",
                     k, status);
             if (status != 0) {
@@ -555,7 +559,8 @@ int main(int argc, char *argv[])
 
         while (!all_done) {
             fprintf(stderr, "TX_PROBE before sync_rx\n");
-            status = bladerf_sync_rx(dev, rx_buf, BUFFER_SIZE, &rx_meta, TIMEOUT_MS);
+            status = bladerf_sync_rx(dev, rx_buf, BUFFER_SIZE * samples_per_frame,
+                                     &rx_meta, TIMEOUT_MS);
             fprintf(stderr, "TX_PROBE after sync_rx status=%d ts=%llu\n",
                     status, (unsigned long long)rx_meta.timestamp);
             if (status != 0) {
@@ -563,6 +568,19 @@ int main(int argc, char *argv[])
                 break;
             }
 
+            if (rx_meta.actual_count != BUFFER_SIZE * samples_per_frame ||
+                !rx_meta.rx_epoch_id_valid ||
+                rx_meta.rx_epoch_id != observer_epoch_id ||
+                (have_first_ts && rx_meta.timestamp != rx_last_chunk_ts)) {
+                fprintf(stderr, "invalid observer block: count=%u epoch=%u/%u "
+                        "valid=%u timestamp=%llu expected=%llu\n",
+                        rx_meta.actual_count, rx_meta.rx_epoch_id,
+                        observer_epoch_id, rx_meta.rx_epoch_id_valid,
+                        (unsigned long long)rx_meta.timestamp,
+                        (unsigned long long)rx_last_chunk_ts);
+                status = BLADERF_ERR_UNEXPECTED;
+                break;
+            }
             if (rx_meta.status & BLADERF_META_STATUS_OVERRUN) {
                 overrun_seen = true;
             }
@@ -834,7 +852,8 @@ int main(int argc, char *argv[])
      * gate's RESUME acknowledgement by one monitor pass. */
     dump_recent_rf_events(dev);
     printf("overrun_seen=%d\n", (int)overrun_seen);
-    ret = (burst_found && (nbursts == 1u || bursts_found_count == nbursts)) ? 0 : 1;
+    ret = (status == 0 && !overrun_seen && burst_found &&
+           (nbursts == 1u || bursts_found_count == nbursts)) ? 0 : 1;
 
 out_disable_tx:
     bladerf_enable_module(dev, BLADERF_CHANNEL_TX(ch), false);

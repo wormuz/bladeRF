@@ -245,6 +245,13 @@ int32_t adi_fastlock_load_start(bladerf_module module,
     return 0;
 }
 
+/* Production NIOS records this temporary diagnostic call-site tag. The host
+ * queue model does not use it. */
+void adi_fastlock_jobs_debug_set_load_site(uint8_t site)
+{
+    (void)site;
+}
+
 int32_t adi_fastlock_load_step(bladerf_module module)
 {
     fastlock_profile *slots;
@@ -3229,6 +3236,33 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
     }
     fail_profile_recall = false;
     simulated_fastlock_terminal_status = 0;
+
+    /* A recalled profile can lose its queue entry during startup recovery.
+     * Keep the RFIC owner until the PLL is polled to a terminal state, then
+     * report the orphan instead of pinning all later RFIC traffic forever. */
+    pkt_retune2_init();
+    simulated_fastlock_active = true;
+    simulated_fastlock_owner = BLADERF_MODULE_RX;
+    simulated_fastlock_pending_polls = 2;
+    pkt_retune2_work();
+    if (!simulated_fastlock_active ||
+        simulated_fastlock_pending_polls != 1 ||
+        rx_queue.count != 0 ||
+        !pkt_retune2_fastlock_recall_orphaned()) {
+        fputs("orphan PLL recall did not retain its owner while pending\n",
+              stderr);
+        return 1;
+    }
+    pkt_retune2_work();
+    pkt_retune2_work();
+    if (simulated_fastlock_active || rx_queue.count != 0 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 1 ||
+        !pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
+        pkt_retune2_completion_word(4) !=
+            NIOS_PKT_RETUNE2_FAILURE_INTERNAL) {
+        fputs("orphan PLL recall was not retired fail-closed\n", stderr);
+        return 1;
+    }
     return 0;
 }
 

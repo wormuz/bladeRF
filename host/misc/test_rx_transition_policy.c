@@ -185,6 +185,12 @@ int main(void)
 
     /* A status read which returns at or after the deadline is not a timely
      * completion, even if its sampled hardware bit is already asserted. */
+    assert(bladerf2_rf_transition_wait_deadline_ns(123, 0) == UINT64_MAX);
+    assert(bladerf2_rf_transition_wait_deadline_ns(123, 1) == 1000123);
+    assert(bladerf2_rf_transition_wait_deadline_ns(UINT64_MAX - 1, 1) == UINT64_MAX);
+    assert(!bladerf2_rf_transition_deadline_expired(
+        true, 64000000000000ULL,
+        bladerf2_rf_transition_wait_deadline_ns(123, 0)));
     assert(!bladerf2_rf_transition_deadline_expired(true, 99, 100));
     assert(bladerf2_rf_transition_deadline_expired(true, 100, 100));
     assert(bladerf2_rf_transition_deadline_expired(true, 101, 100));

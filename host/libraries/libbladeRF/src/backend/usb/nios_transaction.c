@@ -182,8 +182,12 @@ static bool nios_response_matches_request(const uint8_t *request,
                (!req_write || req_data == resp_data);
     }
     case NIOS_PKT_8x16_MAGIC: {
-        if (!nios_response_flags_and_reserved_valid(
-                response, NIOS_PKT_8x16_IDX_FLAGS, NIOS_PKT_8x16_IDX_RESV1) ||
+        const uint8_t response_flags =
+            response[NIOS_PKT_8x16_IDX_FLAGS];
+        if ((response_flags & 0xf8u) != 0 ||
+            response[NIOS_PKT_8x16_IDX_RESV1] != 0 ||
+            ((response_flags & NIOS_PKT_8x16_FLAG_BUSY) != 0 &&
+             (response_flags & NIOS_PKT_8x16_FLAG_SUCCESS) != 0) ||
             !nios_response_has_zero_tail(
                 response, NIOS_PKT_8x16_IDX_RESV2)) {
             return false;
@@ -709,6 +713,7 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
         }
     }
 
+
     status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT, buffer,
                                     buffer_len, PERIPHERAL_TIMEOUT_MS,
                                     NULL, NULL);
@@ -907,14 +912,20 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
             if (response_bytes == 0 && validate_echo &&
                 request[NIOS_PKT_RETUNE2_IDX_MAGIC] ==
                     NIOS_PKT_RETUNE2_MAGIC) {
-                if (!state->command_session_generation_valid) {
+                const bool tokenless_queue_clear =
+                    nios_pkt_retune2_unpack_request_token(request) == 0 &&
+                    nios_read_le64(request, NIOS_PKT_RETUNE2_IDX_TIME) ==
+                        NIOS_PKT_RETUNE2_CLEAR_QUEUE;
+                if (!state->command_session_generation_valid &&
+                    !tokenless_queue_clear) {
                     state->desynchronized = true;
                     status = BLADERF_ERR_UNEXPECTED;
                 } else {
                     memcpy(state->pending_retune2_request, request,
                            sizeof(request));
                     state->pending_retune2_session_generation =
-                        state->command_session_generation;
+                        state->command_session_generation_valid
+                            ? state->command_session_generation : 0;
                     state->pending_retune2_response = true;
                 }
             } else if (response_bytes == 0 && validate_echo &&

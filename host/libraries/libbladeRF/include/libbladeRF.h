@@ -2136,8 +2136,7 @@ typedef enum {
      * When using this format the minimum required buffer size, in bytes, is:
      *
      * \f$
-     *  buffer\_size\_min = (2 \times num\_samples \times num\_channels \times
-     *                      sizeof(int16\_t))
+     *  buffer\_size\_min = (2 \times num\_samples \times sizeof(int16\_t))
      * \f$
      *
      * For example, to hold 2048 samples for one channel, a buffer must be at
@@ -2161,8 +2160,10 @@ typedef enum {
      *  `-------------`--------------`--------------`------------------`
      * </pre>
      *
-     * Per the `buffer_size_min` formula above, 2048 samples for two channels
-     * will generate 4096 total samples, and require at least 16384 bytes.
+     * API sample counts include all interleaved IQ pairs. For 2048 samples
+     * per channel in X2, pass num_samples=4096 and allocate at least 16384
+     * bytes. An X2 count must be even; its timestamp advances once per pair
+     * of channel samples.
      *
      * Implementors may use the interleaved buffers directly, or may use
      * bladerf_deinterleave_stream_buffer() / bladerf_interleave_stream_buffer()
@@ -2297,8 +2298,7 @@ typedef enum {
      * When using this format the minimum required buffer size, in bytes, is:
      *
      * \f$
-     *  buffer\_size\_min = (2 \times num\_samples \times num\_channels \times
-     *                      sizeof(int8\_t))
+     *  buffer\_size\_min = (2 \times num\_samples \times sizeof(int8\_t))
      * \f$
      *
      * For example, to hold 2048 samples for one channel, a buffer must be at
@@ -2322,8 +2322,10 @@ typedef enum {
      *  `-------------`--------------`--------------`------------------`
      * </pre>
      *
-     * Per the `buffer_size_min` formula above, 2048 samples for two channels
-     * will generate 4096 total samples, and require at least 8192 bytes.
+     * API sample counts include all interleaved IQ pairs. For 2048 samples
+     * per channel in X2, pass num_samples=4096 and allocate at least 8192
+     * bytes. An X2 count must be even; its timestamp advances once per pair
+     * of channel samples.
      *
      * Implementors may use the interleaved buffers directly, or may use
      * bladerf_deinterleave_stream_buffer() / bladerf_interleave_stream_buffer()
@@ -5254,8 +5256,8 @@ struct bladerf_rx_transition_request {
     uint64_t target_frequency_hz;
     uint32_t required_events_mask; /**< OR of BLADERF_RF_REQUIRE_* */
     /** Maximum time for epoch prepare, parser fencing, FPGA ARM, and the
-     *  matching FPGA PENDING acknowledgement. Zero selects the 1000 ms
-     *  default. The wait call has its own independent timeout. */
+     *  matching FPGA PENDING acknowledgement. Zero waits for status/events
+     *  without an elapsed-time limit. The wait call has its own budget. */
     uint32_t timeout_ms;
     /** Require FPGA epoch confirmation before the call reports
      *  BLADERF_RF_STATE_RX_DATA_VALID.
@@ -5357,7 +5359,8 @@ int CALL_CONV bladerf_rx_transition_begin_quick_tune(
  * @param       dev             Device handle
  * @param[in]   transaction_id  Handle from bladerf_rx_transition_begin
  * @param[out]  final_event     Last event recorded for this transaction
- * @param[in]   timeout_ms      Maximum time to wait
+ * @param[in]   timeout_ms      Maximum time to wait; zero waits for events
+ *                             without an elapsed-time limit
  *
  * @return 0 on success, value from \ref RETCODES list on failure
  */

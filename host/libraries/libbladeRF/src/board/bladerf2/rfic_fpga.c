@@ -161,8 +161,8 @@ static const char *_rfic_fpga_init_stage_name(uint8_t stage)
  * compatibility poll budget. Firmware with active transaction reporting is
  * polled until the matching retirement event; this is required because RX
  * RF-DC and TX quadrature calibration can exceed the old 3 ms budget. A
- * separate monotonic deadman returns failure if retirement never arrives; it
- * neither certifies completion nor cancels the still-pending NIOS operation.
+ * matching terminal result determines completion, without an elapsed-time
+ * limit on a still-running operation.
  * INIT is also synchronous in NIOS and can take around 1.2 s on the host.
  *
  * Deferred RFIC queue work runs after each request response as well as on
@@ -170,12 +170,9 @@ static const char *_rfic_fpga_init_stage_name(uint8_t stage)
  * progress. A RUNNING queue entry still executes its whole ADI callback
  * synchronously in that deferred-work step; while that call is blocked, the
  * Nios loop cannot service another USB command. */
-#define RFIC_SPINWAIT_TRIES        30
 #define RFIC_SPINWAIT_DELAY_US     1000
-#define RFIC_SPINWAIT_INIT_TRIES   600
-#define RFIC_SPINWAIT_INIT_DELAY_US 5000  /* 600 x 5 ms = 3 s */
+#define RFIC_SPINWAIT_INIT_DELAY_US 5000
 #define RFIC_SPINWAIT_EVENT_MAX_DELAY_US 20000
-#define RFIC_SPINWAIT_ACTIVE_DEADMAN_NS UINT64_C(60000000000)
 
 static int _rfic_cmd_read(struct bladerf *dev, bladerf_channel ch,
                           bladerf_rfic_command cmd, uint64_t *data);
@@ -204,7 +201,6 @@ static int _rfic_fpga_ack_retired_result(struct bladerf *dev,
                                          bool expected_success);
 
 static int _rfic_fpga_spinwait_for(struct bladerf *dev,
-                                   size_t tries,
                                    unsigned int delay_us,
                                    bool sequence_supported,
                                    bool retirement_event_supported,
@@ -212,16 +208,9 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                    uint32_t expected_sequence,
                                    bool *retired)
 {
-    size_t const TRIES       = tries;
     unsigned int poll_delay = delay_us;
-    size_t count             = 0;
     int status;
     struct bladerf_rfic_status_register rfic_status;
-    uint64_t started_ns = 0;
-    uint32_t progress_sequence = 0;
-    uint16_t progress_transaction_id = 0;
-    uint8_t progress_command = 0;
-    uint8_t progress_phase_or_result = 0;
     const bool result_valid_supported = have_cap_dev(
         dev, BLADERF_CAP_RFIC_WQ_RESULT_VALID);
     const bool progress_supported = have_cap_dev(
@@ -231,23 +220,15 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
         *retired = false;
     }
 
-    if (retirement_event_supported &&
-        bladerf_monotonic_now_ns(&started_ns) != 0) {
-        log_error("%s: monotonic clock unavailable; RFIC command outcome "
-                  "remains unresolved\n", __FUNCTION__);
-        return BLADERF_ERR_UNEXPECTED;
-    }
-
     /* A successful USB OUT only means that the command packet reached the
      * device. The first status read can race NIOS packet dispatch and still
      * see an empty queue with the previous retirement token. On capable
      * firmware, wait for both an empty queue and this command's exact token.
      * On firmware with active-transaction reporting, retirement is the
-     * completion event and the bounded ADI operation owns its own deadline;
-     * only the response transport has a timeout. Older firmware retains its
-     * finite polling budget. */
-    status = BLADERF_ERR_TIMEOUT;
-    for (count = 0; retirement_event_supported || count < TRIES; count++) {
+     * completion event. Wait for hardware retirement or an actual status-read
+     * failure on every supported firmware version; elapsed time and poll count
+     * cannot establish the command outcome. */
+    for (;;) {
         int read_status = _rfic_fpga_get_status(dev, &rfic_status);
         if (read_status < 0) {
             if (sequence_supported) {
@@ -270,58 +251,6 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                 dev, &active_id, &last_id, &transaction_sequence);
             if (read_status < 0) {
                 return read_status;
-            }
-
-            {
-                uint64_t now_ns;
-
-                if (bladerf_monotonic_now_ns(&now_ns) != 0) {
-                    log_error("%s: monotonic clock failed while waiting for "
-                              "RFIC transaction %u; outcome remains "
-                              "unresolved\n", __FUNCTION__,
-                              (unsigned int)expected_transaction_id);
-                    return BLADERF_ERR_UNEXPECTED;
-                }
-                if (bladerf2_rfic_deadline_expired(
-                        started_ns, now_ns,
-                        RFIC_SPINWAIT_ACTIVE_DEADMAN_NS)) {
-                    /* Progress is diagnostic only. Read it once on the
-                     * failure path rather than adding a third NIOS command
-                     * to every exact-retirement poll. */
-                    if (progress_supported) {
-                        int progress_status = _rfic_fpga_get_progress(
-                            dev, &progress_transaction_id,
-                            &progress_command, &progress_phase_or_result,
-                            &progress_sequence);
-                        if (progress_status < 0) {
-                            log_debug("%s: progress snapshot unavailable "
-                                      "at RFIC deadman expiry (%s)\n",
-                                      __FUNCTION__,
-                                      bladerf_strerror(progress_status));
-                        }
-                    }
-                    log_warning("%s: failure-only deadman expired for "
-                                "RFIC transaction %u (expected_sequence=%u, "
-                                "observed_sequence=%u, queue_length=%u, "
-                                "active_state=%u, progress_id=%u, "
-                                "progress_cmd=0x%02x, progress_phase=0x%02x, "
-                                "progress_stage=%s, progress_sequence=%u); "
-                                "operation is not "
-                                "cancelled and outcome remains unresolved\n",
-                                __FUNCTION__,
-                                (unsigned int)expected_transaction_id,
-                                expected_sequence,
-                                rfic_status.last_write_sequence,
-                                rfic_status.write_queue_length,
-                                (unsigned int)rfic_status.active_state,
-                                (unsigned int)progress_transaction_id,
-                                (unsigned int)progress_command,
-                                (unsigned int)progress_phase_or_result,
-                                bladerf_rfic_progress_phase_name(
-                                    progress_phase_or_result),
-                                progress_sequence);
-                    return BLADERF_ERR_TIMEOUT;
-                }
             }
 
             /* STATUS and TRANSACTION_STATUS are separate USB reads. If a
@@ -358,31 +287,6 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
             poll_delay = bladerf2_rfic_next_poll_delay_us(
                 poll_delay, RFIC_SPINWAIT_EVENT_MAX_DELAY_US);
         }
-    }
-
-    if (status != 0) {
-        if (sequence_supported) {
-            log_warning("%s: timed out waiting for RFIC command retirement "
-                        "(expected_sequence=%u, observed_sequence=%u, "
-                        "queue_length=%u active=%u cmd=0x%02x ch=0x%x "
-                        "state=%u progress_id=%u progress_cmd=0x%02x "
-                        "progress_phase=0x%02x progress_stage=%s "
-                        "progress_sequence=%u)\n",
-                        __FUNCTION__, expected_sequence,
-                        rfic_status.last_write_sequence,
-                        rfic_status.write_queue_length,
-                        rfic_status.active_command_valid,
-                        rfic_status.active_command,
-                        rfic_status.active_channel,
-                        rfic_status.active_state,
-                        (unsigned int)progress_transaction_id,
-                        (unsigned int)progress_command,
-                        (unsigned int)progress_phase_or_result,
-                        bladerf_rfic_progress_phase_name(
-                            progress_phase_or_result),
-                        progress_sequence);
-        }
-        return BLADERF_ERR_TIMEOUT;
     }
 
     /* The queue drained and this command retired, which is still not the
@@ -547,7 +451,7 @@ static int _rfic_fpga_spinwait(struct bladerf *dev,
                                uint32_t expected_sequence,
                                bool *retired)
 {
-    return _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_TRIES,
+    return _rfic_fpga_spinwait_for(dev,
                                    RFIC_SPINWAIT_DELAY_US,
                                    sequence_supported,
                                    retirement_event_supported,
@@ -686,10 +590,14 @@ static int _rfic_fpga_ack_retired_result(struct bladerf *dev,
 
     /* The ACK uses the retired transaction ID as its packet token and the
      * retirement sequence as payload. Firmware accepts an identical retry. */
-    return dev->backend->rfic_command_write(
+    status = dev->backend->rfic_command_write(
         dev, RFIC_ADDRESS(BLADERF_RFIC_COMMAND_RESULT_ACK,
                           BLADERF_CHANNEL_INVALID),
         sequence, transaction_id);
+    log_debug("%s: result ACK (transaction=%u sequence=%u) returned %d\n",
+              __FUNCTION__, (unsigned int)transaction_id,
+              (unsigned int)sequence, status);
+    return status;
 }
 
 static int _rfic_resolve_pending_write(
@@ -808,7 +716,7 @@ static int _rfic_resolve_pending_write(
         if ((board_data->rfic_wq_pending_addr & 0xffu) ==
             BLADERF_RFIC_COMMAND_INIT) {
             result = _rfic_fpga_spinwait_for(
-                dev, RFIC_SPINWAIT_INIT_TRIES,
+                dev,
                 RFIC_SPINWAIT_INIT_DELAY_US, true,
                 retirement_event_supported,
                 board_data->rfic_wq_pending_id,
@@ -850,7 +758,7 @@ static int _rfic_resolve_pending_write(
     if ((board_data->rfic_wq_pending_addr & 0xffu) ==
         BLADERF_RFIC_COMMAND_INIT) {
         result = _rfic_fpga_spinwait_for(
-            dev, RFIC_SPINWAIT_INIT_TRIES, RFIC_SPINWAIT_INIT_DELAY_US,
+            dev, RFIC_SPINWAIT_INIT_DELAY_US,
             true, retirement_event_supported,
             board_data->rfic_wq_pending_id,
             board_data->rfic_wq_pending_sequence, &retired);
@@ -1059,7 +967,7 @@ static int _rfic_cmd_write(struct bladerf *dev,
     /* Wait for this command's retirement event. On firmware that reports the
      * active transaction, completion is not inferred from elapsed time. */
     if (BLADERF_RFIC_COMMAND_INIT == cmd) {
-        status = _rfic_fpga_spinwait_for(dev, RFIC_SPINWAIT_INIT_TRIES,
+        status = _rfic_fpga_spinwait_for(dev,
                                          RFIC_SPINWAIT_INIT_DELAY_US,
                                          sequence_supported,
                                          transaction_supported,

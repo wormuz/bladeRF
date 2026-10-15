@@ -36,6 +36,7 @@ void pkt_retune2(struct pkt_buf *b);
 /* Safe cooperative-hook entry: request queue clear without touching RFIC or
  * queue entries from inside an active SPI/calibration call stack. */
 bool pkt_retune2_defer_clear(bladerf_module module);
+bool pkt_retune2_fastlock_recall_orphaned(void);
 
 void pkt_retune2_work(void);
 

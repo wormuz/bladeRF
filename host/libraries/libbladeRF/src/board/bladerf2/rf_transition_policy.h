@@ -592,6 +592,16 @@ bladerf2_rx_invalidation_channel_event(
     return event;
 }
 
+/* Zero requests event-driven waiting without an implicit operation limit. */
+static inline uint64_t bladerf2_rf_transition_wait_deadline_ns(
+    uint64_t now_ns, uint32_t timeout_ms)
+{
+    const uint64_t duration_ns = (uint64_t)timeout_ms * 1000000ULL;
+    if (timeout_ms == 0 || now_ns > UINT64_MAX - duration_ns)
+        return UINT64_MAX;
+    return now_ns + duration_ns;
+}
+
 /* A hardware observation is timely only if it completed strictly before the
  * caller's deadline. Checking only before a blocking SPI/NIOS read can accept
  * a late completion and turn an expired wait into success. */

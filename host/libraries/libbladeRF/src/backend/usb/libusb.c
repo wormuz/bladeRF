@@ -1152,6 +1152,13 @@ static int lusb_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     status = libusb_bulk_transfer(lusb->handle, endpoint, buffer, buffer_len,
                                   &n_transferred, timeout_ms);
 
+    if (status != 0) {
+        log_debug("libusb bulk transfer failed: endpoint=0x%02x requested=%u "
+                  "transferred=%d timeout=%u ms error=%d (%s)\n",
+                  endpoint, buffer_len, n_transferred, timeout_ms, status,
+                  libusb_error_name(status));
+    }
+
     if (transferred != NULL) {
         *transferred = n_transferred < 0 ? 0u : (uint32_t)n_transferred;
     }

@@ -155,10 +155,12 @@ void pkt_16x64(struct pkt_buf *b)
         /* Each batch entry occupies 18 bits (10-bit register plus 8-bit
          * value). Reject payload bits outside the entries selected by the
          * count instead of silently accepting malformed/truncated commands. */
-        if (state_allows_write && addr >= 1 && addr <= 3 &&
-            (data >> (18 * addr)) == 0) {
+        if (state_allows_write &&
+            nios_pkt_16x64_batch_payload_valid(addr, data)) {
             success = adi_spi_write_register_batch(addr, data, &completed);
-            data = completed;
+            data = !success && completed == 0xffu
+                       ? (uint64_t)0xa5u << 56
+                       : completed;
         } else {
             /* The response payload reports completed entries. A request
              * rejected before the SPI operation completed none, so do not
@@ -221,6 +223,8 @@ void pkt_16x64(struct pkt_buf *b)
     } else {
         success = perform_read(id, addr, &data);
     }
+
+
 
     if (is_write && id == NIOS_PKT_16x64_TARGET_RFIC) {
         nios_pkt_16x64_resp_pack_with_transaction_id(

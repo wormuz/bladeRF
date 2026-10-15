@@ -799,10 +799,14 @@ int main(void)
             settings[0] = &failed_target;
             memset(&band_job, 0, sizeof(band_job));
             gpio_direction_status = -EIO;
-            if (ad9361_ext_band_transaction_start(
-                    &band_phy, false, 1835000000ULL, &band_job) != 0 ||
-                ad9361_ext_band_transaction_poll(&band_phy, &band_job) !=
-                    -EIO ||
+            ret = ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job);
+            if (ret == 0) {
+                do {
+                    ret = ad9361_ext_band_transaction_poll(&band_phy, &band_job);
+                } while (ret == 1);
+            }
+            if (ret != -EIO ||
                 !band_job.terminal || band_job.terminal_status != -EIO ||
                 band_ctl.current_rx_setting != NULL ||
                 band_phy.ext_band_transaction != NULL ||
@@ -820,10 +824,14 @@ int main(void)
         {
             band_ctl.current_rx_setting = NULL;
             memset(&band_job, 0, sizeof(band_job));
-            if (ad9361_ext_band_transaction_start(
-                    &band_phy, false, 1835000000ULL, &band_job) != 0 ||
-                ad9361_ext_band_transaction_poll(&band_phy, &band_job) != 1 ||
-                !band_job.mutation_started) {
+            ret = ad9361_ext_band_transaction_start(
+                    &band_phy, false, 1835000000ULL, &band_job);
+            if (ret == 0) {
+                do {
+                    ret = ad9361_ext_band_transaction_poll(&band_phy, &band_job);
+                } while (ret == 1 && !band_job.mutation_started);
+            }
+            if (ret != 1 || !band_job.mutation_started) {
                 fprintf(stderr, "band cancellation setup did not mutate once\n");
                 return EXIT_FAILURE;
             }
@@ -912,10 +920,13 @@ int main(void)
             ad9361_register_ext_band_control(&free_phy, ctl) != 0 ||
             ad9361_ext_band_transaction_start(&free_phy, false, 1, &job) !=
                 0 ||
-            ad9361_ext_band_transaction_poll(&free_phy, &job) != 1 ||
-            !job.mutation_started) {
+            ad9361_ext_band_transaction_poll(&free_phy, &job) != 1) {
             fprintf(stderr, "controller free cancellation setup failed\n");
             return EXIT_FAILURE;
+        }
+        while (!job.mutation_started) {
+            if (ad9361_ext_band_transaction_poll(&free_phy, &job) != 1)
+                return EXIT_FAILURE;
         }
         ad9361_ext_band_ctl_free(ctl);
         if (free_phy.ext_band_ctl != NULL ||
@@ -1256,6 +1267,8 @@ int main(void)
         int32_t step;
 
         post_cp_job.phy = &post_cp_phy;
+        post_cp_job.use_ext_rx_lo = post_cp_pdata.use_ext_rx_lo;
+        post_cp_job.use_ext_tx_lo = post_cp_pdata.use_ext_tx_lo;
         post_cp_job.active = true;
         post_cp_job.stage = AD9361_SETUP_TRANSACTION_POST_CP_BEGIN;
         post_cp_phy.setup_transaction = &post_cp_job;
@@ -1681,7 +1694,7 @@ int main(void)
 			txq_phy.tx_quad_transaction = &txq;
 			if (ad9361_tx_quad_calibration_transaction_poll(
 				    &txq_phy, &txq) != 1 ||
-			    txq.cleanup_status != 0 || txq.status != -ETIMEDOUT ||
+			    txq.cleanup_status != -EIO || txq.status != -ETIMEDOUT ||
 			    txq.job.cleanup_status != -EIO ||
 			    !txq_phy.calibration_state_unknown) {
 				fprintf(stderr,
@@ -1732,7 +1745,7 @@ int main(void)
 		/* RFDC is also a retained parent: start only establishes tracking
 		 * state and arms its ENSM child; it must not wait through ALERT inline. */
 		{
-			struct refclk_scale rx_rfpll = { .rate = 2400000000ULL };
+			struct no_os_clk rx_rfpll = { .rate = 2400000000ULL };
 			struct ad9361_rf_phy rfdc_phy = {
 				.spi = &spi,
 				.pdata = &pdata,
@@ -1768,8 +1781,8 @@ int main(void)
 		/* Exercise the complete retained RFDC path through calibration and
 		 * both restoration phases; the parent owner must survive every yield. */
 		{
-			struct refclk_scale rx_rfpll = { .rate = 2400000000ULL };
-			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct no_os_clk rx_rfpll = { .rate = 2400000000ULL };
+			struct no_os_clk clkrf = { .rate = 61440000ULL };
 			struct ad9361_rf_phy rfdc_phy = {
 				.spi = &spi,
 				.pdata = &pdata,
@@ -1833,10 +1846,10 @@ int main(void)
 		{
 			unsigned failure_case;
 			for (failure_case = 0; failure_case < 2; ++failure_case) {
-				struct refclk_scale rx_rfpll = {
+				struct no_os_clk rx_rfpll = {
 					.rate = 2400000000ULL
 				};
-			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct no_os_clk clkrf = { .rate = 61440000ULL };
 			struct ad9361_rf_phy rfdc_phy = {
 				.spi = &spi,
 				.pdata = &pdata,
@@ -1885,7 +1898,7 @@ int main(void)
 			    rfdc.terminal_status != -EAGAIN ||
 			    rfdc_phy.rfdc_transaction != NULL ||
 			    ad9361_operation_busy(&rfdc_phy) ||
-			    !rfdc_phy.tracking_config_valid ||
+			    (rfdc_phy.tracking_config_valid != (failure_case == 0)) ||
 			    (failure_case == 0 &&
 			     (rfdc.cleanup_status != 0 ||
 			      ad9361_calibration_state_unknown(&rfdc_phy) ||
@@ -1917,10 +1930,10 @@ int main(void)
 		/* The blocking timeout wrapper must preserve a distinct cleanup error
 		 * from the retained RFDC job instead of returning calibration success. */
 		{
-			struct refclk_scale rx_rfpll = {
+			struct no_os_clk rx_rfpll = {
 				.rate = 2400000000ULL
 			};
-			struct refclk_scale clkrf = { .rate = 61440000ULL };
+			struct no_os_clk clkrf = { .rate = 61440000ULL };
 			struct ad9361_rf_phy rfdc_phy = {
 				.spi = &spi,
 				.pdata = &pdata,
@@ -1936,7 +1949,7 @@ int main(void)
 			fake_regs[REG_STATE] = ENSM_STATE_RX;
 			state_after_ensm_write = ENSM_STATE_ALERT;
 			fail_write_once_reg = REG_ENSM_CONFIG_1;
-			fail_write_once_reg_occurrence = 2;
+			fail_write_once_reg_occurrence = 3;
 			apply_failed_write_once = false;
 			ret = ad9361_do_calib_timeout_with_cleanup(
 				&rfdc_phy, RFDC_CAL, 0, 50000U, &cleanup_status);
@@ -1963,6 +1976,7 @@ int main(void)
             unsigned poll;
             bool reached_filter_start = false;
 
+            register_map_enabled = true;
             memset(fake_regs, 0, sizeof(fake_regs));
             fake_regs[REG_STATE] = ENSM_STATE_RX_FLUSH;
             state_after_ensm_write = ENSM_STATE_ALERT;
@@ -2014,7 +2028,8 @@ int main(void)
                     return EXIT_FAILURE;
                 }
             }
-            for (poll = 0; poll < 16; ++poll) {
+            for (poll = 0; poll < 32; ++poll) {
+                fake_time_us += 120U;
                 unsigned reads = read_count;
                 unsigned writes = write_count;
                 ret = ad9361_rf_bandwidth_transaction_poll(
@@ -2147,6 +2162,10 @@ int main(void)
         int32_t temperature = INT32_MAX;
         unsigned index;
 
+        struct no_os_clk cp_refclk = { .rate = 40000000 };
+        cp_phy.clk_refin = &cp_refclk;
+        struct no_os_clk cp_bbpll = { .rate = 983040000 };
+        cp_phy.clks[BBPLL_CLK] = &cp_bbpll;
         cp_phy.pdata = &cp_pdata;
         other_phy.pdata = &other_pdata;
         cp_phy.ref_clk_scale[RX_RFPLL] = &rx_lo_scale;
@@ -2752,7 +2771,7 @@ int main(void)
         unsigned writes_before = write_count;
 
         if (ad9361_init(NULL, &init_param) != -EINVAL ||
-            ad9361_init(&init_result, NULL) != -EINVAL || init_result != NULL ||
+            ad9361_init(&init_result, NULL) != -EINVAL || init_result != &phy ||
             ad9361_remove(NULL) != -EINVAL ||
             read_count != reads_before || write_count != writes_before) {
             fprintf(stderr,
@@ -2890,18 +2909,22 @@ int main(void)
             fprintf(stderr, "failed to allocate AXI teardown test PHY\n");
             return EXIT_FAILURE;
         }
+        memset(fake_gpio_remove_status, 0, sizeof(fake_gpio_remove_status));
         remove_phy->rx_adc = (struct axi_adc *)(uintptr_t)1;
         remove_phy->tx_dac = (struct axi_dac *)(uintptr_t)1;
         fake_axi_adc_remove_status = -ENOMEM;
         fake_axi_dac_remove_status = -EIO;
+        fake_gpio_remove_count = 0;
         fake_axi_adc_remove_count = 0;
         fake_axi_dac_remove_count = 0;
 
-        if (ad9361_remove(remove_phy) != -ENOMEM ||
+        ret = ad9361_remove(remove_phy);
+        if (ret != -ENOMEM ||
             fake_axi_adc_remove_count != 1 ||
             fake_axi_dac_remove_count != 1) {
             fprintf(stderr,
-                    "AD9361 teardown lost first AXI cleanup error or skipped a resource\n");
+                    "AD9361 teardown lost first AXI cleanup error or skipped a resource: ret=%d adc=%u dac=%u\n",
+                    ret, fake_axi_adc_remove_count, fake_axi_dac_remove_count);
             return EXIT_FAILURE;
         }
 
@@ -2914,6 +2937,7 @@ int main(void)
         remove_phy->tx_dac = (struct axi_dac *)(uintptr_t)1;
         fake_axi_adc_remove_status = 0;
         fake_axi_dac_remove_status = -EIO;
+        fake_gpio_remove_count = 0;
         fake_axi_adc_remove_count = 0;
         fake_axi_dac_remove_count = 0;
 
@@ -4094,9 +4118,8 @@ int main(void)
                 }
             }
 
-            /* A TX lock timeout is terminal failure, never a successful
-             * cache commit. The fake clock advances to the hardware-derived
-             * deadline without running a wall-clock wait. */
+            /* Elapsed time cannot retire an unconfirmed TX lock or publish its
+             * cache. A later SPI observation error must fail closed. */
             {
                 struct refclk_scale txpll = {
                     .spi = &spi,
@@ -4129,12 +4152,23 @@ int main(void)
                     tx_timeout.wait.timeout_us;
                 ret = ad9361_rfpll_rate_transaction_poll(
                     &phy, &tx_timeout);
-                if (ret != -ETIMEDOUT || !tx_timeout.terminal ||
+                if (ret != 1 || tx_timeout.terminal ||
+                    phy.rfpll_rate_transaction != &tx_timeout ||
+                    ad9361_calibration_state_unknown(&phy) ||
+                    phy.current_tx_lo_freq != 0) {
+                    fprintf(stderr, "pending TX RFPLL retired by elapsed time\n");
+                    return EXIT_FAILURE;
+                }
+                fail_read_reg = tx_timeout.lock_reg;
+                fake_time_us += tx_timeout.wait.poll_delay_us;
+                ret = ad9361_rfpll_rate_transaction_poll(&phy, &tx_timeout);
+                fail_read_reg = -1;
+                if (ret != -EIO || !tx_timeout.terminal ||
                     phy.rfpll_rate_transaction != NULL ||
                     !ad9361_calibration_state_unknown(&phy) ||
                     phy.current_tx_lo_freq != 0) {
                     fprintf(stderr,
-                            "TX RFPLL timeout was not fail-closed: ret=%" PRId32 "\n",
+                            "TX RFPLL observation error was not fail-closed: ret=%" PRId32 "\n",
                             ret);
                     return EXIT_FAILURE;
                 }
@@ -4266,7 +4300,7 @@ int main(void)
     }
 
     spi_status = -EIO;
-    ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
+    ret = ad9361_wait_status_timeout(&phy, REG_CALIBRATION_CTRL, 1, 1, 1000, 10);
     if (ret != -EIO || read_count != 1 || delay_count != 0) {
         fprintf(stderr, "SPI read error not propagated: ret=%" PRId32
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
@@ -4275,17 +4309,16 @@ int main(void)
 
     read_count = delay_count = 0;
     spi_status = 1;
-    ret = ad9361_check_cal_done(&phy, REG_CALIBRATION_CTRL, 1, 1);
+    phy.calibration_state_unknown = false;
+    ret = ad9361_wait_status_timeout(&phy, REG_CALIBRATION_CTRL, 1, 1, 1000, 10);
     if (ret != 0 || read_count != 1 || delay_count != 0) {
         fprintf(stderr, "completed calibration mishandled: ret=%" PRId32
                 " reads=%u delays=%u\n", ret, read_count, delay_count);
         return EXIT_FAILURE;
     }
 
-    /* A completion status observed after a delayed cooperative poll is still
-     * hardware completion evidence. The deadline fails only while the status
-     * remains absent; scheduling latency alone must not poison a completed
-     * transceiver. */
+    /* Delayed observations retain ownership while pending and complete only
+     * on hardware evidence; elapsed time must not poison the transceiver. */
     {
         struct ad9361_rf_phy late_done_phy = { .spi = &spi };
         struct ad9361_status_wait wait = {0};
@@ -4315,14 +4348,18 @@ int main(void)
                                          100, 10, &overdue_wait) != 0)
                 return EXIT_FAILURE;
             fake_time_us = 2200;
-            if (ad9361_status_wait_poll(&overdue_phy, &overdue_wait) !=
-                    -ETIMEDOUT ||
-                !ad9361_calibration_state_unknown(&overdue_phy) ||
-                overdue_phy.status_wait != NULL) {
+            if (ad9361_status_wait_poll(&overdue_phy, &overdue_wait) != 1 ||
+                ad9361_calibration_state_unknown(&overdue_phy) ||
+                overdue_phy.status_wait != &overdue_wait) {
                 fprintf(stderr,
-                        "absent status did not fail at watchdog deadline\n");
+                        "absent status lost pending ownership after elapsed time\n");
                 return EXIT_FAILURE;
             }
+            fake_regs[REG_STATE] = 1;
+            fake_time_us += 10;
+            if (ad9361_status_wait_poll(&overdue_phy, &overdue_wait) != 0 ||
+                overdue_phy.status_wait != NULL)
+                return EXIT_FAILURE;
         }
 
         /* One live wait context cannot be rebound to another PHY: doing so
@@ -4568,15 +4605,25 @@ int main(void)
             return EXIT_FAILURE;
         fake_time_us = timeout_wait.start_us + timeout_wait.timeout_us +
                        timeout_wait.poll_delay_us;
-        if (ad9361_calibration_wait_poll(quarantined, &timeout_wait) !=
-                -ETIMEDOUT ||
+        if (ad9361_calibration_wait_poll(quarantined, &timeout_wait) != 1 ||
+            quarantined->calibration_wait != &timeout_wait ||
+            quarantined->calibration_wait_quarantined ||
+            ad9361_calibration_state_unknown(quarantined)) {
+            fprintf(stderr, "pending calibration retired by elapsed time\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_CALIBRATION_CTRL;
+        fake_time_us += timeout_wait.poll_delay_us;
+        ret = ad9361_calibration_wait_poll(quarantined, &timeout_wait);
+        fail_read_reg = -1;
+        if (ret != -EIO ||
             !quarantined->calibration_wait_quarantined ||
             quarantined->calibration_wait != NULL ||
             !ad9361_operation_busy(quarantined) ||
             ad9361_remove_ex(quarantined, false, &consumed) != -EBUSY ||
             consumed) {
             fprintf(stderr,
-                    "busy calibration timeout lost PHY quarantine/ownership\n");
+                    "calibration SPI error lost PHY quarantine/ownership\n");
             return EXIT_FAILURE;
         }
         if (ad9361_bbdc_calibration_start(quarantined,
@@ -4785,7 +4832,7 @@ int main(void)
         phy.ref_clk_scale[CLKTF_CLK] = &clktf;
         pdata.rx1rx2_phase_inversion_en = true;
         fail_write_once_reg = REG_PARALLEL_PORT_CONF_2;
-        ret = ad9361_tx_quad_calib(&phy, 20000000, 20000000, -1);
+        ret = ad9361_tx_quad_calib(&phy, 20000000, 20000000, -1, 20000000, 20000000);
         if (ret != -EIO || fail_write_once_reg != -1 ||
             (fake_regs[REG_PARALLEL_PORT_CONF_2] & INVERT_RX2) == 0) {
             fprintf(stderr,
@@ -5790,7 +5837,7 @@ int main(void)
                 .spi = &spi,
                 .pdata = &pdata,
             };
-            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 777 };
+            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 255 };
             uint32_t old_filter_conf = fake_regs[REG_RX_FILTER_CONFIG];
             unsigned writes_before =
                 fake_write_counts[REG_RX_FILTER_CONFIG];
@@ -5805,7 +5852,7 @@ int main(void)
             fail_write_once_reg = -1;
             if (ret != -EIO || cleanup_status != 0 ||
                 !fir_get_phy.calibration_state_unknown ||
-                fir_cfg.rx_coef_size != 777 ||
+                fir_cfg.rx_coef_size != 255 ||
                 fake_write_counts[REG_RX_FILTER_CONFIG] != writes_before + 1) {
                 fprintf(stderr,
                         "RX FIR getter wrote after failed selection or changed output\n");
@@ -5818,7 +5865,7 @@ int main(void)
 			.spi = &spi,
 			.pdata = &pdata,
 		};
-		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 777 };
+		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 255 };
 		uint32_t old_filter_conf = fake_regs[REG_TX_FILTER_CONF];
 		unsigned writes_before = fake_write_counts[REG_TX_FILTER_CONF];
 		int32_t cleanup_status = 123;
@@ -5832,7 +5879,7 @@ int main(void)
 		fail_write_once_reg = -1;
 		if (ret != -EIO || cleanup_status != 0 ||
 		    !fir_get_phy.calibration_state_unknown ||
-		    fir_cfg.tx_coef_size != 777 ||
+		    fir_cfg.tx_coef_size != 255 ||
 		    fake_write_counts[REG_TX_FILTER_CONF] != writes_before + 1) {
 			fprintf(stderr,
 				"TX FIR getter wrote after failed selection or changed output\n");
@@ -5845,7 +5892,7 @@ int main(void)
                 .spi = &spi,
                 .pdata = &pdata,
             };
-            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 777 };
+            AD9361_RXFIRConfig fir_cfg = { .rx_coef_size = 255 };
             uint32_t old_filter_conf = fake_regs[REG_RX_FILTER_CONFIG];
 			uint32_t old_filter_gain = fake_regs[REG_RX_FILTER_GAIN];
             int32_t cleanup_status = 0;
@@ -5862,7 +5909,7 @@ int main(void)
             fail_write_once_reg = -1;
             if (ret != -EIO || cleanup_status != -EIO ||
                 !fir_get_phy.calibration_state_unknown ||
-                fir_cfg.rx_coef_size != 777) {
+                fir_cfg.rx_coef_size != 255) {
                 fprintf(stderr,
                         "RX FIR getter lost primary/restore failure or changed output\n");
                 return EXIT_FAILURE;
@@ -5875,7 +5922,7 @@ int main(void)
 			.spi = &spi,
 			.pdata = &pdata,
 		};
-		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 777 };
+		AD9361_TXFIRConfig fir_cfg = { .tx_coef_size = 255 };
 		uint32_t old_filter_conf = fake_regs[REG_TX_FILTER_CONF];
 		int32_t cleanup_status = 0;
 
@@ -5890,7 +5937,7 @@ int main(void)
 		fail_write_once_reg = -1;
 		if (ret != -EIO || cleanup_status != -EIO ||
 		    !fir_get_phy.calibration_state_unknown ||
-		    fir_cfg.tx_coef_size != 777) {
+		    fir_cfg.tx_coef_size != 255) {
 			fprintf(stderr,
 				"TX FIR getter lost primary/restore failure or changed output\n");
 			return EXIT_FAILURE;
@@ -6496,7 +6543,15 @@ int main(void)
         }
 
         fail_write_reg = REG_GM_SUB_TABLE_CONFIG;
-        ret = ad9361_load_mixer_gm_subtable(&phy);
+        {
+            struct ad9361_setup_transaction gm = {
+                .phy = &phy, .active = true,
+                .stage = AD9361_SETUP_TRANSACTION_GM_START,
+            };
+            phy.setup_transaction = &gm;
+            ret = ad9361_setup_transaction_poll(&phy, &gm);
+            phy.setup_transaction = NULL;
+        }
         if (ret != -EIO) {
             fprintf(stderr, "Mixer Gm-table setup hid start write failure: ret=%" PRId32
                     "\n", ret);
@@ -6701,11 +6756,26 @@ int main(void)
     fail_write_reg = -1;
     fake_regs[REG_STATE] = ENSM_STATE_RX;
     fake_regs[REG_ENSM_CONFIG_1] = 0;
-    ret = ad9361_ensm_force_state_checked(&phy, ENSM_STATE_ALERT);
-    if (ret != -ETIMEDOUT) {
-        fprintf(stderr, "ENSM force accepted an unconfirmed state: ret=%" PRId32
-                "\n", ret);
-        return EXIT_FAILURE;
+    {
+        struct ad9361_ensm_transition_job pending = {0};
+        ret = ad9361_ensm_transition_start(&phy, ENSM_STATE_ALERT, false, &pending);
+        if (ret != 0)
+            return EXIT_FAILURE;
+        while (!pending.wait.active) {
+            if (ad9361_ensm_transition_poll(&phy, &pending) != 1)
+                return EXIT_FAILURE;
+        }
+        fake_time_us += 1000000000ULL;
+        if (ad9361_ensm_transition_poll(&phy, &pending) != 1 ||
+            pending.terminal || phy.ensm_transition_job != &pending)
+            return EXIT_FAILURE;
+        fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+        do {
+            fake_time_us += 1000;
+            ret = ad9361_ensm_transition_poll(&phy, &pending);
+        } while (ret == 1);
+        if (ret != 0)
+            return EXIT_FAILURE;
     }
 
     fake_regs[REG_STATE] = ENSM_STATE_RX;
@@ -7588,7 +7658,7 @@ int main(void)
                         clock_nodes[ADC_CLK].rate, phy.bbpll_initialized);
                 return EXIT_FAILURE;
             }
-            if (clk_get_rate_checked(&phy, bbpll, &clock_nodes[BBPLL_CLK]) !=
+            if (clk_get_rate_checked(&phy, bbpll, &(uint32_t){0}) !=
                     -EBUSY ||
                 ad9361_bbpll_clock_transaction_start(
                     &phy, bbpll, 983040000, &transaction) != -EBUSY) {
@@ -9279,8 +9349,8 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        /* A missing target-state event must fail at the status deadline and
-         * retire both nested and parent owners without accepting setup. */
+        /* A missing target-state event retains both owners regardless of elapsed
+         * time. A real observation error retires them without accepting setup. */
         memset(&setup_job, 0, sizeof(setup_job));
         setup_job.phy = &post_phy;
         setup_job.active = true;
@@ -9304,15 +9374,26 @@ int main(void)
         fake_time_us = setup_job.post_calibration_wait.start_us +
                        setup_job.post_calibration_wait.timeout_us;
         ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        if (ret != 1 || setup_job.terminal ||
+            post_phy.status_wait != &setup_job.post_calibration_wait ||
+            post_phy.setup_transaction != &setup_job ||
+            ad9361_calibration_state_unknown(&post_phy)) {
+            fprintf(stderr, "pending setup retired by elapsed time\n");
+            return EXIT_FAILURE;
+        }
+        fail_read_reg = REG_STATE;
+        fake_time_us += setup_job.post_calibration_wait.poll_delay_us;
+        ret = ad9361_setup_transaction_poll(&post_phy, &setup_job);
+        fail_read_reg = -1;
         state_after_ensm_write = -1;
         register_map_enabled = false;
-        if (ret != -ETIMEDOUT || !setup_job.terminal ||
-            setup_job.terminal_status != -ETIMEDOUT ||
+        if (ret != -EIO || !setup_job.terminal ||
+            setup_job.terminal_status != -EIO ||
             post_phy.status_wait != NULL ||
             post_phy.setup_transaction != NULL ||
             !ad9361_calibration_state_unknown(&post_phy)) {
             fprintf(stderr,
-                    "Missing ENSM event was not terminal timeout: ret=%" PRId32
+                    "ENSM observation error was not terminal: ret=%" PRId32
                     " terminal=%" PRId32 " wait=%p setup=%p unknown=%d\n",
                     ret, setup_job.terminal_status,
                     (void *)post_phy.status_wait,

@@ -556,6 +556,38 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 {
     struct rfic_queue_entry *e = rfic_queue_peek(q);
 
+    if (e == NULL && state.phy == NULL && !state.init_job_started) {
+        /* A consumed/absent PHY cannot own a live ADI continuation. Retire
+         * stale scheduler flags left behind after queue recovery; otherwise
+         * they keep host-owned SPI fenced forever with no callback to poll. */
+        state.init_job_pending = false;
+        state.init_job_started = false;
+        state.init_job_status = 0;
+        state.init_tail_phase = RFIC_INIT_TAIL_IDLE;
+        state.init_tail_pending = false;
+        state.init_module_index = 0;
+        state.init_channel_index = 0;
+        state.init_restore_standby = false;
+        state.init_nested_complete = false;
+        state.init_nested_status = 0;
+        state.rfpll_job_pending = false;
+        state.frequency_rfpll_resume_command = false;
+        state.frequency_rfpll_status = 0;
+        state.sample_rate_job_pending = false;
+        state.sample_rate_resume_command = false;
+        state.bandwidth_job_pending = false;
+        state.bandwidth_resume_command = false;
+        state.rfdc_job_pending = false;
+        state.tx_quad_job_pending = false;
+        state.tx_quad_commit_tx_frequency = false;
+        state.tx_quad_retune_owner = false;
+        state.tx_quad_resume_command = false;
+        state.fir_enable_job_pending = false;
+        state.fir_enable_resume_command = false;
+        state.fir_enable_init_pair_resume = false;
+        return;
+    }
+
     /* A RETUNE2 entry owns the shared TXQ context until its terminal poll.
      * Do not let a newly queued RFIC write steal that poll or inherit its
      * result; the scheduler routes polling back to the owning RETUNE2 queue. */
@@ -1183,6 +1215,19 @@ bool rfic_command_read_immed(bladerf_rfic_command cmd,
  */
 void rfic_command_init(void)
 {
+    size_t i;
+    /* The command state contains retained job flags and contexts in addition
+     * to the queue. Reset the whole owner state on FPGA/NIOS startup so stale
+     * RAM contents can never claim AD9361 ownership before the first command. */
+    memset(&state, 0, sizeof(state));
+    state.init_state = BLADERF_RFIC_INIT_STATE_OFF;
+    state.frequency_invalid[BLADERF_MODULE_RX] = true;
+    state.frequency_invalid[BLADERF_MODULE_TX] = true;
+    for (i = 0; i < NUM_MODULES; i++) {
+        state.samplerate_invalid[i] = true;
+        state.bandwidth_invalid[i] = true;
+        state.filter_invalid[i] = true;
+    }
     rfic_queue_reset(&state.write_queue);
 }
 
@@ -1203,6 +1248,28 @@ bool rfic_command_worker_active(void)
                state.init_job_pending || state.init_tail_pending ||
                state.rfpll_job_pending || state.fir_enable_job_pending);
 }
+
+uint8_t rfic_command_pending_mask(void)
+{
+    return (state.rfdc_job_pending ? 0x01u : 0u) |
+           (state.tx_quad_job_pending ? 0x02u : 0u) |
+           (state.sample_rate_job_pending ? 0x04u : 0u) |
+           (state.bandwidth_job_pending ? 0x08u : 0u) |
+           (state.init_job_pending ? 0x10u : 0u) |
+           (state.init_tail_pending ? 0x20u : 0u) |
+           (state.rfpll_job_pending ? 0x40u : 0u) |
+           (state.fir_enable_job_pending ? 0x80u : 0u);
+}
+
+
+bool rfic_command_has_orphaned_jobs(void)
+{
+    return state.phy == NULL &&
+           rfic_queue_peek(&state.write_queue) == NULL &&
+           rfic_command_pending_mask() != 0;
+}
+
+
 
 bool rfic_command_owns_device(void)
 {

@@ -116,6 +116,7 @@ static void retry_prepared_cooperative_response(void)
         return;
     }
 
+
     if (cooperative_pkt->session_generation !=
         command_uart_current_session_generation()) {
         cooperative_pkt->ready = false;
@@ -155,6 +156,25 @@ static void retry_prepared_cooperative_response(void)
         break;
     }
 }
+
+static void begin_deferred_worker(void)
+{
+    command_uart_set_worker_busy(true);
+    if (cooperative_pkt != NULL && cooperative_pkt->ready) {
+        /* Preserve arrival-time fencing for a request captured just before
+         * this deferred operation begins. */
+        cooperative_pkt->deferred_work_active_at_accept = true;
+    }
+}
+
+static void end_deferred_worker(void)
+{
+    command_uart_set_worker_busy(rfic_command_worker_active() ||
+                                 rfic_command_owns_device() ||
+                                 rfic_tx_quad_retune_owner() ||
+                                 (cooperative_pkt != NULL &&
+                                  cooperative_pkt->response_deferred));
+}
 #endif
 
 static void run_deferred_packet_work(void)
@@ -162,12 +182,6 @@ static void run_deferred_packet_work(void)
     size_t i;
 
 #ifdef BLADERF_NIOS_LIBAD936X
-    /* Close the gap between HAVE_REQUEST and worker entry. If the ISR
-     * already accepted a packet in that gap, fence it here. */
-    command_uart_set_worker_busy(true);
-    if (cooperative_pkt != NULL && cooperative_pkt->ready) {
-        cooperative_pkt->deferred_work_active_at_accept = true;
-    }
 #endif
 
 #ifdef BLADERF_NIOS_LIBAD936X
@@ -179,7 +193,9 @@ static void run_deferred_packet_work(void)
         for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
             if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
                 if (pkt_handlers[i].do_work != NULL) {
+                    begin_deferred_worker();
                     pkt_handlers[i].do_work();
+                    end_deferred_worker();
                 }
                 break;
             }
@@ -195,7 +211,9 @@ static void run_deferred_packet_work(void)
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
         if (pkt_handlers[i].magic == NIOS_PKT_16x64_MAGIC) {
             if (pkt_handlers[i].do_work != NULL) {
+                begin_deferred_worker();
                 pkt_handlers[i].do_work();
+                end_deferred_worker();
             }
             break;
         }
@@ -206,7 +224,9 @@ static void run_deferred_packet_work(void)
             for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
                 if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
                     if (pkt_handlers[i].do_work != NULL) {
+                        begin_deferred_worker();
                         pkt_handlers[i].do_work();
+                        end_deferred_worker();
                     }
                     break;
                 }
@@ -219,7 +239,9 @@ static void run_deferred_packet_work(void)
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
         if (pkt_handlers[i].magic != NIOS_PKT_16x64_MAGIC &&
             pkt_handlers[i].do_work != NULL) {
+            begin_deferred_worker();
             pkt_handlers[i].do_work();
+            end_deferred_worker();
         }
     }
 #else
@@ -289,6 +311,7 @@ static bool reject_packet_during_rfic_operation(struct pkt_buf *b)
             nios_pkt_8x16_unpack(b->req, &target, &write, &addr8, &data16);
             nios_pkt_8x16_resp_pack(b->resp, target, write, addr8, data16,
                                     false);
+            b->resp[NIOS_PKT_8x16_IDX_FLAGS] |= NIOS_PKT_8x16_FLAG_BUSY;
             break;
         case NIOS_PKT_8x32_MAGIC:
             nios_pkt_8x32_unpack(b->req, &target, &write, &addr8, &data32);
@@ -337,7 +360,7 @@ static bool reject_packet_during_rfic_operation(struct pkt_buf *b)
  * scheduled requests only snapshot/append queue state; their profile SPI
  * writes belong to the cooperative RETUNE2 worker. Reject every other
  * recognized packet normally so it cannot execute after timeout. */
-static void service_rfic_status_request(void)
+static void service_rfic_status_request_impl(void)
 {
     bladerf_module retune_module;
     uint64_t retune_timestamp;
@@ -358,6 +381,7 @@ static void service_rfic_status_request(void)
         return;
     }
 
+
     if (cooperative_pkt->session_generation !=
         command_uart_current_session_generation()) {
         /* USB reconnect invalidated this request's response session. Retire
@@ -373,9 +397,61 @@ static void service_rfic_status_request(void)
         return;
     }
 
-    /* A late-dispatch request also comes through this path. Its captured
-     * arrival-time fence, not the worker's now-idle state, makes rejection
-     * mandatory. Clear it once the response is consumed. */
+    /* A stale fastlock recall can outlive its RETUNE2 queue entry. Keep a
+     * read-only AD9361 probe pending while the RETUNE2 worker polls that
+     * orphan owner to a terminal lock observation. Do not run SPI or publish
+     * a false failure; the main loop retries this same request after work. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_16x64_MAGIC &&
+        cooperative_pkt->req[NIOS_PKT_16x64_IDX_TARGET_ID] ==
+            NIOS_PKT_16x64_TARGET_AD9361 &&
+        (cooperative_pkt->req[NIOS_PKT_16x64_IDX_FLAGS] &
+         NIOS_PKT_16x64_FLAG_WRITE) == 0 &&
+        (pkt_retune2_fastlock_recall_orphaned() ||
+         rfic_command_has_orphaned_jobs())) {
+        return;
+    }
+
+    /* Keep host AD9361 platform setup's AXI request pending while a
+     * resumable RFIC operation owns the part. Retry after the owner retires. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_32x32_MAGIC &&
+        cooperative_pkt->req[NIOS_PKT_32x32_IDX_TARGET_ID] ==
+            NIOS_PKT_32x32_TARGET_ADI_AXI &&
+        (rfic_command_worker_active() || rfic_command_owns_device() ||
+         rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
+         adi_fastlock_recall_active())) {
+        return;
+    }
+
+    /* Host PLL setup updates the control PIO after RFIC initialization.
+     * Preserve it until the RFIC worker releases the device. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x32_MAGIC &&
+        (cooperative_pkt->req[NIOS_PKT_8x32_IDX_TARGET_ID] ==
+             NIOS_PKT_8x32_TARGET_CONTROL ||
+         cooperative_pkt->req[NIOS_PKT_8x32_IDX_TARGET_ID] ==
+             NIOS_PKT_8x32_TARGET_ADF400X) &&
+        (cooperative_pkt->req[NIOS_PKT_8x32_IDX_FLAGS] &
+         NIOS_PKT_8x32_FLAG_WRITE) != 0 &&
+        (rfic_command_worker_active() || rfic_command_owns_device() ||
+         rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
+         adi_fastlock_recall_active())) {
+        return;
+    }
+
+    /* The VCTCXO trim DAC shares the peripheral SPI arbiter with AD9361.
+     * Preserve host calibration writes until all RFIC owners have retired. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x16_MAGIC &&
+        (cooperative_pkt->req[NIOS_PKT_8x16_IDX_TARGET_ID] ==
+             NIOS_PKT_8x16_TARGET_VCTCXO_DAC ||
+         cooperative_pkt->req[NIOS_PKT_8x16_IDX_TARGET_ID] ==
+             NIOS_PKT_8x16_TARGET_AD56X1_DAC) &&
+        (rfic_command_worker_active() || rfic_command_owns_device() ||
+         rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
+         adi_fastlock_recall_active())) {
+        return;
+    }
+
+    /* The arrival fence routes the request here. Current RFIC ownership
+     * determines whether the normal peripheral handler can now run. */
     cooperative_pkt->deferred_work_active_at_accept = false;
 
     /* Retry only the immutable response when backpressured. The request's
@@ -385,18 +461,59 @@ static void service_rfic_status_request(void)
         goto publish_cooperative_response;
     }
 
+    /* An idle deferred-worker poll also fences arriving UART packets.
+     * Once every RFIC owner is clear, dispatch peripheral packets normally
+     * rather than maintaining a partial target whitelist. The service-hook
+     * guard prevents SPI/AXI helpers from redispatching this request. RFIC
+     * and RETUNE2 protocols retain their specialized admission below. */
+    if (!rfic_command_worker_active() && !rfic_command_owns_device() &&
+        !rfic_tx_quad_retune_owner() && !adi_fastlock_load_active() &&
+        !adi_fastlock_recall_active()) {
+        switch (cooperative_pkt->req[PKT_MAGIC_IDX]) {
+        case NIOS_PKT_8x8_MAGIC:
+            pkt_8x8(cooperative_pkt);
+            goto publish_cooperative_response;
+        case NIOS_PKT_8x16_MAGIC:
+            pkt_8x16(cooperative_pkt);
+            goto publish_cooperative_response;
+        case NIOS_PKT_8x32_MAGIC:
+            pkt_8x32(cooperative_pkt);
+            goto publish_cooperative_response;
+        case NIOS_PKT_8x64_MAGIC:
+            pkt_8x64(cooperative_pkt);
+            goto publish_cooperative_response;
+        case NIOS_PKT_32x32_MAGIC:
+            pkt_32x32(cooperative_pkt);
+            goto publish_cooperative_response;
+        case NIOS_PKT_LEGACY_MAGIC:
+            pkt_legacy(cooperative_pkt);
+            goto publish_cooperative_response;
+        default:
+            break;
+        }
+    }
+
     if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_RETUNE2_MAGIC) {
         nios_pkt_retune2_unpack_token(
             cooperative_pkt->req, &retune_module, &retune_timestamp,
             &retune_nios_profile, &retune_rffe_profile, &retune_port,
             &retune_spdt, &retune_token);
-        if (retune_timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE &&
-            pkt_retune2_defer_clear(retune_module)) {
-            nios_pkt_retune2_resp_pack(
-                cooperative_pkt->resp, 0,
-                NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING,
-                NIOS_PKT_RETUNE2_FAILURE_NONE, retune_token,
-                cooperative_pkt->session_generation);
+        if (retune_timestamp == NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
+            if (rfic_command_owns_device() ||
+                rfic_tx_quad_retune_owner()) {
+                (void)pkt_retune2_defer_clear(retune_module);
+                nios_pkt_retune2_resp_pack(
+                    cooperative_pkt->resp, 0,
+                    NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING,
+                    NIOS_PKT_RETUNE2_FAILURE_NONE, retune_token,
+                    cooperative_pkt->session_generation);
+            } else {
+                /* A request captured during worker ownership is dispatched
+                 * here without running its packet handler. If ownership has
+                 * ended by this safe point, compute the clear result now;
+                 * the response buffer may still contain the previous packet. */
+                pkt_retune2(cooperative_pkt);
+            }
         } else if (retune_timestamp != NIOS_PKT_RETUNE2_NOW &&
                    retune_timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
             /* Scheduled RETUNE2 is queue-only for both protocol generations;
@@ -405,6 +522,43 @@ static void service_rfic_status_request(void)
         } else if (!reject_packet_during_rfic_operation(cooperative_pkt)) {
             return;
         }
+        goto publish_cooperative_response;
+    }
+
+    /* Read-only CONTROL PIO and independent INA219 I2C requests remain
+     * safe during RFIC ownership. Other peripheral requests were dispatched
+     * above only after all owners retired. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x16_MAGIC &&
+        cooperative_pkt->req[NIOS_PKT_8x16_IDX_TARGET_ID] ==
+            NIOS_PKT_8x16_TARGET_INA219) {
+        pkt_8x16(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x32_MAGIC &&
+        cooperative_pkt->req[NIOS_PKT_8x32_IDX_TARGET_ID] ==
+            NIOS_PKT_8x32_TARGET_CONTROL &&
+        (cooperative_pkt->req[NIOS_PKT_8x32_IDX_FLAGS] &
+         NIOS_PKT_8x32_FLAG_WRITE) == 0) {
+        pkt_8x32(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
+
+    /* The host probes FPGA version before selecting RFIC ownership. This
+     * legacy read is a constant lookup and remains safe while a deferred RFIC
+     * worker has fenced the UART. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_LEGACY_MAGIC &&
+        (cooperative_pkt->req[PKT_CFG_IDX] &
+         (NIOS_PKT_LEGACY_MODE_DIR_MASK |
+          NIOS_PKT_LEGACY_MODE_DEV_MASK |
+          NIOS_PKT_LEGACY_MODE_CNT_MASK)) ==
+            (NIOS_PKT_LEGACY_MODE_DIR_READ |
+             NIOS_PKT_LEGACY_DEV_CONFIG | 1u) &&
+        cooperative_pkt->req[2] >=
+            NIOS_PKT_LEGACY_PIO_ADDR_FPGA_VERSION &&
+        cooperative_pkt->req[2] <
+            NIOS_PKT_LEGACY_PIO_ADDR_FPGA_VERSION +
+                NIOS_PKT_LEGACY_PIO_LEN_FPGA_VERSION) {
+        pkt_legacy(cooperative_pkt);
         goto publish_cooperative_response;
     }
 
@@ -419,6 +573,47 @@ static void service_rfic_status_request(void)
                           &data);
     transaction_id =
         nios_pkt_16x64_transaction_id(cooperative_pkt->req);
+    if (target == NIOS_PKT_16x64_TARGET_RFIC && is_write &&
+        transaction_id != 0 && addr == 0x0f01u &&
+        !rfic_command_worker_active() && !rfic_command_owns_device() &&
+        !rfic_tx_quad_retune_owner() && !adi_fastlock_load_active() &&
+        !adi_fastlock_recall_active()) {
+        /* Startup selects host-owned RFIC control by explicitly sending
+         * INIT/OFF. Admit that command if the UART arrival fence only
+         * overlapped an idle deferred-worker poll. */
+        pkt_16x64(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
+    if (target == NIOS_PKT_16x64_TARGET_RFIC && is_write &&
+        transaction_id != 0 && addr == 0x0f0eu) {
+        /* RESULT_ACK only retires the already-terminal result record. It
+         * does not touch the PHY or command queue, so permit it at a safe
+         * point even when a new ADI callback set the UART arrival fence.
+         * Returning BUSY here leaves a successful INIT/OFF result retained;
+         * host mode can then proceed to direct SPI while NIOS still reports
+         * an outstanding worker owner. */
+        pkt_16x64(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
+    if (target == NIOS_PKT_16x64_TARGET_AD9361 ||
+        target == NIOS_PKT_16x64_TARGET_AD9361_WRITE_BATCH ||
+        target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW) {
+        /* Host-owned RFIC initialization performs direct AD9361 SPI
+         * transactions while the NIOS RFIC PHY is absent. A short deferred
+         * worker poll can set the UART arrival fence at that time; recheck
+         * actual ownership here and let pkt_16x64 apply its PHY/fault guards
+         * instead of dropping safe host SPI traffic. */
+        if (!is_write &&
+            (rfic_command_worker_active() || rfic_command_owns_device() ||
+             rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
+             adi_fastlock_recall_active())) {
+            nios_pkt_16x64_resp_pack(
+                cooperative_pkt->resp, target, is_write, addr, data, false);
+        } else {
+            pkt_16x64(cooperative_pkt);
+        }
+        goto publish_cooperative_response;
+    }
     if (target != NIOS_PKT_16x64_TARGET_RFIC) {
         /* Direct AD9361 SPI, gain-table and batch operations bypass the RFIC
          * command queue. Never let one run reentrantly while an ADI callback
@@ -444,7 +639,9 @@ static void service_rfic_status_request(void)
         }
     } else if (!is_write && transaction_id == 0 &&
                (addr == 0x0f00u || addr == 0x0f0cu ||
-                addr == 0x0f0du)) {
+                addr == 0x0f0du || addr == 0x0f01u)) {
+        /* STATUS, transaction/progress snapshots, and INIT state are
+         * read-only RFIC commands required by host-side initialization. */
         pkt_16x64(cooperative_pkt);
     } else {
         nios_pkt_16x64_resp_pack_with_transaction_id(
@@ -454,6 +651,21 @@ static void service_rfic_status_request(void)
 publish_cooperative_response:
     command_uart_response_mark_prepared(&cooperative_pkt->response_prepared);
     retry_prepared_cooperative_response();
+}
+
+static void service_rfic_status_request(void)
+{
+    static bool servicing;
+
+    /* An admitted packet may call SPI/AXI or delay helpers, which invoke
+     * this hook themselves. The immutable request is still ready until its
+     * response is published; dispatch it only once across those callbacks. */
+    if (servicing) {
+        return;
+    }
+    servicing = true;
+    service_rfic_status_request_impl();
+    servicing = false;
 }
 #endif
 
@@ -549,6 +761,14 @@ int main(int argc, char **argv, char **envp)
             pkt_handlers[i].init();
         }
     }
+
+
+
+    /* pkt_*_init() establishes queue and asynchronous-owner invariants.
+     * Only admit command UART requests after all handlers are ready. */
+    command_uart_enable_isr(true);
+    alt_ic_irq_enable(COMMAND_UART_IRQ_INTERRUPT_CONTROLLER_ID,
+                      COMMAND_UART_IRQ);
 
     /* ====================
      * AD9361 SPI TESTS
@@ -760,8 +980,8 @@ int main(int argc, char **argv, char **envp)
             } else {
                 command_uart_response_mark_prepared(&pkt.response_prepared);
                 pkt.ready = true;
-                pkt.deferred_work_active_at_accept = true;
-                service_rfic_status_request();
+                pkt.deferred_work_active_at_accept = false;
+                retry_prepared_cooperative_response();
             }
 #else
             if (!command_uart_publish_response(pkt.resp,
@@ -880,6 +1100,17 @@ int main(int argc, char **argv, char **envp)
          * ADI work; yielded calibration polls retain RFIC ownership while
          * unrelated RFIC-capable deferred work is suppressed. */
         run_deferred_packet_work();
+#ifdef BLADERF_NIOS_LIBAD936X
+        /* service_rfic_status_request() can intentionally leave a host
+         * AD9361 request pending while an orphaned fastlock owner drains.
+         * Revisit that immutable request after each worker pass; otherwise
+         * the final owner poll may produce no further SPI/delay safe point,
+         * leaving the request slot occupied and the command UART silent. */
+        if (cooperative_pkt != NULL && cooperative_pkt->ready &&
+            cooperative_pkt->deferred_work_active_at_accept) {
+            service_rfic_status_request();
+        }
+#endif
     }
 
     return 0;

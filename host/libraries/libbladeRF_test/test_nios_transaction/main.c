@@ -701,6 +701,47 @@ static void test_scheduled_retune2_timeout_retains_and_drains_late_ack(void)
     teardown(&usb);
 }
 
+static void test_tokenless_clear_timeout_recovers_without_session_seed(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_retune2_pack(request, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0x83, 0);
+    fake.fail_call = fake.calls + 2;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+    assert(!usb.peripheral->command_session_generation_valid);
+
+    fake.fail_call = 0;
+    nios_pkt_retune2_resp_pack(
+        fake.scripted_responses[0], 0,
+        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING,
+        NIOS_PKT_RETUNE2_FAILURE_NONE, 0, 0);
+    nios_pkt_retune2_resp_pack(
+        fake.scripted_responses[1], 0, NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS,
+        NIOS_PKT_RETUNE2_FAILURE_NONE, 0, 0);
+    fake.scripted_response_count = 2;
+
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
+                                NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(!usb.peripheral->pending_retune2_response);
+
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
+                                NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(fake.scripted_response_index == 2);
+    assert(!usb.peripheral->desynchronized);
+    teardown(&usb);
+}
+
 static void test_tokenless_retune2_timeout_recovers_after_session_reset(void)
 {
     struct bladerf_usb usb;
@@ -1422,6 +1463,7 @@ int main(void)
     test_retune2_response_echoes_request_token();
     test_tokened_now_async_acceptance_response();
     test_scheduled_retune2_timeout_retains_and_drains_late_ack();
+    test_tokenless_clear_timeout_recovers_without_session_seed();
     test_tokenless_retune2_timeout_recovers_after_session_reset();
     test_success();
     test_in_timeout_fails_closed();

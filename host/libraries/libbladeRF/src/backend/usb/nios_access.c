@@ -102,6 +102,7 @@ static int nios_access_with_response_timeout(struct bladerf *dev, uint8_t *buf,
                                              uint32_t response_timeout_ms)
 {
     struct bladerf_usb *usb = dev->backend_data;
+    uint8_t request[NIOS_PKT_LEN];
     int status;
     const bool trace_retune2 = buf[0] == NIOS_PKT_RETUNE2_MAGIC;
     uint64_t transfer_started_ns = 0;
@@ -121,12 +122,24 @@ static int nios_access_with_response_timeout(struct bladerf *dev, uint8_t *buf,
         dev->nios_retune_trace.valid = true;
     }
 
+    memcpy(request, buf, sizeof(request));
+
     print_buf("NIOS II REQ:", buf, NIOS_PKT_LEN);
 
     status = nios_usb_transaction(usb, buf, NIOS_PKT_LEN,
                                   response_timeout_ms,
                                   nios_trace_out_complete, &trace, &stage);
     if (status != 0) {
+        log_debug("NIOS USB transaction failed at stage %u (status=%d)\n",
+                  (unsigned int)stage, status);
+        if (stage == NIOS_TRANSACTION_RESPONSE_MISMATCH) {
+            size_t i;
+            log_debug("NIOS response mismatch request/response:");
+            for (i = 0; i < NIOS_PKT_LEN; i++) {
+                log_debug(" %02x/%02x", request[i], buf[i]);
+            }
+            log_debug("\n");
+        }
         if (stage == NIOS_TRANSACTION_DESYNCHRONIZED) {
             log_error("NIOS request channel is desynchronized; reopen the device\n");
         } else if (stage == NIOS_TRANSACTION_RESPONSE_MISMATCH) {
@@ -258,19 +271,29 @@ static int nios_8x16_write(struct bladerf *dev, uint8_t id,
     int status;
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
+    while (true) {
+        nios_pkt_8x16_pack(buf, id, true, addr, data);
 
-    nios_pkt_8x16_pack(buf, id, true, addr, data);
+        status = nios_access(dev, buf);
+        if (status != 0) {
+            return status;
+        }
 
-    status = nios_access(dev, buf);
-    if (status != 0) {
-        return status;
-    }
+        nios_pkt_8x16_resp_unpack(buf, NULL, NULL, NULL, NULL, &success);
 
-    nios_pkt_8x16_resp_unpack(buf, NULL, NULL, NULL, NULL, &success);
+        if ((buf[NIOS_PKT_8x16_IDX_FLAGS] &
+             NIOS_PKT_8x16_FLAG_BUSY) != 0) {
+            /* NIOS explicitly rejected this request before executing it, so
+             * retrying the same peripheral write cannot duplicate a side
+             * effect. */
+            usleep(120);
+            continue;
+        }
 
-    if (success) {
-        return 0;
-    } else {
+        if (success) {
+            return 0;
+        }
+
         log_debug("%s: response packet reported failure.\n", __FUNCTION__);
         return BLADERF_ERR_FPGA_OP;
     }
@@ -412,6 +435,8 @@ static int nios_16x64_read(struct bladerf *dev,
     if (success) {
         return 0;
     } else {
+        log_error("16x64 read was rejected (target=0x%02x, address=0x%04x, response=0x%016" PRIx64 ")\n",
+                  id, addr, *data);
         *data = 0;
         log_debug("%s: response packet reported failure.\n", __FUNCTION__);
         return BLADERF_ERR_FPGA_OP;
@@ -426,6 +451,7 @@ static int nios_16x64_write_with_transaction_id(struct bladerf *dev,
 {
     int status;
     uint8_t buf[NIOS_PKT_LEN];
+    uint64_t response_data = 0;
     bool success;
 
     nios_pkt_16x64_pack_with_transaction_id(
@@ -445,17 +471,23 @@ static int nios_16x64_write_with_transaction_id(struct bladerf *dev,
 
     if (id == NIOS_PKT_16x64_TARGET_RFIC &&
         nios_pkt_16x64_resp_is_busy(buf)) {
+        log_debug("RFIC tagged write BUSY (address=0x%04x id=%u capability=%u)\n",
+                  addr, (unsigned int)transaction_id,
+                  (unsigned int)have_cap_dev(
+                      dev, BLADERF_CAP_RFIC_BUSY_RESPONSE));
         return have_cap_dev(dev, BLADERF_CAP_RFIC_BUSY_RESPONSE)
                    ? BLADERF_ERR_WOULD_BLOCK
                    : BLADERF_ERR_FPGA_OP;
     }
 
-    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, NULL, &success);
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
+                               &success);
 
     if (success) {
         return 0;
     } else {
-        log_debug("%s: response packet reported failure.\n", __FUNCTION__);
+        log_debug("%s: response packet reported failure (address=0x%04x, data=0x%016" PRIx64 ").\n",
+                  __FUNCTION__, addr, response_data);
         return BLADERF_ERR_FPGA_OP;
     }
 }
@@ -813,7 +845,8 @@ int nios_ad9361_spi_write_batch(struct bladerf *dev,
                                 const uint8_t *values, uint8_t count)
 {
     const uint8_t max_count = 3;
-    const uint8_t unsupported_marker = 0xa5;
+    const uint8_t unsupported_marker =
+        NIOS_PKT_16x64_BATCH_UNSUPPORTED_MARKER;
     uint8_t buf[NIOS_PKT_LEN];
     uint64_t data = (uint64_t)unsupported_marker << 56;
     uint64_t response_data = 0;
@@ -848,7 +881,8 @@ int nios_ad9361_spi_write_batch(struct bladerf *dev,
     }
     if (!success || response_data != count) {
         log_debug("AD9361 SPI script failed after %" PRIu64
-                  " of %u writes\n", response_data, count);
+                  " of %u writes (response=0x%016" PRIx64 ")\n",
+                  response_data, count, response_data);
         return BLADERF_ERR_FPGA_OP;
     }
 
@@ -2311,6 +2345,13 @@ static int nios_retune_clear_wait(struct bladerf *dev, uint8_t *buf,
 
         memcpy(buf, request, sizeof(request));
         status = nios_access(dev, buf);
+        if (status == BLADERF_ERR_TIMEOUT) {
+            /* nios_usb_transaction() retains a timed-out RETUNE2 identity
+             * when the session generation is known. Reissuing CLEAR_QUEUE
+             * drains a late response and remains idempotent while the queue
+             * cancellation is pending. Keep the outer deadline authoritative. */
+            continue;
+        }
         if (status != 0 || (buf[flags_index] & pending_flag) == 0) {
             return status;
         }

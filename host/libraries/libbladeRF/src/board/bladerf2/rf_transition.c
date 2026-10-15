@@ -166,7 +166,7 @@ void bladerf2_tx_stream_set_faulted(
     if (faulted || board_data->tx_async_fault_flush_required) {
         board_data->tx_async_rfic_state_certified = false;
     }
-    COND_SIGNAL(&board_data->rx_async_epoch_cond);
+    COND_BROADCAST(&board_data->rx_async_epoch_cond);
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
@@ -196,14 +196,11 @@ void bladerf2_tx_stream_set_epoch_id(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-int bladerf2_tx_wait_for_validity(struct bladerf *dev,
-                                         uint32_t timeout_ms)
+int bladerf2_tx_wait_for_validity(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
-    uint64_t now_ns;
-    uint64_t deadline_ns;
 
-    if (dev == NULL || dev->board_data == NULL || timeout_ms == 0) {
+    if (dev == NULL || dev->board_data == NULL) {
         return BLADERF_ERR_INVAL;
     }
 
@@ -211,13 +208,6 @@ int bladerf2_tx_wait_for_validity(struct bladerf *dev,
     if (!board_data->rx_async_epoch_cond_initialized) {
         return BLADERF_ERR_UNEXPECTED;
     }
-    now_ns = _monotonic_ns();
-    if (now_ns == 0 ||
-        (uint64_t)timeout_ms > (UINT64_MAX - now_ns) / 1000000ULL) {
-        return BLADERF_ERR_UNEXPECTED;
-    }
-    deadline_ns = now_ns + (uint64_t)timeout_ms * 1000000ULL;
-
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (;;) {
         if (board_data->tx_async_fault_flush_required) {
@@ -259,28 +249,10 @@ int bladerf2_tx_wait_for_validity(struct bladerf *dev,
             return BLADERF_ERR_WOULD_BLOCK;
         }
 
-        now_ns = _monotonic_ns();
-        if (now_ns == 0) {
-            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            return BLADERF_ERR_UNEXPECTED;
-        }
-        if (now_ns >= deadline_ns) {
-            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            return BLADERF_ERR_TIMEOUT;
-        }
-
-        uint64_t remaining_ms =
-            (deadline_ns - now_ns + 999999ULL) / 1000000ULL;
-        if (remaining_ms == 0) {
-            remaining_ms = 1;
-        } else if (remaining_ms > UINT32_MAX) {
-            remaining_ms = UINT32_MAX;
-        }
-        const int wait_status = COND_TIMED_WAIT(
+        const int wait_status = COND_WAIT(
             &board_data->rx_async_epoch_cond,
-            &board_data->rx_async_epoch_lock, (uint32_t)remaining_ms);
-        if (wait_status != THREAD_SUCCESS &&
-            wait_status != THREAD_TIMEOUT) {
+            &board_data->rx_async_epoch_lock);
+        if (wait_status != THREAD_SUCCESS) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             return BLADERF_ERR_UNEXPECTED;
         }
@@ -680,7 +652,7 @@ static void _emit_event_with_timestamp_for_transaction(struct bladerf *dev,
             bladerf2_rf_event_append_locked(board_data, &event);
         }
         MUTEX_UNLOCK(&board_data->rf_transition_event_lock);
-        COND_SIGNAL(&board_data->rx_async_epoch_cond);
+        COND_BROADCAST(&board_data->rx_async_epoch_cond);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (inherit_transaction_context) {
             board_data->rf_transition_state = state;
@@ -3837,10 +3809,9 @@ static int _bladerf_rx_transition_begin(
         uint32_t epoch_status_word = 0;
         uint8_t epoch_id = 0;
 
-        const uint32_t epoch_timeout_ms =
-            request->timeout_ms ? request->timeout_ms : 1000;
-        const uint64_t epoch_deadline_ns = _monotonic_ns() +
-            (uint64_t)epoch_timeout_ms * 1000000ULL;
+        const uint64_t epoch_deadline_ns =
+            bladerf2_rf_transition_wait_deadline_ns(
+                _monotonic_ns(), request->timeout_ms);
         stage_started_ns = _monotonic_ns();
         int epoch_status = _prepare_rx_epoch_id(
             dev, epoch_deadline_ns, &epoch_id, &epoch_status_word);
@@ -3913,10 +3884,8 @@ static int _bladerf_rx_transition_begin(
      * cannot leak samples; a deadline remains a failure, never a validity
      * signal. */
     {
-        const uint32_t timeout_ms = request->timeout_ms
-            ? request->timeout_ms : 1000;
-        calibration_deadline_ns = _monotonic_ns() +
-            (uint64_t)timeout_ms * 1000000ULL;
+        calibration_deadline_ns = bladerf2_rf_transition_wait_deadline_ns(
+            _monotonic_ns(), request->timeout_ms);
     }
     for (;;) {
         if (_rx_transition_close_requested(board_data)) {
@@ -4267,9 +4236,12 @@ static int _wait_for_first_host_data(
         } else if (remaining_ms > UINT32_MAX) {
             remaining_ms = UINT32_MAX;
         }
-        const int wait_status = COND_TIMED_WAIT(
-            &board_data->rx_async_epoch_cond,
-            &board_data->rx_async_epoch_lock, (uint32_t)remaining_ms);
+        const int wait_status = deadline_ns == UINT64_MAX
+            ? COND_WAIT(&board_data->rx_async_epoch_cond,
+                        &board_data->rx_async_epoch_lock)
+            : COND_TIMED_WAIT(&board_data->rx_async_epoch_cond,
+                              &board_data->rx_async_epoch_lock,
+                              (uint32_t)remaining_ms);
         if (wait_status != THREAD_SUCCESS &&
             wait_status != THREAD_TIMEOUT) {
             status = BLADERF_ERR_UNEXPECTED;
@@ -4341,7 +4313,8 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
         return _fail_transition_for_close(dev, board_data, final_event);
     }
 
-    deadline_ns = _monotonic_ns() + (uint64_t)timeout_ms * 1000000ULL;
+    deadline_ns = bladerf2_rf_transition_wait_deadline_ns(
+        _monotonic_ns(), timeout_ms);
     wait_started_ns = _monotonic_ns();
     if (board_data->rf_transition_required_events_mask &
         BLADERF_RF_REQUIRE_FIRST_HOST_DATA) {

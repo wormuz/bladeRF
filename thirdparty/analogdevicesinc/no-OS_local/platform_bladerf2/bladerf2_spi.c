@@ -214,6 +214,8 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
         status = dev->backend->ad9361_spi_write(dev, cmd, word);
         bladerf2_rx_transition_spi_observe(dev, false, status);
         if (status < 0) {
+            log_error("AD9361 SPI write failed (command=0x%04x, status=%d)\n",
+                      cmd, status);
             return bladerf2_status_to_errno(status);
         }
 
@@ -223,6 +225,8 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
     word = 0;
     status = dev->backend->ad9361_spi_read(dev, cmd, &word);
     if (status < 0) {
+        log_error("AD9361 SPI read failed (command=0x%04x, status=%d)\n",
+                  cmd, status);
         return bladerf2_status_to_errno(status);
     }
 

@@ -12,12 +12,14 @@
  * another device's backend.
  */
 #include <errno.h>
+#include <stdio.h>
 #include <stdint.h>
 
 #include "board/board.h"
 
 #include "bladerf2_status.h"
 #include "no_os_axi_io.h"
+#include "log.h"
 
 #if defined(_MSC_VER)
 static __declspec(thread) struct bladerf *axi_io_dev;
@@ -48,6 +50,8 @@ int32_t no_os_axi_io_read(uint32_t base, uint32_t offset, uint32_t *data)
     int status = axi_io_dev->backend->adi_axi_read(
         axi_io_dev, (uint32_t)address, data);
     if (status < 0) {
+        log_error("AD9361 AXI read failed (address=0x%08x, status=%d)\n",
+                  (uint32_t)address, status);
         /* Some backends can partially write the output before reporting a
          * transport failure. Never let that value escape as register data. */
         *data = 0;
@@ -71,6 +75,8 @@ int32_t no_os_axi_io_write(uint32_t base, uint32_t offset, uint32_t data)
     int status = axi_io_dev->backend->adi_axi_write(
         axi_io_dev, (uint32_t)address, data);
     if (status < 0) {
+        log_error("AD9361 AXI write failed (address=0x%08x, value=0x%08x, status=%d)\n",
+                  (uint32_t)address, data, status);
         return bladerf2_status_to_errno(status);
     }
 

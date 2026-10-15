@@ -64,7 +64,6 @@
 #include "streaming/metadata.h"
 #include "streaming/sync.h"
 
-#define BLADERF2_TX_VALIDITY_WAIT_TIMEOUT_MS 1000
 
 /* no_os_axi_io has no context parameter; bind the device around direct ADI
  * calls that reach AXI, just as the host RFIC callbacks do. */
@@ -3401,9 +3400,8 @@ static bool bladerf2_tx_async_buffer_valid(struct bladerf *dev)
     /* The FPGA START ACK precedes the monitor's RFIC PLL/ENSM/BBPLL
      * observation. Do not terminate an async stream in that narrow initial
      * state; wait for the positive status event. Faulted/revoked states are
-     * rejected immediately, and timeout remains a failure-only watchdog. */
-    status = bladerf2_tx_wait_for_validity(
-        dev, BLADERF2_TX_VALIDITY_WAIT_TIMEOUT_MS);
+     * rejected immediately. Readiness follows the monitor's status event. */
+    status = bladerf2_tx_wait_for_validity(dev);
     if (status != 0) {
         struct bladerf2_board_data *board_data = dev->board_data;
         bool link_certified;
@@ -5805,9 +5803,8 @@ static int bladerf2_sync_tx(struct bladerf *dev,
     if (!tx_admission_allowed) {
         /* START ACK can precede RFIC certification, and an RFIC certificate
          * can precede the TX gate's RESUME event. Wait for both; fail if a
-         * real fault revokes the epoch or the watchdog expires. */
-        int validity_status = bladerf2_tx_wait_for_validity(
-            dev, BLADERF2_TX_VALIDITY_WAIT_TIMEOUT_MS);
+         * real fault revokes the epoch. */
+        int validity_status = bladerf2_tx_wait_for_validity(dev);
         if (validity_status != 0) {
             bool link_certified;
             bool rfic_certified;

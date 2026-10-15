@@ -139,6 +139,23 @@ bool pkt_retune2_defer_clear(bladerf_module module)
     return true;
 }
 
+bool pkt_retune2_fastlock_recall_orphaned(void)
+{
+#ifdef BLADERF_NIOS_LIBAD936X
+    if (!adi_fastlock_recall_active()) {
+        return false;
+    }
+
+    switch (adi_fastlock_recall_owner()) {
+        case BLADERF_MODULE_RX: return rx_queue.count == 0;
+        case BLADERF_MODULE_TX: return tx_queue.count == 0;
+        default: return true;
+    }
+#else
+    return false;
+#endif
+}
+
 /* Deferred failures happen after the host has already received the queue
  * acceptance response. Keep per-direction monotonic counters so host
  * monitoring can report an execution failure instead of silently losing the
@@ -1115,6 +1132,9 @@ void pkt_retune2_init()
 {
     reset_queue(&rx_queue);
     reset_queue(&tx_queue);
+#ifdef BOARD_BLADERF_MICRO
+    adi_fastlock_jobs_init();
+#endif
     profile_preload_tx_first = false;
     rx_retune2_failure_count = 0;
     tx_retune2_failure_count = 0;
@@ -1577,10 +1597,39 @@ void pkt_retune2_work(void)
     }
     if (adi_fastlock_recall_active()) {
         bladerf_module const owner = adi_fastlock_recall_owner();
-        if (owner == BLADERF_MODULE_RX)
+        if (owner == BLADERF_MODULE_RX && rx_queue.count == 0) {
+            uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+            int32_t status = adi_fastlock_recall_poll(owner,
+                                                       &failure_stage);
+            if (status == 1)
+                return;
+            if (rfic_frequency_state_available())
+                rfic_invalidate_frequency(owner);
+            record_retune2_failure(owner, NULL,
+                                   failure_stage ==
+                                           NIOS_PKT_RETUNE2_FAILURE_NONE
+                                       ? NIOS_PKT_RETUNE2_FAILURE_INTERNAL
+                                       : failure_stage);
             perform_work(&rx_queue, owner);
-        else if (owner == BLADERF_MODULE_TX)
+        } else if (owner == BLADERF_MODULE_RX) {
+            perform_work(&rx_queue, owner);
+        } else if (owner == BLADERF_MODULE_TX && tx_queue.count == 0) {
+            uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+            int32_t status = adi_fastlock_recall_poll(owner,
+                                                       &failure_stage);
+            if (status == 1)
+                return;
+            if (rfic_frequency_state_available())
+                rfic_invalidate_frequency(owner);
+            record_retune2_failure(owner, NULL,
+                                   failure_stage ==
+                                           NIOS_PKT_RETUNE2_FAILURE_NONE
+                                       ? NIOS_PKT_RETUNE2_FAILURE_INTERNAL
+                                       : failure_stage);
             perform_work(&tx_queue, owner);
+        } else if (owner == BLADERF_MODULE_TX) {
+            perform_work(&tx_queue, owner);
+        }
         return;
     }
     if (rfic_tx_quad_retune_owner()) {

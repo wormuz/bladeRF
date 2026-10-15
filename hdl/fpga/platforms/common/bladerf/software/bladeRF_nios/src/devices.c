@@ -50,6 +50,7 @@ static void rfic_service_safe_point(void)
 {
     bladerf_platform_service();
 }
+
 #endif
 
 /* Define a global variable containing the current VCTCXO DAC setting.
@@ -126,14 +127,6 @@ void command_uart_set_worker_busy(bool busy)
     IOWR_32DIRECT(COMMAND_UART_BASE, 16, command_uart_control_shadow);
 }
 
-static bool command_uart_request_busy(void)
-{
-    /* Bit 0 is the worker state captured at final-byte receipt. Bit 1 is the
-     * live worker state, covering a frame completed just before worker entry
-     * whose IRQ is serviced only after entry. */
-    return (IORD_32DIRECT(COMMAND_UART_BASE, 28) & 0x03) != 0;
-}
-
 uint32_t command_uart_current_session_generation(void)
 {
     return IORD_32DIRECT(COMMAND_UART_BASE, 24);
@@ -202,7 +195,11 @@ static void command_uart_isr(void *context)
     /* Snapshot arrival-time evidence before reading the request. Consuming
      * the first request word releases the UART slot and clears its per-frame
      * busy latch in FPGA logic. */
-    pkt->deferred_work_active_at_accept = command_uart_request_busy();
+    /* Bit 0 records worker ownership at frame receipt; bit 1 records live
+     * ownership if worker entry preceded this ISR. Read before consuming
+     * the request, which releases the frame's arrival fence in hardware. */
+    pkt->deferred_work_active_at_accept =
+        (IORD_32DIRECT(COMMAND_UART_BASE, 28) & 0x03u) != 0;
     pkt->session_generation = command_uart_request_session_generation();
     command_uart_read_request((uint8_t *)pkt->req);
     command_uart_response_retire(&pkt->response_prepared);
@@ -546,6 +543,12 @@ void bladerf_nios_init(struct pkt_buf *pkt,
     IOWR_ALTERA_AVALON_PIO_DATA(TX_TRIGGER_CTL_BASE, 0x00);
     IOWR_ALTERA_AVALON_PIO_DATA(RX_TRIGGER_CTL_BASE, 0x00);
 
+    /* Keep command admission disabled until the board's packet handlers
+     * have initialized their queues and retained RFIC jobs. A request IRQ
+     * in the gap between ISR registration and pkt_*_init() can otherwise
+     * publish work against partially initialized state. */
+    command_uart_enable_isr(false);
+
     /* Register Command UART ISR */
     alt_ic_isr_register(COMMAND_UART_IRQ_INTERRUPT_CONTROLLER_ID,
                         COMMAND_UART_IRQ, command_uart_isr, pkt, NULL);
@@ -561,9 +564,6 @@ void bladerf_nios_init(struct pkt_buf *pkt,
     }
 
     /* Enable interrupts */
-    command_uart_enable_isr(true);
-    alt_ic_irq_enable(COMMAND_UART_IRQ_INTERRUPT_CONTROLLER_ID,
-                      COMMAND_UART_IRQ);
     alt_ic_irq_enable(VCTCXO_TAMER_0_IRQ_INTERRUPT_CONTROLLER_ID,
                       VCTCXO_TAMER_0_IRQ);
 }
@@ -1063,12 +1063,17 @@ bool adi_spi_write_register_batch(uint16_t count, uint64_t data,
     uint16_t i;
     bool success = false;
 
-    if (completed == NULL || count == 0 || count > 3 ||
-        !spi_arbiter_lock()) {
+    if (completed == NULL || count == 0 || count > 3) {
         return false;
     }
 
     *completed = 0;
+    if (!spi_arbiter_lock()) {
+        /* No register command was issued. Let the host use its scalar path,
+         * where each write has its own bounded arbiter acquisition. */
+        *completed = UINT8_MAX;
+        return false;
+    }
     for (i = 0; i < count; i++) {
         const uint64_t entry = (data >> (18 * i)) & 0x3ffff;
         const uint16_t reg = entry & 0x3ff;
@@ -1518,6 +1523,12 @@ static struct {
     struct no_os_time started;
     struct no_os_time last_poll;
 } fastlock_recall_job;
+
+void adi_fastlock_jobs_init(void)
+{
+    memset(&fastlock_load_job, 0, sizeof(fastlock_load_job));
+    memset(&fastlock_recall_job, 0, sizeof(fastlock_recall_job));
+}
 
 bool adi_fastlock_recall_active(void)
 {
