@@ -29,6 +29,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
+#include <string.h>
 
 #include "ad936x_helpers.h"
 #include "devices_inline.h"
@@ -372,7 +373,8 @@ static void _rfic_init_tail_advance_module(struct rfic_state *state,
  * SETUP_POLL value for the entire constructor. */
 static uint8_t _rfic_init_progress_step(const struct rfic_state *state)
 {
-    uint8_t const stage = (uint8_t)state->init_job.stage;
+    uint8_t const stage = state->init_job_pending
+        ? (uint8_t)state->init_job.stage : state->init_job_stage;
 
     if (state->init_job_started &&
         (state->init_job_pending || state->phy == NULL ||
@@ -393,7 +395,9 @@ static uint8_t _rfic_init_progress_step(const struct rfic_state *state)
         case AD9361_INIT_TXN_SETUP_START:
             return BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK;
         case AD9361_INIT_TXN_SETUP_POLL: {
-            uint8_t const setup = (uint8_t)state->init_job.setup_job.stage;
+            uint8_t const setup = state->init_job_pending
+                ? (uint8_t)state->init_job.setup_job.stage
+                : state->init_setup_stage;
 
             if (setup < AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_START)
                 return BLADERF_RFIC_PROGRESS_INIT_PRE_CLOCK;
@@ -458,9 +462,9 @@ static bool _rfic_initialize(struct rfic_state *state)
     if (state->init_job_started && !state->init_job_pending &&
         state->init_job_status < 0) {
         state->calibration_faulted = true;
-        rfic_command_record_cleanup_error(state->init_job.cleanup_status);
+        rfic_command_record_cleanup_error(state->init_job_cleanup_status);
         state->init_stage = rfic_init_cleanup_stage(
-            state->init_job.cleanup_status, state->init_stage,
+            state->init_job_cleanup_status, state->init_stage,
             BLADERF_RFIC_INIT_STAGE_CLEANUP_FAILED);
         RFIC_ERR("AD9361 init transaction", state->init_job_status);
         return false;
@@ -472,6 +476,10 @@ static bool _rfic_initialize(struct rfic_state *state)
      * the datapath. Resume at the common PHY validation/tail boundary. */
     if (ad9361_init_resume)
         goto ad9361_init_ready;
+    if (state->init_job_started) {
+        RFIC_ERR("invalid ADI init resume state", -EIO);
+        return false;
+    }
 
     state->init_stage = BLADERF_RFIC_INIT_STAGE_ENTER;
     /* Initialization can mutate clocks, ports, FIR and LO in stages. Until
@@ -515,27 +523,13 @@ static bool _rfic_initialize(struct rfic_state *state)
     if (NULL == state->phy) {
         state->init_state = BLADERF_RFIC_INIT_STATE_OFF;
 
-        if (state->init_job_started) {
-            /* The queue worker has completed the retained ADI constructor.
-             * Its exact status and candidate ownership survive until this
-             * callback continuation handles success or cleanup. */
-            if (state->init_job_pending) {
-                RFIC_ERR("INIT callback resumed while ADI job is pending",
-                         -EBUSY);
-                return false;
-            }
-            if (state->init_job_status < 0) {
-                state->calibration_faulted = true;
-                RFIC_ERR("ad9361_init_transaction_poll",
-                         state->init_job_status);
-                return false;
-            }
-            if (state->init_job_status != 0 || state->phy == NULL) {
-                state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
-                RFIC_ERR("ADI init transaction completed without PHY", -EIO);
-                return false;
-            }
-        } else {
+        /* No retained ADI owner is active for a new INIT command. The union
+         * may contain the previous tail job, so initialize its constructor
+         * member before the ADI start routine checks its active flags. */
+        memset(&state->init_job, 0, sizeof(state->init_job));
+        state->init_job_stage = 0;
+        state->init_setup_stage = 0;
+        state->init_job_cleanup_status = 0;
 
         DBG("--- Initializing AD9361 ---\n");
 
@@ -623,17 +617,6 @@ static bool _rfic_initialize(struct rfic_state *state)
          * ADI phase on each later pass and re-enters this callback only at
          * the constructor's terminal result. */
         return true;
-        }
-        state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_OK;
-
-        if (NULL == state->phy) {
-            state->init_stage = BLADERF_RFIC_INIT_STAGE_PHY_NULL;
-            RFIC_ERR("ad9361_init returned NULL PHY", -EIO);
-            DBG("%s: ad9361_init returned ok but left phy NULL\n",
-                __FUNCTION__);
-            return false;
-        }
-
     }
 
 ad9361_init_ready:

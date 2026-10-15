@@ -598,6 +598,11 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
                 state.init_job_pending = false;
                 state.init_job_status = step_status;
+                state.init_job_stage = (uint8_t)state.init_job.stage;
+                state.init_setup_stage =
+                    (uint8_t)state.init_job.setup_job.stage;
+                state.init_job_cleanup_status =
+                    state.init_job.cleanup_status;
                 if (step_status < 0)
                     rfic_command_record_error(step_status);
 

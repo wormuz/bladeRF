@@ -74,21 +74,23 @@ struct rfic_state {
      * stopped instead of only "false". */
     uint8_t init_stage;
 
-    /* Keep INIT separate: its constructor result and cleanup detail remain
-     * live while the sequential INIT tail runs. */
-    struct ad9361_init_transaction init_job;
-
-    /* Runtime retained jobs share storage. The deferred scheduler polls only
-     * one RFIC operation at a time and routes the active owner before any
-     * other RFIC-capable work. Pending flags below identify the active member. */
+    /* The NIOS queue owns one retained ADI context at a time. Cold INIT's
+     * constructor ends before its ordered tail jobs begin, so reuse this
+     * storage after copying the constructor's small terminal report fields. */
     union {
-        struct ad9361_rfpll_clock_transaction rfpll_job;
-        struct ad9361_sample_rate_transaction sample_rate_job;
-        struct ad9361_rf_bandwidth_transaction bandwidth_job;
-        struct ad9361_fir_enable_transaction fir_enable_job;
-        struct ad9361_rfdc_calibration_job rfdc_job;
-        struct ad9361_tx_quad_calibration_transaction tx_quad_job;
-    } job_context;
+        struct ad9361_init_transaction init_job;
+        union {
+            struct ad9361_rfpll_clock_transaction rfpll_job;
+            struct ad9361_sample_rate_transaction sample_rate_job;
+            struct ad9361_rf_bandwidth_transaction bandwidth_job;
+            struct ad9361_fir_enable_transaction fir_enable_job;
+            struct ad9361_rfdc_calibration_job rfdc_job;
+            struct ad9361_tx_quad_calibration_transaction tx_quad_job;
+        } job_context;
+    };
+    uint8_t init_job_stage;
+    uint8_t init_setup_stage;
+    int32_t init_job_cleanup_status;
 
     /* Cold INIT retains the ADI candidate-PHY constructor while the sole
      * RFIC queue worker yields between setup/calibration polls. The context
@@ -208,6 +210,9 @@ struct rfic_state {
  * sample-rate state (~1.25 KiB); it must not silently grow above 1280 bytes. */
 typedef char rfic_runtime_job_context_size_must_stay_below_1280[
     sizeof(((struct rfic_state *)0)->job_context) <= 1280U ? 1 : -1];
+typedef char rfic_init_context_overlay_must_save_memory[
+    sizeof(((struct rfic_state *)0)->init_job) >
+        sizeof(((struct rfic_state *)0)->job_context) ? 1 : -1];
 
 
 /******************************************************************************/
