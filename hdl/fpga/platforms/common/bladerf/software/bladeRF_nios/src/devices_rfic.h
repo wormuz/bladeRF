@@ -74,10 +74,25 @@ struct rfic_state {
      * stopped instead of only "false". */
     uint8_t init_stage;
 
+    /* Keep INIT separate: its constructor result and cleanup detail remain
+     * live while the sequential INIT tail runs. */
+    struct ad9361_init_transaction init_job;
+
+    /* Runtime retained jobs share storage. The deferred scheduler polls only
+     * one RFIC operation at a time and routes the active owner before any
+     * other RFIC-capable work. Pending flags below identify the active member. */
+    union {
+        struct ad9361_rfpll_clock_transaction rfpll_job;
+        struct ad9361_sample_rate_transaction sample_rate_job;
+        struct ad9361_rf_bandwidth_transaction bandwidth_job;
+        struct ad9361_fir_enable_transaction fir_enable_job;
+        struct ad9361_rfdc_calibration_job rfdc_job;
+        struct ad9361_tx_quad_calibration_transaction tx_quad_job;
+    } job_context;
+
     /* Cold INIT retains the ADI candidate-PHY constructor while the sole
      * RFIC queue worker yields between setup/calibration polls. The context
      * and init parameters remain resident until terminal result/cleanup. */
-    struct ad9361_init_transaction init_job;
     bool init_job_started;
     bool init_job_pending;
     int32_t init_job_status;
@@ -92,7 +107,6 @@ struct rfic_state {
     /* NIOS LO programming uses the retained ADI RFPLL clock transaction.
      * The command resumes after PLL lock to run RFDC/TXQ and publish the LO
      * cache; it must not replay port selection or the LO programming phase. */
-    struct ad9361_rfpll_clock_transaction rfpll_job;
     bool rfpll_job_pending;
     bool frequency_rfpll_resume_command;
     bladerf_channel frequency_rfpll_channel;
@@ -129,7 +143,6 @@ struct rfic_state {
     /* RX/TX sample-rate changes share the AD9361 clock tree and bandwidth
      * calibration. Keep the entire clock→filter→TXQ/recovery transaction
      * resident while the RFIC queue yields between TXQ polls. */
-    struct ad9361_sample_rate_transaction sample_rate_job;
     bool sample_rate_job_pending;
     bool sample_rate_resume_command;
     bool sample_rate_saved_samplerate_invalid[NUM_MODULES];
@@ -137,7 +150,6 @@ struct rfic_state {
 
     /* Standalone RX/TX bandwidth writes also run shared BBF/TXQ work. Keep
      * their ADI transaction resident while the queue yields between polls. */
-    struct ad9361_rf_bandwidth_transaction bandwidth_job;
     bool bandwidth_job_pending;
     bool bandwidth_resume_command;
 
@@ -145,7 +157,6 @@ struct rfic_state {
      * validation nests clock-chain, analog-filter, and TXQ work. Preserve the
      * command identity so a resumed callback commits cache only, never reloads
      * coefficients or restarts calibration. */
-    struct ad9361_fir_enable_transaction fir_enable_job;
     bool fir_enable_job_pending;
     bool fir_enable_resume_command;
     bool fir_enable_init_pair_resume;
@@ -164,7 +175,6 @@ struct rfic_state {
     /* Runtime RX retune may yield while RF DC calibration is active. This
      * context stays resident until the hardware completion and ADI restore
      * phase have both reached a terminal result. */
-    struct ad9361_rfdc_calibration_job rfdc_job;
     bool rfdc_job_pending;
     bool rfdc_commit_rx_frequency;
     uint8_t rfdc_job_port;
@@ -180,7 +190,6 @@ struct rfic_state {
     /* Runtime TX LO retune may yield across TXQ attempts/phase search. The
      * target TX frequency remains invalid until tracking/ENSM restoration and
      * calibration-history commit both complete. */
-    struct ad9361_tx_quad_calibration_transaction tx_quad_job;
     bool tx_quad_job_pending;
     bool tx_quad_commit_tx_frequency;
     bool tx_quad_retune_owner;
@@ -194,6 +203,11 @@ struct rfic_state {
     /* TX mute state at standby */
     bool tx_mute_state[2];
 };
+
+/* Guard the BSS budget: the largest current retained runtime context is
+ * sample-rate state (~1.25 KiB); it must not silently grow above 1280 bytes. */
+typedef char rfic_runtime_job_context_size_must_stay_below_1280[
+    sizeof(((struct rfic_state *)0)->job_context) <= 1280U ? 1 : -1];
 
 
 /******************************************************************************/

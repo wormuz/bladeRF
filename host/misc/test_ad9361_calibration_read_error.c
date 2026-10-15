@@ -1060,7 +1060,7 @@ int main(void)
         unsigned delays_before = delay_count;
         unsigned expected_index = writes_before;
         unsigned polls = 0;
-        unsigned empty_gc_polls = 0;
+        unsigned gc_setup_writes_before;
         unsigned row;
         int32_t step;
 
@@ -1143,33 +1143,38 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        /* The continuation must keep the full gain-control register setup
-         * and timing update bounded too; no poll may execute more than one
-         * register helper (writef may perform one read plus one write). */
+        gc_setup_writes_before = write_count;
+        /* The gain-control register prefix is intentionally one ordered
+         * batch. It must finish before the separately retained calibration
+         * start/update phases; it must not yield one NIOS turn per register. */
         polls = 0;
-        while (gm_job.stage != AD9361_SETUP_TRANSACTION_CALIBRATION_START &&
-               polls++ < 512) {
-            unsigned reads_at_start = read_count;
-            unsigned writes_at_start = write_count;
-
+        while (gm_job.stage == AD9361_SETUP_TRANSACTION_GC_SETUP &&
+               polls++ < 2) {
             step = ad9361_setup_transaction_poll(&gm_phy, &gm_job);
-            if (step != 1 || read_count - reads_at_start > 1 ||
-                write_count - writes_at_start > 1) {
-                fprintf(stderr,
-                        "AGC setup/update poll exceeded its register-operation budget\n");
+            if (step != 1) {
+                fprintf(stderr, "AGC register batch failed during setup\n");
                 return EXIT_FAILURE;
             }
-            if (read_count == reads_at_start &&
-                write_count == writes_at_start && ++empty_gc_polls > 2) {
-                fprintf(stderr,
-                        "AGC setup/update cursor stalled without register work\n");
+        }
+        if (gm_job.stage != AD9361_SETUP_TRANSACTION_GC_UPDATE ||
+            polls != 1 || write_count <= gc_setup_writes_before) {
+            fprintf(stderr,
+                    "AGC register batch did not complete in one retained step\n");
+            return EXIT_FAILURE;
+        }
+        polls = 0;
+        while (gm_job.stage != AD9361_SETUP_TRANSACTION_CALIBRATION_START &&
+               polls++ < 16) {
+            step = ad9361_setup_transaction_poll(&gm_phy, &gm_job);
+            if (step != 1) {
+                fprintf(stderr, "AGC update phase failed before calibration\n");
                 return EXIT_FAILURE;
             }
         }
         if (gm_job.stage != AD9361_SETUP_TRANSACTION_CALIBRATION_START ||
-            gm_job.gc_cursor != 0 || polls >= 512) {
+            polls >= 16) {
             fprintf(stderr,
-                    "AGC setup/update did not reach calibration in bounded polls\n");
+                    "AGC update did not reach calibration in bounded polls\n");
             return EXIT_FAILURE;
         }
     }
@@ -1339,6 +1344,40 @@ int main(void)
         }
         mux_phy.setup_transaction = NULL;
         mux_job.active = false;
+    }
+
+    /* A pre-clock setup write failure must not run gain-table cleanup: the
+     * indirect GM engine has not been started at this point. */
+    {
+        struct ad9361_phy_platform_data prefix_pdata = {0};
+        struct ad9361_rf_phy prefix_phy = {
+            .spi = &spi,
+            .pdata = &prefix_pdata,
+        };
+        struct ad9361_setup_transaction prefix_job = {0};
+        unsigned gm_cleanup_writes =
+            fake_write_counts[REG_GM_SUB_TABLE_CONFIG];
+        int32_t step;
+
+        prefix_job.phy = &prefix_phy;
+        prefix_job.active = true;
+        prefix_job.stage = AD9361_SETUP_TRANSACTION_PRE_CTRL;
+        prefix_phy.setup_transaction = &prefix_job;
+        register_map_enabled = true;
+        fail_write_once_reg = REG_CTRL;
+        fail_write_once_reg_occurrence = 1;
+
+        step = ad9361_setup_transaction_poll(&prefix_phy, &prefix_job);
+        if (step != -EIO || !prefix_job.terminal ||
+            prefix_job.terminal_status != -EIO ||
+            prefix_phy.setup_transaction != NULL ||
+            !ad9361_calibration_state_unknown(&prefix_phy) ||
+            fake_write_counts[REG_GM_SUB_TABLE_CONFIG] != gm_cleanup_writes ||
+            fail_write_once_reg != -1) {
+            fprintf(stderr,
+                    "Pre-clock setup failure ran gain-table cleanup or lost status\n");
+            return EXIT_FAILURE;
+        }
     }
 
     /* A failed RX CP programming write must terminate the parent setup,

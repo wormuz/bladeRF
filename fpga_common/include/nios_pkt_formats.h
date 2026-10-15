@@ -22,6 +22,11 @@
 #ifndef BLADERF_NIOS_PKT_FORMATS_H_
 #define BLADERF_NIOS_PKT_FORMATS_H_
 
+/* The packet-specific inline helpers use this bound; define it before the
+ * packet headers so they are valid when this umbrella header is included
+ * from the no-OS platform layer as well as the NIOS packet handler. */
+#define NIOS_PKT_LEN 16
+
 #include "nios_pkt_legacy.h"
 #include "nios_pkt_retune.h"
 #include "nios_pkt_retune2.h"
@@ -31,7 +36,5 @@
 #include "nios_pkt_8x64.h"
 #include "nios_pkt_32x32.h"
 #include "nios_pkt_16x64.h"
-
-#define NIOS_PKT_LEN 16
 
 #endif

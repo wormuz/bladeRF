@@ -1748,7 +1748,9 @@ void pkt_retune2(struct pkt_buf *b)
                  * acceptance/completion protocol; tokenless callers retain
                  * their synchronous response by keeping this packet buffer
                  * until the worker is terminal. */
+#ifndef BLADERF_NIOS_LIBAD936X
                 uint64_t readback_frequency_hz = 0;
+#endif
                 struct queue *q = module == BLADERF_MODULE_TX
                     ? &tx_queue : &rx_queue;
                 struct queue *other_q = module == BLADERF_MODULE_TX

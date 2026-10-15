@@ -385,7 +385,7 @@
  * coherent word. Bits 0..5 are sticky causes; bits 6..30 are GPIF-timeout
  * context. Bit 31 is reserved for the host-side snapshot-valid marker. */
 #define NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES  0x8c
-#define NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE   0x90
+#define NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE   0x91
 
 #define NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_LO 0u
 #define NIOS_PKT_8x32_TX_RETUNE_CMD_TARGET_HI 1u

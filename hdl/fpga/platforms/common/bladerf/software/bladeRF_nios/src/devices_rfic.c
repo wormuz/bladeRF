@@ -185,7 +185,7 @@ void rfic_fail_tx_quad_calibration(int32_t status,
                                    uint8_t *failure_stage)
 {
     RFIC_ERR("TX quadrature calibration", status);
-    rfic_command_record_cleanup_error(state.tx_quad_job.cleanup_status);
+    rfic_command_record_cleanup_error(state.job_context.tx_quad_job.cleanup_status);
     state.tx_quad_job_pending = false;
     state.tx_quad_commit_tx_frequency = false;
     state.tx_quad_resume_command = false;
@@ -217,7 +217,7 @@ bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
     }
     *pending = false;
     status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.tx_quad_job);
+                                                &state.job_context.tx_quad_job);
     if (status == 1) {
         return true;
     }
@@ -246,7 +246,7 @@ bool rfic_start_tx_quad_calibration_for_command(bool *pending,
     }
     *pending = false;
     status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.tx_quad_job);
+                                                &state.job_context.tx_quad_job);
     if (status == 1) {
         return true;
     }
@@ -274,7 +274,7 @@ bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
     }
     *pending = false;
     status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.tx_quad_job);
+                                                &state.job_context.tx_quad_job);
     if (status == 1) {
         state.frequency_invalid[BLADERF_MODULE_TX] = false;
         return true;
@@ -302,7 +302,7 @@ int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage)
         return -EINVAL;
     }
     status = ad9361_tx_quad_calibration_transaction_poll(
-        state.phy, &state.tx_quad_job);
+        state.phy, &state.job_context.tx_quad_job);
     status = rfic_checked_poll_status(status);
     if (status == 1) {
         return 1;
@@ -546,7 +546,8 @@ static bool rfic_latch_calibration_fault(void)
     state.init_state = BLADERF_RFIC_INIT_STATE_OFF;
     if (!rfic_force_rf_path_off()) {
         rfic_command_record_cleanup_error(-EIO);
-        RFIC_DBG("failed to disconnect RFFE after unknown calibration state\n");
+        DBG("%s: failed to disconnect RFFE after unknown calibration state\n",
+            __FUNCTION__);
     }
     return true;
 }
@@ -607,7 +608,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 break;
             } else if (state.fir_enable_job_pending) {
                 step_status = ad9361_fir_enable_transaction_poll(
-                    state.phy, &state.fir_enable_job);
+                    state.phy, &state.job_context.fir_enable_job);
                 step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
@@ -615,7 +616,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
 
                 rfic_command_record_cleanup_error(
-                    state.fir_enable_job.cleanup_status);
+                    state.job_context.fir_enable_job.cleanup_status);
                 state.fir_enable_job_pending = false;
                 if (step_status < 0) {
                     rfic_command_record_error(step_status);
@@ -639,7 +640,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
             } else if (state.rfpll_job_pending) {
                 step_status = ad9361_rfpll_clock_transaction_poll(
-                    state.phy, &state.rfpll_job);
+                    state.phy, &state.job_context.rfpll_job);
                 step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
@@ -658,7 +659,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 break;
             } else if (state.sample_rate_job_pending) {
                 step_status = ad9361_sample_rate_transaction_poll(
-                    state.phy, &state.sample_rate_job);
+                    state.phy, &state.job_context.sample_rate_job);
                 step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
@@ -666,15 +667,16 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
 
                 rfic_command_record_cleanup_error(
-                    state.sample_rate_job.cleanup_status);
+                    state.job_context.sample_rate_job.cleanup_status);
                 rfic_command_record_cleanup_error(
-                    state.sample_rate_job.bandwidth_job.cleanup_status);
+                    state.job_context.sample_rate_job.bandwidth_job.cleanup_status);
                 rfic_command_record_cleanup_error(
-                    state.sample_rate_job.bandwidth_job.tracking_restore_status);
+                    state.job_context.sample_rate_job.bandwidth_job.
+                        tracking_restore_status);
                 state.sample_rate_job_pending = false;
                 if (step_status < 0) {
                     if (rfic_sample_rate_restore_cache_after_rollback(
-                            state.sample_rate_job.rollback_complete,
+                            state.job_context.sample_rate_job.rollback_complete,
                             state.phy->current_bw_valid,
                             !ad9361_calibration_state_unknown(state.phy))) {
                         /* The old clock plan and bandwidth completed their
@@ -704,7 +706,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
             } else if (state.bandwidth_job_pending) {
                 step_status = ad9361_rf_bandwidth_transaction_poll(
-                    state.phy, &state.bandwidth_job);
+                    state.phy, &state.job_context.bandwidth_job);
                 step_status = rfic_checked_poll_status(step_status);
                 if (step_status == 1) {
                     q->progress_sequence++;
@@ -712,9 +714,9 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
 
                 rfic_command_record_cleanup_error(
-                    state.bandwidth_job.cleanup_status);
+                    state.job_context.bandwidth_job.cleanup_status);
                 rfic_command_record_cleanup_error(
-                    state.bandwidth_job.tracking_restore_status);
+                    state.job_context.bandwidth_job.tracking_restore_status);
                 state.bandwidth_job_pending = false;
                 if (step_status < 0) {
                     rfic_command_record_error(step_status);
@@ -735,7 +737,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 enum rfic_calibration_poll_action action;
 
                 step_status = ad9361_tx_quad_calibration_transaction_poll(
-                    state.phy, &state.tx_quad_job);
+                    state.phy, &state.job_context.tx_quad_job);
                 step_status = rfic_checked_poll_status(step_status);
                 action = rfic_calibration_poll_action(
                     step_status, state.tx_quad_resume_command);
@@ -745,7 +747,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
 
                 rfic_command_record_cleanup_error(
-                    state.tx_quad_job.cleanup_status);
+                    state.job_context.tx_quad_job.cleanup_status);
                 state.tx_quad_job_pending = false;
                 if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
                     if (step_status == 0 &&
@@ -793,7 +795,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 enum rfic_rfdc_poll_action action;
 
                 step_status = ad9361_rfdc_calibration_poll(
-                    state.phy, &state.rfdc_job);
+                    state.phy, &state.job_context.rfdc_job);
                 step_status = rfic_checked_poll_status(step_status);
                 action = rfic_rfdc_poll_action(
                     step_status, state.rfdc_resume_enable_command);
@@ -809,7 +811,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 }
 
                 rfic_command_record_cleanup_error(
-                    state.rfdc_job.cleanup_status);
+                    state.job_context.rfdc_job.cleanup_status);
                 state.rfdc_job_pending = false;
                 if (e->cmd == BLADERF_RFIC_COMMAND_INIT) {
                     if (step_status == 0 &&
