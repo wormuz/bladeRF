@@ -118,12 +118,19 @@ static int fake_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         ((uint8_t *)buffer)[0] = NIOS_PKT_LEGACY_ERROR_MAGIC;
     }
     if (endpoint == PERIPHERAL_EP_IN && fake->make_register_response) {
+        uint8_t target;
+        bool is_write;
+
+        nios_pkt_16x64_unpack(buffer, &target, &is_write, NULL, NULL);
         uint8_t *response = buffer;
         response[NIOS_PKT_16x64_IDX_FLAGS] |=
             NIOS_PKT_16x64_FLAG_SUCCESS;
         /* Reads return data different from the request. Identity validation
-         * must compare only the transaction key, not response payload. */
-        response[NIOS_PKT_16x64_IDX_DATA] = 0x5a;
+         * must compare only the transaction key, not response payload.
+         * Standard RFIC write ACKs echo the payload, so preserve it there. */
+        if (!is_write || target != NIOS_PKT_16x64_TARGET_RFIC) {
+            response[NIOS_PKT_16x64_IDX_DATA] = 0x5a;
+        }
     }
     if (endpoint == PERIPHERAL_EP_IN && fake->mutate_response_target) {
         ((uint8_t *)buffer)[NIOS_PKT_16x64_IDX_TARGET_ID] ^= 1u;
@@ -1138,7 +1145,7 @@ static void test_tagged_rfic_retry_without_duplicate_clears_on_status(void)
     teardown(&usb);
 }
 
-static void test_status_timeout_with_pending_write_stays_fail_closed(void)
+static void test_status_timeout_with_pending_write_retains_both_responses(void)
 {
     struct bladerf_usb usb;
     struct usb_fns fns;
@@ -1161,7 +1168,8 @@ static void test_status_timeout_with_pending_write_stays_fail_closed(void)
                                 NULL, &stage) == BLADERF_ERR_TIMEOUT);
     assert(stage == NIOS_TRANSACTION_IN_FAILED);
     assert(usb.peripheral->pending_rfic_write);
-    assert(usb.peripheral->desynchronized);
+    assert(usb.peripheral->pending_read_response);
+    assert(!usb.peripheral->desynchronized);
     teardown(&usb);
 }
 
@@ -1437,7 +1445,7 @@ int main(void)
     test_tagged_rfic_response_lost_across_session_reset();
     test_tagged_rfic_retry_drains_duplicate_ack_before_status();
     test_tagged_rfic_retry_without_duplicate_clears_on_status();
-    test_status_timeout_with_pending_write_stays_fail_closed();
+    test_status_timeout_with_pending_write_retains_both_responses();
     test_nonzero_16x64_reserved_response_fails_closed();
     test_8x8_reserved_tail_fails_closed();
     test_16x64_batch_result_is_not_compared_as_payload();
