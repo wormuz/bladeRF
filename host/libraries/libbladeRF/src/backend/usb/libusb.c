@@ -1828,6 +1828,7 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
                            size_t len, uint64_t tx_generation)
 {
     int status;
+    bool stream_lock_held = false;
     struct bladerf_lusb *lusb = lusb_backend(stream->dev);
     struct lusb_stream_data *stream_data = stream->backend_data;
     struct libusb_transfer *transfer;
@@ -1929,7 +1930,10 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
             stream_data->tx_lease_active[prev_idx] = false;
             async_tx_submit_lease_release(stream);
         }
-        MUTEX_UNLOCK(&stream->lock);
+        /* Keep the lock after rolling the failed submission back. The caller
+         * must publish the RX terminal fault and move the stream to shutdown
+         * before another in-flight completion can enter the data callback. */
+        stream_lock_held = true;
     } else if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
         /* This hook samples the NIOS loss counter over the peripheral USB
          * endpoint. Do not hold stream->lock across that synchronous control
@@ -1943,7 +1947,9 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
      * by async_submit_stream_buffer(). The transfer metadata is already
      * committed before libusb_submit_transfer(), so it is safe for a callback
      * to run while the TX admission observation is read above. */
-    MUTEX_LOCK(&stream->lock);
+    if (!stream_lock_held) {
+        MUTEX_LOCK(&stream->lock);
+    }
 
     return error_conv(status);
 }

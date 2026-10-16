@@ -32,7 +32,10 @@ if (($# == 1)); then
 else
   layouts=(RX1 RX2 BOTH)
 fi
-faults=(ERROR STALL TIMEOUT NO_DEVICE UNKNOWN)
+faults=(ERROR STALL TIMEOUT NO_DEVICE UNKNOWN
+        EVENT_IO EVENT_NODEV
+        SUBMIT_IO SUBMIT_NODEV SUBMIT_TIMEOUT API_SUBMIT_IO
+        SHORT SHORT_AFTER_VALID OVERFLOW CANCELLED)
 
 for layout in "${layouts[@]}"; do
   case "$layout" in

@@ -14,6 +14,7 @@
 #include <time.h>
 
 #include "host_config.h"
+#include "streaming/async.h"
 #include "streaming/metadata.h"
 
 #define RX_META_MESSAGE_BYTES 8192u
@@ -41,6 +42,7 @@ struct fault_test {
     struct bladerf_stream *stream;
     enum rx_fault_layout layout;
     bladerf_channel transition_channel;
+    const char *fault_status;
     void **buffers;
     atomic_uint data_callbacks;
     atomic_uint event_callbacks;
@@ -54,6 +56,10 @@ struct fault_test {
     atomic_uint_fast64_t resumed_timestamp;
     atomic_bool fault_seen;
     atomic_bool data_after_fault;
+    atomic_bool expected_epoch_ready;
+    atomic_bool fault_injection_armed;
+    atomic_uint pre_fault_data_callbacks;
+    atomic_uint post_fault_data_callbacks;
     atomic_bool api_submit_requested;
     atomic_bool api_submit_mode;
     atomic_bool recoverable_short_mode;
@@ -123,6 +129,36 @@ static bool consume_rf_events(struct fault_test *test, struct bladerf *dev)
     return true;
 }
 
+static void arm_rx_fault(struct fault_test *test)
+{
+    if (atomic_exchange(&test->fault_injection_armed, true)) {
+        return;
+    }
+
+    const char *fault = test->fault_status;
+    if (strcmp(fault, "EVENT_IO") == 0 ||
+        strcmp(fault, "EVENT_NODEV") == 0) {
+        (void)setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR",
+                     strcmp(fault, "EVENT_NODEV") == 0 ? "NO_DEVICE" : "IO",
+                     1);
+    } else if (strcmp(fault, "SUBMIT_IO") == 0 ||
+               strcmp(fault, "SUBMIT_NODEV") == 0 ||
+               strcmp(fault, "SUBMIT_TIMEOUT") == 0) {
+        const char *status = strcmp(fault, "SUBMIT_NODEV") == 0 ? "NO_DEVICE" :
+            strcmp(fault, "SUBMIT_TIMEOUT") == 0 ? "TIMEOUT" : "IO";
+        (void)setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR", status, 1);
+    } else if (strcmp(fault, "API_SUBMIT_IO") != 0) {
+        (void)setenv("BLADERF_TEST_LIBUSB_RX_STATUS",
+                     strcmp(fault, "SHORT_AFTER_VALID") == 0
+                         ? "SHORT" : fault,
+                     1);
+        if (strcmp(fault, "SHORT_AFTER_VALID") == 0) {
+            (void)setenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS",
+                         "20", 1);
+        }
+    }
+}
+
 static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
                          struct bladerf_metadata *metadata, void *samples,
                          size_t num_samples, void *user_data)
@@ -139,10 +175,21 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
         return BLADERF_STREAM_REUSE_BUFFER;
     }
 
-    if (atomic_load(&test->fault_seen) &&
-        !atomic_load(&test->recoverable_short_mode)) {
-        atomic_store(&test->data_after_fault, true);
-        return BLADERF_STREAM_SHUTDOWN;
+    /* The stream is started before the RX epoch transition so USB has no
+     * stale pre-epoch queue to drain. Do not consume a valid callback until
+     * the control thread publishes the epoch returned by transition_wait. */
+    if (!atomic_load(&test->expected_epoch_ready)) {
+        return BLADERF_STREAM_REUSE_BUFFER;
+    }
+
+    const bool fault_seen = atomic_load(&test->fault_seen);
+    if (fault_seen) {
+        if (!atomic_load(&test->recoverable_short_mode)) {
+            atomic_store(&test->data_after_fault, true);
+            return BLADERF_STREAM_SHUTDOWN;
+        }
+    } else {
+        atomic_fetch_add(&test->pre_fault_data_callbacks, 1);
     }
     if (atomic_load(&test->api_submit_mode)) {
         test->api_buffer = samples;
@@ -183,11 +230,18 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     if (!consume_rf_events(test, dev)) {
         return BLADERF_STREAM_SHUTDOWN;
     }
-    if (atomic_fetch_add(&test->data_callbacks, 1) >=
-        (atomic_load(&test->recoverable_short_mode)
-             ? (atomic_load(&test->short_after_valid_mode) ? 50 : 1)
-             : 3)) {
-        return BLADERF_STREAM_SHUTDOWN;
+    atomic_fetch_add(&test->data_callbacks, 1);
+    if (atomic_load(&test->recoverable_short_mode) &&
+        atomic_load(&test->fault_seen)) {
+        const unsigned recovered = atomic_fetch_add(
+            &test->post_fault_data_callbacks, 1) + 1;
+        if (recovered >= (atomic_load(&test->short_after_valid_mode) ? 50u : 1u)) {
+            return BLADERF_STREAM_SHUTDOWN;
+        }
+    } else if (!atomic_load(&test->fault_seen) &&
+               atomic_load(&test->pre_fault_data_callbacks) >=
+                   (atomic_load(&test->short_after_valid_mode) ? 20u : 3u)) {
+        arm_rx_fault(test);
     }
     return samples;
 }
@@ -213,7 +267,7 @@ static void *run_api_submit(void *arg)
     if (atomic_load(&test->api_submit_requested)) {
         setenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR", "IO", 1);
         test->api_submit_status = bladerf_submit_stream_buffer(
-            test->stream, test->api_buffer, 2000);
+            test->stream, test->api_buffer, 0);
         unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
     }
     return NULL;
@@ -236,6 +290,7 @@ int main(void)
 {
     struct fault_test test = {0};
     pthread_t thread;
+    bool stream_thread_started = false;
     const char *fault_status = getenv("BLADERF_TEST_LIBUSB_RX_STATUS");
     const char *layout = getenv("BLADERF_TEST_RX_LAYOUT");
     test.layout = RX_FAULT_LAYOUT_X2;
@@ -253,6 +308,15 @@ int main(void)
     if (fault_status == NULL) {
         fault_status = "OVERFLOW";
     }
+    test.fault_status = fault_status;
+    /* The harness receives the selected fault through RX_STATUS for backwards
+     * compatibility; disarm all injection variables until certified data is
+     * flowing and arm_rx_fault() publishes the requested fault. */
+    unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR");
+    unsetenv("BLADERF_TEST_LIBUSB_RX_API_SUBMIT_ERROR");
     if (strcmp(fault_status, "OVERFLOW") == 0) {
         test.expected_reason = BLADERF_RF_WITHHELD_USB_OVERFLOW;
         test.expected_stream_status = BLADERF_ERR_IO;
@@ -330,42 +394,24 @@ int main(void)
                                      BLADERF_FORMAT_SC16_Q11_META,
                                      8192, 8, &test);
     }
+    if (status == 0) {
+        /* This live test deliberately uses event-driven transfers. The
+         * library default one-second bulk transfer timeout would abort the
+         * pre-epoch USB queue while the RFIC/FPGA transition is in progress. */
+        test.stream->transfer_timeout = 0;
+    }
     if (status == 0 && test.layout != RX_FAULT_LAYOUT_RX2) {
         status = bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(0), true);
     }
     if (status == 0 && test.layout != RX_FAULT_LAYOUT_RX1) {
         status = bladerf_enable_module(test.dev, BLADERF_CHANNEL_RX(1), true);
     }
-    if (status == 0) {
-        const struct bladerf_rx_transition_request request = {
-            .target_frequency_hz = 1835000000ULL,
-            .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
-                                    BLADERF_RF_REQUIRE_ENSM_RX,
-            .timeout_ms = 2000,
-            .require_rx_data_valid = true,
-            .epoch_settle_samples = 0,
-        };
-        uint32_t transaction_id = 0;
-        struct bladerf_rf_event transition_event;
-        status = bladerf_rx_transition_begin(
-            test.dev, test.transition_channel, &request, &transaction_id);
-        if (status == 0) {
-            status = bladerf_rx_transition_wait(
-                test.dev, transaction_id, &transition_event, 2000);
-            if (status == 0) {
-                test.expected_epoch_id = transition_event.epoch_id;
-                test.first_valid_timestamp = transition_event.fpga_timestamp;
-            }
-        }
-    }
     if (status != 0) {
         fprintf(stderr, "RX setup failed: %s\n", bladerf_strerror(status));
         goto cleanup;
     }
 
-    /* Discard the successful transition's history before starting the
-     * stream, so a later RX_DATA_RESUMED event is checked at the exact
-     * recovery callback that admitted its META packet. */
+    /* Establish the event cursor before starting the callback thread. */
     {
         struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
         uint32_t count = 0;
@@ -382,38 +428,58 @@ int main(void)
         test.event_cursor = next;
     }
 
+    if (pthread_create(&thread, NULL, run_stream, &test) != 0) {
+        fprintf(stderr, "could not start RX stream\n");
+        status = BLADERF_ERR_UNEXPECTED;
+        goto cleanup;
+    }
+    stream_thread_started = true;
+
+    /* Let the backend queue USB IN transfers before arming the first epoch.
+     * This is startup coordination, not an operation completion deadline. */
+    const struct timespec backend_startup = {
+        .tv_sec = 0, .tv_nsec = 100000000,
+    };
+    nanosleep(&backend_startup, NULL);
+
+    const struct bladerf_rx_transition_request request = {
+        .target_frequency_hz = 1835000000ULL,
+        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                                BLADERF_RF_REQUIRE_ENSM_RX |
+                                BLADERF_RF_REQUIRE_EPOCH_VALID,
+        .timeout_ms = 0,
+        .require_rx_data_valid = true,
+        .epoch_settle_samples = 0,
+    };
+    uint32_t transaction_id = 0;
+    struct bladerf_rf_event transition_event;
+    status = bladerf_rx_transition_begin(
+        test.dev, test.transition_channel, &request, &transaction_id);
+    if (status == 0) {
+        status = bladerf_rx_transition_wait(
+            test.dev, transaction_id, &transition_event, 0);
+    }
+    if (status != 0) {
+        fprintf(stderr, "RX epoch setup failed: %s\n",
+                bladerf_strerror(status));
+        goto cleanup;
+    }
+    test.expected_epoch_id = transition_event.epoch_id;
+    test.first_valid_timestamp = transition_event.fpga_timestamp;
+    atomic_store(&test.expected_epoch_ready, true);
+
     if (strcmp(fault_status, "API_SUBMIT_IO") == 0) {
         pthread_t submit_thread;
-        if (pthread_create(&thread, NULL, run_stream, &test) != 0 ||
-            pthread_create(&submit_thread, NULL, run_api_submit, &test) != 0) {
+        if (pthread_create(&submit_thread, NULL, run_api_submit, &test) != 0) {
             fprintf(stderr, "could not start API submit fault test\n");
             status = BLADERF_ERR_UNEXPECTED;
             goto cleanup;
         }
         pthread_join(submit_thread, NULL);
-        pthread_join(thread, NULL);
-    } else if (((strcmp(fault_status, "EVENT_IO") == 0 ||
-                 strcmp(fault_status, "EVENT_NODEV") == 0)
-             ? setenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR",
-                      strcmp(fault_status, "EVENT_NODEV") == 0 ? "NO_DEVICE" : "IO", 1)
-         : (strcmp(fault_status, "SUBMIT_IO") == 0 ||
-            strcmp(fault_status, "SUBMIT_NODEV") == 0 ||
-            strcmp(fault_status, "SUBMIT_TIMEOUT") == 0)
-             ? setenv("BLADERF_TEST_LIBUSB_RX_SUBMIT_ERROR",
-                      strcmp(fault_status, "SUBMIT_NODEV") == 0 ? "NO_DEVICE" :
-                      strcmp(fault_status, "SUBMIT_TIMEOUT") == 0 ? "TIMEOUT" : "IO", 1)
-             : setenv("BLADERF_TEST_LIBUSB_RX_STATUS",
-                      atomic_load(&test.short_after_valid_mode)
-                          ? "SHORT" : fault_status, 1)) != 0 ||
-        (atomic_load(&test.short_after_valid_mode) &&
-         setenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS", "20", 1) != 0) ||
-        pthread_create(&thread, NULL, run_stream, &test) != 0) {
-        fprintf(stderr, "could not arm/start test stream\n");
-        status = BLADERF_ERR_UNEXPECTED;
-        goto cleanup;
     }
 
     pthread_join(thread, NULL);
+    stream_thread_started = false;
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
     unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
     unsetenv("BLADERF_TEST_LIBUSB_RX_EVENT_ERROR");
@@ -427,8 +493,12 @@ int main(void)
                                     strcmp(fault_status, "SUBMIT_NODEV") == 0 ||
                                     strcmp(fault_status, "SUBMIT_TIMEOUT") == 0;
     if (test.stream_status != test.expected_stream_status ||
+        atomic_load(&test.pre_fault_data_callbacks) <
+            (strcmp(fault_status, "API_SUBMIT_IO") == 0 ? 1u :
+             atomic_load(&test.short_after_valid_mode) ? 20u : 3u) ||
         (atomic_load(&test.recoverable_short_mode) &&
-         (atomic_load(&test.data_callbacks) == 0 ||
+         (atomic_load(&test.post_fault_data_callbacks) <
+              (atomic_load(&test.short_after_valid_mode) ? 50u : 1u) ||
           (test.layout == RX_FAULT_LAYOUT_RX2
                ? atomic_load(&test.rx2_samples) == 0
                : atomic_load(&test.rx1_samples) == 0) ||
@@ -443,17 +513,14 @@ int main(void)
              ? atomic_load(&test.overrun_events) < 1
              : atomic_load(&test.overrun_events) != 1) ||
         atomic_load(&test.event_callbacks) < 1 ||
-        (atomic_load(&test.short_after_valid_mode)
+        (atomic_load(&test.recoverable_short_mode)
              ? (atomic_load(&test.resumed_events) != 1 ||
                 atomic_load(&test.first_valid_events) != 1 ||
-                !atomic_load(&test.withheld_timestamp_valid) ||
-                !timestamp_strictly_after(
-                    atomic_load(&test.resumed_timestamp),
-                    atomic_load(&test.withheld_timestamp)))
-             : (atomic_load(&test.resumed_events) != 0 ||
-                (atomic_load(&test.recoverable_short_mode) &&
-                 (atomic_load(&test.first_valid_events) != 1 ||
-                  atomic_load(&test.withheld_timestamp_valid))))) ||
+                (atomic_load(&test.withheld_timestamp_valid) &&
+                 !timestamp_strictly_after(
+                     atomic_load(&test.resumed_timestamp),
+                     atomic_load(&test.withheld_timestamp))))
+             : atomic_load(&test.resumed_events) != 0) ||
         atomic_load(&test.resume_metadata_mismatches) != 0 ||
         atomic_load(&test.data_after_fault) ||
         atomic_load(&test.invalid_meta_buffers) != 0) {
@@ -536,6 +603,12 @@ int main(void)
     }
 
 cleanup:
+    if (stream_thread_started) {
+        (void)bladerf_submit_stream_buffer(
+            test.stream, BLADERF_STREAM_SHUTDOWN, 0);
+        pthread_join(thread, NULL);
+        stream_thread_started = false;
+    }
     if (test.dev != NULL) {
         unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS");
         unsetenv("BLADERF_TEST_LIBUSB_RX_STATUS_AFTER_COMPLETIONS");
