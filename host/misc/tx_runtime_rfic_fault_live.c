@@ -89,6 +89,23 @@ static int wait_for_event(struct bladerf *dev,
     }
 }
 
+static int current_event_cursor(struct bladerf *dev,
+                                struct bladerf_rf_event *events,
+                                uint64_t *cursor)
+{
+    uint32_t count = 0;
+    bool history_complete = false;
+    uint64_t next = 0;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next, &history_complete);
+    if (status != 0 || !history_complete) {
+        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+    }
+    *cursor = next;
+    return 0;
+}
+
 int main(void)
 {
     struct bladerf *dev = NULL;
@@ -106,6 +123,7 @@ int main(void)
     bool link_fault_seen = false;
     bool rfics_invalid_seen = false;
     bool feeder_started = false;
+    bladerf_frequency tx_recovery_frequency = 0;
     int status;
     const char *tx_rate_env = getenv("BLADERF_TX_TEST_SAMPLE_RATE");
     const char *tx_bandwidth_env = getenv("BLADERF_TX_TEST_BANDWIDTH");
@@ -148,6 +166,8 @@ int main(void)
     }
 
     status = bladerf_open(&dev, NULL);
+    if (status != 0) goto cleanup;
+    status = current_event_cursor(dev, events, &cursor);
     if (status != 0) goto cleanup;
     bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
     status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
@@ -193,6 +213,10 @@ int main(void)
         }
         status = wait_for_event(dev, events, &cursor,
                                 BLADERF_RF_EVT_TX_RFIC_STATE_VALID);
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
+        }
         if (status != 0) {
             uint8_t state_reg = 0, calibration_reg = 0;
             uint8_t tx_pll_reg = 0, bbpll_reg = 0;
@@ -254,6 +278,16 @@ int main(void)
                             events[i].error_code, events[i].flags);
                 }
             }
+            goto cleanup;
+        }
+    }
+    if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0 ||
+        strcmp(mode, "RUNTIME_TX_GAIN_SETTER") == 0) {
+        status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                 TX_FEEDER_TIMEOUT_MS);
+        if (status != 0) {
+            fprintf(stderr, "TX stream was not valid before setter fault: %s\n",
+                    bladerf_strerror(status));
             goto cleanup;
         }
     }
@@ -574,11 +608,22 @@ int main(void)
         /* Rewrite the existing value while TX is live. The RFIC value stays
          * unchanged; the public raw-register path must still revoke TX
          * admission and acknowledge the FPGA mute before the SPI write. */
+        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       &tx_recovery_frequency);
+        if (status != 0) goto cleanup;
         status = bladerf_get_rfic_register(dev, 0x007,
                                            &tx_clock_data_delay);
+        if (status != 0) {
+            fprintf(stderr, "TX RFIC register read failed: %s\n",
+                    bladerf_strerror(status));
+        }
         if (status == 0) {
             status = bladerf_set_rfic_register(dev, 0x007,
                                                tx_clock_data_delay);
+            if (status != 0) {
+                fprintf(stderr, "TX RFIC register write failed: %s\n",
+                        bladerf_strerror(status));
+            }
         }
         if (status != 0) goto cleanup;
     }
@@ -679,47 +724,90 @@ int main(void)
         bladerf_frequency current_frequency = 0;
         bool retune_valid_seen = false;
 
-        /* The configuration fence must be recoverable through a normal TX
-         * retune after the FPGA acknowledged mute; it must not require a
-         * module disable/enable cycle. */
-        status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
-                                       &current_frequency);
+        /* A terminal fault may leave in-flight USB callbacks associated with
+         * the old transport generation. Retire that stream and device handle
+         * before checking whether a fresh TX session can submit IQ again. */
+        if (strcmp(mode, "RUNTIME_TX_RFIC_REGISTER_WRITE") == 0) {
+            /* Raw writes invalidate the host's RFIC frequency model, so
+             * same-session retuning is correctly blocked until RFIC caches
+             * have been rebuilt by closing and reopening the device. */
+            current_frequency = tx_recovery_frequency;
+        } else {
+            status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                           &current_frequency);
+            if (status == 0) {
+                status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                               current_frequency);
+            }
+            if (status != 0) goto cleanup;
+
+            while (!retune_valid_seen) {
+                uint64_t next = cursor;
+                status = bladerf_rf_events_get_since(
+                    dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                    &count, &next, &history_complete);
+                if (status != 0 || !history_complete) {
+                    status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+                    goto cleanup;
+                }
+                cursor = next;
+                for (uint32_t i = 0; i < count; ++i) {
+                    retune_valid_seen |= events[i].event_type ==
+                                         BLADERF_RF_EVT_TX_RETUNE_VALID;
+                }
+                if (!retune_valid_seen) {
+                    const struct timespec pause = {.tv_sec = 0,
+                                                   .tv_nsec = 1000000};
+                    nanosleep(&pause, NULL);
+                }
+            }
+        }
+
+        unsetenv("BLADERF_TEST_RX_TRANSITION_STALL");
+        atomic_store(&feeder.stop, true);
+        (void)pthread_join(feeder_thread, NULL);
+        feeder_started = false;
+        bladerf_close(dev);
+        dev = NULL;
+
+        status = bladerf_open(&dev, NULL);
+        if (status == 0) {
+            status = current_event_cursor(dev, events, &cursor);
+        }
+        if (status == 0) {
+            status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
+                                             tx_sample_rate, NULL);
+        }
+        if (status == 0) {
+            status = bladerf_set_bandwidth(dev, BLADERF_CHANNEL_TX(0),
+                                           tx_bandwidth, NULL);
+        }
+        if (status == 0) {
+            status = bladerf_sync_config(dev, BLADERF_TX_X1,
+                                         BLADERF_FORMAT_SC16_Q11,
+                                         16, 8192, 8, 1000);
+        }
+        if (status == 0) {
+            status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
+        }
         if (status == 0) {
             status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
                                            current_frequency);
         }
-        if (status != 0) goto cleanup;
-
-        while (!retune_valid_seen) {
-            uint64_t next = cursor;
-            status = bladerf_rf_events_get_since(
-                dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
-                &count, &next, &history_complete);
-            if (status != 0 || !history_complete) {
-                status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
-                goto cleanup;
-            }
-            cursor = next;
-            for (uint32_t i = 0; i < count; ++i) {
-                retune_valid_seen |= events[i].event_type ==
-                                     BLADERF_RF_EVT_TX_RETUNE_VALID;
-            }
-            if (!retune_valid_seen) {
-                const struct timespec pause = {.tv_sec = 0,
-                                               .tv_nsec = 1000000};
-                nanosleep(&pause, NULL);
-            }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RFIC_STATE_VALID);
         }
-        if (!retune_valid_seen) {
-            fprintf(stderr, "TX did not recover through a new retune\n");
-            status = BLADERF_ERR_UNEXPECTED;
-            goto cleanup;
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
         }
-
-        status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
-                                 TX_FEEDER_TIMEOUT_MS);
+        if (status == 0) {
+            status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
+                                     TX_FEEDER_TIMEOUT_MS);
+        }
         if (status != 0) {
-            fprintf(stderr, "TX remained blocked after valid retune: %s\n",
+            fprintf(stderr, "TX did not recover after handle reopen: %s\n",
                     bladerf_strerror(status));
             goto cleanup;
         }
