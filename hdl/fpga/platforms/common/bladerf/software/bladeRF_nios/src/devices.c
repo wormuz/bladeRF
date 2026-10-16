@@ -1510,17 +1510,13 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 #define AD9361_REG_TX_PLL_LOCK       0x287
 #define AD9361_PLL_LOCK_MASK         (1 << 1)
 #define AD9361_PLL_LOCK_POLL_INTERVAL_US  10ULL
-#define AD9361_PLL_LOCK_TIMEOUT_US     20000ULL
-#define AD9361_PLL_LOCK_POLL_MAX         2000u
 #define AD9361_PLL_LOCK_DEFER_FALLBACK     16u
 
 static struct {
     bool active;
     bladerf_module owner;
     uint16_t lock_reg;
-    uint32_t poll_count;
     uint32_t defer_count;
-    struct no_os_time started;
     struct no_os_time last_poll;
 } fastlock_recall_job;
 
@@ -1573,15 +1569,14 @@ bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
     fastlock_recall_job.owner = m;
     fastlock_recall_job.lock_reg = is_tx ? AD9361_REG_TX_PLL_LOCK
                                          : AD9361_REG_RX_PLL_LOCK;
-    fastlock_recall_job.poll_count = 0;
     fastlock_recall_job.defer_count = 0;
-    fastlock_recall_job.started = no_os_get_time();
-    fastlock_recall_job.last_poll = fastlock_recall_job.started;
+    fastlock_recall_job.last_poll = no_os_get_time();
     return true;
 }
 
 /* Returns 1 while the RFPLL autonomously acquires lock, 0 on observed lock,
- * and a negative error on timeout, SPI failure, or an owner mismatch. */
+ * and a negative error on SPI failure or an owner mismatch. Lock acquisition
+ * has no elapsed-time or poll-count completion cutoff. */
 int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
 {
     struct no_os_time now;
@@ -1597,14 +1592,6 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
     }
 
     now = no_os_get_time();
-    if (bladerf_monotonic_deadline_expired(
-            fastlock_recall_job.started, AD9361_PLL_LOCK_TIMEOUT_US) ||
-        fastlock_recall_job.poll_count >= AD9361_PLL_LOCK_POLL_MAX) {
-        fastlock_recall_job.active = false;
-        if (failure_stage != NULL)
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT;
-        return -ETIMEDOUT;
-    }
     if (!bladerf_monotonic_deadline_expired(
             fastlock_recall_job.last_poll,
             AD9361_PLL_LOCK_POLL_INTERVAL_US) &&
@@ -1614,7 +1601,6 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
 
     fastlock_recall_job.last_poll = now;
     fastlock_recall_job.defer_count = 0;
-    ++fastlock_recall_job.poll_count;
     status_addr = (0x0 << 15) | (0x0 << 12) |
                   (fastlock_recall_job.lock_reg & 0x3ff);
     if (!adi_spi_read_checked(status_addr, &value)) {

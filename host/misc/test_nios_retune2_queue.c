@@ -32,6 +32,7 @@ static bool simulated_txq_owner;
 static unsigned simulated_txq_pending_polls;
 static int32_t simulated_txq_terminal_status;
 static bool simulated_fastlock_active;
+static bool simulated_fastlock_never_locks;
 static bool staged_profile_load_active;
 static bool defer_clear_during_staged_step;
 static bool simulated_rfic_worker_active;
@@ -380,7 +381,7 @@ bool adi_fastlock_recall(bladerf_module module, fastlock_profile *profile,
     recalled_spdt = profile->spdt;
     if (failure_stage != NULL) {
         *failure_stage = fail_profile_recall
-            ? NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT
+            ? NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ
             : NIOS_PKT_RETUNE2_FAILURE_NONE;
     }
     if (track_rffe_fastlock_slots) {
@@ -434,6 +435,9 @@ int32_t adi_fastlock_recall_poll(bladerf_module module,
             *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
         return -EINVAL;
     }
+    if (simulated_fastlock_never_locks) {
+        return 1;
+    }
     if (simulated_fastlock_pending_polls > 0) {
         simulated_fastlock_pending_polls--;
         return 1;
@@ -441,7 +445,7 @@ int32_t adi_fastlock_recall_poll(bladerf_module module,
     simulated_fastlock_active = false;
     if (simulated_fastlock_terminal_status < 0) {
         if (failure_stage != NULL)
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT;
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ;
         return simulated_fastlock_terminal_status;
     }
     return 0;
@@ -607,7 +611,7 @@ static int check_immediate_failure_stage_response(void)
         const char *name;
     } failures[] = {
         { &fail_profile_recall,
-          NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT, "PLL recall" },
+          NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ, "PLL status read" },
         { &fail_port_select,
           NIOS_PKT_RETUNE2_FAILURE_RF_PORT_SELECT, "RF port" },
         { &fail_spdt_select,
@@ -976,8 +980,8 @@ static int check_tokenless_now_defers_terminal_response(void)
         (request.resp[NIOS_PKT_RETUNE2_RESP_IDX_FLAGS] &
          NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0 ||
         nios_pkt_retune2_resp_failure(request.resp) !=
-            NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT) {
-        fputs("tokenless RX NOW did not publish terminal PLL failure\n",
+            NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ) {
+        fputs("tokenless RX NOW did not publish terminal PLL status failure\n",
               stderr);
         fail_profile_recall = false;
         return 1;
@@ -3201,7 +3205,7 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
         return 1;
     }
 
-    /* A terminal lock failure is correlated to the scheduled request and
+    /* A PLL status SPI failure is correlated to the scheduled request and
      * never performs port/SPDT changes or publishes success. */
     pkt_retune2_init();
     simulated_fastlock_active = false;
@@ -3227,15 +3231,61 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
         !pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
         pkt_retune2_completion_word(3) != 0xaaaa ||
         pkt_retune2_completion_word(4) !=
-            NIOS_PKT_RETUNE2_FAILURE_PLL_LOCK_TIMEOUT ||
+            NIOS_PKT_RETUNE2_FAILURE_PLL_STATUS_READ ||
         pkt_retune2_completion_word(5) != 0x55556666 ||
         pkt_retune2_completion_word(6) != 0x7777) {
-        fputs("PLL lock timeout was not reported against retune token\n",
+        fputs("PLL status-read failure was not reported against retune token\n",
               stderr);
         return 1;
     }
     fail_profile_recall = false;
     simulated_fastlock_terminal_status = 0;
+
+    /* A lack of the RFPLL lock bit remains pending beyond the old 2,000-poll
+     * failure cutoff. The same retained request completes when lock is later
+     * observed; elapsed time or poll count alone never retires it. */
+    pkt_retune2_init();
+    simulated_fastlock_active = false;
+    simulated_fastlock_never_locks = true;
+    port_count = 0;
+    spdt_count = 0;
+    if (enqueue_retune_with_identity(&rx_queue, &rx_profile, 0xbbbb, 400,
+                                     0x88889999, 0xaaaa) != 1) {
+        fputs("failed to enqueue indefinite PLL wait regression\n", stderr);
+        simulated_fastlock_never_locks = false;
+        return 1;
+    }
+    rx_queue.entries[(rx_queue.ins_idx - 1) &
+                     (RETUNE2_QUEUE_MAX - 1)].profile.state =
+        FASTLOCK_STATE_RFFE;
+    pkt_retune2_work();
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    pkt_retune2_work();
+    for (unsigned poll = 0; poll < 2500; ++poll) {
+        pkt_retune2_work();
+    }
+    if (!simulated_fastlock_active || rx_queue.count != 1 ||
+        rx_queue.entries[rx_queue.rem_idx].state != ENTRY_STATE_PLL_PENDING ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 0 ||
+        port_count != 0 || spdt_count != 0) {
+        fputs("PLL wait was retired without an RFPLL terminal observation\n",
+              stderr);
+        simulated_fastlock_never_locks = false;
+        return 1;
+    }
+    simulated_fastlock_never_locks = false;
+    simulated_fastlock_pending_polls = 0;
+    simulated_fastlock_terminal_status = 0;
+    pkt_retune2_work();
+    if (!run_until_queue_empty(&rx_queue, 8) || simulated_fastlock_active ||
+        pkt_retune2_success_count(BLADERF_MODULE_RX) != 1 ||
+        pkt_retune2_failure_count(BLADERF_MODULE_RX) != 0 ||
+        port_count != 1 || spdt_count != 1) {
+        fputs("later RFPLL lock observation did not complete retained request\n",
+              stderr);
+        return 1;
+    }
 
     /* A recalled profile can lose its queue entry during startup recovery.
      * Keep the RFIC owner until the PLL is polled to a terminal state, then
