@@ -64,6 +64,8 @@ int main(int argc, char **argv)
         uint64_t total_ticks = 0;
         uint64_t max_worker_ticks = 0;
         uint64_t max_service_gap_ticks = 0;
+        uint64_t max_service_hook_gap_ticks = 0;
+        uint64_t max_service_hook_ticks = 0;
         uint64_t counter_hz = 0;
         uint64_t init_stage = 0;
         uint64_t result_detail = 0;
@@ -101,6 +103,14 @@ int main(int argc, char **argv)
                     NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_GAP_TICKS,
                     &max_service_gap_ticks);
         if (result == 0)
+            result = read_metric(dev,
+                    NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_GAP_TICKS,
+                    &max_service_hook_gap_ticks);
+        if (result == 0)
+            result = read_metric(dev,
+                    NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_TICKS,
+                    &max_service_hook_ticks);
+        if (result == 0)
             result = read_metric(dev, NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ,
                                  &counter_hz);
         if (result == 0)
@@ -137,13 +147,17 @@ int main(int argc, char **argv)
         if (result == 0 && (!valid || active || total_ticks == 0 ||
                             counter_hz == 0 ||
                             max_worker_ticks > total_ticks ||
-                            max_service_gap_ticks > total_ticks)) {
+                            max_service_gap_ticks > total_ticks ||
+                            max_service_hook_gap_ticks > total_ticks ||
+                            max_service_hook_ticks > total_ticks)) {
             fprintf(stderr,
                     "invalid INIT timing run=%u valid=%u active=%u "
                     "txn=%u seq=%" PRIu32 " total=%" PRIu64
-                    " worker=%" PRIu64 " gap=%" PRIu64 " hz=%" PRIu64
+                    " worker=%" PRIu64 " idle_gap=%" PRIu64
+                    " hook_gap=%" PRIu64 " hook=%" PRIu64 " hz=%" PRIu64
                     "\n", run, valid, active, transaction_id, sequence,
                     total_ticks, max_worker_ticks, max_service_gap_ticks,
+                    max_service_hook_gap_ticks, max_service_hook_ticks,
                     counter_hz);
             result = BLADERF_ERR_UNEXPECTED;
         }
@@ -170,7 +184,11 @@ int main(int argc, char **argv)
                " hz=%" PRIu64 " total_ticks=%" PRIu64
                " total_ms=%.3f max_worker_ticks=%" PRIu64
                " max_worker_ms=%.3f max_service_gap_ticks=%" PRIu64
-               " max_service_gap_ms=%.3f\n",
+               " max_service_gap_ms=%.3f"
+               " max_service_hook_gap_ticks=%" PRIu64
+               " max_service_hook_gap_ms=%.3f"
+               " max_service_hook_ticks=%" PRIu64
+               " max_service_hook_ms=%.3f\n",
                run, init_status, transaction_id, sequence, init_stage,
                result_detail, (int32_t)adi_status,
                (int32_t)adi_cleanup_status, adi_stage, setup_stage,
@@ -181,6 +199,12 @@ int main(int argc, char **argv)
                1000.0 * (double)max_worker_ticks / (double)counter_hz,
                max_service_gap_ticks,
                1000.0 * (double)max_service_gap_ticks /
+                   (double)counter_hz,
+               max_service_hook_gap_ticks,
+               1000.0 * (double)max_service_hook_gap_ticks /
+                   (double)counter_hz,
+               max_service_hook_ticks,
+               1000.0 * (double)max_service_hook_ticks /
                    (double)counter_hz);
         if (init_status != 0) return 1;
     }

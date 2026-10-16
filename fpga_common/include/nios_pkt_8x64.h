@@ -120,6 +120,8 @@
 #define NIOS_PKT_8x64_RFIC_TIMING_SETUP_STAGE 0x0b
 #define NIOS_PKT_8x64_RFIC_TIMING_ERROR_STATUS 0x0c
 #define NIOS_PKT_8x64_RFIC_TIMING_ERROR_CONTEXT 0x0d
+#define NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_GAP_TICKS 0x0e
+#define NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_TICKS 0x0f
 
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */

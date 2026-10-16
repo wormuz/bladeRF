@@ -708,6 +708,8 @@ void rfic_command_init(void);
 void rfic_command_work(void);
 bool rfic_command_worker_active(void);
 bool rfic_command_init_timing_read(uint8_t addr, uint64_t *value);
+bool rfic_command_init_timing_hook_begin(uint64_t *start_ticks);
+void rfic_command_init_timing_hook_end(uint64_t start_ticks);
 bool rfic_command_owns_device(void);
 uint8_t rfic_command_pending_mask(void);
 bool rfic_command_has_orphaned_jobs(void);

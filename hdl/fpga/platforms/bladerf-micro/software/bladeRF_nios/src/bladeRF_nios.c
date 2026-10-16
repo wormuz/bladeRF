@@ -687,6 +687,8 @@ publish_cooperative_response:
 static void service_rfic_status_request(void)
 {
     static bool servicing;
+    uint64_t service_start_ticks = 0;
+    bool measuring_init_service = false;
 
     /* An admitted packet may call SPI/AXI or delay helpers, which invoke
      * this hook themselves. The immutable request is still ready until its
@@ -694,9 +696,13 @@ static void service_rfic_status_request(void)
     if (servicing) {
         return;
     }
+    measuring_init_service =
+        rfic_command_init_timing_hook_begin(&service_start_ticks);
     servicing = true;
     service_rfic_status_request_impl();
     servicing = false;
+    if (measuring_init_service)
+        rfic_command_init_timing_hook_end(service_start_ticks);
 }
 #endif
 

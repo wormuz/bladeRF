@@ -80,13 +80,17 @@ struct rfic_state {
         bool active;
         bool valid;
         bool have_worker_tick;
+        bool have_service_hook_tick;
         uint16_t transaction_id;
         uint32_t retirement_sequence;
         uint64_t start_ticks;
         uint64_t last_worker_end_ticks;
+        uint64_t last_service_hook_ticks;
         uint64_t total_ticks;
         uint64_t max_worker_ticks;
         uint64_t max_service_gap_ticks;
+        uint64_t max_service_hook_gap_ticks;
+        uint64_t max_service_hook_ticks;
         uint8_t init_stage;
         uint8_t tail_phase;
         uint8_t module_index;

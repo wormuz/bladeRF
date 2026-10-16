@@ -638,6 +638,8 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 state.init_timing.start_ticks = now;
                 state.init_timing.last_worker_end_ticks = now;
                 state.init_timing.have_worker_tick = true;
+                state.init_timing.last_service_hook_ticks = now;
+                state.init_timing.have_service_hook_tick = true;
             }
             q->progress_sequence++;
             break;
@@ -1352,6 +1354,12 @@ bool rfic_command_init_timing_read(uint8_t addr, uint64_t *value)
         case NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_GAP_TICKS:
             *value = state.init_timing.max_service_gap_ticks;
             return state.init_timing.valid || state.init_timing.active;
+        case NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_GAP_TICKS:
+            *value = state.init_timing.max_service_hook_gap_ticks;
+            return state.init_timing.valid || state.init_timing.active;
+        case NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_TICKS:
+            *value = state.init_timing.max_service_hook_ticks;
+            return state.init_timing.valid || state.init_timing.active;
         case NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ:
             *value = alt_timestamp_freq();
             return *value != 0;
@@ -1390,6 +1398,34 @@ bool rfic_command_init_timing_read(uint8_t addr, uint64_t *value)
             *value = 0;
             return false;
     }
+}
+
+bool rfic_command_init_timing_hook_begin(uint64_t *start_ticks)
+{
+    uint64_t now;
+    uint64_t gap;
+
+    if (start_ticks == NULL || !state.init_timing.active)
+        return false;
+
+    now = (uint64_t)alt_timestamp();
+    if (state.init_timing.have_service_hook_tick) {
+        gap = now - state.init_timing.last_service_hook_ticks;
+        if (gap > state.init_timing.max_service_hook_gap_ticks)
+            state.init_timing.max_service_hook_gap_ticks = gap;
+    }
+    state.init_timing.last_service_hook_ticks = now;
+    state.init_timing.have_service_hook_tick = true;
+    *start_ticks = now;
+    return true;
+}
+
+void rfic_command_init_timing_hook_end(uint64_t start_ticks)
+{
+    const uint64_t elapsed = (uint64_t)alt_timestamp() - start_ticks;
+
+    if (elapsed > state.init_timing.max_service_hook_ticks)
+        state.init_timing.max_service_hook_ticks = elapsed;
 }
 
 bool rfic_command_worker_active(void)
