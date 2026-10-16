@@ -26,7 +26,7 @@ static int transition(struct bladerf *dev, uint64_t frequency_hz,
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX |
                                 BLADERF_RF_REQUIRE_EPOCH_VALID,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -38,7 +38,7 @@ static int transition(struct bladerf *dev, uint64_t frequency_hz,
                 frequency_hz / 1e6, bladerf_strerror(status), transaction_id);
         return status;
     }
-    status = bladerf_rx_transition_wait(dev, transaction_id, result, 2500);
+    status = bladerf_rx_transition_wait(dev, transaction_id, result, 0);
     if (status != 0) {
         fprintf(stderr, "transition wait %.3f MHz: %s txn=%u\n",
                 frequency_hz / 1e6, bladerf_strerror(status), transaction_id);
@@ -348,7 +348,7 @@ int main(void)
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                     BLADERF_RF_REQUIRE_ENSM_RX |
                                     BLADERF_RF_REQUIRE_EPOCH_VALID,
-            .timeout_ms = 2000,
+            .timeout_ms = 0,
             .require_rx_data_valid = true,
             .epoch_settle_samples = 0,
         };
@@ -382,14 +382,35 @@ int main(void)
             goto out;
         }
 
-        struct bladerf_rf_event spi_recovered = {0};
-        CHECK(transition(dev, recovery_frequency_hz, &spi_recovered));
-        if (spi_recovered.epoch_id == initial.epoch_id) {
-            fprintf(stderr, "SPI failure recovery reused old epoch %u\n",
-                    initial.epoch_id);
+        struct bladerf_rf_event blocked_transition = {0};
+        status = transition(dev, recovery_frequency_hz, &blocked_transition);
+        if (status != BLADERF_ERR_WOULD_BLOCK) {
+            fprintf(stderr, "uncertain RFIC state admitted retry before reopen: %s\n",
+                    bladerf_strerror(status));
             status = BLADERF_ERR_UNEXPECTED;
             goto out;
         }
+
+        /* The injected write failure makes the host RFIC model uncertain.
+         * Verify that it remains fail-closed in this session, then reopen so
+         * libbladeRF rebuilds its cached RFIC state before another transition. */
+        bladerf_close(dev);
+        dev = NULL;
+        CHECK(bladerf_open(&dev, NULL));
+        CHECK(bladerf_set_sample_rate(dev, BLADERF_CHANNEL_RX(0),
+                                      50000000, NULL));
+        CHECK(bladerf_set_bandwidth(dev, BLADERF_CHANNEL_RX(0),
+                                    5000000, NULL));
+        CHECK(bladerf_set_gain_mode(dev, BLADERF_CHANNEL_RX(0),
+                                    BLADERF_GAIN_MGC));
+        CHECK(bladerf_set_gain(dev, BLADERF_CHANNEL_RX(0), 30));
+        CHECK(bladerf_sync_config(dev, BLADERF_RX_X1,
+                                  BLADERF_FORMAT_SC16_Q11_META,
+                                  16, 8192, 8, 1000));
+        CHECK(bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true));
+
+        struct bladerf_rf_event spi_recovered = {0};
+        CHECK(transition(dev, recovery_frequency_hz, &spi_recovered));
         CHECK(read_valid_epoch(dev, samples, spi_recovered.epoch_id,
                                spi_recovered.fpga_timestamp));
         initial = spi_recovered;
@@ -412,7 +433,7 @@ int main(void)
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX |
                                 BLADERF_RF_REQUIRE_EPOCH_VALID,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -449,7 +470,7 @@ int main(void)
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX |
                                 BLADERF_RF_REQUIRE_EPOCH_VALID,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -504,7 +525,7 @@ int main(void)
                                 BLADERF_RF_REQUIRE_ENSM_RX |
                                 BLADERF_RF_REQUIRE_EPOCH_VALID |
                                 BLADERF_RF_REQUIRE_FIRST_HOST_DATA,
-        .timeout_ms = 1000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -514,7 +535,7 @@ int main(void)
         dev, BLADERF_CHANNEL_RX(0), &first_data_request,
         &first_data_txn));
     status = bladerf_rx_transition_wait(
-        dev, first_data_txn, &first_data_result, 1000);
+        dev, first_data_txn, &first_data_result, 0);
     if (status != 0 || first_data_result.event_type !=
                            BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA) {
         fprintf(stderr, "first host-data wait returned %s event=%u\n",
