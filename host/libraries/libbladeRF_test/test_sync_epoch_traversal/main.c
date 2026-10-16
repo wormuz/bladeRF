@@ -3513,6 +3513,9 @@ static void test_expired_transition_deadline_keeps_sync_rx_fenced(void)
 
 static void test_retune_failure_record_identity(void)
 {
+    assert(bladerf2_retune_failure_read_retryable(true, 0));
+    assert(!bladerf2_retune_failure_read_retryable(false, 0));
+    assert(!bladerf2_retune_failure_read_retryable(true, 1));
     assert(bladerf2_retune_failure_matches(
         UINT64_C(0x123456789abcdef0), 7, 41, 0x1234,
         UINT64_C(0x123456789abcdef0), 7, 41, 0x1234));

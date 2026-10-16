@@ -435,6 +435,26 @@ static bool nios_is_recovery_status_read(const uint8_t *packet)
     return address == 0x0f00u || address == 0x0f0cu;
 }
 
+/* RETUNE2 completion/failure records are read-only diagnostic state; their
+ * selector writes only choose which retained record subsequent reads expose.
+ * These exact operations can safely serve as ordered barriers for a late
+ * tagged RFIC write response. */
+static bool nios_is_retune2_readout_request(const uint8_t *packet)
+{
+    uint8_t target, addr;
+    uint32_t data;
+    bool write;
+
+    if (packet[NIOS_PKT_8x32_IDX_MAGIC] != NIOS_PKT_8x32_MAGIC) {
+        return false;
+    }
+    nios_pkt_8x32_unpack(packet, &target, &write, &addr, &data);
+    (void)data;
+    return target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION &&
+           ((!write && addr <= NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN) ||
+            (write && addr <= NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX));
+}
+
 /* Only fixed-width request formats with a format-specific response identity
  * can be retained for ordered recovery. Legacy and scheduled retune packets
  * have separate response lifecycles. */
@@ -689,10 +709,11 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
     if (state->pending_rfic_write) {
         recovering_pending_write = true;
         /* While one RFIC write may still have a late reply in the endpoint,
-         * allow only the two status reads used to resolve it or an exact
-         * retry of that same tagged write. */
+         * allow only ordered status/RETUNE2 readouts or an exact retry of
+         * that same tagged write. */
         if (!validate_echo ||
             (!nios_is_recovery_status_read(request) &&
+             !nios_is_retune2_readout_request(request) &&
              memcmp(request, state->pending_rfic_request,
                     sizeof(request)) != 0)) {
             if (stage != NULL) {
@@ -823,9 +844,10 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
             }
             if (current_matches) {
                 if (recovering_pending_write &&
-                    nios_is_recovery_status_read(request)) {
+                    (nios_is_recovery_status_read(request) ||
+                     nios_is_retune2_readout_request(request))) {
                     /* UART responses preserve commit order. A matching
-                     * status response cannot pass an older duplicate write
+                     * recovery readout cannot pass an older duplicate write
                      * ACK, so reaching it resolves the ambiguous retry ACK. */
                     state->pending_rfic_write = false;
                     memset(state->pending_rfic_request, 0,

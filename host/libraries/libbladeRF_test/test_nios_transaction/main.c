@@ -370,6 +370,48 @@ static void test_read_barrier_drains_pending_rfic_duplicate_acks(void)
     teardown(&usb);
 }
 
+static void test_retune_failure_readout_drains_late_rfic_ack(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_16x64_pack_with_transaction_id(
+        request, NIOS_PKT_16x64_TARGET_RFIC, true, 0x0104, 0x12345678,
+        0x5a31);
+    fake.fail_call = 2;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 20,
+                                NULL, NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_rfic_write);
+
+    /* Reading the failure ring starts with a selector write. It is safe to
+     * admit this readout while recovering the old RFIC ACK, and its ordered
+     * response proves that the late ACK has been drained. */
+    fake.fail_call = 0;
+    nios_pkt_8x32_pack(
+        request, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, true,
+        NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX, 1);
+    nios_pkt_16x64_resp_pack_with_transaction_id(
+        fake.scripted_responses[0], NIOS_PKT_16x64_TARGET_RFIC, true,
+        0x0104, 0x12345678, true, 0x5a31);
+    nios_pkt_8x32_resp_pack(
+        fake.scripted_responses[1],
+        NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, true,
+        NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_TX, 1, true);
+    fake.scripted_response_count = 2;
+
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 100,
+                                NULL, NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(fake.scripted_response_index == 2);
+    assert(!usb.peripheral->pending_rfic_write);
+    assert(!usb.peripheral->desynchronized);
+    teardown(&usb);
+}
+
 static void test_tagged_write_full_ack_with_timeout_status_is_consumed(void)
 {
     struct bladerf_usb usb;
@@ -1471,6 +1513,7 @@ int main(void)
     test_zero_byte_read_timeout_recovers_when_original_was_lost();
     test_ordered_barrier_timeout_remains_fail_closed();
     test_read_barrier_drains_pending_rfic_duplicate_acks();
+    test_retune_failure_readout_drains_late_rfic_ack();
     test_tagged_write_full_ack_with_timeout_status_is_consumed();
     test_tagged_rfic_busy_response_is_a_valid_terminal_reply();
     test_retune_busy_responses_are_terminal_and_correlated();

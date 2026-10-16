@@ -977,12 +977,14 @@ static bool tx_retune_completion_batch_matches_pending(
  * across timestamp, profile, command session, and host token. */
 static bool tx_retune_failure_batch_consume(
     struct bladerf *dev, struct bladerf2_board_data *board_data,
-    uint32_t baseline, uint32_t observed, int32_t *error_out)
+    uint32_t baseline, uint32_t observed, int32_t *error_out,
+    bool *retryable_out)
 {
     uint32_t delta = observed - baseline;
     bool matched[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH] = { false };
     uint8_t pending_count;
 
+    *retryable_out = false;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     pending_count = board_data->tx_retune2_pending_count;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -1009,6 +1011,8 @@ static bool tx_retune_failure_batch_consume(
             &session_generation, &request_token);
         if (status != 0) {
             *error_out = status;
+            *retryable_out = bladerf2_retune_failure_read_retryable(
+                status == BLADERF_ERR_WOULD_BLOCK, offset);
             return false;
         }
 
@@ -1754,6 +1758,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_tx_retune_failure = false;
             bool report_tx_retune_failure_detailed = false;
             bool report_tx_retune_failure_record_lost = false;
+            bool tx_retune_failure_read_retryable = false;
             uint32_t tx_retune_failure_baseline = 0;
             int32_t tx_retune_failure_read_error = BLADERF_ERR_UNEXPECTED;
             bool report_tx_retune_counter_reset = false;
@@ -1937,26 +1942,40 @@ static void *rx_fault_monitor_task(void *arg)
                                         dev, board_data,
                                         tx_retune_failure_baseline,
                                         tx_retune2_failure_count,
-                                        &tx_retune_failure_read_error);
+                                        &tx_retune_failure_read_error,
+                                        &tx_retune_failure_read_retryable);
+                                if (tx_retune_failure_read_retryable) {
+                                    /* Preserve the counter delta and request
+                                     * identity. The failed retune still
+                                     * fences TX below, while a later monitor
+                                     * pass retries its diagnostic record. */
+                                    board_data->tx_retune2_failure_count_last =
+                                        tx_retune_failure_baseline;
+                                    board_data->tx_retune2_failure_count_valid =
+                                        true;
+                                }
                                 report_tx_retune_failure_record_lost =
                                     have_cap(board_data->capabilities,
                                              BLADERF_CAP_RETUNE2_REQUEST_TOKEN) &&
-                                    !report_tx_retune_failure_detailed;
+                                    !report_tx_retune_failure_detailed &&
+                                    !tx_retune_failure_read_retryable;
                             }
                             bladerf2_tx_stream_set_faulted(board_data, true);
                             board_data->tx_recovery_blocked = true;
                             abort_tx_retune_gate = true;
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = true;
-                            board_data->tx_retune2_pending_count = 0;
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
                             if (tx_retune2_success_status == 0) {
                                 board_data->tx_retune2_success_count_last =
                                     tx_retune2_success_count;
                             }
-                            for (unsigned int i = 0; i <
-                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
-                                board_data->tx_retune2_pending[i].valid = false;
+                            if (!tx_retune_failure_read_retryable) {
+                                board_data->tx_retune2_pending_count = 0;
+                                for (unsigned int i = 0; i <
+                                     NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                    board_data->tx_retune2_pending[i].valid = false;
+                                }
                             }
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         }
@@ -2607,6 +2626,7 @@ static void *rx_fault_monitor_task(void *arg)
             bool report_completion_lost = false;
             bool report_failure_record_lost = false;
             bool report_failure_detailed = false;
+            bool failure_read_retryable = false;
             uint32_t failure_baseline = 0;
             int32_t failure_read_error = BLADERF_ERR_UNEXPECTED;
             uint32_t unpaired_completion_count = 0;
@@ -2665,19 +2685,32 @@ static void *rx_fault_monitor_task(void *arg)
                                     tx_retune_failure_batch_consume(
                                         dev, board_data, failure_baseline,
                                         tx_retune2_failure_count,
-                                        &failure_read_error);
+                                        &failure_read_error,
+                                        &failure_read_retryable);
+                                if (failure_read_retryable) {
+                                    /* Keep the failure sequence and pending
+                                     * request so the diagnostic read can be
+                                     * retried after the NIOS safe point. */
+                                    board_data->tx_retune2_failure_count_last =
+                                        failure_baseline;
+                                    board_data->tx_retune2_failure_count_valid =
+                                        true;
+                                }
                                 report_failure_record_lost =
                                     have_cap(board_data->capabilities,
                                              BLADERF_CAP_RETUNE2_REQUEST_TOKEN) &&
-                                    !report_failure_detailed;
+                                    !report_failure_detailed &&
+                                    !failure_read_retryable;
                             }
                             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune2_completion_faulted = true;
-                            board_data->tx_retune2_pending_count = 0;
                             board_data->tx_retune2_applied_waiting_rf_valid = false;
-                            for (unsigned int i = 0; i <
-                                 NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
-                                board_data->tx_retune2_pending[i].valid = false;
+                            if (!failure_read_retryable) {
+                                board_data->tx_retune2_pending_count = 0;
+                                for (unsigned int i = 0; i <
+                                     NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+                                    board_data->tx_retune2_pending[i].valid = false;
+                                }
                             }
                             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                             board_data->tx_retune_recovery_pending = true;

@@ -194,6 +194,15 @@ static inline bool bladerf2_retune_completion_unresolved(
     return pending_after_match != 0;
 }
 
+/* A failure-ring read can be deferred only before consuming any record. This
+ * keeps counter and request identity available if NIOS temporarily returns
+ * WOULD_BLOCK while the retained owner is still active. */
+static inline bool bladerf2_retune_failure_read_retryable(
+    bool would_block, uint32_t records_consumed)
+{
+    return would_block && records_consumed == 0;
+}
+
 /* Queue cancellation must preserve an in-flight gate release when the queue
  * is already empty; only an actual pending retune forces release tracking
  * back to the muted/abort path. */
