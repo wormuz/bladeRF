@@ -24,16 +24,13 @@ static inline bool rfic_frequency_change_blocked(bool init_sequence,
     return !init_sequence && peer_unknown;
 }
 
-/* In HOST tuning mode NIOS has no AD9361 PHY. A synchronous host-owned
- * fastlock recall may still use NIOS for the raw profile activation because
- * libbladeRF verifies the resulting LO through the active host PHY. Deferred
- * recalls have no such synchronous host readback and must retain NIOS PHY
- * ownership. */
-static inline bool rfic_fastlock_host_owned_without_phy(bool immediate,
-                                                         bool phy_present,
+/* In HOST tuning mode NIOS has no AD9361 PHY. Fastlock recall may still use
+ * NIOS for raw profile activation because libbladeRF retains RF validity and
+ * verifies the resulting LO through the active host PHY before admission. */
+static inline bool rfic_fastlock_host_owned_without_phy(bool phy_present,
                                                          bool faulted)
 {
-    return immediate && !phy_present && !faulted;
+    return !phy_present && !faulted;
 }
 
 #endif

@@ -915,5 +915,9 @@ void bladerf2_rx_epoch_admission_finish(
 /* Finalize TX quadrature calibration and disconnect the TX RFFE path if the
  * calibration fails, preserving the failure instead of exposing stale TX. */
 int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev);
+int bladerf2_quick_tune_readback(
+    struct bladerf *dev, bladerf_channel ch, uint8_t profile,
+    bladerf_frequency expected_frequency,
+    bladerf_frequency *readback_frequency);
 
 #endif  // BLADERF2_COMMON_H_

@@ -255,8 +255,9 @@ static inline bool bladerf2_retune_completion_matches(
                requested_session_generation, requested_token,
                completed_timestamp, completed_profile,
                completed_session_generation, completed_token) &&
-           bladerf2_rfic_frequency_matches(requested_frequency_hz,
-                                           readback_frequency_hz);
+           (readback_frequency_hz == 0 ||
+            bladerf2_rfic_frequency_matches(requested_frequency_hz,
+                                            readback_frequency_hz));
 }
 
 /* Failure records have no RFIC readback frequency because the operation

@@ -688,7 +688,7 @@ static int check_immediate_failure_stage_response(void)
     return 0;
 }
 
-static int check_deferred_retune_requires_rfic_context(void)
+static int check_deferred_retune_without_nios_phy(void)
 {
     fastlock_profile profile = { .profile_num = 0,
                                  .state = FASTLOCK_STATE_BBP };
@@ -699,15 +699,33 @@ static int check_deferred_retune_requires_rfic_context(void)
 
     simulated_rfic_phy_present = false;
     simulated_rfic_faulted = false;
-    const bool activated = profile_activate(
-        BLADERF_MODULE_TX, &profile, false, &readback_frequency_hz,
+    bool activated = profile_activate(
+        BLADERF_MODULE_TX, &profile, &readback_frequency_hz,
         &failure_stage, true, false, &pll_pending, &txq_pending);
-    simulated_rfic_phy_present = true;
+    if (!activated || !pll_pending ||
+        failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+        simulated_rfic_phy_present = true;
+        fputs("deferred retune without NIOS PHY was rejected\n", stderr);
+        return 1;
+    }
 
-    if (activated || failure_stage !=
-                         NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE) {
-        fprintf(stderr, "deferred retune without NIOS PHY returned stage %u\n",
-                failure_stage);
+    /* Drain the simulated PLL owner and prove completion reports no NIOS LO
+     * readback; the host completion path must perform the independent read. */
+    for (unsigned i = 0; i < 4 && pll_pending; ++i) {
+        activated = profile_activate(
+            BLADERF_MODULE_TX, &profile, &readback_frequency_hz,
+            &failure_stage, true, true, &pll_pending, &txq_pending);
+        if (!activated || failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
+            simulated_rfic_phy_present = true;
+            fputs("deferred host-owned fastlock failed while draining PLL\n",
+                  stderr);
+            return 1;
+        }
+    }
+    simulated_rfic_phy_present = true;
+    if (pll_pending || txq_pending || readback_frequency_hz != 0) {
+        fputs("host-owned deferred fastlock returned invalid completion state\n",
+              stderr);
         return 1;
     }
     return 0;
@@ -3495,7 +3513,7 @@ int main(void)
     if (check_immediate_failure_stage_response() != 0) {
         return 1;
     }
-    if (check_deferred_retune_requires_rfic_context() != 0) {
+    if (check_deferred_retune_without_nios_phy() != 0) {
         return 1;
     }
     if (check_tokened_now_uses_terminal_completion() != 0) {

@@ -1474,14 +1474,17 @@ static void *rx_fault_monitor_task(void *arg)
 
                                 uint64_t profile_frequency_hz = 0;
                                 completion_status =
-                                    ad9361_fastlock_sync_current_lo(
-                                        board_data->phy, false, rffe_profile,
+                                    bladerf2_quick_tune_readback(
+                                        dev, BLADERF_CHANNEL_RX(0),
+                                        rffe_profile,
                                         requested_frequency_hz,
                                         &profile_frequency_hz);
                                 if (completion_status != 0 ||
                                     !bladerf2_rfic_frequency_matches(
                                         profile_frequency_hz,
-                                        readback_frequency_hz)) {
+                                        readback_frequency_hz == 0
+                                            ? requested_frequency_hz
+                                            : readback_frequency_hz)) {
                                     completion_lost = true;
                                     break;
                                 }
@@ -2109,17 +2112,27 @@ static void *rx_fault_monitor_task(void *arg)
                                 if (request_found && !completion_lost) {
                                     uint64_t profile_frequency_hz = 0;
                                     completion_read_status =
-                                        ad9361_fastlock_sync_current_lo(
-                                            board_data->phy, true,
+                                        bladerf2_quick_tune_readback(
+                                            dev, BLADERF_CHANNEL_TX(0),
                                             rffe_profile,
                                             requested_frequency_hz,
                                             &profile_frequency_hz);
                                     if (completion_read_status != 0 ||
                                         !bladerf2_rfic_frequency_matches(
                                             profile_frequency_hz,
-                                            readback_frequency_hz)) {
+                                            readback_frequency_hz == 0
+                                                ? requested_frequency_hz
+                                                : readback_frequency_hz)) {
                                         completion_lost = true;
                                     } else {
+                                        readback_frequency_hz =
+                                            profile_frequency_hz;
+                                        MUTEX_LOCK(
+                                            &board_data->rx_async_epoch_lock);
+                                        board_data->tx_retune2_applied_frequency_hz =
+                                            profile_frequency_hz;
+                                        MUTEX_UNLOCK(
+                                            &board_data->rx_async_epoch_lock);
                                         bladerf2_tx_retune_event(
                                             dev,
                                             BLADERF_RF_EVT_TX_RETUNE_APPLIED,

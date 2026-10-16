@@ -296,7 +296,9 @@ static int wait_for_event(struct bladerf *dev,
                           uint64_t *cursor,
                           bladerf_rf_event_type expected)
 {
+    const bool trace_events = getenv("BLADERF_TX_RETUNE_TRACE_EVENTS") != NULL;
     for (;;) {
+        const uint64_t starting_cursor = *cursor;
         uint64_t next = *cursor;
         uint32_t count = 0;
         bool history_complete = false;
@@ -306,14 +308,31 @@ static int wait_for_event(struct bladerf *dev,
         if (status != 0 || !history_complete) {
             return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
         }
-        *cursor = next;
         for (uint32_t i = 0; i < count; ++i) {
+            if (trace_events) {
+                fprintf(stderr, "observed event type=%u txn=%u epoch=%u "
+                                "error=%d status=0x%08x flags=0x%x "
+                                "ts=%" PRIu64 " requested=%" PRIu64 " "
+                                "readback=%" PRIu64 "\n",
+                        events[i].event_type, events[i].transaction_id,
+                        events[i].epoch_id, events[i].error_code,
+                        events[i].rfic_status, events[i].flags,
+                        events[i].fpga_timestamp,
+                        events[i].requested_rx_lo_hz,
+                        events[i].readback_rx_lo_hz);
+            }
             if (events[i].event_type == expected) {
+                *cursor = starting_cursor + i + 1u;
                 return 0;
             }
             if (events[i].event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED ||
                 events[i].event_type ==
                     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST) {
+                if (expected == BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE &&
+                    events[i].event_type ==
+                        BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST) {
+                    continue;
+                }
                 const bool stage_valid =
                     (events[i].flags &
                      BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID) != 0;
@@ -345,6 +364,7 @@ static int wait_for_event(struct bladerf *dev,
                 return BLADERF_ERR_FPGA_OP;
             }
         }
+        *cursor = next;
         const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
         nanosleep(&pause, NULL);
     }
@@ -771,8 +791,46 @@ int main(void)
             status = BLADERF_ERR_UNEXPECTED;
             goto cleanup;
         }
-        fprintf(stderr, "queue-clear: recover with direct tune\n");
-        status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), frequency);
+        /* The one timestamped hold burst has ended by this point, so its TX
+         * link epoch is no longer active. Reopen and certify a fresh stream
+         * epoch before claiming that recovery restored sample admission. */
+        fprintf(stderr, "queue-clear: reopen TX stream for recovery\n");
+        if (rx_reader_started) {
+            atomic_store(&rx_reader.stop, true);
+            (void)pthread_join(rx_reader_thread, NULL);
+            rx_reader_started = false;
+        }
+        bladerf_close(dev);
+        dev = NULL;
+        status = bladerf_open(&dev, NULL);
+        if (status == 0) {
+            status = current_event_cursor(dev, events, &cursor);
+        }
+        if (status == 0) {
+            status = bladerf_set_sample_rate(
+                dev, BLADERF_CHANNEL_TX(0), tx_sample_rate, NULL);
+        }
+        if (status == 0) {
+            status = bladerf_set_bandwidth(
+                dev, BLADERF_CHANNEL_TX(0), tx_bandwidth, NULL);
+        }
+        if (status == 0) {
+            status = bladerf_sync_config(
+                dev, BLADERF_TX_X1, BLADERF_FORMAT_SC16_Q11_META,
+                16, 8192, 8, 0);
+        }
+        if (status == 0) {
+            status = bladerf_enable_module(
+                dev, BLADERF_CHANNEL_TX(0), true);
+        }
+        if (status == 0) {
+            status = bladerf_set_frequency(
+                dev, BLADERF_CHANNEL_TX(0), frequency);
+        }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RFIC_STATE_VALID);
+        }
         if (status == 0) {
             fprintf(stderr, "queue-clear: wait recovery valid event\n");
             status = wait_for_event(dev, events, &cursor,
@@ -835,7 +893,9 @@ int main(void)
             const bladerf_rf_event_type expected_event = strcmp(
                 mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0
                     ? BLADERF_RF_EVT_TX_TRANSPORT_ERROR
-                    : BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST;
+                    : (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0
+                           ? BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE
+                           : BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST);
             status = wait_for_event(dev, events, &cursor, expected_event);
         }
         if (status != 0) {
@@ -860,29 +920,9 @@ int main(void)
                                  BLADERF_RF_EVT_TX_RETUNE_VALID;
             }
             cursor = next;
-            while (!tx_valid_seen) {
-                next = cursor;
-                status = bladerf_rf_events_get_since(
-                    dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
-                    &count, &next, &history_complete);
-                if (status != 0 || !history_complete) {
-                    status = status != 0 ? status : BLADERF_ERR_UNEXPECTED;
-                    goto cleanup;
-                }
-                for (uint32_t i = 0; i < count; ++i) {
-                    tx_valid_seen |= events[i].event_type ==
-                                     BLADERF_RF_EVT_TX_RETUNE_VALID;
-                }
-                cursor = next;
-                if (!tx_valid_seen) {
-                    const struct timespec pause = {.tv_sec = 0,
-                                                   .tv_nsec = 1000000};
-                    nanosleep(&pause, NULL);
-                }
-            }
             if (tx_valid_seen) {
                 fprintf(stderr,
-                        "TX-valid was published after transport failure\n");
+                        "TX-valid preceded transport failure containment\n");
                 status = BLADERF_ERR_UNEXPECTED;
                 goto cleanup;
             }
@@ -907,10 +947,26 @@ int main(void)
             goto cleanup;
         }
         if (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
-            status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE);
+            bool completion_lost_seen = false;
+            uint64_t next = scheduled_cursor;
+            status = bladerf_rf_events_get_since(
+                dev, scheduled_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+                &count, &next, &history_complete);
+            if (status == 0 && history_complete) {
+                for (uint32_t i = 0; i < count; ++i) {
+                    completion_lost_seen |= events[i].event_type ==
+                        BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST;
+                }
+                cursor = next;
+            } else if (status == 0) {
+                status = BLADERF_ERR_UNEXPECTED;
+            }
+            if (status == 0 && !completion_lost_seen) {
+                status = BLADERF_ERR_UNEXPECTED;
+            }
             if (status != 0) {
-                fprintf(stderr, "failed mute acknowledgement was not reported\n");
+                fprintf(stderr,
+                        "TX gate abort failure lacked completion-loss/status evidence\n");
                 goto cleanup;
             }
             status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),

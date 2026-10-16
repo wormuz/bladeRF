@@ -396,6 +396,9 @@ int main(void)
         1234, 1840000001ULL, 3, 17, 41));
     assert(bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 17, 41,
+        1234, 0, 3, 17, 41));
+    assert(bladerf2_retune_completion_matches(
+        1234, 1840000000ULL, 3, 17, 41,
         1234, 1840001000ULL, 3, 17, 41));
     assert(!bladerf2_retune_completion_matches(
         1234, 1840000000ULL, 3, 17, 41,

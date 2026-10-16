@@ -3939,9 +3939,10 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
     return 0;
 }
 
-/* Immediate retune completion is reported by NIOS, but the host must also
- * reconcile the frequency model owned by its current RFIC controller. */
-static int bladerf2_quick_tune_readback(
+/* NIOS retune completion may omit RFIC readback in HOST tuning mode. The host
+ * reconciles its current RFIC owner's LO and final TX calibration before
+ * admitting the completed retune. */
+int bladerf2_quick_tune_readback(
     struct bladerf *dev, bladerf_channel ch, uint8_t profile,
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency)

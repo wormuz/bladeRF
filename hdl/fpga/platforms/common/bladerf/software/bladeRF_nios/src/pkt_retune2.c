@@ -841,7 +841,6 @@ static inline bool profile_load(bladerf_module module, fastlock_profile *p)
 }
 
 static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
-                                    bool immediate,
                                     uint64_t *readback_frequency_hz,
                                     uint8_t *failure_stage,
                                     bool allow_txq_yield,
@@ -855,7 +854,7 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     bool phy_present = rfic_phy_present();
     bool rfic_faulted = rfic_command_state_faulted();
     bool host_owned_fastlock = rfic_fastlock_host_owned_without_phy(
-        immediate, phy_present, rfic_faulted);
+        phy_present, rfic_faulted);
 #endif
 
     if (failure_stage != NULL) {
@@ -900,9 +899,9 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
 
     /* Dependent-FDD PLL programming chooses a VCO table using the peer LO.
      * Do not activate a saved profile while that frequency is invalidated by
-     * an earlier partial/failed tune. In HOST mode NIOS has no PHY; only an
-     * immediate recall is allowed there because the host verifies the LO
-     * synchronously before certifying its transition. */
+     * an earlier partial/failed tune. In HOST mode NIOS has no PHY; the host
+     * owns the pending operation and keeps RX/TX invalid until it verifies
+     * the resulting LO (and TXQ calibration for TX) after completion. */
     if (!frequency_state_available && !host_owned_fastlock) {
         if (failure_stage != NULL) {
             *failure_stage =
@@ -1408,7 +1407,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             bool txq_pending = false;
 
             /* Activate the fast lock profile for this retune */
-            if (!profile_activate(module, &e->profile, e->immediate,
+            if (!profile_activate(module, &e->profile,
                                  &readback_frequency_hz, &failure_stage,
                                  true, false, &pll_pending, &txq_pending)) {
                 if (failure_stage == NIOS_PKT_RETUNE2_FAILURE_NONE) {
@@ -1439,7 +1438,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             bool pll_pending = false;
             bool txq_pending = false;
 
-            if (!profile_activate(module, &e->profile, e->immediate,
+            if (!profile_activate(module, &e->profile,
                                  &readback_frequency_hz, &failure_stage,
                                  true, true, &pll_pending, &txq_pending)) {
                 if (failure_stage == NIOS_PKT_RETUNE2_FAILURE_NONE)
@@ -1920,7 +1919,7 @@ void pkt_retune2(struct pkt_buf *b)
                                 /* Legacy untracked NOW retains its
                                  * synchronous completion contract. */
                                 if (profile_activate(
-                                        module, profile, true,
+                                        module, profile,
                                         &readback_frequency_hz,
                                         &failure_stage, false, false,
                                         NULL, NULL)) {
