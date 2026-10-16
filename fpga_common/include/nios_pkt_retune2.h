@@ -363,6 +363,7 @@ typedef enum {
     NIOS_PKT_RETUNE2_FAILURE_TIMER_STOPPED,
     NIOS_PKT_RETUNE2_FAILURE_INTERNAL,
     NIOS_PKT_RETUNE2_FAILURE_CANCELLED,
+    NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE,
 } nios_pkt_retune2_failure;
 
 #define NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG UINT64_C(0xa75c000000000000)
@@ -440,7 +441,7 @@ static inline uint8_t nios_pkt_retune2_resp_failure(const uint8_t *buf)
         return NIOS_PKT_RETUNE2_FAILURE_NONE;
     }
     failure = (uint8_t)duration;
-    return failure <= NIOS_PKT_RETUNE2_FAILURE_INTERNAL
+    return failure <= NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE
         ? failure : NIOS_PKT_RETUNE2_FAILURE_NONE;
 }
 

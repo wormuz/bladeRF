@@ -905,7 +905,8 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
      * synchronously before certifying its transition. */
     if (!frequency_state_available && !host_owned_fastlock) {
         if (failure_stage != NULL) {
-            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_PEER_FREQUENCY_UNKNOWN;
+            *failure_stage =
+                NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE;
         }
         return false;
     }

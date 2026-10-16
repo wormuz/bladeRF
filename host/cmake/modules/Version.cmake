@@ -126,6 +126,33 @@ if(GIT_FOUND)
             endif()
         endif()
         if(GIT_VERSION_INPUTS)
+            # A dirty-source fingerprint also depends on unstaged edits to
+            # tracked files. Git metadata dependencies above catch commits,
+            # staging and ref changes, but do not change when a tracked file
+            # is edited in place. Watch the tracked source set so a plain
+            # `cmake --build` reconfigures before compiling a new source
+            # snapshot. Recurse into active submodules because the dirty
+            # fingerprint includes their working-tree diffs as well.
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} ls-files --recurse-submodules
+                OUTPUT_VARIABLE GIT_TRACKED_FILES
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE GIT_TRACKED_FILES_RESULT
+                WORKING_DIRECTORY ${GIT_TOPLEVEL}
+            )
+            if(NOT GIT_TRACKED_FILES_RESULT EQUAL 0)
+                message(FATAL_ERROR
+                    "Unable to list tracked Git version inputs")
+            endif()
+            string(REPLACE "\n" ";" GIT_TRACKED_FILES
+                "${GIT_TRACKED_FILES}")
+            foreach(GIT_TRACKED_FILE IN LISTS GIT_TRACKED_FILES)
+                if(NOT "${GIT_TRACKED_FILE}" STREQUAL "" AND
+                   EXISTS "${GIT_TOPLEVEL}/${GIT_TRACKED_FILE}")
+                    list(APPEND GIT_VERSION_INPUTS
+                        "${GIT_TOPLEVEL}/${GIT_TRACKED_FILE}")
+                endif()
+            endforeach()
             set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
                 ${GIT_VERSION_INPUTS})
         endif()

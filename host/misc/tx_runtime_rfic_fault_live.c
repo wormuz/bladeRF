@@ -314,11 +314,34 @@ static int wait_for_event(struct bladerf *dev,
             if (events[i].event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED ||
                 events[i].event_type ==
                     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST) {
+                const bool stage_valid =
+                    (events[i].flags &
+                     BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID) != 0;
                 fprintf(stderr, "TX retune ended before expected event %u "
-                                "with event %u: error=%d stage=%u flags=0x%x\n",
-                        expected,
-                        events[i].event_type, events[i].error_code,
-                        events[i].rfic_status, events[i].flags);
+                                "with event %u: error=%d "
+                                "stage=%s%u rfic_status=0x%08x flags=0x%x "
+                                "ts=%" PRIu64 " requested=%" PRIu64 " "
+                                "readback=%" PRIu64 "\n",
+                        expected, events[i].event_type,
+                        events[i].error_code,
+                        stage_valid ? "" : "unavailable/",
+                        stage_valid ? events[i].rfic_status : 0,
+                        events[i].rfic_status, events[i].flags,
+                        events[i].fpga_timestamp,
+                        events[i].requested_rx_lo_hz,
+                        events[i].readback_rx_lo_hz);
+                for (uint32_t j = 0; j < count; ++j) {
+                    fprintf(stderr, "  event[%u] type=%u txn=%u epoch=%u "
+                                    "error=%d status=0x%08x flags=0x%x "
+                                    "ts=%" PRIu64 " requested=%" PRIu64 " "
+                                    "readback=%" PRIu64 "\n",
+                            j, events[j].event_type,
+                            events[j].transaction_id, events[j].epoch_id,
+                            events[j].error_code, events[j].rfic_status,
+                            events[j].flags, events[j].fpga_timestamp,
+                            events[j].requested_rx_lo_hz,
+                            events[j].readback_rx_lo_hz);
+                }
                 return BLADERF_ERR_FPGA_OP;
             }
         }

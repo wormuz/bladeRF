@@ -1374,7 +1374,7 @@ int nios_retune2_failure_completion_read(struct bladerf *dev,
     }
     if (!nios_retune_profile_word_valid(profile) ||
         stage == NIOS_PKT_RETUNE2_FAILURE_NONE ||
-        stage > NIOS_PKT_RETUNE2_FAILURE_INTERNAL ||
+        stage > NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE ||
         token > UINT16_MAX) {
         return BLADERF_ERR_UNEXPECTED;
     }

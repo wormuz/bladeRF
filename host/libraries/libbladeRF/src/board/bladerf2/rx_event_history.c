@@ -507,7 +507,7 @@ void bladerf2_tx_retune_failure_detail_event(
     struct bladerf2_board_data *board_data;
 
     if (dev == NULL || dev->board_data == NULL ||
-        failure_stage > NIOS_PKT_RETUNE2_FAILURE_INTERNAL) {
+        failure_stage > NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE) {
         return;
     }
 

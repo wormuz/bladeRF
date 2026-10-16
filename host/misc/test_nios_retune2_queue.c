@@ -688,6 +688,31 @@ static int check_immediate_failure_stage_response(void)
     return 0;
 }
 
+static int check_deferred_retune_requires_rfic_context(void)
+{
+    fastlock_profile profile = { .profile_num = 0,
+                                 .state = FASTLOCK_STATE_BBP };
+    uint64_t readback_frequency_hz = 0;
+    uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    bool pll_pending = false;
+    bool txq_pending = false;
+
+    simulated_rfic_phy_present = false;
+    simulated_rfic_faulted = false;
+    const bool activated = profile_activate(
+        BLADERF_MODULE_TX, &profile, false, &readback_frequency_hz,
+        &failure_stage, true, false, &pll_pending, &txq_pending);
+    simulated_rfic_phy_present = true;
+
+    if (activated || failure_stage !=
+                         NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE) {
+        fprintf(stderr, "deferred retune without NIOS PHY returned stage %u\n",
+                failure_stage);
+        return 1;
+    }
+    return 0;
+}
+
 static int check_tokened_now_uses_terminal_completion(void)
 {
     struct pkt_buf request = { 0 };
@@ -3468,6 +3493,9 @@ int main(void)
         return 1;
     }
     if (check_immediate_failure_stage_response() != 0) {
+        return 1;
+    }
+    if (check_deferred_retune_requires_rfic_context() != 0) {
         return 1;
     }
     if (check_tokened_now_uses_terminal_completion() != 0) {
