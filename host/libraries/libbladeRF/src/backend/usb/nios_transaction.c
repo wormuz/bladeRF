@@ -938,7 +938,15 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
                     nios_pkt_retune2_unpack_request_token(request) == 0 &&
                     nios_read_le64(request, NIOS_PKT_RETUNE2_IDX_TIME) ==
                         NIOS_PKT_RETUNE2_CLEAR_QUEUE;
-                if (!state->command_session_generation_valid &&
+                /* A timed-out recovery request may itself leave a late
+                 * response behind the original RETUNE2 response. The state
+                 * currently tracks one RETUNE2 identity, so replacing it
+                 * would make the older response indistinguishable from a
+                 * mismatch. Fail closed and retain the original identity. */
+                if (state->pending_retune2_response) {
+                    state->desynchronized = true;
+                    status = BLADERF_ERR_TIMEOUT;
+                } else if (!state->command_session_generation_valid &&
                     !tokenless_queue_clear) {
                     state->desynchronized = true;
                     status = BLADERF_ERR_UNEXPECTED;

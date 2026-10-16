@@ -847,6 +847,58 @@ static void test_retune2_and_read_timeouts_recover_in_order(void)
     teardown(&usb);
 }
 
+static void test_retune2_recovery_timeout_preserves_original_identity(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+    uint8_t original[NIOS_PKT_LEN];
+    uint32_t const session_generation = 0x01020304;
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_8x32_pack(request,
+                       NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                       false, 0, 0);
+    nios_pkt_8x32_resp_pack(fake.scripted_responses[0],
+                            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                            false, 0, session_generation, true);
+    fake.scripted_response_count = 1;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+
+    fake.fail_call = fake.calls + 2;
+    nios_pkt_retune2_pack_token(request, BLADERF_MODULE_RX, 1000, 1, 0,
+                                0x83, 0, 0x0022);
+    memcpy(original, request, sizeof(original));
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+
+    /* The queue-clear recovery request can also time out. Since that would
+     * leave two possible late RETUNE2 replies but only one retained identity,
+     * the transport must fail closed without overwriting the original. */
+    fake.fail_call = fake.calls + 2;
+    nios_pkt_retune2_pack(request, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0x83, 0);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->desynchronized);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(memcmp(usb.peripheral->pending_retune2_request, original,
+                  sizeof(original)) == 0);
+    assert(usb.peripheral->pending_retune2_session_generation ==
+           session_generation);
+
+    fake.fail_call = 0;
+    nios_pkt_8x32_pack(request, NIOS_PKT_8x32_TARGET_VERSION, false, 0, 0);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_UNEXPECTED);
+    teardown(&usb);
+}
+
 static void test_tokenless_clear_timeout_recovers_without_session_seed(void)
 {
     struct bladerf_usb usb;
@@ -1610,6 +1662,7 @@ int main(void)
     test_tokened_now_async_acceptance_response();
     test_scheduled_retune2_timeout_retains_and_drains_late_ack();
     test_retune2_and_read_timeouts_recover_in_order();
+    test_retune2_recovery_timeout_preserves_original_identity();
     test_tokenless_clear_timeout_recovers_without_session_seed();
     test_tokenless_retune2_timeout_recovers_after_session_reset();
     test_success();
