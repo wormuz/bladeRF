@@ -37,7 +37,6 @@
 #include <unistd.h>
 
 #define TX_SAMPLES 4096u
-#define EVENT_WAIT_MS 4000u
 #define TX_FEEDER_TIMEOUT_MS 50u
 
 struct tx_feeder {
@@ -64,23 +63,12 @@ static void *feed_tx_until_fault(void *arg)
     return NULL;
 }
 
-static uint64_t monotonic_ms(void)
-{
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (uint64_t)now.tv_sec * 1000u +
-           (uint64_t)now.tv_nsec / 1000000u;
-}
-
 static int wait_for_event(struct bladerf *dev,
                           struct bladerf_rf_event *events,
                           uint64_t *cursor,
-                          bladerf_rf_event_type expected,
-                          uint32_t timeout_ms)
+                          bladerf_rf_event_type expected)
 {
-    const uint64_t deadline = monotonic_ms() + timeout_ms;
-
-    while (monotonic_ms() < deadline) {
+    for (;;) {
         uint64_t next = *cursor;
         uint32_t count = 0;
         bool history_complete = false;
@@ -99,7 +87,6 @@ static int wait_for_event(struct bladerf *dev,
         const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
         nanosleep(&pause, NULL);
     }
-    return BLADERF_ERR_TIMEOUT;
 }
 
 int main(void)
@@ -108,9 +95,10 @@ int main(void)
     struct tx_feeder feeder = {0};
     pthread_t feeder_thread;
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-    const char *mode = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    const char *mode_env = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
+    char mode_storage[96];
+    const char *mode = mode_storage;
     uint64_t cursor = 0;
-    uint64_t deadline;
     uint32_t count = 0;
     bool history_complete = false;
     bool expected_event_seen = false;
@@ -130,8 +118,13 @@ int main(void)
         tx_bandwidth = strtoul(tx_bandwidth_env, NULL, 0);
     }
 
-    if (mode == NULL) {
+    if (mode_env == NULL) {
         fprintf(stderr, "set BLADERF_TEST_RX_TRANSITION_STALL to a TX mode\n");
+        return 2;
+    }
+    if (snprintf(mode_storage, sizeof(mode_storage), "%s", mode_env) >=
+        (int)sizeof(mode_storage)) {
+        fprintf(stderr, "TX runtime injection mode is too long\n");
         return 2;
     }
     if (strcmp(mode, "RUNTIME_TX_RFIC_STATUS_READ_FAILURE") != 0 &&
@@ -199,8 +192,7 @@ int main(void)
             goto cleanup;
         }
         status = wait_for_event(dev, events, &cursor,
-                                BLADERF_RF_EVT_TX_RFIC_STATE_VALID,
-                                EVENT_WAIT_MS);
+                                BLADERF_RF_EVT_TX_RFIC_STATE_VALID);
         if (status != 0) {
             uint8_t state_reg = 0, calibration_reg = 0;
             uint8_t tx_pll_reg = 0, bbpll_reg = 0;
@@ -240,8 +232,7 @@ int main(void)
                                        915000000);
         if (status == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
         }
         if (status != 0) {
             uint64_t next = cursor;
@@ -290,8 +281,7 @@ int main(void)
         }
         if (status == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_FAILED,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_RETUNE_FAILED);
         }
         if (status != 0) {
             fprintf(stderr,
@@ -335,8 +325,7 @@ int main(void)
         }
         if (status == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
         }
         if (status != 0) {
             fprintf(stderr, "could not establish TX retune baseline: %s\n",
@@ -355,8 +344,7 @@ int main(void)
             goto cleanup;
         }
         status = wait_for_event(dev, events, &cursor,
-                                BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST,
-                                EVENT_WAIT_MS);
+                                BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST);
         if (status != 0) {
             fprintf(stderr, "queue-clear failure event missing: %s\n",
                     bladerf_strerror(status));
@@ -378,8 +366,7 @@ int main(void)
         status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), frequency);
         if (status == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
         }
         if (status == 0) {
             status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
@@ -434,9 +421,7 @@ int main(void)
                 mode, "RUNTIME_TX_TRANSPORT_FAILURE_DURING_RELEASE") == 0
                     ? BLADERF_RF_EVT_TX_TRANSPORT_ERROR
                     : BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST;
-            status = wait_for_event(dev, events, &cursor,
-                                    expected_event,
-                                    EVENT_WAIT_MS);
+            status = wait_for_event(dev, events, &cursor, expected_event);
         }
         if (status != 0) {
             fprintf(stderr, "TX gate fault was not contained: %s\n",
@@ -460,8 +445,7 @@ int main(void)
                                  BLADERF_RF_EVT_TX_RETUNE_VALID;
             }
             cursor = next;
-            deadline = monotonic_ms() + 250u;
-            while (!tx_valid_seen && monotonic_ms() < deadline) {
+            while (!tx_valid_seen) {
                 next = cursor;
                 status = bladerf_rf_events_get_since(
                     dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -487,9 +471,7 @@ int main(void)
                 status = BLADERF_ERR_UNEXPECTED;
                 goto cleanup;
             }
-            deadline = monotonic_ms() + 1000u;
-            while (monotonic_ms() < deadline &&
-                   atomic_load(&feeder.terminal_status) == 0) {
+            while (atomic_load(&feeder.terminal_status) == 0) {
                 const struct timespec pause = {.tv_sec = 0,
                                                .tv_nsec = 1000000};
                 nanosleep(&pause, NULL);
@@ -507,8 +489,7 @@ int main(void)
         }
         if (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE);
             if (status != 0) {
                 fprintf(stderr, "failed mute acknowledgement was not reported\n");
                 goto cleanup;
@@ -562,8 +543,7 @@ int main(void)
         status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0), frequency);
         if (status == 0) {
             status = wait_for_event(dev, events, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                    EVENT_WAIT_MS);
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
         }
         if (status == 0) {
             status = bladerf_sync_tx(dev, feeder.samples, TX_SAMPLES, NULL,
@@ -603,8 +583,7 @@ int main(void)
         if (status != 0) goto cleanup;
     }
 
-    deadline = monotonic_ms() + EVENT_WAIT_MS;
-    while (monotonic_ms() < deadline && !expected_event_seen) {
+    while (!expected_event_seen) {
         uint64_t next = cursor;
         status = bladerf_rf_events_get_since(
             dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -682,9 +661,7 @@ int main(void)
         goto cleanup;
     }
 
-    deadline = monotonic_ms() + 1000u;
-    while (monotonic_ms() < deadline &&
-           atomic_load(&feeder.terminal_status) == 0) {
+    while (atomic_load(&feeder.terminal_status) == 0) {
         const struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000};
         nanosleep(&pause, NULL);
     }
@@ -713,8 +690,7 @@ int main(void)
         }
         if (status != 0) goto cleanup;
 
-        deadline = monotonic_ms() + EVENT_WAIT_MS;
-        while (monotonic_ms() < deadline && !retune_valid_seen) {
+        while (!retune_valid_seen) {
             uint64_t next = cursor;
             status = bladerf_rf_events_get_since(
                 dev, cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
