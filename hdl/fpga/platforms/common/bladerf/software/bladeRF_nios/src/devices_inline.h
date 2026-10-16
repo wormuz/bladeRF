@@ -36,6 +36,7 @@
 #include "nios_gpio_policy.h"
 #include "rffe_csr_policy.h"
 #include "nios_pkt_8x32.h"
+#include "command_uart_response_mmio.h"
 
 /* Independent FPGA system-clock monitor, exposed on control PIO GPI[27]. */
 #define CONTROL_AD9361_RX_IF_CLOCK_ALIVE (1u << 27)
@@ -811,27 +812,29 @@ INLINE bool command_uart_write_response(uint8_t *resp,
     return true;
 }
 
+INLINE uint32_t command_uart_response_mmio_read32(void *context,
+                                                   uint32_t offset) {
+    (void)context;
+    return IORD_32DIRECT(COMMAND_UART_BASE, offset);
+}
+
+INLINE void command_uart_response_mmio_write32(void *context,
+                                                uint32_t offset,
+                                                uint32_t value) {
+    (void)context;
+    IOWR_32DIRECT(COMMAND_UART_BASE, offset, value);
+}
+
 INLINE enum command_uart_try_publish_result
 command_uart_write_response_try(uint8_t *resp, uint32_t session_generation) {
-    int i;
-    uint32_t val;
-    const uint32_t status = IORD_32DIRECT(COMMAND_UART_BASE, 28);
-    const enum command_uart_try_publish_result slot_result =
-        command_uart_response_slot_result(status);
+    static const struct command_uart_response_mmio mmio = {
+        .read32 = command_uart_response_mmio_read32,
+        .write32 = command_uart_response_mmio_write32,
+        .context = NULL,
+    };
 
-    if (slot_result != COMMAND_UART_TRY_PUBLISH_OK) {
-        return slot_result;
-    }
-
-    IOWR_32DIRECT(COMMAND_UART_BASE, 24, session_generation);
-    for (i = 0; i < 16; i += 4) {
-        val = ((uint32_t)resp[i + 0]) |
-              (((uint32_t)resp[i + 1]) << 8) |
-              (((uint32_t)resp[i + 2]) << 16) |
-              (((uint32_t)resp[i + 3]) << 24);
-        IOWR_32DIRECT(COMMAND_UART_BASE, i, val);
-    }
-    return COMMAND_UART_TRY_PUBLISH_OK;
+    return command_uart_response_mmio_try_publish(
+        &mmio, resp, session_generation);
 }
 
 #endif
