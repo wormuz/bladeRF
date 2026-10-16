@@ -75,6 +75,61 @@ if(GIT_FOUND)
             message(FATAL_ERROR "Unable to locate git worktree root")
         endif()
 
+        # The version string includes HEAD and a fingerprint of the staged
+        # and unstaged diff. Make ordinary build invocations reconfigure when
+        # those Git inputs change; otherwise a commit can leave the compiled
+        # library reporting the previous revision until a manual CMake run.
+        set(GIT_VERSION_INPUTS)
+        foreach(GIT_INPUT HEAD index packed-refs)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path ${GIT_INPUT}
+                OUTPUT_VARIABLE GIT_INPUT_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE GIT_INPUT_RESULT
+                WORKING_DIRECTORY ${GIT_TOPLEVEL}
+            )
+            if(GIT_INPUT_RESULT EQUAL 0 AND NOT "${GIT_INPUT_PATH}" STREQUAL "")
+                if(NOT IS_ABSOLUTE "${GIT_INPUT_PATH}")
+                    get_filename_component(
+                        GIT_INPUT_PATH
+                        "${GIT_TOPLEVEL}/${GIT_INPUT_PATH}" ABSOLUTE)
+                endif()
+                if(EXISTS "${GIT_INPUT_PATH}")
+                    list(APPEND GIT_VERSION_INPUTS "${GIT_INPUT_PATH}")
+                endif()
+            endif()
+        endforeach()
+
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} symbolic-ref --quiet HEAD
+            OUTPUT_VARIABLE GIT_HEAD_REF
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE GIT_HEAD_REF_RESULT
+            WORKING_DIRECTORY ${GIT_TOPLEVEL}
+        )
+        if(GIT_HEAD_REF_RESULT EQUAL 0 AND NOT "${GIT_HEAD_REF}" STREQUAL "")
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path ${GIT_HEAD_REF}
+                OUTPUT_VARIABLE GIT_REF_PATH
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE GIT_REF_RESULT
+                WORKING_DIRECTORY ${GIT_TOPLEVEL}
+            )
+            if(GIT_REF_RESULT EQUAL 0 AND NOT "${GIT_REF_PATH}" STREQUAL "")
+                if(NOT IS_ABSOLUTE "${GIT_REF_PATH}")
+                    get_filename_component(
+                        GIT_REF_PATH "${GIT_TOPLEVEL}/${GIT_REF_PATH}" ABSOLUTE)
+                endif()
+                if(EXISTS "${GIT_REF_PATH}")
+                    list(APPEND GIT_VERSION_INPUTS "${GIT_REF_PATH}")
+                endif()
+            endif()
+        endif()
+        if(GIT_VERSION_INPUTS)
+            set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                ${GIT_VERSION_INPUTS})
+        endif()
+
         execute_process(
             COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD --
             OUTPUT_VARIABLE GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE
