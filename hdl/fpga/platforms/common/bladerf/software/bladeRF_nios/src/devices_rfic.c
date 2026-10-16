@@ -636,7 +636,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 state.init_timing.active = true;
                 state.init_timing.transaction_id = e->transaction_id;
                 state.init_timing.start_ticks = now;
-                state.init_timing.last_worker_ticks = now;
+                state.init_timing.last_worker_end_ticks = now;
                 state.init_timing.have_worker_tick = true;
             }
             q->progress_sequence++;
@@ -1308,18 +1308,23 @@ void rfic_command_work(void)
         ? (uint64_t)alt_timestamp() : 0;
 
     if (state.init_timing.active && state.init_timing.have_worker_tick) {
-        const uint64_t gap = call_start - state.init_timing.last_worker_ticks;
+        const uint64_t gap =
+            call_start - state.init_timing.last_worker_end_ticks;
         if (gap > state.init_timing.max_service_gap_ticks)
             state.init_timing.max_service_gap_ticks = gap;
-        state.init_timing.last_worker_ticks = call_start;
     }
 
     rfic_command_work_wq(&state.write_queue);
 
     if (measures_init) {
-        const uint64_t elapsed = (uint64_t)alt_timestamp() - call_start;
+        const uint64_t call_end = (uint64_t)alt_timestamp();
+        const uint64_t elapsed = call_end - call_start;
         if (elapsed > state.init_timing.max_worker_ticks)
             state.init_timing.max_worker_ticks = elapsed;
+        if (state.init_timing.active) {
+            state.init_timing.last_worker_end_ticks = call_end;
+            state.init_timing.have_worker_tick = true;
+        }
     }
 }
 

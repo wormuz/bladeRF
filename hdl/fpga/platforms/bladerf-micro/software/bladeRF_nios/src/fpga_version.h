@@ -12,11 +12,12 @@
  * 0.22.0 adds retained RETUNE2 failure identity and cause records;
  * 0.23.0 adds session-bound request tokens to deferred outcomes;
  * 0.24.0 adds correlated primary/cleanup result detail for RFIC commands;
- * 0.25.0 adds RFIC INIT timing telemetry over the custom NIOS packet target.
+ * 0.25.0 adds RFIC INIT timing telemetry over the custom NIOS packet target;
+ * 0.26.0 reports true worker-idle service gaps separately from worker time.
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      25
+#define FPGA_VERSION_MINOR      26
 #define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \

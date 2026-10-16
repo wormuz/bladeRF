@@ -83,7 +83,7 @@ struct rfic_state {
         uint16_t transaction_id;
         uint32_t retirement_sequence;
         uint64_t start_ticks;
-        uint64_t last_worker_ticks;
+        uint64_t last_worker_end_ticks;
         uint64_t total_ticks;
         uint64_t max_worker_ticks;
         uint64_t max_service_gap_ticks;
