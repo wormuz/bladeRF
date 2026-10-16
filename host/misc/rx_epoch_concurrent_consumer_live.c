@@ -205,7 +205,7 @@ int main(int argc, char **argv)
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                    BLADERF_RF_REQUIRE_ENSM_RX |
                                    BLADERF_RF_REQUIRE_EPOCH_VALID,
-            .timeout_ms = 2000,
+            .timeout_ms = 0,
             .require_rx_data_valid = true,
             .epoch_settle_samples = 0,
         };
