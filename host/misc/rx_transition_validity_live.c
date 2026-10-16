@@ -45,7 +45,7 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
     const struct bladerf_rx_transition_request request = {
         .target_frequency_hz = frequency_hz,
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -91,7 +91,7 @@ static int transition_and_check_iq(struct bladerf *dev, uint64_t frequency_hz,
         }
     }
     if (status == 0) {
-        status = bladerf_rx_transition_wait(dev, *txn, event, 2000);
+        status = bladerf_rx_transition_wait(dev, *txn, event, 0);
         if (status != 0) {
             fprintf(stderr, "recovery transition wait: %s event=%u state=%u\n",
                     bladerf_strerror(status), event->event_type,
@@ -309,13 +309,13 @@ int main(int argc, char **argv)
         .target_frequency_hz = 1835000000ULL,
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = false,
         .epoch_settle_samples = 0,
     };
     CHECK(bladerf_rx_transition_begin(dev, rx_channel,
                                      &control_only, &txn));
-    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
+    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 0));
     if (event.event_type != BLADERF_RF_EVT_CONTROL_PLANE_CONFIRMED ||
         event.fpga_state != BLADERF_RF_STATE_RX_DATA_INVALID) {
         fprintf(stderr, "control-only result claimed wrong state/event: %u/%u\n",
@@ -329,13 +329,13 @@ int main(int argc, char **argv)
     const struct bladerf_rx_transition_request require_valid = {
         .target_frequency_hz = 1835400000ULL,
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
     CHECK(bladerf_rx_transition_begin(dev, rx_channel,
                                      &require_valid, &txn));
-    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 2000));
+    CHECK(bladerf_rx_transition_wait(dev, txn, &event, 0));
     if (event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID ||
         event.fpga_state != BLADERF_RF_STATE_RX_DATA_VALID ||
         event.epoch_id == 0) {
