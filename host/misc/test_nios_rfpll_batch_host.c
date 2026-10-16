@@ -35,6 +35,7 @@ enum response_mode {
     RESPONSE_RETUNE2_SUCCESS,
     RESPONSE_TAGGED_RFIC_LATE_ACK_THEN_STATUS,
     RESPONSE_TAGGED_RFIC_DUPLICATE_ACK_THEN_STATUS,
+    RESPONSE_TAGGED_RFIC_ACK_AND_STATUS_TIMEOUT,
     RESPONSE_LATE_8X32_READ_THEN_BARRIER,
     RESPONSE_PARTIAL_FRAME_THEN_TIMEOUT,
     RESPONSE_UNKNOWN_TRANSFER_LENGTH,
@@ -50,6 +51,9 @@ static uint32_t last_in_timeout_ms;
 static uint8_t tagged_rfic_request[NIOS_PKT_LEN];
 static unsigned int tagged_rfic_ack_count;
 static bool tagged_rfic_initial_timeout_sent;
+static uint8_t interleaved_tagged_write[NIOS_PKT_LEN];
+static uint8_t interleaved_status_read[NIOS_PKT_LEN];
+static unsigned int interleaved_recovery_stage;
 static uint8_t pending_8x32_read_request[NIOS_PKT_LEN];
 static bool pending_8x32_read_response;
 static bool pending_8x32_initial_timeout_sent;
@@ -122,6 +126,28 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     }
 
     if (endpoint == PERIPHERAL_EP_OUT) {
+        if (response_mode == RESPONSE_TAGGED_RFIC_ACK_AND_STATUS_TIMEOUT) {
+            if (interleaved_recovery_stage == 0 &&
+                bytes[NIOS_PKT_16x64_IDX_MAGIC] ==
+                    NIOS_PKT_16x64_MAGIC &&
+                bytes[NIOS_PKT_16x64_IDX_TARGET_ID] ==
+                    NIOS_PKT_16x64_TARGET_RFIC &&
+                (bytes[NIOS_PKT_16x64_IDX_FLAGS] &
+                 NIOS_PKT_16x64_FLAG_WRITE) != 0) {
+                memcpy(interleaved_tagged_write, bytes,
+                       sizeof(interleaved_tagged_write));
+            } else if (interleaved_recovery_stage == 1 &&
+                       bytes[NIOS_PKT_16x64_IDX_MAGIC] ==
+                           NIOS_PKT_16x64_MAGIC &&
+                       bytes[NIOS_PKT_16x64_IDX_TARGET_ID] ==
+                           NIOS_PKT_16x64_TARGET_RFIC &&
+                       (bytes[NIOS_PKT_16x64_IDX_FLAGS] &
+                        NIOS_PKT_16x64_FLAG_WRITE) == 0) {
+                memcpy(interleaved_status_read, bytes,
+                       sizeof(interleaved_status_read));
+                interleaved_recovery_stage = 2;
+            }
+        }
         if ((response_mode == RESPONSE_TAGGED_RFIC_LATE_ACK_THEN_STATUS ||
              response_mode ==
                  RESPONSE_TAGGED_RFIC_DUPLICATE_ACK_THEN_STATUS) &&
@@ -161,6 +187,57 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
     }
 
     in_count++;
+    if (response_mode == RESPONSE_TAGGED_RFIC_ACK_AND_STATUS_TIMEOUT) {
+        uint8_t target16;
+        uint16_t addr16;
+        uint64_t data16;
+        bool write16;
+
+        switch (interleaved_recovery_stage) {
+        case 0:
+            interleaved_recovery_stage = 1;
+            return BLADERF_ERR_TIMEOUT;
+        case 2:
+            nios_pkt_16x64_unpack(interleaved_tagged_write, &target16,
+                                  &write16, &addr16, &data16);
+            interleaved_recovery_stage = 3;
+            nios_pkt_16x64_resp_pack_with_transaction_id(
+                bytes, target16, write16, addr16, data16, true,
+                nios_pkt_16x64_transaction_id(interleaved_tagged_write));
+            return mock_transfer_success(length, transferred,
+                                         transferred_valid);
+        case 3:
+            interleaved_recovery_stage = 4;
+            return BLADERF_ERR_TIMEOUT;
+        case 4:
+            nios_pkt_16x64_unpack(interleaved_status_read, &target16,
+                                  &write16, &addr16, &data16);
+            interleaved_recovery_stage = 5;
+            nios_pkt_16x64_resp_pack_with_transaction_id(
+                bytes, target16, write16, addr16, UINT64_C(0x2468), true,
+                0);
+            return mock_transfer_success(length, transferred,
+                                         transferred_valid);
+        case 5:
+            nios_pkt_8x32_unpack(request, &target8, &write8, &addr8,
+                                 &data8);
+            interleaved_recovery_stage = 6;
+            nios_pkt_8x32_resp_pack(bytes, target8, write8, addr8, 0, true);
+            return mock_transfer_success(length, transferred,
+                                         transferred_valid);
+        case 6:
+            nios_pkt_16x64_unpack(request, &target16, &write16, &addr16,
+                                  &data16);
+            interleaved_recovery_stage = 7;
+            nios_pkt_16x64_resp_pack_with_transaction_id(
+                bytes, target16, write16, addr16, UINT64_C(0x12345678),
+                true, 0);
+            return mock_transfer_success(length, transferred,
+                                         transferred_valid);
+        default:
+            return BLADERF_ERR_UNEXPECTED;
+        }
+    }
     if (request[NIOS_PKT_16x64_IDX_MAGIC] == NIOS_PKT_16x64_MAGIC &&
         (response_mode == RESPONSE_PARTIAL_FRAME_THEN_TIMEOUT ||
          response_mode == RESPONSE_UNKNOWN_TRANSFER_LENGTH)) {
@@ -955,6 +1032,84 @@ static int expect_duplicate_tagged_rfic_ack_is_drained_by_status(void)
     return 0;
 }
 
+static int expect_timed_out_status_keeps_both_recovery_identities(void)
+{
+    struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
+    uint8_t packet[NIOS_PKT_LEN];
+    enum nios_transaction_stage stage;
+    const unsigned int out_before = out_count;
+    const unsigned int in_before = in_count;
+    uint64_t response_data = 0;
+    int status;
+
+    usb.peripheral = &usb.peripheral_local;
+    MUTEX_INIT(&usb.peripheral_local.lock);
+    response_mode = RESPONSE_TAGGED_RFIC_ACK_AND_STATUS_TIMEOUT;
+    interleaved_recovery_stage = 0;
+    nios_pkt_16x64_pack_with_transaction_id(
+        packet, NIOS_PKT_16x64_TARGET_RFIC, true, 0x0023,
+        UINT64_C(0xabcdef), 0x2468);
+    status = nios_usb_transaction(&usb, packet, sizeof(packet),
+                                  PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
+    if (status != BLADERF_ERR_TIMEOUT ||
+        !usb.peripheral_local.pending_rfic_write ||
+        usb.peripheral_local.pending_read_response ||
+        usb.peripheral_local.desynchronized) {
+        fprintf(stderr, "tagged write timeout did not retain sole identity: "
+                        "status=%d stage=%d write=%u read=%u desync=%u\n",
+                status, stage, usb.peripheral_local.pending_rfic_write,
+                usb.peripheral_local.pending_read_response,
+                usb.peripheral_local.desynchronized);
+        MUTEX_DESTROY(&usb.peripheral_local.lock);
+        return 1;
+    }
+
+    nios_pkt_16x64_pack(packet, NIOS_PKT_16x64_TARGET_RFIC, false,
+                        0x0f00, 0);
+    status = nios_usb_transaction(&usb, packet, sizeof(packet),
+                                  PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
+    if (status != BLADERF_ERR_TIMEOUT ||
+        !usb.peripheral_local.pending_rfic_write ||
+        !usb.peripheral_local.pending_read_response ||
+        usb.peripheral_local.desynchronized || in_count != in_before + 3 ||
+        out_count != out_before + 2) {
+        fprintf(stderr, "timed-out status lost a concurrent pending identity: "
+                        "status=%d stage=%d write=%u read=%u desync=%u "
+                        "out=%u in=%u\n", status, stage,
+                usb.peripheral_local.pending_rfic_write,
+                usb.peripheral_local.pending_read_response,
+                usb.peripheral_local.desynchronized, out_count, in_count);
+        MUTEX_DESTROY(&usb.peripheral_local.lock);
+        return 1;
+    }
+
+    nios_pkt_16x64_pack(packet, NIOS_PKT_16x64_TARGET_RFIC, false,
+                        0x0f00, 0);
+    status = nios_usb_transaction(&usb, packet, sizeof(packet),
+                                  PERIPHERAL_TIMEOUT_MS, NULL, NULL, &stage);
+    nios_pkt_16x64_unpack(packet, NULL, NULL, NULL, &response_data);
+    if (status != 0 || stage != NIOS_TRANSACTION_COMPLETE ||
+        usb.peripheral_local.pending_rfic_write ||
+        usb.peripheral_local.pending_read_response ||
+        usb.peripheral_local.desynchronized ||
+        interleaved_recovery_stage != 7 ||
+        out_count != out_before + 4 || in_count != in_before + 6 ||
+        response_data != UINT64_C(0x12345678)) {
+        fprintf(stderr, "combined late-ACK/status/barrier recovery failed: "
+                        "status=%d stage=%d write=%u read=%u desync=%u "
+                        "phase=%u out=%u in=%u data=%016llx\n", status,
+                stage, usb.peripheral_local.pending_rfic_write,
+                usb.peripheral_local.pending_read_response,
+                usb.peripheral_local.desynchronized,
+                interleaved_recovery_stage, out_count, in_count,
+                (unsigned long long)response_data);
+        MUTEX_DESTROY(&usb.peripheral_local.lock);
+        return 1;
+    }
+    MUTEX_DESTROY(&usb.peripheral_local.lock);
+    return 0;
+}
+
 static int expect_late_8x32_read_is_drained_by_barrier(void)
 {
     struct bladerf_usb usb = { .fn = &mock_usb_fns, .driver = NULL };
@@ -1107,11 +1262,12 @@ int main(void)
         expect_partial_dwell_summary_timeout_is_atomic() ||
         expect_tagged_rfic_late_ack_is_resolved_by_status() ||
         expect_duplicate_tagged_rfic_ack_is_drained_by_status() ||
+        expect_timed_out_status_keeps_both_recovery_identities() ||
         expect_late_8x32_read_is_drained_by_barrier() ||
         expect_partial_frame_timeout_desynchronizes() ||
         expect_unknown_transfer_length_desynchronizes() ||
-        out_count != 27 || in_count != 31) {
-        if (out_count != 27 || in_count != 31) {
+        out_count != 31 || in_count != 37) {
+        if (out_count != 31 || in_count != 37) {
             fprintf(stderr, "NIOS transaction count mismatch: out=%u in=%u\n",
                     out_count, in_count);
         }
