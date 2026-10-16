@@ -14,7 +14,7 @@ struct fake_usb {
     bool timeout_length_unknown;
     uint8_t endpoints[16];
     uint32_t timeouts[16];
-    uint8_t scripted_responses[4][NIOS_PKT_LEN];
+    uint8_t scripted_responses[8][NIOS_PKT_LEN];
     size_t scripted_response_count;
     size_t scripted_response_index;
     uint32_t scripted_response_offset;
@@ -738,6 +738,110 @@ static void test_scheduled_retune2_timeout_retains_and_drains_late_ack(void)
                                 NULL, &stage) == 0);
     assert(stage == NIOS_TRANSACTION_COMPLETE);
     assert(fake.scripted_response_index == 3);
+    assert(!usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+    teardown(&usb);
+}
+
+static void test_retune2_and_read_timeouts_recover_in_order(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+    uint32_t const session_generation = 0x01020304;
+    uint16_t const token = 0x0022;
+    int status;
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_8x32_pack(request,
+                       NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                       false, 0, 0);
+    nios_pkt_8x32_resp_pack(fake.scripted_responses[0],
+                            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION,
+                            false, 0, session_generation, true);
+    fake.scripted_response_count = 1;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+
+    /* Lose the tokened RETUNE2 acceptance reply. Its generation and token
+     * must remain owned while read-only status polling remains available. */
+    fake.fail_call = fake.calls + 2;
+    nios_pkt_retune2_pack_token(request, BLADERF_MODULE_RX, 1000, 1, 0,
+                                0x83, 0, token);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(usb.peripheral->pending_retune2_session_generation ==
+           session_generation);
+    assert(!usb.peripheral->desynchronized);
+
+    /* Then lose a completion read too. Recovery must consume the late
+     * acceptance, late read response, and distinct ordered barrier response. */
+    fake.fail_call = fake.calls + 2;
+    nios_pkt_8x32_pack(request, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                       false, 0, 0);
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == BLADERF_ERR_TIMEOUT);
+    assert(usb.peripheral->pending_read_response);
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+
+    fake.fail_call = 0;
+    nios_pkt_retune2_resp_pack(
+        fake.scripted_responses[1], 0,
+        NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS,
+        NIOS_PKT_RETUNE2_FAILURE_NONE, token, session_generation);
+    nios_pkt_8x32_resp_pack(
+        fake.scripted_responses[2], NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+        false, 0, 0x00000001, true);
+    nios_pkt_8x32_resp_pack(
+        fake.scripted_responses[3], NIOS_PKT_8x32_TARGET_VERSION,
+        false, 0, 0x00000042, true);
+    nios_pkt_8x32_resp_pack(
+        fake.scripted_responses[4], NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+        false, 0, 0x00000002, true);
+    fake.scripted_response_count = 5;
+    nios_pkt_8x32_pack(request, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+                       false, 0, 0);
+    status = nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                  NULL, &stage);
+    if (status != 0) {
+        fprintf(stderr, "combined RETUNE2/read recovery failed: status=%d "
+                        "stage=%d calls=%d response_count=%zu "
+                        "response_index=%zu offset=%u "
+                        "last_ep=%u pending_read=%u pending_retune2=%u "
+                        "desynchronized=%u\n",
+                status, stage, fake.calls, fake.scripted_response_count,
+                fake.scripted_response_index,
+                fake.scripted_response_offset,
+                fake.calls != 0 ? fake.endpoints[fake.calls - 1] : 0,
+                usb.peripheral->pending_read_response,
+                usb.peripheral->pending_retune2_response,
+                usb.peripheral->desynchronized);
+    }
+    assert(status == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(fake.scripted_response_index == 5);
+    assert(!usb.peripheral->pending_read_response);
+    /* The ordered reads do not retire the timed-out request identity; a
+     * matching queue-clear acknowledgement is the terminal barrier. */
+    assert(usb.peripheral->pending_retune2_response);
+    assert(!usb.peripheral->desynchronized);
+
+    nios_pkt_retune2_pack(request, BLADERF_MODULE_RX,
+                          NIOS_PKT_RETUNE2_CLEAR_QUEUE, 0, 0, 0x83, 0);
+    nios_pkt_retune2_resp_pack(
+        fake.scripted_responses[5], 0,
+        NIOS_PKT_RETUNE2_RESP_FLAG_CANCEL_PENDING,
+        NIOS_PKT_RETUNE2_FAILURE_NONE, 0, 0);
+    fake.scripted_response_count = 6;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 1000, NULL,
+                                NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(fake.scripted_response_index == 6);
+    assert(!usb.peripheral->pending_read_response);
     assert(!usb.peripheral->pending_retune2_response);
     assert(!usb.peripheral->desynchronized);
     teardown(&usb);
@@ -1505,6 +1609,7 @@ int main(void)
     test_retune2_response_echoes_request_token();
     test_tokened_now_async_acceptance_response();
     test_scheduled_retune2_timeout_retains_and_drains_late_ack();
+    test_retune2_and_read_timeouts_recover_in_order();
     test_tokenless_clear_timeout_recovers_without_session_seed();
     test_tokenless_retune2_timeout_recovers_after_session_reset();
     test_success();
