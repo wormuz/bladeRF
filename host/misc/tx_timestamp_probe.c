@@ -45,12 +45,11 @@
 #define DEFAULT_TX_GAIN_DB     20
 
 /* Keep the RX observer's pre-burst history until the main thread can consume
- * it after sync_tx returns. At 10 Msps, 32 x 8192 buffers retain only 26 ms,
- * shorter than the RF transition/setup plus scheduled-burst window observed
- * on hardware; ring overflow would make a healthy transmitted burst invisible
- * to this probe. */
+ * it after sync_tx returns. At 10 Msps, 512 x 8192 frames retain about 419 ms
+ * per channel. The former 256-buffer setting produced intermittent RX stream
+ * overruns and short metadata reads during TX2 BIST qualification. */
 #ifndef NUM_BUFFERS
-#define NUM_BUFFERS 256u
+#define NUM_BUFFERS 512u
 #endif
 #define BUFFER_SIZE 8192u
 #define NUM_XFERS   8u
@@ -117,6 +116,50 @@ static int cmp_double(const void *a, const void *b)
     return (da > db) - (da < db);
 }
 
+static int latest_rf_event_cursor(struct bladerf *dev, uint64_t *cursor)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE, &count, cursor,
+        &complete);
+
+    return status == 0 || status == BLADERF_ERR_MEM ? 0 : status;
+}
+
+static int check_rx_stream_overrun_events(struct bladerf *dev,
+                                          uint64_t after_sequence,
+                                          uint8_t observer_epoch_id,
+                                          bool *overrun_seen)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = after_sequence;
+    bool complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, after_sequence, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next_sequence, &complete);
+
+    if (status != 0 || !complete) {
+        fprintf(stderr, "RX event history incomplete after %llu: %s\n",
+                (unsigned long long)after_sequence,
+                bladerf_strerror(status != 0 ? status : BLADERF_ERR_MEM));
+        return status != 0 ? status : BLADERF_ERR_MEM;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        if (events[i].event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN &&
+            events[i].epoch_id == observer_epoch_id) {
+            fprintf(stderr, "RX stream overrun event epoch=%u error=%d\n",
+                    events[i].epoch_id, events[i].error_code);
+            *overrun_seen = true;
+        }
+    }
+
+    return 0;
+}
+
 static void dump_recent_rf_events(struct bladerf *dev)
 {
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
@@ -171,6 +214,7 @@ int main(int argc, char *argv[])
     bladerf_timestamp search_start_ts;
     bool overrun_seen  = false;
     uint8_t observer_epoch_id = 0;
+    uint64_t observer_event_cursor = 0;
     bool burst_found    = false;
     unsigned int bursts_found_count = 0;
     double first_chunk_median = 0.0;
@@ -368,6 +412,13 @@ int main(int argc, char *argv[])
             fprintf(stderr, "enable tx0: %s\n", bladerf_strerror(status));
             goto out_disable_rx;
         }
+    }
+
+    status = latest_rf_event_cursor(dev, &observer_event_cursor);
+    if (status != 0) {
+        fprintf(stderr, "read RF event cursor: %s\n",
+                bladerf_strerror(status));
+        goto out_disable_tx;
     }
 
     status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(ch), true);
@@ -850,6 +901,13 @@ int main(int argc, char *argv[])
 
     /* Capture post-stream state too: RFIC validity may precede the FPGA TX
      * gate's RESUME acknowledgement by one monitor pass. */
+    {
+        int event_status = check_rx_stream_overrun_events(
+            dev, observer_event_cursor, observer_epoch_id, &overrun_seen);
+        if (status == 0 && event_status != 0) {
+            status = event_status;
+        }
+    }
     dump_recent_rf_events(dev);
     printf("overrun_seen=%d\n", (int)overrun_seen);
     ret = (status == 0 && !overrun_seen && burst_found &&
