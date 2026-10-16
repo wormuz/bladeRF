@@ -2441,29 +2441,13 @@ static int nios_retune2_wait_now_terminal(
 {
     bladerf_module const module = BLADERF_CHANNEL_IS_TX(ch)
         ? BLADERF_MODULE_TX : BLADERF_MODULE_RX;
-    uint64_t now_ns = 0;
-    uint64_t deadline_ns;
-    bool expired = false;
-    int status = bladerf_monotonic_now_ns(&now_ns);
-
-    if (!nios_deadline_start(status, now_ns, 120000000000ULL,
-                             &deadline_ns)) {
-        return BLADERF_ERR_UNEXPECTED;
-    }
+    int status;
 
     for (;;) {
         uint32_t success_count;
         uint32_t failure_count;
         uint32_t success_delta;
         uint32_t failure_delta;
-
-        status = bladerf_monotonic_now_ns(&now_ns);
-        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
-            return BLADERF_ERR_UNEXPECTED;
-        }
-        if (expired) {
-            return BLADERF_ERR_TIMEOUT;
-        }
 
         status = nios_retune2_success_count_read(dev, module, &success_count);
         if (status == 0) {

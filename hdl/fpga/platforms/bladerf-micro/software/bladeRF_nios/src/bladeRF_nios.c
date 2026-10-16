@@ -159,21 +159,37 @@ static void retry_prepared_cooperative_response(void)
 
 static void begin_deferred_worker(void)
 {
-    command_uart_set_worker_busy(true);
-    if (cooperative_pkt != NULL && cooperative_pkt->ready) {
+    const bool worker_owns_rfic =
+        rfic_command_worker_active() || rfic_command_owns_device() ||
+        rfic_tx_quad_retune_owner();
+    const bool worker_busy = worker_owns_rfic ||
+        (cooperative_pkt != NULL && cooperative_pkt->response_deferred);
+
+    /* do_work hooks are polled on every main-loop pass, including when their
+     * queues are empty. Do not fence the UART merely because an idle hook was
+     * entered: the FPGA latches this bit for the whole incoming frame, which
+     * otherwise turns ordinary RETUNE2 NOW requests into BUSY at random. */
+    command_uart_set_worker_busy(worker_busy);
+    if (worker_busy && cooperative_pkt != NULL && cooperative_pkt->ready) {
         /* Preserve arrival-time fencing for a request captured just before
-         * this deferred operation begins. */
+         * an owned deferred operation begins. */
         cooperative_pkt->deferred_work_active_at_accept = true;
     }
 }
 
 static void end_deferred_worker(void)
 {
-    command_uart_set_worker_busy(rfic_command_worker_active() ||
-                                 rfic_command_owns_device() ||
-                                 rfic_tx_quad_retune_owner() ||
-                                 (cooperative_pkt != NULL &&
-                                  cooperative_pkt->response_deferred));
+    const bool worker_owns_rfic =
+        rfic_command_worker_active() || rfic_command_owns_device() ||
+        rfic_tx_quad_retune_owner();
+    const bool worker_busy = worker_owns_rfic ||
+        (cooperative_pkt != NULL && cooperative_pkt->response_deferred);
+
+    command_uart_set_worker_busy(worker_busy);
+    if (worker_owns_rfic && cooperative_pkt != NULL &&
+        cooperative_pkt->ready) {
+        cooperative_pkt->deferred_work_active_at_accept = true;
+    }
 }
 #endif
 
@@ -523,6 +539,21 @@ static void service_rfic_status_request_impl(void)
             return;
         }
         goto publish_cooperative_response;
+    }
+
+    /* Tokened RETUNE2 NOW callers poll the counters and completion ring
+     * while the retained fastlock worker owns the RFIC. These NIOS RAM
+     * records do not touch the PHY, so keep only their reads (and the ring's
+     * record selector writes) available during ownership. */
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x32_MAGIC) {
+        const uint8_t target =
+            cooperative_pkt->req[NIOS_PKT_8x32_IDX_TARGET_ID];
+        const bool write = (cooperative_pkt->req[NIOS_PKT_8x32_IDX_FLAGS] &
+                            NIOS_PKT_8x32_FLAG_WRITE) != 0;
+        if (nios_pkt_8x32_retune2_readout_safe(target, write)) {
+            pkt_8x32(cooperative_pkt);
+            goto publish_cooperative_response;
+        }
     }
 
     /* Read-only CONTROL PIO and independent INA219 I2C requests remain

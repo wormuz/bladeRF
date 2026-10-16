@@ -198,6 +198,24 @@ static int check_single_register_write_rejected(uint8_t target, uint8_t addr)
 
 int main(void)
 {
+    if (!nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, false) ||
+        !nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, false) ||
+        !nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, false) ||
+        !nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, true) ||
+        nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, true) ||
+        nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, true) ||
+        nios_pkt_8x32_retune2_readout_safe(
+            NIOS_PKT_8x32_TARGET_CONTROL, false)) {
+        fputs("RETUNE2 completion polling access policy mismatch\n", stderr);
+        return 1;
+    }
+
     CHECK_READ(NIOS_PKT_8x32_TARGET_VERSION, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_CONTROL, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RFFE_CSR, 1, false, 0);

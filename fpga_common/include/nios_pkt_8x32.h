@@ -470,6 +470,18 @@
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN 7u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
 
+/* These NIOS-owned counters and records remain safe to access while a
+ * retained RETUNE2 operation owns the RFIC. The completion target also
+ * accepts writes that select which RAM record subsequent reads observe. */
+static inline bool nios_pkt_8x32_retune2_readout_safe(uint8_t target,
+                                                       bool write)
+{
+    return target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION ||
+           (!write &&
+            (target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES ||
+             target == NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES));
+}
+
 /* Current command-link session generation captured for each NIOS packet.
  * Used to distinguish deferred outcomes retained across USB sessions. */
 #define NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION 0x90

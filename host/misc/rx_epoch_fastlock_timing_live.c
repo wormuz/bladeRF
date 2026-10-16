@@ -147,7 +147,6 @@ int main(int argc, char **argv)
         if (status != 0 || !complete || !have_config ||
             !nios_timing.transaction_retained ||
             nios_timing.nios_retune_observed != use_fastlock ||
-            (use_fastlock && !nios_timing.device_duration_valid) ||
             (use_fastlock && (!nios_events || begin_ns > out_ns ||
                               out_ns > response_ns || host_events)) ||
             (!use_fastlock && (!host_events || nios_events ||
@@ -189,6 +188,7 @@ int main(int argc, char **argv)
             }
         }
         if (use_fastlock) {
+            /* Tokened asynchronous NOW acceptance has no device duration. */
             printf("trial=%u mode=fastlock txn=%u epoch=%u usb_out_us=%.3f "
                    "usb_in_us=%.3f retune_roundtrip_us=%.3f "
                    "nios_duration_valid=%u nios_duration_ticks=%llu "
@@ -229,7 +229,7 @@ int main(int argc, char **argv)
             dev, last_transaction_id, &timing);
         if (status != 0 || !timing.transaction_retained ||
             timing.nios_retune_observed != last_transaction_fastlock ||
-            (last_transaction_fastlock && !timing.device_duration_valid)) {
+            (last_transaction_fastlock && timing.device_duration_valid)) {
             fprintf(stderr, "newest NIOS timing missing after wrap: "
                     "txn=%u retained=%u observed=%u valid=%u ticks=%llu\n",
                     last_transaction_id, timing.transaction_retained,
