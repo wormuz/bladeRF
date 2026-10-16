@@ -461,6 +461,7 @@ static bool _rfic_initialize(struct rfic_state *state)
     AD9361_InitParam *init_param = &bladerf2_rfic_init_params;
     bladerf_direction dir;
     bladerf_channel ch;
+    int32_t status;
     bool const ad9361_init_resume = rfic_init_adi_resume(
         state->init_job_started, state->init_job_pending,
         state->init_job_status, state->phy != NULL);
@@ -771,9 +772,12 @@ ad9361_init_ready:
     switch (state->init_tail_phase) {
     case RFIC_INIT_TAIL_TX_GAIN:
         ch = CHANNEL_IDX(BLADERF_TX, state->init_channel_index);
-        if (!txmute_set_cached(state->phy, ch,
-                               init_param->tx_attenuation_mdB))
+        status = txmute_set_cached(state->phy, ch,
+                                   init_param->tx_attenuation_mdB);
+        if (status < 0) {
+            RFIC_ERR("cache TX attenuation during INIT", status);
             return false;
+        }
         state->init_tail_phase = RFIC_INIT_TAIL_TX_MUTE;
         state->init_tail_pending = true;
         return true;

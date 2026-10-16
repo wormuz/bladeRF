@@ -75,6 +75,12 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint64_t *data)
             success = read_timestamp(addr, data);
             break;
 
+#ifdef BOARD_BLADERF_MICRO
+        case NIOS_PKT_8x64_TARGET_RFIC_TIMING:
+            success = rfic_command_init_timing_read(addr, data);
+            break;
+#endif
+
         /* Add user customizations here
 
         case NIOS_PKT_8x64_TARGET_USR1:

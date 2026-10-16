@@ -26,11 +26,13 @@
 
 #include <errno.h>
 #include <string.h>
+#include <sys/alt_timestamp.h>
 
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
 
 #include "devices_rfic.h"
 #include "ad936x_helpers.h"
+#include "nios_pkt_8x64.h"
 #include "nios_pkt_retune2.h"
 #include "rfic_frequency_policy.h"
 #include "rfic_scheduler_policy.h"
@@ -76,6 +78,22 @@ void rfic_command_record_error(int32_t status)
 
     if (status < 0 && active != NULL &&
         active->state == ENTRY_STATE_RUNNING) {
+        if (state.init_timing.active &&
+            state.init_timing.primary_error_status == 0) {
+            state.init_timing.primary_error_status = status;
+            state.init_timing.error_stage = state.init_stage;
+            state.init_timing.error_tail_phase = state.init_tail_phase;
+            state.init_timing.error_module_index = state.init_module_index;
+            state.init_timing.error_pending_mask =
+                (state.rfdc_job_pending ? 0x01u : 0u) |
+                (state.tx_quad_job_pending ? 0x02u : 0u) |
+                (state.sample_rate_job_pending ? 0x04u : 0u) |
+                (state.bandwidth_job_pending ? 0x08u : 0u) |
+                (state.init_job_pending ? 0x10u : 0u) |
+                (state.init_tail_pending ? 0x20u : 0u) |
+                (state.rfpll_job_pending ? 0x40u : 0u) |
+                (state.fir_enable_job_pending ? 0x80u : 0u);
+        }
         active->result_code = bladerf_rfic_result_latch_error(
             active->result_code, status);
     }
@@ -610,6 +628,17 @@ static void rfic_command_work_wq(struct rfic_queue *q)
     switch (e->state) {
         case ENTRY_STATE_NEW: {
             e->state = ENTRY_STATE_RUNNING;
+            if (e->cmd == BLADERF_RFIC_COMMAND_INIT &&
+                e->value == BLADERF_RFIC_INIT_STATE_ON &&
+                state.init_state != BLADERF_RFIC_INIT_STATE_ON) {
+                const uint64_t now = (uint64_t)alt_timestamp();
+                memset(&state.init_timing, 0, sizeof(state.init_timing));
+                state.init_timing.active = true;
+                state.init_timing.transaction_id = e->transaction_id;
+                state.init_timing.start_ticks = now;
+                state.init_timing.last_worker_ticks = now;
+                state.init_timing.have_worker_tick = true;
+            }
             q->progress_sequence++;
             break;
         }
@@ -637,6 +666,17 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     state.init_job.cleanup_status;
                 if (step_status < 0)
                     rfic_command_record_error(step_status);
+                else {
+                    /* INIT's retained constructor and the ordered tail jobs
+                     * intentionally share one bounded context. Start the
+                     * first tail job from a clean context: ADI transaction
+                     * objects may be terminal but still carry stale child
+                     * flags that their next start() correctly rejects as
+                     * already active. The scalar completion report above is
+                     * all the constructor state the continuation needs. */
+                    memset(&state.job_context, 0,
+                           sizeof(state.job_context));
+                }
 
                 /* Re-enter the INIT callback on the next worker pass. It
                  * performs the common success continuation or fail-closed
@@ -948,6 +988,27 @@ static void rfic_command_work_wq(struct rfic_queue *q)
 
             /* Publish COMPLETE only after the full ADI callback returns. */
             e->state = ENTRY_STATE_COMPLETE;
+            if (e->cmd == BLADERF_RFIC_COMMAND_INIT &&
+                state.init_timing.active &&
+                state.init_timing.transaction_id == e->transaction_id) {
+                state.init_timing.total_ticks =
+                    (uint64_t)alt_timestamp() - state.init_timing.start_ticks;
+                state.init_timing.retirement_sequence =
+                    q->last_rv_sequence + 1u;
+                state.init_timing.init_stage = state.init_stage;
+                state.init_timing.tail_phase = state.init_tail_phase;
+                state.init_timing.module_index = state.init_module_index;
+                state.init_timing.result_code = e->result_code;
+                state.init_timing.cleanup_result_code =
+                    e->cleanup_result_code;
+                state.init_timing.adi_status = state.init_job_status;
+                state.init_timing.adi_cleanup_status =
+                    state.init_job_cleanup_status;
+                state.init_timing.adi_stage = state.init_job_stage;
+                state.init_timing.setup_stage = state.init_setup_stage;
+                state.init_timing.active = false;
+                state.init_timing.valid = true;
+            }
             q->progress_sequence++;
 
             break;
@@ -1236,7 +1297,94 @@ void rfic_command_init(void)
  */
 void rfic_command_work(void)
 {
+    struct rfic_queue_entry *active = rfic_queue_peek(&state.write_queue);
+    const bool begins_init = active != NULL &&
+        active->state == ENTRY_STATE_NEW &&
+        active->cmd == BLADERF_RFIC_COMMAND_INIT &&
+        active->value == BLADERF_RFIC_INIT_STATE_ON &&
+        state.init_state != BLADERF_RFIC_INIT_STATE_ON;
+    const bool measures_init = state.init_timing.active || begins_init;
+    const uint64_t call_start = measures_init
+        ? (uint64_t)alt_timestamp() : 0;
+
+    if (state.init_timing.active && state.init_timing.have_worker_tick) {
+        const uint64_t gap = call_start - state.init_timing.last_worker_ticks;
+        if (gap > state.init_timing.max_service_gap_ticks)
+            state.init_timing.max_service_gap_ticks = gap;
+        state.init_timing.last_worker_ticks = call_start;
+    }
+
     rfic_command_work_wq(&state.write_queue);
+
+    if (measures_init) {
+        const uint64_t elapsed = (uint64_t)alt_timestamp() - call_start;
+        if (elapsed > state.init_timing.max_worker_ticks)
+            state.init_timing.max_worker_ticks = elapsed;
+    }
+}
+
+bool rfic_command_init_timing_read(uint8_t addr, uint64_t *value)
+{
+    if (value == NULL) return false;
+
+    switch (addr) {
+        case NIOS_PKT_8x64_RFIC_TIMING_STATUS:
+            *value = ((uint64_t)state.init_timing.retirement_sequence << 32) |
+                     ((uint64_t)state.init_timing.transaction_id << 16) |
+                     ((uint64_t)state.init_timing.active << 1) |
+                     (uint64_t)state.init_timing.valid;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_TOTAL_TICKS:
+        case NIOS_PKT_8x64_RFIC_TIMING_ACTIVE_ELAPSED_TICKS:
+            *value = state.init_timing.active
+                ? (uint64_t)alt_timestamp() - state.init_timing.start_ticks
+                : state.init_timing.total_ticks;
+            return state.init_timing.active || state.init_timing.valid ||
+                   addr == NIOS_PKT_8x64_RFIC_TIMING_ACTIVE_ELAPSED_TICKS;
+        case NIOS_PKT_8x64_RFIC_TIMING_MAX_WORKER_TICKS:
+            *value = state.init_timing.max_worker_ticks;
+            return state.init_timing.valid || state.init_timing.active;
+        case NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_GAP_TICKS:
+            *value = state.init_timing.max_service_gap_ticks;
+            return state.init_timing.valid || state.init_timing.active;
+        case NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ:
+            *value = alt_timestamp_freq();
+            return *value != 0;
+        case NIOS_PKT_8x64_RFIC_TIMING_INIT_STAGE:
+            *value = state.init_stage;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_RESULT_DETAIL:
+            *value = ((uint64_t)state.init_timing.init_stage << 32) |
+                     ((uint64_t)state.init_timing.tail_phase << 24) |
+                     ((uint64_t)state.init_timing.module_index << 16) |
+                     ((uint64_t)state.init_timing.cleanup_result_code << 8) |
+                     state.init_timing.result_code;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_ADI_STATUS:
+            *value = (uint32_t)state.init_timing.adi_status;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_ADI_CLEANUP_STATUS:
+            *value = (uint32_t)state.init_timing.adi_cleanup_status;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_ADI_STAGE:
+            *value = state.init_timing.adi_stage;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_SETUP_STAGE:
+            *value = state.init_timing.setup_stage;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_ERROR_STATUS:
+            *value = (uint32_t)state.init_timing.primary_error_status;
+            return true;
+        case NIOS_PKT_8x64_RFIC_TIMING_ERROR_CONTEXT:
+            *value = ((uint64_t)state.init_timing.error_stage << 32) |
+                     ((uint64_t)state.init_timing.error_tail_phase << 24) |
+                     ((uint64_t)state.init_timing.error_module_index << 16) |
+                     state.init_timing.error_pending_mask;
+            return true;
+        default:
+            *value = 0;
+            return false;
+    }
 }
 
 bool rfic_command_worker_active(void)

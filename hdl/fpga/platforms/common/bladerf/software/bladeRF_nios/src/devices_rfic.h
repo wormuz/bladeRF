@@ -74,6 +74,35 @@ struct rfic_state {
      * stopped instead of only "false". */
     uint8_t init_stage;
 
+    /* Device-clock measurements for the most recent INIT. Diagnostics only;
+     * these counters never gate or time out an RFIC operation. */
+    struct {
+        bool active;
+        bool valid;
+        bool have_worker_tick;
+        uint16_t transaction_id;
+        uint32_t retirement_sequence;
+        uint64_t start_ticks;
+        uint64_t last_worker_ticks;
+        uint64_t total_ticks;
+        uint64_t max_worker_ticks;
+        uint64_t max_service_gap_ticks;
+        uint8_t init_stage;
+        uint8_t tail_phase;
+        uint8_t module_index;
+        uint8_t result_code;
+        uint8_t cleanup_result_code;
+        int32_t adi_status;
+        int32_t adi_cleanup_status;
+        int32_t primary_error_status;
+        uint8_t adi_stage;
+        uint8_t setup_stage;
+        uint8_t error_stage;
+        uint8_t error_tail_phase;
+        uint8_t error_module_index;
+        uint8_t error_pending_mask;
+    } init_timing;
+
     /* The NIOS queue owns one retained ADI context at a time. Cold INIT's
      * constructor ends before its ordered tail jobs begin, so reuse this
      * storage after copying the constructor's small terminal report fields. */

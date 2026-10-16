@@ -89,6 +89,7 @@
  */
 
 #define NIOS_PKT_8x64_MAGIC         ((uint8_t) 'D')
+#define NIOS_PKT_8x64_LEN            16
 
 /* Request packet indices */
 #define NIOS_PKT_8x64_IDX_MAGIC      0
@@ -102,6 +103,23 @@
 /* Target IDs */
 
 #define NIOS_PKT_8x64_TARGET_TIMESTAMP 0x00 /* Timestamp readback (read only) */
+
+/* Project-owned read-only diagnostics for the hosted xA4 RFIC worker. */
+#define NIOS_PKT_8x64_TARGET_RFIC_TIMING 0x80
+#define NIOS_PKT_8x64_RFIC_TIMING_STATUS 0x00
+#define NIOS_PKT_8x64_RFIC_TIMING_TOTAL_TICKS 0x01
+#define NIOS_PKT_8x64_RFIC_TIMING_MAX_WORKER_TICKS 0x02
+#define NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_GAP_TICKS 0x03
+#define NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ 0x04
+#define NIOS_PKT_8x64_RFIC_TIMING_ACTIVE_ELAPSED_TICKS 0x05
+#define NIOS_PKT_8x64_RFIC_TIMING_INIT_STAGE 0x06
+#define NIOS_PKT_8x64_RFIC_TIMING_RESULT_DETAIL 0x07
+#define NIOS_PKT_8x64_RFIC_TIMING_ADI_STATUS 0x08
+#define NIOS_PKT_8x64_RFIC_TIMING_ADI_CLEANUP_STATUS 0x09
+#define NIOS_PKT_8x64_RFIC_TIMING_ADI_STAGE 0x0a
+#define NIOS_PKT_8x64_RFIC_TIMING_SETUP_STAGE 0x0b
+#define NIOS_PKT_8x64_RFIC_TIMING_ERROR_STATUS 0x0c
+#define NIOS_PKT_8x64_RFIC_TIMING_ERROR_CONTEXT 0x0d
 
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */
