@@ -113,6 +113,8 @@ static int bladerf2_set_rfic_register_reserved(struct bladerf *dev,
                                                uint8_t val);
 static bool bladerf2_rx_retune_blocks_rf_config(
     struct bladerf2_board_data *board_data);
+static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
+                                             bladerf_channel ch);
 
 
 /******************************************************************************/
@@ -1549,6 +1551,28 @@ static int bladerf2_enable_module(struct bladerf *dev,
      * TX module state changes. */
     if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
         return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    /* NIOS may still be retiring the last scheduled TX fastlock after the
+     * host has observed its completion. Establish an acknowledged queue
+     * boundary before the RFIC disable path reads or changes RFFE control. */
+    if (!enable && BLADERF_CHANNEL_IS_TX(ch) &&
+        have_cap(board_data->capabilities, BLADERF_CAP_SCHEDULED_RETUNE)) {
+        bool gate_abort_pending;
+        status = bladerf2_cancel_scheduled_retunes(dev, ch);
+        if (status != 0) {
+            return status;
+        }
+        MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+        gate_abort_pending = board_data->tx_gate_abort_pending;
+        MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        if (gate_abort_pending) {
+            status = bladerf2_tx_gate_abort_fail_closed(
+                dev, board_data, 0);
+            if (status != 0) {
+                return status;
+            }
+        }
     }
 
     if (enable) {

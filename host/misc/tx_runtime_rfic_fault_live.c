@@ -37,7 +37,149 @@
 #include <unistd.h>
 
 #define TX_SAMPLES 4096u
-#define TX_FEEDER_TIMEOUT_MS 50u
+#define TX_FEEDER_TIMEOUT_MS 0u
+#define RX_OBSERVER_SAMPLES 4096u
+
+struct rx_transition_waiter {
+    struct bladerf *dev;
+    uint32_t transaction_id;
+    struct bladerf_rf_event final_event;
+    int status;
+};
+
+struct rx_observer_reader {
+    struct bladerf *dev;
+    atomic_bool stop;
+    atomic_int terminal_status;
+    int16_t samples[RX_OBSERVER_SAMPLES * 4];
+};
+
+static void *wait_for_rx_transition(void *arg)
+{
+    struct rx_transition_waiter *waiter = arg;
+    waiter->status = bladerf_rx_transition_wait(
+        waiter->dev, waiter->transaction_id, &waiter->final_event, 0);
+    return NULL;
+}
+
+static void *drain_rx_observer(void *arg)
+{
+    struct rx_observer_reader *reader = arg;
+    while (!atomic_load(&reader->stop)) {
+        struct bladerf_metadata metadata = {
+            .flags = BLADERF_META_FLAG_RX_NOW
+        };
+        const int status = bladerf_sync_rx(
+            reader->dev, reader->samples, RX_OBSERVER_SAMPLES * 2,
+            &metadata, TX_FEEDER_TIMEOUT_MS);
+        if (status == 0 || status == BLADERF_ERR_TIMEOUT ||
+            status == BLADERF_ERR_WOULD_BLOCK) {
+            continue;
+        }
+        atomic_store(&reader->terminal_status, status);
+        break;
+    }
+    return NULL;
+}
+
+static int prepare_rx_x2_observer(struct bladerf *dev)
+{
+    const bladerf_channel rx0 = BLADERF_CHANNEL_RX(0);
+    const bladerf_channel rx1 = BLADERF_CHANNEL_RX(1);
+    int status;
+    unsigned int actual_rate = 0, actual_bandwidth = 0;
+
+    status = bladerf_set_sample_rate(dev, rx0, 1000000, &actual_rate);
+    if (status == 0)
+        status = bladerf_set_bandwidth(dev, rx0, 1500000, &actual_bandwidth);
+    if (status == 0)
+        status = bladerf_set_sample_rate(dev, rx1, 1000000, &actual_rate);
+    if (status == 0)
+        status = bladerf_set_bandwidth(dev, rx1, 1500000, &actual_bandwidth);
+    if (status == 0)
+        status = bladerf_sync_config(dev, BLADERF_RX_X2,
+                                     BLADERF_FORMAT_SC16_Q11_META,
+                                     8, RX_OBSERVER_SAMPLES * 2, 4, 0);
+    if (status == 0)
+        status = bladerf_enable_module(dev, rx0, true);
+    if (status == 0)
+        status = bladerf_enable_module(dev, rx1, true);
+    return status;
+}
+
+/* TX timestamp reads require an active RX_X2 host-data epoch on this image.
+ * Keep the TX-only retune fault test's prerequisite explicit and event driven. */
+static int qualify_rx_x2_observer(struct bladerf *dev,
+                                  struct rx_observer_reader *reader,
+                                  pthread_t *reader_thread)
+{
+    const bladerf_channel rx0 = BLADERF_CHANNEL_RX(0);
+    struct bladerf_rx_transition_request request = {
+        .target_frequency_hz = 915000000,
+        .required_events_mask = BLADERF_RF_REQUIRE_RX_X2_HOST_DATA,
+        .require_rx_data_valid = true,
+        .timeout_ms = 0,
+    };
+    struct rx_transition_waiter waiter = { .dev = dev };
+    struct bladerf_metadata metadata = { .flags = BLADERF_META_FLAG_RX_NOW };
+    int16_t samples[RX_OBSERVER_SAMPLES * 4] = {0};
+    pthread_t wait_thread;
+    uint32_t transaction_id = 0;
+    int status;
+
+    status = bladerf_rx_transition_begin(dev, rx0, &request,
+                                         &transaction_id);
+    if (status != 0) {
+        fprintf(stderr, "begin RX_X2 transition: %s (%d)\n",
+                bladerf_strerror(status), status);
+        return status;
+    }
+
+    waiter.transaction_id = transaction_id;
+    status = pthread_create(&wait_thread, NULL, wait_for_rx_transition,
+                            &waiter);
+    if (status != 0) {
+        fprintf(stderr, "start RX transition waiter failed (%d)\n", status);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    for (;;) {
+        metadata = (struct bladerf_metadata){
+            .flags = BLADERF_META_FLAG_RX_NOW
+        };
+        status = bladerf_sync_rx(dev, samples, RX_OBSERVER_SAMPLES * 2,
+                                 &metadata, 0);
+        if (status == BLADERF_ERR_TIMEOUT ||
+            status == BLADERF_ERR_WOULD_BLOCK) {
+            continue;
+        }
+        break;
+    }
+    (void)pthread_join(wait_thread, NULL);
+    if (status == 0)
+        status = waiter.status;
+    if (status == 0 &&
+        (waiter.final_event.event_type !=
+             BLADERF_RF_EVT_RX_FIRST_VALID_HOST_DATA ||
+         !(waiter.final_event.flags & BLADERF_RF_EVENT_F_RX_X2_LAYOUT))) {
+        status = BLADERF_ERR_UNEXPECTED;
+    }
+    if (status == 0) {
+        reader->dev = dev;
+        atomic_init(&reader->stop, false);
+        atomic_init(&reader->terminal_status, 0);
+        status = pthread_create(reader_thread, NULL, drain_rx_observer,
+                                reader);
+        if (status != 0) {
+            status = BLADERF_ERR_UNEXPECTED;
+        }
+    }
+    if (status != 0) {
+        fprintf(stderr, "read first RX_X2 host block: %s (%d)\n",
+                bladerf_strerror(status), status);
+    }
+    return status;
+}
 
 struct tx_feeder {
     struct bladerf *dev;
@@ -106,12 +248,32 @@ static int current_event_cursor(struct bladerf *dev,
     return 0;
 }
 
+/* Discard old history after a long RX observer transition, then require fresh
+ * TX certificate events from the tune that follows it. */
+static int reset_event_cursor(struct bladerf *dev,
+                              struct bladerf_rf_event *events,
+                              uint64_t *cursor)
+{
+    uint32_t count = 0;
+    uint64_t next = 0;
+    bool history_complete = false;
+    int status = bladerf_rf_events_get_since(
+        dev, 0, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next, &history_complete);
+    if (status == 0) {
+        *cursor = next;
+    }
+    return status;
+}
+
 int main(void)
 {
     struct bladerf *dev = NULL;
     struct tx_feeder feeder = {0};
     pthread_t feeder_thread;
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    struct rx_observer_reader rx_reader = {0};
+    pthread_t rx_reader_thread;
     const char *mode_env = getenv("BLADERF_TEST_RX_TRANSITION_STALL");
     char mode_storage[96];
     const char *mode = mode_storage;
@@ -123,6 +285,7 @@ int main(void)
     bool link_fault_seen = false;
     bool rfics_invalid_seen = false;
     bool feeder_started = false;
+    bool rx_reader_started = false;
     bladerf_frequency tx_recovery_frequency = 0;
     int status;
     const char *tx_rate_env = getenv("BLADERF_TX_TEST_SAMPLE_RATE");
@@ -177,9 +340,21 @@ int main(void)
                                    tx_bandwidth, NULL);
     if (status != 0) goto cleanup;
     status = bladerf_sync_config(dev, BLADERF_TX_X1,
-                                 BLADERF_FORMAT_SC16_Q11,
-                                 16, 8192, 8, 1000);
+                                 strcmp(mode,
+                                        "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0
+                                     ? BLADERF_FORMAT_SC16_Q11_META
+                                     : BLADERF_FORMAT_SC16_Q11,
+                                 16, 8192, 8, 0);
     if (status != 0) goto cleanup;
+
+    if (strcmp(mode, "RUNTIME_TX_RETUNE_FAILURE_TX_DISABLED") == 0) {
+        status = prepare_rx_x2_observer(dev);
+        if (status != 0) {
+            fprintf(stderr, "prepare RX_X2 timestamp observer failed: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+    }
 
     status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
     if (status != 0) goto cleanup;
@@ -296,6 +471,50 @@ int main(void)
         bladerf_timestamp timestamp = 0;
         struct bladerf_quick_tune quick_tune;
 
+        status = qualify_rx_x2_observer(dev, &rx_reader,
+                                        &rx_reader_thread);
+        if (status != 0) {
+            fprintf(stderr, "RX_X2 timestamp observer failed: %s\n",
+                    bladerf_strerror(status));
+            goto cleanup;
+        }
+        rx_reader_started = true;
+        status = reset_event_cursor(dev, events, &cursor);
+        if (status != 0) {
+            fprintf(stderr, "reset TX event cursor after RX observer failed: "
+                            "%s\n", bladerf_strerror(status));
+            goto cleanup;
+        }
+        /* RX setup and TX stream configuration can revoke the TX certificate.
+         * Re-tune after the observer epoch and wait for both RFIC and tune
+         * validity before asking NIOS for the TX timestamp. */
+        status = bladerf_set_frequency(dev, BLADERF_CHANNEL_TX(0),
+                                       915000000);
+        if (status != 0) {
+            fprintf(stderr, "TX retune after RX observer failed: %s (%d)\n",
+                    bladerf_strerror(status), status);
+        }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RFIC_STATE_VALID);
+            if (status != 0) {
+                fprintf(stderr, "TX RFIC-valid event after RX observer: %s "
+                                "(%d)\n", bladerf_strerror(status), status);
+            }
+        }
+        if (status == 0) {
+            status = wait_for_event(dev, events, &cursor,
+                                    BLADERF_RF_EVT_TX_RETUNE_VALID);
+            if (status != 0) {
+                fprintf(stderr, "TX retune-valid event after RX observer: %s "
+                                "(%d)\n", bladerf_strerror(status), status);
+            }
+        }
+        if (status != 0) {
+            fprintf(stderr, "TX RFIC did not revalidate after RX observer: "
+                            "%s\n", bladerf_strerror(status));
+            goto cleanup;
+        }
         status = bladerf_get_frequency(dev, BLADERF_CHANNEL_TX(0),
                                        &frequency);
         if (status == 0) {
@@ -307,7 +526,8 @@ int main(void)
         }
         if (status == 0) {
             status = bladerf_schedule_retune(
-                dev, BLADERF_CHANNEL_TX(0), timestamp + 100000,
+                dev, BLADERF_CHANNEL_TX(0),
+                timestamp + 100000,
                 frequency, &quick_tune);
         }
         if (status == 0) {
@@ -785,7 +1005,7 @@ int main(void)
         if (status == 0) {
             status = bladerf_sync_config(dev, BLADERF_TX_X1,
                                          BLADERF_FORMAT_SC16_Q11,
-                                         16, 8192, 8, 1000);
+                                         16, 8192, 8, 0);
         }
         if (status == 0) {
             status = bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), true);
@@ -824,6 +1044,14 @@ cleanup:
     if (feeder_started) {
         atomic_store(&feeder.stop, true);
         (void)pthread_join(feeder_thread, NULL);
+    }
+    if (rx_reader_started) {
+        atomic_store(&rx_reader.stop, true);
+        (void)pthread_join(rx_reader_thread, NULL);
+        const int rx_status = atomic_load(&rx_reader.terminal_status);
+        if (status == 0 && rx_status != 0) {
+            status = rx_status;
+        }
     }
     if (dev != NULL) {
         (void)bladerf_enable_module(dev, BLADERF_CHANNEL_TX(0), false);
