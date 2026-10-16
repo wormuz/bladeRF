@@ -311,12 +311,12 @@ static int wait_for_event(struct bladerf *dev,
             if (events[i].event_type == expected) {
                 return 0;
             }
-            if (expected == BLADERF_RF_EVT_TX_RETUNE_VALID &&
-                (events[i].event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED ||
-                 events[i].event_type ==
-                     BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST)) {
-                fprintf(stderr, "TX retune validity ended in event %u: "
-                                "error=%d stage=%u flags=0x%x\n",
+            if (events[i].event_type == BLADERF_RF_EVT_TX_RETUNE_FAILED ||
+                events[i].event_type ==
+                    BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST) {
+                fprintf(stderr, "TX retune ended before expected event %u "
+                                "with event %u: error=%d stage=%u flags=0x%x\n",
+                        expected,
                         events[i].event_type, events[i].error_code,
                         events[i].rfic_status, events[i].flags);
                 return BLADERF_ERR_FPGA_OP;
