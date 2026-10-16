@@ -584,11 +584,19 @@ static void *tx_callback(struct bladerf *dev,
                             __FUNCTION__, b->cons_i);
 
                 ret = b->buffers[b->cons_i];
-                /* Async PACKET_META actual_count is a DWORD count. The
-                 * synchronous buffer manager stores its length in bytes. */
-                assert((b->actual_lengths[b->cons_i] % sizeof(uint32_t)) == 0);
-                meta->actual_count = (unsigned int)(
-                    b->actual_lengths[b->cons_i] / sizeof(uint32_t));
+                if (s->stream_config.format == BLADERF_FORMAT_PACKET_META) {
+                    /* Async PACKET_META actual_count is a DWORD count. The
+                     * synchronous buffer manager stores its length in bytes. */
+                    assert((b->actual_lengths[b->cons_i] %
+                            sizeof(uint32_t)) == 0);
+                    meta->actual_count = (unsigned int)(
+                        b->actual_lengths[b->cons_i] / sizeof(uint32_t));
+                } else {
+                    /* Fixed-size sample formats submit the complete async
+                     * buffer; actual_lengths is only populated for
+                     * PACKET_META and must not be read here. */
+                    meta->actual_count = 0;
+                }
                 b->status[b->cons_i] = SYNC_BUFFER_IN_FLIGHT;
                 b->cons_i = (b->cons_i + 1) % b->num_buffers;
             } else {

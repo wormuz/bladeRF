@@ -34,4 +34,5 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
   -L"$build_dir/output" -Wl,-rpath,"$build_dir/output" \
   -lbladeRF -o "$binary"
 
-BLADERF_TEST_RX_TRANSITION_STALL="$1" "$binary"
+LD_LIBRARY_PATH="$build_dir/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  BLADERF_TEST_RX_TRANSITION_STALL="$1" "$binary"
