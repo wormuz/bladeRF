@@ -15,6 +15,8 @@ architecture test of tx_retune_gate_tb is
     signal timestamp : unsigned(63 downto 0) := (others => '0');
     signal arm, immediate, complete, abort : std_logic := '0';
     signal underflow_pulse : std_logic := '0';
+    signal underflow_to_gate : std_logic;
+    signal first_data_seen : std_logic := '0';
     signal target_timestamp : unsigned(63 downto 0) := (others => '0');
     signal samples_in : sample_streams_t(0 to 1) := (others => (
         data_i => to_signed(1234, 16),
@@ -27,6 +29,9 @@ architecture test of tx_retune_gate_tb is
     signal muted_sample_count : unsigned(63 downto 0);
 begin
     clock <= not clock after 5 ns;
+    underflow_to_gate <= '0' when state = "10" or state = "11" or
+                                  first_data_seen = '0' else
+                         underflow_pulse;
 
     dut : entity work.tx_retune_gate
         generic map (NUM_STREAMS => 2)
@@ -39,7 +44,9 @@ begin
             target_timestamp => target_timestamp,
             complete => complete,
             abort => abort,
-            underflow => underflow_pulse,
+            -- tx.v masks the FIFO reader's registered event once the gate
+            -- has already muted output; the event may lag the mute edge.
+            underflow => underflow_to_gate,
             in_samples => samples_in,
             out_samples => samples_out,
             state => state,
@@ -283,9 +290,19 @@ begin
             report "TX gate failed to resume after signed-boundary test"
             severity failure;
 
-        -- fifo_reader supplies an event pulse separately from its stretched
-        -- LED level. A real underflow episode fail-closes TX, then a fresh
-        -- ARM can recover without a stale display level re-triggering abort.
+        -- Startup FIFO starvation before the first host buffer is admitted
+        -- must not fault TX, including the first empty cycles after the gate
+        -- resumes. Once data has reached the reader, a real underflow episode
+        -- fail-closes TX; a fresh ARM then recovers without a stale display
+        -- level re-triggering abort.
+        underflow_pulse <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        underflow_pulse <= '0';
+        assert state = "00" and muted = '0'
+            report "startup underflow before first TX data faulted the gate"
+            severity failure;
+        first_data_seen <= '1';
         underflow_pulse <= '1';
         wait until rising_edge(clock);
         wait for 1 ns;
@@ -315,6 +332,13 @@ begin
         wait for 1 ns;
         assert state = "10" and muted = '1' and underflow_pulse = '0'
             report "TX gate did not retain recovery mute after event pulse"
+            severity failure;
+        underflow_pulse <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        underflow_pulse <= '0';
+        assert state = "10" and muted = '1'
+            report "late underflow pulse aborted an already-muted TX gate"
             severity failure;
         timestamp <= unsigned'(x"ffffffffffffffff");
         wait for 1 ns;

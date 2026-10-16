@@ -142,6 +142,7 @@ architecture arch of tx is
     signal dac_streams_raw                : sample_streams_t(0 to NUM_STREAMS-1) := (others => ZERO_SAMPLE);
     signal tx_underflow_led_i              : std_logic := '0';
     signal tx_underflow_event              : std_logic := '0';
+    signal tx_stream_data_seen              : std_logic := '0';
     signal retune_gate_state               : unsigned(1 downto 0);
     signal retune_gate_arm_ack_seen        : std_logic := '0';
     signal retune_gate_muted               : std_logic;
@@ -156,6 +157,9 @@ architecture arch of tx is
     signal tx_fifo_write_block             : std_logic;
     signal tx_fifo_reader_block            : std_logic;
     signal tx_fifo_reader_block_tx         : std_logic;
+    signal tx_fifo_reader_fault_block_tx   : std_logic;
+    signal tx_fifo_reader_tx_reset_block_tx : std_logic;
+    signal tx_fifo_reader_sys_reset_block_tx : std_logic;
     signal tx_fifo_flush_busy              : std_logic;
     signal tx_fifo_flush_done              : std_logic;
     signal tx_fifo_flush_error             : std_logic;
@@ -208,13 +212,33 @@ begin
     -- busy is generated in sys_clock. Assert the TX reader barrier
     -- asynchronously, then release it only on tx_clock edges so it cannot
     -- form a timed cross-domain path into FIFO read control and address logic.
-    U_tx_fifo_reader_block_sync : entity work.reset_synchronizer
+    U_tx_fifo_reader_fault_block_sync : entity work.reset_synchronizer
         generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
         port map (
             clock => tx_clock,
-            async => tx_reset or tx_fifo_reader_block,
-            sync => tx_fifo_reader_block_tx
+            async => tx_fifo_reader_block,
+            sync => tx_fifo_reader_fault_block_tx
         );
+
+    U_tx_fifo_reader_tx_reset_block_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => tx_clock,
+            async => tx_reset,
+            sync => tx_fifo_reader_tx_reset_block_tx
+        );
+
+    U_tx_fifo_reader_sys_reset_block_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => tx_clock,
+            async => sys_reset,
+            sync => tx_fifo_reader_sys_reset_block_tx
+        );
+
+    tx_fifo_reader_block_tx <= tx_fifo_reader_fault_block_tx or
+                               tx_fifo_reader_tx_reset_block_tx or
+                               tx_fifo_reader_sys_reset_block_tx;
 
     -- TX sample fifo. This private clear is scoped to TX; tx_reset remains
     -- the shared fabric reset and is never pulsed for this recovery operation.
@@ -374,6 +398,31 @@ begin
             loopback_data_valid =>  loopback_fifo_source_valid
         );
 
+    -- Do not fail-close on FIFO starvation before this RF-link session has
+    -- delivered its first application sample. TX can be enabled before the
+    -- host has submitted its first buffer; the RFIC/gate certificate may be
+    -- restored while the TX FIFO is still empty. Once real data has reached
+    -- the reader, later underflow pulses are genuine stream faults.
+    track_first_tx_data : process(tx_clock, tx_reset)
+        variable any_data : std_logic;
+    begin
+        if tx_reset = '1' then
+            tx_stream_data_seen <= '0';
+        elsif rising_edge(tx_clock) then
+            if link_active = '0' then
+                tx_stream_data_seen <= '0';
+            else
+                any_data := '0';
+                for i in dac_streams_raw'range loop
+                    any_data := any_data or dac_streams_raw(i).data_v;
+                end loop;
+                if any_data = '1' then
+                    tx_stream_data_seen <= '1';
+                end if;
+            end if;
+        end if;
+    end process;
+
     U_tx_retune_gate : entity work.tx_retune_gate
         generic map (
             NUM_STREAMS => NUM_STREAMS
@@ -386,10 +435,14 @@ begin
             arm_immediate        => retune_gate_immediate,
             target_timestamp     => retune_gate_target,
             complete             => retune_gate_complete and not tx_fifo_reader_block_tx,
-            -- A one-clock underflow event feeds the gate directly; the
-            -- stretched underflow LED is only for front-panel visibility.
+            -- A registered underflow can arrive after the retune mute begins;
+            -- startup starvation can also precede the first host sample.
+            -- Neither is a TX stream underrun. Once application data has
+            -- entered the reader, active-stream underflows fail-close TX.
             abort                => retune_gate_abort,
-            underflow            => tx_underflow_event,
+            underflow            => tx_underflow_event and
+                                    not retune_gate_muted_status and
+                                    tx_stream_data_seen,
             in_samples           => dac_streams_raw,
             out_samples          => dac_streams,
             state                => retune_gate_state,

@@ -1,10 +1,10 @@
 /* Hardware failure-path qualification for ADR-0207.
  *
- * Exercise a failure after the FPGA has fenced the old epoch: a valid
- * transition first establishes data, then an out-of-range LO request must
- * fail and ABORT the pending epoch. The host META parser must not return
- * queued samples from the previous epoch. A later explicit transition must
- * recover the ERROR gate and return only the newly admitted epoch.
+ * An out-of-range request must be rejected before transaction allocation and
+ * leave the current data epoch usable. Separately inject an ARM failure after
+ * transaction allocation and an ABORT failure during cleanup. The host META
+ * parser must withhold queued samples until a later explicit transition
+ * recovers the gate and returns data from the new epoch.
  *
  * This does not write FPGA flash or inject an RFIC/USB electrical fault.
  */
@@ -130,62 +130,6 @@ static int read_valid_epoch(struct bladerf *dev, int16_t *samples,
     return BLADERF_ERR_UNEXPECTED;
 }
 
-static int check_failed_trace(struct bladerf *dev, uint32_t transaction_id)
-{
-    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
-    uint32_t count = 0;
-    bool complete = false;
-    int status = bladerf_rx_transition_get_events(
-        dev, transaction_id, events, BLADERF_RF_EVENT_HISTORY_SIZE,
-        &count, &complete);
-    if (status != 0 || !complete || count == 0) {
-        fprintf(stderr, "failed transition trace unavailable txn=%u status=%s "
-                "complete=%u count=%u\n", transaction_id,
-                bladerf_strerror(status), complete, count);
-        return status ? status : BLADERF_ERR_UNEXPECTED;
-    }
-
-    bool invalidated = false;
-    bool errored = false;
-    bool valid = false;
-    bool spi_started = false;
-    bool spi_done = false;
-    bool lo_readback = false;
-    bool pll_locked = false;
-    bool ensm_rx = false;
-    uint64_t previous_timestamp = 0;
-    for (uint32_t i = 0; i < count; ++i) {
-        if (events[i].transaction_id != transaction_id) {
-            return BLADERF_ERR_UNEXPECTED;
-        }
-        if (events[i].host_monotonic_ns < previous_timestamp) {
-            fprintf(stderr, "failed transition events out of timestamp order\n");
-            return BLADERF_ERR_UNEXPECTED;
-        }
-        previous_timestamp = events[i].host_monotonic_ns;
-        invalidated |= events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_INVALID;
-        errored |= events[i].event_type == BLADERF_RF_EVT_ERROR;
-        valid |= events[i].event_type == BLADERF_RF_EVT_RX_EPOCH_VALID;
-        spi_started |= events[i].event_type == BLADERF_RF_EVT_SPI_WRITE_BEGIN;
-        spi_done |= events[i].event_type == BLADERF_RF_EVT_SPI_DONE;
-        lo_readback |= events[i].event_type == BLADERF_RF_EVT_LO_READBACK_MATCH;
-        pll_locked |= events[i].event_type == BLADERF_RF_EVT_RX_PLL_LOCKED;
-        ensm_rx |= events[i].event_type == BLADERF_RF_EVT_ENSM_RX;
-    }
-    if (!invalidated || !errored || valid || spi_started || spi_done ||
-        lo_readback || pll_locked || ensm_rx ||
-        events[count - 1].event_type != BLADERF_RF_EVT_ERROR ||
-        events[count - 1].error_code != BLADERF_ERR_RANGE) {
-        fprintf(stderr, "failed transition trace invalid txn=%u "
-                "invalidated=%u error=%u epoch_valid=%u spi=%u/%u "
-                "readback=%u pll=%u ensm=%u events=%u\n",
-                transaction_id, invalidated, errored, valid,
-                spi_started, spi_done, lo_readback, pll_locked, ensm_rx, count);
-        return BLADERF_ERR_UNEXPECTED;
-    }
-    return 0;
-}
-
 #ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
 static int check_abort_failed_trace(struct bladerf *dev,
                                     uint32_t transaction_id)
@@ -305,6 +249,10 @@ int main(void)
     struct bladerf *dev = NULL;
     struct bladerf_rf_event initial = {0};
     struct bladerf_rf_event recovered = {0};
+#ifdef BLADERF_ENABLE_TEST_RX_ABORT_FAULT_INJECTION
+    struct bladerf_metadata metadata = {0};
+#endif
+    uint32_t abort_failed_transaction_id = 0;
     int status = BLADERF_ERR_UNEXPECTED;
     if (samples == NULL) {
         return 2;
@@ -472,32 +420,21 @@ int main(void)
     status = bladerf_rx_transition_begin(
         dev, BLADERF_CHANNEL_RX(0), &invalid_request,
         &failed_transaction_id);
-    if (status != BLADERF_ERR_RANGE) {
-        fprintf(stderr, "out-of-range transition returned %s, expected %s\n",
-                bladerf_strerror(status), bladerf_strerror(BLADERF_ERR_RANGE));
+    if (status != BLADERF_ERR_RANGE || failed_transaction_id != 0) {
+        fprintf(stderr, "out-of-range transition returned %s txn=%u; "
+                "expected preflight rejection with txn=0\n",
+                bladerf_strerror(status), failed_transaction_id);
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
-    status = check_failed_trace(dev, failed_transaction_id);
+    status = read_valid_epoch(dev, samples, initial.epoch_id,
+                              initial.fpga_timestamp);
     if (status != 0) {
+        fprintf(stderr, "out-of-range preflight rejection disturbed the "
+                "current RX epoch: %s\n", bladerf_strerror(status));
         goto out;
     }
-
-    /* The host parser remains invalidated while the FPGA gate is in ERROR.
-     * sync_rx must fail promptly rather than wait on an epoch that cannot
-     * arrive until the next explicit transition. */
-    struct bladerf_metadata metadata = {0};
-    metadata.flags = BLADERF_META_FLAG_RX_NOW;
-    status = bladerf_sync_rx(dev, samples, 4096, &metadata, 300);
-    if (status != BLADERF_ERR_WOULD_BLOCK) {
-        fprintf(stderr, "failed epoch read returned %s (epoch=%u valid=%u "
-                "count=%u), expected fail-closed WOULD_BLOCK\n",
-                bladerf_strerror(status),
-                metadata.rx_epoch_id, metadata.rx_epoch_id_valid,
-                metadata.actual_count);
-        status = BLADERF_ERR_UNEXPECTED;
-        goto out;
-    }
+    printf("RX out-of-range preflight: PASS txn=0; current epoch remains valid\n");
 
     /* Keep the recovery reproduction actionable: expose backend events from
      * the moment the failed epoch is followed by a new transition. */
@@ -507,16 +444,27 @@ int main(void)
     /* Fail only the NIOS cleanup command after FPGA ARM. The event trace must
      * distinguish failed cleanup, IQ must remain blocked, and the next
      * explicit transition must recover the still-pending FPGA gate. */
-    uint32_t abort_failed_transaction_id = 0;
-    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
+    struct bladerf_rx_transition_request abort_failure_request = {
+        .target_frequency_hz = recovery_frequency_hz,
+        .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
+                                BLADERF_RF_REQUIRE_ENSM_RX |
+                                BLADERF_RF_REQUIRE_EPOCH_VALID,
+        .timeout_ms = 2000,
+        .require_rx_data_valid = true,
+        .epoch_settle_samples = 0,
+    };
+    if (setenv("BLADERF_TEST_FAIL_RX_EPOCH_ARM", "1", 1) != 0 ||
+        setenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT", "1", 1) != 0) {
+        unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ARM");
         status = BLADERF_ERR_UNEXPECTED;
         goto out;
     }
     status = bladerf_rx_transition_begin(
-        dev, BLADERF_CHANNEL_RX(0), &invalid_request,
+        dev, BLADERF_CHANNEL_RX(0), &abort_failure_request,
         &abort_failed_transaction_id);
+    unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ARM");
     unsetenv("BLADERF_TEST_FAIL_RX_EPOCH_ABORT");
-    if (status != BLADERF_ERR_RANGE || abort_failed_transaction_id == 0) {
+    if (status != BLADERF_ERR_UNEXPECTED || abort_failed_transaction_id == 0) {
         fprintf(stderr, "ABORT-fault transition returned %s txn=%u\n",
                 bladerf_strerror(status), abort_failed_transaction_id);
         status = BLADERF_ERR_UNEXPECTED;
@@ -665,7 +613,7 @@ int main(void)
     printf("RX epoch ABORT qualification: PASS initial_epoch=%u "
            "failed_txn=%u recovered_epoch=%u; stale IQ rejected, "
            "explicit ARM recovery valid\n", initial.epoch_id,
-           failed_transaction_id, recovered.epoch_id);
+           abort_failed_transaction_id, recovered.epoch_id);
     status = 0;
 
 out:

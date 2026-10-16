@@ -256,27 +256,33 @@ begin
         end if ;
     end process ;
 
-    receive_command : process(clock, reset, session_reset)
+    receive_command : process(clock, reset)
         type state_t is (WAIT_FOR_MAGIC, CHECK_MAGIC, RECEIVE_COMMAND, INTERRUPT, WAIT_FOR_READ) ;
         variable state : state_t ;
         variable count : natural range 0 to 15 ;
     begin
-        if( reset = '1' or session_reset = '1' ) then
+        if( reset = '1' ) then
             state := WAIT_FOR_MAGIC ;
             count := 0 ;
             irq <= '0' ;
             request_busy <= '0' ;
         elsif( rising_edge(clock) ) then
-            if( sin_we = '1' and state /= WAIT_FOR_READ and
-                state /= INTERRUPT ) then
+            if session_reset = '1' then
+                state := WAIT_FOR_MAGIC;
+                count := 0;
+                irq <= '0';
+                request_busy <= '0';
+            elsif( sin_we = '1' and state /= WAIT_FOR_READ and
+                   state /= INTERRUPT ) then
                 reg_request(count*8+7 downto count*8) <= sin_data ;
             end if ;
             -- Capture worker ownership before the case statement can move a
             -- pending request from WAIT_FOR_READ to WAIT_FOR_MAGIC.
-            if( worker_busy = '1' and
-                (state = INTERRUPT or state = WAIT_FOR_READ) ) then
+            if session_reset = '0' and worker_busy = '1' and
+               (state = INTERRUPT or state = WAIT_FOR_READ) then
                 request_busy <= '1';
             end if;
+            if session_reset = '0' then
             case state is
                 when WAIT_FOR_MAGIC =>
                     if( sin_we = '1' ) then
@@ -333,6 +339,7 @@ begin
                         state := WAIT_FOR_MAGIC ;
                     end if ;
             end case ;
+            end if;
 
         end if ;
     end process ;

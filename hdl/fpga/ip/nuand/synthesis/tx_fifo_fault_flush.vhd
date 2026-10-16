@@ -43,11 +43,16 @@ architecture rtl of tx_fifo_fault_flush is
     signal error_i              : std_logic := '0';
     signal released_i           : std_logic := '0';
     signal write_block_i        : std_logic;
+    signal write_block_sys_reset : std_logic;
+    signal write_block_tx_reset  : std_logic;
+    signal write_block_busy      : std_logic;
     signal write_block_seen     : std_logic := '0';
     signal write_block_seen_reset : std_logic;
     signal write_block_seen_sys: std_logic;
-    signal write_release_pipe   : std_logic_vector(2 downto 0) := (others => '0');
-    signal read_release_pipe    : std_logic_vector(2 downto 0) := (others => '0');
+    signal write_release_count : natural range 0 to 3 := 0;
+    signal read_release_count  : natural range 0 to 3 := 0;
+    signal write_empty_ready_src : std_logic := '0';
+    signal read_empty_ready_src  : std_logic := '0';
     signal write_release_reset  : std_logic;
     signal read_release_reset   : std_logic;
     signal write_empty_ready    : std_logic;
@@ -78,13 +83,37 @@ begin
     write_drain_ready <= busy_i and write_block_seen_sys and
                          reset_hold and not tx_reset_sys and gpif_idle;
 
-    U_write_block_sync : entity work.reset_synchronizer
+    -- Keep asynchronous assertion for each independent fault/reset source,
+    -- but don't combine sources on an asynchronous reset pin. Each source
+    -- releases through its own local-clock synchronizer; combining the safe
+    -- outputs preserves the immediate fail-closed behavior without creating
+    -- a combinational reset path.
+    U_write_block_sys_reset_sync : entity work.reset_synchronizer
         generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
         port map (
             clock => write_clock,
-            async => sys_reset or tx_reset or busy_i,
-            sync => write_block_i
+            async => sys_reset,
+            sync => write_block_sys_reset
         );
+
+    U_write_block_tx_reset_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => write_clock,
+            async => tx_reset,
+            sync => write_block_tx_reset
+        );
+
+    U_write_block_busy_sync : entity work.reset_synchronizer
+        generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
+        port map (
+            clock => write_clock,
+            async => busy_i,
+            sync => write_block_busy
+        );
+
+    write_block_i <= write_block_sys_reset or write_block_tx_reset or
+                     write_block_busy;
 
     U_write_block_seen_reset_sync : entity work.reset_synchronizer
         generic map (INPUT_LEVEL => '1', OUTPUT_LEVEL => '1')
@@ -127,15 +156,22 @@ begin
     process(write_clock, write_release_reset)
     begin
         if write_release_reset = '1' then
-            write_release_pipe <= (others => '0');
+            write_release_count <= 0;
+            write_empty_ready_src <= '0';
         elsif rising_edge(write_clock) then
-            write_release_pipe <= write_release_pipe(1 downto 0) & '1';
+            if write_release_count < 3 then
+                write_release_count <= write_release_count + 1;
+            end if;
+            if write_release_count >= 2 and sample_wempty = '1' and
+               meta_wempty = '1' then
+                write_empty_ready_src <= '1';
+            else
+                write_empty_ready_src <= '0';
+            end if;
         end if;
     end process;
 
-    write_empty_ready <= '1' when write_release_pipe = "111" and
-                                  sample_wempty = '1' and
-                                  meta_wempty = '1' else '0';
+    write_empty_ready <= write_empty_ready_src;
 
     U_write_empty_ready_sync : entity work.synchronizer
         generic map (RESET_LEVEL => '0')
@@ -157,15 +193,22 @@ begin
     process(tx_clock, read_release_reset)
     begin
         if read_release_reset = '1' then
-            read_release_pipe <= (others => '0');
+            read_release_count <= 0;
+            read_empty_ready_src <= '0';
         elsif rising_edge(tx_clock) then
-            read_release_pipe <= read_release_pipe(1 downto 0) & '1';
+            if read_release_count < 3 then
+                read_release_count <= read_release_count + 1;
+            end if;
+            if read_release_count >= 2 and sample_rempty = '1' and
+               meta_rempty = '1' then
+                read_empty_ready_src <= '1';
+            else
+                read_empty_ready_src <= '0';
+            end if;
         end if;
     end process;
 
-    read_empty_ready <= '1' when read_release_pipe = "111" and
-                                 sample_rempty = '1' and
-                                 meta_rempty = '1' else '0';
+    read_empty_ready <= read_empty_ready_src;
 
     U_read_empty_ready_sync : entity work.synchronizer
         generic map (RESET_LEVEL => '0')

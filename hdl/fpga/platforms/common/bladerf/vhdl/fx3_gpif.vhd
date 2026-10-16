@@ -190,6 +190,7 @@ architecture sample_shuffler of fx3_gpif is
     );
 
     signal current, future      :   fsm_t := FSM_RESET_VALUE;
+    signal tx_fault_idle_i      :   std_logic := '0';
 
     signal can_rx               :   boolean;
     signal can_tx               :   boolean;
@@ -228,12 +229,29 @@ begin
     -- Acknowledge only after no TX parse state can issue GPIF acknowledgments.
     -- RX transfers use a different FX3 DMA channel and do not prevent resetting
     -- the host-to-FPGA TX channel.
-    tx_fault_idle <= '1' when tx_fault_stop = '1' and
-        current.state /= SETUP_WR and current.state /= META_WRITE and
-        current.state /= SAMPLE_WRITE and
-        current.state /= SAMPLE_WRITE_IGNORE and
-        not (current.state = FINISHED and current.finishing_rx = '0')
-        else '0';
+    tx_fault_idle <= tx_fault_idle_i;
+
+    -- Register the source-domain idle certificate before crossing it to the
+    -- fault-flush controller. Driving the synchronizer directly from this
+    -- state decode caused Quartus D103 findings on every FSM state/count bit.
+    process(pclk, reset)
+    begin
+        if reset = '1' then
+            tx_fault_idle_i <= '0';
+        elsif rising_edge(pclk) then
+            if tx_fault_stop = '1' and
+               current.state /= SETUP_WR and
+               current.state /= META_WRITE and
+               current.state /= SAMPLE_WRITE and
+               current.state /= SAMPLE_WRITE_IGNORE and
+               not (current.state = FINISHED and
+                    current.finishing_rx = '0') then
+                tx_fault_idle_i <= '1';
+            else
+                tx_fault_idle_i <= '0';
+            end if;
+        end if;
+    end process;
 
     -- DMA handshake signals (active-low, so inverting for clarity)
     dma_req.rx0 <= not dma0_rx_reqx;

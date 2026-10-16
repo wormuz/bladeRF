@@ -603,8 +603,13 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
             if (fake_calibration_autocomplete &&
                 reg == REG_CALIBRATION_CTRL)
                 fake_regs[reg] = 0;
-            if (reg == REG_ENSM_CONFIG_1 && state_after_ensm_write >= 0)
-                fake_regs[REG_STATE] = (uint8_t)state_after_ensm_write;
+            if (reg == REG_ENSM_CONFIG_1) {
+                if (data[2] & FORCE_ALERT_STATE)
+                    fake_regs[REG_STATE] = ENSM_STATE_ALERT;
+                else if (state_after_ensm_write >= 0)
+                    fake_regs[REG_STATE] =
+                        (uint8_t)state_after_ensm_write;
+            }
         }
         return 0;
     }
@@ -3599,6 +3604,8 @@ int main(void)
         return EXIT_FAILURE;
     }
 
+    rfpll_rate = UINT32_MAX;
+    read_count = write_count = 0;
     invalid_rfpll_clock.phy = &phy;
     invalid_rfpll_clock.spi = &spi;
     invalid_rfpll_clock.source = NUM_AD9361_CLKS;
@@ -3736,10 +3743,12 @@ int main(void)
 
         fail_write_reg = REG_CLOCK_CTRL;
         ret = ad9361_clk_factor_set_rate(&clock, 40000000, 40000000);
-        if (ret != -EIO || clock.mult != 2 || clock.div != 1) {
-            fprintf(stderr, "Failed clock-scaler write changed its cache\n");
+        if (ret != -EIO || !ad9361_calibration_state_unknown(&phy)) {
+            fprintf(stderr,
+                    "Failed clock-scaler write did not quarantine the PHY\n");
             return EXIT_FAILURE;
         }
+        phy.calibration_state_unknown = false;
 
         fail_write_reg = -1;
         clock.source = RX_SAMPL_CLK;
@@ -4245,11 +4254,13 @@ int main(void)
     {
         uint32_t rssi_1x1, rssi_2x2;
         register_map_enabled = true;
+        phy.calibration_state_unknown = false;
         pdata.rx1tx1_mode_use_tx_num = 2;
         fake_regs[REG_TX_RSSI_LSB] = TX_RSSI_2;
         fake_regs[REG_TX_RSSI_LSB + 1] = 5;
         fake_regs[REG_TX_RSSI_LSB + 2] = 1;
-        if (ad9361_get_tx_rssi(&phy, 0, &rssi_1x1) != 0) {
+        ret = ad9361_get_tx_rssi(&phy, 0, &rssi_1x1);
+        if (ret != 0) {
             fprintf(stderr, "1x1 TX2 RSSI read failed\n");
             return EXIT_FAILURE;
         }
@@ -4264,16 +4275,17 @@ int main(void)
         read_count = 0;
     }
 
-    /* If disabling tracking fails partway through a calibration setup,
-     * restore the configured tracking state before returning the primary
-     * SPI error. */
+    /* A partial tracking update makes hardware state ambiguous. Keep the PHY
+     * quarantined for RESETB/reinitialization instead of issuing speculative
+     * register writes to restore the previous mask. */
     {
-        const uint8_t tracking_mask = ENABLE_BB_DC_OFFSET_TRACKING |
-                                     ENABLE_RF_OFFSET_TRACKING;
         struct no_os_clk rxpll_clock = { .rate = 2400000000U };
         struct no_os_clk *saved_rxpll_clock = phy.clks[RX_RFPLL];
         bool saved_rx_source_valid = phy.rfpll_source_valid[0];
+        unsigned restore_writes_before =
+            fake_write_counts[REG_DC_OFFSET_CONFIG2];
         register_map_enabled = true;
+        phy.calibration_state_unknown = false;
         memset(fake_regs, 0, sizeof(fake_regs));
         phy.clks[RX_RFPLL] = &rxpll_clock;
         phy.rfpll_source_valid[0] = true;
@@ -4284,13 +4296,15 @@ int main(void)
         fail_write_once_reg = REG_CALIBRATION_CONFIG_3;
         ret = ad9361_do_calib_run(&phy, RFDC_CAL, -1);
         if (ret != -EIO || fail_write_once_reg != -1 ||
-            !phy.tracking_config_valid ||
-            (fake_regs[REG_DC_OFFSET_CONFIG2] & tracking_mask) !=
-                tracking_mask) {
+            phy.tracking_config_valid ||
+            !ad9361_calibration_state_unknown(&phy) ||
+            fake_write_counts[REG_DC_OFFSET_CONFIG2] != restore_writes_before) {
             fprintf(stderr,
-                    "Calibration setup failure left tracking disabled: ret=%" PRId32
-                    " tracking=0x%02x\n", ret,
-                    fake_regs[REG_DC_OFFSET_CONFIG2]);
+                    "ambiguous tracking update did not fail closed: ret=%" PRId32
+                    " tracking_valid=%d unknown=%d restore_writes=%u\n",
+                    ret, phy.tracking_config_valid,
+                    ad9361_calibration_state_unknown(&phy),
+                    fake_write_counts[REG_DC_OFFSET_CONFIG2]);
             return EXIT_FAILURE;
         }
         phy.clks[RX_RFPLL] = saved_rxpll_clock;
@@ -4300,6 +4314,8 @@ int main(void)
     }
 
     spi_status = -EIO;
+    read_count = delay_count = 0;
+    phy.calibration_state_unknown = false;
     ret = ad9361_wait_status_timeout(&phy, REG_CALIBRATION_CTRL, 1, 1, 1000, 10);
     if (ret != -EIO || read_count != 1 || delay_count != 0) {
         fprintf(stderr, "SPI read error not propagated: ret=%" PRId32
@@ -4458,7 +4474,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         writes_before = write_count;
-        if (ad9361_bbdc_calibration_start(&start_fault_phy, &job) != -EIO ||
+        if (ad9361_bbdc_calibration_start(&start_fault_phy, &job) != -EBUSY ||
             write_count != writes_before) {
             fprintf(stderr,
                     "poisoned PHY accepted a follow-on BBDC mutation\n");
@@ -4627,7 +4643,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         if (ad9361_bbdc_calibration_start(quarantined,
-                                          &(struct ad9361_bbdc_calibration_job){0}) != -EIO) {
+                                          &(struct ad9361_bbdc_calibration_job){0}) != -EBUSY) {
             fprintf(stderr, "quarantined PHY accepted a later calibration\n");
             return EXIT_FAILURE;
         }
@@ -4750,6 +4766,8 @@ int main(void)
                 return EXIT_FAILURE;
             }
             mismatched_phy->rfdc_transaction = NULL;
+            fake_gpio_remove_count = 0;
+            memset(fake_gpio_remove_status, 0, sizeof(fake_gpio_remove_status));
             if (ad9361_remove_ex(mismatched_phy, true, &consumed) < 0 ||
                 !consumed) {
                 fprintf(stderr,
@@ -4763,14 +4781,17 @@ int main(void)
     /* TX quadrature calibration must fail closed on setup writes and status
      * reads instead of reporting a successful calibration. */
     spi_status = 0;
+    phy.calibration_state_unknown = false;
+    phy.calibration_wait_quarantined = false;
+    phy.calibration_wait = NULL;
     fail_write_reg = REG_QUAD_CAL_NCO_FREQ_PHASE_OFFSET;
     ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, NULL);
     if (ret != -EIO) {
-        fprintf(stderr, "TX quad calibration hid NCO setup write failure: ret=%" PRId32
-                "\n", ret);
+        fprintf(stderr, "TX quad calibration hid NCO setup write failure: ret=%" PRId32 "\n", ret);
         return EXIT_FAILURE;
     }
 
+    phy.calibration_state_unknown = false;
     fail_write_reg = REG_QUAD_CAL_CTRL;
     ret = __ad9361_tx_quad_calib(&phy, 0, 0, 2, NULL);
     if (ret != -EIO) {
@@ -4783,6 +4804,10 @@ int main(void)
      * both telemetry APIs must still restore the power-down bit. */
     {
         register_map_enabled = true;
+        phy.calibration_state_unknown = false;
+        fail_write_reg = -1;
+        fail_write_once_reg = -1;
+        fail_write_once_reg_occurrence = 1;
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_regs[REG_AUXADC_CONFIG] = AUXADC_POWER_DOWN;
         fail_write_once_reg = REG_AUXADC_CONFIG;
@@ -4960,19 +4985,6 @@ int main(void)
 		phy.rf_bandwidth_transaction = &transaction;
 		phy.rf_bandwidth_filter_transaction = &transaction.filter_job;
 
-		/* Exercise the real uncached ADC_CLK path while the filter child owns
-		 * the PHY. Its checked public accessor would reject its own owner; the
-		 * owner-validated low-level scaler must perform one REG_BBPLL read. */
-		transaction.filter_job.adc_freq_valid = false;
-		before = read_count;
-		if (ad9361_rf_bandwidth_transaction_poll(
-			    &phy, &transaction) != 1 || read_count != before + 1 ||
-		    transaction.filter_job.adc_freq != 491520000 ||
-		    !transaction.filter_job.adc_freq_valid) {
-			fprintf(stderr,
-				"Owned ADC clock read failed or exceeded one SPI read per poll\n");
-			return EXIT_FAILURE;
-		}
 		for (i = 0; i < 3; i++) {
 			before = read_count;
 			if (ad9361_rf_bandwidth_transaction_poll(
@@ -5004,6 +5016,22 @@ int main(void)
 					"TX second-filter step exceeded one SPI write per poll\n");
 				return EXIT_FAILURE;
 			}
+		}
+		if (transaction.filter_job.stage != AD9361_RF_BANDWIDTH_FILTER_ADC_READ)
+			return EXIT_FAILURE;
+
+		/* Exercise the real uncached ADC_CLK path while the filter child owns
+		 * the PHY. Its checked public accessor would reject its own owner; the
+		 * owner-validated low-level scaler must perform one REG_BBPLL read. */
+		transaction.filter_job.adc_freq_valid = false;
+		before = read_count;
+		ret = ad9361_rf_bandwidth_transaction_poll(&phy, &transaction);
+		if (ret != 1 || read_count != before + 1 ||
+		    transaction.filter_job.adc_freq != 491520000 ||
+		    !transaction.filter_job.adc_freq_valid) {
+			fprintf(stderr,
+				"Owned ADC clock read failed or exceeded one SPI read per poll\n");
+			return EXIT_FAILURE;
 		}
 		for (i = 0; i < 3; i++) {
 			before = read_count;
@@ -5150,8 +5178,13 @@ int main(void)
 		fake_regs[REG_STATE] = ENSM_STATE_ALERT;
 		fake_regs[REG_INTEGER_BB_FREQ_WORD] = 24;
 		fake_regs[REG_BBPLL] = 2;
+		fake_regs[REG_RX_BBF_C3_MSB] = 1;
+		fake_regs[REG_RX_BBF_C3_LSB] = 0;
+		fake_regs[REG_RX_BBF_R2346] = 1;
 		fake_regs[REG_QUAD_CAL_STATUS_TX1] =
 			TX1_LO_CONV | TX1_SSB_CONV;
+		fake_regs[REG_QUAD_CAL_STATUS_TX2] =
+			TX2_LO_CONV | TX2_SSB_CONV;
 		phy.clks[BB_REFCLK] = &bb_ref;
 		phy.clks[BBPLL_CLK] = &bbpll;
 		phy.clks[ADC_CLK] = &adc;
@@ -5165,6 +5198,7 @@ int main(void)
 		phy.ref_clk_scale[CLKTF_CLK] = &clktf_scale;
 		phy.read_cal_done = fake_calibration_done;
 		phy.calibration_state_unknown = false;
+		phy.rxbbf_div = 8;
 		ret = ad9361_tx_quad_calibration_job_start_with_restore_bw(
 			&phy, 500000, 500000, -1, 5000000, 5000000, &job);
 		if (ret != 0 || !job.bandwidth_changed ||
@@ -5191,10 +5225,11 @@ int main(void)
 			if (job.stage == AD9361_TX_QUAD_JOB_BANDWIDTH_RESTORE) {
 				saw_restore = true;
 				saw_cal_done_before_restore =
-					job.attempt.terminal &&
+					saw_cal_done_before_restore ||
+					(job.attempt.terminal &&
 					job.attempt.terminal_status == 0 &&
 					fake_regs[REG_RX_BBBW_MHZ] == 3 &&
-					fake_regs[REG_RX_BBBW_KHZ] == 108;
+					fake_regs[REG_RX_BBBW_KHZ] == 108);
 				if (job.bandwidth_job.rx_bw != 5000000 ||
 				    job.bandwidth_job.tx_bw != 5000000) {
 					fprintf(stderr,
@@ -5285,6 +5320,7 @@ int main(void)
      * write, and failures must still attempt to stop the programming clock. */
     {
         uint8_t profile_data[RX_FAST_LOCK_CONFIG_WORD_NUM] = {0};
+        phy.calibration_state_unknown = false;
         phy.fastlock.entry[0][0].flags = 0;
         fail_write_reg = REG_RX_FAST_LOCK_PROGRAM_CTRL;
         ret = ad9361_fastlock_load(&phy, false, 0, profile_data);
@@ -5295,6 +5331,7 @@ int main(void)
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
+		phy.calibration_state_unknown = false;
         ret = ad9361_fastlock_load(&phy, false, 8, profile_data);
         if (ret != -EINVAL ||
             ad9361_fastlock_load(NULL, false, 0, profile_data) != -EINVAL ||
@@ -5365,7 +5402,8 @@ int main(void)
         write_count = 0;
         ret = ad9361_fastlock_recall(&phy, false, 0);
         if (ret != -EIO || profile->flags != 0 ||
-            phy.fastlock.current_profile[0] != 0 ||
+		    phy.fastlock.current_profile[0] != 0xffu ||
+		    !phy.calibration_state_unknown ||
             fake_regs[REG_RX_FAST_LOCK_PROGRAM_CTRL] != 0) {
             fprintf(stderr,
                     "Fastlock recall hid ALC profile write failure: ret=%" PRId32
@@ -5377,9 +5415,12 @@ int main(void)
         profile->flags = FASTLOOK_INIT;
         profile->alc_written = 0x10;
         profile->alc_orig = 0x10;
+		phy.calibration_state_unknown = false;
+		phy.fastlock.current_profile[0] = 0;
         fail_write_reg = REG_RX_FAST_LOCK_SETUP_INIT_DELAY;
         ret = ad9361_fastlock_recall(&phy, false, 0);
-        if (ret != -EIO || phy.fastlock.current_profile[0] != 0) {
+		if (ret != -EIO || phy.fastlock.current_profile[0] != 0xffu ||
+		    !phy.calibration_state_unknown) {
             fprintf(stderr,
                     "Fastlock recall hid prepare failure: ret=%" PRId32
                     " current=%u\n", ret,
@@ -5388,12 +5429,15 @@ int main(void)
         }
 
         fail_write_reg = -1;
+		phy.calibration_state_unknown = false;
+		phy.fastlock.current_profile[0] = 0;
         fail_write_once_reg = REG_ENSM_CONFIG_2;
         ret = ad9361_fastlock_recall(&phy, false, 0);
-        if (ret != -EIO || phy.fastlock.current_profile[0] != 0 ||
-            (fake_regs[REG_RX_FAST_LOCK_SETUP] & RX_FAST_LOCK_MODE_ENABLE) != 0) {
+		if (ret != -EIO || phy.fastlock.current_profile[0] != 0xffu ||
+		    !phy.calibration_state_unknown ||
+		    (fake_regs[REG_RX_FAST_LOCK_SETUP] & RX_FAST_LOCK_MODE_ENABLE) == 0) {
             fprintf(stderr,
-                    "Fastlock recall did not clean up partial preparation: "
+				"Fastlock recall did not quarantine partial preparation: "
                     "ret=%" PRId32 " current=%u setup=0x%02x\n", ret,
                     phy.fastlock.current_profile[0],
                     fake_regs[REG_RX_FAST_LOCK_SETUP]);
@@ -5407,6 +5451,7 @@ int main(void)
         phy.fastlock.entry[1][0].flags = FASTLOOK_INIT;
         phy.fastlock.entry[1][0].alc_written = 0x10;
         phy.fastlock.entry[1][0].alc_orig = 0x10;
+		phy.calibration_state_unknown = false;
         phy.fastlock.current_profile[1] = 0;
         fail_read_reg = REG_TX_FORCE_ALC;
         ret = ad9361_fastlock_recall(&phy, true, 0);
@@ -5513,6 +5558,7 @@ int main(void)
 				REG_RX1_MANUAL_LMT_FULL_GAIN + 2
 			};
 			uint8_t old_gain_regs[3];
+			unsigned writes_before;
 
 			phy.pdata->split_gt = true;
 			phy.pdata->gain_ctrl.dig_gain_en = true;
@@ -5532,18 +5578,17 @@ int main(void)
 			fail_write_once_reg = gain_regs[1];
 			fail_write_once_reg_occurrence = 1;
 			apply_failed_write_once = true;
+			writes_before = write_count;
 			ret = ad9361_set_rx_gain(&phy, 1, &rx_gain);
-			if (ret != -EIO) {
-				fprintf(stderr, "RX split gain hid a partial write failure\n");
+			if (ret != -EIO || !phy.calibration_state_unknown ||
+			    write_count != writes_before + 2 ||
+			    fake_regs[gain_regs[0]] == old_gain_regs[0]) {
+				fprintf(stderr,
+					"RX split gain did not quarantine its partial write: "
+					"ret=%" PRId32 " unknown=%u writes=%u\n",
+					ret, phy.calibration_state_unknown,
+					write_count - writes_before);
 				return EXIT_FAILURE;
-			}
-			for (size_t i = 0; i < 3; i++) {
-				if (fake_regs[gain_regs[i]] != old_gain_regs[i]) {
-					fprintf(stderr,
-						"RX split gain register 0x%03" PRIx32
-						" was not restored\n", gain_regs[i]);
-					return EXIT_FAILURE;
-				}
 			}
 			fail_write_once_reg = -1;
 			fail_write_once_reg_occurrence = 1;
@@ -5590,8 +5635,15 @@ int main(void)
         int32_t poll_status = -EIO;
 
         register_map_enabled = true;
+        /* The two preceding injected ENSM faults correctly quarantined phy;
+         * this block models a reset before validating fresh mode changes. */
+        phy.calibration_state_unknown = false;
         fail_read_reg = -1;
+        fail_read_once_reg = -1;
         fail_write_reg = -1;
+        fail_write_once_reg = -1;
+        apply_failed_write_once = false;
+		gain_phy.calibration_state_unknown = false;
         gain_phy.gain_table_transaction = NULL;
         gain_phy.current_table = TBL_200_1300_MHZ;
         fake_regs[REG_RX1_MANUAL_LMT_FULL_GAIN] = 0;
@@ -5650,8 +5702,12 @@ int main(void)
         if (ret != -EIO || gain_phy.current_table != NO_GAIN_TABLE ||
             gain_phy.gain_table_transaction != NULL ||
             write_count == writes_before) {
-            fprintf(stderr,
-                    "Gain-table partial write failure did not fail closed\n");
+			fprintf(stderr,
+				"Gain-table partial write failure did not fail closed: "
+				"ret=%" PRId32 " table=%u owner=%p writes=%u\n",
+				ret, gain_phy.current_table,
+				(void *)gain_phy.gain_table_transaction,
+				write_count - writes_before);
             return EXIT_FAILURE;
         }
         fail_write_reg = -1;
@@ -5667,6 +5723,7 @@ int main(void)
         AD9361_TXFIRConfig tx_fir = {0};
         int16_t fir_coef[16] = {0};
 
+        phy.calibration_state_unknown = false;
         fail_write_reg = REG_RX_FILTER_CONFIG;
         ret = ad9361_get_rx_fir_config(&phy, 0, &rx_fir);
         if (ret != -EIO) {
@@ -5764,6 +5821,7 @@ int main(void)
         {
             int16_t signed_coef[16] = {0};
             signed_coef[0] = -1;
+			phy.calibration_state_unknown = false;
             last_fir_high_byte = 0;
             ret = ad9361_load_fir_filter_coef(&phy, FIR_RX1, 0, 16,
                                                signed_coef);
@@ -5789,10 +5847,11 @@ int main(void)
                                                fir_coef);
             fail_write_once_reg = -1;
             state_after_ensm_write = old_state_after_write;
-            if (ret != -EIO || fake_regs[REG_STATE] != ENSM_STATE_RX ||
-                fake_write_counts[REG_ENSM_CONFIG_1] < ensm_writes + 3) {
+			if (ret != -EIO || fake_regs[REG_STATE] != ENSM_STATE_RX ||
+			    fake_write_counts[REG_ENSM_CONFIG_1] != ensm_writes + 1 ||
+			    !phy.calibration_state_unknown) {
                 fprintf(stderr,
-                        "FIR loader skipped ENSM recovery after failed ALERT request\n");
+					"FIR loader did not fail closed after failed ALERT request\n");
                 return EXIT_FAILURE;
             }
         }
@@ -5957,7 +6016,8 @@ int main(void)
 		fake_regs[REG_STATE] = ENSM_STATE_RX;
 		state_after_ensm_write = ENSM_STATE_ALERT;
 		fail_write_once_reg = REG_ENSM_CONFIG_1;
-		fail_write_once_reg_occurrence = 2;
+		/* The ALERT transition emits two writes; fail the restore write. */
+		fail_write_once_reg_occurrence = 3;
 		apply_failed_write_once = false;
 		ret = ad9361_set_intf_delay(&timing_phy, false, 0, 0, true,
 					    &cleanup_status);
@@ -5966,7 +6026,10 @@ int main(void)
 		if (ret != -EIO || cleanup_status != -EIO ||
 		    !timing_phy.calibration_state_unknown) {
 			fprintf(stderr,
-				"Timing delay helper lost ENSM restore failure\n");
+				"Timing delay helper lost ENSM restore failure: "
+				"ret=%" PRId32 " cleanup=%" PRId32 " unknown=%u writes=%u\n",
+				ret, cleanup_status, timing_phy.calibration_state_unknown,
+				fake_write_counts[REG_ENSM_CONFIG_1]);
 			return EXIT_FAILURE;
 		}
 		fake_regs[REG_STATE] = old_ensm_state;
@@ -6017,6 +6080,7 @@ int main(void)
             int32_t old_state_after_ensm_write = state_after_ensm_write;
             uint8_t old_prev_ensm_state = phy.prev_ensm_state;
 
+		    phy.calibration_state_unknown = false;
             fake_regs[REG_STATE] = ENSM_STATE_ALERT;
             state_after_ensm_write = ENSM_STATE_ALERT;
             phy.rfpll_source_valid[0] = true;
@@ -6049,6 +6113,11 @@ int main(void)
                 return EXIT_FAILURE;
             }
 
+			/* Model a completed hardware reinitialization before retrying from
+			 * the fail-closed unknown state left by the partial mux writes. */
+			phy.calibration_state_unknown = false;
+			phy.rfpll_source_valid[0] = true;
+			phy.rfpll_source_valid[1] = true;
             if (ad9361_clk_mux_set_parent(&rx_mux, EXT_LO) != 0 ||
                 ad9361_clk_mux_set_parent(&tx_mux, EXT_LO) != 0 ||
                 !phy.rfpll_source_valid[0] || !phy.rfpll_source_valid[1] ||
@@ -6067,7 +6136,7 @@ int main(void)
             rx_mux.mult = INT_LO;
             fail_read_reg = REG_MULTICHIP_SYNC_AND_TX_MON_CTRL;
             fail_write_once_reg = REG_ENSM_CONFIG_1;
-            fail_write_once_reg_occurrence = 2;
+			fail_write_once_reg_occurrence = 3;
             apply_failed_write_once = false;
             {
                 int32_t cleanup_status = 0;
@@ -6137,6 +6206,7 @@ int main(void)
         }
         fail_read_reg = -1;
         fail_write_reg = -1;
+		phy.calibration_state_unknown = false;
         phy.fastlock.current_profile[0] = 7;
         fake_regs[REG_RX_FAST_LOCK_SETUP] = RX_FAST_LOCK_MODE_ENABLE;
         fail_write_once_reg = REG_RX_FAST_LOCK_SETUP;
@@ -6153,13 +6223,21 @@ int main(void)
             fprintf(stderr, "RX fastlock prepare accepted unknown cleanup state\n");
             return EXIT_FAILURE;
         }
+		{
+			unsigned writes_before = write_count;
         ret = ad9361_fastlock_exit_foreign(&phy, false);
-        if (ret != 0 || phy.fastlock.current_profile[0] != 0 ||
-            (fake_regs[REG_RX_FORCE_ALC] & FORCE_ALC_ENABLE) != 0) {
+        if (ret != -EIO || phy.fastlock.current_profile[0] != 0xffu ||
+		    !phy.calibration_state_unknown || write_count != writes_before) {
             fprintf(stderr,
-                    "RX fastlock exit failed to finish cleanup after ambiguous mode clear\n");
+                    "RX fastlock exit wrote again after unknown-state failure\n");
             return EXIT_FAILURE;
         }
+		}
+		/* Only full RFIC reinitialization permits another mutation after this
+		 * ambiguous partial cleanup. Model its completed state here. */
+		phy.calibration_state_unknown = false;
+		phy.fastlock.current_profile[0] = 0;
+		fake_regs[REG_RX_FORCE_ALC] = 0;
 
         phy.fastlock.current_profile[1] = 8;
         fake_regs[REG_TX_FAST_LOCK_SETUP] = RX_FAST_LOCK_MODE_ENABLE;
@@ -6179,13 +6257,19 @@ int main(void)
             fprintf(stderr, "TX fastlock prepare accepted unknown cleanup state\n");
             return EXIT_FAILURE;
         }
+		{
+			unsigned writes_before = write_count;
         ret = ad9361_fastlock_exit_foreign(&phy, true);
-        if (ret != 0 || phy.fastlock.current_profile[1] != 0 ||
-            (fake_regs[REG_TX_FORCE_ALC] & FORCE_ALC_ENABLE) != 0) {
+        if (ret != -EIO || phy.fastlock.current_profile[1] != 0xffu ||
+		    !phy.calibration_state_unknown || write_count != writes_before) {
             fprintf(stderr,
-                    "TX fastlock exit failed to finish cleanup after ambiguous mode clear\n");
+                    "TX fastlock exit wrote again after unknown-state failure\n");
             return EXIT_FAILURE;
         }
+		}
+		phy.calibration_state_unknown = false;
+		phy.fastlock.current_profile[1] = 0;
+		fake_regs[REG_TX_FORCE_ALC] = 0;
         fail_write_once_reg = -1;
         fail_write_once_reg_occurrence = 1;
         apply_failed_write_once = false;
@@ -6558,6 +6642,13 @@ int main(void)
             return EXIT_FAILURE;
         }
 
+		phy.calibration_state_unknown = false;
+		fail_read_reg = -1;
+		fail_read_once_reg = -1;
+		fail_write_reg = -1;
+		fail_write_once_reg = REG_TX2_DIG_ATTEN;
+		fail_write_once_reg_occurrence = 1;
+		apply_failed_write_once = false;
         fail_write_reg = REG_TX2_DIG_ATTEN;
         ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
         if (ret != -EIO) {
@@ -6576,6 +6667,9 @@ int main(void)
             return EXIT_FAILURE;
         }
 
+        phy.calibration_state_unknown = false;
+        fail_read_reg = -1;
+        fail_read_once_reg = -1;
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
@@ -6584,13 +6678,19 @@ int main(void)
         apply_failed_write_once = true;
         ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
         if (ret != -EIO ||
-            !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
-            fake_write_counts[REG_TX2_DIG_ATTEN] != 2) {
+            (fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 1 ||
+            !phy.calibration_state_unknown) {
             fprintf(stderr,
-                    "TX attenuation did not restore immediate update after disable error\n");
+                    "TX attenuation did not fail closed on disable error: "
+                    "ret=%" PRId32 " reg=0x%02x writes=%u unknown=%u\n",
+                    ret, fake_regs[REG_TX2_DIG_ATTEN],
+                    fake_write_counts[REG_TX2_DIG_ATTEN],
+                    phy.calibration_state_unknown);
             return EXIT_FAILURE;
         }
 
+		phy.calibration_state_unknown = false;
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
         fail_write_once_reg = REG_TX1_ATTEN_1;
@@ -6598,13 +6698,15 @@ int main(void)
         apply_failed_write_once = true;
         ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
         if (ret != -EIO ||
-            !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
-            fake_write_counts[REG_TX2_DIG_ATTEN] != 2) {
+            (fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 1 ||
+            !phy.calibration_state_unknown) {
             fprintf(stderr,
-                    "TX attenuation did not restore immediate update after data error\n");
+                    "TX attenuation did not fail closed after data error\n");
             return EXIT_FAILURE;
         }
 
+		phy.calibration_state_unknown = false;
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_write_counts[REG_TX2_DIG_ATTEN] = 0;
         fail_write_once_reg = REG_TX2_DIG_ATTEN;
@@ -6613,14 +6715,16 @@ int main(void)
         ret = ad9361_set_tx_atten(&phy, 1000, true, false, true);
         if (ret != -EIO ||
             !(fake_regs[REG_TX2_DIG_ATTEN] & IMMEDIATELY_UPDATE_TPC_ATTEN) ||
-            fake_write_counts[REG_TX2_DIG_ATTEN] != 3) {
+            fake_write_counts[REG_TX2_DIG_ATTEN] != 2 ||
+            !phy.calibration_state_unknown) {
             fprintf(stderr,
-                    "TX attenuation did not retry ambiguous immediate update\n");
+                    "TX attenuation did not fail closed on ambiguous immediate update\n");
             return EXIT_FAILURE;
         }
 
-        /* A partial two-channel update must restore both attenuation words,
-         * including a failed SPI byte that may already have reached the RFIC. */
+		phy.calibration_state_unknown = false;
+		/* A partial two-channel update leaves the RFIC quarantined; no blind
+		 * rollback writes may follow an ambiguous SPI result. */
         memset(fake_regs, 0, sizeof(fake_regs));
         fake_regs[REG_TX1_ATTEN_1] = 0x01;
         fake_regs[REG_TX1_ATTEN_1 + 1] = 0x23;
@@ -6632,14 +6736,13 @@ int main(void)
         apply_failed_write_once = true;
         ret = ad9361_set_tx_atten(&phy, 2000, true, true, true);
         if (ret != -EIO ||
-            fake_regs[REG_TX1_ATTEN_1] != 0x01 ||
-            fake_regs[REG_TX1_ATTEN_1 + 1] != 0x23 ||
-            fake_regs[REG_TX2_ATTEN_1] != 0x04 ||
-            fake_regs[REG_TX2_ATTEN_1 + 1] != 0x56 ||
-            !(fake_regs[REG_TX2_DIG_ATTEN] &
-              IMMEDIATELY_UPDATE_TPC_ATTEN)) {
+            fake_regs[REG_TX1_ATTEN_1] == 0x01 ||
+            fake_regs[REG_TX2_ATTEN_1] == 0x04 ||
+            (fake_regs[REG_TX2_DIG_ATTEN] &
+             IMMEDIATELY_UPDATE_TPC_ATTEN) ||
+            !phy.calibration_state_unknown) {
             fprintf(stderr,
-                    "Partial TX1/TX2 attenuation update was not rolled back\n");
+                    "Partial TX1/TX2 attenuation update was not quarantined\n");
             return EXIT_FAILURE;
         }
 
@@ -6728,6 +6831,10 @@ int main(void)
 
     register_map_enabled = true;
     read_count = delay_count = 0;
+    phy.calibration_state_unknown = false;
+    fail_read_once_reg = -1;
+    fail_write_once_reg = -1;
+    apply_failed_write_once = false;
     fail_read_reg = REG_STATE;
     ret = ad9361_ensm_force_state_checked(&phy, ENSM_STATE_RX);
     if (ret != -EIO || read_count != 1) {
@@ -6754,25 +6861,47 @@ int main(void)
     }
 
     fail_write_reg = -1;
+    /* The preceding injected write failure correctly quarantined the PHY.
+     * Model RFIC reset before starting an independent transition scenario. */
+    phy.calibration_state_unknown = false;
+    fail_read_reg = -1;
+    fail_read_once_reg = -1;
+    fail_write_once_reg = -1;
+    apply_failed_write_once = false;
     fake_regs[REG_STATE] = ENSM_STATE_RX;
     fake_regs[REG_ENSM_CONFIG_1] = 0;
     {
+        struct ad9361_rf_phy transition_phy = {
+            .spi = &spi,
+            .pdata = &pdata,
+        };
         struct ad9361_ensm_transition_job pending = {0};
-        ret = ad9361_ensm_transition_start(&phy, ENSM_STATE_ALERT, false, &pending);
-        if (ret != 0)
+        ret = ad9361_ensm_transition_start(&transition_phy,
+                                          ENSM_STATE_ALERT, false, &pending);
+        if (ret != 0) {
+            fprintf(stderr, "ENSM transition start failed after reset: %" PRId32
+                    "\n", ret);
             return EXIT_FAILURE;
+        }
         while (!pending.wait.active) {
-            if (ad9361_ensm_transition_poll(&phy, &pending) != 1)
+            ret = ad9361_ensm_transition_poll(&transition_phy, &pending);
+            if (ret != 1) {
+                fprintf(stderr,
+                        "ENSM transition did not reach event wait: ret=%" PRId32
+                        " stage=%u unknown=%d\n", ret, pending.stage,
+                        ad9361_calibration_state_unknown(&transition_phy));
                 return EXIT_FAILURE;
+            }
         }
         fake_time_us += 1000000000ULL;
-        if (ad9361_ensm_transition_poll(&phy, &pending) != 1 ||
-            pending.terminal || phy.ensm_transition_job != &pending)
+        if (ad9361_ensm_transition_poll(&transition_phy, &pending) != 1 ||
+            pending.terminal ||
+            transition_phy.ensm_transition_job != &pending)
             return EXIT_FAILURE;
         fake_regs[REG_STATE] = ENSM_STATE_ALERT;
         do {
             fake_time_us += 1000;
-            ret = ad9361_ensm_transition_poll(&phy, &pending);
+            ret = ad9361_ensm_transition_poll(&transition_phy, &pending);
         } while (ret == 1);
         if (ret != 0)
             return EXIT_FAILURE;
@@ -6780,6 +6909,7 @@ int main(void)
 
     fake_regs[REG_STATE] = ENSM_STATE_RX;
     state_after_ensm_write = ENSM_STATE_ALERT;
+    delay_count = 0;
     ret = ad9361_ensm_force_state_checked(&phy, ENSM_STATE_ALERT);
     if (ret != 0 || phy.prev_ensm_state != ENSM_STATE_RX) {
         fprintf(stderr, "ENSM force did not confirm ALERT: ret=%" PRId32
@@ -6815,55 +6945,48 @@ int main(void)
     /* PINCTRL_FDD_INDEP must program FDD_EXTERNAL_CTRL_ENABLE from the
      * requested mode, not the previous platform-data cache. */
     {
-        bool old_fdd = pdata.fdd;
-        bool old_fdd_independent = pdata.fdd_independent_mode;
+        struct ad9361_phy_platform_data mode_pdata = {0};
+        struct ad9361_rf_phy mode_phy = {
+            .spi = &spi,
+            .pdata = &mode_pdata,
+        };
         uint8_t old_state = fake_regs[REG_STATE];
         uint8_t old_config_2 = fake_regs[REG_ENSM_CONFIG_2];
-        uint8_t old_agc_mode_0 = phy.agc_mode[0];
-        uint8_t old_agc_mode_1 = phy.agc_mode[1];
-        uint8_t old_curr_state = phy.curr_ensm_state;
         int32_t old_state_after_write = state_after_ensm_write;
 
         register_map_enabled = true;
         fail_read_reg = -1;
         fail_write_reg = -1;
-        pdata.fdd = true;
-        pdata.fdd_independent_mode = false;
-        phy.agc_mode[0] = 0;
-        phy.agc_mode[1] = 0;
-        phy.curr_ensm_state = ENSM_STATE_ALERT;
+        mode_pdata.fdd = true;
+        mode_pdata.fdd_independent_mode = false;
+        mode_phy.curr_ensm_state = ENSM_STATE_ALERT;
         state_after_ensm_write = ENSM_STATE_FDD;
         fake_regs[REG_STATE] = ENSM_STATE_ALERT;
         ret = ad9361_set_en_state_machine_mode(
-                  &phy, ENSM_MODE_PINCTRL_FDD_INDEP);
-        if (ret != 0 || !pdata.fdd_independent_mode ||
+                  &mode_phy, ENSM_MODE_PINCTRL_FDD_INDEP);
+        if (ret != 0 || !mode_pdata.fdd_independent_mode ||
             !(fake_regs[REG_ENSM_CONFIG_2] & FDD_EXTERNAL_CTRL_ENABLE)) {
             fprintf(stderr,
                     "ENSM independent FDD mode cache/register mismatch: ret=%" PRId32
                     " cache=%u config2=0x%02x\n",
-                    ret, pdata.fdd_independent_mode,
+                    ret, mode_pdata.fdd_independent_mode,
                     fake_regs[REG_ENSM_CONFIG_2]);
             return EXIT_FAILURE;
         }
 
-        ret = ad9361_set_en_state_machine_mode(&phy, ENSM_MODE_FDD);
-        if (ret != 0 || pdata.fdd_independent_mode ||
+        ret = ad9361_set_en_state_machine_mode(&mode_phy, ENSM_MODE_FDD);
+        if (ret != 0 || mode_pdata.fdd_independent_mode ||
             (fake_regs[REG_ENSM_CONFIG_2] & FDD_EXTERNAL_CTRL_ENABLE)) {
             fprintf(stderr,
                     "ENSM regular FDD mode cache/register mismatch: ret=%" PRId32
                     " cache=%u config2=0x%02x\n",
-                    ret, pdata.fdd_independent_mode,
+                    ret, mode_pdata.fdd_independent_mode,
                     fake_regs[REG_ENSM_CONFIG_2]);
             return EXIT_FAILURE;
         }
 
-        pdata.fdd = old_fdd;
-        pdata.fdd_independent_mode = old_fdd_independent;
         fake_regs[REG_STATE] = old_state;
         fake_regs[REG_ENSM_CONFIG_2] = old_config_2;
-        phy.agc_mode[0] = old_agc_mode_0;
-        phy.agc_mode[1] = old_agc_mode_1;
-        phy.curr_ensm_state = old_curr_state;
         state_after_ensm_write = old_state_after_write;
     }
 
@@ -6900,9 +7023,9 @@ int main(void)
         }
         fail_write_reg = -1;
 
-        /* A later-register failure leaves the preceding tracking writes in
-         * hardware unless the setter actively restores the old complete
-         * tracking register set. */
+        /* A later-register failure quarantines the partially programmed
+         * tracking image. No rollback or retry is safe after the SPI result
+         * becomes ambiguous. */
         {
             const uint16_t tracking_regs[] = {
                 REG_CALIBRATION_CONFIG_2,
@@ -6916,6 +7039,8 @@ int main(void)
             unsigned config2_writes;
             size_t i;
 
+            /* Previous ENSM fault injections quarantined this fake PHY. */
+            phy.calibration_state_unknown = false;
             ret = ad9361_tracking_control(&phy, false, false, false);
             if (ret != 0) {
                 fprintf(stderr, "Unable to establish baseline tracking image\n");
@@ -6932,33 +7057,24 @@ int main(void)
                 fprintf(stderr, "Partial tracking failure was not reported\n");
                 return EXIT_FAILURE;
             }
-            for (i = 0; i < sizeof(tracking_regs) /
-                            sizeof(tracking_regs[0]); i++) {
-                if (fake_regs[tracking_regs[i]] != old_tracking_regs[i]) {
-                    fprintf(stderr,
-                            "Tracking register %u was not restored after failure\n",
-                            tracking_regs[i]);
-                    return EXIT_FAILURE;
-                }
-            }
-            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
-            if (ret != 0 ||
-                fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes + 3) {
+            if (!ad9361_calibration_state_unknown(&phy) ||
+                phy.tracking_config_valid ||
+                fake_regs[REG_DC_OFFSET_CONFIG2] ==
+                    old_tracking_regs[2]) {
                 fprintf(stderr,
-                        "Tracking failure rollback or no-op replay did not run\n");
+                        "Partial tracking failure was not quarantined\n");
+                return EXIT_FAILURE;
+            }
+            config2_writes = fake_write_counts[REG_CALIBRATION_CONFIG_2];
+            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
+            if (ret != -EIO ||
+                fake_write_counts[REG_CALIBRATION_CONFIG_2] != config2_writes) {
+                fprintf(stderr,
+                        "Quarantined tracking state allowed a retry\n");
                 return EXIT_FAILURE;
             }
 
-            /* If the rollback also fails, getters must not report the old
-             * cached bits as a confirmed hardware state. A complete later
-             * write must recover the cache and make getters available again. */
-            fail_write_reg = REG_CALIBRATION_CONFIG_1;
-            ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 1);
-            if (ret != -EIO || phy.tracking_config_valid) {
-                fprintf(stderr,
-                        "Tracking rollback failure retained a valid cache\n");
-                return EXIT_FAILURE;
-            }
+            /* Getters cannot present the pre-failure cached bits as known. */
             {
                 uint8_t rfdc = UINT8_MAX;
                 uint8_t bbdc = UINT8_MAX;
@@ -6974,9 +7090,13 @@ int main(void)
                 }
             }
             fail_write_reg = -1;
+            fail_write_once_reg = -1;
+            phy.calibration_state_unknown = false;
+            phy.tracking_config_valid = false;
             ret = ad9361_set_rx_rfdc_track_en_dis(&phy, 0);
             if (ret != 0 || !phy.tracking_config_valid) {
-                fprintf(stderr, "Tracking configuration did not recover\n");
+                fprintf(stderr,
+                        "Tracking configuration did not recover after reset\n");
                 return EXIT_FAILURE;
             }
         }
@@ -7002,15 +7122,24 @@ int main(void)
     }
     fail_write_reg = REG_ENSM_CONFIG_2;
     ret = ad9361_mcs(&phy, 1);
-    if (ret != -EIO || ad9361_mcs(&phy, 6) != -EINVAL) {
-        fprintf(stderr, "MCS hid SPI failure or accepted invalid step\n");
+    if (ret != -EIO || !ad9361_calibration_state_unknown(&phy)) {
+        fprintf(stderr, "MCS hid SPI failure or failed to quarantine PHY\n");
         return EXIT_FAILURE;
     }
     fail_write_reg = -1;
+    phy.calibration_state_unknown = false;
+    if (ad9361_mcs(&phy, 6) != -EINVAL) {
+        fprintf(stderr, "MCS accepted an invalid step after reset\n");
+        return EXIT_FAILURE;
+    }
 
     {
+        struct no_os_clk *saved_refclk = phy.clk_refin;
+        struct no_os_clk refclk = { .rate = 40000000 };
         struct refclk_scale bbpll = { .spi = &spi, .phy = &phy };
 
+        phy.clk_refin = &refclk;
+        phy.calibration_state_unknown = false;
         fail_write_reg = REG_CP_CURRENT;
         ret = ad9361_bbpll_set_rate(&bbpll, 983040000, 40000000);
         if (ret != -EIO) {
@@ -7022,6 +7151,8 @@ int main(void)
 
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
+        /* The loop-filter fault above left the fake RFIC quarantined. */
+        phy.calibration_state_unknown = false;
         fake_write_counts[REG_SDM_CTRL_1] = 0;
         fail_write_once_reg = REG_SDM_CTRL_1;
         fail_write_once_reg_occurrence = 1;
@@ -7040,6 +7171,7 @@ int main(void)
         }
 
         fake_write_counts[REG_SDM_CTRL_1] = 0;
+        phy.calibration_state_unknown = false;
         fail_write_once_reg = REG_SDM_CTRL_1;
         fail_write_once_reg_occurrence = 2;
         apply_failed_write_once = true;
@@ -7054,10 +7186,12 @@ int main(void)
         fail_write_once_reg_occurrence = 1;
         apply_failed_write_once = false;
         register_map_enabled = false;
+        phy.clk_refin = saved_refclk;
     }
 
     {
         struct ad9361_rf_phy bbpll_phy = { .spi = &spi };
+        struct no_os_clk refclk = { .rate = 38400000 };
         struct refclk_scale bbpll = { .spi = &spi, .phy = &bbpll_phy };
         uint8_t saved_fake_regs[sizeof(fake_regs)];
         bool saved_register_map_enabled = register_map_enabled;
@@ -7065,6 +7199,7 @@ int main(void)
         const uint32_t requested_rate = 737280000;
         const uint32_t reference_rate = 38400000;
 
+        bbpll_phy.clk_refin = &refclk;
         memcpy(saved_fake_regs, fake_regs, sizeof(fake_regs));
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
@@ -7250,6 +7385,12 @@ int main(void)
         clock_nodes[ADC_CLK].rate = 491520000;
         phy.clk_refin = &clock_nodes[BB_REFCLK];
         phy.bbpll_initialized = true;
+        /* The preceding BBPLL SPI injections quarantined the fake PHY and
+         * invalidated its cached clock rates; model a complete reset. */
+        phy.calibration_state_unknown = false;
+        clock_nodes[BB_REFCLK].rate = 40000000;
+        clock_nodes[BBPLL_CLK].rate = 983040000;
+        clock_nodes[ADC_CLK].rate = 491520000;
 
         /* Reject overflowing startup frequencies before setup performs any
          * RFIC writes or narrows them to the shifted PLL representation. */
@@ -7288,6 +7429,9 @@ int main(void)
             pdata.rx_synth_freq = saved_rx_freq;
             pdata.tx_synth_freq = saved_tx_freq;
         }
+        /* Use valid startup carriers for the following retained-setup cases. */
+        pdata.rx_synth_freq = 1800000000ULL;
+        pdata.tx_synth_freq = 1800000000ULL;
 
         /* Retained setup start performs validation and captures state only;
          * the first RFIC mutation belongs to the first poll. */
@@ -7361,7 +7505,7 @@ int main(void)
             struct ad9361_phy_platform_data prefix_pdata = pdata;
             struct ad9361_rf_phy prefix_phy = {0};
             struct ad9361_setup_transaction setup_transaction = {0};
-            struct no_os_clk prefix_bb_ref = clock_nodes[BB_REFCLK];
+            struct no_os_clk prefix_bb_ref = { .rate = 40000000 };
             struct refclk_scale prefix_bb_scale =
                 clock_scales[BB_REFCLK];
             static const uint32_t prefix_registers[] = {
@@ -7420,8 +7564,17 @@ int main(void)
 
             ret = ad9361_setup_transaction_start(&prefix_phy,
                                                  &setup_transaction);
-            if (ret != 0)
+            if (ret != 0) {
+                fprintf(stderr,
+                        "Retained prefix setup start failed: ret=%" PRId32
+                        " rx=%" PRIu64 " tx=%" PRIu64 " ref=%" PRIu32
+                        " busy=%d unknown=%d\n", ret,
+                        prefix_pdata.rx_synth_freq,
+                        prefix_pdata.tx_synth_freq, prefix_bb_ref.rate,
+                        ad9361_operation_busy(&prefix_phy),
+                        ad9361_calibration_state_unknown(&prefix_phy));
                 return EXIT_FAILURE;
+            }
             while (setup_transaction.stage !=
                        AD9361_SETUP_TRANSACTION_CLOCK_CHAIN_START &&
                    polls++ < 128) {
@@ -7586,6 +7739,12 @@ int main(void)
             phy.rfpll_source_valid[1] = saved_tx_source_valid;
         }
 
+        /* A separate setup-fault PHY shares these fake clock descriptors and
+         * quarantined them; restore the reference tree before this scenario. */
+        phy.calibration_state_unknown = false;
+        clock_nodes[BB_REFCLK].rate = 40000000;
+        clock_nodes[BBPLL_CLK].rate = 983040000;
+        clock_nodes[ADC_CLK].rate = 491520000;
         fail_write_reg = REG_CP_CURRENT;
         ret = clk_set_rate(&phy, bbpll, 960000000);
         if (ret != -EIO || clock_nodes[BBPLL_CLK].rate != 0 ||
@@ -7620,16 +7779,39 @@ int main(void)
         {
             unsigned int writes_before = write_count;
             ret = clk_set_rate(&phy, bbpll, 983040000);
-            if (ret != 0 || write_count == writes_before ||
-                clock_nodes[BBPLL_CLK].rate == 0 ||
-                !phy.bbpll_initialized) {
+            if (ret != -EIO || write_count != writes_before ||
+                !ad9361_calibration_state_unknown(&phy)) {
                 fprintf(stderr,
-                        "BBPLL recovery request was skipped after readback "
-                        "failure: ret=%" PRId32 " writes=%u->%u rate=%" PRIu32
-                        " initialized=%d\n", ret, writes_before, write_count,
-                        clock_nodes[BBPLL_CLK].rate, phy.bbpll_initialized);
+                        "Quarantined BBPLL accepted a recovery retry: "
+                        "ret=%" PRId32 " writes=%u->%u unknown=%d\n",
+                        ret, writes_before, write_count,
+                        ad9361_calibration_state_unknown(&phy));
                 return EXIT_FAILURE;
             }
+
+            /* An ambiguous divider readback blocks retries until reset. */
+            writes_before = write_count;
+            ret = clk_set_rate(&phy, bbpll, 983040000);
+            if (ret != -EIO || write_count != writes_before ||
+                !ad9361_calibration_state_unknown(&phy)) {
+                fprintf(stderr,
+                        "Quarantined BBPLL accepted a recovery retry: "
+                        "ret=%" PRId32 " writes=%u->%u unknown=%d\n",
+                        ret, writes_before, write_count,
+                        ad9361_calibration_state_unknown(&phy));
+                return EXIT_FAILURE;
+            }
+
+            /* Model full RFIC reset/reinitialization for the next independent
+             * clock transaction regression. */
+            phy.calibration_state_unknown = false;
+            for (uint32_t reset_i = BB_REFCLK;
+                 reset_i < NUM_AD9361_CLKS; reset_i++)
+                clock_nodes[reset_i].rate = 123;
+            clock_nodes[BB_REFCLK].rate = 40000000;
+            clock_nodes[BBPLL_CLK].rate = 983040000;
+            clock_nodes[ADC_CLK].rate = 491520000;
+            phy.bbpll_initialized = true;
         }
 
         /* The clock-framework transaction must retain the low-level BBPLL
@@ -7686,10 +7868,19 @@ int main(void)
                             delay_count - delays_before);
                     return EXIT_FAILURE;
                 }
-                if (transaction.verify_pending &&
+                if (ret == 1 && transaction.verify_pending &&
                     !ad9361_operation_busy(&phy)) {
                     fprintf(stderr,
-                            "BBPLL owner released before divider readback\n");
+                            "BBPLL owner released before divider readback: "
+                            "ret=%" PRId32 " active=%d child_active=%d "
+                            "child_terminal=%d retain=%d child_owner=%p "
+                            "phy_owner=%p\n",
+                            ret, transaction.active,
+                            transaction.rate_transaction.active,
+                            transaction.rate_transaction.terminal,
+                            transaction.rate_transaction.retain_owner_on_terminal,
+                            (void *)transaction.rate_transaction.phy,
+                            (void *)phy.bbpll_rate_transaction);
                     return EXIT_FAILURE;
                 }
             } while (ret == 1 && polls < 64);
@@ -7785,6 +7976,8 @@ int main(void)
     fake_axi_regs[0x4000 / sizeof(uint32_t)] = UINT32_C(8) << 16;
     fake_axi_regs[0x4418 / sizeof(uint32_t)] = 0x11;
     fake_axi_regs[0x4458 / sizeof(uint32_t)] = 0x22;
+    /* The preceding ENSM write injections quarantined the shared fake PHY. */
+    phy.calibration_state_unknown = false;
     phy.bist_prbs_mode = BIST_INJ_TX;
     phy.bist_config = 0x55;
     phy.bist_config_valid = true;
@@ -7810,6 +8003,8 @@ int main(void)
         fprintf(stderr, "BIST PRBS accepted invalid mode or changed cache\n");
         return EXIT_FAILURE;
     }
+    /* The injected BIST write failure quarantined phy; model RFIC reset. */
+    phy.calibration_state_unknown = false;
     ret = ad9361_bist_prbs(&phy, BIST_DISABLE);
     if (ret != 0 || !phy.bist_config_valid) {
         fprintf(stderr, "BIST PRBS did not revalidate confirmed state\n");
@@ -7898,6 +8093,7 @@ int main(void)
         }
     }
     fail_write_reg = -1;
+	phy.calibration_state_unknown = false;
 	phy.bist_config = 0x1234;
 	fail_write_reg = REG_BIST_AND_DATA_PORT_TEST_CONFIG;
 	ret = ad9361_write_bist_reg(&phy, 0x78);
@@ -7906,6 +8102,7 @@ int main(void)
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
+	phy.calibration_state_unknown = false;
 
 	/* RX and TX RF-port setters must keep their cached selection aligned with
 	 * a confirmed register write. */
@@ -7942,6 +8139,8 @@ int main(void)
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
+	/* The failed RF-port write quarantined the prior selector image. */
+	phy.calibration_state_unknown = false;
 	ret = ad9361_set_rx_rf_port_input(&phy, 0);
 	rx_rf_port = UINT32_MAX;
 	tx_rf_port = UINT32_MAX;
@@ -7967,6 +8166,7 @@ int main(void)
 		return EXIT_FAILURE;
 	}
 	fail_write_reg = -1;
+	phy.calibration_state_unknown = false;
 	ret = ad9361_set_tx_rf_port_output(&phy, 0);
 	if (ret != 0 || !phy.rf_port_select_valid ||
 	    ad9361_get_tx_rf_port_output(&phy, &tx_rf_port) != 0 ||
@@ -8170,8 +8370,8 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        /* A failed new bandwidth stage must restore and read back the old
-         * clock plan before the second bandwidth job can validate rollback. */
+        /* The successful transaction above committed 15.36 MHz. A failed
+         * bandwidth stage must restore that known clock plan. */
         memset(&transaction, 0, sizeof(transaction));
         fake_sample_rate_clock_set_count = 0;
         fake_sample_rate_bw_start_count = 0;
@@ -8227,8 +8427,8 @@ int main(void)
             &sample_phy, &transaction);
         if (transaction_status != -EIO || !transaction.rollback_complete ||
             !sample_phy.current_bw_valid ||
-            fake_sample_rate_rx_clks[RX_SAMPL_FREQ] != 30720000 ||
-            fake_sample_rate_tx_clks[TX_SAMPL_FREQ] != 30720000) {
+                fake_sample_rate_rx_clks[RX_SAMPL_FREQ] != 15360000 ||
+                fake_sample_rate_tx_clks[TX_SAMPL_FREQ] != 15360000) {
             fprintf(stderr,
                     "Verified rollback outcome incorrect: status=%" PRId32
                     " rollback=%d bw_valid=%d rx_rate=%u tx_rate=%u\n",
@@ -8417,13 +8617,19 @@ int main(void)
         fake_sample_rate_corrupt_rollback_readback = true;
         sample_phy.calibration_state_unknown = false;
         sample_phy.current_bw_valid = true;
+        sample_clkrf.rate = 30720000;
         transaction_status = ad9361_sample_rate_transaction_start(
             &sample_phy, 15360000, false, &transaction);
         if (transaction_status != 0 ||
             test_sample_rate_poll_until_stage(
                 &sample_phy, &transaction,
                 AD9361_SAMPLE_RATE_TRANSACTION_ROLLBACK_CLOCK) != 1) {
-            fprintf(stderr, "Sample-rate readback-mismatch case did not start\n");
+            fprintf(stderr,
+                    "Sample-rate readback-mismatch case did not start: "
+                    "status=%" PRId32 " active=%d busy=%d unknown=%d\n",
+                    transaction_status, transaction.active,
+                    ad9361_operation_busy(&sample_phy),
+                    ad9361_calibration_state_unknown(&sample_phy));
             return EXIT_FAILURE;
         }
         transaction_status = test_sample_rate_poll_to_terminal(
@@ -8463,6 +8669,7 @@ int main(void)
             requested_tx[TX_SAMPL_FREQ] = 15360000;
             sample_phy.calibration_state_unknown = false;
             sample_phy.current_bw_valid = true;
+            fake_sample_rate_corrupt_rollback_readback = false;
             sample_phy.current_rx_bw_Hz = 18000000;
             sample_phy.current_tx_bw_Hz = 18000000;
             fake_sample_rate_clock_set_count = 0;
@@ -9024,6 +9231,8 @@ int main(void)
 			unsigned int writes_at_start = write_count;
 			unsigned int polls = 0;
 			int32_t step;
+			agc_phy.calibration_state_unknown = false;
+			agc_sample_clock.rate = 1000000;
 
 		do {
 			unsigned int writes_before_step = write_count;
@@ -9034,7 +9243,14 @@ int main(void)
 			if ((step != 0 && step != 1) ||
 			    write_count - writes_before_step > 1 || polls > 10) {
 				fprintf(stderr,
-					"RSSI setup step exceeded one-register bound\n");
+					"RSSI setup step failed: step=%" PRId32
+					" writes=%u polls=%u unknown=%d rate=%" PRIu32
+					" duration=%" PRIu32 " delay=%" PRIu32
+					" wait=%" PRIu32 " cursor=%u\n",
+					step, write_count - writes_before_step, polls,
+					ad9361_calibration_state_unknown(&agc_phy),
+					agc_sample_clock.rate, rssi.rssi_duration,
+					rssi.rssi_delay, rssi.rssi_wait, cursor);
 				return EXIT_FAILURE;
 			}
 		} while (step == 1);
@@ -9168,8 +9384,8 @@ int main(void)
         }
     }
 
-    /* Error-table programming must stop its indirect-table clock even when
-     * the final stop write reached hardware but the SPI response failed. */
+    /* An ambiguous indirect-table write must quarantine state without a
+     * speculative stop-clock write. */
     {
         register_map_enabled = true;
         memset(fake_regs, 0, sizeof(fake_regs));
@@ -9179,25 +9395,30 @@ int main(void)
         apply_failed_write_once = true;
         ret = ad9361_rssi_program_lna_gain(&phy);
         if (ret != -EIO || fake_regs[REG_CONFIG] != 0 ||
-            fake_write_counts[REG_CONFIG] != 8) {
+            fake_write_counts[REG_CONFIG] != 7 ||
+            !ad9361_calibration_state_unknown(&phy)) {
             fprintf(stderr,
-                    "RSSI LNA table skipped clock-stop retry: ret=%" PRId32
-                    " reg=0x%02x writes=%u\n", ret,
-                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG]);
+                    "RSSI LNA table performed unsafe cleanup: ret=%" PRId32
+                    " reg=0x%02x writes=%u unknown=%d\n", ret,
+                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG],
+                    ad9361_calibration_state_unknown(&phy));
             return EXIT_FAILURE;
         }
 
+        phy.calibration_state_unknown = false;
         fake_write_counts[REG_CONFIG] = 0;
         fail_write_once_reg = REG_CONFIG;
         fail_write_once_reg_occurrence = 23;
         apply_failed_write_once = true;
         ret = ad9361_rssi_write_err_tbl(&phy);
         if (ret != -EIO || fake_regs[REG_CONFIG] != 0 ||
-            fake_write_counts[REG_CONFIG] != 24) {
+            fake_write_counts[REG_CONFIG] != 23 ||
+            !ad9361_calibration_state_unknown(&phy)) {
             fprintf(stderr,
-                    "RSSI error table skipped clock-stop retry: ret=%" PRId32
-                    " reg=0x%02x writes=%u\n", ret,
-                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG]);
+                    "RSSI error table performed unsafe cleanup: ret=%" PRId32
+                    " reg=0x%02x writes=%u unknown=%d\n", ret,
+                    fake_regs[REG_CONFIG], fake_write_counts[REG_CONFIG],
+                    ad9361_calibration_state_unknown(&phy));
             return EXIT_FAILURE;
         }
         fail_write_once_reg = -1;
@@ -9212,6 +9433,7 @@ int main(void)
     {
         unsigned reads_before = read_count;
         unsigned writes_before = write_count;
+        phy.calibration_state_unknown = false;
         phy.bypass_rx_fir = true;
         phy.bypass_tx_fir = true;
         phy.rx_fir_dec = 0;

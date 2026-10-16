@@ -61,9 +61,18 @@ void no_os_udelay(uint32_t us)
 	delay_us_total += us;
 }
 
+struct no_os_time no_os_get_time(void)
+{
+	struct no_os_time now;
+
+	now.s = (unsigned int)(delay_us_total / 1000000ULL);
+	now.us = (unsigned int)(delay_us_total % 1000000ULL);
+	return now;
+}
+
 void no_os_mdelay(uint32_t ms)
 {
-    (void)ms;
+	delay_us_total += (uint64_t)ms * 1000ULL;
 }
 
 int32_t ilog2(int32_t value)
@@ -317,7 +326,8 @@ static int test_rssi_calibration_and_table_loaders_fail_closed(void)
     setup_phy(&phy, &pdata, &spi);
     read_state_alert = true;
     fail_write_reg = REG_MAX_MIXER_CALIBRATION_GAIN_INDEX;
-    if (ad9361_rssi_gain_step_calib(&phy) != -EIO || spi_write_calls != 3) {
+    if (ad9361_rssi_gain_step_calib(&phy) != -EIO || spi_write_calls != 1 ||
+        !ad9361_calibration_state_unknown(&phy)) {
         fprintf(stderr,
                 "RSSI gain calibration failure status/calls mismatch: calls=%u\n",
                 spi_write_calls);
@@ -333,8 +343,10 @@ static int test_rssi_calibration_and_table_loaders_fail_closed(void)
 
     setup_phy(&phy, &pdata, &spi);
     fail_write_reg = REG_CONFIG;
-    if (ad9361_rssi_write_err_tbl(&phy) != -EIO || spi_write_calls != 2) {
-        fprintf(stderr, "RSSI error table failure was not propagated\n");
+    if (ad9361_rssi_write_err_tbl(&phy) != -EIO || spi_write_calls != 1 ||
+        !ad9361_calibration_state_unknown(&phy)) {
+        fprintf(stderr, "RSSI error table failure was not propagated: calls=%u\n",
+                spi_write_calls);
         return -1;
     }
     return 0;
@@ -352,7 +364,8 @@ static int test_mid_table_write_failure(void)
 
     int status = ad9361_load_gt(&phy, 1301000000ULL, GT_RX1 + GT_RX2);
     if (status != -EIO || phy.current_table != NO_GAIN_TABLE ||
-        !cleanup_clock_stop_seen || table_commits != 1) {
+        cleanup_clock_stop_seen || table_commits != 1 ||
+        !ad9361_calibration_state_unknown(&phy)) {
         fprintf(stderr,
                 "mid-table failure: status=%d current_table=%u commits=%u cleanup=%d\n",
                 status, phy.current_table, table_commits,
@@ -460,7 +473,8 @@ static int test_batched_row_failure_invalidates_cache(void)
     int status = ad9361_load_gt(&phy, 1301000000ULL, GT_RX1 + GT_RX2);
     if (status != -EIO || phy.current_table != NO_GAIN_TABLE ||
         batch_row_calls != 8 || batch_commits != 7 ||
-        !cleanup_clock_stop_seen) {
+        cleanup_clock_stop_seen ||
+        !ad9361_calibration_state_unknown(&phy)) {
         fprintf(stderr,
                 "batched row failure: status=%d table=%u calls=%u commits=%u cleanup=%d\n",
                 status, phy.current_table, batch_row_calls, batch_commits,

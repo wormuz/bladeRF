@@ -69,6 +69,14 @@ LIBS                += ad936x
 
 include $(BLADERF_COMMON_DIR)/Makefile
 
+# The NIOS app and AD936x archive are both LTO objects. The NIOS LTO linker
+# plugin does not reliably extract the required archive members from this
+# archive's symbol index, leaving AD9361 APIs unresolved. Force the archive
+# members into the LTO link; --gc-sections above still removes unreferenced
+# functions and data from the final image.
+APP_LIBS := $(filter-out -lad936x,$(APP_LIBS)) \
+	-Wl,--whole-archive -lad936x -Wl,--no-whole-archive
+
 #------------------------------------------------------------------------------
 #              AD936X LIBRARY
 #------------------------------------------------------------------------------

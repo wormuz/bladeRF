@@ -11,12 +11,13 @@ entity reset_synchronizer is
     async           :   in  std_logic ;
     sync            :   out std_logic
   ) ;
+  attribute PRESERVE : boolean;
+  attribute PRESERVE of sync : signal is TRUE;
 end entity ;
 
 architecture arch of reset_synchronizer is
 
     attribute ALTERA_ATTRIBUTE  : string;
-    attribute PRESERVE          : boolean;
 
     signal reg0, reg1   : std_logic;
 
@@ -40,7 +41,6 @@ architecture arch of reset_synchronizer is
     attribute ALTERA_ATTRIBUTE of reg1  : signal is "-name SYNCHRONIZER_IDENTIFICATION ""FORCED IF ASYNCHRONOUS"" ; -name DONT_MERGE_REGISTER ON ; -name PRESERVE_REGISTER ON ; -name ADV_NETLIST_OPT_ALLOWED NEVER_ALLOW";
     attribute PRESERVE of reg0          : signal is TRUE;
     attribute PRESERVE of reg1          : signal is TRUE;
-    attribute PRESERVE of sync          : signal is TRUE;
 
 begin
 

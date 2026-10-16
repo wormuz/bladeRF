@@ -255,7 +255,7 @@ begin
         wait until rising_edge(clock) and host_irq = '1';
         read_command(clock, host_addr, host_dout, host_read, response);
         assert response = x"A1A1A1A1A1A1A1A1A1A1A1A1A1A1A143"
-            report "first committed response was modified in flight"
+            report "first committed response mismatch: " & to_hstring(response)
             severity failure;
 
         wait until rising_edge(clock) and host_irq = '1';
@@ -390,6 +390,12 @@ begin
                     wait until rising_edge(clock);
                 end loop;
                 dev_read <= '0';
+                -- The single-response host consumes each response before it
+                -- can accept the next frame. Do not launch A while the real
+                -- NIOS reply is still asserted at the host interface.
+                if host_irq = '1' then
+                    wait until host_irq = '0';
+                end if;
                 commit_response(clock, dev_addr, dev_din, dev_write,
                                 x"A1A1A143", x"A1A1A1A1",
                                 x"A1A1A1A1", x"A1A1A1A1");
