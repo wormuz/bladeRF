@@ -411,7 +411,7 @@ int main(int argc, char *argv[])
                 BLADERF_RF_REQUIRE_EPOCH_VALID |
                 (mimo ? BLADERF_RF_REQUIRE_RX_X2_HOST_DATA :
                         BLADERF_RF_REQUIRE_FIRST_HOST_DATA),
-            .timeout_ms = 1000,
+            .timeout_ms = 0,
             .require_rx_data_valid = true,
         };
         struct bladerf_rf_event final_event = {0};
@@ -420,7 +420,7 @@ int main(int argc, char *argv[])
             dev, BLADERF_CHANNEL_RX(ch), &request, &transaction_id);
         if (status == 0) {
             status = bladerf_rx_transition_wait(
-                dev, transaction_id, &final_event, 2000);
+                dev, transaction_id, &final_event, 0);
         }
         if (status != 0) {
             fprintf(stderr, "certify RX observer epoch: %s\n",
