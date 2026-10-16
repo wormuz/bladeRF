@@ -44,7 +44,8 @@ for layout in "${layouts[@]}"; do
   esac
   for fault in "${faults[@]}"; do
     echo "CASE $layout $fault"
-    BLADERF_TEST_RX_LAYOUT="$layout" \
+    LD_LIBRARY_PATH="$build_dir/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      BLADERF_TEST_RX_LAYOUT="$layout" \
       BLADERF_TEST_LIBUSB_RX_STATUS="$fault" "$binary"
   done
 done

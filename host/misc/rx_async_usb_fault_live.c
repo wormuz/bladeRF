@@ -4,6 +4,7 @@
 #include "timestamp_order.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -60,6 +61,7 @@ struct fault_test {
     atomic_bool fault_injection_armed;
     atomic_uint pre_fault_data_callbacks;
     atomic_uint post_fault_data_callbacks;
+    atomic_uint trace_callback_count;
     atomic_bool api_submit_requested;
     atomic_bool api_submit_mode;
     atomic_bool recoverable_short_mode;
@@ -166,13 +168,30 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     struct fault_test *test = user_data;
     (void)stream;
     (void)metadata;
+    const bool trace = getenv("BLADERF_TEST_RX_TRACE") != NULL;
+    const unsigned trace_index = trace
+        ? atomic_fetch_add(&test->trace_callback_count, 1) : UINT_MAX;
 
     if (num_samples == 0) {
+        if (trace && trace_index < 16) {
+            fprintf(stderr, "RX_FAULT_CALLBACK index=%u event_only samples=0\n",
+                    trace_index);
+        }
         if (samples != NULL || !consume_rf_events(test, dev)) {
             return BLADERF_STREAM_SHUTDOWN;
         }
         atomic_fetch_add(&test->event_callbacks, 1);
         return BLADERF_STREAM_REUSE_BUFFER;
+    }
+
+    if (trace && trace_index < 16) {
+        fprintf(stderr, "RX_FAULT_CALLBACK index=%u samples=%zu epoch=%u "
+                        "epoch_valid=%u expected_epoch=%u expected_ready=%u\n",
+                trace_index, num_samples,
+                metadata != NULL ? metadata->rx_epoch_id : 0,
+                metadata != NULL ? metadata->rx_epoch_id_valid : 0,
+                test->expected_epoch_id,
+                atomic_load(&test->expected_epoch_ready));
     }
 
     /* The stream is started before the RX epoch transition so USB has no
@@ -241,6 +260,11 @@ static void *rx_callback(struct bladerf *dev, struct bladerf_stream *stream,
     } else if (!atomic_load(&test->fault_seen) &&
                atomic_load(&test->pre_fault_data_callbacks) >=
                    (atomic_load(&test->short_after_valid_mode) ? 20u : 3u)) {
+        if (trace && !atomic_load(&test->fault_injection_armed)) {
+            fprintf(stderr, "RX_FAULT_CALLBACK arming fault=%s pre_fault=%u\n",
+                    test->fault_status,
+                    atomic_load(&test->pre_fault_data_callbacks));
+        }
         arm_rx_fault(test);
     }
     return samples;
@@ -370,6 +394,8 @@ int main(void)
         fprintf(stderr, "open failed: %s\n", bladerf_strerror(status));
         return 1;
     }
+    fprintf(stderr, "RX_FAULT_STAGE open_done layout=%s fault=%s\n",
+            fault_layout_name(test.layout), fault_status);
 
     status = bladerf_set_tuning_mode(test.dev, BLADERF_TUNING_MODE_HOST);
     if (status == 0) {
@@ -410,6 +436,7 @@ int main(void)
         fprintf(stderr, "RX setup failed: %s\n", bladerf_strerror(status));
         goto cleanup;
     }
+    fprintf(stderr, "RX_FAULT_STAGE config_done\n");
 
     /* Establish the event cursor before starting the callback thread. */
     {
@@ -434,6 +461,7 @@ int main(void)
         goto cleanup;
     }
     stream_thread_started = true;
+    fprintf(stderr, "RX_FAULT_STAGE stream_started\n");
 
     /* Let the backend queue USB IN transfers before arming the first epoch.
      * This is startup coordination, not an operation completion deadline. */
@@ -441,6 +469,7 @@ int main(void)
         .tv_sec = 0, .tv_nsec = 100000000,
     };
     nanosleep(&backend_startup, NULL);
+    fprintf(stderr, "RX_FAULT_STAGE transition_begin\n");
 
     const struct bladerf_rx_transition_request request = {
         .target_frequency_hz = 1835000000ULL,
@@ -452,13 +481,19 @@ int main(void)
         .epoch_settle_samples = 0,
     };
     uint32_t transaction_id = 0;
-    struct bladerf_rf_event transition_event;
+    struct bladerf_rf_event transition_event = {0};
     status = bladerf_rx_transition_begin(
         test.dev, test.transition_channel, &request, &transaction_id);
+    fprintf(stderr, "RX_FAULT_STAGE transition_submitted txn=%u status=%d\n",
+            transaction_id, status);
     if (status == 0) {
         status = bladerf_rx_transition_wait(
             test.dev, transaction_id, &transition_event, 0);
     }
+    fprintf(stderr, "RX_FAULT_STAGE transition_complete txn=%u status=%d "
+                    "event=%u epoch=%u\n",
+            transaction_id, status, transition_event.event_type,
+            transition_event.epoch_id);
     if (status != 0) {
         fprintf(stderr, "RX epoch setup failed: %s\n",
                 bladerf_strerror(status));
