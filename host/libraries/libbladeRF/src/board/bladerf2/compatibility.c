@@ -30,6 +30,7 @@ const struct version_compat_table bladerf2_fw_compat_table = {fw_compat, ARRAY_S
 
 static const struct compat fpga_compat[] = {
     /*    FPGA          requires >=        Firmware */
+    { VERSION(0, 24, 0),                VERSION(2, 6, 1) },
     { VERSION(0, 17, 1),                VERSION(2, 6, 1) },
     { VERSION(0, 16, 1),                VERSION(2, 6, 1) },
     { VERSION(0, 16, 0),                VERSION(2, 6, 0) },
