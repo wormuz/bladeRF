@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "command_uart_response_mmio.h"
+#include "command_uart_response_publish.h"
 
 #define MAX_TRACE 8
 
@@ -131,6 +132,105 @@ static bool test_frame_commit_and_retry(void)
     return true;
 }
 
+struct publish_fake {
+    uint32_t session_reads[2];
+    size_t session_read_count;
+    enum command_uart_try_publish_result write_result;
+    size_t write_count;
+    size_t disable_count;
+    size_t enable_count;
+};
+
+static uint32_t publish_fake_read_session(void *context)
+{
+    struct publish_fake *fake = context;
+    size_t index = fake->session_read_count++;
+
+    if (index >= 2) {
+        index = 1;
+    }
+    return fake->session_reads[index];
+}
+
+static enum command_uart_try_publish_result publish_fake_write(
+    void *context, uint8_t *response, uint32_t session_generation)
+{
+    struct publish_fake *fake = context;
+
+    (void)response;
+    (void)session_generation;
+    ++fake->write_count;
+    return fake->write_result;
+}
+
+static void publish_fake_set_isr(void *context, bool enabled)
+{
+    struct publish_fake *fake = context;
+
+    if (enabled) {
+        ++fake->enable_count;
+    } else {
+        ++fake->disable_count;
+    }
+}
+
+static bool test_publish_fault_and_session_recovery(void)
+{
+    uint8_t response[16] = { 0 };
+    struct command_uart_fault_state fault = { 0 };
+    struct publish_fake fake = {
+        .session_reads = { 20, 20 },
+        .write_result = COMMAND_UART_TRY_PUBLISH_BACKPRESSURE,
+    };
+    const struct command_uart_response_publish_ops ops = {
+        publish_fake_read_session,
+        publish_fake_write,
+        publish_fake_set_isr,
+        &fake,
+    };
+
+    if (command_uart_response_publish_try(&ops, &fault, response, 19) !=
+            COMMAND_UART_TRY_PUBLISH_STALE ||
+        fake.write_count != 0 || fault.latched || fake.disable_count != 0) {
+        return false;
+    }
+
+    fake.session_read_count = 0;
+    if (command_uart_response_publish_try(&ops, &fault, response, 20) !=
+            COMMAND_UART_TRY_PUBLISH_BACKPRESSURE ||
+        fake.write_count != 1 || fault.latched || fake.disable_count != 0) {
+        return false;
+    }
+
+    fake.session_read_count = 0;
+    fake.write_result = COMMAND_UART_TRY_PUBLISH_ERROR;
+    if (command_uart_response_publish_try(&ops, &fault, response, 20) !=
+            COMMAND_UART_TRY_PUBLISH_ERROR ||
+        !fault.latched || fault.session_generation != 20 ||
+        fake.disable_count != 1 || fake.enable_count != 0) {
+        return false;
+    }
+
+    if (command_uart_response_publish_recover(&ops, &fault, 20) ||
+        !fault.latched || fake.enable_count != 0 ||
+        !command_uart_response_publish_recover(&ops, &fault, 21) ||
+        fault.latched || fake.enable_count != 1) {
+        return false;
+    }
+
+    fake.session_reads[0] = 30;
+    fake.session_reads[1] = 31;
+    fake.session_read_count = 0;
+    fake.write_result = COMMAND_UART_TRY_PUBLISH_ERROR;
+    if (command_uart_response_publish_try(&ops, &fault, response, 30) !=
+            COMMAND_UART_TRY_PUBLISH_STALE ||
+        fault.latched || fake.disable_count != 1 || fake.write_count != 3) {
+        return false;
+    }
+
+    return true;
+}
+
 int main(void)
 {
     if (!test_stale_session()) {
@@ -153,7 +253,12 @@ int main(void)
         fputs("response MMIO frame packing/order or retry failed\n", stderr);
         return 1;
     }
+    if (!test_publish_fault_and_session_recovery()) {
+        fputs("response publication fault latch/session recovery failed\n",
+              stderr);
+        return 1;
+    }
 
-    puts("UART response MMIO session, backpressure, overflow, and frame commit: PASS");
+    puts("UART response MMIO publication, fault latch, and session recovery: PASS");
     return 0;
 }

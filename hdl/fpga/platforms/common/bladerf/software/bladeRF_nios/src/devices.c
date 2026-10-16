@@ -31,6 +31,7 @@
 #include "nios_axi_address_policy.h"
 #include "rfic_scheduler_policy.h"
 #include "command_uart_fault_policy.h"
+#include "command_uart_response_publish.h"
 #include "debug.h"
 #include "devices_inline.h"
 #include "fpga_version.h"
@@ -127,6 +128,25 @@ void command_uart_set_worker_busy(bool busy)
     IOWR_32DIRECT(COMMAND_UART_BASE, 16, command_uart_control_shadow);
 }
 
+static uint32_t command_uart_publish_read_session(void *context)
+{
+    (void)context;
+    return command_uart_current_session_generation();
+}
+
+static enum command_uart_try_publish_result command_uart_publish_try_write(
+    void *context, uint8_t *resp, uint32_t session_generation)
+{
+    (void)context;
+    return command_uart_write_response_try(resp, session_generation);
+}
+
+static void command_uart_publish_set_isr(void *context, bool enabled)
+{
+    (void)context;
+    command_uart_enable_isr(enabled);
+}
+
 uint32_t command_uart_current_session_generation(void)
 {
     return IORD_32DIRECT(COMMAND_UART_BASE, 24);
@@ -152,40 +172,30 @@ bool command_uart_publish_response(uint8_t *resp,
 enum command_uart_try_publish_result command_uart_try_publish_response(
     uint8_t *resp, uint32_t session_generation)
 {
-    enum command_uart_try_publish_result result;
-    const uint32_t current_generation =
-        command_uart_current_session_generation();
+    static const struct command_uart_response_publish_ops ops = {
+        .read_session_generation = command_uart_publish_read_session,
+        .try_write_response = command_uart_publish_try_write,
+        .set_isr_enabled = command_uart_publish_set_isr,
+        .context = NULL,
+    };
 
-    if (session_generation != current_generation) {
-        return COMMAND_UART_TRY_PUBLISH_STALE;
-    }
-
-    result = command_uart_write_response_try(resp, session_generation);
-    if (result == COMMAND_UART_TRY_PUBLISH_ERROR) {
-        const uint32_t generation_after_failure =
-            command_uart_current_session_generation();
-
-        if (session_generation != generation_after_failure) {
-            return COMMAND_UART_TRY_PUBLISH_STALE;
-        }
-        if (command_uart_fault_latch(&command_uart_fault,
-                                     session_generation,
-                                     generation_after_failure)) {
-            command_uart_enable_isr(false);
-        }
-    }
-    return result;
+    return command_uart_response_publish_try(
+        &ops, &command_uart_fault, resp, session_generation);
 }
 
 void command_uart_check_session_recovery(void)
 {
+    static const struct command_uart_response_publish_ops ops = {
+        .read_session_generation = command_uart_publish_read_session,
+        .try_write_response = command_uart_publish_try_write,
+        .set_isr_enabled = command_uart_publish_set_isr,
+        .context = NULL,
+    };
     const uint32_t current_generation =
         command_uart_current_session_generation();
 
-    if (command_uart_fault_recover(&command_uart_fault,
-                                   current_generation)) {
-        command_uart_enable_isr(true);
-    }
+    (void)command_uart_response_publish_recover(
+        &ops, &command_uart_fault, current_generation);
 }
 
 static void command_uart_isr(void *context)
