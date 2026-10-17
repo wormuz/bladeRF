@@ -71,7 +71,7 @@ int main(int argc, char **argv)
         (status = bladerf_set_frequency(dev, RX_CHANNEL, frequencies[0])) != 0 ||
         (status = bladerf_sync_config(dev, BLADERF_RX_X1,
                                       BLADERF_FORMAT_SC16_Q11_META,
-                                      16, 8192, 8, 1000)) != 0 ||
+                                      16, 8192, 8, 0)) != 0 ||
         (status = bladerf_enable_module(dev, RX_CHANNEL, true)) != 0) {
         fail_status("configure fastlock timing test", status);
         goto done;
