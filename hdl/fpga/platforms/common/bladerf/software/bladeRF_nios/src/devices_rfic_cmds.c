@@ -353,6 +353,8 @@ static bool _rfic_deinitialize(struct rfic_state *state,
         state->fir_enable_job_pending = false;
         state->fir_enable_resume_command = false;
         state->fir_enable_init_pair_resume = false;
+        state->fir_load_job_pending = false;
+        state->fir_load_init_pair_resume = false;
     }
 
     /* The chip is deliberately left out of hardware reset, matching
@@ -724,6 +726,10 @@ ad9361_init_ready:
                         ? BLADERF_RFIC_TXFIR_DEFAULT
                         : BLADERF_RFIC_RXFIR_DEFAULT))
                 return false;
+            if (state->fir_load_job_pending) {
+                state->init_tail_pending = true;
+                return true;
+            }
             if (state->fir_enable_job_pending) {
                 state->init_tail_pending = true;
                 return true;
@@ -2098,6 +2104,22 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
             txfir = BLADERF_RFIC_TXFIR_DEFAULT;
         }
 
+        if (init_pair && state->fir_load_init_pair_resume) {
+            if (state->fir_load_channel != channel ||
+                state->fir_load_filter != filter) {
+                state->fir_load_init_pair_resume = false;
+                RFIC_ERR("FIR load continuation command mismatch", -EIO);
+                return false;
+            }
+            state->fir_load_init_pair_resume = false;
+            state->txfir = txfir;
+            state->fir_enable_init_tx_filter = txfir;
+            state->filter_invalid[BLADERF_TX] = true;
+            if (state->init_module_index + 1 < NUM_MODULES)
+                return true;
+            return _rfic_start_init_fir_pair(state, channel, filter);
+        }
+
         if (state->fir_enable_init_pair_resume) {
             if (!init_pair || state->fir_enable_channel != channel ||
                 state->fir_enable_filter != filter) {
@@ -2149,6 +2171,20 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
         }
 
         state->filter_invalid[BLADERF_TX] = true;
+        state->fir_enable_init_tx_filter = txfir;
+        if (init_pair) {
+            int32_t status = ad9361_set_tx_fir_config_transaction_start(
+                state->phy, fir_config, &state->job_context.fir_load_job);
+
+            if (status < 0) {
+                RFIC_ERR("AD9361 TX FIR configuration start", status);
+                return false;
+            }
+            state->fir_load_job_pending = true;
+            state->fir_load_channel = channel;
+            state->fir_load_filter = filter;
+            return true;
+        }
         {
             int32_t cleanup_status = 0;
             int32_t status = ad9361_set_tx_fir_config_with_cleanup(
@@ -2162,7 +2198,6 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
                 return false;
             }
         }
-        state->fir_enable_init_tx_filter = txfir;
         if (init_pair) {
             if (state->init_module_index + 1 < NUM_MODULES) {
                 state->filter_invalid[BLADERF_TX] = true;
@@ -2194,6 +2229,22 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
         if (BLADERF_RFIC_RXFIR_CUSTOM == rxfir) {
             // custom FIR not implemented, assuming default
             rxfir = BLADERF_RFIC_RXFIR_DEFAULT;
+        }
+
+        if (init_pair && state->fir_load_init_pair_resume) {
+            if (state->fir_load_channel != channel ||
+                state->fir_load_filter != filter) {
+                state->fir_load_init_pair_resume = false;
+                RFIC_ERR("FIR load continuation command mismatch", -EIO);
+                return false;
+            }
+            state->fir_load_init_pair_resume = false;
+            state->rxfir = rxfir;
+            state->fir_enable_init_rx_filter = rxfir;
+            state->filter_invalid[BLADERF_RX] = true;
+            if (state->init_module_index + 1 < NUM_MODULES)
+                return true;
+            return _rfic_start_init_fir_pair(state, channel, filter);
         }
 
         if (state->fir_enable_init_pair_resume) {
@@ -2247,6 +2298,20 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
         }
 
         state->filter_invalid[BLADERF_RX] = true;
+        state->fir_enable_init_rx_filter = rxfir;
+        if (init_pair) {
+            int32_t status = ad9361_set_rx_fir_config_transaction_start(
+                state->phy, fir_config, &state->job_context.fir_load_job);
+
+            if (status < 0) {
+                RFIC_ERR("AD9361 RX FIR configuration start", status);
+                return false;
+            }
+            state->fir_load_job_pending = true;
+            state->fir_load_channel = channel;
+            state->fir_load_filter = filter;
+            return true;
+        }
         {
             int32_t cleanup_status = 0;
             int32_t status = ad9361_set_rx_fir_config_with_cleanup(
@@ -2260,7 +2325,6 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
                 return false;
             }
         }
-        state->fir_enable_init_rx_filter = rxfir;
         if (init_pair) {
             if (state->init_module_index + 1 < NUM_MODULES) {
                 state->filter_invalid[BLADERF_RX] = true;

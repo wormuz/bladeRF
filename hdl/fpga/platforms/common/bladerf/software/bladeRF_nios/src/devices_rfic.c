@@ -685,6 +685,32 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                  * cleanup; terminal queue retirement stays centralized. */
                 q->progress_sequence++;
                 break;
+            } else if (state.fir_load_job_pending) {
+                step_status = ad9361_fir_load_transaction_poll(
+                    state.phy, &state.job_context.fir_load_job);
+                step_status = rfic_checked_poll_status(step_status);
+                if (step_status == 1) {
+                    q->progress_sequence++;
+                    break;
+                }
+
+                rfic_command_record_cleanup_error(
+                    state.job_context.fir_load_job.cleanup_status);
+                state.fir_load_job_pending = false;
+                if (step_status < 0) {
+                    rfic_command_record_error(step_status);
+                    state.init_nested_status = step_status;
+                    state.init_nested_complete = true;
+                } else {
+                    state.fir_load_init_pair_resume = true;
+                }
+                /* job_context overlays all retained NIOS transactions.
+                 * The resumed INIT callback may start FIR-enable in the
+                 * same union, so retire the completed loader before it is
+                 * reused. */
+                memset(&state.job_context, 0, sizeof(state.job_context));
+                q->progress_sequence++;
+                break;
             } else if (state.fir_enable_job_pending) {
                 step_status = ad9361_fir_enable_transaction_poll(
                     state.phy, &state.job_context.fir_enable_job);

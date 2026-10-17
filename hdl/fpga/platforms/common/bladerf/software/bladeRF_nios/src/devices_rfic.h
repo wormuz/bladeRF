@@ -117,6 +117,7 @@ struct rfic_state {
             struct ad9361_sample_rate_transaction sample_rate_job;
             struct ad9361_rf_bandwidth_transaction bandwidth_job;
             struct ad9361_fir_enable_transaction fir_enable_job;
+            struct ad9361_fir_load_transaction fir_load_job;
             struct ad9361_rfdc_calibration_job rfdc_job;
             struct ad9361_tx_quad_calibration_transaction tx_quad_job;
         } job_context;
@@ -195,6 +196,10 @@ struct rfic_state {
     bool fir_enable_job_pending;
     bool fir_enable_resume_command;
     bool fir_enable_init_pair_resume;
+    bool fir_load_job_pending;
+    bool fir_load_init_pair_resume;
+    bladerf_channel fir_load_channel;
+    uint32_t fir_load_filter;
     bladerf_channel fir_enable_channel;
     uint32_t fir_enable_filter;
     bladerf_rfic_rxfir fir_enable_init_rx_filter;
