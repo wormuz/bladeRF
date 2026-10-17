@@ -50,10 +50,7 @@ CyU3PReturnStatus_t NuandConfigureGpif(NuandGpifConfig config)
      * resets. */
 
     if (gpif_active) {
-        status = CyU3PGpifDisable(CyTrue);
-        if (status != CY_U3P_SUCCESS) {
-            return status;
-        }
+        CyU3PGpifDisable(CyTrue);
         gpif_active = CyFalse;
     }
 

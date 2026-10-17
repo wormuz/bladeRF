@@ -829,6 +829,7 @@ void CyFxbladeRFApplnUSBEventCB (CyU3PUsbEventType_t evtype, uint16_t evdata)
 {
     int interface;
     int alt_interface;
+    CyU3PReturnStatus_t apiRetStatus;
     switch (evtype)
     {
         case CY_U3P_USB_EVENT_SETINTF:
@@ -1123,7 +1124,8 @@ void bladeRFAppThread_Entry( uint32_t input)
         } else {
             char compressed_len[11] = {0};
             char format[5] = {0};
-            if (!NuandExtractField((void*)glAutoLoad, 0x100, "FMT", format, 4) &&
+            if (!NuandExtractField((void*)glAutoLoad, 0x100, "FMT", format,
+                                   sizeof(format)) &&
                 !NuandExtractField((void*)glAutoLoad, 0x100,
                                    "ULEN", (char *)&fpga_len, 10) &&
                 !NuandExtractField((void*)glAutoLoad, 0x100,
