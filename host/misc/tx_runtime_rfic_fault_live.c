@@ -559,7 +559,9 @@ int main(void)
     feeder.metadata_format = mode_needs_tx_timestamp(mode);
     status = current_event_cursor(dev, events, &cursor);
     if (status != 0) goto cleanup;
-    bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_WARNING);
+    bladerf_log_set_verbosity(
+        getenv("BLADERF_TX_RETUNE_TRACE_EVENTS") != NULL
+            ? BLADERF_LOG_LEVEL_DEBUG : BLADERF_LOG_LEVEL_WARNING);
     status = bladerf_set_sample_rate(dev, BLADERF_CHANNEL_TX(0),
                                      tx_sample_rate, NULL);
     if (status != 0) {
