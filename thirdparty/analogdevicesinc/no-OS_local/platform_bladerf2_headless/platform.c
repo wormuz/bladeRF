@@ -91,15 +91,11 @@ void no_os_mdelay(uint32_t msecs)
 	bladerf_serviceable_delay_us((uint64_t)msecs * 1000ULL);
 }
 
-/* Return elapsed time from a free-running 64-bit Avalon timer on sys_clock.
- * This clock is intentionally independent of usleep()/alt_busy_sleep(): the
- * latter is a calibrated CPU loop and cannot be used as an operation
- * deadline. The timer snapshot makes the four 16-bit reads atomic. */
-struct no_os_time no_os_get_time(void)
+/* Return elapsed ticks from a free-running 64-bit Avalon timer on sys_clock.
+ * The timer snapshot makes the four 16-bit reads atomic. */
+uint64_t bladerf_platform_monotonic_ticks(void)
 {
     uint64_t ticks_down;
-    uint64_t ticks;
-    struct no_os_time now;
 
     IOWR_ALTERA_AVALON_TIMER_SNAP_0(RFIC_MONOTONIC_TIMER_BASE, 0);
     ticks_down = (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_0(
@@ -111,7 +107,18 @@ struct no_os_time no_os_get_time(void)
     ticks_down |= (uint64_t)IORD_ALTERA_AVALON_TIMER_SNAP_3(
                       RFIC_MONOTONIC_TIMER_BASE) << 48;
 
-    ticks = UINT64_MAX - ticks_down;
+    return UINT64_MAX - ticks_down;
+}
+
+/* Return elapsed time from a free-running 64-bit Avalon timer on sys_clock.
+ * This clock is intentionally independent of usleep()/alt_busy_sleep(): the
+ * latter is a calibrated CPU loop and cannot be used as an operation
+ * deadline. */
+struct no_os_time no_os_get_time(void)
+{
+    uint64_t ticks = bladerf_platform_monotonic_ticks();
+    struct no_os_time now;
+
     now.s = (unsigned int)(ticks / ALT_CPU_FREQ);
     now.us = (unsigned int)(((ticks % ALT_CPU_FREQ) * 1000000ULL) /
                             ALT_CPU_FREQ);

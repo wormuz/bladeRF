@@ -160,6 +160,8 @@ void udelay(unsigned long usecs);
 void mdelay(unsigned long msecs);
 void no_os_udelay(uint32_t usecs);
 void no_os_mdelay(uint32_t msecs);
+/* Raw free-running 64-bit RFIC timer ticks, for low-overhead NIOS deadlines. */
+uint64_t bladerf_platform_monotonic_ticks(void);
 /* Optional cooperative service hook used by the NIOS command loop while
  * AD9361 code waits for hardware. The hook must not mutate the active RFIC
  * transaction. */

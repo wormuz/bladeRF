@@ -27,6 +27,7 @@
 #include "devices.h"
 #include "nios_pkt_retune2.h"
 #include "i2c_status_policy.h"
+#include "i2c_deadline_policy.h"
 #include "spi_arbiter_policy.h"
 #include "nios_axi_address_policy.h"
 #include "rfic_scheduler_policy.h"
@@ -45,6 +46,7 @@ static uint8_t command_uart_control_shadow = 1;
 static struct command_uart_fault_state command_uart_fault;
 #ifdef BOARD_BLADERF_MICRO
 #include "no_os_delay.h"
+extern uint64_t bladerf_platform_monotonic_ticks(void);
 extern void bladerf_platform_service(void);
 
 static void rfic_service_safe_point(void)
@@ -585,10 +587,17 @@ void bladerf_nios_init(struct pkt_buf *pkt,
  *
  * Returns false if any phase timed out. */
 #ifdef BOARD_BLADERF_MICRO
-static bool bladerf_monotonic_deadline_expired(struct no_os_time start,
-                                                uint64_t timeout_us);
 #define BLADERF_I2C_TRANSFER_TIMEOUT_US 10000ULL
 #define BLADERF_I2C_TIMEOUT_CHECK_MASK  0xffu
+#define BLADERF_I2C_TRANSFER_TIMEOUT_TICKS \
+    (BLADERF_I2C_TRANSFER_TIMEOUT_US * (ALT_CPU_FREQ / 1000000ULL))
+
+static bool bladerf_i2c_deadline_expired(uint64_t start_ticks)
+{
+    return bladerf_i2c_deadline_expired_at(
+        bladerf_platform_monotonic_ticks(), start_ticks,
+        BLADERF_I2C_TRANSFER_TIMEOUT_TICKS);
+}
 #endif
 
 static bool i2c_complete_transfer(uint8_t check_rxack)
@@ -598,7 +607,7 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     uint32_t count;
     uint8_t status;
 #ifdef BOARD_BLADERF_MICRO
-    struct no_os_time const start = no_os_get_time();
+    uint64_t const start_ticks = bladerf_platform_monotonic_ticks();
 #endif
 
     if ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
@@ -606,8 +615,7 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
         while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
 #ifdef BOARD_BLADERF_MICRO
             if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
-                bladerf_monotonic_deadline_expired(
-                    start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+                bladerf_i2c_deadline_expired(start_ticks)) {
                 DBG("%s: timed out waiting for TIP to assert\n",
                     __FUNCTION__);
                 return false;
@@ -625,8 +633,7 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     while (status & OC_I2C_TIP) {
 #ifdef BOARD_BLADERF_MICRO
         if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
-            bladerf_monotonic_deadline_expired(
-                start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+            bladerf_i2c_deadline_expired(start_ticks)) {
             DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
             return false;
         }
@@ -657,15 +664,14 @@ static void i2c_abort_transfer(void)
 {
     uint32_t count = 0;
 #ifdef BOARD_BLADERF_MICRO
-    struct no_os_time const start = no_os_get_time();
+    uint64_t const start_ticks = bladerf_platform_monotonic_ticks();
 #endif
 
     IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STO);
     while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) != 0) {
 #ifdef BOARD_BLADERF_MICRO
         if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
-            bladerf_monotonic_deadline_expired(
-                start, BLADERF_I2C_TRANSFER_TIMEOUT_US)) {
+            bladerf_i2c_deadline_expired(start_ticks)) {
             DBG("%s: timed out issuing I2C STOP\n", __FUNCTION__);
             return;
         }
