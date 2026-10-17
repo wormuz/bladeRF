@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,7 +129,7 @@ int main(int argc, char **argv)
         goto out;
     }
     status = bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
-                                 32, block_samples, 8, 5000);
+                                 32, block_samples, 8, 0);
     if (status != 0) {
         fprintf(stderr, "sync_config: %s\n", bladerf_strerror(status));
         goto out;
@@ -151,7 +152,7 @@ int main(int argc, char **argv)
         .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
                                 BLADERF_RF_REQUIRE_ENSM_RX |
                                 BLADERF_RF_REQUIRE_EPOCH_VALID,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
         .require_rx_data_valid = true,
         .epoch_settle_samples = 0,
     };
@@ -161,7 +162,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "transition_begin: %s\n", bladerf_strerror(status));
         goto out;
     }
-    status = bladerf_rx_transition_wait(dev, transaction_id, &event, 3000);
+    status = bladerf_rx_transition_wait(dev, transaction_id, &event, 0);
     if (status != 0) {
         fprintf(stderr, "transition_wait: %s\n", bladerf_strerror(status));
         goto out;
@@ -176,7 +177,10 @@ int main(int argc, char **argv)
         meta = (struct bladerf_metadata){0};
         meta.flags = BLADERF_META_FLAG_RX_NOW;
         if (i == 0) start_ns = monotonic_ns();
-        status = bladerf_sync_rx(dev, samples, requested_count, &meta, 5000);
+        do {
+            status = bladerf_sync_rx(dev, samples, requested_count, &meta, 0);
+            if (status == BLADERF_ERR_WOULD_BLOCK) sched_yield();
+        } while (status == BLADERF_ERR_WOULD_BLOCK);
         if (status != 0 || meta.actual_count != requested_count ||
             !meta.rx_epoch_id_valid || meta.rx_epoch_id != event.epoch_id ||
             (meta.status & BLADERF_META_STATUS_OVERRUN) != 0) {
