@@ -14,11 +14,13 @@
  * 0.24.0 adds correlated primary/cleanup result detail for RFIC commands;
  * 0.25.0 adds RFIC INIT timing telemetry over the custom NIOS packet target;
  * 0.26.0 reports true worker-idle service gaps separately from worker time.
- * 0.27.0 measures effective service-hook entry gaps and execution time.
+ * 0.27.0 measures effective service-hook entry gaps and execution time;
+ * 0.28.0 includes subsequent NIOS RFIC lifecycle, cleanup propagation,
+ * ownership, and initialization fixes.
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      27
+#define FPGA_VERSION_MINOR      28
 #define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \
