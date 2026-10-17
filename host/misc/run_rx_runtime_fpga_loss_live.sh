@@ -25,9 +25,11 @@ cc -std=c11 -Wall -Wextra -Werror -O2 \
   -lbladeRF -o "$binary"
 
 if (($# == 1)); then
-  "$binary" "$1"
+  LD_LIBRARY_PATH="$build_dir/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+    "$binary" "$1"
 else
   for layout in RX1 RX2 RX_X2; do
-    "$binary" "$layout"
+    LD_LIBRARY_PATH="$build_dir/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+      "$binary" "$layout"
   done
 fi

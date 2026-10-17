@@ -51,7 +51,7 @@ int main(int argc, char **argv)
     status = bladerf_set_bandwidth(dev, transition_channel, 1500000, NULL);
     if (status != 0) goto cleanup;
     status = bladerf_sync_config(dev, layout, BLADERF_FORMAT_SC16_Q11_META,
-                                 16, 8192, 8, 1000);
+                                 16, 8192, 8, 0);
     if (status != 0) goto cleanup;
     if (enable_rx1) {
         status = bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), true);
@@ -66,7 +66,7 @@ int main(int argc, char **argv)
         .target_frequency_hz = 1835000000ULL,
         .required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID,
         .require_rx_data_valid = true,
-        .timeout_ms = 2000,
+        .timeout_ms = 0,
     };
     uint32_t transaction_id = 0;
     struct bladerf_rf_event epoch_event = {0};
@@ -74,7 +74,7 @@ int main(int argc, char **argv)
                                          &transaction_id);
     if (status != 0) goto cleanup;
     status = bladerf_rx_transition_wait(dev, transaction_id, &epoch_event,
-                                        2000);
+                                        0);
     if (status != 0 ||
         epoch_event.event_type != BLADERF_RF_EVT_RX_EPOCH_VALID) {
         fprintf(stderr, "initial epoch failed: %s event=%u\n",
@@ -101,7 +101,7 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     bool saw_fpga_loss = false;
-    for (unsigned attempt = 0; attempt < 3000 && !saw_fpga_loss; ++attempt) {
+    while (!saw_fpga_loss) {
         usleep(1000);
         uint64_t next_cursor = cursor;
         status = bladerf_rf_events_get_since(
@@ -134,11 +134,11 @@ int main(int argc, char **argv)
         layout == BLADERF_RX_X2 ? RX_SAMPLES * 2 : RX_SAMPLES;
     struct bladerf_metadata metadata = {0};
     bool saw_sync_overrun = false;
-    for (unsigned attempt = 0; attempt < 100; ++attempt) {
+    for (;;) {
         memset(&metadata, 0, sizeof(metadata));
         metadata.flags = BLADERF_META_FLAG_RX_NOW;
         status = bladerf_sync_rx(dev, samples, expected_samples,
-                                 &metadata, 100);
+                                 &metadata, 0);
         saw_sync_overrun |=
             (metadata.status & BLADERF_META_STATUS_OVERRUN) != 0;
         if (status == 0 && metadata.actual_count == expected_samples) {
