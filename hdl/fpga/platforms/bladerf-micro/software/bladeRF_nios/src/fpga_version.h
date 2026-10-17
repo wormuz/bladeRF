@@ -16,11 +16,12 @@
  * 0.26.0 reports true worker-idle service gaps separately from worker time.
  * 0.27.0 measures effective service-hook entry gaps and execution time;
  * 0.28.0 includes subsequent NIOS RFIC lifecycle, cleanup propagation,
- * ownership, and initialization fixes.
+ * ownership, and initialization fixes; 0.29.0 switches I2C deadline checks
+ * to raw monotonic ticks to avoid repeated 64-bit time conversions.
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      28
+#define FPGA_VERSION_MINOR      29
 #define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \
