@@ -23,4 +23,5 @@ cc -D_POSIX_C_SOURCE=200809L \
   -L"$build_dir/output" -Wl,-rpath,"$build_dir/output" \
   -lbladeRF -o "$binary"
 
-"$binary"
+LD_LIBRARY_PATH="$build_dir/output${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
+  "$binary"
