@@ -3626,6 +3626,17 @@ static int _bladerf_rx_transition_begin(
             &required_events_mask)) {
         return BLADERF_ERR_INVAL;
     }
+    log_debug("%s: RFDC request channel=%u target_hz=%" PRIu64
+              " requested=0x%08" PRIx32 " require_rx_data_valid=%u"
+              " normalized=0x%08" PRIx32 " target_port=%u\n",
+              __FUNCTION__, (unsigned)ch,
+              (uint64_t)request->target_frequency_hz,
+              request->required_events_mask,
+              (unsigned)request->require_rx_data_valid,
+              required_events_mask,
+              target_rx_port_map != NULL
+                  ? (unsigned)target_rx_port_map->rfic_port
+                  : UINT32_MAX);
     if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
         target_rx_port_map = _get_band_port_map_by_freq(
             ch, request->target_frequency_hz);
@@ -3641,16 +3652,32 @@ static int _bladerf_rx_transition_begin(
          * last successful calibration instead of relying on each wrapper to
          * remember the optional flag. Explicit RFDC requests still force a
          * fresh calibration below even when this history is current. */
-        if ((required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
-            bladerf2_rx_rfdc_calibration_required(
-                board_data->rx_rfdc_calibration_frequency_hz,
-                board_data->rx_rfdc_calibration_valid_mask,
-                (uint8_t)target_rx_port_map->rfic_port,
-                request->target_frequency_hz)) {
-            required_events_mask |= BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE;
-            (void)bladerf2_rf_transition_normalize_requirements(
-                required_events_mask, request->require_rx_data_valid,
-                &required_events_mask);
+        if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+            const uint8_t target_port =
+                (uint8_t)target_rx_port_map->rfic_port;
+            const uint32_t requested_events_mask = required_events_mask;
+            const bool calibration_required =
+                bladerf2_rx_rfdc_calibration_required(
+                    board_data->rx_rfdc_calibration_frequency_hz,
+                    board_data->rx_rfdc_calibration_valid_mask,
+                    target_port, request->target_frequency_hz);
+
+            if (calibration_required) {
+                required_events_mask |= BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE;
+                (void)bladerf2_rf_transition_normalize_requirements(
+                    required_events_mask, request->require_rx_data_valid,
+                    &required_events_mask);
+            }
+            log_debug("%s: RFDC gate port=%u target_hz=%" PRIu64
+                      " valid_mask=0x%02x history_hz=%" PRIu64
+                      " required=%u requested=0x%08" PRIx32
+                      " effective=0x%08" PRIx32 "\n",
+                      __FUNCTION__, (unsigned)target_port,
+                      (uint64_t)request->target_frequency_hz,
+                      board_data->rx_rfdc_calibration_valid_mask,
+                      (uint64_t)board_data->rx_rfdc_calibration_frequency_hz[
+                          target_port], (unsigned)calibration_required,
+                      requested_events_mask, required_events_mask);
         }
         if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
             rx_source_status = dev->board->get_rx_mux != NULL
@@ -4550,6 +4577,10 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                   transaction_id,
                   board_data->rf_transition_readback_frequency_hz,
                   remaining_us);
+        WITH_MUTEX(&dev->lock, {
+            bladerf2_rfic_host_log_rx_metrics(
+                dev, "before-rfdc", target_hz);
+        });
         if (remaining_us == 0) {
             return _fail_transition(dev, board_data, BLADERF_ERR_TIMEOUT,
                                     final_event);
@@ -4573,6 +4604,10 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
             bladerf2_rfic_host_fail_closed(dev);
             return _fail_transition(dev, board_data, status, final_event);
         }
+        WITH_MUTEX(&dev->lock, {
+            bladerf2_rfic_host_log_rx_metrics(
+                dev, "after-rfdc", target_hz);
+        });
         if (_deadline_expired(deadline_ns)) {
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
@@ -4590,6 +4625,11 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                 board_data->rx_rfdc_calibration_frequency_hz,
                 &board_data->rx_rfdc_calibration_valid_mask,
                 (uint8_t)target_port_map->rfic_port, target_hz);
+            log_debug("%s: RFDC history recorded port=%u frequency_hz=%" PRIu64
+                      " valid_mask=0x%02x\n", __FUNCTION__,
+                      (unsigned)target_port_map->rfic_port,
+                      (uint64_t)target_hz,
+                      board_data->rx_rfdc_calibration_valid_mask);
         });
         _emit_event(dev, board_data, BLADERF_RF_EVT_RX_RFDC_CAL_DONE,
                     BLADERF_RF_STATE_CALIBRATING, 0, 0, 0, 0,

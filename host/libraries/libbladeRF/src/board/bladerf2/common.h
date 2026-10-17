@@ -155,6 +155,14 @@ struct bladerf2_board_data {
 
     /* AD9361 PHY Handle */
     struct ad9361_rf_phy *phy;
+    /* Snapshot used by the reversible RX correction-bypass diagnostic API.
+     * Contains AD9361 QEC, RF-DC and BB-DC words plus their enable state. */
+    bool rx_corrections_bypass_saved;
+    bool rx_corrections_saved_bbdc;
+    bool rx_corrections_saved_rfdc;
+    uint8_t rx_corrections_saved_qec_mask;
+    uint8_t rx_corrections_saved_force_bits;
+    uint8_t rx_corrections_saved_regs[31];
     /* Survives PHY removal after a calibration timeout so reinitialization
      * still knows a RESETB pulse is required before touching the AD9361. */
     bool calibration_faulted;
@@ -176,6 +184,13 @@ struct bladerf2_board_data {
      * rx_async_epoch_lock. */
     bool rfic_reference_clock_known;
     bool rfic_frequency_model_known;
+
+    /* Last RX gain (dB, API scale) requested through bladerf_set_gain() per
+     * RFIC lane. A raw write to the manual-gain registers bypasses the
+     * band-dependent gain table; bladerf_set_rfic_register() compares the
+     * resulting gain with this value and warns when they differ. */
+    bool rx_gain_api_known[2];
+    int rx_gain_api_db[2];
 
     /* Bitmask of capabilities determined by version numbers */
     uint64_t capabilities;
@@ -452,6 +467,10 @@ struct bladerf2_board_data {
 
 /* Shared host/transition containment for an AD9361 calibration fault. */
 void bladerf2_rfic_host_fail_closed(struct bladerf *dev);
+/* Debug-only, read-only paired RX1/RX2 AD9361 state snapshot. */
+void bladerf2_rfic_host_log_rx_metrics(struct bladerf *dev,
+                                       const char *stage,
+                                       uint64_t target_frequency_hz);
 
 /* Internal sync-RX hook: record when the first post-epoch META samples pass
  * host validation. Optional RF transition waits may require this event before

@@ -116,6 +116,88 @@ int CALL_CONV bladerf_set_rfic_register(struct bladerf *dev,
                                         uint16_t address,
                                         uint8_t val);
 
+/** Enable or disable AD9361 RX quadrature tracking for one receive lane.
+ *
+ * The setting is retained by the AD9361 driver and restored by subsequent
+ * RF reconfiguration. This invalidates the current RX data epoch.
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_rx_qec_tracking(struct bladerf *dev,
+                                         bladerf_channel channel,
+                                         bool enable);
+
+/** Read the cached RX QEC tracking enable state for one receive lane.
+ * Returns an error if the AD9361 tracking state is not known.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_qec_tracking(struct bladerf *dev,
+                                         bladerf_channel channel,
+                                         bool *enable);
+
+/** Set AD9361 RX BB DC, RF DC and per-lane QEC tracking state together.
+ * qec_mask bit 0 controls RX1 and bit 1 controls RX2.
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_rx_tracking_config(struct bladerf *dev,
+                                            bool bbdc_enable,
+                                            bool rfdc_enable,
+                                            uint8_t qec_mask);
+
+/** Read the cached AD9361 RX tracking configuration. */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_tracking_config(struct bladerf *dev,
+                                            bool *bbdc_enable,
+                                            bool *rfdc_enable,
+                                            uint8_t *qec_mask);
+
+/** Read the latest BB-DC tracking I/Q correction words for one RX lane.
+ *
+ * AD9361 multiplexes the channel words into registers 0x1A2..0x1A5. This
+ * function selects the requested lane and toggles the readback latch in
+ * register 0x191, then restores the original 0x191 value. The returned
+ * words are raw unsigned 15-bit register values. This readback-latch
+ * operation does not change the RX signal path or invalidate its epoch.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_bbdc_tracking_words(struct bladerf *dev,
+                                                 bladerf_channel channel,
+                                                 uint16_t *i_word,
+                                                 uint16_t *q_word);
+
+/** Reversibly bypass controllable AD9361 RX correction and tracking blocks.
+ *
+ * When enabled, saves the current state, disables BB-DC/RF-DC/QEC tracking,
+ * disables phase/gain correction, zeros the active RF-DC words, and zeros
+ * the RX QEC/tracking words. The AD9361's static BB-DC calibration words
+ * are readback-only and remain applied. Calling with false restores the
+ * saved state. This changes RX data and invalidates the active RX epoch.
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_rx_corrections_bypass(struct bladerf *dev,
+                                                bool bypass);
+
+/** AD9361 BIST tone injection point. */
+typedef enum {
+    BLADERF_BIST_TONE_DISABLE = 0,
+    BLADERF_BIST_TONE_TX = 1,
+    BLADERF_BIST_TONE_RX = 2,
+} bladerf_bist_tone_mode;
+
+/** Inject an AD9361 BIST tone into the selected RFIC path.
+ *
+ * For RX injection, channel_mask bits 0..3 mask RX1-I, RX1-Q, RX2-I and
+ * RX2-Q respectively; zero enables the tone on both receive channels.
+ * Frequency values 0..3 select Fsample/32, Fsample/16, 3*Fsample/32 and
+ * Fsample/8; larger values are requested frequencies in Hz. Level is 0,
+ * 6, 12 or 18 dBFS attenuation. The change invalidates the RX data epoch.
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_bist_tone(struct bladerf *dev,
+                                    bladerf_bist_tone_mode mode,
+                                    uint32_t frequency_hz,
+                                    uint32_t level_db,
+                                    uint8_t channel_mask);
+
 /**
  * Read the RFFE control register
  *
@@ -137,6 +219,38 @@ int CALL_CONV bladerf_set_rfic_register(struct bladerf *dev,
  */
 API_EXPORT
 int CALL_CONV bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value);
+
+/** Read or set the four FPGA RX ADC IQ-correction enables (RX1 I/Q, RX2 I/Q).
+ * The mask uses bits 0..3 in that order. Changing it invalidates RX data.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev,
+                                             uint8_t *mask);
+API_EXPORT
+int CALL_CONV bladerf_set_rx_fpga_iqcor_mask(struct bladerf *dev,
+                                             uint8_t mask);
+
+/** Read or set the four FPGA RX ADC DC-filter enables (RX1 I/Q, RX2 I/Q).
+ * The mask uses bits 0..3 in that order. Changing it invalidates RX data.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_fpga_dcfilt_mask(struct bladerf *dev,
+                                              uint8_t *mask);
+API_EXPORT
+int CALL_CONV bladerf_set_rx_fpga_dcfilt_mask(struct bladerf *dev,
+                                              uint8_t mask);
+
+/** Read the four RX AXI ADC channel-control words in RX1-I, RX1-Q, RX2-I,
+ * RX2-Q order. This is read-only and does not invalidate RX data.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_fpga_adc_channel_control(
+    struct bladerf *dev, uint32_t values[4]);
+/** Enable or disable the four RX FPGA ADC output channels (RX1-I, RX1-Q,
+ * RX2-I, RX2-Q). The mask uses bits 0..3 in that order. */
+API_EXPORT
+int CALL_CONV bladerf_set_rx_fpga_adc_enable_mask(struct bladerf *dev,
+                                                   uint8_t mask);
 
 /**
  * Latched summary of one completed dwell, from the sweep-revision spectrum

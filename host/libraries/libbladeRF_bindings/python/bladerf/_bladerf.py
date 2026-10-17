@@ -1271,6 +1271,32 @@ class BladeRF:
                                                 value)
         _check_error(ret)
 
+    def get_rx_qec_tracking(self, ch):
+        enabled = ffi.new("bool *")
+        ret = libbladeRF.bladerf_get_rx_qec_tracking(self.dev[0], ch,
+                                                     enabled)
+        _check_error(ret)
+        return bool(enabled[0])
+
+    def set_rx_qec_tracking(self, ch, enabled):
+        ret = libbladeRF.bladerf_set_rx_qec_tracking(self.dev[0], ch,
+                                                     bool(enabled))
+        _check_error(ret)
+
+    def get_rx_tracking_config(self):
+        bbdc = ffi.new("bool *")
+        rfdc = ffi.new("bool *")
+        qec_mask = ffi.new("uint8_t *")
+        ret = libbladeRF.bladerf_get_rx_tracking_config(
+            self.dev[0], bbdc, rfdc, qec_mask)
+        _check_error(ret)
+        return bool(bbdc[0]), bool(rfdc[0]), int(qec_mask[0])
+
+    def set_rx_tracking_config(self, bbdc, rfdc, qec_mask):
+        ret = libbladeRF.bladerf_set_rx_tracking_config(
+            self.dev[0], bool(bbdc), bool(rfdc), qec_mask)
+        _check_error(ret)
+
     # Streaming format
 
     def interleave_stream_buffer(self, layout, format, buffer_size, samples):

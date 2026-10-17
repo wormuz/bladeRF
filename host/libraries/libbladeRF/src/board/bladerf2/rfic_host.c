@@ -121,6 +121,136 @@ void bladerf2_rfic_host_fail_closed(struct bladerf *dev)
     _rfic_host_fail_closed(dev, dev != NULL ? dev->board_data : NULL);
 }
 
+/* Read-only calibration/receive snapshot. Raw register groups are kept
+ * separate by channel so one log record can be compared directly with the
+ * other. A/C and B/C DC-offset bytes are packed across adjacent registers;
+ * retain the raw bytes here rather than implying a decoded engineering unit.
+ * This is intentionally debug-only because each sample reads 62 SPI registers. */
+static int _rfic_host_metric_read(struct bladerf *dev, uint16_t reg)
+{
+    uint64_t data = 0;
+    uint16_t address = reg | AD936X_READ | AD936X_CNT(1);
+    int status = dev->backend->ad9361_spi_read(dev, address, &data);
+
+    return status < 0 ? status : (int)((data >> 56) & 0xff);
+}
+
+void bladerf2_rfic_host_log_rx_metrics(struct bladerf *dev,
+                                       const char *stage,
+                                       uint64_t target_frequency_hz)
+{
+    static const uint16_t common_regs[] = {
+        REG_INPUT_SELECT, REG_STATE, REG_CALIBRATION_CTRL,
+        REG_AGC_CONFIG_1, REG_AGC_CONFIG_2, REG_CALIBRATION_CONFIG_1,
+        REG_DC_OFFSET_CONFIG2, REG_FORCE_BITS, REG_INVERT_BITS,
+        REG_RX_QUAD_CAL_LEVEL, REG_RX_QUAD_GAIN1, REG_RX_QUAD_GAIN2,
+        REG_BB_TRACK_CORR_WORD_I_MSB, REG_BB_TRACK_CORR_WORD_I_LSB,
+        REG_BB_TRACK_CORR_WORD_Q_MSB, REG_BB_TRACK_CORR_WORD_Q_LSB,
+    };
+    /* Actual and requested gain state, then per-lane QEC, RF DC, BB DC,
+     * RSSI, and overload readbacks. Shared A/BC RF DC bytes are repeated
+     * in each lane record to make the two records self-contained. */
+    static const uint16_t rx1_regs[] = {
+        REG_GAIN_RX1, REG_LPF_GAIN_RX1, REG_DIG_GAIN_RX1,
+        REG_RX1_MANUAL_LMT_FULL_GAIN, REG_RX1_MANUAL_LPF_GAIN,
+        REG_RX1_MANUAL_DIGITALFORCED_GAIN,
+        AD936X_REG_RX1_INPUT_A_PHASE_CORR,
+        AD936X_REG_RX1_INPUT_A_GAIN_CORR,
+        AD936X_REG_RX1_INPUT_BC_PHASE_CORR,
+        AD936X_REG_RX1_INPUT_BC_GAIN_CORR,
+        AD936X_REG_RX1_INPUT_A_Q_OFFSET,
+        AD936X_REG_RX1_INPUT_A_OFFSETS,
+        AD936X_REG_INPUT_A_OFFSETS_1,
+        AD936X_REG_RX1_INPUT_BC_Q_OFFSET,
+        AD936X_REG_RX1_INPUT_BC_OFFSETS,
+        AD936X_REG_INPUT_BC_OFFSETS_1,
+        REG_RX1_BB_DC_WORD_I_MSB, REG_RX1_BB_DC_WORD_I_LSB,
+        REG_RX1_BB_DC_WORD_Q_MSB, REG_RX1_BB_DC_WORD_Q_LSB,
+        REG_RX1_RSSI_SYMBOL, REG_RX1_RSSI_PREAMBLE, REG_OVRG_SIGS_RX1,
+    };
+    static const uint16_t rx2_regs[] = {
+        REG_GAIN_RX2, REG_LPF_GAIN_RX2, REG_DIG_GAIN_RX2,
+        REG_RX2_MANUAL_LMT_FULL_GAIN, REG_RX2_MANUAL_LPF_GAIN,
+        REG_RX2_MANUAL_DIGITALFORCED_GAIN,
+        AD936X_REG_RX2_INPUT_A_PHASE_CORR,
+        AD936X_REG_RX2_INPUT_A_GAIN_CORR,
+        AD936X_REG_RX2_INPUT_BC_PHASE_CORR,
+        AD936X_REG_RX2_INPUT_BC_GAIN_CORR,
+        AD936X_REG_RX2_INPUT_A_OFFSETS,
+        AD936X_REG_RX2_INPUT_A_I_OFFSET,
+        AD936X_REG_INPUT_A_OFFSETS_1,
+        AD936X_REG_RX2_INPUT_BC_OFFSETS,
+        AD936X_REG_RX2_INPUT_BC_I_OFFSET,
+        AD936X_REG_INPUT_BC_OFFSETS_1,
+        REG_RX2_BB_DC_WORD_I_MSB, REG_RX2_BB_DC_WORD_I_LSB,
+        REG_RX2_BB_DC_WORD_Q_MSB, REG_RX2_BB_DC_WORD_Q_LSB,
+        REG_RX2_RSSI_SYMBOL, REG_RX2_RSSI_PREAMBLE, REG_OVRG_SIGS_RX2,
+    };
+    int common[ARRAY_SIZE(common_regs)];
+    int rx1[ARRAY_SIZE(rx1_regs)];
+    int rx2[ARRAY_SIZE(rx2_regs)];
+    uint32_t rffe = 0;
+    size_t i;
+
+    if (dev == NULL || dev->board_data == NULL ||
+        ((struct bladerf2_board_data *)dev->board_data)->phy == NULL ||
+        log_get_verbosity() > BLADERF_LOG_LEVEL_DEBUG) {
+        return;
+    }
+
+    for (i = 0; i < ARRAY_SIZE(common_regs); i++) {
+        common[i] = _rfic_host_metric_read(dev, common_regs[i]);
+    }
+    for (i = 0; i < ARRAY_SIZE(rx1_regs); i++) {
+        rx1[i] = _rfic_host_metric_read(dev, rx1_regs[i]);
+        rx2[i] = _rfic_host_metric_read(dev, rx2_regs[i]);
+    }
+    if (dev->backend->rffe_control_read != NULL) {
+        (void)dev->backend->rffe_control_read(dev, &rffe);
+    }
+
+    log_debug("rfic_rx_metrics stage=%s target_hz=%" PRIu64
+              " rffe=0x%08" PRIx32
+              " input=%d state=%d cal_ctrl=%d agc1=%d agc2=%d"
+              " qec_track_cfg=0x%02x dc_track_cfg=0x%02x"
+              " force=0x%02x invert=0x%02x qec_level=%d"
+              " qec_gain1=%d qec_gain2=%d"
+              " bb_track_corr={%d,%d,%d,%d}\n",
+              stage != NULL ? stage : "unspecified", target_frequency_hz,
+              rffe, common[0], common[1], common[2], common[3], common[4],
+              common[5], common[6], common[7], common[8], common[9],
+              common[10], common[11], common[12], common[13],
+              common[14], common[15]);
+    log_debug("rfic_rx_metrics RX1 gain_idx=%d lpf_gain=%d dig_gain=%d"
+              " manual_raw={gain:%d,lpf:%d,digital:%d}"
+              " manual_idx={gain:%d,lpf:%d,digital:%d}"
+              " qec_A={phase:%d,gain:%d} qec_BC={phase:%d,gain:%d}"
+              " dc_A={%d,%d,%d} dc_BC={%d,%d,%d}"
+              " bb_dc={%d,%d,%d,%d} rssi={symbol:%d,preamble:%d}"
+              " overrange=0x%02x\n",
+              rx1[0], rx1[1], rx1[2], rx1[3], rx1[4], rx1[5],
+              rx1[3] < 0 ? -1 : rx1[3] & RX_FULL_TBL_IDX_MASK,
+              rx1[4] < 0 ? -1 : rx1[4] & RX_LPF_IDX_MASK,
+              rx1[5] < 0 ? -1 : rx1[5] & RX_DIGITAL_IDX_MASK,
+              rx1[6], rx1[7], rx1[8], rx1[9], rx1[10], rx1[11],
+              rx1[12], rx1[13], rx1[14], rx1[15], rx1[16], rx1[17],
+              rx1[18], rx1[19], rx1[20], rx1[21], rx1[22]);
+    log_debug("rfic_rx_metrics RX2 gain_idx=%d lpf_gain=%d dig_gain=%d"
+              " manual_raw={gain:%d,lpf:%d,digital:%d}"
+              " manual_idx={gain:%d,lpf:%d,digital:%d}"
+              " qec_A={phase:%d,gain:%d} qec_BC={phase:%d,gain:%d}"
+              " dc_A={%d,%d,%d} dc_BC={%d,%d,%d}"
+              " bb_dc={%d,%d,%d,%d} rssi={symbol:%d,preamble:%d}"
+              " overrange=0x%02x\n",
+              rx2[0], rx2[1], rx2[2], rx2[3], rx2[4], rx2[5],
+              rx2[3] < 0 ? -1 : rx2[3] & RX_FULL_TBL_IDX_MASK,
+              rx2[4] < 0 ? -1 : rx2[4] & RX_LPF_IDX_MASK,
+              rx2[5] < 0 ? -1 : rx2[5] & RX_DIGITAL_IDX_MASK,
+              rx2[6], rx2[7], rx2[8], rx2[9], rx2[10], rx2[11],
+              rx2[12], rx2[13], rx2[14], rx2[15], rx2[16], rx2[17],
+              rx2[18], rx2[19], rx2[20], rx2[21], rx2[22]);
+}
+
 /* Every AD9361 access in this controller must first establish that a prior
  * calibration did not leave the chip in an unknown active state. */
 #undef CHECK_AD936X
@@ -373,6 +503,11 @@ static int _rfic_host_initialize(struct bladerf *dev)
                 init_param->rx_synthesizer_frequency_hz;
             board_data->rx_rfdc_calibration_valid_mask |= 1u << port;
         }
+        log_debug("%s: RFDC init history selected_input=%" PRIu32
+                  " init_lo=%" PRIu64 " valid_mask=0x%02x\n",
+                  __FUNCTION__, port,
+                  (uint64_t)init_param->rx_synthesizer_frequency_hz,
+                  board_data->rx_rfdc_calibration_valid_mask);
     }
 
     /* ad9361_init() programs both configured operating LOs and completes its
@@ -428,6 +563,9 @@ static int _rfic_host_initialize(struct bladerf *dev)
     board_data->tx_rfic_fault_event_reported = false;
     board_data->rx_rfic_fault_event_reported = false;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    bladerf2_rfic_host_log_rx_metrics(
+        dev, "host-init-complete", phy->pdata->rx_synth_freq);
 
     bladerf2_axi_io_set_dev(NULL);
     return 0;
@@ -943,6 +1081,8 @@ static int _rfic_host_set_frequency(struct bladerf *dev,
     } else {
         lo_status = ad9361_set_rx_lo_freq(phy, frequency);
         CHECK_AD936X(lo_status);
+        bladerf2_rfic_host_log_rx_metrics(dev, "rx-frequency-set",
+                                          frequency);
     }
 
     return 0;

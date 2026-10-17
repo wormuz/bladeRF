@@ -2796,6 +2796,19 @@ int bladerf_config_gpio_write(struct bladerf *dev, uint32_t val)
     return status;
 }
 
+int bladerf_config_gpio_write_raw(struct bladerf *dev, uint32_t val)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (dev->board->config_gpio_write == NULL) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->config_gpio_write(dev, val);
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
 /******************************************************************************/
 /* Low-level SPI Flash access */
 /******************************************************************************/

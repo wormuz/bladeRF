@@ -18,6 +18,11 @@ option(BUILD_AD936X_PRINTF_DEBUG
        OFF
 )
 
+option(BLADERF_NIOS_SKIP_BBDC_CAL
+       "Diagnostic: skip AD9361 startup BB-DC calibration. Not for release."
+       OFF
+)
+
 ################################################################################
 # Paths
 ################################################################################
@@ -114,6 +119,13 @@ set_source_files_properties(
 if(BLADERF_NIOS_ABLATE_AXI_ADC)
     message(WARNING "libad936x: AXI_ADC_NOT_PRESENT - diagnostic converter build, not for release")
     target_compile_options(ad936x PRIVATE -DAXI_ADC_NOT_PRESENT)
+endif()
+
+# Diagnostic only: the BB-DC calibration words are read-only, so skipping
+# their startup calibration is the controlled way to test their effect.
+if(BLADERF_NIOS_SKIP_BBDC_CAL)
+    message(WARNING "AD9361 startup BB-DC calibration skipped: diagnostic image, not for release")
+    target_compile_options(ad936x PRIVATE -DBLADERF_NIOS_SKIP_BBDC_CAL)
 endif()
 
 if(NIOS_HAS_HARDWARE_MULTIPLY_DIVIDE)

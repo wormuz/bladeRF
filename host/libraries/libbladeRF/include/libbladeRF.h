@@ -4076,6 +4076,16 @@ int CALL_CONV bladerf_config_gpio_read(struct bladerf *dev, uint32_t *val);
 API_EXPORT
 int CALL_CONV bladerf_config_gpio_write(struct bladerf *dev, uint32_t val);
 
+/**
+ * Diagnostic raw write for experiments that change FPGA sample sources
+ * inside an already-running stream. Unlike bladerf_config_gpio_write(),
+ * this does not invalidate RX/TX stream validity. Do not use for ordinary
+ * configuration changes.
+ */
+API_EXPORT
+int CALL_CONV bladerf_config_gpio_write_raw(struct bladerf *dev,
+                                            uint32_t val);
+
 /** @} (End of FN_CONFIG_GPIO) */
 
 /**

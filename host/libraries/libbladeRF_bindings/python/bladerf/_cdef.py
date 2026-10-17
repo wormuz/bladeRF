@@ -301,6 +301,14 @@ header = """
     bladerf_correction corr, bladerf_correction_value value);
   int bladerf_get_correction(struct bladerf *dev, bladerf_channel ch,
     bladerf_correction corr, bladerf_correction_value *value);
+  int bladerf_set_rx_qec_tracking(struct bladerf *dev, bladerf_channel ch,
+    bool enable);
+  int bladerf_get_rx_qec_tracking(struct bladerf *dev, bladerf_channel ch,
+    bool *enable);
+  int bladerf_set_rx_tracking_config(struct bladerf *dev, bool bbdc_enable,
+    bool rfdc_enable, uint8_t qec_mask);
+  int bladerf_get_rx_tracking_config(struct bladerf *dev, bool *bbdc_enable,
+    bool *rfdc_enable, uint8_t *qec_mask);
   typedef enum
   {
     BLADERF_FORMAT_SC16_Q11,

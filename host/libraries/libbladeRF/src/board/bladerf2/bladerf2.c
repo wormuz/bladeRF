@@ -51,6 +51,7 @@
 
 #include "ad936x.h"
 #include "ad936x_helpers.h"
+#include "axi_adc_core.h"
 
 #include "driver/fpga_trigger.h"
 #include "driver/fx3_fw.h"
@@ -2153,6 +2154,7 @@ static int bladerf2_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_range const *range      = NULL;
+    int status;
 
     if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
         return BLADERF_ERR_WOULD_BLOCK;
@@ -2160,7 +2162,14 @@ static int bladerf2_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 
     CHECK_STATUS(dev->board->get_gain_range(dev, ch, &range));
 
-    return board_data->rfic->set_gain(dev, ch, clamp_to_range(range, gain));
+    gain = clamp_to_range(range, gain);
+    status = board_data->rfic->set_gain(dev, ch, gain);
+    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch)) {
+        board_data->rx_gain_api_known[ch >> 1] = true;
+        board_data->rx_gain_api_db[ch >> 1]    = gain;
+    }
+
+    return status;
 }
 
 static int bladerf2_get_gain_stage(struct bladerf *dev,
@@ -7319,6 +7328,242 @@ int bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value)
     return 0;
 }
 
+int bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t *mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(mask);
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        uint8_t result = 0;
+        bladerf2_axi_io_set_dev(dev);
+        for (uint8_t ch = 0; ch < 4; ++ch) {
+            uint32_t value = 0;
+            int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                       AXI_ADC_REG_CHAN_CNTRL(ch), &value);
+            if (ret < 0) {
+                bladerf2_axi_io_set_dev(NULL);
+                MUTEX_UNLOCK(__lock);
+                return errno_ad9361_to_bladerf(ret);
+            }
+            if (value & AXI_ADC_IQCOR_ENB) {
+                result |= (uint8_t)(1u << ch);
+            }
+        }
+        bladerf2_axi_io_set_dev(NULL);
+        *mask = result;
+    });
+    return 0;
+}
+
+int bladerf_set_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (mask & 0xf0) {
+        return BLADERF_ERR_INVAL;
+    }
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            bladerf2_axi_io_set_dev(dev);
+            for (uint8_t ch = 0; ch < 4; ++ch) {
+                uint32_t value = 0;
+                int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                           AXI_ADC_REG_CHAN_CNTRL(ch), &value);
+                if (ret == 0) {
+                    if (mask & (1u << ch)) {
+                        value |= AXI_ADC_IQCOR_ENB;
+                    } else {
+                        value &= ~AXI_ADC_IQCOR_ENB;
+                    }
+                    ret = axi_adc_write(board_data->phy->rx_adc,
+                                        AXI_ADC_REG_CHAN_CNTRL(ch), value);
+                }
+                if (ret < 0) {
+                    status = errno_ad9361_to_bladerf(ret);
+                    break;
+                }
+            }
+            bladerf2_axi_io_set_dev(NULL);
+        }
+    });
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return status;
+}
+
+int bladerf_get_rx_fpga_dcfilt_mask(struct bladerf *dev, uint8_t *mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(mask);
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        uint8_t result = 0;
+        bladerf2_axi_io_set_dev(dev);
+        for (uint8_t ch = 0; ch < 4; ++ch) {
+            uint32_t value = 0;
+            int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                       AXI_ADC_REG_CHAN_CNTRL(ch), &value);
+            if (ret < 0) {
+                bladerf2_axi_io_set_dev(NULL);
+                MUTEX_UNLOCK(__lock);
+                return errno_ad9361_to_bladerf(ret);
+            }
+            if (value & AXI_ADC_DCFILT_ENB) {
+                result |= (uint8_t)(1u << ch);
+            }
+        }
+        bladerf2_axi_io_set_dev(NULL);
+        *mask = result;
+    });
+    return 0;
+}
+
+int bladerf_set_rx_fpga_dcfilt_mask(struct bladerf *dev, uint8_t mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (mask & 0xf0) {
+        return BLADERF_ERR_INVAL;
+    }
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            bladerf2_axi_io_set_dev(dev);
+            for (uint8_t ch = 0; ch < 4; ++ch) {
+                uint32_t value = 0;
+                int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                           AXI_ADC_REG_CHAN_CNTRL(ch), &value);
+                if (ret == 0) {
+                    if (mask & (1u << ch)) {
+                        value |= AXI_ADC_DCFILT_ENB;
+                    } else {
+                        value &= ~AXI_ADC_DCFILT_ENB;
+                    }
+                    ret = axi_adc_write(board_data->phy->rx_adc,
+                                        AXI_ADC_REG_CHAN_CNTRL(ch), value);
+                }
+                if (ret < 0) {
+                    status = errno_ad9361_to_bladerf(ret);
+                    break;
+                }
+            }
+            bladerf2_axi_io_set_dev(NULL);
+        }
+    });
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return status;
+}
+
+int bladerf_get_rx_fpga_adc_channel_control(struct bladerf *dev,
+                                             uint32_t values[4])
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(values);
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        bladerf2_axi_io_set_dev(dev);
+        for (uint8_t ch = 0; ch < 4; ++ch) {
+            int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                       AXI_ADC_REG_CHAN_CNTRL(ch),
+                                       &values[ch]);
+            if (ret < 0) {
+                bladerf2_axi_io_set_dev(NULL);
+                MUTEX_UNLOCK(__lock);
+                return errno_ad9361_to_bladerf(ret);
+            }
+        }
+        bladerf2_axi_io_set_dev(NULL);
+    });
+    return 0;
+}
+
+int bladerf_set_rx_fpga_adc_enable_mask(struct bladerf *dev, uint8_t mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (mask & 0xf0) {
+        return BLADERF_ERR_INVAL;
+    }
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            bladerf2_axi_io_set_dev(dev);
+            for (uint8_t ch = 0; ch < 4; ++ch) {
+                uint32_t value = 0;
+                int32_t ret = axi_adc_read(board_data->phy->rx_adc,
+                                           AXI_ADC_REG_CHAN_CNTRL(ch), &value);
+                if (ret == 0) {
+                    if (mask & (1u << ch)) {
+                        value |= AXI_ADC_ENABLE;
+                    } else {
+                        value &= ~AXI_ADC_ENABLE;
+                    }
+                    ret = axi_adc_write(board_data->phy->rx_adc,
+                                        AXI_ADC_REG_CHAN_CNTRL(ch), value);
+                }
+                if (ret < 0) {
+                    status = errno_ad9361_to_bladerf(ret);
+                    break;
+                }
+            }
+            bladerf2_axi_io_set_dev(NULL);
+        }
+    });
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return status;
+}
+
 /* Bits 31:28 of the dwell status word are the analyzer version marker
  * (bladerf_core.vhd, dwell_status_word(31 downto 28) <= "0001"). Hosted
  * gateware shares the same FPGA version number as sweep but does not
@@ -7669,6 +7914,14 @@ int bladerf_set_rfic_register(struct bladerf *dev,
                 board_data->rxfir_known = false;
                 board_data->txfir_known = false;
             }
+            if (board_data->phy != NULL &&
+                (address == AD936X_REG_CALIBRATION_CONFIG_1 ||
+                 address == AD936X_REG_DC_OFFSET_CONFIG2)) {
+                /* Raw tracking-register writes bypass no-OS's cached
+                 * enable state. Require the supported tracking API to
+                 * reapply the complete register set before reporting it. */
+                board_data->phy->tracking_config_valid = false;
+            }
             status = bladerf2_set_rfic_register_reserved(dev, address, val);
         }
     });
@@ -7677,8 +7930,777 @@ int bladerf_set_rfic_register(struct bladerf *dev,
     if (status < 0) {
         log_error("%s: AD9361 register write failed: %s\n", __FUNCTION__,
                   bladerf_strerror(status));
+    } else if (status == 0 && (address == 0x109 || address == 0x10c)) {
+        /* A raw manual-gain index bypasses the band-dependent gain table
+         * (no-OS selects a different table per band, and get_gain adds the
+         * per-frequency offset), so the same index is a different gain at
+         * different frequencies. Compare the resulting API gain with the
+         * last gain requested through bladerf_set_gain() and say so, instead
+         * of leaving the lanes silently different. */
+        const bladerf_channel ch = BLADERF_CHANNEL_RX(address == 0x109 ? 0 : 1);
+        struct bladerf2_board_data *bd = dev->board_data;
+        bool known;
+        bool rx_on;
+        int wanted;
+        int actual = 0;
+
+        MUTEX_LOCK(&bd->rx_async_epoch_lock);
+        known  = bd->rx_gain_api_known[ch >> 1];
+        rx_on  = bd->rf_link_dir_on[0];
+        wanted = bd->rx_gain_api_db[ch >> 1];
+        MUTEX_UNLOCK(&bd->rx_async_epoch_lock);
+
+        /* The applied-gain readback is only meaningful while the RX path is
+         * running; otherwise the lane sits outside the RX state and reads a
+         * default. Skip the comparison then and stop trusting the old
+         * request. */
+        if (!rx_on) {
+            MUTEX_LOCK(&bd->rx_async_epoch_lock);
+            bd->rx_gain_api_known[ch >> 1] = false;
+            MUTEX_UNLOCK(&bd->rx_async_epoch_lock);
+        } else if (dev->board->get_gain(dev, ch, &actual) == 0) {
+            if (known && actual != wanted) {
+                log_warning("%s: raw write 0x%03x=0x%02x set RX%u gain to %d dB "
+                            "but the last bladerf_set_gain() request was %d dB; "
+                            "the raw index bypasses the band-dependent gain "
+                            "table\n",
+                            __FUNCTION__, address, val, (unsigned)(ch >> 1) + 1,
+                            actual, wanted);
+            } else if (!known) {
+                log_warning("%s: raw write 0x%03x=0x%02x set RX%u gain to %d dB "
+                            "without a bladerf_set_gain() request; the index "
+                            "is band-dependent\n",
+                            __FUNCTION__, address, val, (unsigned)(ch >> 1) + 1,
+                            actual);
+            }
+            MUTEX_LOCK(&bd->rx_async_epoch_lock);
+            bd->rx_gain_api_known[ch >> 1] = true;
+            bd->rx_gain_api_db[ch >> 1]    = actual;
+            MUTEX_UNLOCK(&bd->rx_async_epoch_lock);
+        }
     }
 
+    return status;
+}
+
+/* ADI's tracking-control helper rewrites REG_CALIBRATION_CONFIG_1 and
+ * unconditionally enables phase/gain correction application. Keep the
+ * explicit correction-bypass mode coherent across tracking-mask changes:
+ * no QEC lane means all QEC words are neutralized and their application is
+ * disabled; with a QEC lane selected, retain only that lane's adaptive words
+ * so a per-lane QEC experiment cannot inherit the other lane's prior state.
+ */
+static int bladerf2_apply_rx_correction_bypass_tracking_mask(
+    struct bladerf2_board_data *board_data, uint8_t qec_mask)
+{
+    static const uint16_t qec_regs[2][4] = {
+        { AD936X_REG_RX1_INPUT_A_PHASE_CORR,
+          AD936X_REG_RX1_INPUT_A_GAIN_CORR,
+          AD936X_REG_RX1_INPUT_BC_PHASE_CORR,
+          AD936X_REG_RX1_INPUT_BC_GAIN_CORR },
+        { AD936X_REG_RX2_INPUT_A_PHASE_CORR,
+          AD936X_REG_RX2_INPUT_A_GAIN_CORR,
+          AD936X_REG_RX2_INPUT_BC_PHASE_CORR,
+          AD936X_REG_RX2_INPUT_BC_GAIN_CORR }
+    };
+    struct ad9361_rf_phy *phy = board_data->phy;
+    int status = 0;
+    size_t lane, reg;
+
+    if (!board_data->rx_corrections_bypass_saved) {
+        return 0;
+    }
+    if (phy == NULL) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    for (lane = 0; lane < 2 && status == 0; lane++) {
+        if ((qec_mask & (1u << lane)) != 0) {
+            continue;
+        }
+        for (reg = 0; reg < ARRAY_SIZE(qec_regs[lane]); reg++) {
+            int adi_status = ad9361_spi_write(phy->spi,
+                                              qec_regs[lane][reg], 0);
+            if (adi_status < 0) {
+                status = errno_ad9361_to_bladerf(adi_status);
+                break;
+            }
+        }
+    }
+
+    if (status == 0 && qec_mask == 0) {
+        int cfg = ad9361_spi_read(phy->spi, AD936X_REG_CALIBRATION_CONFIG_1);
+        if (cfg < 0) {
+            status = errno_ad9361_to_bladerf(cfg);
+        } else {
+            int adi_status = ad9361_spi_write(
+                phy->spi, AD936X_REG_CALIBRATION_CONFIG_1,
+                (uint8_t)cfg & (uint8_t)~0xc0);
+            if (adi_status < 0) {
+                status = errno_ad9361_to_bladerf(adi_status);
+            }
+        }
+    }
+
+    return status;
+}
+
+int bladerf_set_rx_qec_tracking(struct bladerf *dev,
+                                bladerf_channel channel, bool enable)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (channel != BLADERF_CHANNEL_RX(0) &&
+        channel != BLADERF_CHANNEL_RX(1)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        if (status == 0) {
+            uint8_t mask = 0;
+            int adi_status = ad9361_get_rx_quad_track_mask(
+                board_data->phy, &mask);
+            if (adi_status == 0) {
+                uint8_t bit = channel == BLADERF_CHANNEL_RX(0) ? 0x01 : 0x02;
+                mask = enable ? (uint8_t)(mask | bit) :
+                                (uint8_t)(mask & (uint8_t)~bit);
+                adi_status = ad9361_set_rx_quad_track_mask(
+                    board_data->phy, mask);
+            }
+            status = adi_status < 0 ?
+                     errno_ad9361_to_bladerf(adi_status) : 0;
+            if (status == 0) {
+                status = bladerf2_apply_rx_correction_bypass_tracking_mask(
+                    board_data, mask);
+            }
+        }
+    });
+
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    if (status < 0) {
+        log_error("%s: RX QEC tracking update failed: %s\n", __FUNCTION__,
+                  bladerf_strerror(status));
+    }
+    return status;
+}
+
+int bladerf_set_rx_tracking_config(struct bladerf *dev, bool bbdc_enable,
+                                   bool rfdc_enable, uint8_t qec_mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (qec_mask & ~0x03) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        if (status == 0) {
+            int adi_status = ad9361_set_rx_tracking_config(
+                board_data->phy, bbdc_enable, rfdc_enable, qec_mask);
+            status = adi_status < 0 ?
+                     errno_ad9361_to_bladerf(adi_status) : 0;
+            if (status == 0) {
+                status = bladerf2_apply_rx_correction_bypass_tracking_mask(
+                    board_data, qec_mask);
+            }
+        }
+    });
+
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    if (status < 0) {
+        log_error("%s: RX tracking configuration failed: %s\n", __FUNCTION__,
+                  bladerf_strerror(status));
+    }
+    return status;
+}
+
+int bladerf_set_bist_tone(struct bladerf *dev,
+                          bladerf_bist_tone_mode mode,
+                          uint32_t frequency_hz, uint32_t level_db,
+                          uint8_t channel_mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    if (mode < BLADERF_BIST_TONE_DISABLE ||
+        mode > BLADERF_BIST_TONE_RX || channel_mask & ~0x0f) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    enum ad9361_bist_mode adi_mode;
+    switch (mode) {
+        case BLADERF_BIST_TONE_DISABLE:
+            adi_mode = BIST_DISABLE;
+            break;
+        case BLADERF_BIST_TONE_TX:
+            adi_mode = BIST_INJ_TX;
+            break;
+        case BLADERF_BIST_TONE_RX:
+            adi_mode = BIST_INJ_RX;
+            break;
+        default:
+            return BLADERF_ERR_INVAL;
+    }
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    int status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        if (status == 0) {
+            int adi_status = ad9361_bist_tone(
+                board_data->phy, adi_mode, frequency_hz, level_db,
+                channel_mask);
+            status = adi_status < 0 ?
+                     errno_ad9361_to_bladerf(adi_status) : 0;
+        }
+    });
+
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    return status;
+}
+
+int bladerf_get_rx_qec_tracking(struct bladerf *dev,
+                                bladerf_channel channel, bool *enable)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(enable);
+    if (channel != BLADERF_CHANNEL_RX(0) &&
+        channel != BLADERF_CHANNEL_RX(1)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    int status = 0;
+    WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        uint8_t mask = 0;
+        int adi_status = ad9361_get_rx_quad_track_mask(board_data->phy,
+                                                       &mask);
+        if (adi_status < 0) {
+            status = errno_ad9361_to_bladerf(adi_status);
+        } else {
+            uint8_t bit = channel == BLADERF_CHANNEL_RX(0) ? 0x01 : 0x02;
+            *enable = (mask & bit) != 0;
+        }
+    });
+    return status;
+}
+
+int bladerf_get_rx_tracking_config(struct bladerf *dev, bool *bbdc_enable,
+                                   bool *rfdc_enable, uint8_t *qec_mask)
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(bbdc_enable);
+    NULL_CHECK(rfdc_enable);
+    NULL_CHECK(qec_mask);
+
+    int status = 0;
+    WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        uint8_t bbdc = 0;
+        uint8_t rfdc = 0;
+        uint8_t mask = 0;
+        int adi_status = ad9361_get_rx_tracking_config(
+            board_data->phy, &bbdc, &rfdc, &mask);
+        if (adi_status < 0) {
+            status = errno_ad9361_to_bladerf(adi_status);
+        } else {
+            *bbdc_enable = bbdc != 0;
+            *rfdc_enable = rfdc != 0;
+            *qec_mask = mask;
+        }
+    });
+    return status;
+}
+
+int bladerf_get_rx_bbdc_tracking_words(struct bladerf *dev,
+                                       bladerf_channel channel,
+                                       uint16_t *i_word,
+                                       uint16_t *q_word)
+{
+    const uint8_t channel_select = 0x80;
+    const uint8_t update_words = 0x40;
+    uint8_t original = 0;
+    uint8_t control = 0;
+    uint8_t i_msb = 0, i_lsb = 0, q_msb = 0, q_lsb = 0;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(i_word);
+    NULL_CHECK(q_word);
+    if (channel != BLADERF_CHANNEL_RX(0) &&
+        channel != BLADERF_CHANNEL_RX(1)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        struct bladerf2_board_data *board_data = dev->board_data;
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+
+        int adi_status = ad9361_spi_read(
+            board_data->phy->spi, REG_BB_DC_OFFSET_FAST_SETTLE_SHIFT);
+        if (adi_status < 0) {
+            status = errno_ad9361_to_bladerf(adi_status);
+        } else {
+            original = (uint8_t)adi_status;
+            control = original & (uint8_t)~(channel_select | update_words);
+            if (channel == BLADERF_CHANNEL_RX(0)) {
+                control |= channel_select;
+            }
+
+            /* D6 must transition high to latch the selected channel's
+             * current tracking words into 0x1A2..0x1A5. */
+            adi_status = ad9361_spi_write(
+                board_data->phy->spi, REG_BB_DC_OFFSET_FAST_SETTLE_SHIFT,
+                control);
+            if (adi_status >= 0) {
+                adi_status = ad9361_spi_write(
+                    board_data->phy->spi,
+                    REG_BB_DC_OFFSET_FAST_SETTLE_SHIFT,
+                    control | update_words);
+            }
+            if (adi_status < 0) {
+                status = errno_ad9361_to_bladerf(adi_status);
+            }
+            if (status == 0) {
+                adi_status = ad9361_spi_read(
+                    board_data->phy->spi, REG_BB_TRACK_CORR_WORD_I_MSB);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    i_msb = (uint8_t)adi_status;
+                }
+            }
+            if (status == 0) {
+                adi_status = ad9361_spi_read(
+                    board_data->phy->spi, REG_BB_TRACK_CORR_WORD_I_LSB);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    i_lsb = (uint8_t)adi_status;
+                }
+            }
+            if (status == 0) {
+                adi_status = ad9361_spi_read(
+                    board_data->phy->spi, REG_BB_TRACK_CORR_WORD_Q_MSB);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    q_msb = (uint8_t)adi_status;
+                }
+            }
+            if (status == 0) {
+                adi_status = ad9361_spi_read(
+                    board_data->phy->spi, REG_BB_TRACK_CORR_WORD_Q_LSB);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    q_lsb = (uint8_t)adi_status;
+                }
+            }
+
+            /* Restore the readback mux/latch control even if a word read
+             * failed; these controls are not part of the RX data epoch. */
+            adi_status = ad9361_spi_write(
+                board_data->phy->spi, REG_BB_DC_OFFSET_FAST_SETTLE_SHIFT,
+                original);
+            if (adi_status < 0 && status == 0) {
+                status = errno_ad9361_to_bladerf(adi_status);
+            }
+        }
+    });
+
+    if (status == 0) {
+        *i_word = ((uint16_t)(i_msb & 0x7f) << 8) | i_lsb;
+        *q_word = ((uint16_t)(q_msb & 0x7f) << 8) | q_lsb;
+    }
+    return status;
+}
+
+int bladerf_set_rx_corrections_bypass(struct bladerf *dev, bool bypass)
+{
+    static const uint16_t correction_regs[] = {
+        REG_CALIBRATION_CONFIG_1,
+        AD936X_REG_RX1_INPUT_A_PHASE_CORR,
+        AD936X_REG_RX1_INPUT_A_GAIN_CORR,
+        AD936X_REG_RX2_INPUT_A_PHASE_CORR,
+        AD936X_REG_RX2_INPUT_A_GAIN_CORR,
+        AD936X_REG_RX1_INPUT_A_Q_OFFSET,
+        AD936X_REG_RX1_INPUT_A_OFFSETS,
+        AD936X_REG_INPUT_A_OFFSETS_1,
+        AD936X_REG_RX2_INPUT_A_OFFSETS,
+        AD936X_REG_RX2_INPUT_A_I_OFFSET,
+        AD936X_REG_RX1_INPUT_BC_PHASE_CORR,
+        AD936X_REG_RX1_INPUT_BC_GAIN_CORR,
+        AD936X_REG_RX2_INPUT_BC_PHASE_CORR,
+        AD936X_REG_RX2_INPUT_BC_GAIN_CORR,
+        AD936X_REG_RX1_INPUT_BC_Q_OFFSET,
+        AD936X_REG_RX1_INPUT_BC_OFFSETS,
+        AD936X_REG_INPUT_BC_OFFSETS_1,
+        AD936X_REG_RX2_INPUT_BC_OFFSETS,
+        AD936X_REG_RX2_INPUT_BC_I_OFFSET,
+        REG_RX1_BB_DC_WORD_I_MSB, REG_RX1_BB_DC_WORD_I_LSB,
+        REG_RX1_BB_DC_WORD_Q_MSB, REG_RX1_BB_DC_WORD_Q_LSB,
+        REG_RX2_BB_DC_WORD_I_MSB, REG_RX2_BB_DC_WORD_I_LSB,
+        REG_RX2_BB_DC_WORD_Q_MSB, REG_RX2_BB_DC_WORD_Q_LSB,
+        REG_BB_TRACK_CORR_WORD_I_MSB, REG_BB_TRACK_CORR_WORD_I_LSB,
+        REG_BB_TRACK_CORR_WORD_Q_MSB, REG_BB_TRACK_CORR_WORD_Q_LSB,
+    };
+    struct bladerf2_board_data *board_data;
+    struct ad9361_rf_phy *phy;
+    uint8_t saved[ARRAY_SIZE(correction_regs)];
+    bool bbdc = false, rfdc = false;
+    uint8_t saved_bbdc = 0, saved_rfdc = 0;
+    uint8_t qec_mask = 0;
+    uint8_t saved_force = 0;
+    uint32_t rx_input = AD936X_A_BALANCED;
+    bool low_band = false;
+    size_t i;
+    bool changes_started = false;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    board_data = dev->board_data;
+    if (bladerf2_rx_retune_blocks_rf_config(board_data)) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+    status = bladerf2_rx_data_invalidate(
+        dev, BLADERF_CHANNEL_RX(0), BLADERF_RF_INVALIDATE_RFIC_REG);
+    if (status != 0) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        phy = board_data->phy;
+        if (board_data->rfic_lifecycle_active || phy == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        status = bladerf2_tx_rf_config_change_begin(dev, board_data);
+        if (status != 0) {
+            MUTEX_UNLOCK(__lock);
+            return status;
+        }
+
+        if (bypass && board_data->rx_corrections_bypass_saved) {
+            status = 0;
+        } else if (!bypass && !board_data->rx_corrections_bypass_saved) {
+            status = BLADERF_ERR_INVAL;
+        } else if (bypass) {
+            for (i = 0; i < ARRAY_SIZE(correction_regs); i++) {
+                int value = ad9361_spi_read(phy->spi, correction_regs[i]);
+                if (value < 0) {
+                    status = errno_ad9361_to_bladerf(value);
+                    break;
+                }
+                saved[i] = (uint8_t)value;
+            }
+            if (status == 0) {
+                int adi_status = ad9361_get_rx_tracking_config(
+                    phy, &saved_bbdc, &saved_rfdc, &qec_mask);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    bbdc = saved_bbdc != 0;
+                    rfdc = saved_rfdc != 0;
+                }
+            }
+            if (status == 0) {
+                int value = ad9361_spi_read(phy->spi, REG_FORCE_BITS);
+                if (value < 0) {
+                    status = errno_ad9361_to_bladerf(value);
+                } else {
+                    saved_force = (uint8_t)value;
+                    int adi_status = ad9361_get_rx_rf_port_input(
+                        phy, &rx_input);
+                    if (adi_status < 0) {
+                        status = errno_ad9361_to_bladerf(adi_status);
+                    } else {
+                        low_band = rx_input != AD936X_A_BALANCED;
+                    }
+                }
+            }
+            if (status == 0) {
+                changes_started = true;
+                int adi_status = ad9361_set_rx_tracking_config(
+                    phy, false, false, 0);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                /* Disable phase/gain correction application as well as the
+                 * three tracking loops. Static BB-DC calibration words are
+                 * readback-only and cannot be neutralized through SPI. */
+                uint8_t cfg = saved[0] & (uint8_t)~0xc3;
+                int adi_status = ad9361_spi_write(
+                    phy->spi, REG_CALIBRATION_CONFIG_1, cfg);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    changes_started = true;
+                }
+            }
+            for (i = 1; status == 0 && i < ARRAY_SIZE(correction_regs); i++) {
+                uint16_t address = correction_regs[i];
+                /* The RF-DC DAC table is only writable while its force bit
+                 * is asserted; use the coherent per-channel helper below.
+                 * 0x19a..0x1a1 are readback-only BB-DC calibration words. */
+                if ((address >= AD936X_REG_RX1_INPUT_A_Q_OFFSET &&
+                     address <= AD936X_REG_RX2_INPUT_A_I_OFFSET) ||
+                    (address >= AD936X_REG_RX1_INPUT_BC_Q_OFFSET &&
+                     address <= AD936X_REG_RX2_INPUT_BC_I_OFFSET) ||
+                    (address >= REG_RX1_BB_DC_WORD_I_MSB &&
+                     address <= REG_RX2_BB_DC_WORD_Q_LSB)) {
+                    continue;
+                }
+                int adi_status = ad9361_spi_write(
+                    phy->spi, address, 0);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                status = bladerf2_set_rx_dcoff_correction(
+                    dev, BLADERF_CHANNEL_RX(0), BLADERF_CORR_DCOFF_I,
+                    0, low_band);
+                if (status == 0) status = bladerf2_set_rx_dcoff_correction(
+                    dev, BLADERF_CHANNEL_RX(0), BLADERF_CORR_DCOFF_Q,
+                    0, low_band);
+                if (status == 0) status = bladerf2_set_rx_dcoff_correction(
+                    dev, BLADERF_CHANNEL_RX(1), BLADERF_CORR_DCOFF_I,
+                    0, low_band);
+                if (status == 0) status = bladerf2_set_rx_dcoff_correction(
+                    dev, BLADERF_CHANNEL_RX(1), BLADERF_CORR_DCOFF_Q,
+                    0, low_band);
+                if (status != 0) {
+                    status = status < 0 ? status :
+                             errno_ad9361_to_bladerf(status);
+                }
+            }
+            if (status == 0) {
+                int adi_status = ad9361_set_rx_correction_application_bypass(
+                    phy, true);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                memcpy(board_data->rx_corrections_saved_regs, saved,
+                       sizeof(saved));
+                board_data->rx_corrections_saved_bbdc = bbdc;
+                board_data->rx_corrections_saved_rfdc = rfdc;
+                board_data->rx_corrections_saved_qec_mask = qec_mask;
+                board_data->rx_corrections_saved_force_bits = saved_force;
+                board_data->rx_corrections_bypass_saved = true;
+            }
+        } else {
+            memcpy(saved, board_data->rx_corrections_saved_regs,
+                   sizeof(saved));
+            /* Release forced RF-DC words, restore the saved packed tables,
+             * then put the original force state back. */
+            int current_force = ad9361_spi_read(phy->spi, REG_FORCE_BITS);
+            if (current_force < 0) {
+                status = errno_ad9361_to_bladerf(current_force);
+            } else {
+                int adi_status = ad9361_spi_write(
+                    phy->spi, REG_FORCE_BITS,
+                    (uint8_t)current_force & (uint8_t)~0xcc);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            for (i = 0; status == 0 && i < ARRAY_SIZE(correction_regs); i++) {
+                uint16_t address = correction_regs[i];
+                if ((address >= REG_RX1_BB_DC_WORD_I_MSB &&
+                     address <= REG_RX2_BB_DC_WORD_Q_LSB) ||
+                    address == REG_CALIBRATION_CONFIG_1) {
+                    continue;
+                }
+                int adi_status = ad9361_spi_write(phy->spi, address, saved[i]);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                int adi_status = ad9361_spi_write(
+                    phy->spi, REG_FORCE_BITS,
+                    board_data->rx_corrections_saved_force_bits);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                int adi_status = ad9361_spi_write(
+                    phy->spi, REG_CALIBRATION_CONFIG_1, saved[0]);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                int adi_status = ad9361_set_rx_correction_application_bypass(
+                    phy, false);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                }
+            }
+            if (status == 0) {
+                int adi_status = ad9361_set_rx_tracking_config(
+                    phy, board_data->rx_corrections_saved_bbdc,
+                    board_data->rx_corrections_saved_rfdc,
+                    board_data->rx_corrections_saved_qec_mask);
+                if (adi_status < 0) {
+                    status = errno_ad9361_to_bladerf(adi_status);
+                } else {
+                    board_data->rx_corrections_bypass_saved = false;
+                }
+            }
+        }
+
+        if (status < 0 && bypass && changes_started) {
+            int rollback_status = 0;
+            int force = ad9361_spi_read(phy->spi, REG_FORCE_BITS);
+            if (force < 0) {
+                rollback_status = force;
+            } else {
+                int rollback = ad9361_spi_write(
+                    phy->spi, REG_FORCE_BITS,
+                    (uint8_t)force & (uint8_t)~0xcc);
+                if (rollback < 0) rollback_status = rollback;
+            }
+            for (i = 0; i < ARRAY_SIZE(correction_regs); i++) {
+                uint16_t address = correction_regs[i];
+                if (address == REG_CALIBRATION_CONFIG_1 ||
+                    (address >= REG_RX1_BB_DC_WORD_I_MSB &&
+                     address <= REG_RX2_BB_DC_WORD_Q_LSB)) {
+                    continue;
+                }
+                int rollback = ad9361_spi_write(phy->spi, address, saved[i]);
+                if (rollback < 0 && rollback_status == 0) {
+                    rollback_status = rollback;
+                }
+            }
+            int force_restore = ad9361_spi_write(
+                phy->spi, REG_FORCE_BITS, saved_force);
+            if (force_restore < 0 && rollback_status == 0) {
+                rollback_status = force_restore;
+            }
+            int cfg_restore = ad9361_spi_write(
+                phy->spi, REG_CALIBRATION_CONFIG_1, saved[0]);
+            if (cfg_restore < 0 && rollback_status == 0) {
+                rollback_status = cfg_restore;
+            }
+            int bypass_restore = ad9361_set_rx_correction_application_bypass(
+                phy, true);
+            if (bypass_restore < 0 && rollback_status == 0) {
+                rollback_status = bypass_restore;
+            }
+            int rollback = ad9361_set_rx_tracking_config(
+                phy, bbdc, rfdc, qec_mask);
+            if (rollback < 0 && rollback_status == 0) {
+                rollback_status = rollback;
+            }
+            if (rollback_status < 0) {
+                ad9361_mark_calibration_state_unknown(phy);
+                status = errno_ad9361_to_bladerf(rollback_status);
+            }
+        } else if (status < 0 && !bypass && board_data->rx_corrections_bypass_saved) {
+            int rollback_status = ad9361_set_rx_tracking_config(phy, 0, 0, 0);
+            int force = ad9361_spi_read(phy->spi, REG_FORCE_BITS);
+            if (force >= 0) {
+                int force_status = ad9361_spi_write(
+                    phy->spi, REG_FORCE_BITS,
+                    (uint8_t)force & (uint8_t)~0xcc);
+                if (force_status < 0 && rollback_status == 0) {
+                    rollback_status = force_status;
+                }
+            } else if (rollback_status == 0) {
+                rollback_status = force;
+            }
+            for (i = 0; i < ARRAY_SIZE(correction_regs); i++) {
+                uint16_t address = correction_regs[i];
+                if (address == REG_CALIBRATION_CONFIG_1 ||
+                    (address >= REG_RX1_BB_DC_WORD_I_MSB &&
+                     address <= REG_RX2_BB_DC_WORD_Q_LSB)) {
+                    continue;
+                }
+                int rollback = ad9361_spi_write(phy->spi, address, 0);
+                if (rollback < 0 && rollback_status == 0) {
+                    rollback_status = rollback;
+                }
+            }
+            for (unsigned int ch = 0; ch < 2 && rollback_status == 0; ch++) {
+                rollback_status = bladerf2_set_rx_dcoff_correction(
+                    dev, BLADERF_CHANNEL_RX(ch), BLADERF_CORR_DCOFF_I,
+                    0, low_band);
+                if (rollback_status == 0) rollback_status =
+                    bladerf2_set_rx_dcoff_correction(
+                        dev, BLADERF_CHANNEL_RX(ch), BLADERF_CORR_DCOFF_Q,
+                        0, low_band);
+            }
+            if (rollback_status < 0) {
+                ad9361_mark_calibration_state_unknown(phy);
+                status = errno_ad9361_to_bladerf(rollback_status);
+            }
+        }
+    });
+
+    bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
     return status;
 }
 

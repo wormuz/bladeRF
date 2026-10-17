@@ -1838,7 +1838,22 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
         (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX ? SAMPLE_EP_OUT : SAMPLE_EP_IN;
 
     transfer = get_next_available_transfer(stream_data);
-    assert(transfer != NULL);
+    if (transfer == NULL) {
+        /* The precondition ("a transfer is available") is not guaranteed
+         * when a completion callback resubmits while another submitter has
+         * already taken the freed slot (observed live: TX callback at
+         * lusb_stream_cb, process abort here). Fail closed with an error
+         * every caller already handles by shutting the stream down, instead
+         * of aborting the whole process. */
+        log_error("%s: no transfer available: %s, num_avail %u of %u, "
+                  "stream state %d\n", __FUNCTION__,
+                  (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
+                      ? "TX" : "RX",
+                  (unsigned)stream_data->num_avail,
+                  (unsigned)stream_data->num_transfers,
+                  (int)stream->state);
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
 
     assert(bytes_per_buffer <= INT_MAX);
     libusb_fill_bulk_transfer(transfer,
