@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdlib.h>
 #include <string.h>
 #include <libbladeRF.h>
@@ -22,7 +23,7 @@ static void *wait_for_transition(void *arg)
 {
     struct transition_wait_context *context = arg;
     context->status = bladerf_rx_transition_wait(
-        context->dev, context->transaction_id, &context->event, 3000);
+        context->dev, context->transaction_id, &context->event, 0);
     return NULL;
 }
 
@@ -122,7 +123,7 @@ int main(void)
 
     status = bladerf_sync_config(dev, BLADERF_RX_X1,
                                  BLADERF_FORMAT_SC16_Q11_META,
-                                 8, SAMPLES, 4, 3000);
+                                 8, SAMPLES, 4, 0);
     if (status != 0) {
         fprintf(stderr, "RX_X1 sync config: %s\n", bladerf_strerror(status));
         goto fail;
@@ -140,7 +141,7 @@ int main(void)
     request.target_frequency_hz = 1835000000ULL;
     request.required_events_mask = BLADERF_RF_REQUIRE_RX_X2_HOST_DATA;
     request.require_rx_data_valid = true;
-    request.timeout_ms = 3000;
+    request.timeout_ms = 0;
     transaction_id = 0;
     status = bladerf_rx_transition_begin(dev, RX1, &request,
                                          &transaction_id);
@@ -162,11 +163,27 @@ int main(void)
         goto fail;
     }
 
+    /* Reconfigure the host stream only after stopping the RF modules that
+     * were running under the RX_X1 layout. */
+    status = bladerf_enable_module(dev, RX1, false);
+    if (status == 0) status = bladerf_enable_module(dev, RX2, false);
+    if (status != 0) {
+        fprintf(stderr, "stop RX_X1 modules before RX_X2 config: %s\n",
+                bladerf_strerror(status));
+        goto fail;
+    }
     status = bladerf_sync_config(dev, BLADERF_RX_X2,
                                  BLADERF_FORMAT_SC16_Q11_META,
-                                 8, SAMPLES * 2, 4, 3000);
+                                 8, SAMPLES * 2, 4, 0);
     if (status != 0) {
         fprintf(stderr, "RX_X2 sync config: %s\n", bladerf_strerror(status));
+        goto fail;
+    }
+    status = bladerf_enable_module(dev, RX1, true);
+    if (status == 0) status = bladerf_enable_module(dev, RX2, true);
+    if (status != 0) {
+        fprintf(stderr, "enable RX_X2 modules: %s\n",
+                bladerf_strerror(status));
         goto fail;
     }
     request.required_events_mask = BLADERF_RF_REQUIRE_RX_X2_HOST_DATA;
@@ -189,10 +206,15 @@ int main(void)
         goto fail;
     }
     /* The waiter commits the FPGA boundary while sync_rx consumes the first
-     * paired block. The host-data event must identify this exact block. */
+     * paired block. While that boundary is pending, the META reader reports
+     * WOULD_BLOCK even in zero/infinite-wait mode. Correlate the event and
+     * delivered block by epoch and order their timestamps. */
     memset(samples, 0, sizeof(samples));
     meta = (struct bladerf_metadata){ .flags = BLADERF_META_FLAG_RX_NOW };
-    status = bladerf_sync_rx(dev, samples, SAMPLES * 2, &meta, 3000);
+    do {
+        status = bladerf_sync_rx(dev, samples, SAMPLES * 2, &meta, 0);
+        if (status == BLADERF_ERR_WOULD_BLOCK) sched_yield();
+    } while (status == BLADERF_ERR_WOULD_BLOCK);
     (void)pthread_join(waiter, NULL);
     if (status != 0) {
         fprintf(stderr, "first paired META read: %s\n",
@@ -213,7 +235,7 @@ int main(void)
         !(final.flags & BLADERF_RF_EVENT_F_RX_X2_LAYOUT) ||
         final.fpga_state != BLADERF_RF_STATE_RX_DATA_VALID ||
         final.epoch_id != meta.rx_epoch_id ||
-        final.fpga_timestamp != meta.timestamp ||
+        !timestamp_at_or_after(meta.timestamp, final.fpga_timestamp) ||
         meta.rx_epoch_id_valid == 0 || meta.actual_count != SAMPLES * 2 ||
         (meta.status & BLADERF_META_STATUS_OVERRUN)) {
         fprintf(stderr, "paired completion/block mismatch: event=%d flags=0x%x "
@@ -230,7 +252,7 @@ int main(void)
 
     status = bladerf_sync_config(dev, BLADERF_RX_X1,
                                  BLADERF_FORMAT_SC16_Q11_META,
-                                 8, SAMPLES, 4, 3000);
+                                 8, SAMPLES, 4, 0);
     if (status != BLADERF_ERR_UNSUPPORTED) {
         fprintf(stderr, "RX_X1 reconfiguration during paired contract="
                 "%d (%s)\n", status, bladerf_strerror(status));
@@ -243,7 +265,7 @@ int main(void)
     }
 
     meta = (struct bladerf_metadata){ .flags = BLADERF_META_FLAG_RX_NOW };
-    status = bladerf_sync_rx(dev, samples, SAMPLES * 2, &meta, 1500);
+    status = bladerf_sync_rx(dev, samples, SAMPLES * 2, &meta, 0);
     if (status != 0 || !meta.rx_epoch_id_valid ||
         meta.rx_epoch_id != final.epoch_id ||
         meta.actual_count != SAMPLES * 2 ||

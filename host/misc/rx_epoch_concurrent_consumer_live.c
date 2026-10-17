@@ -1,6 +1,7 @@
 #include <libbladeRF.h>
 #include "timestamp_order.h"
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,13 +15,24 @@
 struct reader_state {
     struct bladerf *dev;
     atomic_bool running;
+    atomic_bool epoch_transition_active;
     atomic_uint blocks;
     atomic_uint would_block;
-    atomic_uint timeouts;
+    atomic_uint last_epoch_id;
     atomic_uint invalid_blocks;
     atomic_uint overruns;
     atomic_uint bad_timestamps;
+    pthread_mutex_t event_mutex;
+    pthread_cond_t event_changed;
 };
+
+static void set_epoch_transition_active(struct reader_state *state, bool active)
+{
+    pthread_mutex_lock(&state->event_mutex);
+    atomic_store(&state->epoch_transition_active, active);
+    pthread_cond_broadcast(&state->event_changed);
+    pthread_mutex_unlock(&state->event_mutex);
+}
 
 static void *reader_thread(void *arg)
 {
@@ -38,20 +50,29 @@ static void *reader_thread(void *arg)
         struct bladerf_metadata meta = {0};
         meta.flags = BLADERF_META_FLAG_RX_NOW;
         int status = bladerf_sync_rx(state->dev, samples, RX_BLOCK_SAMPLES,
-                                     &meta, 100);
+                                     &meta, 0);
         if (status == BLADERF_ERR_WOULD_BLOCK) {
             atomic_fetch_add(&state->would_block, 1);
-            /* The transition thread owns recovery. Avoid a tight retry loop
-             * while the epoch is deliberately fenced. */
-            usleep(1000);
+            /* The transition thread owns recovery. Sleep until it certifies
+             * the new epoch; do not poll or impose a retry period/deadline. */
+            pthread_mutex_lock(&state->event_mutex);
+            while (atomic_load(&state->running) &&
+                   atomic_load(&state->epoch_transition_active)) {
+                pthread_cond_wait(&state->event_changed,
+                                  &state->event_mutex);
+            }
+            pthread_mutex_unlock(&state->event_mutex);
             continue;
         }
-        if (status == BLADERF_ERR_TIMEOUT) {
-            atomic_fetch_add(&state->timeouts, 1);
-            continue;
+        if (status != 0) {
+            atomic_fetch_add(&state->invalid_blocks, 1);
+            pthread_mutex_lock(&state->event_mutex);
+            atomic_store(&state->running, false);
+            pthread_cond_broadcast(&state->event_changed);
+            pthread_mutex_unlock(&state->event_mutex);
+            break;
         }
-        if (status != 0 || !meta.rx_epoch_id_valid ||
-            meta.actual_count != RX_BLOCK_SAMPLES) {
+        if (!meta.rx_epoch_id_valid || meta.actual_count != RX_BLOCK_SAMPLES) {
             atomic_fetch_add(&state->invalid_blocks, 1);
             continue;
         }
@@ -64,7 +85,11 @@ static void *reader_thread(void *arg)
         }
         last_timestamp = meta.timestamp;
         have_last_timestamp = true;
+        atomic_store(&state->last_epoch_id, meta.rx_epoch_id);
         atomic_fetch_add(&state->blocks, 1);
+        pthread_mutex_lock(&state->event_mutex);
+        pthread_cond_broadcast(&state->event_changed);
+        pthread_mutex_unlock(&state->event_mutex);
     }
 
     free(samples);
@@ -162,7 +187,7 @@ int main(int argc, char **argv)
         dev, BLADERF_CHANNEL_RX(1), 30);
     if (status == 0) status = bladerf_sync_config(
         dev, BLADERF_RX_X2, BLADERF_FORMAT_SC16_Q11_META,
-        16, buffer_samples, 8, 1000);
+        16, buffer_samples, 8, 0);
     if (status == 0) status = bladerf_enable_module(
         dev, BLADERF_CHANNEL_RX(0), true);
     if (status == 0) status = bladerf_enable_module(
@@ -175,15 +200,29 @@ int main(int argc, char **argv)
 
     struct reader_state reader = {.dev = dev};
     atomic_init(&reader.running, true);
+    atomic_init(&reader.epoch_transition_active, true);
     atomic_init(&reader.blocks, 0);
     atomic_init(&reader.would_block, 0);
-    atomic_init(&reader.timeouts, 0);
+    atomic_init(&reader.last_epoch_id, 0);
     atomic_init(&reader.invalid_blocks, 0);
     atomic_init(&reader.overruns, 0);
     atomic_init(&reader.bad_timestamps, 0);
+    if (pthread_mutex_init(&reader.event_mutex, NULL) != 0) {
+        fprintf(stderr, "reader synchronization init failed\n");
+        bladerf_close(dev);
+        return 2;
+    }
+    if (pthread_cond_init(&reader.event_changed, NULL) != 0) {
+        fprintf(stderr, "reader condition init failed\n");
+        pthread_mutex_destroy(&reader.event_mutex);
+        bladerf_close(dev);
+        return 2;
+    }
     pthread_t thread;
     if (pthread_create(&thread, NULL, reader_thread, &reader) != 0) {
         fprintf(stderr, "pthread_create failed\n");
+        pthread_cond_destroy(&reader.event_changed);
+        pthread_mutex_destroy(&reader.event_mutex);
         bladerf_close(dev);
         return 2;
     }
@@ -191,6 +230,7 @@ int main(int argc, char **argv)
     uint64_t event_cursor = 0;
     uint32_t event_overruns = 0;
     unsigned completed = 0;
+    uint32_t final_epoch_id = 0;
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t count = 0;
     bool complete = false;
@@ -216,6 +256,7 @@ int main(int argc, char **argv)
                     atomic_load(&reader.blocks),
                     atomic_load(&reader.would_block));
         }
+        set_epoch_transition_active(&reader, true);
         status = bladerf_rx_transition_begin(
             dev, BLADERF_CHANNEL_RX(0), &request, &transaction_id);
         fprintf(stderr, "begin_done=%u status=%s txn=%u\n", i,
@@ -225,7 +266,7 @@ int main(int argc, char **argv)
                     bladerf_strerror(status));
         }
         if (status == 0) status = bladerf_rx_transition_wait(
-            dev, transaction_id, &result, 2000);
+            dev, transaction_id, &result, 0);
         fprintf(stderr, "wait_done=%u status=%s event=%u blocks=%u\n", i,
                 bladerf_strerror(status), result.event_type,
                 atomic_load(&reader.blocks));
@@ -240,6 +281,8 @@ int main(int argc, char **argv)
             status = BLADERF_ERR_UNEXPECTED;
             break;
         }
+        final_epoch_id = result.epoch_id;
+        set_epoch_transition_active(&reader, false);
         status = collect_overruns(dev, &event_cursor, &event_overruns);
         if (status != 0) break;
         if (dwell_ms != 0) {
@@ -251,22 +294,34 @@ int main(int argc, char **argv)
     }
 
 done:
-    /* Let the reader observe steady-state data after the final epoch. This
-     * is only test duration; transition validity still comes from events. */
-    usleep(250000);
+    /* Wait for a META block from the final certified epoch rather than
+     * sleeping for a guessed observation interval. */
+    if (status == 0 && completed == transitions) {
+        pthread_mutex_lock(&reader.event_mutex);
+        while (atomic_load(&reader.running) &&
+               atomic_load(&reader.last_epoch_id) != final_epoch_id) {
+            pthread_cond_wait(&reader.event_changed, &reader.event_mutex);
+        }
+        pthread_mutex_unlock(&reader.event_mutex);
+    }
+    pthread_mutex_lock(&reader.event_mutex);
     atomic_store(&reader.running, false);
+    pthread_cond_broadcast(&reader.event_changed);
+    pthread_mutex_unlock(&reader.event_mutex);
     pthread_join(thread, NULL);
     printf("RX_X2 concurrent transitions=%u/%u sample_rate=%u buffer_samples=%u dwell_ms=%u blocks=%u would_block=%u "
-           "timeouts=%u invalid_blocks=%u sync_overruns=%u "
+           "invalid_blocks=%u sync_overruns=%u "
            "event_overruns=%u bad_timestamps=%u\n",
            completed, transitions, sample_rate, buffer_samples, dwell_ms,
            atomic_load(&reader.blocks),
-           atomic_load(&reader.would_block), atomic_load(&reader.timeouts),
+           atomic_load(&reader.would_block),
            atomic_load(&reader.invalid_blocks), atomic_load(&reader.overruns),
            event_overruns, atomic_load(&reader.bad_timestamps));
     bladerf_enable_module(dev, BLADERF_CHANNEL_RX(0), false);
     bladerf_enable_module(dev, BLADERF_CHANNEL_RX(1), false);
     bladerf_close(dev);
+    pthread_cond_destroy(&reader.event_changed);
+    pthread_mutex_destroy(&reader.event_mutex);
     if (status != 0 || completed != transitions || event_overruns != 0 ||
         atomic_load(&reader.overruns) != 0 ||
         atomic_load(&reader.invalid_blocks) != 0 ||
