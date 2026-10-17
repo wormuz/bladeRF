@@ -1026,6 +1026,7 @@ int main(void)
         }
         if (strcmp(mode, "RUNTIME_TX_GATE_ABORT_FAILURE") == 0) {
             bool completion_lost_seen = false;
+            bool status_unavailable_seen = false;
             uint64_t next = scheduled_cursor;
             status = bladerf_rf_events_get_since(
                 dev, scheduled_cursor, events, BLADERF_RF_EVENT_HISTORY_SIZE,
@@ -1034,12 +1035,15 @@ int main(void)
                 for (uint32_t i = 0; i < count; ++i) {
                     completion_lost_seen |= events[i].event_type ==
                         BLADERF_RF_EVT_TX_RETUNE_COMPLETION_LOST;
+                    status_unavailable_seen |= events[i].event_type ==
+                        BLADERF_RF_EVT_TX_STATUS_UNAVAILABLE;
                 }
                 cursor = next;
             } else if (status == 0) {
                 status = BLADERF_ERR_UNEXPECTED;
             }
-            if (status == 0 && !completion_lost_seen) {
+            if (status == 0 && !completion_lost_seen &&
+                !status_unavailable_seen) {
                 status = BLADERF_ERR_UNEXPECTED;
             }
             if (status != 0) {
