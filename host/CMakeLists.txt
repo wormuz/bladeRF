@@ -7,12 +7,12 @@ project(bladeRF C)
 set(BLADERF_PROJECT_ENV_WRAPPER
     "${CMAKE_CURRENT_SOURCE_DIR}/../../sdr-scanner/tools/with-project-env"
     CACHE FILEPATH "Project environment wrapper used for the hosted A4 image")
-add_custom_target(hosted_a4_embedded
+add_custom_target(hosted_a4_embedded ALL
     COMMAND "${BLADERF_PROJECT_ENV_WRAPPER}" --check-toolchain
             "${CMAKE_CURRENT_SOURCE_DIR}/misc/rebuild_hosted_a4_embedded.sh"
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     USES_TERMINAL
-    COMMENT "Rebuilding NIOS II and the hosted A4 FPGA image")
+    COMMENT "Rebuilding NIOS II and the hosted A4 FPGA image (default build)")
 
 ################################################################################
 # Project configuration

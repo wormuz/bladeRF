@@ -42,7 +42,7 @@ This technique can be seen with the currently supported architectures:
 ## Building the Project ##
 The Quartus Prime build tools supports TCL as a scripting language which we utilize to not only create the project file, but build the system without requiring the need of the GUI. Currently, the `build_bladerf.sh` performs some environment checks, builds the NIOS BSP and software, and then kicks off TCL scripts to build the FPGA image.
 
-`cmake --build host/...` builds host software only. It does not update the NIOS program embedded in an FPGA image. For an incremental hosted A4 NIOS-only change when the fitted FPGA logic is unchanged, build the explicit `hosted_a4_embedded` target:
+`cmake --build host/...` builds host software and, by default, rebuilds the NIOS program embedded in the hosted A4 FPGA image. This requires the configured direnv/Quartus/NIOS toolchain. The `hosted_a4_embedded` target can also be invoked on its own:
 
 ```sh
 cmake --build host/build --target hosted_a4_embedded
