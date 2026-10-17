@@ -541,16 +541,19 @@ static void service_rfic_status_request_impl(void)
         goto publish_cooperative_response;
     }
 
-    /* Tokened RETUNE2 NOW callers poll the counters and completion ring
-     * while the retained fastlock worker owns the RFIC. These NIOS RAM
-     * records do not touch the PHY, so keep only their reads (and the ring's
-     * record selector writes) available during ownership. */
+    /* Read-only FPGA status PIOs, the TX gate's fail-closed controls, and
+     * NIOS-owned RETUNE2 counters/completion records do not touch the PHY.
+     * Keep those operations available while a retained fastlock worker owns
+     * the RFIC. */
     if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x32_MAGIC) {
         const uint8_t target =
             cooperative_pkt->req[NIOS_PKT_8x32_IDX_TARGET_ID];
         const bool write = (cooperative_pkt->req[NIOS_PKT_8x32_IDX_FLAGS] &
                             NIOS_PKT_8x32_FLAG_WRITE) != 0;
-        if (nios_pkt_8x32_retune2_readout_safe(target, write)) {
+        uint8_t addr = cooperative_pkt->req[NIOS_PKT_8x32_IDX_ADDR];
+        uint32_t data = 0;
+        nios_pkt_8x32_unpack(cooperative_pkt->req, NULL, NULL, NULL, &data);
+        if (nios_pkt_8x32_rfic_owner_access_safe(target, write, addr, data)) {
             pkt_8x32(cooperative_pkt);
             goto publish_cooperative_response;
         }

@@ -1076,9 +1076,13 @@ static void *rx_fault_monitor_task(void *arg)
         bool should_poll_tx = false;
         bool should_poll_tx_retune = false;
         bool should_poll_rx_retune = false;
+        bool should_poll_reference_clock = false;
         bool tx_fir_config_valid = false;
         bool tx_retune2_watch_active = false;
         bool rx_retune2_watch_active = false;
+        uint8_t tx_retune2_pending_count = 0;
+        uint8_t rx_retune2_pending_count = 0;
+        bool rfic_status_poll_allowed = false;
         uint64_t rx_retune2_watch_generation = 0;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
@@ -1149,6 +1153,8 @@ static void *rx_fault_monitor_task(void *arg)
                 board_data->rfic_reference_clock_known;
             frequency_model_fault = reference_clock_known &&
                 !board_data->rfic_frequency_model_known;
+            tx_retune2_pending_count = board_data->tx_retune2_pending_count;
+            rx_retune2_pending_count = board_data->rx_retune2_pending_count;
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             transaction_id = board_data->rf_transition_current_id;
             observed_requested_rx_lo_hz =
@@ -1186,24 +1192,31 @@ static void *rx_fault_monitor_task(void *arg)
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
                 rx_retune2_watch_active &&
                 !board_data->rf_transition_setter_active;
+            should_poll_reference_clock = (should_poll || should_poll_tx) &&
+                tx_retune2_pending_count == 0 &&
+                rx_retune2_pending_count == 0;
+            rfic_status_poll_allowed = tx_retune2_pending_count == 0 &&
+                rx_retune2_pending_count == 0;
             if (should_poll || should_poll_tx || should_poll_tx_retune ||
                 should_poll_rx_retune) {
-                if (should_poll || should_poll_tx) {
+                if (should_poll_reference_clock) {
                     _rx_fault_monitor_stage(board_data, "RFFE status");
                     rx_channel_status = dev->backend->rffe_control_read(
                         dev, &rffe_status);
                     uint32_t config_gpio = 0;
-                    reference_clock_status = dev->backend->config_gpio_read(
-                        dev, &config_gpio);
+                    const int config_gpio_status =
+                        dev->backend->config_gpio_read(dev, &config_gpio);
                     if (!reference_clock_known) {
                         reference_clock_status = BLADERF_ERR_WOULD_BLOCK;
                     }
                     if (reference_clock_status == 0 &&
+                        config_gpio_status == 0 &&
                         (config_gpio & (1u << CFG_GPIO_CLOCK_SELECT)) == 0) {
                         if ((config_gpio & (1u << CFG_GPIO_PLL_EN)) != 0) {
-                            if (rx_channel_status != 0) {
-                                reference_clock_status = rx_channel_status;
-                            } else if ((rffe_status &
+                            /* A failed RFFE read makes this sample
+                             * inconclusive; it is not evidence that the
+                             * reference PLL itself is unlocked. */
+                            if (rx_channel_status == 0 && (rffe_status &
                                         (1u << RFFE_CONTROL_ADF_MUXOUT)) == 0) {
                                 reference_clock_status = BLADERF_ERR_FPGA_OP;
                             }
@@ -1284,6 +1297,7 @@ static void *rx_fault_monitor_task(void *arg)
                     }
                 }
                 if (status == 0 && should_poll &&
+                    rfic_status_poll_allowed &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                         RF_LINK_STATUS_VERSION_2 &&
                     (rf_link_status & RF_LINK_STATUS_RX_FAULT) == 0) {
@@ -1312,6 +1326,7 @@ static void *rx_fault_monitor_task(void *arg)
                          NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK) != 0;
                 }
                 if (status == 0 && should_poll_tx &&
+                    rfic_status_poll_allowed &&
                     (rf_link_status & RF_LINK_STATUS_VERSION_MASK) ==
                         RF_LINK_STATUS_VERSION_2 &&
                     (rf_link_status & RF_LINK_STATUS_TX_FAULT) == 0) {
@@ -1818,7 +1833,8 @@ static void *rx_fault_monitor_task(void *arg)
                         (tx_retune2_watch_active &&
                          (tx_retune2_status != 0 ||
                           tx_retune2_success_status != 0)) ||
-                        !tx_rfic_status_observed) {
+                        (!tx_rfic_status_observed &&
+                         rfic_status_poll_allowed)) {
                         if (!board_data->tx_status_unavailable_reported) {
                             board_data->tx_status_unavailable_reported = true;
                             bladerf2_tx_stream_set_faulted(board_data, true);
@@ -2832,13 +2848,6 @@ static void *rx_fault_monitor_task(void *arg)
         if (!should_poll) {
             continue;
         }
-        if (test_mode != NULL &&
-            strcmp(test_mode, "RUNTIME_RX_CHANNEL_STATUS_READ_FAILURE") == 0) {
-            rx_channel_status = BLADERF_ERR_IO;
-        } else if (test_mode != NULL &&
-                   strcmp(test_mode, "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
-            rffe_status ^= (1u << RFFE_CONTROL_MIMO_RX_EN_0);
-        }
         if (reference_clock_fault || frequency_model_fault) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id,
@@ -2850,31 +2859,42 @@ static void *rx_fault_monitor_task(void *arg)
                                       : BLADERF_ERR_WOULD_BLOCK);
             continue;
         }
-        const uint8_t observed_rx_channel_mask =
-            (uint8_t)(((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
-                      (((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
-        const enum bladerf2_rx_channel_mask_observation channel_observation =
-            bladerf2_rx_channel_mask_observation(
-                rx_channel_status == 0, expected_rx_channel_mask_valid,
-                expected_rx_channel_mask, observed_rx_channel_mask);
-        if (channel_observation == BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE) {
-            const int monitor_error = rx_channel_status != 0
-                ? rx_channel_status : BLADERF_ERR_UNEXPECTED;
-            _invalidate_faulted_rx_epoch(
-                dev, transaction_id, epoch_id,
-                rx_channel_status != 0 ? (uint32_t)rx_channel_status
-                                       : expected_rx_channel_mask,
-                BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE,
-                monitor_error);
-            continue;
-        }
-        if (channel_observation == BLADERF2_RX_CHANNEL_MASK_CHANGED) {
-            _invalidate_faulted_rx_epoch(
-                dev, transaction_id, epoch_id,
-                ((uint32_t)expected_rx_channel_mask << 8) |
-                    observed_rx_channel_mask,
-                BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED, 0);
-            continue;
+        if (should_poll_reference_clock) {
+            if (test_mode != NULL && strcmp(
+                    test_mode, "RUNTIME_RX_CHANNEL_STATUS_READ_FAILURE") == 0) {
+                rx_channel_status = BLADERF_ERR_IO;
+            } else if (test_mode != NULL && strcmp(
+                           test_mode,
+                           "RUNTIME_RX_CHANNEL_MASK_CHANGED") == 0) {
+                rffe_status ^= (1u << RFFE_CONTROL_MIMO_RX_EN_0);
+            }
+            const uint8_t observed_rx_channel_mask = (uint8_t)(
+                ((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_0) & 1u) |
+                (((rffe_status >> RFFE_CONTROL_MIMO_RX_EN_1) & 1u) << 1));
+            const enum bladerf2_rx_channel_mask_observation channel_observation =
+                bladerf2_rx_channel_mask_observation(
+                    rx_channel_status == 0, expected_rx_channel_mask_valid,
+                    expected_rx_channel_mask, observed_rx_channel_mask);
+            if (channel_observation ==
+                BLADERF2_RX_CHANNEL_MASK_UNAVAILABLE) {
+                const int monitor_error = rx_channel_status != 0
+                    ? rx_channel_status : BLADERF_ERR_UNEXPECTED;
+                _invalidate_faulted_rx_epoch(
+                    dev, transaction_id, epoch_id,
+                    rx_channel_status != 0 ? (uint32_t)rx_channel_status
+                                           : expected_rx_channel_mask,
+                    BLADERF_RF_INVALIDATE_RX_CHANNEL_STATUS_UNAVAILABLE,
+                    monitor_error);
+                continue;
+            }
+            if (channel_observation == BLADERF2_RX_CHANNEL_MASK_CHANGED) {
+                _invalidate_faulted_rx_epoch(
+                    dev, transaction_id, epoch_id,
+                    ((uint32_t)expected_rx_channel_mask << 8) |
+                        observed_rx_channel_mask,
+                    BLADERF_RF_INVALIDATE_RX_CHANNEL_STATE_CHANGED, 0);
+                continue;
+            }
         }
         if (_test_runtime_rx_status_unavailable()) {
             const char *requested =

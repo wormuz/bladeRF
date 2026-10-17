@@ -470,16 +470,36 @@
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN 7u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
 
-/* These NIOS-owned counters and records remain safe to access while a
- * retained RETUNE2 operation owns the RFIC. The completion target also
- * accepts writes that select which RAM record subsequent reads observe. */
-static inline bool nios_pkt_8x32_retune2_readout_safe(uint8_t target,
-                                                       bool write)
+/* FPGA status PIOs are independent of the RFIC and remain safe while a
+ * retained RETUNE2 operation owns it. Completion-record writes only select
+ * which NIOS-owned RAM record subsequent reads observe. Gate COMPLETE and
+ * ABORT only control the FPGA TX mute state; ARM and target writes stay
+ * blocked until RFIC ownership is released. */
+static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
+                                                         bool write,
+                                                         uint8_t addr,
+                                                         uint32_t data)
 {
-    return target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION ||
-           (!write &&
-            (target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES ||
-             target == NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES));
+    if (target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION) {
+        return true;
+    }
+    if (target == NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE && write) {
+        return data == 0 &&
+            (addr == NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE ||
+             addr == NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+    }
+    if (write) {
+        return false;
+    }
+    if (target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES ||
+        target == NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES ||
+        target == NIOS_PKT_8x32_TARGET_RF_LINK_STATUS ||
+        target == NIOS_PKT_8x32_TARGET_LOSS_COUNTERS ||
+        target == NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS) {
+        return true;
+    }
+    return target == NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE &&
+           addr == NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS;
 }
 
 /* Current command-link session generation captured for each NIOS packet.

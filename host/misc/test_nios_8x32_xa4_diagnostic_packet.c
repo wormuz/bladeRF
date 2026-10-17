@@ -198,21 +198,41 @@ static int check_single_register_write_rejected(uint8_t target, uint8_t addr)
 
 int main(void)
 {
-    if (!nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, false) ||
-        !nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, false) ||
-        !nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, false) ||
-        !nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, true) ||
-        nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, true) ||
-        nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, true) ||
-        nios_pkt_8x32_retune2_readout_safe(
-            NIOS_PKT_8x32_TARGET_CONTROL, false)) {
-        fputs("RETUNE2 completion polling access policy mismatch\n", stderr);
+    if (!nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION, true, 0, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES, true, 0, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES, true, 0, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_CONTROL, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RF_LINK_STATUS, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, false, 3, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, false, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, false,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, true,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, true,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, true,
+            NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RFFE_CSR, false, 0, 0)) {
+        fputs("RFIC-owner 8x32 access policy mismatch\n", stderr);
         return 1;
     }
 
