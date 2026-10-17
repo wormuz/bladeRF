@@ -53,7 +53,7 @@
 #endif
 #define BUFFER_SIZE 8192u
 #define NUM_XFERS   8u
-#define TIMEOUT_MS  2000u
+#define TIMEOUT_MS  0u
 
 #define BURST_SAMPLES 8192u
 #define TONE_PERIOD   32u
@@ -160,6 +160,57 @@ static int check_rx_stream_overrun_events(struct bladerf *dev,
     return 0;
 }
 
+/* A sync RX read may report WOULD_BLOCK once after it consumes a META slot
+ * that the epoch parser correctly withheld. Keep retrying without a wall
+ * clock limit, but stop if the certified observer epoch itself was revoked. */
+static int check_rx_observer_epoch(struct bladerf *dev,
+                                   uint64_t after_sequence,
+                                   uint8_t observer_epoch_id)
+{
+    struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
+    uint32_t count = 0;
+    uint64_t next_sequence = after_sequence;
+    bool complete = false;
+    bool epoch_valid_seen = false;
+    int status = bladerf_rf_events_get_since(
+        dev, after_sequence, events, BLADERF_RF_EVENT_HISTORY_SIZE,
+        &count, &next_sequence, &complete);
+
+    if (status != 0 || !complete) {
+        fprintf(stderr, "RX observer event history incomplete: %s\n",
+                bladerf_strerror(status != 0 ? status : BLADERF_ERR_MEM));
+        return status != 0 ? status : BLADERF_ERR_MEM;
+    }
+
+    for (uint32_t i = 0; i < count; ++i) {
+        const struct bladerf_rf_event *event = &events[i];
+        if (event->epoch_id != observer_epoch_id) {
+            continue;
+        }
+        if (event->event_type == BLADERF_RF_EVT_RX_EPOCH_VALID) {
+            epoch_valid_seen = true;
+        } else if (epoch_valid_seen &&
+                   (event->event_type == BLADERF_RF_EVT_RX_EPOCH_INVALID ||
+                    event->event_type == BLADERF_RF_EVT_RX_DATA_INVALIDATED ||
+                    event->event_type == BLADERF_RF_EVT_RX_STREAM_OVERRUN ||
+                    event->event_type == BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED ||
+                    event->event_type == BLADERF_RF_EVT_RX_RETUNE_FAILED ||
+                    event->event_type == BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE)) {
+            fprintf(stderr, "RX observer epoch %u revoked by event type=%u error=%d\n",
+                    observer_epoch_id, event->event_type, event->error_code);
+            return event->error_code != 0 ? event->error_code
+                                          : BLADERF_ERR_UNEXPECTED;
+        }
+    }
+
+    if (!epoch_valid_seen) {
+        fprintf(stderr, "RX observer epoch %u has no durable valid event\n",
+                observer_epoch_id);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
+}
+
 static void dump_recent_rf_events(struct bladerf *dev)
 {
     struct bladerf_rf_event events[BLADERF_RF_EVENT_HISTORY_SIZE];
@@ -214,6 +265,7 @@ int main(int argc, char *argv[])
     bladerf_timestamp search_start_ts;
     bool overrun_seen  = false;
     uint8_t observer_epoch_id = 0;
+    bladerf_timestamp observer_first_valid_timestamp = 0;
     uint64_t observer_event_cursor = 0;
     bool burst_found    = false;
     unsigned int bursts_found_count = 0;
@@ -479,10 +531,54 @@ int main(int argc, char *argv[])
             goto out_disable_tx;
         }
         observer_epoch_id = final_event.epoch_id;
+        observer_first_valid_timestamp = final_event.fpga_timestamp;
         printf("rx_observer_epoch=%u first_valid_timestamp=%llu\n",
                final_event.epoch_id,
                (unsigned long long)final_event.fpga_timestamp);
     }
+
+    /* The transition event certifies the hardware boundary, but the sync
+     * parser must also consume a complete packet from that epoch before TX
+     * starts. This proves the observer path is live and prevents a later
+     * WOULD_BLOCK from being mistaken for a BIST failure. timeout_ms=0 keeps
+     * the operation unbounded, as required by this probe. */
+    memset(&rx_meta, 0, sizeof(rx_meta));
+    rx_meta.flags = BLADERF_META_FLAG_RX_NOW;
+    for (;;) {
+        status = bladerf_sync_rx(dev, rx_buf,
+                                 BUFFER_SIZE * samples_per_frame, &rx_meta, 0);
+        if (status != BLADERF_ERR_WOULD_BLOCK) {
+            break;
+        }
+        status = check_rx_observer_epoch(
+            dev, observer_event_cursor, observer_epoch_id);
+        if (status != 0) {
+            goto out_disable_tx;
+        }
+    }
+    if (status != 0) {
+        fprintf(stderr, "prime RX observer stream: %s\n",
+                bladerf_strerror(status));
+        goto out_disable_tx;
+    }
+    if (rx_meta.actual_count != BUFFER_SIZE * samples_per_frame ||
+        !rx_meta.rx_epoch_id_valid ||
+        rx_meta.rx_epoch_id != observer_epoch_id ||
+        timestamp_strictly_after(observer_first_valid_timestamp,
+                                  rx_meta.timestamp) ||
+        (rx_meta.status & BLADERF_META_STATUS_OVERRUN)) {
+        fprintf(stderr, "invalid priming RX block: count=%u epoch=%u/%u "
+                "valid=%u timestamp=%llu first_valid=%llu status=0x%x\n",
+                rx_meta.actual_count, rx_meta.rx_epoch_id,
+                observer_epoch_id, rx_meta.rx_epoch_id_valid,
+                (unsigned long long)rx_meta.timestamp,
+                (unsigned long long)observer_first_valid_timestamp,
+                rx_meta.status);
+        goto out_disable_tx;
+    }
+    printf("rx_observer_primed timestamp=%llu epoch=%u count=%u\n",
+           (unsigned long long)rx_meta.timestamp, rx_meta.rx_epoch_id,
+           rx_meta.actual_count);
 
     status = bladerf_get_timestamp(dev, BLADERF_RX, &ts_rx0);
     if (status != 0) {
@@ -538,7 +634,7 @@ int main(int argc, char *argv[])
         for (k = 0; k < nbursts; k++) {
             fprintf(stderr, "TX_PROBE before sync_tx burst=%u\n", k);
             status = bladerf_sync_tx(dev, tx_buf, BURST_SAMPLES * samples_per_frame,
-                                     &tx_meta[k], 5000);
+                                     &tx_meta[k], 0);
             fprintf(stderr, "TX_PROBE after sync_tx burst=%u status=%d\n",
                     k, status);
             if (status != 0) {
@@ -614,6 +710,19 @@ int main(int argc, char *argv[])
                                      &rx_meta, TIMEOUT_MS);
             fprintf(stderr, "TX_PROBE after sync_rx status=%d ts=%llu\n",
                     status, (unsigned long long)rx_meta.timestamp);
+            while (status == BLADERF_ERR_WOULD_BLOCK) {
+                status = check_rx_observer_epoch(
+                    dev, observer_event_cursor, observer_epoch_id);
+                if (status != 0) {
+                    break;
+                }
+                status = bladerf_sync_rx(
+                    dev, rx_buf, BUFFER_SIZE * samples_per_frame,
+                    &rx_meta, TIMEOUT_MS);
+                fprintf(stderr,
+                        "TX_PROBE retry sync_rx status=%d ts=%llu\n",
+                        status, (unsigned long long)rx_meta.timestamp);
+            }
             if (status != 0) {
                 fprintf(stderr, "sync_rx: %s\n", bladerf_strerror(status));
                 break;
