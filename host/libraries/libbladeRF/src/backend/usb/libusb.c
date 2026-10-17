@@ -144,6 +144,7 @@ typedef enum {
 struct lusb_stream_data {
     size_t num_transfers;               /* Total # of allocated transfers */
     size_t num_avail;                   /* # of currently available transfers */
+    size_t cb_active;                   /* TX completion callbacks that have freed a transfer and still intend to reuse it */
     size_t i;                           /* Index to next transfer */
     struct libusb_transfer **transfers; /* Array of transfer metadata */
     transfer_status *transfer_status;   /* Status of each transfer */
@@ -1347,6 +1348,28 @@ static int test_libusb_error_from_env(const char *name)
 }
 #endif
 
+/* Counterpart of the cb_active increment at the top of lusb_stream_cb(): the
+ * callback no longer holds a freed transfer in reserve, so wake any submitter
+ * that was kept waiting for it. Caller holds stream->lock. */
+static inline void lusb_cb_release(struct bladerf_stream *stream,
+                                   struct lusb_stream_data *stream_data)
+{
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        if (stream_data->cb_active != 0) {
+            stream_data->cb_active--;
+        }
+        COND_BROADCAST(&stream->can_submit_buffer);
+    }
+}
+
+/* Transfers a submitter may take: those not reserved by running TX callbacks. */
+static inline size_t lusb_submittable(const struct lusb_stream_data *stream_data)
+{
+    return stream_data->num_avail > stream_data->cb_active
+               ? stream_data->num_avail - stream_data->cb_active
+               : 0;
+}
+
 static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
 {
     struct bladerf_stream *stream = transfer->user_data;
@@ -1362,6 +1385,16 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     memset(&metadata, 0, sizeof(metadata));
 
     MUTEX_LOCK(&stream->lock);
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
+        /* This completion is about to free a transfer it intends to reuse.
+         * Several helpers below drop stream->lock (TX timestamp validation,
+         * the NIOS loss sampling), and a sync_tx submitter waiting for a free
+         * transfer could otherwise take the one freed here, leaving the
+         * callback with none (observed: all 32 transfers in flight and
+         * submit_transfer() aborting). Count the callback so submitters see
+         * only the transfers beyond those reserved for running callbacks. */
+        stream_data->cb_active++;
+    }
 
     transfer_i = transfer_idx(stream_data, transfer);
     if (!libusb_transfer_index_valid(transfer_i,
@@ -1380,6 +1413,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         } else {
             cancel_all_transfers(stream);
         }
+        lusb_cb_release(stream, stream_data);
         MUTEX_UNLOCK(&stream->lock);
         return;
     }
@@ -1531,6 +1565,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
                 if (retire_tx_lease) {
                     async_tx_submit_lease_release(stream);
                 }
+                lusb_cb_release(stream, stream_data);
                 MUTEX_UNLOCK(&stream->lock);
                 return;
             }
@@ -1789,6 +1824,7 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
         async_tx_submit_lease_release(stream);
     }
 
+    lusb_cb_release(stream, stream_data);
     MUTEX_UNLOCK(&stream->lock);
 }
 
@@ -1845,13 +1881,24 @@ static int submit_transfer(struct bladerf_stream *stream, void *buffer,
          * lusb_stream_cb, process abort here). Fail closed with an error
          * every caller already handles by shutting the stream down, instead
          * of aborting the whole process. */
-        log_error("%s: no transfer available: %s, num_avail %u of %u, "
-                  "stream state %d\n", __FUNCTION__,
-                  (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
-                      ? "TX" : "RX",
-                  (unsigned)stream_data->num_avail,
-                  (unsigned)stream_data->num_transfers,
-                  (int)stream->state);
+        {
+            char states[96] = {0};
+            size_t k, off = 0;
+
+            for (k = 0; k < stream_data->num_transfers &&
+                        off + 3 < sizeof(states); k++) {
+                off += (size_t)snprintf(states + off, sizeof(states) - off,
+                                        "%d", (int)stream_data->transfer_status[k]);
+            }
+            log_error("%s: no transfer available: %s, num_avail %u of %u, "
+                      "next index %u, stream state %d, per-transfer status "
+                      "[%s] (0 uninitialised, see enum)\n", __FUNCTION__,
+                      (stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX
+                          ? "TX" : "RX",
+                      (unsigned)stream_data->num_avail,
+                      (unsigned)stream_data->num_transfers,
+                      (unsigned)stream_data->i, (int)stream->state, states);
+        }
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -2003,6 +2050,7 @@ static int lusb_init_stream(void *driver, struct bladerf_stream *stream,
 #endif
     stream_data->cancel_deadline_ns = 0;
     stream_data->done_flag = 0;
+    stream_data->cb_active = 0;
 
     stream_data->transfers =
         calloc(num_transfers, sizeof(struct libusb_transfer *));
@@ -2105,6 +2153,7 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
      * never reaped and shutdown can wait forever with transfers marked
      * CANCEL_PENDING. Reset before submitting this run's first transfer. */
     stream_data->done_flag = 0;
+    stream_data->cb_active = 0;
     stream_data->num_complete = 0;
     stream_data->timeout_reported = false;
     stream_data->rx_terminal_failure_reported = false;
@@ -2326,7 +2375,7 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
      * pressure is instead absorbed by requeueing zero-byte TX timeouts in
      * lusb_stream_cb, which keeps the stream alive while the device waits
      * for its timestamp. */
-    if (stream_data->num_avail == 0) {
+    if (lusb_submittable(stream_data) == 0) {
         if (nonblock) {
             log_debug("Non-blocking buffer submission requested, but no "
                       "transfers are currently available.\n");
@@ -2335,13 +2384,13 @@ int lusb_submit_stream_buffer(void *driver, struct bladerf_stream *stream,
         }
 
         if (timeout_ms != 0) {
-            while (stream_data->num_avail == 0 && status == THREAD_SUCCESS) {
+            while (lusb_submittable(stream_data) == 0 && status == THREAD_SUCCESS) {
                 status = COND_TIMED_WAIT(&stream->can_submit_buffer,
                         &stream->lock,
                         timeout_ms);
             }
         } else {
-            while (stream_data->num_avail == 0 && status == THREAD_SUCCESS) {
+            while (lusb_submittable(stream_data) == 0 && status == THREAD_SUCCESS) {
                 status = COND_WAIT(&stream->can_submit_buffer,
                         &stream->lock);
             }
