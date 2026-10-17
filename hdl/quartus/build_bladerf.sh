@@ -163,14 +163,13 @@ fi
 clear_work_dir=1
 nios_rev="Fast"
 flow="full"
-# Seed 3 was requalified with the current RX epoch/clipping RTL, regenerated
-# NIOS/Qsys system, and Quartus 25.1 Standard on 2026-10-09. Full hosted fit
-# closes all four setup/hold corners (worst setup +0.352 ns, hold +0.073 ns).
-# Seeds 7 and 11 did not retain adequate hold margin on this exact source.
-# Keep this default aligned with the recorded candidate; use -S to override.
-# Detailed reports and image hash: scanner docs/reports/rf/
-# rx-epoch-clipping-event-implementation-2026-10-09.md.
-seed="3"
+# Seed 5 was requalified against the regenerated hosted A4 NIOS/Qsys system
+# and current committed sources with Quartus 25.1 Standard on 2026-10-17.
+# The full fit passes qgate with positive setup/hold slack. Seed 3 regressed
+# TX underflow-counter setup slack to -0.261 ns on this source.
+# Keep the default aligned with the release-qualified candidate; use -S to
+# override when intentionally exploring another placement seed.
+seed="5"
 omit_date=false
 
 while getopts ":ckb:r:s:a:fn:l:S:DhH" opt; do
