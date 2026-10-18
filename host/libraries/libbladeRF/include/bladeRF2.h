@@ -226,6 +226,11 @@ int CALL_CONV bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value);
 API_EXPORT
 int CALL_CONV bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev,
                                              uint8_t *mask);
+
+/** Read-only diagnostic: FPGA RX ADC channel registers CHAN_CNTRL, _1 (DC filter), _2 (IQ coeff), _3 for ADC channel 0..3 (RX1 I/Q, RX2 I/Q). */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_fpga_adc_chan_regs(struct bladerf *dev, uint8_t ch,
+                                                uint32_t regs[4]);
 API_EXPORT
 int CALL_CONV bladerf_set_rx_fpga_iqcor_mask(struct bladerf *dev,
                                              uint8_t mask);

@@ -7362,6 +7362,42 @@ int bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t *mask)
     return 0;
 }
 
+int bladerf_get_rx_fpga_adc_chan_regs(struct bladerf *dev, uint8_t ch,
+                                      uint32_t regs[4])
+{
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(regs);
+    if (ch > 3) {
+        return BLADERF_ERR_INVAL;
+    }
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    const uint32_t addr0 = AXI_ADC_REG_CHAN_CNTRL(ch);
+    const uint32_t addr1 = AXI_ADC_REG_CHAN_CNTRL_1(ch);
+    const uint32_t addr2 = AXI_ADC_REG_CHAN_CNTRL_2(ch);
+    const uint32_t addr3 = AXI_ADC_REG_CHAN_CNTRL_3(ch);
+    const uint32_t addr[4] = { addr0, addr1, addr2, addr3 };
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active || board_data->phy == NULL ||
+            board_data->phy->rx_adc == NULL) {
+            MUTEX_UNLOCK(__lock);
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        bladerf2_axi_io_set_dev(dev);
+        for (int i = 0; i < 4; ++i) {
+            int32_t ret = axi_adc_read(board_data->phy->rx_adc, addr[i], &regs[i]);
+            if (ret < 0) {
+                bladerf2_axi_io_set_dev(NULL);
+                MUTEX_UNLOCK(__lock);
+                return errno_ad9361_to_bladerf(ret);
+            }
+        }
+        bladerf2_axi_io_set_dev(NULL);
+    });
+    return 0;
+}
+
 int bladerf_set_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t mask)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
