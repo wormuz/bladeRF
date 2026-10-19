@@ -1384,6 +1384,27 @@ static void LIBUSB_CALL lusb_stream_cb(struct libusb_transfer *transfer)
     /* Currently unused - zero out for out own debugging sanity... */
     memset(&metadata, 0, sizeof(metadata));
 
+    /* RX completion pacing: a long gap between completions with transfers
+     * queued means the bus stopped delivering; a long gap with none queued
+     * means the host did not resubmit in time (event thread latency). */
+    if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        static uint64_t last_rx_cb_ns = 0;
+        struct timespec ts_now;
+        clock_gettime(CLOCK_MONOTONIC, &ts_now);
+        const uint64_t now_ns = (uint64_t)ts_now.tv_sec * 1000000000ULL +
+                                (uint64_t)ts_now.tv_nsec;
+        if (last_rx_cb_ns != 0 && now_ns - last_rx_cb_ns > 20000000ULL &&
+            stream->state == STREAM_RUNNING) {
+            log_warning("RX completion gap %" PRIu64 " ms: status=%d "
+                        "actual=%d in_flight=%zu of %zu\n",
+                        (now_ns - last_rx_cb_ns) / 1000000ULL,
+                        (int)transfer->status, transfer->actual_length,
+                        stream_data->num_transfers - stream_data->num_avail,
+                        stream_data->num_transfers);
+        }
+        last_rx_cb_ns = now_ns;
+    }
+
     MUTEX_LOCK(&stream->lock);
     if ((stream->layout & BLADERF_DIRECTION_MASK) == BLADERF_TX) {
         /* This completion is about to free a transfer it intends to reuse.
