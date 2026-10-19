@@ -3240,6 +3240,15 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             return false;
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+        /* Expected vs received timestamp of the rejected USB buffer: a
+         * negative or exactly-one-buffer delta means completion reordering,
+         * any other delta is lost samples. */
+        log_warning("RX async timestamp discontinuity: epoch=%u expected=%" PRIu64
+                    " got=%" PRIu64 " delta=%" PRId64 " len=%zu step=%zu\n",
+                    (unsigned)epoch_id, expected_timestamp,
+                    metadata_get_timestamp(bytes),
+                    (int64_t)(metadata_get_timestamp(bytes) - expected_timestamp),
+                    length, timestamp_step);
         bladerf2_rx_async_timestamp_discontinuity(
             dev, epoch_id, expected_timestamp);
     } else {
