@@ -5004,19 +5004,29 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
                    (rx_fault_causes &
                     NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK))
                 : rf_link_status;
+            /* GPIF timeout with valid causes means the host stopped draining
+             * USB (sync ring full, sample FIFO full): data were lost, the
+             * device is healthy and the next transition recovers. Report it
+             * as its own code so callers can tell it from a device fault. */
+            int fault_error = (rx_fault_causes_valid &&
+                               (rx_fault_causes &
+                                BLADERF_RF_FPGA_RX_FAULT_GPIF_TIMEOUT) != 0)
+                ? BLADERF_ERR_RX_HOST_STARVED : BLADERF_ERR_UNEXPECTED;
 
             log_error("%s: FPGA RX fault before epoch certification: "
                       "transaction=%u status=0x%08x causes=0x%08x "
-                      "causes_status=%d epoch=%u\n",
+                      "causes_status=%d epoch=%u%s\n",
                       __FUNCTION__, transaction_id, rf_link_status,
                       rx_fault_causes, rx_fault_causes_status,
-                      expected_epoch_id);
+                      expected_epoch_id,
+                      fault_error == BLADERF_ERR_RX_HOST_STARVED
+                          ? " (host starved: GPIF timeout)" : "");
             _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
                         BLADERF_RF_STATE_ERROR, 0, 0,
-                        fault_snapshot, BLADERF_ERR_UNEXPECTED,
+                        fault_snapshot, fault_error,
                         expected_epoch_id);
             return _fail_transition(dev, board_data,
-                                    BLADERF_ERR_UNEXPECTED, final_event);
+                                    fault_error, final_event);
         }
 
         /* Stage the exact FPGA boundary while keeping sync RX invalidated.

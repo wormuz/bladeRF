@@ -3081,6 +3081,9 @@ const char *bladerf_strerror(int error)
             return "Application stream callback failed";
         case BLADERF_ERR_ABORTED:
             return "Operation aborted by device close";
+        case BLADERF_ERR_RX_HOST_STARVED:
+            return "RX data lost: host did not drain samples before epoch "
+                   "certification (FPGA GPIF timeout)";
         case 0:
             return "Success";
         default:

@@ -4743,6 +4743,13 @@ void CALL_CONV bladerf_version(struct bladerf_version *version);
                                        *   for operation */
 #define BLADERF_ERR_CALLBACK    (-20) /**< Application stream callback failed */
 #define BLADERF_ERR_ABORTED     (-21) /**< Operation aborted by device close */
+#define BLADERF_ERR_RX_HOST_STARVED (-22) /**< RX transition failed because the
+                                           *   host did not drain samples: FPGA
+                                           *   GPIF timeout with a full sample
+                                           *   FIFO before epoch certification.
+                                           *   Data were lost; the device is
+                                           *   healthy and a new transition
+                                           *   recovers. */
 // clang-format on
 
 /**
