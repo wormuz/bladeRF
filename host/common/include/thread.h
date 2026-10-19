@@ -60,14 +60,22 @@
 #define COND pthread_cond_t
 static inline int bladerf_thread_mutex_init(MUTEX *mutex)
 {
-#ifdef ENABLE_LOCK_CHECKS
+    /* Priority inheritance: the USB event thread may run SCHED_FIFO
+     * (BLADERF_RX_EVENT_THREAD_RT_PRIO) and shares these locks with normal
+     * threads. Without PI a preempted normal holder stalls the RT thread
+     * for as long as the scheduler keeps it off the CPU. */
     pthread_mutexattr_t mutex_attr;
     int status = pthread_mutexattr_init(&mutex_attr);
     if (status != 0) {
         return status;
     }
-    status = pthread_mutexattr_settype(&mutex_attr,
-                                       PTHREAD_MUTEX_ERRORCHECK);
+    status = pthread_mutexattr_setprotocol(&mutex_attr, PTHREAD_PRIO_INHERIT);
+#ifdef ENABLE_LOCK_CHECKS
+    if (status == 0) {
+        status = pthread_mutexattr_settype(&mutex_attr,
+                                           PTHREAD_MUTEX_ERRORCHECK);
+    }
+#endif
     if (status == 0) {
         status = pthread_mutex_init(mutex, &mutex_attr);
     }
@@ -80,9 +88,6 @@ static inline int bladerf_thread_mutex_init(MUTEX *mutex)
         return attr_status;
     }
     return 0;
-#else
-    return pthread_mutex_init(mutex, NULL);
-#endif
 }
 #define MUTEX_INIT(m) bladerf_thread_mutex_init(m)
 

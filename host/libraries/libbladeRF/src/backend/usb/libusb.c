@@ -2140,6 +2140,47 @@ error:
     return status;
 }
 
+/* This thread is the only one that resubmits RX transfers. 24 x 512 KB in
+ * flight cover ~51 ms at 61.44 Msps; past that the FPGA FIFO overflows and
+ * drops samples. Under CPU load a SCHED_OTHER event thread was measured
+ * preempted while runnable for 99 ms out of a 105 ms events-lock hold,
+ * which dropped 13-28 ms of samples inside a transfer.
+ * BLADERF_RX_EVENT_THREAD_RT_PRIO=<1..99> runs it SCHED_FIFO. Once asked
+ * for, failing to get it is an error: running on without it means the
+ * same silent drops. */
+static int lusb_rx_event_thread_priority(void)
+{
+#if !defined(WIN32) && !defined(__APPLE__)
+    const char *text = getenv("BLADERF_RX_EVENT_THREAD_RT_PRIO");
+    char *end = NULL;
+    long prio;
+    struct sched_param param;
+    int status;
+
+    if (text == NULL || text[0] == '\0') {
+        return 0;
+    }
+    prio = strtol(text, &end, 10);
+    if (*end != '\0' || prio < sched_get_priority_min(SCHED_FIFO) ||
+        prio > sched_get_priority_max(SCHED_FIFO)) {
+        log_error("BLADERF_RX_EVENT_THREAD_RT_PRIO=%s is not a SCHED_FIFO "
+                  "priority\n", text);
+        return BLADERF_ERR_INVAL;
+    }
+    memset(&param, 0, sizeof(param));
+    param.sched_priority = (int)prio;
+    status = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+    if (status != 0) {
+        log_error("RX event thread SCHED_FIFO %ld refused: %s (raise "
+                  "RLIMIT_RTPRIO)\n", prio, strerror(status));
+        return BLADERF_ERR_PERMISSION;
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
 static int lusb_stream(void *driver, struct bladerf_stream *stream,
                        bladerf_channel_layout layout)
 {
@@ -2179,6 +2220,17 @@ static int lusb_stream(void *driver, struct bladerf_stream *stream,
     stream_data->timeout_reported = false;
     stream_data->rx_terminal_failure_reported = false;
     stream_data->cancel_deadline_ns = 0;
+
+    if ((layout & BLADERF_DIRECTION_MASK) == BLADERF_RX) {
+        status = lusb_rx_event_thread_priority();
+        if (status != 0) {
+            fail_rx_stream(stream, stream_data, status,
+                           BLADERF_RF_WITHHELD_USB_TRANSFER_ERROR);
+            mark_stream_done(stream);
+            MUTEX_UNLOCK(&stream->lock);
+            return status;
+        }
+    }
 
     /* Set up initial set of buffers */
     for (i = 0; i < stream_data->num_transfers; i++) {
