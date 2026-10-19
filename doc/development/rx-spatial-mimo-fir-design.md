@@ -1,6 +1,6 @@
 # 2x2 complex MIMO FIR spatial whitening in the xA4 RX path: implementation design
 
-Status: design only, nothing built or run. Fork: `~/projects/bladerf` @ `5d833830`.
+Status: stage A (datapath, T1-T7) and B1 (rx.vhd/core/Qsys/SDC, NIOS target 0x92, libbladeRF, T8) implemented; not synthesized, not run on hardware. Fork: `~/projects/bladerf` @ `5d833830`.
 Input decision: OC `sdr-scanner/rx-precalibration-plan-2026-10-18.md`, last three sections
 (5 taps reproduce the per-10-RB oracle in float emulation `tmp/wh_fir.py`; 9 taps also OK).
 
@@ -17,7 +17,7 @@ Input decision: OC `sdr-scanner/rx-precalibration-plan-2026-10-18.md`, last thre
 | loopback / counter sources enter at the mux, not before it | `rx.vhd:513-529` |
 | 8-bit mode packs `data(11 downto 4)`, packed SC12 mode takes 12 bits: samples must stay inside the 12-bit range | `fifo_writer.vhd:1040-1058` |
 | epoch gate: COMPLETE moves PENDING->WAIT_FIRST_SAMPLE, the next valid sample is admitted and its timestamp latched as `first_valid_timestamp` | `rx_epoch_gate.vhd:238-266` |
-| `rx_reset` comes from system reset only (not per stream), so fabric state survives stream stop/start and host close/reopen | `bladerf_core.vhd:2027-2036` |
+| `rx_reset` follows FX3 GPIO_SYS_RST (`fx3_ctl(7)`), which the FX3 pulses on RF_RX/RF_TX enable while both directions are off and in `NuandRFDisableModules`; so fabric state survives host close/reopen and a stream stop/start while the other direction runs, but not a start from idle | `bladerf_core.vhd:2144-2152`, `fx3_firmware/src/bladeRF.c:402-420`, `rf.c:81` |
 | last hosted fit: DSP 12/66, ALM 9,539/18,480, RAM blocks 304/308 (99 %), regs 21,100 | `quartus/work/...qualification-final-2a879d50/output_files/hosted.fit.summary` |
 | last sweep fit: DSP 13/66, RAM blocks 282/308 | `quartus/work/bladerf-micro-A4-sweep/output_files/sweep.fit.summary` |
 | same build: worst setup slack on pll_sclk (= rx_clock/tx_clock) is -0.261 ns, TNS -9.439, path `tx:U_tx|fifo_reader|underflow_detected -> underflow_count[*]`; Fmax 121.05 MHz | `hosted.sta.summary`, `hosted.slow_85C.setup_paths.rpt:52-58` |
@@ -34,10 +34,9 @@ Input decision: OC `sdr-scanner/rx-precalibration-plan-2026-10-18.md`, last thre
 - `rx_mux` NORMAL branch (`rx.vhd:506-507`): `mux_streams <= fir_streams` (trigger gating at
   `rx.vhd:508-512` unchanged, now applied to FIR output). In the same process add two registered
   sidebands: `mux_timestamp <= fir_timestamp` and `mux_epoch_complete <= fir_epoch_complete` in
-  NORMAL; `mux_timestamp <= rx_timestamp`, `mux_epoch_complete <= rx_epoch_complete` in every
-  other mode (test/loopback modes keep stock timing).
-- `U_rx_epoch_gate` (`rx.vhd:297`, `:300`): `rx_timestamp => mux_timestamp`,
-  `epoch_complete => mux_epoch_complete`. ARM and ABORT stay direct (fencing earlier is safe).
+  NORMAL. Every other mode gives the gate the live `rx_timestamp` and `rx_epoch_complete` through a registered select (`mux_ts_from_fir`), because a registered copy would lag the live counter by one rx_clock (half a sample) against stock timing.
+- `U_rx_epoch_gate`: `rx_timestamp => gate_timestamp`, `epoch_complete => gate_epoch_complete` (the FIR sidebands in NORMAL, the live stock signals otherwise),
+  ARM and ABORT stay direct (fencing earlier is safe).
 - New generic `ENABLE_SPATIAL_FIR : boolean := false` on `rx` (`rx.vhd:30-32`) and on
   `bladerf_core` next to `ENABLE_SWEEP_ANALYZER` (`bladerf_core.vhd:41`); `bladerf-hosted.vhd:40-43`
   and `bladerf-sweep.vhd:42-` set it true. With false, a `generate` wires `fir_* <= adc_*/rx_*`
@@ -122,11 +121,11 @@ blocks are at 304/308).
 New PIOs in `hdl/fpga/platforms/bladerf-micro/build/nios_system.tcl` (copy the `rx_epoch_ctrl`
 block `:471-498`, export `:821`, data_master connection `:1000-1002`, clock `:1133`, reset `:1193`):
 
-| PIO | dir | width | base (free slots between 0x95e0 and 0x9680) |
+| PIO | dir | width | base (0x9600-0x9660 are the loss counters, the 64-bit `rfic_monotonic_timer` spans 0x9840-0x987f) |
 |---|---|---|---|
-| `rx_sfir_data` | Output | 32 | 0x9600 |
-| `rx_sfir_ctrl` | Output | 32 | 0x9620 |
-| `rx_sfir_status` | Input | 32 | 0x9640 |
+| `rx_sfir_data` | Output | 32 | 0x9880 |
+| `rx_sfir_ctrl` | Output | 32 | 0x98a0 |
+| `rx_sfir_status` | Input | 32 | 0x98c0 |
 
 Bases must be confirmed by qsys-generate (no overlap error); the listed addresses are unused in the
 current tcl. Add the three `*_export` ports to the `nios_system` component in `bladerf_p.vhd:61-`
@@ -179,7 +178,7 @@ by which time data is already stable (same argument as TX retune target lo/hi th
 
 - `fpga_common/include/nios_pkt_8x32.h`: `NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR 0x92` (0x91 is the
   last used, `:388`); addr 0..19 = coefficient word; `..._SFIR_CMD_COMMIT 0x80` (data = 8-bit tag);
-  `..._SFIR_CMD_IDENTITY 0x81` (data 0); read addr 0x80 = status word, 0..19 = NIOS mirror.
+  `..._SFIR_CMD_IDENTITY 0x81` (data 0); read addr 0x80 = status word, 0..19 = NIOS mirror of the active bank, 0x20+i = mirror of the shadow bank. IDENTITY writes and all reads stay allowed while a retained RETUNE2 owns the RFIC (`nios_pkt_8x32_rfic_owner_access_safe`).
 - `fpga_common/include/nios_pkt_8x32_diag.h:32`: allow the new read addresses.
 - `devices_inline.h` (next to `dwell_cfg_write`, `:301-311`, and RX_EPOCH bits `:488`):
   `rx_sfir_write_word(idx, w)`, `rx_sfir_commit(tag)`, `rx_sfir_identity()`, `rx_sfir_status()`,
@@ -212,7 +211,7 @@ by which time data is already stable (same argument as TX retune target lo/hi th
       int bladerf_reset_rx_spatial_fir(struct bladerf *dev);   /* identity */
 
   `coef[i][j][k][0]` = real, `[1]` = imag, output lane i, input lane j, tap k (k=2 center).
-- `include/libbladeRF.h:5107`: `BLADERF_RF_INVALIDATE_SPATIAL_FIR (1U << 19)` (bits 0-18 used).
+- `include/libbladeRF.h`: all 32 RX_DATA_INVALIDATED reason bits are assigned, so the FIR transaction is marked by `BLADERF_RF_EVENT_F_SPATIAL_FIR (1U << 25)` on its CONFIG_ACCEPTED event instead of a reason bit.
 - `src/backend/usb/nios_access.{c,h}` (pattern `nios_rx_epoch_ctrl_cmd`, `.c:1588`, `.h:452`):
   `nios_rx_sfir_write(dev, idx, word)`, `nios_rx_sfir_commit(dev, tag)`,
   `nios_rx_sfir_identity(dev)`, `nios_rx_sfir_status_read(dev, &w)`, `nios_rx_sfir_mirror_read`.
@@ -290,8 +289,8 @@ withheld; no special case). Cost: 4 samples + 9 cycles more before EPOCH_VALID.
 
 ## 4. Reset to identity
 
-- Fabric: `rx_reset` -> active = identity, `force_identity` cleared, toggles adopted.
-- Library open: identity (fabric state survives close/reopen, `rx_reset` is system reset only).
+- Fabric: `rx_reset` -> active = identity, tag 0, toggles adopted without firing; `force_identity` reads 0 until the first capture, then follows the surviving PIO level. `rx_reset` also fires when RX or TX is enabled while both were off (FX3 SYS_RST, section 0), so W is loaded after `bladerf_enable_module`; the library does not clear `rx_sfir_may_be_active` on that reset (older FX3 firmware may not pulse it), it only costs a redundant identity write.
+- Library open: identity (fabric state survives close/reopen). The identity hooks below write only while `rx_sfir_may_be_active` (cleared by an acknowledged identity, set before any commit), so retunes pay no NIOS write while the block is already identity.
 - Library, inside `bladerf2_rx_data_invalidate` (`rf_transition.c:3171`, the single choke point
   that `set_gain` `bladerf.c:784`, `set_frequency` `:1340`, `schedule_retune` `:1640`, gain mode,
   bias tee and the FPGA correction setters already go through): after the ABORT/revoke succeeded,
@@ -374,7 +373,7 @@ Plus `ghdl --synth --std=08` on both new entities.
 | 9 taps, 2:1 time-multiplexed | 36 blocks; possible because a sample arrives at most every 2nd cycle (`adc_valid` alternation, timestamp tick). Not chosen: depends on that cadence and doubles control complexity; the measured 5-tap result does not need it |
 | ALMs | adder trees 4 x 9 adders of up to 38 bits, round/sat, delay lines, 64-bit x (3 + 9) timestamp carry, banks (shadow 640 + active ~980 FF), controller: estimate 1,500-2,500 ALMs on 8,941 free. Estimate, not a fit result |
 | M10K | 0 (all registers); RAM blocks are at 304/308 |
-| NIOS | code + 160 B mirrors; 10.8 KB headroom today |
+| NIOS | measured (B1 tree, BSP of the 2a879d50 qualification build plus the three `RX_SFIR_*_BASE` defines): text+data+bss 165,220 B, +556 B against the same tree without the PIOs (164,664 B); 9,884 B of 175,104 left, linker report 6,964 B free for stack + heap |
 
 Acceptance on the first fit: DSP <= 52 (hosted), no new failing setup path inside the block, and the
 existing pll_sclk worst slack not worse (виміряно STA, quartus/work/bladerf-micro-A4-hosted-release-qualification-final-2a879d50/output_files/hosted.sta.summary: -0.261 ns, TX fifo_reader).

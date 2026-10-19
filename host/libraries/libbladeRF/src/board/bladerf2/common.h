@@ -440,6 +440,16 @@ struct bladerf2_board_data {
     bladerf_rf_state rf_transition_state;
     struct bladerf_rf_event rf_transition_last_event;
     bool rf_transition_epoch_contract_enabled;
+    /* RX spatial FIR (rx_spatial_fir_policy.h). Protected by dev->lock.
+     * rx_sfir_may_be_active is cleared only by an acknowledged identity
+     * write or a fabric reset; while set, the identity hooks in RX
+     * invalidation and transition begin write identity. The device is
+     * claimed by one handle, so this handle is the only writer. */
+    bool rx_sfir_supported;
+    bool rx_sfir_may_be_active;
+    uint32_t rx_sfir_host_generation;
+    uint8_t rx_sfir_tag;
+    uint8_t rx_sfir_epoch_id;
     bool rf_transition_first_host_data_required;
     bool rf_transition_rx_x2_host_data_required;
     uint32_t rf_transition_rx_x2_host_data_transaction_id;
@@ -536,6 +546,22 @@ void bladerf2_rx_epoch_revoke_admission(void *context);
 void bladerf2_rx_rfic_state_invalid(struct bladerf *dev, int error_code);
 int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
+/* RX epoch transaction without an LO change: prepare/ARM/fence as
+ * bladerf_rx_transition_begin, then apply() in place of the RFIC retune,
+ * then the full bladerf_rx_transition_wait (COMPLETE, EPOCH_VALID, host
+ * certification) at the current RX LO. apply() runs with no lock held.
+ * On failure the epoch is aborted (fail closed) as for any transition. */
+struct bladerf2_rx_epoch_apply {
+    int (*fn)(struct bladerf *dev, void *ctx);
+    void *ctx;
+    uint32_t event_flags;
+};
+int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
+                                  const struct bladerf2_rx_epoch_apply *apply,
+                                  uint32_t timeout_ms, uint8_t *epoch_id);
+/* RX spatial FIR identity hook (bladerf2.c). Writes the identity level when
+ * the FIR may be active; no-op on gateware without the block. */
+int bladerf2_rx_sfir_force_identity(struct bladerf *dev);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
 

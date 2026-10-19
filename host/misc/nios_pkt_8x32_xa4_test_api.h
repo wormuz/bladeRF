@@ -18,6 +18,9 @@
 #define TX_RETUNE_GATE_TARGET_LO_BASE 7u
 #define TX_RETUNE_GATE_TARGET_HI_BASE 8u
 #define TX_RETUNE_GATE_STATUS_BASE 9u
+#define RX_SFIR_DATA_BASE 10u
+#define RX_SFIR_CTRL_BASE 11u
+#define RX_SFIR_STATUS_BASE 12u
 
 uint32_t xa4_test_pio_read(uint32_t base);
 void xa4_test_pio_write(uint32_t base, uint32_t value);
@@ -61,5 +64,9 @@ bool tx_retune_gate_abort(void);
 bool tx_retune_gate_fifo_flush(void);
 bool tx_retune_gate_fifo_release(void);
 uint32_t tx_retune_gate_status_read(void);
+uint32_t rx_sfir_status_read(void);
+bool rx_sfir_write_word(uint8_t idx, uint32_t word);
+bool rx_sfir_commit(uint8_t tag);
+bool rx_sfir_identity(void);
 
 #endif

@@ -74,6 +74,7 @@ static void _test_rx_transition_late_observation(const char *stage)
 #include "nios_pkt_8x32.h"
 #include "nios_pkt_retune2.h"
 #include "rf_transition_policy.h"
+#include "rx_spatial_fir_policy.h"
 #include "streaming/metadata.h"
 #include "streaming/sync.h"
 
@@ -3305,6 +3306,19 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
         }
     }
 
+    /* RX spatial FIR: the reconfiguration about to happen invalidates W.
+     * Identity is a level (no wait), so it is safe while a sample-rate
+     * change stops l_clk; the handshake delivers it when the clock runs.
+     * Fail the setter rather than let it run with a stale W. */
+    if (status == 0 && bladerf2_sfir_reset_required(reason)) {
+        status = bladerf2_rx_sfir_force_identity(dev);
+        if (status != 0) {
+            WITH_MUTEX(&dev->lock, {
+                board_data->rf_transition_setter_active = false;
+            });
+        }
+    }
+
     return status;
 }
 
@@ -3581,6 +3595,7 @@ static int _bladerf_rx_transition_begin(
     struct bladerf *dev, bladerf_channel ch,
     const struct bladerf_rx_transition_request *request,
     const struct bladerf_quick_tune *quick_tune,
+    const struct bladerf2_rx_epoch_apply *apply,
     uint32_t *transaction_id)
 {
     struct bladerf2_board_data *board_data;
@@ -3630,6 +3645,9 @@ static int _bladerf_rx_transition_begin(
         !nios_pkt_retune2_route_valid(BLADERF_MODULE_RX,
                                       quick_tune->port,
                                       quick_tune->spdt)) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (apply != NULL && (quick_tune != NULL || apply->fn == NULL)) {
         return BLADERF_ERR_INVAL;
     }
     CHECK_BOARD_IS_BLADERF2(dev);
@@ -3996,6 +4014,21 @@ static int _bladerf_rx_transition_begin(
                     epoch_status_word, 0, epoch_id);
     }
 
+    /* RX spatial FIR: W is estimated for one LO/gain state, so a retune
+     * returns the block to identity here, inside the ARM fence and before
+     * the RFIC write. The level needs no l_clk acknowledgement; it crosses
+     * in well under one USB round trip, and COMPLETE follows the RFIC
+     * programming and PLL polling below. */
+    if (apply == NULL) {
+        status = bladerf2_rx_sfir_force_identity(dev);
+        if (status != 0) {
+            _emit_event(dev, board_data, BLADERF_RF_EVT_ERROR,
+                        BLADERF_RF_STATE_ERROR,
+                        request->target_frequency_hz, 0, 0, status, 0);
+            return _fail_transition(dev, board_data, status, NULL);
+        }
+    }
+
     /* Do not retune while a calibration from an earlier timed-out operation
      * is still active. The FPGA fence is already closed, so waiting here
      * cannot leak samples; a deadline remains a failure, never a validity
@@ -4052,7 +4085,16 @@ static int _bladerf_rx_transition_begin(
      * path also performs ad9361_fastlock_exit_foreign() before returning
      * ownership to host-side status/readback. */
     stage_started_ns = _monotonic_ns();
-    if (quick_tune != NULL) {
+    if (apply != NULL) {
+        /* No LO change: the transaction's data-plane change is apply(),
+         * made while the FPGA fence is closed. */
+        _emit_event_with_timestamp(dev, board_data,
+                                   BLADERF_RF_EVT_CONFIG_ACCEPTED,
+                                   BLADERF_RF_STATE_SPI_PROGRAMMING,
+                                   request->target_frequency_hz, 0, 0, 0, 0,
+                                   0, 0, apply->event_flags);
+        status = apply->fn(dev, apply->ctx);
+    } else if (quick_tune != NULL) {
         struct bladerf_quick_tune qt = *quick_tune;
         /* Snapshot the NIOS transport stage timestamps before releasing the
          * device lock, so another control operation cannot overwrite them. */
@@ -4188,11 +4230,15 @@ static int _bladerf_rx_transition_begin(
 
     /* This timestamp is the return of the selected host/NIOS tune path.
      * It deliberately does not claim raw SPI completion or PLL lock. */
-    _emit_event(dev, board_data, BLADERF_RF_EVT_LO_SET_RETURNED,
-                BLADERF_RF_STATE_PLL_ACQUIRING,
-                request->target_frequency_hz, 0, 0, 0, 0);
-    log_debug("%s: %s RFIC tune transaction=%u took %" PRIu64 " us\n",
-              __FUNCTION__, quick_tune != NULL ? "fastlock" : "host",
+    if (apply == NULL) {
+        _emit_event(dev, board_data, BLADERF_RF_EVT_LO_SET_RETURNED,
+                    BLADERF_RF_STATE_PLL_ACQUIRING,
+                    request->target_frequency_hz, 0, 0, 0, 0);
+    }
+    log_debug("%s: %s transaction=%u took %" PRIu64 " us\n",
+              __FUNCTION__, apply != NULL ? "apply" :
+                            quick_tune != NULL ? "fastlock RFIC tune" :
+                                                 "host RFIC tune",
               board_data->rf_transition_current_id,
               (_monotonic_ns() - stage_started_ns) / 1000ULL);
 
@@ -4276,7 +4322,7 @@ int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
         }
         return status;
     }
-    status = _bladerf_rx_transition_begin(dev, ch, request, NULL,
+    status = _bladerf_rx_transition_begin(dev, ch, request, NULL, NULL,
                                           transaction_id);
     bladerf2_rx_transition_call_leave(board_data);
     return status;
@@ -4304,7 +4350,7 @@ int bladerf_rx_transition_begin_quick_tune(
         }
         return status;
     }
-    status = _bladerf_rx_transition_begin(dev, ch, request, quick_tune,
+    status = _bladerf_rx_transition_begin(dev, ch, request, quick_tune, NULL,
                                           transaction_id);
     bladerf2_rx_transition_call_leave(board_data);
     return status;
@@ -5232,6 +5278,55 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
     status = _bladerf_rx_transition_wait(dev, transaction_id, final_event,
                                          timeout_ms);
+
+    bladerf2_rx_transition_call_leave(board_data);
+    return status;
+}
+
+int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
+                                  const struct bladerf2_rx_epoch_apply *apply,
+                                  uint32_t timeout_ms, uint8_t *epoch_id)
+{
+    struct bladerf2_board_data *board_data;
+    struct bladerf_rx_transition_request request;
+    struct bladerf_rf_event final_event;
+    bladerf_frequency current_hz = 0;
+    uint32_t transaction_id = 0;
+    int status;
+
+    if (epoch_id != NULL) {
+        *epoch_id = 0;
+    }
+    if (apply == NULL || apply->fn == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    status = bladerf2_rx_transition_call_enter(dev, &board_data);
+    if (status != 0) {
+        return status;
+    }
+
+    /* The RX LO is shared by RX1/RX2; RX1 carries the transaction. The
+     * begin call re-reads the LO after apply() and requires it unchanged. */
+    status = bladerf_get_frequency(dev, BLADERF_CHANNEL_RX(0), &current_hz);
+    if (status == 0) {
+        memset(&request, 0, sizeof(request));
+        request.target_frequency_hz = current_hz;
+        request.required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID;
+        request.timeout_ms = timeout_ms;
+        status = _bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
+                                              &request, NULL, apply,
+                                              &transaction_id);
+    }
+    if (status == 0) {
+        memset(&final_event, 0, sizeof(final_event));
+        status = _bladerf_rx_transition_wait(dev, transaction_id,
+                                             &final_event, timeout_ms);
+    }
+    if (status == 0 && epoch_id != NULL) {
+        WITH_MUTEX(&dev->lock, {
+            *epoch_id = board_data->rf_transition_epoch_id;
+        });
+    }
 
     bladerf2_rx_transition_call_leave(board_data);
     return status;

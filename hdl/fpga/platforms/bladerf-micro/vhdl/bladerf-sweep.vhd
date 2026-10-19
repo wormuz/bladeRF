@@ -22,6 +22,7 @@
 -- and ENABLE_GAIN_SEQUENCER are on here and off in hosted, so the analyser
 -- and its settling sequencer cost the hosted image nothing.
 -- ENABLE_TRIGGER_CAPTURE brings in the 4096-sample pre-trigger ring (13 M10K).
+-- ENABLE_SPATIAL_FIR puts the 2x2 RX FIR in rx.vhd, as in hosted.
 
 library ieee;
     use ieee.std_logic_1164.all;
@@ -42,7 +43,8 @@ begin
         generic map (
             ENABLE_SWEEP_ANALYZER  => true,
             ENABLE_TRIGGER_CAPTURE => false,
-            ENABLE_GAIN_SEQUENCER  => false
+            ENABLE_GAIN_SEQUENCER  => false,
+            ENABLE_SPATIAL_FIR     => true
         )
         port map (
             c5_clock2      => c5_clock2,

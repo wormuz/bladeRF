@@ -227,6 +227,9 @@ architecture foxhunt_bladerf of bladerf is
         xb_gpio_in_port                 :   in  std_logic_vector(31 downto 0) := (others => 'X');
         xb_gpio_out_port                :   out std_logic_vector(31 downto 0);
         xb_gpio_dir_export              :   out std_logic_vector(31 downto 0);
+        rx_sfir_data_export             :   out std_logic_vector(31 downto 0);
+        rx_sfir_ctrl_export             :   out std_logic_vector(31 downto 0);
+        rx_sfir_status_export           :   in  std_logic_vector(31 downto 0) := (others => '0');
         command_serial_in               :   in  std_logic;
         command_serial_out              :   out std_logic;
         command_session_reset           :   in  std_logic := '0';
@@ -496,6 +499,12 @@ begin
             xb_gpio_in_port                 => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
+            -- RX spatial FIR PIOs exist in the shared Qsys system; foxhunt has
+            -- no FIR, so the controls go nowhere and the status reads 0
+            -- (version 0 = feature absent for libbladeRF).
+            rx_sfir_data_export             => open,
+            rx_sfir_ctrl_export             => open,
+            rx_sfir_status_export           => (others => '0'),
             command_serial_in               => command_serial_in,
             command_serial_out              => command_serial_out,
             command_session_reset           => sys_reset,

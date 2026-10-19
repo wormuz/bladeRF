@@ -72,6 +72,13 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
         case NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE:
             return addr == NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS;
 
+        case NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR:
+            return addr < NIOS_PKT_8x32_SFIR_NUM_COEF ||
+                   (addr >= NIOS_PKT_8x32_SFIR_SHADOW_BASE &&
+                    addr < NIOS_PKT_8x32_SFIR_SHADOW_BASE +
+                               NIOS_PKT_8x32_SFIR_NUM_COEF) ||
+                   addr == NIOS_PKT_8x32_SFIR_ADDR_STATUS;
+
         default:
             return true;
     }

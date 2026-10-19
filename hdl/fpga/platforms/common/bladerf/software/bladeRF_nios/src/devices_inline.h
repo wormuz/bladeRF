@@ -585,6 +585,123 @@ static inline uint64_t rx_epoch_status_snapshot_read(void)
     return ((uint64_t)rx_epoch_status_read() << 32) | rx_epoch_ts_lo_read();
 }
 
+/* RX spatial FIR (doc/development/rx-spatial-mimo-fir-design.md 2.3/2.4).
+ * rx_sfir_data and rx_sfir_ctrl cross into rx_clock together; the action
+ * fires when a ctrl toggle changes, so data is written first. Toggles are
+ * owned here and read back from the PIO, same rule as RX_EPOCH_CTRL. Echo
+ * bits sit at the same positions in the status word as in ctrl. Waits are
+ * bounded: RX_SFIR_ECHO_POLL_LIMIT status reads, about 1 ms on sys_clock,
+ * which covers the handshake round trip down to a ~1 MHz rx_clock. */
+#define RX_SFIR_CTRL_IDX_MASK        0x1Fu
+#define RX_SFIR_CTRL_WR_TOGGLE       (1u << 5)
+#define RX_SFIR_CTRL_COMMIT_TOGGLE   (1u << 6)
+#define RX_SFIR_CTRL_FORCE_IDENTITY  (1u << 7)
+#define RX_SFIR_CTRL_TAG_SHIFT       16
+#define RX_SFIR_CTRL_TAG_MASK        (0xFFu << RX_SFIR_CTRL_TAG_SHIFT)
+#define RX_SFIR_ECHO_POLL_LIMIT      10000u
+
+static inline uint32_t rx_sfir_status_read(void)
+{
+#ifdef RX_SFIR_STATUS_BASE
+    return IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_STATUS_BASE);
+#else
+    return 0;
+#endif
+}
+
+#if defined(RX_SFIR_DATA_BASE) && defined(RX_SFIR_CTRL_BASE) && \
+    defined(RX_SFIR_STATUS_BASE)
+static inline bool rx_sfir_wait_status(uint32_t mask, uint32_t value)
+{
+    uint32_t i;
+
+    for (i = 0; i < RX_SFIR_ECHO_POLL_LIMIT; i++) {
+        if ((rx_sfir_status_read() & mask) == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static inline bool rx_sfir_ctrl_write(uint32_t ctrl)
+{
+    IOWR_ALTERA_AVALON_PIO_DATA(RX_SFIR_CTRL_BASE, ctrl);
+    return (uint32_t)IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_CTRL_BASE) == ctrl;
+}
+#endif
+
+static inline bool rx_sfir_write_word(uint8_t idx, uint32_t word)
+{
+#if defined(RX_SFIR_DATA_BASE) && defined(RX_SFIR_CTRL_BASE) && \
+    defined(RX_SFIR_STATUS_BASE)
+    uint32_t ctrl;
+
+    if (idx >= NIOS_PKT_8x32_SFIR_NUM_COEF ||
+        (control_reg_read() & CONTROL_AD9361_RX_IF_CLOCK_ALIVE) == 0) {
+        return false;
+    }
+    IOWR_ALTERA_AVALON_PIO_DATA(RX_SFIR_DATA_BASE, word);
+    if ((uint32_t)IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_DATA_BASE) != word) {
+        return false;
+    }
+    ctrl = IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_CTRL_BASE);
+    ctrl = ((ctrl & ~RX_SFIR_CTRL_IDX_MASK) | idx) ^ RX_SFIR_CTRL_WR_TOGGLE;
+    if (!rx_sfir_ctrl_write(ctrl)) {
+        return false;
+    }
+    return rx_sfir_wait_status(
+        RX_SFIR_CTRL_IDX_MASK | RX_SFIR_CTRL_WR_TOGGLE,
+        ctrl & (RX_SFIR_CTRL_IDX_MASK | RX_SFIR_CTRL_WR_TOGGLE));
+#else
+    (void)idx;
+    (void)word;
+    return false;
+#endif
+}
+
+/* Commit and leave force_identity in the same control word, so one capture
+ * both loads the bank and ends the bypass. */
+static inline bool rx_sfir_commit(uint8_t tag)
+{
+#if defined(RX_SFIR_DATA_BASE) && defined(RX_SFIR_CTRL_BASE) && \
+    defined(RX_SFIR_STATUS_BASE)
+    uint32_t ctrl;
+
+    if ((control_reg_read() & CONTROL_AD9361_RX_IF_CLOCK_ALIVE) == 0) {
+        return false;
+    }
+    ctrl = IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_CTRL_BASE);
+    ctrl &= ~(RX_SFIR_CTRL_TAG_MASK | RX_SFIR_CTRL_FORCE_IDENTITY);
+    ctrl |= ((uint32_t)tag) << RX_SFIR_CTRL_TAG_SHIFT;
+    ctrl ^= RX_SFIR_CTRL_COMMIT_TOGGLE;
+    if (!rx_sfir_ctrl_write(ctrl)) {
+        return false;
+    }
+    return rx_sfir_wait_status(
+        RX_SFIR_CTRL_COMMIT_TOGGLE | RX_SFIR_CTRL_FORCE_IDENTITY |
+            (NIOS_PKT_8x32_SFIR_STATUS_TAG_MASK
+             << NIOS_PKT_8x32_SFIR_STATUS_TAG_SHIFT),
+        (ctrl & RX_SFIR_CTRL_COMMIT_TOGGLE) |
+            (((uint32_t)tag) << NIOS_PKT_8x32_SFIR_STATUS_TAG_SHIFT));
+#else
+    (void)tag;
+    return false;
+#endif
+}
+
+/* Level only, no wait: usable while l_clk is stopped (sample-rate change);
+ * the handshake delivers it once the clock runs again. */
+static inline bool rx_sfir_identity(void)
+{
+#if defined(RX_SFIR_DATA_BASE) && defined(RX_SFIR_CTRL_BASE) && \
+    defined(RX_SFIR_STATUS_BASE)
+    return rx_sfir_ctrl_write(IORD_ALTERA_AVALON_PIO_DATA(RX_SFIR_CTRL_BASE) |
+                              RX_SFIR_CTRL_FORCE_IDENTITY);
+#else
+    return false;
+#endif
+}
+
 /* TX timestamped retune gate. Command toggles and both timestamp halves are
  * sampled together by the FPGA mailbox; write target first, then ARM. Bits
  * 4/5 request fault-only FIFO flush and post-DMA-reset release respectively.

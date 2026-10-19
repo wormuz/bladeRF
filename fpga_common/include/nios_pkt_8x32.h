@@ -493,6 +493,54 @@
 #define NIOS_PKT_8x32_NIOS_RAM_STACK         2u
 #define NIOS_PKT_8x32_NIOS_RAM_REGION        3u
 
+/* RX spatial whitening FIR, 2x2 complex, 5 taps
+ * (doc/development/rx-spatial-mimo-fir-design.md section 2).
+ *
+ * Write:
+ *   addr 0..19  coefficient word into the shadow bank. data [15:0] real,
+ *               [31:16] imag, Q2.14. Index (i*2 + j)*5 + k: output lane i,
+ *               input lane j, tap k (center tap 2). NIOS waits (bounded)
+ *               for the fabric echo; fails at once if the AD9361 data
+ *               clock is not running.
+ *   COMMIT      data = 8-bit tag. Shadow -> active in one rx_clock edge
+ *               and force_identity cleared in the same control word; waits
+ *               (bounded) for the commit echo carrying the tag.
+ *   IDENTITY    data 0. Sets the force_identity level; returns without
+ *               waiting, so it works while the data clock is stopped.
+ * Read:
+ *   addr 0..19  NIOS mirror of the active (committed) bank
+ *   addr 0x20+i NIOS mirror of the shadow bank
+ *   STATUS      status word, rx_clock -> sys_clock snapshot:
+ *     [4:0] last written index   [5] write echo   [6] commit echo
+ *     [7] force_identity applied [15:8] active tag [16] bypass now
+ *     [17] active bank identity  [18] both lanes enabled
+ *     [19] saturation sticky RX1 [20] saturation sticky RX2 (cleared by
+ *     commit)  [31:28] block version: 1 = present, 0 = gateware without it
+ * The mirrors are NIOS RAM: a fabric reset (SYS_RST) returns the FPGA bank
+ * to identity with tag 0 and does not clear them. Trust a mirror only while
+ * STATUS reports the tag of the commit that wrote it. */
+#define NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR    0x93
+#define NIOS_PKT_8x32_SFIR_NUM_COEF            20u
+#define NIOS_PKT_8x32_SFIR_SHADOW_BASE         0x20u
+#define NIOS_PKT_8x32_SFIR_CMD_COMMIT          0x80u
+#define NIOS_PKT_8x32_SFIR_CMD_IDENTITY        0x81u
+#define NIOS_PKT_8x32_SFIR_ADDR_STATUS         0x80u
+
+#define NIOS_PKT_8x32_SFIR_STATUS_IDX_MASK      0x1Fu
+#define NIOS_PKT_8x32_SFIR_STATUS_WR_ECHO       (1u << 5)
+#define NIOS_PKT_8x32_SFIR_STATUS_COMMIT_ECHO   (1u << 6)
+#define NIOS_PKT_8x32_SFIR_STATUS_FORCE         (1u << 7)
+#define NIOS_PKT_8x32_SFIR_STATUS_TAG_SHIFT     8
+#define NIOS_PKT_8x32_SFIR_STATUS_TAG_MASK      0xFFu
+#define NIOS_PKT_8x32_SFIR_STATUS_BYPASS        (1u << 16)
+#define NIOS_PKT_8x32_SFIR_STATUS_IDENTITY      (1u << 17)
+#define NIOS_PKT_8x32_SFIR_STATUS_BOTH_LANES    (1u << 18)
+#define NIOS_PKT_8x32_SFIR_STATUS_SAT_RX1       (1u << 19)
+#define NIOS_PKT_8x32_SFIR_STATUS_SAT_RX2       (1u << 20)
+#define NIOS_PKT_8x32_SFIR_STATUS_VERSION_SHIFT 28
+#define NIOS_PKT_8x32_SFIR_STATUS_VERSION_MASK  0xFu
+#define NIOS_PKT_8x32_SFIR_VERSION              1u
+
 /* FPGA status PIOs are independent of the RFIC and remain safe while a
  * retained RETUNE2 operation owns it. Completion-record writes only select
  * which NIOS-owned RAM record subsequent reads observe. Gate COMPLETE and
@@ -510,6 +558,13 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
         return data == 0 &&
             (addr == NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE ||
              addr == NIOS_PKT_8x32_TX_RETUNE_CMD_ABORT);
+    }
+    /* RX spatial FIR: FPGA PIOs only. The fail-safe IDENTITY level and all
+     * reads stay available; coefficient writes and COMMIT wait for the
+     * owner like any other write. */
+    if (target == NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR) {
+        return !write ||
+            (addr == NIOS_PKT_8x32_SFIR_CMD_IDENTITY && data == 0);
     }
     if (write) {
         return false;

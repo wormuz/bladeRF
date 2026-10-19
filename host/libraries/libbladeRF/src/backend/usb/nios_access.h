@@ -474,6 +474,27 @@ int nios_rx_epoch_ctrl_cmd(struct bladerf *dev, uint8_t cmd, uint32_t data);
  */
 int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value);
 
+/**
+ * RX spatial FIR (NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR).
+ *
+ * write: one shadow word, NIOS waits for the fabric echo.
+ * commit: shadow -> active with an 8-bit tag, clears forced identity; NIOS
+ *         waits for the commit echo.
+ * identity: sets the forced-identity level, no wait.
+ * status_read: status word; BLADERF_ERR_UNSUPPORTED when NIOS rejects the
+ *         target (firmware without it). The block version field is decoded
+ *         by the caller.
+ * mirror_read: NIOS copy of the active bank word idx (0..19).
+ *
+ * @return 0 on success, BLADERF_ERR_* on failure
+ */
+int nios_rx_sfir_write(struct bladerf *dev, uint8_t idx, uint32_t word);
+int nios_rx_sfir_commit(struct bladerf *dev, uint8_t tag);
+int nios_rx_sfir_identity(struct bladerf *dev);
+int nios_rx_sfir_status_read(struct bladerf *dev, uint32_t *value);
+int nios_rx_sfir_mirror_read(struct bladerf *dev, uint8_t idx,
+                             uint32_t *word);
+
 /** Read epoch status and the latched first-valid timestamp low word in one
  * NIOS transaction. Returns BLADERF_ERR_UNSUPPORTED on older FPGA images. */
 int nios_rx_epoch_status_snapshot_read(struct bladerf *dev,

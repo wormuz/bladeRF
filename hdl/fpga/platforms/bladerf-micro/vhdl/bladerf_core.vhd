@@ -40,7 +40,11 @@ entity bladerf_core is
     -- place to turn things on without a second copy of this file.
     ENABLE_SWEEP_ANALYZER  : boolean := false;
     ENABLE_TRIGGER_CAPTURE : boolean := false;
-    ENABLE_GAIN_SEQUENCER  : boolean := false
+    ENABLE_GAIN_SEQUENCER  : boolean := false;
+    -- 2x2 RX spatial FIR in rx.vhd. The control/status path below exists in
+    -- every revision; with this false the status version field reads 0 and
+    -- libbladeRF reports the feature as unsupported.
+    ENABLE_SPATIAL_FIR     : boolean := false
   );
   port (
     -- Main 38.4MHz system clock (3.3 V)
@@ -333,6 +337,34 @@ architecture core_bladerf of bladerf_core is
     signal rx_epoch_discard_rx      : std_logic;
     signal rx_epoch_start_event_rx  : std_logic;
     signal rx_epoch_first_valid_rx  : unsigned(63 downto 0);
+
+    -- RX spatial FIR control (doc/development/rx-spatial-mimo-fir-design.md
+    -- section 2). rx_sfir_data/ctrl cross sys -> rx together in
+    -- U_rx_spatial_fir_controller; the status word crosses rx -> sys in
+    -- U_rx_sfir_status_handshake into rx_sfir_status_sys.
+    -- rx_sfir_status: [4:0] last written index, [5] write echo,
+    -- [6] commit echo, [7] force_identity applied, [15:8] active tag,
+    -- [16] bypass now, [17] active bank identity, [18] both lanes enabled,
+    -- [20:19] saturation sticky RX2/RX1, [27:21] 0, [31:28] block version.
+    signal rx_sfir_data_sys         : std_logic_vector(31 downto 0);
+    signal rx_sfir_ctrl_sys         : std_logic_vector(31 downto 0);
+    signal rx_sfir_wr_en_rx         : std_logic;
+    signal rx_sfir_wr_idx_rx        : unsigned(4 downto 0);
+    signal rx_sfir_wr_data_rx       : std_logic_vector(31 downto 0);
+    signal rx_sfir_commit_rx        : std_logic;
+    signal rx_sfir_commit_tag_rx    : unsigned(7 downto 0);
+    signal rx_sfir_force_rx         : std_logic;
+    signal rx_sfir_status_ctrl_rx   : std_logic_vector(7 downto 0);
+    signal rx_sfir_active_tag_rx    : unsigned(7 downto 0);
+    signal rx_sfir_bypass_rx        : std_logic;
+    signal rx_sfir_identity_rx      : std_logic;
+    signal rx_sfir_both_lanes_rx    : std_logic;
+    signal rx_sfir_sat_rx           : std_logic_vector(1 downto 0);
+    signal rx_sfir_status_word_rx   : std_logic_vector(31 downto 0);
+    signal rx_sfir_status_req_sys   : std_logic := '0';
+    signal rx_sfir_status_ack_sys   : std_logic;
+    signal rx_sfir_status_wire_sys  : std_logic_vector(31 downto 0);
+    signal rx_sfir_status_sys       : std_logic_vector(31 downto 0) := (others => '0');
 
     signal link_stop_toggle_rx    : std_logic;
     signal link_stop_toggle_tx    : std_logic;
@@ -885,7 +917,10 @@ begin
                 tx_fault_flush_status_sys(4 downto 0) &
                 tx_retune_gate_status_sys(5 downto 0),
             rx_fault_causes_export           => rx_fault_causes_sys,
-            xb_gpio_in_port                 => nios_xb_gpio_in,
+            rx_sfir_data_export              => rx_sfir_data_sys,
+            rx_sfir_ctrl_export              => rx_sfir_ctrl_sys,
+            rx_sfir_status_export            => rx_sfir_status_sys,
+            xb_gpio_in_port                => nios_xb_gpio_in,
             xb_gpio_out_port                => nios_xb_gpio_out,
             xb_gpio_dir_export              => nios_xb_gpio_oe,
             command_serial_in               => command_serial_in,
@@ -969,6 +1004,9 @@ begin
     --adi_sync_in    <= unpack(rffe_gpio.o).sync_in;
 
     -- Per-dwell measurement, sweep revision only.
+    --
+    -- The spatial FIR in rx.vhd is a separate reader of adc_streams; this tap
+    -- and the pre-trigger ring stay on the raw ADC lane, not the FIR mix.
     --
     -- Tapped off adc_streams(0) rather than inserted into the datapath: the
     -- FIFO write path is untouched, so a fault here cannot cost samples.
@@ -1428,6 +1466,71 @@ begin
         end if;
     end process;
 
+    -- RX spatial FIR: {data, ctrl} sys -> rx in one bundled handshake,
+    -- decoded into rx_clock pulses for the bank in rx.vhd.
+    U_rx_spatial_fir_controller : entity work.rx_spatial_fir_controller
+        port map (
+            source_clock    => sys_clock,
+            source_reset    => sys_reset,
+            source_data     => rx_sfir_data_sys,
+            source_ctrl     => rx_sfir_ctrl_sys,
+            rx_clock        => rx_clock,
+            rx_reset        => rx_reset,
+            coef_wr_en      => rx_sfir_wr_en_rx,
+            coef_wr_idx     => rx_sfir_wr_idx_rx,
+            coef_wr_data    => rx_sfir_wr_data_rx,
+            coef_commit     => rx_sfir_commit_rx,
+            coef_commit_tag => rx_sfir_commit_tag_rx,
+            force_identity  => rx_sfir_force_rx,
+            status_ctrl     => rx_sfir_status_ctrl_rx
+        );
+
+    rx_sfir_status_word_rx(31 downto 28) <= x"1" when ENABLE_SPATIAL_FIR else x"0";
+    rx_sfir_status_word_rx(27 downto 0) <= (27 downto 21 => '0')
+                                           & rx_sfir_sat_rx
+                                           & rx_sfir_both_lanes_rx
+                                           & rx_sfir_identity_rx
+                                           & rx_sfir_bypass_rx
+                                           & std_logic_vector(rx_sfir_active_tag_rx)
+                                           & rx_sfir_status_ctrl_rx;
+
+    U_rx_sfir_status_handshake : entity work.handshake
+        generic map ( DATA_WIDTH => 32 )
+        port map (
+            source_reset => rx_reset,
+            source_clock => rx_clock,
+            source_data  => rx_sfir_status_word_rx,
+            dest_reset   => sys_reset,
+            dest_clock   => sys_clock,
+            dest_data    => rx_sfir_status_wire_sys,
+            dest_req     => rx_sfir_status_req_sys,
+            dest_ack     => rx_sfir_status_ack_sys
+        );
+
+    drive_handshake_rx_sfir_status : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_sfir_status_req_sys <= '0';
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_sfir_status_ack_sys = '0' ) then
+                rx_sfir_status_req_sys <= '1';
+            else
+                rx_sfir_status_req_sys <= '0';
+            end if;
+        end if;
+    end process;
+
+    rx_sfir_status_capture : process( sys_clock, sys_reset )
+    begin
+        if( sys_reset = '1' ) then
+            rx_sfir_status_sys <= (others => '0');
+        elsif( rising_edge(sys_clock) ) then
+            if( rx_sfir_status_ack_sys = '1' ) then
+                rx_sfir_status_sys <= rx_sfir_status_wire_sys;
+            end if;
+        end if;
+    end process;
+
     rx_epoch_status_sys <= rx_epoch_snapshot_sys(95 downto 64);
     rx_epoch_ts_hi_sys  <= rx_epoch_snapshot_sys(63 downto 32);
     rx_epoch_ts_lo_sys  <= rx_epoch_snapshot_sys(31 downto 0);
@@ -1844,7 +1947,8 @@ begin
     -- RX Submodule
     U_rx : entity work.rx
         generic map (
-            NUM_STREAMS            => adc_controls'length
+            NUM_STREAMS            => adc_controls'length,
+            ENABLE_SPATIAL_FIR     => ENABLE_SPATIAL_FIR
         )
         port map (
             rx_reset               => rx_reset,
@@ -1888,6 +1992,19 @@ begin
             rx_epoch_discard_active => rx_epoch_discard_rx,
             rx_epoch_start_event    => rx_epoch_start_event_rx,
             rx_epoch_first_valid_ts => rx_epoch_first_valid_rx,
+
+            -- Spatial FIR bank control and status (rx_clock)
+            sfir_coef_wr_en         => rx_sfir_wr_en_rx,
+            sfir_coef_wr_idx        => rx_sfir_wr_idx_rx,
+            sfir_coef_wr_data       => rx_sfir_wr_data_rx,
+            sfir_coef_commit        => rx_sfir_commit_rx,
+            sfir_coef_commit_tag    => rx_sfir_commit_tag_rx,
+            sfir_force_identity     => rx_sfir_force_rx,
+            sfir_active_tag         => rx_sfir_active_tag_rx,
+            sfir_bypass             => rx_sfir_bypass_rx,
+            sfir_active_identity    => rx_sfir_identity_rx,
+            sfir_both_lanes         => rx_sfir_both_lanes_rx,
+            sfir_sat_sticky         => rx_sfir_sat_rx,
 
             -- Triggering
             trigger_arm            => rx_trigger_ctl.arm,

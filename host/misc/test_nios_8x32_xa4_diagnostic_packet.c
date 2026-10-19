@@ -121,6 +121,17 @@ bool tx_retune_gate_fifo_flush(void)
 bool tx_retune_gate_fifo_release(void)
 { gate_fifo_release_calls++; return gate_command_success; }
 uint32_t tx_retune_gate_status_read(void) { return 0; }
+static bool sfir_success = true;
+static unsigned int sfir_write_calls;
+static unsigned int sfir_commit_calls;
+static unsigned int sfir_identity_calls;
+static uint8_t sfir_last_tag;
+uint32_t rx_sfir_status_read(void) { return UINT32_C(0x1003a5e3); }
+bool rx_sfir_write_word(uint8_t idx, uint32_t word)
+{ (void)idx; (void)word; sfir_write_calls++; return sfir_success; }
+bool rx_sfir_commit(uint8_t tag)
+{ sfir_last_tag = tag; sfir_commit_calls++; return sfir_success; }
+bool rx_sfir_identity(void) { sfir_identity_calls++; return sfir_success; }
 
 #define CHECK_READ(target_value, addr_value, expected_success, expected_data) \
     do { \
@@ -248,7 +259,21 @@ int main(void)
         !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION, false, 0, 0) ||
         nios_pkt_8x32_rfic_owner_access_safe(
-            NIOS_PKT_8x32_TARGET_NIOS_RAM, true, 0, 0)) {
+            NIOS_PKT_8x32_TARGET_NIOS_RAM, true, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, false,
+            NIOS_PKT_8x32_SFIR_ADDR_STATUS, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, true,
+            NIOS_PKT_8x32_SFIR_CMD_IDENTITY, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, true,
+            NIOS_PKT_8x32_SFIR_CMD_IDENTITY, 1) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, true,
+            NIOS_PKT_8x32_SFIR_CMD_COMMIT, 1) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, true, 0, 0)) {
         fputs("RFIC-owner 8x32 access policy mismatch\n", stderr);
         return 1;
     }
@@ -415,6 +440,48 @@ int main(void)
         return 1;
     }
     CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_EPOCH_SETTLE, 0, 0, false);
+
+    /* RX spatial FIR: address bounds, mirrors follow only acknowledged
+     * writes and commits, IDENTITY takes data 0 only. */
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+               NIOS_PKT_8x32_SFIR_ADDR_STATUS, true, UINT32_C(0x1003a5e3));
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 19, true, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 20, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x33, true, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x34, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x81, false, 0);
+    sfir_success = true;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 3,
+                UINT32_C(0x12344000), true);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x23, true,
+               UINT32_C(0x12344000));
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 3, true, 0);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                NIOS_PKT_8x32_SFIR_CMD_COMMIT, 0x5a, true);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 3, true,
+               UINT32_C(0x12344000));
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                NIOS_PKT_8x32_SFIR_CMD_COMMIT, 0x100, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 20, 1, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x23, 1, false);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                NIOS_PKT_8x32_SFIR_CMD_IDENTITY, 0, true);
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                NIOS_PKT_8x32_SFIR_CMD_IDENTITY, 1, false);
+    sfir_success = false;
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 3, 7, false);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 0x23, true,
+               UINT32_C(0x12344000));
+    CHECK_WRITE(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                NIOS_PKT_8x32_SFIR_CMD_COMMIT, 0x11, false);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, 3, true,
+               UINT32_C(0x12344000));
+    sfir_success = true;
+    if (sfir_write_calls != 2 || sfir_commit_calls != 2 ||
+        sfir_identity_calls != 1 || sfir_last_tag != 0x11) {
+        fputs("RX spatial FIR command dispatch mismatch\n", stderr);
+        return 1;
+    }
 
     /* Legacy fastlock packets must validate the full fields before any
      * narrowing or direction selection. */

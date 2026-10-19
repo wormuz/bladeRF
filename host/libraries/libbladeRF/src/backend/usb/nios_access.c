@@ -1629,6 +1629,55 @@ int nios_rx_epoch_status_read(struct bladerf *dev, uint32_t *value)
     return status;
 }
 
+int nios_rx_sfir_write(struct bladerf *dev, uint8_t idx, uint32_t word)
+{
+    if (idx >= NIOS_PKT_8x32_SFIR_NUM_COEF) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, idx,
+                           word);
+}
+
+int nios_rx_sfir_commit(struct bladerf *dev, uint8_t tag)
+{
+    int status = nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                                 NIOS_PKT_8x32_SFIR_CMD_COMMIT, tag);
+#ifdef ENABLE_LIBBLADERF_NIOS_ACCESS_LOG_VERBOSE
+    if (status == 0) {
+        log_verbose("%s: tag 0x%02x\n", __FUNCTION__, tag);
+    }
+#endif
+    return status;
+}
+
+int nios_rx_sfir_identity(struct bladerf *dev)
+{
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                           NIOS_PKT_8x32_SFIR_CMD_IDENTITY, 0);
+}
+
+int nios_rx_sfir_status_read(struct bladerf *dev, uint32_t *value)
+{
+    int status = nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR,
+                                NIOS_PKT_8x32_SFIR_ADDR_STATUS, value);
+    /* Same rule as nios_rx_epoch_status_read: a rejected status read is a
+     * firmware without the target. */
+    if (status == BLADERF_ERR_FPGA_OP) {
+        status = BLADERF_ERR_UNSUPPORTED;
+    }
+    return status;
+}
+
+int nios_rx_sfir_mirror_read(struct bladerf *dev, uint8_t idx,
+                             uint32_t *word)
+{
+    if (idx >= NIOS_PKT_8x32_SFIR_NUM_COEF) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR, idx,
+                          word);
+}
+
 int nios_rx_epoch_status_snapshot_read(struct bladerf *dev,
                                        uint32_t *status_word,
                                        uint32_t *timestamp_lo)

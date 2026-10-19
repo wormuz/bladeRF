@@ -357,6 +357,8 @@ set hs_pairs [list \
     {*U_rx_fault_causes_handshake|source_holding[*]}                {*bladerf_core:*|rx_fault_causes_sys[*]} \
     {*tx_retune_gate_controller:U_tx_retune_gate_controller|handshake:transfer|source_holding[*]} {*tx_retune_gate_controller:U_tx_retune_gate_controller|control_tx[*]} \
     {*U_tx_retune_gate_status_handshake|source_holding[*]}          {*bladerf_core:*|tx_retune_gate_status_sys[*]} \
+    {*rx_spatial_fir_controller:U_rx_spatial_fir_controller|handshake:transfer|source_holding[*]} {*rx_spatial_fir_controller:U_rx_spatial_fir_controller|control_rx[*]} \
+    {*U_rx_sfir_status_handshake|source_holding[*]}                 {*bladerf_core:*|rx_sfir_status_sys[*]} \
 ]
 
 # On reset recovery each controller establishes its surviving command levels

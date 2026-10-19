@@ -18,8 +18,8 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
--- hosted revision: thin wrapper around bladerf_core. All feature generics
--- stay at their default (false); this revision uses the shared core as-is.
+-- hosted revision: thin wrapper around bladerf_core. The sweep feature
+-- generics stay false; ENABLE_SPATIAL_FIR puts the 2x2 RX FIR in rx.vhd.
 
 library ieee;
     use ieee.std_logic_1164.all;
@@ -40,7 +40,8 @@ begin
         generic map (
             ENABLE_SWEEP_ANALYZER  => false,
             ENABLE_TRIGGER_CAPTURE => false,
-            ENABLE_GAIN_SEQUENCER  => false
+            ENABLE_GAIN_SEQUENCER  => false,
+            ENABLE_SPATIAL_FIR     => true
         )
         port map (
             c5_clock2      => c5_clock2,

@@ -44,6 +44,16 @@
  * samples from the wrong part of a frozen ring -- not a hang, and visible
  * because the host wrote the base it expects. */
 static uint16_t pretrig_base = 0;
+
+#if defined(RX_SFIR_DATA_BASE) && defined(RX_SFIR_CTRL_BASE) && \
+    defined(RX_SFIR_STATUS_BASE)
+#define RX_SFIR_PRESENT 1
+/* What this firmware wrote into the fabric banks, for host readback. The
+ * shadow mirror is updated only after the fabric echoed the write, the
+ * active mirror only after the commit echo. */
+static uint32_t rx_sfir_shadow_mirror[NIOS_PKT_8x32_SFIR_NUM_COEF];
+static uint32_t rx_sfir_active_mirror[NIOS_PKT_8x32_SFIR_NUM_COEF];
+#endif
 #endif  // BOARD_BLADERF_MICRO
 
 static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
@@ -275,6 +285,24 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             }
 #ifdef TX_RETUNE_GATE_STATUS_BASE
             *data = tx_retune_gate_status_read();
+            break;
+#else
+            *data = 0;
+            return false;
+#endif
+
+        /* Address range already checked by
+         * nios_pkt_8x32_diagnostic_read_addr_valid(). */
+        case NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR:
+#ifdef RX_SFIR_PRESENT
+            if (addr == NIOS_PKT_8x32_SFIR_ADDR_STATUS) {
+                *data = rx_sfir_status_read();
+            } else if (addr >= NIOS_PKT_8x32_SFIR_SHADOW_BASE) {
+                *data = rx_sfir_shadow_mirror[addr -
+                                              NIOS_PKT_8x32_SFIR_SHADOW_BASE];
+            } else {
+                *data = rx_sfir_active_mirror[addr];
+            }
             break;
 #else
             *data = 0;
@@ -538,6 +566,36 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                     return false;
             }
             break;
+
+        /* RX spatial FIR bank control, see nios_pkt_8x32.h. */
+        case NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR:
+#ifdef RX_SFIR_PRESENT
+            if (addr < NIOS_PKT_8x32_SFIR_NUM_COEF) {
+                if (!rx_sfir_write_word(addr, data)) {
+                    return false;
+                }
+                rx_sfir_shadow_mirror[addr] = data;
+                return true;
+            }
+            if (addr == NIOS_PKT_8x32_SFIR_CMD_COMMIT) {
+                uint8_t m;
+                if (data > UINT8_MAX || !rx_sfir_commit((uint8_t)data)) {
+                    return false;
+                }
+                for (m = 0; m < NIOS_PKT_8x32_SFIR_NUM_COEF; m++) {
+                    rx_sfir_active_mirror[m] = rx_sfir_shadow_mirror[m];
+                }
+                return true;
+            }
+            if (addr == NIOS_PKT_8x32_SFIR_CMD_IDENTITY) {
+                return data == 0 && rx_sfir_identity();
+            }
+            return false;
+#else
+            (void)addr;
+            (void)data;
+            return false;
+#endif
 #endif  // BOARD_BLADERF_MICRO
 
         default:

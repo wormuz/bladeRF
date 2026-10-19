@@ -48,6 +48,7 @@
 #include "../bladerf1/flash.h"
 #include "board/board.h"
 #include "capabilities.h"
+#include "rx_spatial_fir_policy.h"
 #include "compatibility.h"
 
 #include "ad936x.h"
@@ -312,6 +313,8 @@ static int _bladerf2_initialize(struct bladerf *dev)
 /* Detect epoch-tag support only after stale scheduled-retune cleanup. The
  * contract stays off until a transition requests BLADERF_RF_REQUIRE_EPOCH_VALID:
  * stock clients (sync_config/enable_module/sync_rx) keep upstream semantics. */
+static int bladerf2_rx_sfir_probe(struct bladerf *dev);
+
 static int bladerf2_rx_epoch_contract_probe(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -682,6 +685,7 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
     CHECK_STATUS(_bladerf2_initialize(dev));
 
     CHECK_STATUS(bladerf2_rx_epoch_contract_probe(dev));
+    CHECK_STATUS(bladerf2_rx_sfir_probe(dev));
 
     return 0;
 }
@@ -8017,6 +8021,358 @@ int bladerf_set_dwell_cfg(struct bladerf *dev, uint64_t threshold,
     });
 
     return 0;
+}
+
+/******************************************************************************
+ *  RX spatial FIR (doc/development/rx-spatial-mimo-fir-design.md 2.5, 3, 4) *
+ ******************************************************************************/
+
+/* Bounds the epoch prepare/fence and the wait for EPOCH_VALID of one
+ * commit transaction (two calls, each with this budget). */
+#define BLADERF2_SFIR_TRANSACTION_TIMEOUT_MS 2000u
+/* Fenced identity waits for the level to reach the fabric before COMPLETE. */
+#define BLADERF2_SFIR_FORCE_WAIT_NS   (100ULL * 1000ULL * 1000ULL)
+#define BLADERF2_SFIR_FORCE_POLL_US   200u
+
+struct bladerf2_sfir_apply_ctx {
+    struct bladerf2_board_data *board_data;
+    bool identity_level; /* true: force identity; false: commit */
+    uint8_t tag;
+    bool bank_identity;
+};
+
+static uint64_t bladerf2_sfir_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
+int bladerf2_rx_sfir_force_identity(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rx_sfir_supported &&
+            board_data->rx_sfir_may_be_active) {
+            status = nios_rx_sfir_identity(dev);
+            if (status == 0) {
+                board_data->rx_sfir_may_be_active = false;
+                board_data->rx_sfir_host_generation++;
+                board_data->rx_sfir_epoch_id = 0;
+            } else {
+                log_error("%s: identity write failed: %s\n", __FUNCTION__,
+                          bladerf_strerror(status));
+            }
+        }
+    });
+
+    return status;
+}
+
+/* Runs inside the RX epoch fence (bladerf2_rx_epoch_reconfigure) or, with
+ * no epoch contract, directly under dev->lock. NIOS has already waited for
+ * the commit echo; the status word must then show the tag. A forced
+ * identity is a level without NIOS acknowledgement, so wait here for the
+ * fabric to report it before COMPLETE can be issued. */
+static int bladerf2_rx_sfir_apply(struct bladerf *dev, void *context)
+{
+    struct bladerf2_sfir_apply_ctx *ctx = context;
+    uint32_t word = 0;
+    int status;
+
+    if (ctx->identity_level) {
+        const uint64_t deadline_ns =
+            bladerf2_sfir_now_ns() + BLADERF2_SFIR_FORCE_WAIT_NS;
+
+        status = nios_rx_sfir_identity(dev);
+        while (status == 0) {
+            status = nios_rx_sfir_status_read(dev, &word);
+            if (status == 0 &&
+                bladerf2_sfir_status_decode(word).force_identity &&
+                bladerf2_sfir_status_decode(word).bypass) {
+                return 0;
+            }
+            if (status == 0 && bladerf2_sfir_now_ns() > deadline_ns) {
+                status = BLADERF_ERR_TIMEOUT;
+            }
+            if (status == 0) {
+                usleep(BLADERF2_SFIR_FORCE_POLL_US);
+            }
+        }
+        return status;
+    }
+
+    status = nios_rx_sfir_commit(dev, ctx->tag);
+    if (status == 0) {
+        status = nios_rx_sfir_status_read(dev, &word);
+    }
+    if (status == 0) {
+        status = bladerf2_sfir_commit_verify(word, ctx->tag,
+                                             ctx->bank_identity);
+        if (status != 0) {
+            log_error("%s: commit tag 0x%02x not confirmed, status 0x%08x\n",
+                      __FUNCTION__, ctx->tag, word);
+        }
+    }
+    return status;
+}
+
+/* Common tail of set/reset: run the apply step fenced (epoch contract) or
+ * directly, then publish the result. On failure the transition machinery
+ * has already aborted the epoch; force identity as the fail-closed state. */
+static int bladerf2_rx_sfir_run(struct bladerf *dev,
+                                struct bladerf2_sfir_apply_ctx *ctx)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bool contract_enabled;
+    uint8_t epoch_id = 0;
+    int status;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+
+    if (contract_enabled) {
+        const struct bladerf2_rx_epoch_apply apply = {
+            .fn = bladerf2_rx_sfir_apply,
+            .ctx = ctx,
+            .event_flags = BLADERF_RF_EVENT_F_SPATIAL_FIR,
+        };
+        status = bladerf2_rx_epoch_reconfigure(
+            dev, &apply, BLADERF2_SFIR_TRANSACTION_TIMEOUT_MS, &epoch_id);
+    } else {
+        WITH_MUTEX(&dev->lock, {
+            status = bladerf2_rx_sfir_apply(dev, ctx);
+        });
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        if (status == 0) {
+            board_data->rx_sfir_epoch_id = epoch_id;
+            if (ctx->identity_level || ctx->bank_identity) {
+                board_data->rx_sfir_may_be_active = false;
+            }
+            if (!ctx->identity_level) {
+                board_data->rx_sfir_tag = ctx->tag;
+            }
+        } else {
+            /* Unknown fabric state: keep the hooks armed. */
+            board_data->rx_sfir_may_be_active = true;
+        }
+    });
+
+    if (status != 0) {
+        int identity_status = bladerf2_rx_sfir_force_identity(dev);
+        log_error("%s: %s failed: %s (identity %s)\n", __FUNCTION__,
+                  ctx->identity_level ? "identity" : "commit",
+                  bladerf_strerror(status),
+                  identity_status == 0 ? "forced" : "write failed");
+    }
+    return status;
+}
+
+/* Open-time probe, after the RX epoch probe. Fabric state survives a host
+ * close/reopen (only SYS_RST resets it), so a new handle forces identity
+ * rather than inherit an earlier handle's W. */
+static int bladerf2_rx_sfir_probe(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t word = 0;
+    bool supported = false;
+    int status = nios_rx_sfir_status_read(dev, &word);
+
+    if (status == 0) {
+        supported = bladerf2_sfir_status_supported(word);
+    } else if (status != BLADERF_ERR_UNSUPPORTED) {
+        return status;
+    }
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->rx_sfir_supported = supported;
+        board_data->rx_sfir_may_be_active = supported;
+        board_data->rx_sfir_host_generation = 0;
+        board_data->rx_sfir_tag = 0;
+        board_data->rx_sfir_epoch_id = 0;
+    });
+    log_debug("%s: RX spatial FIR %s (status 0x%08x)\n", __FUNCTION__,
+              supported ? "present" : "absent", word);
+
+    return supported ? bladerf2_rx_sfir_force_identity(dev) : 0;
+}
+
+static void bladerf2_rx_sfir_fill_status(
+    struct bladerf2_board_data *board_data, uint32_t word,
+    struct bladerf_rx_spatial_fir_status *st)
+{
+    const struct bladerf2_sfir_status_fields f =
+        bladerf2_sfir_status_decode(word);
+
+    st->host_generation = board_data->rx_sfir_host_generation;
+    st->fpga_tag = f.tag;
+    st->bypass_active = f.bypass;
+    st->identity = f.identity;
+    st->both_lanes = f.both_lanes;
+    st->sat_rx1 = f.sat_rx1;
+    st->sat_rx2 = f.sat_rx2;
+    st->rx_epoch_id = board_data->rx_sfir_epoch_id;
+}
+
+int bladerf_set_rx_spatial_fir(struct bladerf *dev,
+                               const int16_t coef[2][2][5][2])
+{
+    uint32_t words[BLADERF2_SFIR_NUM_COEF];
+    struct bladerf2_sfir_apply_ctx ctx = {0};
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+    NULL_CHECK(coef);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bladerf2_sfir_pack_bank(coef, words);
+    ctx.board_data = board_data;
+    ctx.identity_level = false;
+    ctx.bank_identity = bladerf2_sfir_bank_is_identity(words);
+
+    WITH_MUTEX(&dev->lock, {
+        if (!board_data->rx_sfir_supported) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        }
+        /* W is estimated for one gain state; AGC changes gain without the
+         * host, so a W under AGC is wrong by construction. */
+        for (int c = 0; status == 0 && c < 2; c++) {
+            bladerf_gain_mode mode = BLADERF_GAIN_DEFAULT;
+            status = dev->board->get_gain_mode(dev, BLADERF_CHANNEL_RX(c),
+                                               &mode);
+            if (status == 0 && mode != BLADERF_GAIN_MGC) {
+                status = BLADERF_ERR_UNSUPPORTED;
+            }
+        }
+        if (status == 0) {
+            board_data->rx_sfir_host_generation++;
+            ctx.tag = bladerf2_sfir_tag_for_generation(
+                board_data->rx_sfir_host_generation);
+            board_data->rx_sfir_may_be_active = true;
+            /* Shadow bank only: no effect on samples until the commit. */
+            for (unsigned int m = 0;
+                 status == 0 && m < BLADERF2_SFIR_NUM_COEF; m++) {
+                status = nios_rx_sfir_write(dev, (uint8_t)m, words[m]);
+            }
+        }
+    });
+    if (status == BLADERF_ERR_UNSUPPORTED) {
+        return status;
+    }
+    if (status != 0) {
+        (void)bladerf2_rx_sfir_force_identity(dev);
+        return status;
+    }
+
+    return bladerf2_rx_sfir_run(dev, &ctx);
+}
+
+int bladerf_reset_rx_spatial_fir(struct bladerf *dev)
+{
+    struct bladerf2_sfir_apply_ctx ctx = {0};
+    bool supported;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    WITH_MUTEX(&dev->lock, {
+        supported = board_data->rx_sfir_supported;
+        if (supported) {
+            board_data->rx_sfir_host_generation++;
+            board_data->rx_sfir_may_be_active = true;
+        }
+    });
+    if (!supported) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+
+    ctx.board_data = board_data;
+    ctx.identity_level = true;
+    return bladerf2_rx_sfir_run(dev, &ctx);
+}
+
+int bladerf_get_rx_spatial_fir_status(struct bladerf *dev,
+                                      struct bladerf_rx_spatial_fir_status *st)
+{
+    uint32_t word = 0;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(st);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    WITH_MUTEX(&dev->lock, {
+        if (!board_data->rx_sfir_supported) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        } else {
+            status = nios_rx_sfir_status_read(dev, &word);
+        }
+        if (status == 0 && !bladerf2_sfir_status_supported(word)) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (status == 0) {
+            bladerf2_rx_sfir_fill_status(board_data, word, st);
+        }
+    });
+
+    return status;
+}
+
+int bladerf_get_rx_spatial_fir(struct bladerf *dev,
+                               int16_t coef[2][2][5][2],
+                               struct bladerf_rx_spatial_fir_status *st)
+{
+    uint32_t words[BLADERF2_SFIR_NUM_COEF];
+    uint32_t word = 0;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    WITH_MUTEX(&dev->lock, {
+        if (!board_data->rx_sfir_supported) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        } else {
+            status = nios_rx_sfir_status_read(dev, &word);
+        }
+        if (status == 0 && !bladerf2_sfir_status_supported(word)) {
+            status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (status == 0 && coef != NULL) {
+            const struct bladerf2_sfir_status_fields f =
+                bladerf2_sfir_status_decode(word);
+            if (f.identity) {
+                bladerf2_sfir_identity_bank(words);
+            } else if (f.tag != board_data->rx_sfir_tag) {
+                /* The NIOS mirror describes the last commit of this
+                 * handle only while the fabric still runs its tag. */
+                status = BLADERF_ERR_UNEXPECTED;
+            } else {
+                for (unsigned int m = 0;
+                     status == 0 && m < BLADERF2_SFIR_NUM_COEF; m++) {
+                    status = nios_rx_sfir_mirror_read(dev, (uint8_t)m,
+                                                      &words[m]);
+                }
+            }
+            if (status == 0) {
+                bladerf2_sfir_unpack_bank(words, coef);
+            }
+        }
+        if (status == 0 && st != NULL) {
+            bladerf2_rx_sfir_fill_status(board_data, word, st);
+        }
+    });
+
+    return status;
 }
 
 int bladerf_get_dwell_summary(struct bladerf *dev,

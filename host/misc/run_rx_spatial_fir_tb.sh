@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # rx_spatial_fir GHDL regression (design doc/development/rx-spatial-mimo-fir-design.md
-# section 6.1, T1-T7). Exits non-zero on any mismatch.
+# section 6.1, T1-T8). Exits non-zero on any mismatch.
 #
 # Vectors are committed under hdl/fpga/ip/nuand/simulation/rx_spatial_fir_vectors.
 # To regenerate them from the golden model first, point SDR_SCANNER at an
@@ -26,13 +26,18 @@ cd "${build_dir}"
 ghdl -a --std=08 -frelaxed \
     "${repo_root}/hdl/fpga/platforms/common/bladerf/vhdl/fx3_gpif_p.vhd" \
     "${syn_dir}/fifo_readwrite_p.vhd" \
+    "${syn_dir}/synchronizer.vhd" \
+    "${syn_dir}/handshake.vhd" \
     "${syn_dir}/rx_spatial_fir.vhd" \
+    "${syn_dir}/rx_spatial_fir_controller.vhd" \
     "${syn_dir}/rx_epoch_gate.vhd" \
     "${sim_dir}/rx_spatial_fir_tb.vhd" \
-    "${sim_dir}/rx_spatial_fir_gate_equiv_tb.vhd"
+    "${sim_dir}/rx_spatial_fir_gate_equiv_tb.vhd" \
+    "${sim_dir}/rx_spatial_fir_controller_tb.vhd"
 
 # Synthesisability check of the datapath entity.
 ghdl --synth --std=08 -frelaxed --out=none rx_spatial_fir
+ghdl --synth --std=08 -frelaxed --out=none rx_spatial_fir_controller
 
 run() {
     ghdl -r --std=08 -frelaxed "$@" --assert-level=error --ieee-asserts=disable
@@ -47,5 +52,10 @@ run rx_spatial_fir_tb -gVEC_DIR="${vec_dir}" -gSTROBE=2 -gFIRST=0 -gLAST=5
 
 ghdl -e --std=08 -frelaxed rx_spatial_fir_gate_equiv_tb
 run rx_spatial_fir_gate_equiv_tb
+
+# T8: controller CDC, rx_clock faster (122.88 MHz) and slower than sys_clock.
+ghdl -e --std=08 -frelaxed rx_spatial_fir_controller_tb
+run rx_spatial_fir_controller_tb -gRX_HALF_PS=4069
+run rx_spatial_fir_controller_tb -gRX_HALF_PS=11000
 
 echo "run_rx_spatial_fir_tb: PASS"

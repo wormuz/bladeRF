@@ -558,6 +558,31 @@ foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_
 }
 set_instance_parameter_value tx_retune_gate_status {direction} {Input}
 
+# RX spatial FIR (doc/development/rx-spatial-mimo-fir-design.md section 2).
+# rx_sfir_data (Output): one Q2.14 coefficient, [15:0] real, [31:16] imag.
+# rx_sfir_ctrl (Output): [4:0] index, bit5 write toggle, bit6 commit
+# toggle, bit7 force_identity level, [23:16] commit tag. NIOS owns the
+# toggles. Both cross into rx_clock together in one work.handshake
+# (bladerf_core.vhd U_rx_spatial_fir_controller).
+# rx_sfir_status (Input): rx_clock snapshot through
+# U_rx_sfir_status_handshake; bit layout in nios_pkt_8x32.h.
+foreach pio {rx_sfir_data rx_sfir_ctrl rx_sfir_status} {
+    add_instance $pio altera_avalon_pio
+    set_instance_parameter_value $pio {bitClearingEdgeCapReg} {0}
+    set_instance_parameter_value $pio {bitModifyingOutReg} {0}
+    set_instance_parameter_value $pio {captureEdge} {0}
+    set_instance_parameter_value $pio {edgeType} {RISING}
+    set_instance_parameter_value $pio {generateIRQ} {0}
+    set_instance_parameter_value $pio {irqType} {LEVEL}
+    set_instance_parameter_value $pio {resetValue} {0.0}
+    set_instance_parameter_value $pio {simDoTestBenchWiring} {0}
+    set_instance_parameter_value $pio {simDrivenValue} {0.0}
+    set_instance_parameter_value $pio {width} {32}
+}
+set_instance_parameter_value rx_sfir_data {direction} {Output}
+set_instance_parameter_value rx_sfir_ctrl {direction} {Output}
+set_instance_parameter_value rx_sfir_status {direction} {Input}
+
 # Pre-trigger ring drain. Two PIOs, because a memory needs an address and a
 # datum and a PIO carries one word.
 #
@@ -826,6 +851,9 @@ set_interface_property tx_retune_gate_ctrl EXPORT_OF tx_retune_gate_ctrl.externa
 set_interface_property tx_retune_gate_target_lo EXPORT_OF tx_retune_gate_target_lo.external_connection
 set_interface_property tx_retune_gate_target_hi EXPORT_OF tx_retune_gate_target_hi.external_connection
 set_interface_property tx_retune_gate_status EXPORT_OF tx_retune_gate_status.external_connection
+foreach pio {rx_sfir_data rx_sfir_ctrl rx_sfir_status} {
+    set_interface_property $pio EXPORT_OF $pio.external_connection
+}
 set_interface_property pretrig_addr EXPORT_OF pretrig_addr.external_connection
 set_interface_property pretrig_data EXPORT_OF pretrig_data.external_connection
 set_interface_property dwell_status EXPORT_OF dwell_status.external_connection
@@ -1029,6 +1057,18 @@ foreach {pio base} {
     set_connection_parameter_value nios2.data_master/$pio.s1 baseAddress $base
     set_connection_parameter_value nios2.data_master/$pio.s1 defaultConnection {0}
 }
+# RX spatial FIR PIOs. 0x9600..0x9660 hold the loss counters and the 64-bit
+# rfic_monotonic_timer spans 0x9840..0x987f, so these start at 0x9880.
+foreach {pio base} {
+    rx_sfir_data   0x9880
+    rx_sfir_ctrl   0x98a0
+    rx_sfir_status 0x98c0
+} {
+    add_connection nios2.data_master $pio.s1
+    set_connection_parameter_value nios2.data_master/$pio.s1 arbitrationPriority {1}
+    set_connection_parameter_value nios2.data_master/$pio.s1 baseAddress $base
+    set_connection_parameter_value nios2.data_master/$pio.s1 defaultConnection {0}
+}
 add_connection nios2.data_master rf_link_cfg.s1
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 arbitrationPriority {1}
 set_connection_parameter_value nios2.data_master/rf_link_cfg.s1 baseAddress {0x9540}
@@ -1137,6 +1177,9 @@ add_connection system_clock.clk rx_epoch_ts_hi.clk
 foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi tx_retune_gate_status} {
     add_connection system_clock.clk $pio.clk
 }
+foreach pio {rx_sfir_data rx_sfir_ctrl rx_sfir_status} {
+    add_connection system_clock.clk $pio.clk
+}
 add_connection system_clock.clk rfic_axi_timeout_status.clk
 add_connection system_clock.clk rfic_axi_timeout_clear.clk
 add_connection system_clock.clk wb_timeout_status.clk
@@ -1195,6 +1238,9 @@ add_connection system_clock.clk_reset rx_epoch_status.reset
 add_connection system_clock.clk_reset rx_epoch_ts_lo.reset
 add_connection system_clock.clk_reset rx_epoch_ts_hi.reset
 foreach pio {tx_retune_gate_ctrl tx_retune_gate_target_lo tx_retune_gate_target_hi tx_retune_gate_status} {
+    add_connection system_clock.clk_reset $pio.reset
+}
+foreach pio {rx_sfir_data rx_sfir_ctrl rx_sfir_status} {
     add_connection system_clock.clk_reset $pio.reset
 }
 add_connection system_clock.clk_reset rfic_axi_timeout_status.reset

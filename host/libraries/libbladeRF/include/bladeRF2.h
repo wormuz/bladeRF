@@ -389,6 +389,121 @@ int CALL_CONV bladerf_get_dwell_summary(struct bladerf *dev,
                                         struct bladerf_dwell_summary *summary);
 
 /**
+ * @defgroup FN_BLADERF2_RX_SPATIAL_FIR RX spatial FIR
+ *
+ * 2x2 complex 5-tap FIR between the AD9361 ADC lanes and the RX sample
+ * path (doc/development/rx-spatial-mimo-fir-design.md):
+ *
+ *      y_i[n] = sum_j sum_k h_ij[k] * x_j[n-k],  k = 0..4, center tap 2
+ *
+ * Coefficients are Q2.14 (::BLADERF_RX_SPATIAL_FIR_ONE = 1.0), indexed
+ * `coef[i][j][k][c]`: output lane i, input lane j, tap k, c = 0 real,
+ * c = 1 imaginary. Outputs are rounded and saturated to 12 bits. The block
+ * is a bit-exact pass-through (identity) whenever the bank is the identity,
+ * either RX lane is disabled (RX_X1), or the identity level is forced.
+ *
+ * The fabric returns to identity on its own reset, which the FX3 pulses when
+ * RX or TX is enabled while both directions were off: load W after
+ * ::bladerf_enable_module, not before. libbladeRF also forces identity at
+ * open, on every RX invalidation whose reason changes LO, gain, gain mode,
+ * sample rate, bandwidth, RF port, correction, AD9361 FIR or clock, and at
+ * the RX epoch fence of ::bladerf_rx_transition_begin (also for scheduled
+ * retunes, at schedule time).
+ *
+ * @{
+ */
+
+#define BLADERF_RX_SPATIAL_FIR_TAPS   5
+#define BLADERF_RX_SPATIAL_FIR_CENTER 2
+#define BLADERF_RX_SPATIAL_FIR_ONE    16384 /**< 1.0 in Q2.14 */
+
+/** State of the RX spatial FIR as read back from the FPGA. */
+struct bladerf_rx_spatial_fir_status {
+    /** Library counter, +1 per commit or identity reset by this handle. */
+    uint32_t host_generation;
+    /** Tag of the bank the fabric runs; 0 after a fabric reset. */
+    uint8_t fpga_tag;
+    /** Output is the unfiltered input right now (identity bank, RX_X1, or
+     *  forced identity). */
+    bool bypass_active;
+    /** Active bank is the identity bank. */
+    bool identity;
+    /** Both RX lanes are enabled. */
+    bool both_lanes;
+    /** An RX1 / RX2 output saturated since the last commit. */
+    bool sat_rx1, sat_rx2;
+    /** RX epoch opened by the last commit of this handle, valid when the RX
+     *  epoch contract was enabled at that commit; otherwise 0. */
+    uint8_t rx_epoch_id;
+};
+
+/**
+ * Load a coefficient bank and make it active.
+ *
+ * With the RX epoch contract enabled (an earlier transition requested
+ * BLADERF_RF_REQUIRE_EPOCH_VALID) the commit runs as an RX transaction: the
+ * FPGA epoch is armed and fenced, the bank is committed, COMPLETE opens a
+ * new epoch on the first sample whose 5-sample support follows the commit,
+ * and the call returns after EPOCH_VALID. Without the contract the bank is
+ * written and committed directly, as stock setters do. On any failure the
+ * epoch is aborted and the block forced to identity.
+ *
+ * @param       dev   Device handle
+ * @param[in]   coef  Q2.14 bank, see the group description
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
+ *         block or an RX channel uses an AGC gain mode, or a value from
+ *         \ref RETCODES list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_set_rx_spatial_fir(struct bladerf *dev,
+                                         const int16_t coef[2][2][5][2]);
+
+/**
+ * Read the active bank and status.
+ *
+ * @param       dev   Device handle
+ * @param[out]  coef  Active bank: identity when the FPGA reports an identity
+ *                    bank, else the bank NIOS committed. May be NULL.
+ * @param[out]  st    Status. May be NULL.
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
+ *         block, BLADERF_ERR_UNEXPECTED if the FPGA tag does not match the
+ *         last commit of this handle, or a value from \ref RETCODES list
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_spatial_fir(struct bladerf *dev,
+                                         int16_t coef[2][2][5][2],
+                                         struct bladerf_rx_spatial_fir_status *st);
+
+/**
+ * Force identity (pass-through). Fenced like ::bladerf_set_rx_spatial_fir
+ * when the RX epoch contract is enabled.
+ *
+ * @param       dev   Device handle
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
+ *         block, or a value from \ref RETCODES list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_reset_rx_spatial_fir(struct bladerf *dev);
+
+/**
+ * Read the RX spatial FIR status only.
+ *
+ * @param       dev   Device handle
+ * @param[out]  st    Status
+ *
+ * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
+ *         block, or a value from \ref RETCODES list on other failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_rx_spatial_fir_status(
+    struct bladerf *dev, struct bladerf_rx_spatial_fir_status *st);
+
+/** @} (End of FN_BLADERF2_RX_SPATIAL_FIR) */
+
+/**
  * Read the temperature from the RFIC
  *
  * @param       dev         Device handle

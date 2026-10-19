@@ -5407,6 +5407,13 @@ typedef enum {
 /** On NIOS_RETUNE_RESPONSE, rfic_status contains a
  * bladerf_rf_nios_failure_stage value rather than a raw RFIC status word. */
 #define BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID (1U << 26)
+/** On CONFIG_ACCEPTED of an RX transaction started by
+ * bladerf_set_rx_spatial_fir()/bladerf_reset_rx_spatial_fir(): the
+ * transaction committed an RX spatial FIR bank (or identity) instead of
+ * retuning the LO; requested/readback LO are the unchanged current LO.
+ * The RX_DATA_INVALIDATED reason bits are all assigned, so this change is
+ * identified on the transition events rather than by a reason bit. */
+#define BLADERF_RF_EVENT_F_SPATIAL_FIR (1U << 25)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

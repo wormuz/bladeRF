@@ -28,7 +28,10 @@ library work;
 
 entity rx is
     generic (
-        NUM_STREAMS          : natural := 2
+        NUM_STREAMS          : natural := 2;
+        -- 2x2 spatial FIR between adc_streams and rx_mux
+        -- (doc/development/rx-spatial-mimo-fir-design.md). Off: stock chain.
+        ENABLE_SPATIAL_FIR   : boolean := false
     );
     port (
         rx_reset               : in    std_logic;
@@ -80,6 +83,21 @@ entity rx is
         rx_epoch_discard_active : out   std_logic := '0';
         rx_epoch_start_event    : out   std_logic := '0';
         rx_epoch_first_valid_ts : out   unsigned(63 downto 0) := (others => '0');
+
+        -- Spatial FIR bank control (rx_clock, from rx_spatial_fir_controller)
+        -- and status. With ENABLE_SPATIAL_FIR false the status reads as a
+        -- permanent identity bypass.
+        sfir_coef_wr_en         : in    std_logic := '0';
+        sfir_coef_wr_idx        : in    unsigned(4 downto 0) := (others => '0');
+        sfir_coef_wr_data       : in    std_logic_vector(31 downto 0) := (others => '0');
+        sfir_coef_commit        : in    std_logic := '0';
+        sfir_coef_commit_tag    : in    unsigned(7 downto 0) := (others => '0');
+        sfir_force_identity     : in    std_logic := '0';
+        sfir_active_tag         : out   unsigned(7 downto 0) := (others => '0');
+        sfir_bypass             : out   std_logic := '1';
+        sfir_active_identity    : out   std_logic := '1';
+        sfir_both_lanes         : out   std_logic := '0';
+        sfir_sat_sticky         : out   std_logic_vector(1 downto 0) := (others => '0');
 
         -- Triggering
         trigger_arm            : in    std_logic;
@@ -162,6 +180,22 @@ architecture arch of rx is
     signal rx_gen_valid             : std_logic;
 
     signal mux_streams              : sample_streams_t(adc_streams'range) := (others => ZERO_SAMPLE);
+
+    -- Spatial FIR output and the rx_mux sidebands that carry its timestamp
+    -- and delayed COMPLETE to the gate (design 1.1, 1.4, 3). The FIR carries
+    -- ts_in(n-2) with each output sample; mux_ts_from_fir selects it only
+    -- for samples that came through the NORMAL branch. Every other mux mode
+    -- gives the gate the live rx_timestamp and rx_epoch_complete exactly as
+    -- the stock chain does (a registered copy would lag the live counter by
+    -- one rx_clock, i.e. half a sample).
+    signal fir_streams              : sample_streams_t(adc_streams'range) := (others => ZERO_SAMPLE);
+    signal fir_timestamp            : unsigned(63 downto 0) := (others => '0');
+    signal fir_epoch_complete       : std_logic := '0';
+    signal mux_timestamp            : unsigned(63 downto 0) := (others => '0');
+    signal mux_epoch_complete       : std_logic := '0';
+    signal mux_ts_from_fir          : std_logic := '0';
+    signal gate_timestamp           : unsigned(63 downto 0);
+    signal gate_epoch_complete      : std_logic;
 
     -- ADR-0207 §6.2: rx_epoch_gate sits between the mux output and
     -- fifo_writer. ARM fences new samples, but a sample already registered
@@ -277,6 +311,61 @@ begin
         );
 
 
+    -- 2x2 spatial FIR (rx_spatial_fir.vhd) on the raw ADC lanes, in front of
+    -- rx_mux, so the loopback and counter sources stay out of it. The block
+    -- registers both lanes at its S0 delay line with no combinational fan-in;
+    -- adc_streams keeps one reader here as before (the mux NORMAL branch now
+    -- reads fir_streams instead).
+    gen_spatial_fir : if ENABLE_SPATIAL_FIR generate
+        assert NUM_STREAMS = 2
+            report "rx_spatial_fir needs exactly two RX streams"
+            severity failure;
+
+        U_rx_spatial_fir : entity work.rx_spatial_fir
+            port map (
+                clock               => rx_clock,
+                reset               => rx_reset,
+                in_sample_controls  => adc_controls,
+                in_samples          => adc_streams,
+                rx_timestamp        => rx_timestamp,
+                epoch_arm           => rx_epoch_arm,
+                epoch_complete      => rx_epoch_complete,
+                epoch_abort         => rx_epoch_abort,
+                coef_wr_en          => sfir_coef_wr_en,
+                coef_wr_idx         => sfir_coef_wr_idx,
+                coef_wr_data        => sfir_coef_wr_data,
+                coef_commit         => sfir_coef_commit,
+                coef_commit_tag     => sfir_coef_commit_tag,
+                force_identity      => sfir_force_identity,
+                out_samples         => fir_streams,
+                out_timestamp       => fir_timestamp,
+                out_epoch_complete  => fir_epoch_complete,
+                out_support_clean   => open,
+                out_active_tag      => sfir_active_tag,
+                out_bypass          => sfir_bypass,
+                out_active_identity => sfir_active_identity,
+                out_both_lanes      => sfir_both_lanes,
+                out_sat_sticky      => sfir_sat_sticky
+            );
+    end generate;
+
+    gen_no_spatial_fir : if not ENABLE_SPATIAL_FIR generate
+        fir_streams          <= adc_streams;
+        fir_timestamp        <= rx_timestamp;
+        fir_epoch_complete   <= rx_epoch_complete;
+        sfir_active_tag      <= (others => '0');
+        sfir_bypass          <= '1';
+        sfir_active_identity <= '1';
+        sfir_both_lanes      <= '0';
+        sfir_sat_sticky      <= (others => '0');
+    end generate;
+
+    -- Gate inputs: FIR-carried sidebands for NORMAL samples, live stock
+    -- signals otherwise (see mux_ts_from_fir). Without the FIR the select is
+    -- constant '0' and the gate wiring is the stock one.
+    gate_timestamp      <= mux_timestamp when mux_ts_from_fir = '1' else rx_timestamp;
+    gate_epoch_complete <= mux_epoch_complete when mux_ts_from_fir = '1' else rx_epoch_complete;
+
     -- ADR-0207 §6.2: gate between the mux and the sample bridge. It suppresses
     -- new IQ on ARM; a sample already registered before ARM can still pass
     -- through fifo_writer/rx_fifo with the old epoch identity. Host epoch
@@ -294,10 +383,10 @@ begin
 
             in_sample_controls      => adc_controls,
             in_samples              => mux_streams,
-            rx_timestamp            => rx_timestamp,
+            rx_timestamp            => gate_timestamp,
 
             epoch_arm               => rx_epoch_arm,
-            epoch_complete          => rx_epoch_complete,
+            epoch_complete          => gate_epoch_complete,
             epoch_abort             => rx_epoch_abort,
             epoch_id_in             => rx_epoch_id_in,
 
@@ -501,10 +590,23 @@ begin
         if( rx_reset = '1' ) then
             mux_streams  <= (others => ZERO_SAMPLE);
             rx_gen_mode  <= '0';
+            mux_timestamp      <= (others => '0');
+            mux_epoch_complete <= '0';
+            mux_ts_from_fir    <= '0';
         elsif( rising_edge(rx_clock) ) then
+            -- Registered with the data so the select changes on the same
+            -- sample boundary as the mux mode.
+            mux_timestamp      <= fir_timestamp;
+            mux_epoch_complete <= fir_epoch_complete;
+            if( ENABLE_SPATIAL_FIR and rx_mux_mode = RX_MUX_NORMAL ) then
+                mux_ts_from_fir <= '1';
+            else
+                mux_ts_from_fir <= '0';
+            end if;
+
             case rx_mux_mode is
                 when RX_MUX_NORMAL =>
-                    mux_streams <= adc_streams;
+                    mux_streams <= fir_streams;
                     if( trigger_signal_out_sync = '0' ) then
                         for i in mux_streams'range loop
                             mux_streams(i).data_v <= '0';
