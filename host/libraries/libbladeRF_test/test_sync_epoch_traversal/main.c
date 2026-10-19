@@ -3533,6 +3533,43 @@ static void test_retune_failure_record_identity(void)
         UINT64_C(0x123456789abcdef0), 7, 41, 0x1235));
 }
 
+/* A timestamped read whose target lies past the current message must not
+ * report a discontinuity for samples it skipped itself. The seek branches
+ * used to leave curr_timestamp at the old position, so the next header
+ * (same message re-read, or the next buffer) looked like a gap: OVERRUN on
+ * a contiguous stream, which revokes RX validity. */
+static void test_sync_rx_seek_forward_is_not_a_discontinuity(void)
+{
+    struct fixture f;
+    struct bladerf_metadata meta;
+    int16_t out[20];
+
+    for (int seek_into_next_buffer = 0; seek_into_next_buffer < 2;
+         ++seek_into_next_buffer) {
+        fixture_init(&f);
+        write_msg(f.buffers[0], 1000, 7, 301);
+        write_msg(f.buffers[0] + MSG_BYTES, 1000 + MSG_SAMPLES, 7, 302);
+        write_msg(f.buffers[1], 1000 + 2 * MSG_SAMPLES, 7, 303);
+        write_msg(f.buffers[1] + MSG_BYTES, 1000 + 3 * MSG_SAMPLES, 7, 304);
+        receive(&f, out, 10, &meta);
+        assert(meta.timestamp == 1000);
+
+        const uint64_t target = seek_into_next_buffer
+            ? 1000 + 2 * MSG_SAMPLES + 5   /* discard rest of buffer 0 */
+            : 1000 + MSG_SAMPLES + 5;      /* seek to message 1 */
+        rx_overrun_events = 0;
+        memset(&meta, 0, sizeof(meta));
+        meta.timestamp = target;
+        assert(sync_rx(&f.sync, out, 10, &meta, 0) == 0);
+        assert(meta.actual_count == 10);
+        assert(meta.timestamp == target);
+        assert((meta.status & BLADERF_META_STATUS_OVERRUN) == 0);
+        assert(rx_overrun_events == 0);
+        assert_marker(out, 10, seek_into_next_buffer ? 303 : 302, 5);
+        fixture_destroy(&f);
+    }
+}
+
 int main(void)
 {
     /* FPGA reload owns RFIC teardown/reinitialization. TX-only legacy
@@ -3669,6 +3706,7 @@ int main(void)
     test_shared_invalidation_uses_certified_rx_channel();
     test_rx_x2_layout_rejection_event();
     test_async_timestamp_continuity();
+    test_sync_rx_seek_forward_is_not_a_discontinuity();
 
 
     uint8_t epoch_messages[BYTES_PER_BUFFER];

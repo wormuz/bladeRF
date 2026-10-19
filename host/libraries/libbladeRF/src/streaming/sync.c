@@ -2073,7 +2073,13 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                     (unsigned int)left_in_buffer);
 
                             if (samples_left >= left_in_buffer) {
-                                /* Discard the remainder of this buffer */
+                                /* Discard the remainder of this buffer. The
+                                 * skipped samples are consumed stream time:
+                                 * advance curr_timestamp so the next header is
+                                 * checked against where the stream really is,
+                                 * not reported as a discontinuity. */
+                                s->meta.curr_timestamp +=
+                                    left_in_buffer / s->meta.samples_per_ts;
                                 advance_rx_buffer(b);
                                 s->state = SYNC_STATE_WAIT_FOR_BUFFER;
                                 s->meta.state = SYNC_META_STATE_HEADER;
@@ -2092,8 +2098,19 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                             __FUNCTION__,
                                             s->meta.curr_timestamp);
                             } else {
+                                const unsigned int skip_msgs =
+                                    timestamp_to_msg(s, samples_left);
+                                /* Same accounting as the discard branch: the
+                                 * next header starts skip_msgs messages after
+                                 * the current message start. */
+                                const int64_t skipped =
+                                    (int64_t)skip_msgs * s->meta.samples_per_msg -
+                                    (int64_t)s->meta.curr_msg_off;
+                                s->meta.curr_timestamp = (uint64_t)(
+                                    (int64_t)s->meta.curr_timestamp +
+                                    skipped / (int64_t)s->meta.samples_per_ts);
                                 s->meta.state = SYNC_META_STATE_HEADER;
-                                s->meta.msg_num += timestamp_to_msg(s, samples_left);
+                                s->meta.msg_num += skip_msgs;
 
                                 log_verbose("%s: Seeking to message %u.\n",
                                             __FUNCTION__, s->meta.msg_num);
