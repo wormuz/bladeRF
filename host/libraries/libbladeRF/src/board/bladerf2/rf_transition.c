@@ -4104,7 +4104,20 @@ static int _bladerf_rx_transition_begin(
                       (uint64_t)request->target_frequency_hz,
                       qt.nios_profile, qt.rffe_profile, status);
         }
-    } else {
+    }
+    if (quick_tune != NULL && status == BLADERF_ERR_WOULD_BLOCK) {
+        /* NIOS reported the RFIC busy (or no completion record for this
+         * recall). Fastlock is only a faster way to the same LO: program it
+         * on the host path inside this same fenced transaction instead of
+         * failing the retune. The host path also exits fastlock. */
+        log_warning("%s: fastlock recall busy, host tune: transaction=%u "
+                    "target=%" PRIu64 "\n", __FUNCTION__,
+                    board_data->rf_transition_current_id,
+                    (uint64_t)request->target_frequency_hz);
+        quick_tune = NULL;
+        status = 0;
+    }
+    if (quick_tune == NULL && status == 0) {
         /* Hold device configuration ownership from the transition-specific
          * setter entry through LO programming. Ordinary RX retunes are
          * rejected until wait/abort clears rf_transition_pending. */
