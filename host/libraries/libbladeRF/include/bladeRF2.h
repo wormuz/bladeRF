@@ -435,6 +435,9 @@ struct bladerf_rx_spatial_fir_status {
     /** RX epoch opened by the last commit of this handle, valid when the RX
      *  epoch contract was enabled at that commit; otherwise 0. */
     uint8_t rx_epoch_id;
+    /** RX transaction of the last commit (for bladerf_rx_transition_wait /
+     *  bladerf_rx_transition_get_events), same validity as rx_epoch_id. */
+    uint32_t rx_transaction_id;
 };
 
 /**

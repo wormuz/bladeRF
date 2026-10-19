@@ -5285,15 +5285,19 @@ int bladerf_rx_transition_wait(struct bladerf *dev,
 
 int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
                                   const struct bladerf2_rx_epoch_apply *apply,
-                                  uint32_t timeout_ms, uint8_t *epoch_id)
+                                  uint32_t timeout_ms, uint8_t *epoch_id,
+                                  uint32_t *transaction_id)
 {
     struct bladerf2_board_data *board_data;
     struct bladerf_rx_transition_request request;
     struct bladerf_rf_event final_event;
     bladerf_frequency current_hz = 0;
-    uint32_t transaction_id = 0;
+    uint32_t txn = 0;
     int status;
 
+    if (transaction_id != NULL) {
+        *transaction_id = 0;
+    }
     if (epoch_id != NULL) {
         *epoch_id = 0;
     }
@@ -5315,17 +5319,20 @@ int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
         request.timeout_ms = timeout_ms;
         status = _bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
                                               &request, NULL, apply,
-                                              &transaction_id);
+                                              &txn);
     }
     if (status == 0) {
         memset(&final_event, 0, sizeof(final_event));
-        status = _bladerf_rx_transition_wait(dev, transaction_id,
+        status = _bladerf_rx_transition_wait(dev, txn,
                                              &final_event, timeout_ms);
     }
     if (status == 0 && epoch_id != NULL) {
         WITH_MUTEX(&dev->lock, {
             *epoch_id = board_data->rf_transition_epoch_id;
         });
+    }
+    if (status == 0 && transaction_id != NULL) {
+        *transaction_id = txn;
     }
 
     bladerf2_rx_transition_call_leave(board_data);

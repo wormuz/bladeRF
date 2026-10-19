@@ -450,6 +450,7 @@ struct bladerf2_board_data {
     uint32_t rx_sfir_host_generation;
     uint8_t rx_sfir_tag;
     uint8_t rx_sfir_epoch_id;
+    uint32_t rx_sfir_transaction_id;
     bool rf_transition_first_host_data_required;
     bool rf_transition_rx_x2_host_data_required;
     uint32_t rf_transition_rx_x2_host_data_transaction_id;
@@ -558,7 +559,8 @@ struct bladerf2_rx_epoch_apply {
 };
 int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
                                   const struct bladerf2_rx_epoch_apply *apply,
-                                  uint32_t timeout_ms, uint8_t *epoch_id);
+                                  uint32_t timeout_ms, uint8_t *epoch_id,
+                                  uint32_t *transaction_id);
 /* RX spatial FIR identity hook (bladerf2.c). Writes the identity level when
  * the FIR may be active; no-op on gateware without the block. */
 int bladerf2_rx_sfir_force_identity(struct bladerf *dev);

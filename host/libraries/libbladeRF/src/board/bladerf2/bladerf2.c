@@ -8061,6 +8061,7 @@ int bladerf2_rx_sfir_force_identity(struct bladerf *dev)
                 board_data->rx_sfir_may_be_active = false;
                 board_data->rx_sfir_host_generation++;
                 board_data->rx_sfir_epoch_id = 0;
+                board_data->rx_sfir_transaction_id = 0;
             } else {
                 log_error("%s: identity write failed: %s\n", __FUNCTION__,
                           bladerf_strerror(status));
@@ -8128,6 +8129,7 @@ static int bladerf2_rx_sfir_run(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     bool contract_enabled;
     uint8_t epoch_id = 0;
+    uint32_t transaction_id = 0;
     int status;
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
@@ -8141,7 +8143,8 @@ static int bladerf2_rx_sfir_run(struct bladerf *dev,
             .event_flags = BLADERF_RF_EVENT_F_SPATIAL_FIR,
         };
         status = bladerf2_rx_epoch_reconfigure(
-            dev, &apply, BLADERF2_SFIR_TRANSACTION_TIMEOUT_MS, &epoch_id);
+            dev, &apply, BLADERF2_SFIR_TRANSACTION_TIMEOUT_MS, &epoch_id,
+            &transaction_id);
     } else {
         WITH_MUTEX(&dev->lock, {
             status = bladerf2_rx_sfir_apply(dev, ctx);
@@ -8151,6 +8154,7 @@ static int bladerf2_rx_sfir_run(struct bladerf *dev,
     WITH_MUTEX(&dev->lock, {
         if (status == 0) {
             board_data->rx_sfir_epoch_id = epoch_id;
+            board_data->rx_sfir_transaction_id = transaction_id;
             if (ctx->identity_level || ctx->bank_identity) {
                 board_data->rx_sfir_may_be_active = false;
             }
@@ -8195,6 +8199,7 @@ static int bladerf2_rx_sfir_probe(struct bladerf *dev)
         board_data->rx_sfir_host_generation = 0;
         board_data->rx_sfir_tag = 0;
         board_data->rx_sfir_epoch_id = 0;
+        board_data->rx_sfir_transaction_id = 0;
     });
     log_debug("%s: RX spatial FIR %s (status 0x%08x)\n", __FUNCTION__,
               supported ? "present" : "absent", word);
@@ -8217,6 +8222,7 @@ static void bladerf2_rx_sfir_fill_status(
     st->sat_rx1 = f.sat_rx1;
     st->sat_rx2 = f.sat_rx2;
     st->rx_epoch_id = board_data->rx_sfir_epoch_id;
+    st->rx_transaction_id = board_data->rx_sfir_transaction_id;
 }
 
 int bladerf_set_rx_spatial_fir(struct bladerf *dev,
