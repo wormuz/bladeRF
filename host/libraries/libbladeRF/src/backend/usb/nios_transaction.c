@@ -1,6 +1,10 @@
 #include "nios_transaction.h"
 #include "nios_pkt_formats.h"
 #include "helpers/timeout.h"
+#include "log.h"
+#include <inttypes.h>
+#include <string.h>
+#include <time.h>
 
 static uint64_t nios_read_le64(const uint8_t *buf, uint8_t offset)
 {
@@ -669,7 +673,7 @@ static bool nios_is_retune2_recovery_request(const uint8_t *packet)
     return false;
 }
 
-int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
+static int nios_usb_transaction_impl(struct bladerf_usb *usb, void *buffer,
                          uint32_t buffer_len, uint32_t response_timeout_ms,
                          nios_transaction_out_complete_fn out_complete,
                          void *context,
@@ -998,5 +1002,35 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
     }
 
     MUTEX_UNLOCK(&state->lock);
+    return status;
+}
+
+/* Times every NIOS round trip and names slow ones (packet magic, target,
+ * flags, address): a slow round trip holds the device lock while RX USB
+ * completions may be waiting behind it. */
+int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
+                         uint32_t buffer_len, uint32_t response_timeout_ms,
+                         nios_transaction_out_complete_fn out_complete,
+                         void *context,
+                         enum nios_transaction_stage *stage)
+{
+    uint8_t request[4] = {0};
+    struct timespec t0, t1;
+    int status;
+
+    memcpy(request, buffer, buffer_len < sizeof(request) ? buffer_len
+                                                           : sizeof(request));
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    status = nios_usb_transaction_impl(usb, buffer, buffer_len,
+                                       response_timeout_ms, out_complete,
+                                       context, stage);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    const int64_t ms = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000 +
+                       (t1.tv_nsec - t0.tv_nsec) / 1000000;
+    if (ms > 20) {
+        log_warning("NIOS round trip %" PRId64 " ms: pkt=%02x %02x %02x %02x "
+                    "status=%d\n", ms, request[0], request[1], request[2],
+                    request[3], status);
+    }
     return status;
 }
