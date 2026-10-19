@@ -3249,6 +3249,26 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
                     metadata_get_timestamp(bytes),
                     (int64_t)(metadata_get_timestamp(bytes) - expected_timestamp),
                     length, timestamp_step);
+        /* The first gap inside the transfer: message index, timestamps and
+         * the 16-byte header words around it. */
+        for (size_t off = message_size; off < length; off += message_size) {
+            const uint64_t prev = metadata_get_timestamp(bytes + off - message_size);
+            const uint64_t cur = metadata_get_timestamp(bytes + off);
+            if (cur != prev + timestamp_step) {
+                uint32_t h_prev[4], h_cur[4];
+                memcpy(h_prev, bytes + off - message_size, sizeof(h_prev));
+                memcpy(h_cur, bytes + off, sizeof(h_cur));
+                log_warning("RX async gap inside transfer: msg=%zu of %zu "
+                            "prev_ts=%" PRIu64 " ts=%" PRIu64 " gap=%" PRId64
+                            " hdr_prev=%08x %08x %08x %08x"
+                            " hdr=%08x %08x %08x %08x\n",
+                            off / message_size, length / message_size, prev,
+                            cur, (int64_t)(cur - prev - timestamp_step),
+                            h_prev[0], h_prev[1], h_prev[2], h_prev[3],
+                            h_cur[0], h_cur[1], h_cur[2], h_cur[3]);
+                break;
+            }
+        }
         bladerf2_rx_async_timestamp_discontinuity(
             dev, epoch_id, expected_timestamp);
     } else {
