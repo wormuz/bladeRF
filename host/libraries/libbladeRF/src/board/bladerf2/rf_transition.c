@@ -3227,9 +3227,17 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
     log_debug("%s: reserved RX reconfiguration (reason=0x%x)\n",
               __FUNCTION__, reason);
 
-    status = sync_rx_epoch_invalidate_with_revoke(
-        &board_data->sync[BLADERF_RX],
-        bladerf2_rx_epoch_revoke_admission, board_data);
+    /* Without an opted-in epoch contract no transition will ever re-certify
+     * the parser: a stock client (set_gain/set_frequency around sync_rx)
+     * keeps upstream semantics, so only async admission is revoked. */
+    if (data_epoch_enabled) {
+        status = sync_rx_epoch_invalidate_with_revoke(
+            &board_data->sync[BLADERF_RX],
+            bladerf2_rx_epoch_revoke_admission, board_data);
+    } else {
+        bladerf2_rx_epoch_revoke_admission(board_data);
+        status = 0;
+    }
     if (status != 0) {
         log_debug("%s: sync epoch invalidation failed: %s\n",
                   __FUNCTION__, bladerf_strerror(status));

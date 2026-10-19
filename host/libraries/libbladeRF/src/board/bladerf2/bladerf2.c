@@ -307,9 +307,9 @@ static int _bladerf2_initialize(struct bladerf *dev)
     return 0;
 }
 
-/* Detect epoch-tag support only after stale scheduled-retune cleanup. Once
- * enabled, RX starts uncertified and all host IQ admission requires a later
- * event-confirmed transition. */
+/* Detect epoch-tag support only after stale scheduled-retune cleanup. The
+ * contract stays off until a transition requests BLADERF_RF_REQUIRE_EPOCH_VALID:
+ * stock clients (sync_config/enable_module/sync_rx) keep upstream semantics. */
 static int bladerf2_rx_epoch_contract_probe(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -325,7 +325,7 @@ static int bladerf2_rx_epoch_contract_probe(struct bladerf *dev)
     }
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-    board_data->rf_transition_epoch_contract_enabled = supported;
+    board_data->rf_transition_epoch_contract_enabled = false;
     board_data->rf_transition_epoch_certified = false;
     board_data->rf_transition_first_valid_timestamp = 0;
     if (supported) {
