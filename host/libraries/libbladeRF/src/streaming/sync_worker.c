@@ -273,6 +273,13 @@ bool sync_worker_rx_reorder_buffer(struct bladerf_sync *s, uint32_t seq,
 
     if (distance <= b->reorder_limit &&
         hold_out_of_order_buffer(b, seq, buffer_idx, num_samples, false)) {
+        static unsigned int reorder_logged = 0;
+        if (reorder_logged < 50) {
+            reorder_logged++;
+            log_warning("RX out-of-order USB completion held: seq=%u "
+                        "expected=%u distance=%u\n", seq, b->expected_seq,
+                        distance);
+        }
         return true;
     }
 
