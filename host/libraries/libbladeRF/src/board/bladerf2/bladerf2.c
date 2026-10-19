@@ -1537,6 +1537,30 @@ static int bladerf2_fail_module_enable(struct bladerf *dev,
     return operation_status;
 }
 
+/* Re-write the last MGC gain requested through bladerf_set_gain(). Before
+ * the first RX enable a manual-gain write does not read back from
+ * REG_RX1_MANUAL_LMT_FULL_GAIN (measured 2026-10-19: write 0x24, read 0x4c),
+ * and an RX LO move across a gain-table boundary re-maps that stale index:
+ * set_gain(20) -> tune 2400->947.6 MHz -> enable gave 54 dB, full-scale IQ
+ * for stock clients (srsRAN cell_search). */
+static int bladerf2_rx_reapply_mgc_gain(struct bladerf *dev,
+                                        bladerf_channel ch)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bladerf_gain_mode mode;
+    int status;
+
+    if (!board_data->rx_gain_api_known[ch >> 1]) {
+        return 0;
+    }
+    status = board_data->rfic->get_gain_mode(dev, ch, &mode);
+    if (status != 0 || mode != BLADERF_GAIN_MGC) {
+        return status;
+    }
+    return board_data->rfic->set_gain(dev, ch,
+                                      board_data->rx_gain_api_db[ch >> 1]);
+}
+
 static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
@@ -1677,6 +1701,12 @@ static int bladerf2_enable_module(struct bladerf *dev,
         status = board_data->rfic->enable_module(dev, ch, enable);
         if (status != 0) {
             return bladerf2_fail_module_enable(dev, ch, status, false);
+        }
+        if (enable && !BLADERF_CHANNEL_IS_TX(ch)) {
+            status = bladerf2_rx_reapply_mgc_gain(dev, ch);
+            if (status != 0) {
+                return bladerf2_fail_module_enable(dev, ch, status, false);
+            }
         }
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
@@ -2676,7 +2706,15 @@ static int bladerf2_set_frequency(struct bladerf *dev,
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
-    return board_data->rfic->set_frequency(dev, ch, frequency);
+    int status = board_data->rfic->set_frequency(dev, ch, frequency);
+    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch)) {
+        /* The RX LO is shared: a gain-table reload covers both lanes. */
+        status = bladerf2_rx_reapply_mgc_gain(dev, BLADERF_CHANNEL_RX(0));
+        if (status == 0) {
+            status = bladerf2_rx_reapply_mgc_gain(dev, BLADERF_CHANNEL_RX(1));
+        }
+    }
+    return status;
 }
 
 static int bladerf2_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch,
