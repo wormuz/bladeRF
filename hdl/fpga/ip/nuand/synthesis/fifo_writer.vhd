@@ -1367,6 +1367,20 @@ begin
                 fifo_full = '1' and fifo_current.fifo_clear = '0' ) then
                 overflow_detected <= '1';
             end if;
+            -- A sample that arrives while the writer waits in HOLDOFF for
+            -- room for a whole DMA buffer (fifo_enough false) is dropped
+            -- just as surely as one that meets a full FIFO: HOLDOFF does not
+            -- write it, and the next packet's META header carries a later
+            -- timestamp. Count it as an overflow so the RX loss counter the
+            -- host polls names the gap; before this the drop was silent and
+            -- the host only saw a timestamp discontinuity inside a transfer.
+            -- An intentional epoch fence is not a loss.
+            if( enable = '1' and in_samples(in_samples'low).data_v = '1' and
+                fifo_current.state = HOLDOFF and not fifo_enough and
+                fifo_current.fifo_clear = '0' and
+                rx_epoch_discard_active = '0' ) then
+                overflow_detected <= '1';
+            end if;
         end if;
     end process;
 
