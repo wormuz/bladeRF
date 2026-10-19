@@ -5315,7 +5315,19 @@ int bladerf2_rx_epoch_reconfigure(struct bladerf *dev,
     if (status == 0) {
         memset(&request, 0, sizeof(request));
         request.target_frequency_hz = current_hz;
-        request.required_events_mask = BLADERF_RF_REQUIRE_EPOCH_VALID;
+        uint32_t inherited = 0;
+        /* The new epoch replaces the current one for the same stream, so it
+         * keeps that epoch's host-data requirement: a client that certifies
+         * buffers by first valid host data (RX_X2 pairs) gets the same proof
+         * for the reconfigured epoch. Needs a running RX consumer, as the
+         * original transition did. */
+        WITH_MUTEX(&dev->lock, {
+            inherited = board_data->rf_transition_required_events_mask &
+                        (BLADERF_RF_REQUIRE_FIRST_HOST_DATA |
+                         BLADERF_RF_REQUIRE_RX_X2_HOST_DATA);
+        });
+        request.required_events_mask =
+            BLADERF_RF_REQUIRE_EPOCH_VALID | inherited;
         request.timeout_ms = timeout_ms;
         status = _bladerf_rx_transition_begin(dev, BLADERF_CHANNEL_RX(0),
                                               &request, NULL, apply,
