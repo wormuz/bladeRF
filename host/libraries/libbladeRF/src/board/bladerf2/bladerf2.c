@@ -1702,12 +1702,6 @@ static int bladerf2_enable_module(struct bladerf *dev,
         if (status != 0) {
             return bladerf2_fail_module_enable(dev, ch, status, false);
         }
-        if (enable && !BLADERF_CHANNEL_IS_TX(ch)) {
-            status = bladerf2_rx_reapply_mgc_gain(dev, ch);
-            if (status != 0) {
-                return bladerf2_fail_module_enable(dev, ch, status, false);
-            }
-        }
         if (!BLADERF_CHANNEL_IS_TX(ch)) {
             status = bladerf2_update_channel_enable_masks(dev, board_data);
             if (status != 0) {
@@ -2706,8 +2700,13 @@ static int bladerf2_set_frequency(struct bladerf *dev,
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
+    struct ad9361_rf_phy *phy = board_data->phy;
+    uint32_t table_before = phy != NULL ? phy->current_table : 0;
     int status = board_data->rfic->set_frequency(dev, ch, frequency);
-    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch)) {
+    /* Only a gain-table reload re-maps the manual index. Re-writing gain on
+     * every RX tune also ran inside event-driven retunes. */
+    if (status == 0 && !BLADERF_CHANNEL_IS_TX(ch) && phy != NULL &&
+        phy->current_table != table_before) {
         /* The RX LO is shared: a gain-table reload covers both lanes. */
         status = bladerf2_rx_reapply_mgc_gain(dev, BLADERF_CHANNEL_RX(0));
         if (status == 0) {
