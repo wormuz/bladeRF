@@ -1,6 +1,7 @@
 #!/bin/sh
-# RX sweep: NIOS execution words in success records (PC simulation queue
-# test), host reads of those words, and the sample certification rule.
+# RX sweep: execution data in NIOS success records and the record-read
+# packet (PC simulation queue test), host record reads, the sample
+# certification rule, and the host session ledger.
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -31,9 +32,9 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
     "$repo_root/host/libraries/libbladeRF/src/backend/usb/nios_access.c" \
     "$repo_root/host/libraries/libbladeRF/src/backend/usb/nios_transaction.c" \
     "$repo_root/host/libraries/libbladeRF/src/helpers/timeout.c" \
-    "$repo_root/host/misc/test_nios_retune2_execution_host.c" \
-    -Wl,--gc-sections -o "$out_dir/execution"
-"$out_dir/execution"
+    "$repo_root/host/misc/test_nios_retune2_record_host.c" \
+    -Wl,--gc-sections -o "$out_dir/record"
+"$out_dir/record"
 
 cc -Wall -Wextra -Werror \
     -I"$repo_root/fpga_common/include" \

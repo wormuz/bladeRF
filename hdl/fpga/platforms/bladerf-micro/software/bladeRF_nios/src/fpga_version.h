@@ -22,7 +22,7 @@
  * available while deferred RFIC work owns the peripheral bus; 0.31.0 adds
  * host read/write of NIOS fastlock profile cache slots (16x64 target 0x06);
  * 0.32.0 adds the post-recall timestamp and RFPLL lock bit to retune2
- * success records (8x32 completion words 8-10).
+ * success records and reads whole records (16x64 target 0x07).
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0

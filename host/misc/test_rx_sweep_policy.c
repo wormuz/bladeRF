@@ -59,8 +59,8 @@ static struct bladerf_rx_sweep_record other(uint32_t sequence, uint8_t status,
     return record;
 }
 
-#define OK_FLAGS (NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID | \
-                  NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED)
+#define OK_FLAGS (NIOS_PKT_RETUNE2_EXEC_TS_VALID | \
+                  NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)
 
 static void check_record_classification(void)
 {
@@ -75,13 +75,13 @@ static void check_record_classification(void)
         failures++;
     }
     r = success(1, 100000000, 1000, 1200,
-                NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID, 0, 50);
+                NIOS_PKT_RETUNE2_EXEC_TS_VALID, 0, 50);
     if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0) {
         fputs("unlocked PLL certified\n", stderr);
         failures++;
     }
     r = success(1, 100000000, 1000, 1200,
-                NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED, 0, 50);
+                NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED, 0, 50);
     if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0 ||
         r.executed_timestamp != 0) {
         fputs("success without executed timestamp certified\n", stderr);
@@ -114,7 +114,7 @@ static void check_ranges(void)
     r[1] = other(2, BLADERF_RX_SWEEP_FAILED, 2000);
     r[2] = success(3, 300, 3000, 3300, OK_FLAGS, 0, 20);
     r[3] = success(4, 400, 4000, 4100,
-                   NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID, 0, 20);
+                   NIOS_PKT_RETUNE2_EXEC_TS_VALID, 0, 20);
     r[4] = success(5, 500, 5000, 5050, OK_FLAGS, 0, 20);
     r[5] = other(6, BLADERF_RX_SWEEP_LOST, 6000);
     r[6] = success(7, 700, 7000, 7010, OK_FLAGS, 0, 20);

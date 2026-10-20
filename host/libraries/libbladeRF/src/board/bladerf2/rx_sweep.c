@@ -34,7 +34,6 @@
 #include "common.h"
 #include "backend/usb/nios_access.h"
 #include "helpers/have_cap.h"
-#include "rf_transition_policy.h"
 #include "rx_sweep_policy.h"
 
 #if BLADERF_RX_SWEEP_QUEUE_DEPTH != NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH
@@ -111,13 +110,14 @@ static void sweep_record_from_ledger(
         board_data->rx_retune2_pending[slot].timestamp;
 }
 
-/* Find and retire the ledger entry that a NIOS record identifies.
- * Caller holds rx_async_epoch_lock. */
+/* Find and retire the ledger entry that a NIOS record identifies. The
+ * compact record carries the request token (unique among pending requests,
+ * nonzero), the NIOS profile and the low byte of the command session; the
+ * scheduled timestamp comes from the ledger. Caller holds
+ * rx_async_epoch_lock. */
 static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
-                              uint64_t scheduled_timestamp,
-                              uint16_t nios_profile,
-                              uint32_t session_generation,
-                              uint16_t request_token, uint8_t status,
+                              const struct nios_retune2_record *nios,
+                              uint8_t status,
                               struct bladerf_rx_sweep_record *record)
 {
     unsigned int i;
@@ -125,13 +125,13 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
     for (i = 0; i < SWEEP_DEPTH; i++) {
         if (board_data->rx_retune2_pending[i].valid &&
             board_data->rx_retune2_pending[i].sweep_sequence != 0 &&
-            bladerf2_retune_failure_matches(
-                board_data->rx_retune2_pending[i].timestamp,
-                board_data->rx_retune2_pending[i].nios_profile,
-                board_data->rx_retune2_pending[i].session_generation,
-                board_data->rx_retune2_pending[i].request_token,
-                scheduled_timestamp, nios_profile, session_generation,
-                request_token)) {
+            board_data->rx_retune2_pending[i].request_token != 0 &&
+            board_data->rx_retune2_pending[i].request_token ==
+                nios->request_token &&
+            board_data->rx_retune2_pending[i].nios_profile ==
+                nios->nios_profile &&
+            (uint8_t)board_data->rx_retune2_pending[i].session_generation ==
+                nios->session_generation_low) {
             sweep_record_from_ledger(board_data, i, status, record);
             board_data->rx_retune2_pending[i].valid = false;
             if (board_data->rx_retune2_pending_count != 0) {
@@ -164,12 +164,10 @@ static int sweep_collect(struct bladerf *dev)
     uint32_t i;
     int status;
 
-    status = nios_retune2_success_count_read(dev, BLADERF_MODULE_RX,
-                                             &success_count);
-    if (status == 0) {
-        status = nios_retune2_failure_count_read(dev, BLADERF_MODULE_RX,
-                                                 &failure_count);
-    }
+    /* One read for both counters; each success record then costs two
+     * reads and each failure record one. */
+    status = nios_retune2_record_counts(dev, BLADERF_MODULE_RX,
+                                        &success_count, &failure_count);
     if (status != 0) {
         return status;
     }
@@ -191,67 +189,56 @@ static int sweep_collect(struct bladerf *dev)
     }
 
     for (i = 0; i < new_successes && !lost; i++) {
-        uint64_t readback_frequency_hz;
-        uint64_t scheduled_timestamp;
+        struct nios_retune2_record nios;
         uint64_t executed_timestamp;
-        uint16_t nios_profile;
-        uint32_t session_generation;
-        uint16_t request_token;
-        uint8_t execution_flags;
         bool found;
 
-        status = nios_retune2_completion_execution_read(
-            dev, BLADERF_MODULE_RX, success_last + 1u + i,
-            &readback_frequency_hz, &scheduled_timestamp, &nios_profile,
-            &session_generation, &request_token, &executed_timestamp,
-            &execution_flags);
+        status = nios_retune2_record_read(dev, BLADERF_MODULE_RX, false,
+                                          success_last + 1u + i, &nios);
         if (status != 0) {
             lost = true;
             break;
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        found = sweep_ledger_take(board_data, scheduled_timestamp,
-                                  nios_profile, session_generation,
-                                  request_token, BLADERF_RX_SWEEP_SUCCESS,
+        found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_SUCCESS,
                                   &batch[batch_count]);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
             break;
         }
+        executed_timestamp =
+            batch[batch_count].scheduled_timestamp + nios.executed_delta;
+        if (executed_timestamp < batch[batch_count].scheduled_timestamp) {
+            nios.execution_flags &=
+                (uint8_t)~NIOS_PKT_RETUNE2_EXEC_TS_VALID;
+        }
         bladerf2_rx_sweep_record_success(
-            &batch[batch_count], readback_frequency_hz, executed_timestamp,
-            execution_flags, board_data->rx_sweep.settle_samples);
+            &batch[batch_count], nios.readback_frequency_hz,
+            executed_timestamp, nios.execution_flags,
+            board_data->rx_sweep.settle_samples);
         batch_count++;
     }
 
     for (i = 0; i < new_failures && !lost; i++) {
-        uint64_t scheduled_timestamp;
-        uint16_t nios_profile;
-        uint8_t failure_stage;
-        uint32_t session_generation;
-        uint16_t request_token;
+        struct nios_retune2_record nios;
         bool found;
 
-        status = nios_retune2_failure_completion_read(
-            dev, BLADERF_MODULE_RX, failure_last + 1u + i,
-            &scheduled_timestamp, &nios_profile, &failure_stage,
-            &session_generation, &request_token);
+        status = nios_retune2_record_read(dev, BLADERF_MODULE_RX, true,
+                                          failure_last + 1u + i, &nios);
         if (status != 0) {
             lost = true;
             break;
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        found = sweep_ledger_take(board_data, scheduled_timestamp,
-                                  nios_profile, session_generation,
-                                  request_token, BLADERF_RX_SWEEP_FAILED,
+        found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_FAILED,
                                   &batch[batch_count]);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
             break;
         }
-        batch[batch_count].failure_stage = failure_stage;
+        batch[batch_count].failure_stage = nios.failure_stage;
         batch_count++;
     }
 
@@ -346,12 +333,8 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
-    status = nios_retune2_success_count_read(dev, BLADERF_MODULE_RX,
-                                             &success_count);
-    if (status == 0) {
-        status = nios_retune2_failure_count_read(dev, BLADERF_MODULE_RX,
-                                                 &failure_count);
-    }
+    status = nios_retune2_record_counts(dev, BLADERF_MODULE_RX,
+                                        &success_count, &failure_count);
     if (status != 0) {
         return status;
     }

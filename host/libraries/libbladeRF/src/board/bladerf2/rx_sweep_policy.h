@@ -26,7 +26,7 @@
 
 #include <libbladeRF.h>
 
-#include "nios_pkt_8x32.h"
+#include "nios_pkt_retune2.h"
 
 /* Fill the outcome fields of a SUCCESS record from what NIOS observed.
  * Certification needs all of: a valid post-recall timestamp, the RFPLL lock
@@ -48,11 +48,11 @@ static inline void bladerf2_rx_sweep_record_success(
     record->readback_frequency = readback_frequency_hz;
     record->executed_timestamp = 0;
     record->certified_start = 0;
-    if ((execution_flags & NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID) != 0) {
+    if ((execution_flags & NIOS_PKT_RETUNE2_EXEC_TS_VALID) != 0) {
         record->flags |= BLADERF_RX_SWEEP_F_EXECUTED_VALID;
         record->executed_timestamp = executed_timestamp;
     }
-    if ((execution_flags & NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED) != 0) {
+    if ((execution_flags & NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED) != 0) {
         record->flags |= BLADERF_RX_SWEEP_F_PLL_LOCKED;
     }
     if (readback_frequency_hz != 0 && delta > 1000) {

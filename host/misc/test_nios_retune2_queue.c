@@ -2172,16 +2172,29 @@ static bool run_scheduled_rx_execution(uint64_t scheduled, uint32_t *ts_lo,
     }
     tamer_advance_per_poll = 0;
     *successes = pkt_retune2_success_count(BLADERF_MODULE_RX);
-    if (*successes == 0 ||
-        !pkt_retune2_completion_select(BLADERF_MODULE_RX, *successes)) {
-        return false;
+    {
+        uint64_t identity = 0, execution = 0, executed;
+
+        if (*successes == 0 ||
+            pkt_retune2_record_read(
+                nios_pkt_16x64_retune2_record_addr(
+                    false, false,
+                    NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
+                *successes, &identity) != 0 ||
+            pkt_retune2_record_read(
+                nios_pkt_16x64_retune2_record_addr(
+                    false, false,
+                    NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
+                *successes, &execution) != 0 ||
+            (uint8_t)(identity >> 16) != 4 ||
+            !pkt_retune2_completion_select(BLADERF_MODULE_RX, *successes)) {
+            return false;
+        }
+        executed = scheduled + (uint32_t)execution;
+        *ts_lo = (uint32_t)executed;
+        *ts_hi = (uint32_t)(executed >> 32);
+        *flags = (uint8_t)(identity >> 24);
     }
-    *ts_lo = pkt_retune2_completion_word(
-        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_LO);
-    *ts_hi = pkt_retune2_completion_word(
-        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_HI);
-    *flags = pkt_retune2_completion_word(
-        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS);
     return true;
 }
 
@@ -2198,8 +2211,8 @@ static int check_rx_success_record_carries_execution(void)
         return 1;
     }
     executed = ((uint64_t)ts_hi << 32) | ts_lo;
-    if (flags != (NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID |
-                  NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED) ||
+    if (flags != (NIOS_PKT_RETUNE2_EXEC_TS_VALID |
+                  NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED) ||
         executed <= scheduled || executed != tamer_timestamp ||
         rfpll_lock_reads != 1 ||
         pkt_retune2_completion_word(
@@ -2207,7 +2220,8 @@ static int check_rx_success_record_carries_execution(void)
         pkt_retune2_completion_word(
             NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI) !=
             (uint32_t)(scheduled >> 32)) {
-        fprintf(stderr, "RX execution record mismatch: flags=0x%x "
+        fprintf(stderr, "RX execution record mismatch: "
+                        "flags=0x%x "
                         "executed=0x%llx scheduled=0x%llx reads=%u\n",
                 flags, (unsigned long long)executed,
                 (unsigned long long)scheduled, rfpll_lock_reads);
@@ -2219,7 +2233,7 @@ static int check_rx_success_record_carries_execution(void)
     simulated_rfpll_locked = false;
     if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
                                     &successes) ||
-        flags != NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID) {
+        flags != NIOS_PKT_RETUNE2_EXEC_TS_VALID) {
         fprintf(stderr, "unlocked RFPLL not reflected: flags=0x%x\n", flags);
         return 1;
     }
@@ -2229,18 +2243,80 @@ static int check_rx_success_record_carries_execution(void)
     fail_rfpll_lock_read = true;
     if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
                                     &successes) ||
-        flags != NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID) {
+        flags != NIOS_PKT_RETUNE2_EXEC_TS_VALID) {
         fprintf(stderr, "failed lock read claimed lock: flags=0x%x\n",
                 flags);
         return 1;
     }
 
-    /* Failure records keep their layout; execution words are not exposed. */
-    if (!pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
-        pkt_retune2_completion_word(
-            NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS) != 0) {
-        fputs("failure record exposes execution words\n", stderr);
-        return 1;
+    /* Record-read protocol: counts in one word, exact-sequence checking,
+     * no execution word on the failure ring, malformed requests refused. */
+    {
+        uint64_t data = 0;
+        const uint16_t identity_addr = nios_pkt_16x64_retune2_record_addr(
+            false, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY);
+
+        if (pkt_retune2_record_read(
+                nios_pkt_16x64_retune2_record_addr(
+                    false, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS),
+                0, &data) != 0 ||
+            (uint32_t)data != successes ||
+            (uint32_t)(data >> 32) !=
+                pkt_retune2_failure_count(BLADERF_MODULE_RX) ||
+            pkt_retune2_record_read(identity_addr, successes + 1u, &data) !=
+                NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE ||
+            pkt_retune2_record_read(identity_addr,
+                                    successes + RETUNE2_QUEUE_MAX, &data) !=
+                NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE ||
+            pkt_retune2_record_read(identity_addr, 0, &data) !=
+                NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID ||
+            pkt_retune2_record_read(
+                nios_pkt_16x64_retune2_record_addr(
+                    true, false,
+                    NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
+                1, &data) != NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID ||
+            pkt_retune2_record_read(0x0010, successes, &data) !=
+                NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID) {
+            fputs("RETUNE2 record-read protocol mismatch\n", stderr);
+            return 1;
+        }
+    }
+
+    /* Failure records: one identity word carrying the stage. */
+    reset_execution_test_state();
+    {
+        fastlock_profile profile = { 0 };
+        uint64_t identity = 0;
+
+        profile.profile_num = 3;
+        profile.state = FASTLOCK_STATE_BBP_RFFE;
+        if (enqueue_retune_resident(&rx_queue, &profile, 6,
+                                    UINT64_C(0x2000000)) != 1 ||
+            !run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED,
+                                        24)) {
+            fputs("failure-record case did not arm\n", stderr);
+            return 1;
+        }
+        rx_queue.entries[rx_queue.rem_idx].request_token = 0x4321;
+        fail_spdt_select = true;
+        simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+        (void)run_until_queue_empty(&rx_queue, 16);
+        fail_spdt_select = false;
+        if (pkt_retune2_failure_count(BLADERF_MODULE_RX) == 0 ||
+            pkt_retune2_record_read(
+                nios_pkt_16x64_retune2_record_addr(
+                    true, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
+                pkt_retune2_failure_count(BLADERF_MODULE_RX),
+                &identity) != 0 ||
+            (uint16_t)identity != 0x4321 ||
+            (uint8_t)(identity >> 16) != 6 ||
+            (uint8_t)(identity >> 24) != 0 ||
+            (uint8_t)(identity >> 40) !=
+                NIOS_PKT_RETUNE2_FAILURE_SPDT_SELECT) {
+            fprintf(stderr, "failure record identity mismatch: 0x%016llx\n",
+                    (unsigned long long)identity);
+            return 1;
+        }
     }
     reset_execution_test_state();
     return 0;

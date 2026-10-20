@@ -648,6 +648,15 @@ static void service_rfic_status_request_impl(void)
         }
         goto publish_cooperative_response;
     }
+    if (target == NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE ||
+        target == NIOS_PKT_16x64_TARGET_RETUNE2_RECORD) {
+        /* NIOS RAM only: the fastlock profile cache (whose COMMIT itself
+         * refuses while the RFIC is owned) and RETUNE2 outcome records.
+         * A RETUNE2 worker owning the RFIC is exactly when a sweep reads
+         * records, so do not fence these behind it. */
+        pkt_16x64(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
     if (target != NIOS_PKT_16x64_TARGET_RFIC) {
         /* Direct AD9361 SPI, gain-table and batch operations bypass the RFIC
          * command queue. Never let one run reentrantly while an ADI callback

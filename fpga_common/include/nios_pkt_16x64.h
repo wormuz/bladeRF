@@ -188,6 +188,81 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED 5u /* commit w/o halves */
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_EMPTY     6u /* read INVALID slot */
 
+/* RETUNE2 outcome records in one or two reads (FPGA >= 0.32.0). Read only.
+ *
+ *    +========+===================================================+
+ *    | addr   |                                                   |
+ *    +========+===================================================+
+ *    | 15:4   | Reserved, 0                                       |
+ *    | 3      | Ring: 0 = success, 1 = failure                    |
+ *    | 2      | Direction: 0 = RX, 1 = TX                         |
+ *    | 1:0    | Word: 0 = identity, 1 = execution, 2 = counts     |
+ *    +--------+---------------------------------------------------+
+ *
+ * Request data: the record's full 32-bit outcome sequence (words 0/1) or 0
+ * (counts). NIOS answers from the ring slot only if it still holds exactly
+ * that sequence, so each word is self-checking and a record overwritten
+ * between the two reads fails the second one.
+ *
+ * Word 0, identity:  [15:0] request token, [23:16] NIOS profile,
+ *                    [31:24] NIOS_PKT_RETUNE2_EXEC_* flags (success ring),
+ *                    [39:32] command session generation, low 8 bits,
+ *                    [47:40] failure stage (failure ring), [63:48] 0.
+ * Word 1, execution (success ring only):
+ *                    [31:0] executed - scheduled timestamp (valid with
+ *                    EXEC_TS_VALID; NIOS clears that flag if the difference
+ *                    does not fit), [63:32] NIOS LO readback in units of
+ *                    2 Hz, 0 when not read.
+ * Word 2, counts:    [31:0] success count, [63:32] failure count.
+ *
+ * Errors: success clear, data = ERROR_MARKER[63:56] | code. */
+#define NIOS_PKT_16x64_TARGET_RETUNE2_RECORD 0x07
+
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY  0u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION 1u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS    2u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER   0x5cu
+#define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID    1u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE   2u /* not / no longer */
+
+static inline uint16_t nios_pkt_16x64_retune2_record_addr(bool failure,
+                                                          bool tx,
+                                                          uint8_t word)
+{
+    return (uint16_t)((failure ? 0x8u : 0u) | (tx ? 0x4u : 0u) |
+                      (word & 0x3u));
+}
+
+static inline bool nios_pkt_16x64_retune2_record_addr_unpack(
+    uint16_t addr, bool *failure, bool *tx, uint8_t *word)
+{
+    const uint8_t decoded_word = (uint8_t)(addr & 0x3u);
+
+    if ((addr & 0xfff0u) != 0 ||
+        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS) {
+        return false;
+    }
+    *failure = (addr & 0x8u) != 0;
+    *tx = (addr & 0x4u) != 0;
+    *word = decoded_word;
+    return true;
+}
+
+static inline uint64_t nios_pkt_16x64_retune2_record_identity(
+    uint16_t token, uint8_t nios_profile, uint8_t flags,
+    uint8_t session_low, uint8_t failure_stage)
+{
+    return (uint64_t)token | ((uint64_t)nios_profile << 16) |
+           ((uint64_t)flags << 24) | ((uint64_t)session_low << 32) |
+           ((uint64_t)failure_stage << 40);
+}
+
+static inline uint64_t nios_pkt_16x64_retune2_record_error(uint8_t code)
+{
+    return ((uint64_t)NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER << 56) |
+           code;
+}
+
 static inline uint16_t nios_pkt_16x64_fastlock_profile_addr(bool tx,
                                                             uint8_t slot,
                                                             uint8_t op)

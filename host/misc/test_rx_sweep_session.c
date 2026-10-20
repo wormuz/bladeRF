@@ -37,70 +37,46 @@ static int schedule_status;
 static bool cancelled;
 static uint64_t now_timestamp;
 
-int nios_retune2_success_count_read(struct bladerf *dev,
-                                    bladerf_module module, uint32_t *value)
+int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
+                               uint32_t *success_count,
+                               uint32_t *failure_count)
 {
     (void)dev;
     (void)module;
-    *value = success_base + successes_published;
+    *success_count = success_base + successes_published;
+    *failure_count = failure_base + failures_published;
     return 0;
 }
 
-int nios_retune2_failure_count_read(struct bladerf *dev,
-                                    bladerf_module module, uint32_t *value)
-{
-    (void)dev;
-    (void)module;
-    *value = failure_base + failures_published;
-    return 0;
-}
-
-int nios_retune2_completion_execution_read(
-    struct bladerf *dev, bladerf_module module, uint32_t sequence,
-    uint64_t *frequency_hz, uint64_t *scheduled_timestamp,
-    uint16_t *nios_profile, uint32_t *session_generation,
-    uint16_t *request_token, uint64_t *executed_timestamp,
-    uint8_t *execution_flags)
+int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
+                             bool failure, uint32_t sequence,
+                             struct nios_retune2_record *record)
 {
     const struct scripted_request *r;
 
     (void)dev;
     (void)module;
-    if (success_read_fails || sequence <= success_base ||
-        sequence > success_base + successes_published) {
-        return BLADERF_ERR_WOULD_BLOCK;
+    memset(record, 0, sizeof(*record));
+    if (failure) {
+        if (sequence <= failure_base ||
+            sequence > failure_base + failures_published) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        r = &requests[failure_order[sequence - failure_base - 1u]];
+        record->failure_stage = r->failure_stage;
+    } else {
+        if (success_read_fails || sequence <= success_base ||
+            sequence > success_base + successes_published) {
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+        r = &requests[success_order[sequence - success_base - 1u]];
+        record->execution_flags = r->flags;
+        record->executed_delta = (uint32_t)(r->executed - r->timestamp);
+        record->readback_frequency_hz = r->readback;
     }
-    r = &requests[success_order[sequence - success_base - 1u]];
-    *frequency_hz = r->readback;
-    *scheduled_timestamp = r->timestamp;
-    *nios_profile = r->nios_profile;
-    *session_generation = 5;
-    *request_token = r->token;
-    *executed_timestamp = r->executed;
-    *execution_flags = r->flags;
-    return 0;
-}
-
-int nios_retune2_failure_completion_read(
-    struct bladerf *dev, bladerf_module module, uint32_t sequence,
-    uint64_t *scheduled_timestamp, uint16_t *nios_profile,
-    uint8_t *failure_stage, uint32_t *session_generation,
-    uint16_t *request_token)
-{
-    const struct scripted_request *r;
-
-    (void)dev;
-    (void)module;
-    if (sequence <= failure_base ||
-        sequence > failure_base + failures_published) {
-        return BLADERF_ERR_WOULD_BLOCK;
-    }
-    r = &requests[failure_order[sequence - failure_base - 1u]];
-    *scheduled_timestamp = r->timestamp;
-    *nios_profile = r->nios_profile;
-    *failure_stage = r->failure_stage;
-    *session_generation = 5;
-    *request_token = r->token;
+    record->request_token = r->token;
+    record->nios_profile = (uint8_t)r->nios_profile;
+    record->session_generation_low = 5;
     return 0;
 }
 
@@ -250,8 +226,8 @@ static unsigned int drain(struct bladerf_rx_sweep_record *out,
     return count;
 }
 
-#define OK_FLAGS (NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID | \
-                  NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED)
+#define OK_FLAGS (NIOS_PKT_RETUNE2_EXEC_TS_VALID | \
+                  NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)
 
 static void check_mixed_outcomes(void)
 {

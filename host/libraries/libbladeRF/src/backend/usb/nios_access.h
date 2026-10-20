@@ -333,19 +333,6 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  uint16_t *nios_profile,
                                  uint32_t *session_generation,
                                  uint16_t *request_token);
-/* As nios_retune2_completion_read(), plus the timestamp NIOS read after the
- * recall finished and NIOS_PKT_8x32_RETUNE2_EXEC_* flags (FPGA >= 0.32.0,
- * BLADERF_ERR_UNSUPPORTED otherwise). */
-int nios_retune2_completion_execution_read(struct bladerf *dev,
-                                           bladerf_module module,
-                                           uint32_t sequence,
-                                           uint64_t *frequency_hz,
-                                           uint64_t *scheduled_timestamp,
-                                           uint16_t *nios_profile,
-                                           uint32_t *session_generation,
-                                           uint16_t *request_token,
-                                           uint64_t *executed_timestamp,
-                                           uint8_t *execution_flags);
 int nios_retune2_failure_completion_read(struct bladerf *dev,
                                          bladerf_module module,
                                          uint32_t sequence,
@@ -551,6 +538,29 @@ int nios_fastlock_profile_read(struct bladerf *dev, bool is_tx,
 int nios_fastlock_profile_state(struct bladerf *dev, bool is_tx,
                                 uint8_t nios_profile, uint8_t *state,
                                 uint8_t *rffe_profile);
+
+/* One RETUNE2 outcome record from NIOS_PKT_16x64_TARGET_RETUNE2_RECORD
+ * (FPGA >= 0.32.0): one read for a failure record, two for a success. */
+struct nios_retune2_record {
+    uint16_t request_token;
+    uint8_t nios_profile;
+    uint8_t execution_flags;        /* NIOS_PKT_RETUNE2_EXEC_* */
+    uint8_t session_generation_low;
+    uint8_t failure_stage;
+    uint32_t executed_delta;        /* executed - scheduled timestamp */
+    uint64_t readback_frequency_hz; /* 2 Hz resolution, 0 when not read */
+};
+
+/* RETUNE2 success and failure counters of one direction, one read. */
+int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
+                               uint32_t *success_count,
+                               uint32_t *failure_count);
+
+/* Read outcome record `sequence` of the success or failure ring.
+ * BLADERF_ERR_WOULD_BLOCK: the slot does not (or no longer) hold it. */
+int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
+                             bool failure, uint32_t sequence,
+                             struct nios_retune2_record *record);
 
 /**
  * Write to the AD56X1 VCTCXO trim DAC.

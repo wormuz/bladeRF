@@ -28,6 +28,7 @@
 #include "pkt_retune2.h"
 #include "nios_pkt_retune2.h"    /* Packet format definition */
 #include "nios_pkt_8x32.h"       /* Completion record protocol */
+#include "nios_pkt_16x64.h"      /* Single-read outcome records */
 #include "devices.h"
 #include "debug.h"
 #include "rfic_frequency_policy.h"
@@ -84,7 +85,7 @@ enum entry_state {
 };
 
 /* What NIOS observed when a recall finished: the module timestamp after the
- * PLL locked and the RF switches were set, and NIOS_PKT_8x32_RETUNE2_EXEC_*
+ * PLL locked and the RF switches were set, and NIOS_PKT_RETUNE2_EXEC_*
  * flags. Zero flags mean nothing was observed. */
 struct retune2_execution {
     uint64_t timestamp;
@@ -293,8 +294,7 @@ uint32_t pkt_retune2_completion_word(uint8_t addr)
     struct retune2_completion *record;
     uint32_t sequence = selected_completion_sequence;
 
-    if (addr > (selected_completion_is_failure
-                    ? 6 : NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS)) {
+    if (addr > (selected_completion_is_failure ? 6 : 7)) {
         return 0;
     }
     if (selected_completion_is_failure) {
@@ -346,14 +346,90 @@ uint32_t pkt_retune2_completion_word(uint8_t addr)
             return record->session_generation;
         case 7:
             return record->request_token;
-        case NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_LO:
-            return (uint32_t)record->execution.timestamp;
-        case NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_HI:
-            return (uint32_t)(record->execution.timestamp >> 32);
-        case NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS:
-            return record->execution.flags;
         default:
             return 0;
+    }
+}
+
+uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
+                                uint64_t *data)
+{
+    const uint8_t mask = RETUNE2_QUEUE_MAX - 1u;
+    bladerf_module module;
+    uint32_t sequence;
+    bool failure;
+    bool tx;
+    uint8_t word;
+
+    if (data == NULL ||
+        !nios_pkt_16x64_retune2_record_addr_unpack(addr, &failure, &tx,
+                                                   &word)) {
+        return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID;
+    }
+    module = tx ? BLADERF_MODULE_TX : BLADERF_MODULE_RX;
+
+    if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS) {
+        if (failure || request != 0) {
+            return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID;
+        }
+        *data = (uint64_t)pkt_retune2_success_count(module) |
+                ((uint64_t)pkt_retune2_failure_count(module) << 32);
+        return 0;
+    }
+    if (request == 0 || (request >> 32) != 0) {
+        return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID;
+    }
+    sequence = (uint32_t)request;
+
+    if (failure) {
+        const struct retune2_failure_completion *record = tx
+            ? &tx_retune2_failure_completions[(sequence - 1u) & mask]
+            : &rx_retune2_failure_completions[(sequence - 1u) & mask];
+
+        if (word != NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY) {
+            return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID;
+        }
+        if (record->sequence != sequence) {
+            return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE;
+        }
+        *data = nios_pkt_16x64_retune2_record_identity(
+            record->request_token, (uint8_t)record->nios_profile, 0,
+            (uint8_t)record->session_generation, record->failure_stage);
+        /* A slot being rewritten carries ~sequence until it is complete. */
+        return record->sequence == sequence
+            ? 0 : NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE;
+    } else {
+        const struct retune2_completion *record = tx
+            ? &tx_retune2_completions[(sequence - 1u) & mask]
+            : &rx_retune2_completions[(sequence - 1u) & mask];
+        uint8_t flags;
+        uint64_t delta = 0;
+
+        if (record->sequence != sequence) {
+            return NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE;
+        }
+        flags = record->execution.flags;
+        if ((flags & NIOS_PKT_RETUNE2_EXEC_TS_VALID) != 0) {
+            if (record->execution.timestamp < record->scheduled_timestamp ||
+                record->execution.timestamp - record->scheduled_timestamp >
+                    UINT32_MAX) {
+                flags &= (uint8_t)~NIOS_PKT_RETUNE2_EXEC_TS_VALID;
+            } else {
+                delta = record->execution.timestamp -
+                        record->scheduled_timestamp;
+            }
+        }
+        if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY) {
+            *data = nios_pkt_16x64_retune2_record_identity(
+                record->request_token, (uint8_t)record->nios_profile, flags,
+                (uint8_t)record->session_generation, 0);
+        } else {
+            const uint64_t readback_2hz = record->frequency_hz >> 1;
+            *data = delta | ((readback_2hz > UINT32_MAX ? 0 : readback_2hz)
+                             << 32);
+        }
+        return record->sequence == sequence
+            ? 0 : NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE;
     }
 }
 
@@ -1040,12 +1116,12 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
         execution->timestamp = 0;
         execution->flags = 0;
         if (time_tamer_read(module, &execution->timestamp)) {
-            execution->flags |= NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID;
+            execution->flags |= NIOS_PKT_RETUNE2_EXEC_TS_VALID;
         } else {
             execution->timestamp = 0;
         }
         if (adi_rfpll_lock_read(module, &locked) && locked) {
-            execution->flags |= NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED;
+            execution->flags |= NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED;
         }
     }
 #ifdef BLADERF_NIOS_LIBAD936X
