@@ -1083,6 +1083,7 @@ static void *rx_fault_monitor_task(void *arg)
         uint8_t tx_retune2_pending_count = 0;
         uint8_t rx_retune2_pending_count = 0;
         bool rfic_status_poll_allowed = false;
+        bool rx_sweep_active = false;
         uint64_t rx_retune2_watch_generation = 0;
         bool tx_rfic_status_observed = false;
         bool epoch_certified = false;
@@ -1191,12 +1192,15 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->tx_rf_config_operation_active;
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
                 rx_retune2_watch_active &&
-                !board_data->rf_transition_setter_active;
+                !board_data->rf_transition_setter_active &&
+                /* A sweep session collects its own RX records. */
+                !board_data->rx_sweep.active;
             should_poll_reference_clock = (should_poll || should_poll_tx) &&
                 tx_retune2_pending_count == 0 &&
                 rx_retune2_pending_count == 0;
             rfic_status_poll_allowed = tx_retune2_pending_count == 0 &&
                 rx_retune2_pending_count == 0;
+            rx_sweep_active = board_data->rx_sweep.active;
             if (should_poll || should_poll_tx || should_poll_tx_retune ||
                 should_poll_rx_retune) {
                 if (should_poll_reference_clock) {
@@ -3045,6 +3049,14 @@ static void *rx_fault_monitor_task(void *arg)
                     rx_fault_causes_valid, rx_fault_causes_status));
             continue;
         }
+        /* In an RX sweep the epoch stays open across NIOS recalls. RFIC
+         * status is only read with no retune pending; otherwise nothing was
+         * read. The RX LO is certified per retune by its NIOS record (lock
+         * bit read after the recall), not by this poll, which may land
+         * inside a recall that started after the snapshot above. */
+        if (rx_sweep_active && !rfic_status_poll_allowed) {
+            continue;
+        }
         if (rfic_status != 0) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id,
@@ -3053,7 +3065,7 @@ static void *rx_fault_monitor_task(void *arg)
                 rfic_status);
             continue;
         }
-        if ((pll_status & VCO_LOCK_BIT) == 0) {
+        if (!rx_sweep_active && (pll_status & VCO_LOCK_BIT) == 0) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id, pll_status,
                 BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED, 0);
@@ -3582,6 +3594,7 @@ static int _bladerf_rx_transition_begin(
     const struct band_port_map *target_rx_port_map = NULL;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
+    bool sweep_active = false;
     bool rx_source_unsupported = false;
     bool frequency_model_unknown = false;
     bool epochless_async_stream_active = false;
@@ -3627,6 +3640,12 @@ static int _bladerf_rx_transition_begin(
     board_data = dev->board_data;
     if (board_data == NULL) {
         return BLADERF_ERR_INVAL;
+    }
+    /* A sweep session owns the RX retune queue and certifies samples from
+     * its completion records; a transition would clear that queue. */
+    WITH_MUTEX(&dev->lock, { sweep_active = board_data->rx_sweep.active; });
+    if (sweep_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
     }
     if (!bladerf2_rf_transition_normalize_requirements(
             request->required_events_mask,

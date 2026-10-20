@@ -98,6 +98,13 @@
 
 #define NIOS_PKT_RETUNE2_MAGIC            'U'
 
+/* What NIOS observed when a recall finished (FPGA >= 0.32.0), reported by
+ * NIOS_PKT_16x64_TARGET_RETUNE2_RECORD: a valid module timestamp read
+ * after the recall locked and the RF switches were set, and the RFPLL lock
+ * bit read over SPI after that timestamp. */
+#define NIOS_PKT_RETUNE2_EXEC_TS_VALID   (1u << 0)
+#define NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED (1u << 1)
+
 /* Specify this value instead of a timestamp to clear the retune2 queue */
 #define NIOS_PKT_RETUNE2_CLEAR_QUEUE      ((uint64_t) -1)
 

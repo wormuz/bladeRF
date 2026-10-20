@@ -344,6 +344,10 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage);
 bool adi_fastlock_recall_active(void);
 bladerf_module adi_fastlock_recall_owner(void);
 
+/* Read the RFPLL lock bit (UG-570: RX 0x247[1], TX 0x287[1]) over SPI.
+ * Returns false if the SPI read failed. */
+bool adi_rfpll_lock_read(bladerf_module m, bool *locked);
+
 /**
  * Set the AD9361 port.
  *
@@ -463,6 +467,17 @@ INLINE uint32_t control_reg_read(void);
  * @param   value   Device configuration bit map
  */
 INLINE bool control_reg_write(uint32_t value);
+
+/**
+ * Read the RFFE control PIO. Fails closed when the PIO is absent.
+ */
+INLINE bool rffe_csr_read_checked(uint32_t *value);
+
+/**
+ * Write the RFFE control PIO and verify the fields in verify_mask. Fails
+ * closed when the PIO is absent.
+ */
+INLINE bool rffe_csr_write_checked(uint32_t value, uint32_t verify_mask);
 
 /**
  * Get IQ balance gain value

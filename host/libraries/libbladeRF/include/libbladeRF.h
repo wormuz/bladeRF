@@ -1908,6 +1908,9 @@ struct bladerf_quick_tune {
  *       succeeds. A transition also cancels RX retunes queued before it began.
  *       Scheduling during an active transition returns
  *       ::BLADERF_ERR_WOULD_BLOCK without revoking that transition.
+ * @note Inside an RX sweep session (bladerf_rx_sweep_begin()) an RX request
+ *       is handled by bladerf_rx_sweep_schedule() instead: no revocation,
+ *       certification from its sweep record.
  */
 API_EXPORT
 int CALL_CONV bladerf_schedule_retune(struct bladerf *dev,
@@ -2042,6 +2045,195 @@ int CALL_CONV bladerf_load_quick_tune_profile(
     const uint8_t *profile,
     uint16_t nios_slot,
     struct bladerf_quick_tune *quick_tune);
+
+/**
+ * Outcome of one scheduled retune of an RX sweep session.
+ */
+typedef enum {
+    /** NIOS completed the recall; see the record flags. */
+    BLADERF_RX_SWEEP_SUCCESS = 0,
+    /** NIOS reported a failure; `failure_stage` is the NIOS stage. */
+    BLADERF_RX_SWEEP_FAILED,
+    /** The completion record was lost or unreadable; the LO is unknown from
+     * `scheduled_timestamp` on. */
+    BLADERF_RX_SWEEP_LOST,
+    /** Cancelled by bladerf_rx_sweep_end() before its record was read; it
+     * may or may not have executed. */
+    BLADERF_RX_SWEEP_CANCELLED,
+    /** Session end marker. `scheduled_timestamp` is an RX timestamp read
+     * after the queue was cleared; it bounds the previous record's range. */
+    BLADERF_RX_SWEEP_END,
+} bladerf_rx_sweep_status;
+
+/** NIOS read a valid RX timestamp after the recall finished. */
+#define BLADERF_RX_SWEEP_F_EXECUTED_VALID (1u << 0)
+/** NIOS read the RX RFPLL lock bit set after `executed_timestamp`. */
+#define BLADERF_RX_SWEEP_F_PLL_LOCKED (1u << 1)
+/** NIOS read back an LO that differs from `frequency` by more than 1 kHz. */
+#define BLADERF_RX_SWEEP_F_READBACK_MISMATCH (1u << 2)
+/** Success, executed timestamp valid, PLL locked, no readback mismatch. */
+#define BLADERF_RX_SWEEP_F_CERTIFIED (1u << 3)
+
+/**
+ * One scheduled retune of an RX sweep session, in schedule order.
+ */
+struct bladerf_rx_sweep_record {
+    /** Session-local, 1 for the first scheduled retune, contiguous. */
+    uint32_t sequence;
+    /** bladerf_rx_sweep_status */
+    uint8_t status;
+    /** BLADERF_RX_SWEEP_F_* */
+    uint8_t flags;
+    /** NIOS failure stage for BLADERF_RX_SWEEP_FAILED, otherwise 0 */
+    uint8_t failure_stage;
+    /** NIOS profile slot of the quick tune */
+    uint16_t nios_profile;
+    /** Requested LO */
+    bladerf_frequency frequency;
+    /** LO read back by NIOS (FPGA tuning mode), 0 when not read */
+    bladerf_frequency readback_frequency;
+    /** Timestamp passed to bladerf_rx_sweep_schedule() */
+    bladerf_timestamp scheduled_timestamp;
+    /** RX timestamp NIOS read after the recall locked, when
+     * BLADERF_RX_SWEEP_F_EXECUTED_VALID */
+    bladerf_timestamp executed_timestamp;
+    /** `executed_timestamp` + session settle samples, when
+     * BLADERF_RX_SWEEP_F_CERTIFIED */
+    bladerf_timestamp certified_start;
+};
+
+/**
+ * Begin an RX sweep session on a bladeRF 2.
+ *
+ * Inside a session, scheduled RX retunes do not touch the RX stream: no
+ * invalidation, no epoch abort, no withheld data. Instead every scheduled
+ * retune yields one bladerf_rx_sweep_record. A sample at RX timestamp `t`
+ * is certified to be at record k's `frequency` iff record k has
+ * BLADERF_RX_SWEEP_F_CERTIFIED, `certified_start <= t`, and `t` is earlier
+ * than the `scheduled_timestamp` of record k + 1 (the next record in
+ * sequence, of any status). Every other sample is uncertified. The range
+ * ends at the next *scheduled* timestamp, not the next executed one: from
+ * that point the next recall may already be changing the LO.
+ * bladerf_rx_sweep_label() applies this rule.
+ *
+ * Requirements: FPGA >= v0.32.0, no RX retune pending, no RF transition in
+ * progress. On a handle with an RX epoch contract (a transition required
+ * ::BLADERF_RF_REQUIRE_EPOCH_VALID) the epoch must be open and certified:
+ * the session keeps that epoch open (the FPGA gate fences only on host
+ * ARM/ABORT, never on a NIOS recall), so samples keep flowing under the same
+ * epoch ID; ::BLADERF_RF_EVT_RX_SWEEP_BEGIN marks where its LO claim ends.
+ * Inside the session only sweep records certify the LO. Other RX setters
+ * still revoke the epoch as usual. Otherwise ::BLADERF_ERR_UNSUPPORTED or
+ * ::BLADERF_ERR_WOULD_BLOCK.
+ *
+ * While the session is active, bladerf_schedule_retune() on RX behaves as
+ * bladerf_rx_sweep_schedule() and RX transitions return
+ * ::BLADERF_ERR_WOULD_BLOCK.
+ *
+ * @param       dev             Device handle
+ * @param[in]   ch              RX channel
+ * @param[in]   settle_samples  Samples after `executed_timestamp` that are
+ *                              still excluded from certification
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_sweep_begin(struct bladerf *dev,
+                                     bladerf_channel ch,
+                                     uint64_t settle_samples);
+
+/**
+ * Queue one RX retune of the active sweep session at `timestamp`.
+ *
+ * Same contract as bladerf_schedule_retune() (strictly increasing future
+ * timestamps; ::BLADERF_ERR_WOULD_BLOCK or ::BLADERF_ERR_QUEUE_FULL when the
+ * queue of ::BLADERF_RX_SWEEP_QUEUE_DEPTH entries is full), without
+ * revoking the RX stream. Collects already completed records first.
+ *
+ * @param       dev         Device handle
+ * @param[in]   ch          RX channel of the session
+ * @param[in]   timestamp   RX timestamp of the retune
+ * @param[in]   frequency   LO of `quick_tune`, reported in the record
+ * @param[in]   quick_tune  Quick tune for `frequency`
+ * @param[out]  sequence    Record sequence of this retune; may be NULL
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure. A
+ *         failure whose NIOS outcome is unknown still consumes a sequence
+ *         number and later produces a record.
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_sweep_schedule(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    bladerf_timestamp timestamp,
+    bladerf_frequency frequency,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t *sequence);
+
+/** NIOS queue and completion-record depth of a sweep session. */
+#define BLADERF_RX_SWEEP_QUEUE_DEPTH 16
+
+/**
+ * Read NIOS completion records of the sweep session and return the
+ * records collected so far, oldest first.
+ *
+ * The library keeps the last 256 records; older unread records are dropped
+ * and show up as a sequence gap, which bladerf_rx_sweep_label() treats as
+ * uncertified.
+ *
+ * @param       dev         Device handle
+ * @param[in]   ch          RX channel of the session
+ * @param[out]  records     Output array
+ * @param[in]   max_records Capacity of `records`
+ * @param[out]  count       Number of records written
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_sweep_completions(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    struct bladerf_rx_sweep_record *records,
+    unsigned int max_records,
+    unsigned int *count);
+
+/**
+ * End the sweep session: collect outstanding records, clear the RX retune
+ * queue, report retunes left in it as BLADERF_RX_SWEEP_CANCELLED, and append
+ * a BLADERF_RX_SWEEP_END record. Read the remaining records with
+ * bladerf_rx_sweep_completions() afterwards. The host's model of the RX LO
+ * is invalidated; tune again before relying on bladerf_get_frequency().
+ * The RX epoch certificate is revoked (::BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+ * FPGA epoch ABORT under a contract); run an RX transition to certify the
+ * stream again.
+ *
+ * @param       dev     Device handle
+ * @param[in]   ch      RX channel of the session
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure
+ */
+API_EXPORT
+int CALL_CONV bladerf_rx_sweep_end(struct bladerf *dev, bladerf_channel ch);
+
+/**
+ * Apply the sweep certification rule to one sample timestamp.
+ *
+ * `records` must be in sequence order, as returned by
+ * bladerf_rx_sweep_completions() (possibly concatenated over calls).
+ *
+ * @param[in]   records     Records in sequence order
+ * @param[in]   count       Number of records
+ * @param[in]   timestamp   RX sample timestamp
+ * @param[out]  index       Index of the certifying record, when certified
+ *
+ * @return true if the sample is certified at records[*index].frequency
+ */
+API_EXPORT
+bool CALL_CONV bladerf_rx_sweep_label(
+    const struct bladerf_rx_sweep_record *records,
+    unsigned int count,
+    bladerf_timestamp timestamp,
+    unsigned int *index);
 
 /**
  * @brief Prints the quick retune parameters for a bladeRF device.
@@ -5086,7 +5278,16 @@ typedef enum {
      * including counter reset, ring loss, or an unmatched failure record.
      * This diagnostic accompanies fail-closed RX retune outcome handling;
      * `error_code` contains the read/correlation error. */
-    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
+    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE,
+    /** An RX sweep session began (bladerf_rx_sweep_begin). The open RX epoch
+     * keeps admitting samples, but its LO claim ends at the first sweep
+     * retune: from here on only sweep records certify the LO.
+     * `requested_rx_lo_hz` is the LO of the epoch being superseded. */
+    BLADERF_RF_EVT_RX_SWEEP_BEGIN,
+    /** The RX sweep session ended. The LO is the last executed sweep retune;
+     * the RX epoch certificate was revoked and a new RX transition is
+     * required before samples are valid again. */
+    BLADERF_RF_EVT_RX_SWEEP_END
 } bladerf_rf_event_type;
 
 /** Detailed NIOS RETUNE2 activation failure carried by the

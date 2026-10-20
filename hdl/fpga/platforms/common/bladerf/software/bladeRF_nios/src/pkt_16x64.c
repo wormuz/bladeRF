@@ -29,6 +29,7 @@
 #include "debug.h"
 #include "rfic_calibration_policy.h"
 #include "fastlock_profile_cache.h"
+#include "pkt_retune2.h"
 
 static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
                                  uint16_t transaction_id)
@@ -232,6 +233,19 @@ void pkt_16x64(struct pkt_buf *b)
         } else {
             data = nios_pkt_16x64_fastlock_profile_error(code);
         }
+#else
+        success = false;
+#endif
+    } else if (id == NIOS_PKT_16x64_TARGET_RETUNE2_RECORD) {
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+        uint64_t read_data = 0;
+        const uint8_t code = is_write
+            ? NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID
+            : pkt_retune2_record_read(addr, data, &read_data);
+
+        success = code == 0;
+        data = success ? read_data
+                       : nios_pkt_16x64_retune2_record_error(code);
 #else
         success = false;
 #endif

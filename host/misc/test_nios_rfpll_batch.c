@@ -7,6 +7,7 @@
 #include "pkt_16x64.h"
 #include "devices.h"
 #include "fastlock_profile_cache.h"
+#include "pkt_retune2.h"
 
 static struct pkt_buf make_16x64_packet(uint8_t target, bool write,
                                         uint16_t addr, uint64_t data)
@@ -237,6 +238,44 @@ static int run_fastlock_profile_dispatch(bool write, uint8_t result,
            (!write || fastlock_profile_last_data ==
                           UINT64_C(0x1122334455667788)) &&
            success == (result == NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) &&
+           response == expected_response ? 0 : 1;
+}
+
+static uint64_t record_last_request;
+static uint8_t record_result;
+
+uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
+                                uint64_t *data)
+{
+    (void)addr;
+    record_last_request = request;
+    *data = UINT64_C(0x1122334455667788);
+    return record_result;
+}
+
+/* Target 0x07 is read-only: reads route to the record reader with the
+ * sequence from the request data, writes are refused. */
+static int run_retune2_record_dispatch(bool write, uint8_t result,
+                                       bool expected_success,
+                                       uint64_t expected_response)
+{
+    struct pkt_buf packet = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_RETUNE2_RECORD, write, 0x0001, 41);
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool resp_write = !write;
+    bool success = !expected_success;
+
+    record_result = result;
+    record_last_request = 0;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &resp_write, &addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_RETUNE2_RECORD &&
+           resp_write == write && addr == 0x0001 &&
+           (write || record_last_request == 41) &&
+           success == expected_success &&
            response == expected_response ? 0 : 1;
 }
 
@@ -538,6 +577,13 @@ int main(void)
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_nios_phy_gain_row_rejected() ||
+        run_retune2_record_dispatch(false, 0, true,
+                                    UINT64_C(0x1122334455667788)) ||
+        run_retune2_record_dispatch(
+            false, NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE, false,
+            UINT64_C(0x5c00000000000002)) ||
+        run_retune2_record_dispatch(true, 0, false,
+                                    UINT64_C(0x5c00000000000001)) ||
         run_fastlock_profile_dispatch(true, 0, 0) ||
         run_fastlock_profile_dispatch(false, 0,
                                       UINT64_C(0x0807060504030201)) ||

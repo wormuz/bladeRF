@@ -45,6 +45,7 @@
 #include "channel_policy.h"
 #include "nios_pkt_retune2.h"
 #include "range.h"
+#include "board/bladerf2/rx_sweep_policy.h"
 
 static int invalidate_rx_data_before_reconfigure(struct bladerf *dev,
                                                 bladerf_channel ch,
@@ -1624,6 +1625,112 @@ int bladerf_load_quick_tune_profile(struct bladerf *dev,
     return status;
 }
 
+int bladerf_rx_sweep_begin(struct bladerf *dev,
+                           bladerf_channel ch,
+                           uint64_t settle_samples)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch) || BLADERF_CHANNEL_IS_TX(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->rx_sweep_begin != NULL
+                 ? dev->board->rx_sweep_begin(dev, ch, settle_samples)
+                 : BLADERF_ERR_UNSUPPORTED;
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+int bladerf_rx_sweep_schedule(struct bladerf *dev,
+                              bladerf_channel ch,
+                              bladerf_timestamp timestamp,
+                              bladerf_frequency frequency,
+                              const struct bladerf_quick_tune *quick_tune,
+                              uint32_t *sequence)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (sequence != NULL) {
+        *sequence = 0;
+    }
+    if (!valid_public_channel(ch) || BLADERF_CHANNEL_IS_TX(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_NULL(quick_tune);
+    if (!nios_pkt_retune2_route_valid(BLADERF_MODULE_RX, quick_tune->port,
+                                      quick_tune->spdt)) {
+        return BLADERF_ERR_INVAL;
+    }
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->rx_sweep_schedule != NULL
+                 ? dev->board->rx_sweep_schedule(dev, ch, timestamp,
+                                                 frequency, quick_tune,
+                                                 sequence)
+                 : BLADERF_ERR_UNSUPPORTED;
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+int bladerf_rx_sweep_completions(struct bladerf *dev,
+                                 bladerf_channel ch,
+                                 struct bladerf_rx_sweep_record *records,
+                                 unsigned int max_records,
+                                 unsigned int *count)
+{
+    int status;
+    CHECK_NULL(dev);
+    CHECK_NULL(count);
+    *count = 0;
+    if (!valid_public_channel(ch) || BLADERF_CHANNEL_IS_TX(ch) ||
+        (records == NULL && max_records != 0)) {
+        return BLADERF_ERR_INVAL;
+    }
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->rx_sweep_completions != NULL
+                 ? dev->board->rx_sweep_completions(dev, ch, records,
+                                                    max_records, count)
+                 : BLADERF_ERR_UNSUPPORTED;
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+int bladerf_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch) || BLADERF_CHANNEL_IS_TX(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    MUTEX_LOCK(&dev->lock);
+    status = dev->board->rx_sweep_end != NULL
+                 ? dev->board->rx_sweep_end(dev, ch)
+                 : BLADERF_ERR_UNSUPPORTED;
+    MUTEX_UNLOCK(&dev->lock);
+    if (status != 0) {
+        return status;
+    }
+
+    /* The RX LO is the last swept frequency, not the one the open epoch
+     * was certified for. Revoke it like any other RX frequency change; a
+     * new RX transition certifies the stream again. The invalidation takes
+     * dev->lock itself. */
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_FREQUENCY);
+    if (status == 0) {
+        rx_reconfigure_complete(dev, ch);
+    }
+    return status;
+}
+
+bool bladerf_rx_sweep_label(const struct bladerf_rx_sweep_record *records,
+                            unsigned int count,
+                            bladerf_timestamp timestamp,
+                            unsigned int *index)
+{
+    return bladerf2_rx_sweep_label(records, count, timestamp, index);
+}
+
 int bladerf_print_quick_tune(struct bladerf *dev, const struct bladerf_quick_tune *qt) {
     if (dev == NULL || qt == NULL) {
         log_error("Device handle or quick tune structure is NULL.\n");
@@ -1679,6 +1786,24 @@ int bladerf_schedule_retune(struct bladerf *dev,
             BLADERF_CHANNEL_IS_TX(ch) ? BLADERF_MODULE_TX : BLADERF_MODULE_RX,
             quick_tune->port, quick_tune->spdt)) {
         return BLADERF_ERR_INVAL;
+    }
+
+    /* Inside an RX sweep session the completion record certifies the
+     * samples; the stream is not revoked. */
+    if (!BLADERF_CHANNEL_IS_TX(ch) && dev->board->rx_sweep_active != NULL) {
+        bool sweep_active;
+
+        MUTEX_LOCK(&dev->lock);
+        sweep_active = dev->board->rx_sweep_active(dev, ch);
+        status = sweep_active
+                     ? dev->board->rx_sweep_schedule(dev, ch, timestamp,
+                                                     frequency, quick_tune,
+                                                     NULL)
+                     : 0;
+        MUTEX_UNLOCK(&dev->lock);
+        if (sweep_active) {
+            return status;
+        }
     }
 
     /* A queued RX fastlock recall has no host completion event or valid-data

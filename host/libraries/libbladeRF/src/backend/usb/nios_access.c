@@ -2148,6 +2148,110 @@ int nios_fastlock_profile_state(struct bladerf *dev, bool is_tx,
     return 0;
 }
 
+static int nios_retune2_record_access(struct bladerf *dev, uint16_t addr,
+                                      uint64_t request, uint64_t *data)
+{
+    uint8_t buf[NIOS_PKT_LEN];
+    uint64_t response_data = 0;
+    bool success = false;
+    int status;
+
+    nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_RETUNE2_RECORD, false,
+                        addr, request);
+    status = nios_access(dev, buf);
+    if (status != 0) {
+        return status;
+    }
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
+                               &success);
+    if (success) {
+        *data = response_data;
+        return 0;
+    }
+    if ((response_data >> 56) !=
+        NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER) {
+        /* Firmware without the target echoes the request. */
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return (response_data & 0xffu) == NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE
+        ? BLADERF_ERR_WOULD_BLOCK : BLADERF_ERR_INVAL;
+}
+
+int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
+                               uint32_t *success_count,
+                               uint32_t *failure_count)
+{
+    uint64_t data = 0;
+    int status;
+
+    if (dev == NULL || success_count == NULL || failure_count == NULL ||
+        (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
+        return BLADERF_ERR_INVAL;
+    }
+    status = nios_retune2_record_access(
+        dev,
+        nios_pkt_16x64_retune2_record_addr(
+            false, module == BLADERF_MODULE_TX,
+            NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS),
+        0, &data);
+    if (status != 0) {
+        return status;
+    }
+    *success_count = (uint32_t)data;
+    *failure_count = (uint32_t)(data >> 32);
+    return 0;
+}
+
+int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
+                             bool failure, uint32_t sequence,
+                             struct nios_retune2_record *record)
+{
+    const bool tx = module == BLADERF_MODULE_TX;
+    uint64_t identity = 0;
+    uint64_t execution = 0;
+    int status;
+
+    if (dev == NULL || record == NULL || sequence == 0 ||
+        (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
+        return BLADERF_ERR_INVAL;
+    }
+    memset(record, 0, sizeof(*record));
+
+    status = nios_retune2_record_access(
+        dev,
+        nios_pkt_16x64_retune2_record_addr(
+            failure, tx, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
+        sequence, &identity);
+    /* Failure records have no execution word; a success record's second
+     * word is answered only while the slot still holds this sequence. */
+    if (status == 0 && !failure) {
+        status = nios_retune2_record_access(
+            dev,
+            nios_pkt_16x64_retune2_record_addr(
+                false, tx, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
+            sequence, &execution);
+    }
+    if (status != 0) {
+        return status;
+    }
+    if ((identity >> 48) != 0 ||
+        (identity >> 24 & 0xffu) &
+            ~(uint64_t)(NIOS_PKT_RETUNE2_EXEC_TS_VALID |
+                        NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)) {
+        /* Unknown layout; do not reinterpret. */
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
+    record->request_token = (uint16_t)identity;
+    record->nios_profile = (uint8_t)(identity >> 16);
+    record->execution_flags = (uint8_t)(identity >> 24);
+    record->session_generation_low = (uint8_t)(identity >> 32);
+    record->failure_stage = (uint8_t)(identity >> 40);
+    record->executed_delta = (uint32_t)execution;
+    record->readback_frequency_hz = (execution >> 32) << 1;
+    return 0;
+}
+
 int nios_ad56x1_vctcxo_trim_dac_read(struct bladerf *dev, uint16_t *value)
 {
     int status;

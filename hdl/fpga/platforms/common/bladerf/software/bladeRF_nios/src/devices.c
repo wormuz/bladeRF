@@ -1637,6 +1637,24 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
     return 1;
 }
 
+bool adi_rfpll_lock_read(bladerf_module m, bool *locked)
+{
+    const uint16_t lock_reg = BLADERF_CHANNEL_IS_TX(m)
+        ? AD9361_REG_TX_PLL_LOCK : AD9361_REG_RX_PLL_LOCK;
+    uint64_t value;
+
+    if (locked == NULL) {
+        return false;
+    }
+    *locked = false;
+    if (!adi_spi_read_checked((0x0 << 15) | (0x0 << 12) | (lock_reg & 0x3ff),
+                              &value)) {
+        return false;
+    }
+    *locked = (((uint8_t)(value >> 56)) & AD9361_PLL_LOCK_MASK) != 0;
+    return true;
+}
+
 bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
                          uint8_t *failure_stage)
 {

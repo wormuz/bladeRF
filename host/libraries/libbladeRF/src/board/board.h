@@ -179,6 +179,9 @@
 #define BLADERF_CAP_RFIC_RESULT_DETAIL      (((uint64_t)1) << 47)
 /** FPGA v0.31.0 reads and writes NIOS fastlock profile cache slots. */
 #define BLADERF_CAP_FASTLOCK_PROFILE_UPLOAD (((uint64_t)1) << 48)
+/** FPGA v0.32.0 retune2 success records carry the post-recall timestamp
+ * and RFPLL lock bit. */
+#define BLADERF_CAP_RETUNE2_EXECUTION_RECORD (((uint64_t)1) << 49)
 
 /**
  * Max number of gain calibration tables associated to max number of channels
@@ -470,6 +473,19 @@ struct board_fns {
                                    const uint8_t *profile,
                                    uint16_t nios_slot,
                                    struct bladerf_quick_tune *quick_tune);
+    bool (*rx_sweep_active)(struct bladerf *dev, bladerf_channel ch);
+    int (*rx_sweep_begin)(struct bladerf *dev, bladerf_channel ch,
+                          uint64_t settle_samples);
+    int (*rx_sweep_schedule)(struct bladerf *dev, bladerf_channel ch,
+                             bladerf_timestamp timestamp,
+                             bladerf_frequency frequency,
+                             const struct bladerf_quick_tune *quick_tune,
+                             uint32_t *sequence);
+    int (*rx_sweep_completions)(struct bladerf *dev, bladerf_channel ch,
+                                struct bladerf_rx_sweep_record *records,
+                                unsigned int max_records,
+                                unsigned int *count);
+    int (*rx_sweep_end)(struct bladerf *dev, bladerf_channel ch);
 
     /* DC/Phase/Gain Correction */
     int (*get_correction)(struct bladerf *dev,

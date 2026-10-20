@@ -55,6 +55,10 @@ uint32_t pkt_retune2_failure_count(bladerf_module module);
 uint32_t pkt_retune2_success_count(bladerf_module module);
 bool pkt_retune2_completion_select(bladerf_module module, uint32_t sequence);
 uint32_t pkt_retune2_completion_word(uint8_t addr);
+/* NIOS_PKT_16x64_TARGET_RETUNE2_RECORD read; returns a
+ * NIOS_PKT_16x64_RETUNE2_RECORD_ERR_* code, 0 on success. */
+uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
+                                uint64_t *data);
 bool pkt_retune2_failure_completion_select(bladerf_module module,
                                            uint32_t sequence);
 

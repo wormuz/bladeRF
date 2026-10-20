@@ -23,6 +23,7 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter \
 cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
     -Wno-unused-but-set-variable -ffunction-sections -fdata-sections \
     -I"$repo_root/fpga_common/include" \
+    -I"$repo_root/host/libraries/libbladeRF/include" \
     -I"$repo_root/host/libraries/libbladeRF/src" \
     -I"$repo_root/host/common/include" \
     -I"$repo_root/host/build/common/include" \

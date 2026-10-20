@@ -648,6 +648,15 @@ static void service_rfic_status_request_impl(void)
         }
         goto publish_cooperative_response;
     }
+    if (target == NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE ||
+        target == NIOS_PKT_16x64_TARGET_RETUNE2_RECORD) {
+        /* NIOS RAM only: the fastlock profile cache (whose COMMIT itself
+         * refuses while the RFIC is owned) and RETUNE2 outcome records.
+         * A RETUNE2 worker owning the RFIC is exactly when a sweep reads
+         * records, so do not fence these behind it. */
+        pkt_16x64(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
     if (target != NIOS_PKT_16x64_TARGET_RFIC) {
         /* Direct AD9361 SPI, gain-table and batch operations bypass the RFIC
          * command queue. Never let one run reentrantly while an ADI callback
@@ -807,8 +816,11 @@ int main(int argc, char **argv, char **envp)
     /* pkt_*_init() establishes queue and asynchronous-owner invariants.
      * Only admit command UART requests after all handlers are ready. */
     command_uart_enable_isr(true);
+#ifndef BLADERF_NIOS_PC_SIMULATION
+    /* The simulation feeds requests from test cases, not a UART IRQ. */
     alt_ic_irq_enable(COMMAND_UART_IRQ_INTERRUPT_CONTROLLER_ID,
                       COMMAND_UART_IRQ);
+#endif
 
     /* ====================
      * AD9361 SPI TESTS
