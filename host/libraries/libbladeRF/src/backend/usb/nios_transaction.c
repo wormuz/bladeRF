@@ -1047,6 +1047,10 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
                     ", response %" PRId64 "): pkt=%02x %02x %02x %02x status=%d\n",
                     ms, lock_ms, out_ms, in_ms, request[0], request[1], request[2],
                     request[3], status);
+        /* log_warning compiles to nothing in builds without logging. */
+        (void)lock_ms;
+        (void)out_ms;
+        (void)in_ms;
     }
     return status;
 }
