@@ -432,6 +432,22 @@ bool adi_fastlock_recall_start(bladerf_module module,
     return true;
 }
 
+static bool simulated_rfpll_locked = true;
+static bool fail_rfpll_lock_read;
+static unsigned rfpll_lock_reads;
+static uint64_t tamer_advance_per_poll;
+
+bool adi_rfpll_lock_read(bladerf_module module, bool *locked)
+{
+    (void)module;
+    rfpll_lock_reads++;
+    if (locked == NULL || fail_rfpll_lock_read) {
+        return false;
+    }
+    *locked = simulated_rfpll_locked;
+    return true;
+}
+
 int32_t adi_fastlock_recall_poll(bladerf_module module,
                                  uint8_t *failure_stage)
 {
@@ -445,6 +461,7 @@ int32_t adi_fastlock_recall_poll(bladerf_module module,
     if (simulated_fastlock_never_locks) {
         return 1;
     }
+    tamer_timestamp += tamer_advance_per_poll;
     if (simulated_fastlock_pending_polls > 0) {
         simulated_fastlock_pending_polls--;
         return 1;
@@ -708,7 +725,7 @@ static int check_deferred_retune_without_nios_phy(void)
     simulated_rfic_faulted = false;
     bool activated = profile_activate(
         BLADERF_MODULE_TX, &profile, &readback_frequency_hz,
-        &failure_stage, true, false, &pll_pending, &txq_pending);
+        &failure_stage, true, false, &pll_pending, &txq_pending, NULL);
     if (!activated || !pll_pending ||
         failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
         simulated_rfic_phy_present = true;
@@ -721,7 +738,7 @@ static int check_deferred_retune_without_nios_phy(void)
     for (unsigned i = 0; i < 4 && pll_pending; ++i) {
         activated = profile_activate(
             BLADERF_MODULE_TX, &profile, &readback_frequency_hz,
-            &failure_stage, true, true, &pll_pending, &txq_pending);
+            &failure_stage, true, true, &pll_pending, &txq_pending, NULL);
         if (!activated || failure_stage != NIOS_PKT_RETUNE2_FAILURE_NONE) {
             simulated_rfic_phy_present = true;
             fputs("deferred host-owned fastlock failed while draining PLL\n",
@@ -2095,6 +2112,139 @@ static int check_schedule_ready_lifecycle(void)
     return 0;
 }
 
+
+static void reset_execution_test_state(void)
+{
+    pkt_retune2_init();
+    load_count = 0;
+    schedule_count = 0;
+    recall_count = 0;
+    simulated_rfic_phy_present = true;
+    simulated_rfic_faulted = false;
+    fail_tamer_schedule = false;
+    fail_tamer_schedule_ack = false;
+    fail_tamer_schedule_status = false;
+    fail_tamer_cancel = false;
+    fail_tamer_cancel_status = false;
+    simulated_txq_owner = false;
+    simulated_fastlock_active = false;
+    fire_during_schedule = false;
+    staged_profile_load_active = false;
+    simulated_tamer_clock_stalled = false;
+    fail_tamer_read = false;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    simulated_fastlock_pending_polls = 0;
+    simulated_fastlock_terminal_status = 0;
+    compare_fired_rx = false;
+    compare_fired_tx = false;
+    tamer_timestamp = 0;
+    simulated_rfpll_locked = true;
+    fail_rfpll_lock_read = false;
+    rfpll_lock_reads = 0;
+    port_count = 0;
+    spdt_count = 0;
+}
+
+/* Run one scheduled RX retune at `scheduled` and return its success record
+ * execution words. The simulated recall needs three polls and advances the
+ * timestamp counter by 7 per poll, so execution lands after the schedule. */
+static bool run_scheduled_rx_execution(uint64_t scheduled, uint32_t *ts_lo,
+                                       uint32_t *ts_hi, uint32_t *flags,
+                                       uint32_t *successes)
+{
+    fastlock_profile profile = { 0 };
+
+    profile.profile_num = 3;
+    profile.port = 0x11;
+    profile.spdt = 0x02;
+    profile.state = FASTLOCK_STATE_BBP_RFFE;
+    if (enqueue_retune_resident(&rx_queue, &profile, 4, scheduled) != 1 ||
+        !run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24)) {
+        return false;
+    }
+    tamer_timestamp = scheduled;
+    tamer_advance_per_poll = 7;
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    if (!run_until_queue_empty(&rx_queue, 16)) {
+        tamer_advance_per_poll = 0;
+        return false;
+    }
+    tamer_advance_per_poll = 0;
+    *successes = pkt_retune2_success_count(BLADERF_MODULE_RX);
+    if (*successes == 0 ||
+        !pkt_retune2_completion_select(BLADERF_MODULE_RX, *successes)) {
+        return false;
+    }
+    *ts_lo = pkt_retune2_completion_word(
+        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_LO);
+    *ts_hi = pkt_retune2_completion_word(
+        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_HI);
+    *flags = pkt_retune2_completion_word(
+        NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS);
+    return true;
+}
+
+static int check_rx_success_record_carries_execution(void)
+{
+    const uint64_t scheduled = UINT64_C(0x1234500000);
+    uint32_t ts_lo = 0, ts_hi = 0, flags = 0, successes = 0;
+    uint64_t executed;
+
+    reset_execution_test_state();
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes)) {
+        fputs("scheduled RX execution case did not complete\n", stderr);
+        return 1;
+    }
+    executed = ((uint64_t)ts_hi << 32) | ts_lo;
+    if (flags != (NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID |
+                  NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED) ||
+        executed <= scheduled || executed != tamer_timestamp ||
+        rfpll_lock_reads != 1 ||
+        pkt_retune2_completion_word(
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_LO) != (uint32_t)scheduled ||
+        pkt_retune2_completion_word(
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_TS_HI) !=
+            (uint32_t)(scheduled >> 32)) {
+        fprintf(stderr, "RX execution record mismatch: flags=0x%x "
+                        "executed=0x%llx scheduled=0x%llx reads=%u\n",
+                flags, (unsigned long long)executed,
+                (unsigned long long)scheduled, rfpll_lock_reads);
+        return 1;
+    }
+
+    /* PLL reported unlocked after the recall: the record says so. */
+    reset_execution_test_state();
+    simulated_rfpll_locked = false;
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes) ||
+        flags != NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID) {
+        fprintf(stderr, "unlocked RFPLL not reflected: flags=0x%x\n", flags);
+        return 1;
+    }
+
+    /* A failed lock read must not claim lock. */
+    reset_execution_test_state();
+    fail_rfpll_lock_read = true;
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes) ||
+        flags != NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID) {
+        fprintf(stderr, "failed lock read claimed lock: flags=0x%x\n",
+                flags);
+        return 1;
+    }
+
+    /* Failure records keep their layout; execution words are not exposed. */
+    if (!pkt_retune2_failure_completion_select(BLADERF_MODULE_RX, 1) ||
+        pkt_retune2_completion_word(
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS) != 0) {
+        fputs("failure record exposes execution words\n", stderr);
+        return 1;
+    }
+    reset_execution_test_state();
+    return 0;
+}
 static int check_preload_preserves_scheduled_profile_slot(void)
 {
     fastlock_profile first = { 0 };
@@ -3302,7 +3452,8 @@ static int check_completion_ring_overwrite_is_visible(void)
     }
 
     retune2_completion_publish(record, overwritten_sequence,
-                               1800000000u, 0x100000002ull, 5, 17, 0x4567);
+                               1800000000u, 0x100000002ull, 5, 17, 0x4567,
+                               NULL);
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
                                        requested_sequence) ||
         pkt_retune2_completion_word(
@@ -3723,6 +3874,9 @@ int main(void)
         return 1;
     }
     if (check_fault_cancels_armed_queue_once() != 0) {
+        return 1;
+    }
+    if (check_rx_success_record_carries_execution() != 0) {
         return 1;
     }
     if (check_schedule_ready_lifecycle() != 0) {

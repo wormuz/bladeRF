@@ -775,6 +775,16 @@ bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
            adi_fastlock_recall_poll(m, failure_stage) == 0;
 }
 
+/* The simulated RFPLL is always locked once a recall has finished. */
+bool adi_rfpll_lock_read(bladerf_module m, bool *locked)
+{
+    if (locked == NULL) {
+        return false;
+    }
+    *locked = !sim_recall_job.active || sim_recall_job.module != m;
+    return true;
+}
+
 bool adi_rfport_select(fastlock_profile *p)
 {
     return p != NULL;

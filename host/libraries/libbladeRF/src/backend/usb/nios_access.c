@@ -1159,14 +1159,16 @@ int nios_retune2_success_count_read(struct bladerf *dev,
                           addr, value);
 }
 
-int nios_retune2_completion_read(struct bladerf *dev,
-                                 bladerf_module module,
-                                 uint32_t sequence,
-                                 uint64_t *frequency_hz,
-                                 uint64_t *scheduled_timestamp,
-                                 uint16_t *nios_profile,
-                                 uint32_t *session_generation,
-                                 uint16_t *request_token)
+static int retune2_completion_read(struct bladerf *dev,
+                                   bladerf_module module,
+                                   uint32_t sequence,
+                                   uint64_t *frequency_hz,
+                                   uint64_t *scheduled_timestamp,
+                                   uint16_t *nios_profile,
+                                   uint32_t *session_generation,
+                                   uint16_t *request_token,
+                                   uint64_t *executed_timestamp,
+                                   uint8_t *execution_flags)
 {
     uint8_t select_addr;
     uint32_t first_sequence;
@@ -1178,6 +1180,11 @@ int nios_retune2_completion_read(struct bladerf *dev,
     uint32_t token = 0;
     uint32_t timestamp_lo;
     uint32_t timestamp_hi;
+    uint32_t exec_lo = 0;
+    uint32_t exec_hi = 0;
+    uint32_t exec_flags = 0;
+    const bool want_execution = executed_timestamp != NULL &&
+                                execution_flags != NULL;
     int status;
 
     if (frequency_hz == NULL || scheduled_timestamp == NULL ||
@@ -1190,6 +1197,10 @@ int nios_retune2_completion_read(struct bladerf *dev,
     *nios_profile = 0;
     *session_generation = 0;
     *request_token = 0;
+    if (want_execution) {
+        *executed_timestamp = 0;
+        *execution_flags = 0;
+    }
     if (module == BLADERF_MODULE_RX) {
         select_addr = NIOS_PKT_8x32_RETUNE2_COMPLETION_SELECT_RX;
     } else if (module == BLADERF_MODULE_TX) {
@@ -1250,6 +1261,21 @@ int nios_retune2_completion_read(struct bladerf *dev,
             dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
             NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN, &token);
     }
+    if (status == 0 && want_execution) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_LO, &exec_lo);
+    }
+    if (status == 0 && want_execution) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_HI, &exec_hi);
+    }
+    if (status == 0 && want_execution) {
+        status = nios_8x32_read(
+            dev, NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
+            NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS, &exec_flags);
+    }
     if (status == 0) {
         status = nios_8x32_read(dev,
                                 NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION,
@@ -1261,6 +1287,13 @@ int nios_retune2_completion_read(struct bladerf *dev,
     }
     if (first_sequence != sequence || last_sequence != sequence) {
         return BLADERF_ERR_WOULD_BLOCK;
+    }
+    /* Unknown flag bits mean a newer record layout; do not reinterpret. */
+    if (want_execution &&
+        (exec_flags & ~(uint32_t)(NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID |
+                                  NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED)) !=
+            0) {
+        return BLADERF_ERR_UNEXPECTED;
     }
     /* The completion record stores this field as uint16_t. Reject corrupt
      * peripheral data instead of silently narrowing it to a plausible saved
@@ -1274,7 +1307,49 @@ int nios_retune2_completion_read(struct bladerf *dev,
     *nios_profile = (uint16_t)profile;
     *session_generation = session;
     *request_token = (uint16_t)token;
+    if (want_execution) {
+        *executed_timestamp = ((uint64_t)exec_hi << 32) | exec_lo;
+        *execution_flags = (uint8_t)exec_flags;
+    }
     return 0;
+}
+
+int nios_retune2_completion_read(struct bladerf *dev,
+                                 bladerf_module module,
+                                 uint32_t sequence,
+                                 uint64_t *frequency_hz,
+                                 uint64_t *scheduled_timestamp,
+                                 uint16_t *nios_profile,
+                                 uint32_t *session_generation,
+                                 uint16_t *request_token)
+{
+    return retune2_completion_read(dev, module, sequence, frequency_hz,
+                                   scheduled_timestamp, nios_profile,
+                                   session_generation, request_token, NULL,
+                                   NULL);
+}
+
+int nios_retune2_completion_execution_read(struct bladerf *dev,
+                                           bladerf_module module,
+                                           uint32_t sequence,
+                                           uint64_t *frequency_hz,
+                                           uint64_t *scheduled_timestamp,
+                                           uint16_t *nios_profile,
+                                           uint32_t *session_generation,
+                                           uint16_t *request_token,
+                                           uint64_t *executed_timestamp,
+                                           uint8_t *execution_flags)
+{
+    if (executed_timestamp == NULL || execution_flags == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    if (!have_cap_dev(dev, BLADERF_CAP_RETUNE2_EXECUTION_RECORD)) {
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return retune2_completion_read(dev, module, sequence, frequency_hz,
+                                   scheduled_timestamp, nios_profile,
+                                   session_generation, request_token,
+                                   executed_timestamp, execution_flags);
 }
 
 int nios_retune2_failure_completion_read(struct bladerf *dev,

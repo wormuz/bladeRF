@@ -333,6 +333,19 @@ int nios_retune2_completion_read(struct bladerf *dev,
                                  uint16_t *nios_profile,
                                  uint32_t *session_generation,
                                  uint16_t *request_token);
+/* As nios_retune2_completion_read(), plus the timestamp NIOS read after the
+ * recall finished and NIOS_PKT_8x32_RETUNE2_EXEC_* flags (FPGA >= 0.32.0,
+ * BLADERF_ERR_UNSUPPORTED otherwise). */
+int nios_retune2_completion_execution_read(struct bladerf *dev,
+                                           bladerf_module module,
+                                           uint32_t sequence,
+                                           uint64_t *frequency_hz,
+                                           uint64_t *scheduled_timestamp,
+                                           uint16_t *nios_profile,
+                                           uint32_t *session_generation,
+                                           uint16_t *request_token,
+                                           uint64_t *executed_timestamp,
+                                           uint8_t *execution_flags);
 int nios_retune2_failure_completion_read(struct bladerf *dev,
                                          bladerf_module module,
                                          uint32_t sequence,

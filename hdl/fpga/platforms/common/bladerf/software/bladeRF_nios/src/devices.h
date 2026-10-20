@@ -344,6 +344,10 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage);
 bool adi_fastlock_recall_active(void);
 bladerf_module adi_fastlock_recall_owner(void);
 
+/* Read the RFPLL lock bit (UG-570: RX 0x247[1], TX 0x287[1]) over SPI.
+ * Returns false if the SPI read failed. */
+bool adi_rfpll_lock_read(bladerf_module m, bool *locked);
+
 /**
  * Set the AD9361 port.
  *

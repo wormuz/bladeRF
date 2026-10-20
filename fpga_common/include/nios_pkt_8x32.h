@@ -469,6 +469,16 @@
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_SESSION_GENERATION 6u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN 7u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
+/* FPGA >= 0.32.0: success records also carry what NIOS observed when the
+ * recall finished. Words 8/9 hold the module's FPGA timestamp read after the
+ * fastlock recall locked and the RF port/SPDT switches were set; word 10
+ * holds NIOS_PKT_8x32_RETUNE2_EXEC_* flags. The PLL-lock flag comes from an
+ * SPI read of the RFPLL lock bit made after that timestamp. */
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_LO 8u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_TS_HI 9u
+#define NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS 10u
+#define NIOS_PKT_8x32_RETUNE2_EXEC_TS_VALID   (1u << 0)
+#define NIOS_PKT_8x32_RETUNE2_EXEC_PLL_LOCKED (1u << 1)
 
 /* FPGA status PIOs are independent of the RFIC and remain safe while a
  * retained RETUNE2 operation owns it. Completion-record writes only select

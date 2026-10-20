@@ -32,6 +32,9 @@
 #include "streaming/sync.h"
 #include "thread.h"
 
+/* Sweep records kept for bladerf_rx_sweep_completions(); a power of two. */
+#define BLADERF2_RX_SWEEP_RING_SIZE 256u
+
 
 /******************************************************************************/
 /* Types */
@@ -303,7 +306,20 @@ struct bladerf2_board_data {
         uint16_t request_token;
         uint32_t session_generation;
         bool valid;
+        /* Sequence of the owning sweep record, 0 outside a sweep. */
+        uint32_t sweep_sequence;
     } rx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
+    /* RX sweep session (bladerf_rx_sweep_begin). Guarded by dev->lock;
+     * the ledger entries above carry each request's sweep sequence. */
+    struct {
+        bool active;
+        bladerf_channel ch;
+        uint64_t settle_samples;
+        uint32_t next_sequence;
+        uint32_t ring_head;
+        uint32_t ring_count;
+        struct bladerf_rx_sweep_record ring[BLADERF2_RX_SWEEP_RING_SIZE];
+    } rx_sweep;
     uint32_t tx_retune2_success_count_last;
     bool tx_retune2_success_count_valid;
     uint8_t tx_retune2_pending_count;
@@ -507,6 +523,31 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
                                 uint32_t reason);
 void bladerf2_rx_reconfigure_complete(struct bladerf *dev,
                                       bladerf_channel ch);
+
+/* Schedule a retune2 request. A nonzero sweep_sequence tags the RX ledger
+ * entry with its sweep record; 0 outside a sweep session. */
+int bladerf2_schedule_retune_sequenced(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    bladerf_timestamp timestamp,
+    bladerf_frequency frequency,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t sweep_sequence);
+
+/* RX sweep session (rx_sweep.c). Callers hold dev->lock. */
+bool bladerf2_rx_sweep_active(struct bladerf *dev, bladerf_channel ch);
+int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
+                            uint64_t settle_samples);
+int bladerf2_rx_sweep_schedule(struct bladerf *dev, bladerf_channel ch,
+                               bladerf_timestamp timestamp,
+                               bladerf_frequency frequency,
+                               const struct bladerf_quick_tune *quick_tune,
+                               uint32_t *sequence);
+int bladerf2_rx_sweep_completions(struct bladerf *dev, bladerf_channel ch,
+                                  struct bladerf_rx_sweep_record *records,
+                                  unsigned int max_records,
+                                  unsigned int *count);
+int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch);
 void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags,
                                 uint8_t epoch_id, uint64_t fpga_timestamp,
                                 bool fpga_timestamp_valid);

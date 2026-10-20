@@ -136,7 +136,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             break;
 
         case NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION:
-            if (addr > NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN) {
+            if (addr > NIOS_PKT_8x32_RETUNE2_COMPLETION_EXEC_FLAGS) {
                 *data = 0;
                 return false;
             }

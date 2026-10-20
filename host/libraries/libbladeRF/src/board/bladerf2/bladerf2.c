@@ -4240,11 +4240,13 @@ static void bladerf2_retune2_rebase_now_counters(
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 }
 
-static int bladerf2_schedule_retune(struct bladerf *dev,
-                                    bladerf_channel ch,
-                                    bladerf_timestamp timestamp,
-                                    bladerf_frequency frequency,
-                                    struct bladerf_quick_tune *quick_tune)
+int bladerf2_schedule_retune_sequenced(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    bladerf_timestamp timestamp,
+    bladerf_frequency frequency,
+    const struct bladerf_quick_tune *quick_tune,
+    uint32_t sweep_sequence)
 {
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(quick_tune);
@@ -4393,6 +4395,8 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
             retune2_request_token;
         board_data->rx_retune2_pending[rx_pending_slot].session_generation =
             retune2_session_generation;
+        board_data->rx_retune2_pending[rx_pending_slot].sweep_sequence =
+            sweep_sequence;
         board_data->rx_retune2_pending[rx_pending_slot].valid = true;
         board_data->rx_retune2_pending_count++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -4754,6 +4758,16 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
      * the same exit when it next takes ownership of the RFPLL. */
 
     return 0;
+}
+
+static int bladerf2_schedule_retune(struct bladerf *dev,
+                                    bladerf_channel ch,
+                                    bladerf_timestamp timestamp,
+                                    bladerf_frequency frequency,
+                                    struct bladerf_quick_tune *quick_tune)
+{
+    return bladerf2_schedule_retune_sequenced(dev, ch, timestamp, frequency,
+                                              quick_tune, 0);
 }
 
 static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
@@ -7337,6 +7351,11 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.cancel_scheduled_retunes, bladerf2_cancel_scheduled_retunes),
     FIELD_INIT(.get_quick_tune_profile, bladerf2_get_quick_tune_profile),
     FIELD_INIT(.load_quick_tune_profile, bladerf2_load_quick_tune_profile),
+    FIELD_INIT(.rx_sweep_active, bladerf2_rx_sweep_active),
+    FIELD_INIT(.rx_sweep_begin, bladerf2_rx_sweep_begin),
+    FIELD_INIT(.rx_sweep_schedule, bladerf2_rx_sweep_schedule),
+    FIELD_INIT(.rx_sweep_completions, bladerf2_rx_sweep_completions),
+    FIELD_INIT(.rx_sweep_end, bladerf2_rx_sweep_end),
     FIELD_INIT(.get_correction, bladerf2_get_correction),
     FIELD_INIT(.set_correction, bladerf2_set_correction),
     FIELD_INIT(.trigger_init, bladerf2_trigger_init),

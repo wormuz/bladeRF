@@ -1191,7 +1191,9 @@ static void *rx_fault_monitor_task(void *arg)
                 !board_data->tx_rf_config_operation_active;
             should_poll_rx_retune = board_data->state == STATE_INITIALIZED &&
                 rx_retune2_watch_active &&
-                !board_data->rf_transition_setter_active;
+                !board_data->rf_transition_setter_active &&
+                /* A sweep session collects its own RX records. */
+                !board_data->rx_sweep.active;
             should_poll_reference_clock = (should_poll || should_poll_tx) &&
                 tx_retune2_pending_count == 0 &&
                 rx_retune2_pending_count == 0;
@@ -3582,6 +3584,7 @@ static int _bladerf_rx_transition_begin(
     const struct band_port_map *target_rx_port_map = NULL;
     bladerf_frequency readback_hz = 0;
     bool transition_busy = false;
+    bool sweep_active = false;
     bool rx_source_unsupported = false;
     bool frequency_model_unknown = false;
     bool epochless_async_stream_active = false;
@@ -3627,6 +3630,12 @@ static int _bladerf_rx_transition_begin(
     board_data = dev->board_data;
     if (board_data == NULL) {
         return BLADERF_ERR_INVAL;
+    }
+    /* A sweep session owns the RX retune queue and certifies samples from
+     * its completion records; a transition would clear that queue. */
+    WITH_MUTEX(&dev->lock, { sweep_active = board_data->rx_sweep.active; });
+    if (sweep_active) {
+        return BLADERF_ERR_WOULD_BLOCK;
     }
     if (!bladerf2_rf_transition_normalize_requirements(
             request->required_events_mask,
