@@ -46,6 +46,7 @@
 #include "pkt_retune2.h"
 #include "pkt_legacy.h"
 #include "rfic_scheduler_policy.h"
+#include "nios_ram_watermark.h"
 #include "debug.h"
 #ifdef BLADERF_NIOS_LIBAD936X
 void bladerf_platform_set_service_hook(void (*hook)(void));
@@ -751,6 +752,8 @@ typedef enum state {
 
 int main(int argc, char **argv, char **envp)
 {
+    nios_ram_watermark_paint();
+
     DBG(BLADERF_DEVICE_NAME " FPGA v%x.%x.%x\n",
         FPGA_VERSION_MAJOR, FPGA_VERSION_MINOR, FPGA_VERSION_PATCH);
     DBG("Built " __DATE__ " " __TIME__ " with love <3\n");

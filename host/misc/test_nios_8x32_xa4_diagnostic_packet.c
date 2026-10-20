@@ -5,6 +5,7 @@
 
 #include "devices.h"
 #include "nios_pkt_8x32.h"
+#include "nios_ram_watermark.h"
 #include "pkt_8x32.h"
 #include "pkt_retune2.h"
 
@@ -60,6 +61,13 @@ bool loss_counter_half_read(loss_counter_half_t which, uint32_t *value)
     return true;
 }
 uint32_t dwell_status_read(void) { return 0; }
+static unsigned int nios_ram_read_calls;
+bool nios_ram_watermark_read(uint8_t field, uint32_t *bytes)
+{
+    nios_ram_read_calls++;
+    *bytes = UINT32_C(0x5a000000) | field;
+    return true;
+}
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
 uint32_t command_uart_current_session_generation(void) { return 0; }
@@ -217,6 +225,9 @@ int main(void)
         !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_LOSS_COUNTERS, false, 3, 0) ||
         !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_NIOS_RAM, false,
+            NIOS_PKT_8x32_NIOS_RAM_UNTOUCHED, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, false, 0, 0) ||
         !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, false,
@@ -230,8 +241,14 @@ int main(void)
         nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, true,
             NIOS_PKT_8x32_TX_RETUNE_CMD_ARM, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_RFFE_CSR, false, 0, 0) ||
         nios_pkt_8x32_rfic_owner_access_safe(
-            NIOS_PKT_8x32_TARGET_RFFE_CSR, false, 0, 0)) {
+            NIOS_PKT_8x32_TARGET_RFFE_CSR, true, 0, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION, false, 0, 0) ||
+        nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_NIOS_RAM, true, 0, 0)) {
         fputs("RFIC-owner 8x32 access policy mismatch\n", stderr);
         return 1;
     }
@@ -273,6 +290,16 @@ int main(void)
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_FAULT_CAUSES, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_STATUS, 0, true, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_DWELL_STATUS, 1, false, 0);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_NIOS_RAM,
+               NIOS_PKT_8x32_NIOS_RAM_REGION, true,
+               UINT32_C(0x5a000000) | NIOS_PKT_8x32_NIOS_RAM_REGION);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_NIOS_RAM,
+               NIOS_PKT_8x32_NIOS_RAM_REGION + 1, false, 0);
+    if (nios_ram_read_calls != 1) {
+        fputs("NIOS RAM read reached the firmware for a reserved field\n",
+              stderr);
+        return 1;
+    }
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0, true, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 1, false, 0);
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_TS_LO, 0, true, 0);

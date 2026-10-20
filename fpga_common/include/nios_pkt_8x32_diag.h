@@ -54,6 +54,9 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
         case NIOS_PKT_8x32_TARGET_LOSS_COUNTERS:
             return addr <= 3;
 
+        case NIOS_PKT_8x32_TARGET_NIOS_RAM:
+            return addr <= NIOS_PKT_8x32_NIOS_RAM_REGION;
+
         case NIOS_PKT_8x32_TARGET_DWELL_READOUT:
             return addr <= 15;
 

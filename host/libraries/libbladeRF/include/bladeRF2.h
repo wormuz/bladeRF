@@ -826,6 +826,55 @@ int CALL_CONV bladerf_get_rf_switch_config(struct bladerf *dev,
 
 /** @} (End of FN_BLADERF2_LOW_LEVEL_RF_SWITCHING) */
 
+/**
+ * @defgroup FN_BLADERF2_LOW_LEVEL_NIOS_RAM NIOS RAM usage
+ *
+ * The NIOS II stack and heap share the RAM between the end of the firmware's
+ * static data and the top of on-chip memory. The firmware fills that gap
+ * with a pattern at boot; any word no longer holding it has been written.
+ *
+ * @{
+ */
+
+/**
+ * NIOS stack/heap usage since the last FPGA load, in bytes.
+ *
+ * untouched + heap + stack == region.
+ */
+struct bladerf_nios_ram_usage {
+    /** Gap bytes neither stack nor heap has written since boot: the
+     *  remaining margin */
+    uint32_t untouched;
+    /** Heap extent; the allocator never returns memory, so this is its
+     *  peak */
+    uint32_t heap;
+    /** Deepest stack since boot. A frame that reserves words it never
+     *  writes is not seen. */
+    uint32_t stack;
+    /** RAM shared by the stack and the heap */
+    uint32_t region;
+};
+
+/**
+ * Read the NIOS stack/heap high-water mark.
+ *
+ * Each field is one NIOS request; the set is retried until it adds up, so
+ * a stack that deepened between requests does not produce a torn result.
+ *
+ * @param       dev     Device handle
+ * @param[out]  usage   Byte counts
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure.
+ *         Returns ::BLADERF_ERR_FPGA_OP on FPGA images that predate the
+ *         read, ::BLADERF_ERR_WOULD_BLOCK if no consistent set was read
+ *         after bounded retries.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_nios_ram_usage(struct bladerf *dev,
+                                         struct bladerf_nios_ram_usage *usage);
+
+/** @} (End of FN_BLADERF2_LOW_LEVEL_NIOS_RAM) */
+
 /** @} (End of FN_BLADERF2_LOW_LEVEL) */
 
 /** @} (End of BLADERF2) */

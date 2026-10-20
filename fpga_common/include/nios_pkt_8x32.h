@@ -474,6 +474,25 @@
  * Used to distinguish deferred outcomes retained across USB sessions. */
 #define NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION 0x90
 
+/* NIOS stack/heap high-water mark (read-only, bladeRF 2 xA4 NIOS RAM).
+ * At boot the firmware fills the gap between the heap end and the stack
+ * pointer with a pattern; addr selects one byte count:
+ *   UNTOUCHED  pattern words still intact above the current heap end: the
+ *              smallest stack/heap gap seen since boot
+ *   HEAP       heap end minus heap start (the allocator never shrinks it,
+ *              so this is the heap peak)
+ *   STACK      stack top minus the lowest overwritten word above the gap:
+ *              the deepest stack seen since boot
+ *   REGION     stack top minus heap start, the RAM both share
+ * UNTOUCHED + HEAP + STACK == REGION. A stack frame that reserves words it
+ * never writes is not seen; the static bound comes from
+ * host/misc/nios_stack_budget.py. */
+#define NIOS_PKT_8x32_TARGET_NIOS_RAM        0x92
+#define NIOS_PKT_8x32_NIOS_RAM_UNTOUCHED     0u
+#define NIOS_PKT_8x32_NIOS_RAM_HEAP          1u
+#define NIOS_PKT_8x32_NIOS_RAM_STACK         2u
+#define NIOS_PKT_8x32_NIOS_RAM_REGION        3u
+
 /* FPGA status PIOs are independent of the RFIC and remain safe while a
  * retained RETUNE2 operation owns it. Completion-record writes only select
  * which NIOS-owned RAM record subsequent reads observe. Gate COMPLETE and
@@ -500,6 +519,7 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
         target == NIOS_PKT_8x32_TARGET_RF_LINK_STATUS ||
         target == NIOS_PKT_8x32_TARGET_LOSS_COUNTERS ||
         target == NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS ||
+        target == NIOS_PKT_8x32_TARGET_NIOS_RAM ||
         /* NIOS RAM and the RFFE PIO: bladerf_schedule_retune reads both
          * while an earlier scheduled request still uploads or recalls. */
         target == NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION ||

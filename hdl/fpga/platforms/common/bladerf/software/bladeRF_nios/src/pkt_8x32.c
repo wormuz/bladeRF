@@ -28,6 +28,7 @@
 #include "pkt_8x32.h"
 #include "pkt_retune2.h"
 #include "nios_pkt_8x32_diag.h"
+#include "nios_ram_watermark.h"
 #include "devices.h"
 #include "rffe_csr_policy.h"
 #include "debug.h"
@@ -150,6 +151,12 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
          * there: nothing frozen, nothing triggered. */
         case NIOS_PKT_8x32_TARGET_DWELL_STATUS:
             *data = dwell_status_read();
+            break;
+
+        case NIOS_PKT_8x32_TARGET_NIOS_RAM:
+            if (!nios_ram_watermark_read(addr, data)) {
+                return false;
+            }
             break;
 
         /* Sample-loss counters, one 32-bit half per packet. Each PIO word

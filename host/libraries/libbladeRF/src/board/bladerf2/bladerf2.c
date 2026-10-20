@@ -83,6 +83,7 @@ extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
 #include "common.h"
 #include "rf_transition_policy.h"
 #include "rfic_rssi_policy.h"
+#include "nios_ram_policy.h"
 
 static uint64_t bladerf2_monotonic_ns(void)
 {
@@ -7612,6 +7613,41 @@ int bladerf_get_rffe_control(struct bladerf *dev, uint32_t *value)
 
     return 0;
 }
+
+int bladerf_get_nios_ram_usage(struct bladerf *dev,
+                               struct bladerf_nios_ram_usage *usage)
+{
+    uint32_t v[4];
+    unsigned int attempt;
+    uint8_t field;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(usage);
+
+    MUTEX_LOCK(&dev->lock);
+    for (attempt = 0; attempt < 4; ++attempt) {
+        for (field = 0; field < 4; ++field) {
+            status = nios_ram_usage_read(dev, field, &v[field]);
+            if (status != 0) {
+                goto out;
+            }
+        }
+        if (bladerf2_nios_ram_usage_consistent(v)) {
+            usage->untouched = v[NIOS_PKT_8x32_NIOS_RAM_UNTOUCHED];
+            usage->heap = v[NIOS_PKT_8x32_NIOS_RAM_HEAP];
+            usage->stack = v[NIOS_PKT_8x32_NIOS_RAM_STACK];
+            usage->region = v[NIOS_PKT_8x32_NIOS_RAM_REGION];
+            goto out;
+        }
+    }
+    status = BLADERF_ERR_WOULD_BLOCK;
+out:
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
 
 int bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t *mask)
 {

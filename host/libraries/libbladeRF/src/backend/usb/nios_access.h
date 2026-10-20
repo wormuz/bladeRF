@@ -315,6 +315,17 @@ int nios_dwell_status_read(struct bladerf *dev, uint32_t *value);
  */
 int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value);
 
+/**
+ * Read one NIOS stack/heap high-water field (bladeRF 2 xA4).
+ *
+ * @param       dev     Device handle
+ * @param[in]   field   NIOS_PKT_8x32_NIOS_RAM_* selector
+ * @param[out]  value   Byte count
+ *
+ * @return 0 on success, BLADERF_ERR_* value on failure
+ */
+int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value);
+
 /** Read the cumulative deferred NIOS retune2 execution-failure counter. */
 int nios_retune2_failure_count_read(struct bladerf *dev,
                                     bladerf_module module,

@@ -60,3 +60,19 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     "$repo_root/host/misc/test_nios_ina219_packet_status.c" \
     -Wl,--gc-sections -o "$test_bin"
 "$test_bin"
+
+test_bin=$(mktemp)
+trap 'rm -f "$test_bin"' EXIT
+cc -Wall -Wextra -Werror \
+    -I"$repo_root/fpga_common/include" \
+    -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
+    "$repo_root/host/misc/test_nios_ram_watermark.c" -o "$test_bin"
+"$test_bin"
+
+test_bin=$(mktemp)
+trap 'rm -f "$test_bin"' EXIT
+cc -Wall -Wextra -Werror \
+    -I"$repo_root/fpga_common/include" \
+    -I"$repo_root/host/libraries/libbladeRF/src/board/bladerf2" \
+    "$repo_root/host/misc/test_nios_ram_policy.c" -o "$test_bin"
+"$test_bin"

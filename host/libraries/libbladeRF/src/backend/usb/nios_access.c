@@ -1106,6 +1106,11 @@ int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value)
     return status;
 }
 
+int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value)
+{
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_NIOS_RAM, field, value);
+}
+
 int nios_retune2_failure_count_read(struct bladerf *dev,
                                     bladerf_module module,
                                     uint32_t *value)
