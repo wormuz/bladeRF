@@ -25,6 +25,7 @@
  * records while a session is active, so this file is their only reader. */
 
 #include <string.h>
+#include <time.h>
 
 #include <libbladeRF.h>
 
@@ -45,6 +46,16 @@
 #endif
 
 #define SWEEP_DEPTH NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH
+
+static uint64_t sweep_monotonic_ns(void)
+{
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
 
 static bool sweep_channel_valid(bladerf_channel ch)
 {
@@ -296,7 +307,9 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     struct bladerf2_board_data *board_data = dev->board_data;
     uint32_t success_count = 0;
     uint32_t failure_count = 0;
+    struct bladerf_rf_event event;
     bool contract_enabled;
+    bool epoch_certified;
     bool pending;
     int status;
 
@@ -317,16 +330,19 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     contract_enabled = board_data->rf_transition_epoch_contract_enabled;
+    epoch_certified = board_data->rf_transition_epoch_certified;
     pending = board_data->rx_retune2_pending_count != 0 ||
               board_data->rx_retune2_outcome_unknown;
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-    /* An epoch contract fences IQ in the FPGA gate on every RX retune;
-     * keeping that stream open would label swept samples with a certified
-     * single-LO epoch. */
-    if (contract_enabled) {
-        return BLADERF_ERR_UNSUPPORTED;
-    }
-    if (pending) {
+    /* With an epoch contract the FPGA gate (rx_epoch_gate.vhd) is fenced
+     * only by host ARM/ABORT commands; a NIOS recall drives neither, so an
+     * open epoch keeps forwarding real samples under one epoch ID while
+     * the session retunes. The session therefore starts from an open,
+     * certified epoch and suppresses the host-side revocations
+     * (bladerf_schedule_retune invalidation, RX monitor LO checks) that
+     * would ABORT it. A closed or pending epoch would only emit zero-IQ
+     * keepalives until a transition, which a session excludes. */
+    if (pending || (contract_enabled && !epoch_certified)) {
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
@@ -353,6 +369,17 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     board_data->rx_sweep.ring_head = 0;
     board_data->rx_sweep.ring_count = 0;
     board_data->rx_sweep.active = true;
+
+    /* The open epoch's LO claim ends with the first sweep retune. */
+    memset(&event, 0, sizeof(event));
+    event.host_monotonic_ns = sweep_monotonic_ns();
+    event.event_type = BLADERF_RF_EVT_RX_SWEEP_BEGIN;
+    event.fpga_state = board_data->rf_transition_state;
+    event.epoch_id = board_data->rf_transition_epoch_id;
+    event.requested_rx_lo_hz =
+        board_data->rf_transition_readback_frequency_hz;
+    event.flags = contract_enabled ? 1u : 0u;
+    bladerf2_rf_event_append(board_data, &event);
     return 0;
 }
 
@@ -450,6 +477,7 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_rx_sweep_record cancelled[SWEEP_DEPTH];
     struct bladerf_rx_sweep_record end_record;
+    struct bladerf_rf_event event;
     unsigned int cancelled_count = 0;
     bladerf_timestamp end_timestamp = 0;
     bool end_timestamp_valid;
@@ -475,7 +503,11 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
 
+    /* The session owns this queue the way a transition does; the public
+     * cancel refuses while an epoch contract is active. */
+    board_data->rf_transition_cancelling_scheduled_retunes = true;
     status = dev->board->cancel_scheduled_retunes(dev, ch);
+    board_data->rf_transition_cancelling_scheduled_retunes = false;
     if (status != 0) {
         /* The queue may still run; keep the session and its ledger. */
         return status;
@@ -508,5 +540,16 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
     board_data->rx_sweep.active = false;
     /* NIOS recalled profiles outside the host clock driver. */
     ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+
+    /* The caller (bladerf_rx_sweep_end) then revokes the epoch: its LO is
+     * no longer the one the transition certified. */
+    memset(&event, 0, sizeof(event));
+    event.host_monotonic_ns = sweep_monotonic_ns();
+    event.fpga_timestamp = end_timestamp;
+    event.event_type = BLADERF_RF_EVT_RX_SWEEP_END;
+    event.fpga_state = board_data->rf_transition_state;
+    event.epoch_id = board_data->rf_transition_epoch_id;
+    event.flags = end_record.sequence;
+    bladerf2_rf_event_append(board_data, &event);
     return 0;
 }

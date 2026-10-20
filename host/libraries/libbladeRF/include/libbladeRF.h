@@ -2117,10 +2117,13 @@ struct bladerf_rx_sweep_record {
  * bladerf_rx_sweep_label() applies this rule.
  *
  * Requirements: FPGA >= v0.32.0, no RX retune pending, no RF transition in
- * progress, and no RX epoch contract on this handle (a transition that
- * required ::BLADERF_RF_REQUIRE_EPOCH_VALID enables it for the life of the
- * handle; such a stream is fenced by the FPGA epoch gate, which a sweep
- * cannot keep certified). Otherwise ::BLADERF_ERR_UNSUPPORTED or
+ * progress. On a handle with an RX epoch contract (a transition required
+ * ::BLADERF_RF_REQUIRE_EPOCH_VALID) the epoch must be open and certified:
+ * the session keeps that epoch open (the FPGA gate fences only on host
+ * ARM/ABORT, never on a NIOS recall), so samples keep flowing under the same
+ * epoch ID; ::BLADERF_RF_EVT_RX_SWEEP_BEGIN marks where its LO claim ends.
+ * Inside the session only sweep records certify the LO. Other RX setters
+ * still revoke the epoch as usual. Otherwise ::BLADERF_ERR_UNSUPPORTED or
  * ::BLADERF_ERR_WOULD_BLOCK.
  *
  * While the session is active, bladerf_schedule_retune() on RX behaves as
@@ -2200,6 +2203,9 @@ int CALL_CONV bladerf_rx_sweep_completions(
  * a BLADERF_RX_SWEEP_END record. Read the remaining records with
  * bladerf_rx_sweep_completions() afterwards. The host's model of the RX LO
  * is invalidated; tune again before relying on bladerf_get_frequency().
+ * The RX epoch certificate is revoked (::BLADERF_RF_EVT_RX_DATA_INVALIDATED,
+ * FPGA epoch ABORT under a contract); run an RX transition to certify the
+ * stream again.
  *
  * @param       dev     Device handle
  * @param[in]   ch      RX channel of the session
@@ -5272,7 +5278,16 @@ typedef enum {
      * including counter reset, ring loss, or an unmatched failure record.
      * This diagnostic accompanies fail-closed RX retune outcome handling;
      * `error_code` contains the read/correlation error. */
-    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE
+    BLADERF_RF_EVT_RX_RETUNE_STATUS_UNAVAILABLE,
+    /** An RX sweep session began (bladerf_rx_sweep_begin). The open RX epoch
+     * keeps admitting samples, but its LO claim ends at the first sweep
+     * retune: from here on only sweep records certify the LO.
+     * `requested_rx_lo_hz` is the LO of the epoch being superseded. */
+    BLADERF_RF_EVT_RX_SWEEP_BEGIN,
+    /** The RX sweep session ended. The LO is the last executed sweep retune;
+     * the RX epoch certificate was revoked and a new RX transition is
+     * required before samples are valid again. */
+    BLADERF_RF_EVT_RX_SWEEP_END
 } bladerf_rf_event_type;
 
 /** Detailed NIOS RETUNE2 activation failure carried by the

@@ -1707,6 +1707,19 @@ int bladerf_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
                  ? dev->board->rx_sweep_end(dev, ch)
                  : BLADERF_ERR_UNSUPPORTED;
     MUTEX_UNLOCK(&dev->lock);
+    if (status != 0) {
+        return status;
+    }
+
+    /* The RX LO is the last swept frequency, not the one the open epoch
+     * was certified for. Revoke it like any other RX frequency change; a
+     * new RX transition certifies the stream again. The invalidation takes
+     * dev->lock itself. */
+    status = invalidate_rx_data_before_reconfigure(
+        dev, ch, BLADERF_RF_INVALIDATE_FREQUENCY);
+    if (status == 0) {
+        rx_reconfigure_complete(dev, ch);
+    }
     return status;
 }
 

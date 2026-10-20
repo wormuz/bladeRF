@@ -518,6 +518,32 @@ begin
                out_samples(1).data_i = to_signed(2222, 16)
             report "RX_X2 recovery did not admit a complete sample tuple"
             severity failure;
+
+        -- RX sweep sessions rely on this: an open epoch is fenced only by a
+        -- host ARM/ABORT. A NIOS fastlock recall drives neither, so while
+        -- the LO moves the gate keeps forwarding every real sample under
+        -- the same epoch ID with continuous timestamps; the sweep records,
+        -- not the gate, decide which of them carry a known LO.
+        for n in 0 to 63 loop
+            wait until falling_edge(clock);
+            samples_in(0).data_i <= to_signed(n, 16);
+            samples_in(1).data_i <= to_signed(-n, 16);
+            timestamp <= to_unsigned(1000 + n, 64);
+            wait until rising_edge(clock);
+            wait until rising_edge(clock);
+            wait for 1 ns;
+            assert state = "0000" and epoch_id = x"31" and
+                   discard_active = '0' and gate_fault = '0' and
+                   out_samples(0).data_v = '1' and
+                   out_samples(0).data_i = to_signed(n, 16) and
+                   out_samples(1).data_i = to_signed(-n, 16) and
+                   out_timestamp = to_unsigned(1000 + n, 64)
+                report "open epoch fenced or re-tagged samples without ARM/ABORT"
+                severity failure;
+        end loop;
+        wait until falling_edge(clock);
+        samples_in(0).data_i <= to_signed(1111, 16);
+        samples_in(1).data_i <= to_signed(2222, 16);
         wait until rising_edge(clock);
         wait until falling_edge(clock);
         samples_in(0).data_v <= '0';

@@ -150,6 +150,18 @@ void ad9361_fastlock_invalidate_current_lo(struct ad9361_rf_phy *phy,
     (void)tx;
 }
 
+static unsigned int events_appended;
+static struct bladerf_rf_event last_event;
+static bool cancel_saw_internal_flag;
+
+void bladerf2_rf_event_append(struct bladerf2_board_data *board_data,
+                              const struct bladerf_rf_event *event)
+{
+    (void)board_data;
+    events_appended++;
+    last_event = *event;
+}
+
 static int mock_cancel(struct bladerf *dev, bladerf_channel ch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -157,6 +169,8 @@ static int mock_cancel(struct bladerf *dev, bladerf_channel ch)
 
     (void)ch;
     cancelled = true;
+    cancel_saw_internal_flag =
+        board_data->rf_transition_cancelling_scheduled_retunes;
     for (i = 0; i < SWEEP_DEPTH; i++) {
         board_data->rx_retune2_pending[i].valid = false;
     }
@@ -355,8 +369,25 @@ static void check_begin_preconditions(void)
 {
     setup();
     board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = false;
     CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) ==
-              BLADERF_ERR_UNSUPPORTED, "epoch contract accepted");
+              BLADERF_ERR_WOULD_BLOCK, "closed epoch accepted");
+    setup();
+    board_data.rf_transition_epoch_contract_enabled = true;
+    board_data.rf_transition_epoch_certified = true;
+    board_data.rf_transition_readback_frequency_hz = 925000000;
+    events_appended = 0;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
+              events_appended == 1 &&
+              last_event.event_type == BLADERF_RF_EVT_RX_SWEEP_BEGIN &&
+              last_event.requested_rx_lo_hz == 925000000,
+          "open certified epoch refused or SWEEP_BEGIN missing");
+    now_timestamp = 10;
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              cancel_saw_internal_flag &&
+              !board_data.rf_transition_cancelling_scheduled_retunes &&
+              last_event.event_type == BLADERF_RF_EVT_RX_SWEEP_END,
+          "contract-mode end did not own the queue clear");
     setup();
     board_data.capabilities &= ~BLADERF_CAP_RETUNE2_EXECUTION_RECORD;
     CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) ==
