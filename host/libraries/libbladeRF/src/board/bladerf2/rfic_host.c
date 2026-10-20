@@ -323,6 +323,23 @@ static int _rfic_host_clear_rffe_control(struct bladerf *dev)
     return dev->backend->rffe_control_write(dev, reg);
 }
 
+int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev);
+
+/* TX QUAD is deferred (manual_tx_quad_cal_en): a rate or bandwidth change
+ * leaves it stale. With TX already running, recalibrate now so TX never
+ * transmits with the previous configuration's correction; with TX off, the
+ * enable path does it. */
+static int _rfic_host_txq_refresh(struct bladerf *dev)
+{
+    uint32_t reg;
+
+    CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
+    if (!does_rffe_dir_have_enabled_ch(reg, BLADERF_TX)) {
+        return 0;
+    }
+    return bladerf2_tx_quad_calibration_finalize(dev);
+}
+
 int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
@@ -491,6 +508,15 @@ static int _rfic_host_initialize(struct bladerf *dev)
     log_verbose("%s: ad9361 initialized @ %p\n", __FUNCTION__, phy);
 
     board_data->phy = phy;
+
+    /* Run TX QUAD calibration only where TX is about to be used, not after
+     * every sample-rate or bandwidth change. Those changes invalidate the
+     * stored result; bladerf2_tx_quad_calibration_finalize() reruns it when
+     * TX is enabled or retuned, and _rfic_host_txq_refresh() when it
+     * already is. Measured 2026-10-20 on xA4 (host RFIC): 61.44 -> 1.625
+     * Msps and back took 3.3 s, 2 s of it TX QUAD on an RX-only receiver;
+     * deferred, 1.34 s. */
+    phy->manual_tx_quad_cal_en = true;
 
     /* ADI setup completes RFDC after programming this configured input and
      * RX LO. Seed only that exact result; the bladeRF band mapper may select
@@ -980,7 +1006,7 @@ static int _rfic_host_set_sample_rate(struct bladerf *dev,
         RETURN_ERROR_AD9361("AD9361 sample-rate operation", status);
     }
 
-    return 0;
+    return _rfic_host_txq_refresh(dev);
 }
 
 
@@ -1237,6 +1263,8 @@ static int _rfic_host_set_bandwidth(struct bladerf *dev,
         }
         RETURN_ERROR_AD9361("AD9361 bandwidth operation", status);
     }
+
+    CHECK_STATUS(_rfic_host_txq_refresh(dev));
 
     if (actual != NULL) {
         return rfic->get_bandwidth(dev, ch, actual);
