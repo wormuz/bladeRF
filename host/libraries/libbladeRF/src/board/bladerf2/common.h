@@ -31,6 +31,7 @@
 #include "helpers/version.h"
 #include "streaming/sync.h"
 #include "thread.h"
+#include "fastlock_cache_policy.h"
 
 /* Sweep records kept for bladerf_rx_sweep_completions(); a power of two. */
 #define BLADERF2_RX_SWEEP_RING_SIZE 256u
@@ -246,6 +247,10 @@ struct bladerf2_board_data {
     /* Quick Tune Profile Status */
     uint16_t quick_tune_tx_profile;
     uint16_t quick_tune_rx_profile;
+    /* Words of each NIOS fastlock slot as stored by get_quick_tune or
+     * load_quick_tune_profile, [tx][nios_profile]. */
+    struct bladerf2_nios_fastlock_words
+        nios_fastlock_words[2][NUM_BBP_FASTLOCK_PROFILES];
 
     /* RFIC backend command handling */
     struct controller_fns const *rfic;
@@ -976,7 +981,8 @@ void bladerf2_rx_epoch_admission_finish(
  * calibration fails, preserving the failure instead of exposing stale TX. */
 int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev);
 int bladerf2_quick_tune_readback(
-    struct bladerf *dev, bladerf_channel ch, uint8_t profile,
+    struct bladerf *dev, bladerf_channel ch, uint16_t nios_profile,
+    uint8_t profile,
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency);
 

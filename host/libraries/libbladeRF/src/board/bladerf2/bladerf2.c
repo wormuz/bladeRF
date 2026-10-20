@@ -3847,6 +3847,29 @@ static int bladerf2_get_rf_ports(struct bladerf *dev,
 /* Scheduled Tuning */
 /******************************************************************************/
 
+/* After get_quick_tune stored a profile in AD9361 slot `rffe` and NIOS
+ * saved that slot into NIOS slot `nios`, both hold the words the ADI
+ * driver just cached for `rffe`. In FPGA tuning mode there is no host
+ * driver cache and nothing to record. */
+static void bladerf2_record_nios_fastlock_words(
+    struct bladerf2_board_data *board_data, bool tx, uint16_t nios,
+    uint8_t rffe)
+{
+    struct bladerf2_nios_fastlock_words *slot =
+        &board_data->nios_fastlock_words[tx ? 1 : 0][nios];
+    const struct ad9361_fastlock_entry *entry;
+
+    slot->valid = false;
+    if (board_data->phy == NULL) {
+        return;
+    }
+    entry = &board_data->phy->fastlock.entry[tx ? 1 : 0][rffe];
+    if ((entry->flags & FASTLOOK_INIT) != 0) {
+        memcpy(slot->words, entry->profile_data, sizeof(slot->words));
+        slot->valid = true;
+    }
+}
+
 static int bladerf2_get_quick_tune(struct bladerf *dev,
                                    bladerf_channel ch,
                                    struct bladerf_quick_tune *quick_tune)
@@ -3969,6 +3992,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         log_verbose("Quick tune assigned RFFE TX fast lock index: %u\n",
                     quick_tune->rffe_profile);
 
+        board_data->nios_fastlock_words[1][quick_tune->nios_profile].valid =
+            false;
         /* Create a fast lock profile in the RFIC */
         CHECK_STATUS(
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
@@ -3980,6 +4005,9 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         /* Save a copy of the TX fast lock profile to the Nios */
         CHECK_STATUS(dev->backend->rffe_fastlock_save(
             dev, true, quick_tune->rffe_profile, quick_tune->nios_profile));
+        bladerf2_record_nios_fastlock_words(board_data, true,
+                                            quick_tune->nios_profile,
+                                            quick_tune->rffe_profile);
 
         /* Set the TX band */
         quick_tune->port = (pm->rfic_port << 6);
@@ -3998,6 +4026,8 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         log_verbose("Quick tune assigned RFFE RX fast lock index: %u\n",
                     quick_tune->rffe_profile);
 
+        board_data->nios_fastlock_words[0][quick_tune->nios_profile].valid =
+            false;
         /* Create a fast lock profile in the RFIC */
         CHECK_STATUS(
             rfic->store_fastlock_profile(dev, ch, quick_tune->rffe_profile));
@@ -4007,6 +4037,9 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
         /* Save a copy of the RX fast lock profile to the Nios */
         CHECK_STATUS(dev->backend->rffe_fastlock_save(
             dev, false, quick_tune->rffe_profile, quick_tune->nios_profile));
+        bladerf2_record_nios_fastlock_words(board_data, false,
+                                            quick_tune->nios_profile,
+                                            quick_tune->rffe_profile);
 
         /* Set the RX bit */
         quick_tune->port = NIOS_PKT_RETUNE2_PORT_IS_RX_MASK;
@@ -4150,9 +4183,14 @@ static int bladerf2_load_quick_tune_profile(
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
+    board_data->nios_fastlock_words[tx ? 1 : 0][nios_slot].valid = false;
     CHECK_STATUS(dev->backend->fastlock_profile_write(
         dev, tx, (uint8_t)nios_slot,
         &profile[QUICK_TUNE_PROFILE_IDX_WORDS]));
+    memcpy(board_data->nios_fastlock_words[tx ? 1 : 0][nios_slot].words,
+           &profile[QUICK_TUNE_PROFILE_IDX_WORDS],
+           NIOS_PKT_16x64_FASTLOCK_PROFILE_LEN);
+    board_data->nios_fastlock_words[tx ? 1 : 0][nios_slot].valid = true;
 
     quick_tune->nios_profile = nios_slot;
     quick_tune->rffe_profile =
@@ -4166,7 +4204,8 @@ static int bladerf2_load_quick_tune_profile(
  * reconciles its current RFIC owner's LO and final TX calibration before
  * admitting the completed retune. */
 int bladerf2_quick_tune_readback(
-    struct bladerf *dev, bladerf_channel ch, uint8_t profile,
+    struct bladerf *dev, bladerf_channel ch, uint16_t nios_profile,
+    uint8_t profile,
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency)
 {
@@ -4174,9 +4213,18 @@ int bladerf2_quick_tune_readback(
     struct controller_fns const *rfic = board_data->rfic;
 
     if (rfic->command_mode == RFIC_COMMAND_HOST) {
-        if (board_data->phy == NULL) {
+        const unsigned int dir = BLADERF_CHANNEL_IS_TX(ch) ? 1 : 0;
+
+        if (board_data->phy == NULL || profile >= NUM_RFFE_FASTLOCK_PROFILES) {
             return BLADERF_ERR_UNEXPECTED;
         }
+        /* NIOS just uploaded NIOS slot nios_profile into this AD9361 slot;
+         * the driver's cached words may belong to another profile. */
+        bladerf2_fastlock_cache_after_nios_recall(
+            &board_data->phy->fastlock.entry[dir][profile],
+            nios_profile < NUM_BBP_FASTLOCK_PROFILES
+                ? &board_data->nios_fastlock_words[dir][nios_profile]
+                : NULL);
 
         int status = ad9361_fastlock_sync_current_lo(
             board_data->phy, BLADERF_CHANNEL_IS_TX(ch), profile,
@@ -4686,7 +4734,8 @@ int bladerf2_schedule_retune_sequenced(
              * that does not update ADI's host clock-tree cache. Verify the
              * selected profile's PLL words, as the RX transition path does. */
             readback_status = bladerf2_quick_tune_readback(
-                dev, ch, quick_tune->rffe_profile, frequency,
+                dev, ch, quick_tune->nios_profile, quick_tune->rffe_profile,
+                frequency,
                 &readback_frequency);
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
             board_data->tx_retune2_pending[pending_slot].valid = false;
@@ -4731,7 +4780,8 @@ int bladerf2_schedule_retune_sequenced(
     if (!BLADERF_CHANNEL_IS_TX(ch) && timestamp == BLADERF_RETUNE_NOW) {
         bladerf_frequency readback_frequency = 0;
         int readback_status = bladerf2_quick_tune_readback(
-            dev, ch, quick_tune->rffe_profile, frequency,
+            dev, ch, quick_tune->nios_profile, quick_tune->rffe_profile,
+            frequency,
             &readback_frequency);
         if (readback_status != 0) {
             struct bladerf_rf_event event = {0};

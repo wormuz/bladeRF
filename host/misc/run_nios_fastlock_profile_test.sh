@@ -37,3 +37,18 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     -Wl,--gc-sections -o "$queue_test_bin"
 
 "$queue_test_bin"
+
+# Host ADI driver cache after NIOS uploads into a shared AD9361 slot.
+cache_test_bin=$(mktemp)
+trap 'rm -f "$host_test_bin" "$queue_test_bin" "$cache_test_bin"' EXIT
+cc -Wall -Wextra -Werror -DNUAND_MODIFICATIONS=1 \
+    -I"$repo_root/host/libraries/libbladeRF/include" \
+    -I"$repo_root/host/libraries/libbladeRF/src" \
+    -I"$repo_root/host/common/include" \
+    -I"$host_build_dir/common/include" \
+    -I"$host_build_dir/common/thirdparty/ad936x" \
+    -I"$repo_root/thirdparty/analogdevicesinc/no-OS_local/platform_bladerf2" \
+    -I"$repo_root/firmware_common" \
+    "$repo_root/host/misc/test_fastlock_cache_after_recall.c" \
+    -o "$cache_test_bin"
+"$cache_test_bin"
