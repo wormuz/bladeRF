@@ -95,7 +95,7 @@ bool lms6_write(uint8_t addr, uint8_t data)
 
 bool adi_spi_read_checked(uint16_t addr, uint64_t *value) {
     const uint64_t ret = 0x17;
-    DBG("%s: addr=0x%04x, returning 0x%04x\n", __FUNCTION__, addr, ret);
+    DBG("%s: addr=0x%04x, returning 0x%04" PRIx64 "\n", __FUNCTION__, addr, ret);
     ASSERT(addr == 0x2f2f);
     if (value == NULL) {
         return false;
@@ -111,7 +111,7 @@ uint64_t rx_epoch_status_snapshot_read(void)
 
 bool adi_spi_write(uint16_t addr, uint64_t data)
 {
-    DBG("%s: addr=0x%04x, data=0x%04x\n", __FUNCTION__, addr, data);
+    DBG("%s: addr=0x%04x, data=0x%04" PRIx64 "\n", __FUNCTION__, addr, data);
     ASSERT(addr == 0x0707);
     ASSERT(data == 0x09);
     return true;
@@ -225,6 +225,21 @@ bool control_reg_write(uint32_t value)
     DBG("%s: value=0x%08x\n", __FUNCTION__, value);
     ASSERT(value == 0x80402057);
     return true;
+}
+
+/* The simulated board has no RFFE PIO; behave as the NIOS build does when
+ * GPIO_RFFE_0_BASE is absent. */
+bool rffe_csr_read_checked(uint32_t *value)
+{
+    (void)value;
+    return false;
+}
+
+bool rffe_csr_write_checked(uint32_t value, uint32_t verify_mask)
+{
+    (void)value;
+    (void)verify_mask;
+    return false;
 }
 
 bool iqbal_get_gain(bladerf_module m, uint16_t *value)
@@ -558,4 +573,215 @@ bool rfic_command_read(uint16_t addr, uint64_t *data)
     return true;
 }
 
+
+/* Peripherals the micro platform and shared packet handlers reference but
+ * the simulated board does not have. Each mirrors the NIOS build's
+ * behaviour where it is pure bookkeeping and otherwise reports success
+ * without hardware side effects. */
+
+uint16_t vctcxo_trim_dac_value = 0x7FFF;
+
+static bladerf_vctcxo_tamer_mode sim_tamer_mode =
+    BLADERF_VCTCXO_TAMER_DISABLED;
+static uint8_t sim_tx_trigger_ctl;
+static uint8_t sim_rx_trigger_ctl;
+
+void vctcxo_tamer_enable_isr(bool enable)
+{
+    DBG("%s: enable=%d\n", __FUNCTION__, enable);
+}
+
+void vctcxo_tamer_reset_counters(bool reset)
+{
+    DBG("%s: reset=%d\n", __FUNCTION__, reset);
+}
+
+bool vctcxo_tamer_set_tune_mode(bladerf_vctcxo_tamer_mode mode)
+{
+    sim_tamer_mode = mode;
+    return true;
+}
+
+bladerf_vctcxo_tamer_mode vctcxo_tamer_get_tune_mode()
+{
+    return sim_tamer_mode;
+}
+
+bool tx_trigger_ctl_write(uint8_t data)
+{
+    sim_tx_trigger_ctl = data;
+    return true;
+}
+
+uint8_t tx_trigger_ctl_read(void)
+{
+    return sim_tx_trigger_ctl;
+}
+
+bool rx_trigger_ctl_write(uint8_t data)
+{
+    sim_rx_trigger_ctl = data;
+    return true;
+}
+
+uint8_t rx_trigger_ctl_read(void)
+{
+    return sim_rx_trigger_ctl;
+}
+
+bool agc_dc_corr_write(uint16_t addr, uint16_t value)
+{
+    DBG("%s: addr=0x%04x value=0x%04x\n", __FUNCTION__, addr, value);
+    return true;
+}
+
+bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
+                            uint8_t data3, uint8_t config,
+                            uint32_t delay_us)
+{
+    DBG("%s: row=%u data=%02x %02x %02x config=%02x delay=%u\n",
+        __FUNCTION__, row, data1, data2, data3, config, delay_us);
+    return delay_us == 2;
+}
+
+/* Fastlock profile cache and the simulated RFIC profile bank. The cache
+ * bookkeeping follows devices.c; SPI programming completes immediately and
+ * a recall observes lock on its first poll. */
+fastlock_profile fastlocks_rx[NUM_BBP_FASTLOCK_PROFILES];
+fastlock_profile fastlocks_tx[NUM_BBP_FASTLOCK_PROFILES];
+
+static struct {
+    bool active;
+    bladerf_module module;
+} sim_load_job, sim_recall_job;
+
+bool adi_fastlock_external_write_owned(void)
+{
+    return sim_recall_job.active;
+}
+
+static fastlock_profile *sim_fastlock_cache(bladerf_module m)
+{
+    return BLADERF_CHANNEL_IS_TX(m) ? fastlocks_tx : fastlocks_rx;
+}
+
+bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
+{
+    if (p == NULL) {
+        return false;
+    }
+    if (p->state == FASTLOCK_STATE_RFFE ||
+        p->state == FASTLOCK_STATE_BBP_RFFE) {
+        return true;
+    }
+    if (adi_fastlock_external_write_owned()) {
+        return false;
+    }
+    fastlock_cache_invalidate_slot(sim_fastlock_cache(m),
+                                   NUM_BBP_FASTLOCK_PROFILES,
+                                   p->profile_num);
+    p->state = FASTLOCK_STATE_BBP_RFFE;
+    return true;
+}
+
+int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p)
+{
+    if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX) ||
+        sim_load_job.active || adi_fastlock_external_write_owned()) {
+        return -1;
+    }
+    if (p->state == FASTLOCK_STATE_RFFE ||
+        p->state == FASTLOCK_STATE_BBP_RFFE) {
+        return 1;
+    }
+    fastlock_cache_invalidate_slot(sim_fastlock_cache(m),
+                                   NUM_BBP_FASTLOCK_PROFILES,
+                                   p->profile_num);
+    sim_load_job.active = true;
+    sim_load_job.module = m;
+    return 0;
+}
+
+int32_t adi_fastlock_load_step(bladerf_module m)
+{
+    if (!sim_load_job.active || sim_load_job.module != m) {
+        return -1;
+    }
+    sim_load_job.active = false;
+    return 1;
+}
+
+bool adi_fastlock_load_cancel(bladerf_module m)
+{
+    if (!sim_load_job.active || sim_load_job.module != m) {
+        return false;
+    }
+    sim_load_job.active = false;
+    return true;
+}
+
+void adi_fastlock_profile_cache_commit(bladerf_module m,
+                                       uint16_t nios_profile,
+                                       fastlock_profile *p)
+{
+    fastlock_profile *profiles = sim_fastlock_cache(m);
+
+    if (p == NULL || nios_profile >= NUM_BBP_FASTLOCK_PROFILES) {
+        return;
+    }
+    fastlock_cache_invalidate_slot(profiles, NUM_BBP_FASTLOCK_PROFILES,
+                                   p->profile_num);
+    p->state = FASTLOCK_STATE_BBP_RFFE;
+    profiles[nios_profile] = *p;
+}
+
+bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
+                               uint8_t *failure_stage)
+{
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
+    if (sim_recall_job.active || p == NULL ||
+        (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX)) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
+        }
+        return false;
+    }
+    sim_recall_job.active = true;
+    sim_recall_job.module = m;
+    return true;
+}
+
+int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
+{
+    if (failure_stage != NULL) {
+        *failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+    }
+    if (!sim_recall_job.active || sim_recall_job.module != m) {
+        if (failure_stage != NULL) {
+            *failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+        }
+        return -1;
+    }
+    sim_recall_job.active = false;
+    return 0;
+}
+
+bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
+                         uint8_t *failure_stage)
+{
+    return adi_fastlock_recall_start(m, p, failure_stage) &&
+           adi_fastlock_recall_poll(m, failure_stage) == 0;
+}
+
+bool adi_rfport_select(fastlock_profile *p)
+{
+    return p != NULL;
+}
+
+bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
+{
+    return p != NULL && (m == BLADERF_MODULE_RX || m == BLADERF_MODULE_TX);
+}
 #endif

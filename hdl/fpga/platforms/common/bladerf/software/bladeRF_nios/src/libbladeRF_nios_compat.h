@@ -55,7 +55,9 @@
 #define log_error(...)   DBG(__VA_ARGS__)
 #define log_fatal(...)   DBG(__VA_ARGS__)
 
-/* Output formats... "x" is what alt_printf supports */
+/* Output formats... "x" is what alt_printf supports. The PC simulation
+ * prints through fprintf, which needs the host's 64-bit formats. */
+#ifndef BLADERF_NIOS_PC_SIMULATION
 #ifdef PRIi64
 #undef PRIi64
 #endif
@@ -66,6 +68,7 @@
 
 #define PRIi64 "x"
 #define PRIu64 "x"
+#endif
 
 /* NIOS II builds don't need a device handle. Just forward-declare it to avoid
  * complaints from unused functions */

@@ -26,9 +26,10 @@
 
 #include <errno.h>
 #include <string.h>
-#include <sys/alt_timestamp.h>
 
 #if defined(BOARD_BLADERF_MICRO) && defined(BLADERF_NIOS_LIBAD936X)
+
+#include <sys/alt_timestamp.h>
 
 #include "devices_rfic.h"
 #include "ad936x_helpers.h"

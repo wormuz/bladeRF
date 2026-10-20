@@ -807,8 +807,11 @@ int main(int argc, char **argv, char **envp)
     /* pkt_*_init() establishes queue and asynchronous-owner invariants.
      * Only admit command UART requests after all handlers are ready. */
     command_uart_enable_isr(true);
+#ifndef BLADERF_NIOS_PC_SIMULATION
+    /* The simulation feeds requests from test cases, not a UART IRQ. */
     alt_ic_irq_enable(COMMAND_UART_IRQ_INTERRUPT_CONTROLLER_ID,
                       COMMAND_UART_IRQ);
+#endif
 
     /* ====================
      * AD9361 SPI TESTS

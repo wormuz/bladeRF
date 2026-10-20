@@ -1408,8 +1408,15 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
         case ENTRY_STATE_TXQ_PENDING: {
             uint8_t failure_stage = NIOS_PKT_RETUNE2_FAILURE_NONE;
+#ifdef BLADERF_NIOS_LIBAD936X
             int32_t poll_status = rfic_poll_tx_quad_calibration_for_retune(
                 &failure_stage);
+#else
+            /* Only the libad936x activation path starts a TX quadrature
+             * calibration; without it nothing owns this state. */
+            int32_t poll_status = -1;
+            failure_stage = NIOS_PKT_RETUNE2_FAILURE_INTERNAL;
+#endif
 
             if (poll_status == 1) {
                 break;
@@ -1570,6 +1577,8 @@ static bool profile_preload_next(struct queue *q, bladerf_module module)
     return false;
 }
 
+#ifdef BLADERF_NIOS_LIBAD936X
+/* Only the libad936x work loop services a load owned outside the head. */
 static void perform_profile_load_owner(struct queue *q,
                                        bladerf_module module)
 {
@@ -1603,6 +1612,7 @@ static void perform_profile_load_owner(struct queue *q,
 
     perform_profile_load_step(q, module, entry);
 }
+#endif  // BLADERF_NIOS_LIBAD936X
 
 void pkt_retune2_work(void)
 {

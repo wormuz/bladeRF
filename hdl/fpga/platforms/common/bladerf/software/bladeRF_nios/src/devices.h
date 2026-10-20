@@ -465,6 +465,17 @@ INLINE uint32_t control_reg_read(void);
 INLINE bool control_reg_write(uint32_t value);
 
 /**
+ * Read the RFFE control PIO. Fails closed when the PIO is absent.
+ */
+INLINE bool rffe_csr_read_checked(uint32_t *value);
+
+/**
+ * Write the RFFE control PIO and verify the fields in verify_mask. Fails
+ * closed when the PIO is absent.
+ */
+INLINE bool rffe_csr_write_checked(uint32_t value, uint32_t verify_mask);
+
+/**
  * Get IQ balance gain value
  *
  * @param m         Which module to query
