@@ -155,6 +155,17 @@ static int mock_cancel(struct bladerf *dev, bladerf_channel ch)
     return 0;
 }
 
+
+static bladerf_frequency lo_frequency;
+
+static int mock_get_frequency(struct bladerf *dev, bladerf_channel ch,
+                              bladerf_frequency *frequency)
+{
+    (void)dev;
+    (void)ch;
+    *frequency = lo_frequency;
+    return 0;
+}
 static int mock_get_timestamp(struct bladerf *dev, bladerf_direction dir,
                               bladerf_timestamp *timestamp)
 {
@@ -198,6 +209,8 @@ static void setup(void)
                               BLADERF_CAP_RETUNE2_EXECUTION_RECORD;
     mock_board.fns.cancel_scheduled_retunes = mock_cancel;
     mock_board.fns.get_timestamp = mock_get_timestamp;
+    mock_board.fns.get_frequency = mock_get_frequency;
+    lo_frequency = 925000000;
     dev.board = &mock_board.fns;
     dev.board_data = &board_data;
 }
@@ -377,11 +390,41 @@ static void check_begin_preconditions(void)
               BLADERF_ERR_INVAL, "TX channel accepted");
 }
 
+
+static void check_gain_table_region(void)
+{
+    struct bladerf_quick_tune qt;
+    uint32_t sequence = 99;
+
+    CHECK(bladerf2_rx_gain_table_region(1300000000) == 0 &&
+              bladerf2_rx_gain_table_region(1300000001) == 1 &&
+              bladerf2_rx_gain_table_region(4000000000ULL) == 1 &&
+              bladerf2_rx_gain_table_region(4000000001ULL) == 2 &&
+              bladerf2_rx_gain_table_region(70000000) == 0,
+          "gain-table region boundaries");
+
+    setup();
+    lo_frequency = 2500000000ULL;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
+              board_data.rx_sweep.gain_table_region == 1,
+          "session region not taken from the LO");
+    memset(&qt, 0, sizeof(qt));
+    CHECK(bladerf2_rx_sweep_schedule(&dev, BLADERF_CHANNEL_RX(0), 1000,
+                                     925000000, &qt, &sequence) ==
+              BLADERF_ERR_RANGE &&
+              sequence == 0 && request_count == 0,
+          "retune into another gain-table region was queued");
+    CHECK(bladerf2_rx_sweep_schedule(&dev, BLADERF_CHANNEL_RX(0), 1000,
+                                     1903000000, &qt, &sequence) == 0 &&
+              sequence == 1,
+          "retune inside the region was refused");
+}
 int main(void)
 {
     check_begin_preconditions();
     check_mixed_outcomes();
     check_lost_and_rejected();
+    check_gain_table_region();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);
         return 1;

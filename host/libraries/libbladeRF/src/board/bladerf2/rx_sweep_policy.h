@@ -28,6 +28,19 @@
 
 #include "nios_pkt_retune2.h"
 
+/* AD9361 gain-table region, as ad9361_gt_tableindex() selects it:
+ * start < f <= end over ad9361_adi_gt_info. */
+static inline unsigned int bladerf2_rx_gain_table_region(uint64_t frequency)
+{
+    if (frequency <= BLADERF_RX_GAIN_TABLE_REGION_0_END_HZ) {
+        return 0;
+    }
+    if (frequency <= BLADERF_RX_GAIN_TABLE_REGION_1_END_HZ) {
+        return 1;
+    }
+    return 2;
+}
+
 /* Fill the outcome fields of a SUCCESS record from what NIOS observed.
  * Certification needs all of: a valid post-recall timestamp, the RFPLL lock
  * bit read after it, no NIOS LO readback disagreeing with the request by

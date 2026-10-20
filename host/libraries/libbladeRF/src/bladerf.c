@@ -1723,6 +1723,11 @@ int bladerf_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
     return status;
 }
 
+unsigned int bladerf_rx_gain_table_region(bladerf_frequency frequency)
+{
+    return bladerf2_rx_gain_table_region(frequency);
+}
+
 bool bladerf_rx_sweep_label(const struct bladerf_rx_sweep_record *records,
                             unsigned int count,
                             bladerf_timestamp timestamp,

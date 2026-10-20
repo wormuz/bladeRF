@@ -280,6 +280,49 @@ static int sweep_collect(struct bladerf *dev)
     return 0;
 }
 
+/* The gain-table region the session may sweep in: that of the current LO,
+ * which a slow tune or transition loaded the table for. With a host AD9361
+ * handle also check that the driver's tables have the public boundaries
+ * and that the loaded table is the one for this LO. */
+static int sweep_gain_table_region(struct bladerf *dev, bladerf_channel ch,
+                                   unsigned int *region)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    const struct ad9361_rf_phy *phy = board_data->phy;
+    bladerf_frequency frequency = 0;
+    int status;
+
+    status = dev->board->get_frequency(dev, ch, &frequency);
+    if (status != 0) {
+        return status;
+    }
+    *region = bladerf2_rx_gain_table_region(frequency);
+
+    if (phy != NULL && phy->gt_info != NULL && phy->pdata != NULL) {
+        unsigned int i;
+
+        for (i = 0; phy->gt_info[i].tab != NULL; i++) {
+            const struct gain_table_info *info = &phy->gt_info[i];
+
+            if (info->split_table != phy->pdata->split_gt) {
+                continue;
+            }
+            /* Every table must sit entirely inside one public region. */
+            if (bladerf2_rx_gain_table_region(info->start + 1) !=
+                bladerf2_rx_gain_table_region(info->end)) {
+                return BLADERF_ERR_UNSUPPORTED;
+            }
+        }
+        if (phy->current_table >= i ||
+            bladerf2_rx_gain_table_region(
+                phy->gt_info[phy->current_table].end) != *region) {
+            /* The loaded table does not belong to the current LO. */
+            return BLADERF_ERR_WOULD_BLOCK;
+        }
+    }
+    return 0;
+}
+
 bool bladerf2_rx_sweep_active(struct bladerf *dev, bladerf_channel ch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -298,6 +341,7 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     bool contract_enabled;
     bool epoch_certified;
     bool pending;
+    unsigned int gain_table_region = 0;
     int status;
 
     if (board_data == NULL || !sweep_channel_valid(ch)) {
@@ -333,6 +377,11 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
         return BLADERF_ERR_WOULD_BLOCK;
     }
 
+    status = sweep_gain_table_region(dev, ch, &gain_table_region);
+    if (status != 0) {
+        return status;
+    }
+
     status = nios_retune2_record_counts(dev, BLADERF_MODULE_RX,
                                         &success_count, &failure_count);
     if (status != 0) {
@@ -348,6 +397,7 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
 
     board_data->rx_sweep.ch = ch;
     board_data->rx_sweep.settle_samples = settle_samples;
+    board_data->rx_sweep.gain_table_region = gain_table_region;
     board_data->rx_sweep.next_sequence = 1;
     board_data->rx_sweep.ring_head = 0;
     board_data->rx_sweep.ring_count = 0;
@@ -385,6 +435,13 @@ int bladerf2_rx_sweep_schedule(struct bladerf *dev, bladerf_channel ch,
         ch != board_data->rx_sweep.ch || quick_tune == NULL ||
         timestamp == BLADERF_RETUNE_NOW) {
         return BLADERF_ERR_INVAL;
+    }
+    /* A fastlock recall keeps the loaded gain table; outside its region the
+     * gain would be off by several dB (measured 6.4 dB at 925 MHz coming
+     * from a 2.5 GHz table). */
+    if (bladerf2_rx_gain_table_region(frequency) !=
+        board_data->rx_sweep.gain_table_region) {
+        return BLADERF_ERR_RANGE;
     }
 
     /* Free ledger slots of completed retunes before taking a new one. */

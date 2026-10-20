@@ -320,6 +320,8 @@ struct bladerf2_board_data {
         bool active;
         bladerf_channel ch;
         uint64_t settle_samples;
+        /* bladerf_rx_gain_table_region() of the table loaded at begin. */
+        unsigned int gain_table_region;
         uint32_t next_sequence;
         uint32_t ring_head;
         uint32_t ring_count;

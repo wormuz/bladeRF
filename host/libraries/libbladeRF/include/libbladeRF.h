@@ -2123,7 +2123,10 @@ struct bladerf_rx_sweep_record {
  * ARM/ABORT, never on a NIOS recall), so samples keep flowing under the same
  * epoch ID; ::BLADERF_RF_EVT_RX_SWEEP_BEGIN marks where its LO claim ends.
  * Inside the session only sweep records certify the LO. Other RX setters
- * still revoke the epoch as usual. Otherwise ::BLADERF_ERR_UNSUPPORTED or
+ * still revoke the epoch as usual. The session sweeps one gain-table region,
+ * that of the current LO (bladerf_rx_gain_table_region()); if the loaded
+ * table belongs to another region, begin returns ::BLADERF_ERR_WOULD_BLOCK.
+ * Otherwise ::BLADERF_ERR_UNSUPPORTED or
  * ::BLADERF_ERR_WOULD_BLOCK.
  *
  * While the session is active, bladerf_schedule_retune() on RX behaves as
@@ -2146,7 +2149,9 @@ int CALL_CONV bladerf_rx_sweep_begin(struct bladerf *dev,
  * Queue one RX retune of the active sweep session at `timestamp`.
  *
  * Same contract as bladerf_schedule_retune() (strictly increasing future
- * timestamps; ::BLADERF_ERR_WOULD_BLOCK or ::BLADERF_ERR_QUEUE_FULL when the
+ * timestamps; ::BLADERF_ERR_RANGE if `frequency` lies in another gain-table
+ * region than the session (bladerf_rx_gain_table_region());
+ * ::BLADERF_ERR_WOULD_BLOCK or ::BLADERF_ERR_QUEUE_FULL when the
  * queue of ::BLADERF_RX_SWEEP_QUEUE_DEPTH entries is full), without
  * revoking the RX stream. Collects already completed records first.
  *
@@ -2172,6 +2177,32 @@ int CALL_CONV bladerf_rx_sweep_schedule(
 
 /** NIOS queue and completion-record depth of a sweep session. */
 #define BLADERF_RX_SWEEP_QUEUE_DEPTH 16
+
+/**
+ * Upper bounds of the AD9361 RX gain-table regions (ADI gain tables, full
+ * and split alike): region 0 is f <= 1.3 GHz, region 1 is
+ * 1.3 GHz < f <= 4 GHz, region 2 is f > 4 GHz.
+ */
+#define BLADERF_RX_GAIN_TABLE_REGION_0_END_HZ UINT64_C(1300000000)
+#define BLADERF_RX_GAIN_TABLE_REGION_1_END_HZ UINT64_C(4000000000)
+
+/**
+ * AD9361 RX gain-table region of an LO frequency.
+ *
+ * A NIOS fastlock recall changes the LO but not the gain table, so gain is
+ * only calibrated within the region whose table is loaded. Inside a sweep
+ * session bladerf_rx_sweep_schedule() therefore rejects a retune into
+ * another region with ::BLADERF_ERR_RANGE. Order a sweep plan by region and
+ * cross a region boundary with an RX transition (which loads the table)
+ * between sessions.
+ *
+ * @param[in]   frequency   LO frequency in Hz
+ *
+ * @return region 0, 1 or 2
+ */
+API_EXPORT
+unsigned int CALL_CONV bladerf_rx_gain_table_region(
+    bladerf_frequency frequency);
 
 /**
  * Read NIOS completion records of the sweep session and return the
