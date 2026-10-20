@@ -3240,33 +3240,43 @@ static bool bladerf2_rx_async_buffer_valid(struct bladerf *dev,
             return false;
         }
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-        /* Expected vs received timestamp of the rejected USB buffer: a
-         * negative or exactly-one-buffer delta means completion reordering,
-         * any other delta is lost samples. */
-        log_warning("RX async timestamp discontinuity: epoch=%u expected=%" PRIu64
-                    " got=%" PRIu64 " delta=%" PRId64 " len=%zu step=%zu\n",
-                    (unsigned)epoch_id, expected_timestamp,
-                    metadata_get_timestamp(bytes),
-                    (int64_t)(metadata_get_timestamp(bytes) - expected_timestamp),
-                    length, timestamp_step);
-        /* The first gap inside the transfer: message index, timestamps and
-         * the 16-byte header words around it. */
-        for (size_t off = message_size; off < length; off += message_size) {
-            const uint64_t prev = metadata_get_timestamp(bytes + off - message_size);
-            const uint64_t cur = metadata_get_timestamp(bytes + off);
-            if (cur != prev + timestamp_step) {
-                uint32_t h_prev[4], h_cur[4];
-                memcpy(h_prev, bytes + off - message_size, sizeof(h_prev));
-                memcpy(h_cur, bytes + off, sizeof(h_cur));
-                log_warning("RX async gap inside transfer: msg=%zu of %zu "
-                            "prev_ts=%" PRIu64 " ts=%" PRIu64 " gap=%" PRId64
-                            " hdr_prev=%08x %08x %08x %08x"
-                            " hdr=%08x %08x %08x %08x\n",
-                            off / message_size, length / message_size, prev,
-                            cur, (int64_t)(cur - prev - timestamp_step),
-                            h_prev[0], h_prev[1], h_prev[2], h_prev[3],
-                            h_cur[0], h_cur[1], h_cur[2], h_cur[3]);
-                break;
+        /* One line per discontinuity, at most one per second: this runs on
+         * the libusb event thread, the only thread that resubmits RX
+         * transfers. A burst of gaps logged one line each (22 in 0.8 s on
+         * 2026-10-20 09:41) blocks on the journal pipe exactly when the
+         * stream is already behind. Suppressed lines are counted.
+         * delta: expected vs received timestamp of the rejected buffer
+         * (negative or one buffer = reordering, otherwise lost samples);
+         * first_gap: first gap inside the transfer, message index and size. */
+        {
+            static uint64_t last_log_ns = 0;
+            static unsigned suppressed = 0;
+            struct timespec now_ts;
+            clock_gettime(CLOCK_MONOTONIC, &now_ts);
+            const uint64_t now_ns = (uint64_t)now_ts.tv_sec * 1000000000ULL +
+                                    (uint64_t)now_ts.tv_nsec;
+            if (last_log_ns != 0 && now_ns - last_log_ns < 1000000000ULL) {
+                suppressed++;
+            } else {
+                size_t gap_msg = 0;
+                int64_t gap = 0;
+                for (size_t off = message_size; off < length; off += message_size) {
+                    const uint64_t prev = metadata_get_timestamp(bytes + off - message_size);
+                    const uint64_t cur = metadata_get_timestamp(bytes + off);
+                    if (cur != prev + timestamp_step) {
+                        gap_msg = off / message_size;
+                        gap = (int64_t)(cur - prev - timestamp_step);
+                        break;
+                    }
+                }
+                log_warning("RX async timestamp discontinuity: epoch=%u delta=%" PRId64
+                            " first_gap msg=%zu of %zu gap=%" PRId64
+                            " suppressed_since_last=%u\n",
+                            (unsigned)epoch_id,
+                            (int64_t)(metadata_get_timestamp(bytes) - expected_timestamp),
+                            gap_msg, length / message_size, gap, suppressed);
+                last_log_ns = now_ns;
+                suppressed = 0;
             }
         }
         bladerf2_rx_async_timestamp_discontinuity(
