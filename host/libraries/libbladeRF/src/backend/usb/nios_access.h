@@ -512,6 +512,34 @@ int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
                             uint8_t rffe_profile, uint16_t nios_profile);
 
 /**
+ * Write 16 AD9361 fastlock program words into a NIOS profile cache slot.
+ *
+ * Sends the bounded STAGE half 0, STAGE half 1, COMMIT sequence. NIOS
+ * leaves the slot in state BBP, so the next retune2 using it uploads the
+ * words to its RFFE slot before recall.
+ *
+ * @return 0 on success, BLADERF_ERR_WOULD_BLOCK while a retune2 entry or
+ *         RFIC owner holds the slot, BLADERF_ERR_UNSUPPORTED on firmware
+ *         without the command, other BLADERF_ERR_* on error.
+ */
+int nios_fastlock_profile_write(struct bladerf *dev, bool is_tx,
+                                uint8_t nios_profile, const uint8_t *words);
+
+/**
+ * Read the 16 fastlock program words stored in a NIOS profile cache slot.
+ */
+int nios_fastlock_profile_read(struct bladerf *dev, bool is_tx,
+                               uint8_t nios_profile, uint8_t *words);
+
+/**
+ * Read a NIOS profile cache slot's state (enum fastlock_state) and the RFFE
+ * slot its residency claim refers to.
+ */
+int nios_fastlock_profile_state(struct bladerf *dev, bool is_tx,
+                                uint8_t nios_profile, uint8_t *state,
+                                uint8_t *rffe_profile);
+
+/**
  * Write to the AD56X1 VCTCXO trim DAC.
  *
  * @param       dev         Device handle

@@ -19,11 +19,12 @@
  * ownership, and initialization fixes; 0.29.0 switches I2C deadline checks
  * to raw monotonic ticks to avoid repeated 64-bit time conversions;
  * 0.30.0 keeps read-only FPGA status and fail-closed TX gate commands
- * available while deferred RFIC work owns the peripheral bus.
+ * available while deferred RFIC work owns the peripheral bus; 0.31.0 adds
+ * host read/write of NIOS fastlock profile cache slots (16x64 target 0x06).
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      30
+#define FPGA_VERSION_MINOR      31
 #define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \

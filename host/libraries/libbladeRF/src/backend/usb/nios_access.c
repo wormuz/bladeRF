@@ -2006,6 +2006,148 @@ int nios_rffe_fastlock_save(struct bladerf *dev, bool is_tx,
     return status;
 }
 
+static int nios_fastlock_profile_status(uint64_t response_data, bool success)
+{
+    int code;
+
+    if (success) {
+        return 0;
+    }
+
+    code = nios_pkt_16x64_fastlock_profile_error_code(response_data);
+    switch (code) {
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID:
+            return BLADERF_ERR_INVAL;
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_EMPTY:
+            log_debug("NIOS fastlock profile slot holds no profile\n");
+            return BLADERF_ERR_INVAL;
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_LOADING:
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED:
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED:
+            log_debug("NIOS fastlock profile slot busy (code %d)\n", code);
+            return BLADERF_ERR_WOULD_BLOCK;
+        case NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED:
+            /* The two halves did not reach NIOS as one staged profile. */
+            return BLADERF_ERR_UNEXPECTED;
+        default:
+            /* Firmware without the target echoes the request. */
+            return BLADERF_ERR_UNSUPPORTED;
+    }
+}
+
+static int nios_fastlock_profile_access(struct bladerf *dev, bool write,
+                                        uint16_t addr, uint64_t *data)
+{
+    uint8_t buf[NIOS_PKT_LEN];
+    uint64_t response_data = 0;
+    bool success = false;
+    int status;
+
+    nios_pkt_16x64_pack(buf, NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE, write,
+                        addr, write ? *data : 0);
+    status = nios_access(dev, buf);
+    if (status != 0) {
+        return status;
+    }
+
+    nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
+                               &success);
+    status = nios_fastlock_profile_status(response_data, success);
+    if (status == 0 && !write) {
+        *data = response_data;
+    }
+    return status;
+}
+
+int nios_fastlock_profile_write(struct bladerf *dev, bool is_tx,
+                                uint8_t nios_profile, const uint8_t *words)
+{
+    uint64_t data;
+    uint8_t op;
+    int status;
+
+    if (dev == NULL || words == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    for (op = NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0;
+         op <= NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1; op++) {
+        data = nios_pkt_16x64_fastlock_profile_half_pack(&words[8u * op]);
+        status = nios_fastlock_profile_access(
+            dev, true,
+            nios_pkt_16x64_fastlock_profile_addr(is_tx, nios_profile, op),
+            &data);
+        if (status != 0) {
+            return status;
+        }
+    }
+
+    data = 0;
+    return nios_fastlock_profile_access(
+        dev, true,
+        nios_pkt_16x64_fastlock_profile_addr(
+            is_tx, nios_profile, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT),
+        &data);
+}
+
+int nios_fastlock_profile_read(struct bladerf *dev, bool is_tx,
+                               uint8_t nios_profile, uint8_t *words)
+{
+    uint8_t staged[NIOS_PKT_16x64_FASTLOCK_PROFILE_LEN];
+    uint64_t data;
+    uint8_t op;
+    int status;
+
+    if (dev == NULL || words == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    for (op = NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0;
+         op <= NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1; op++) {
+        status = nios_fastlock_profile_access(
+            dev, false,
+            nios_pkt_16x64_fastlock_profile_addr(is_tx, nios_profile, op),
+            &data);
+        if (status != 0) {
+            return status;
+        }
+        nios_pkt_16x64_fastlock_profile_half_unpack(data, &staged[8u * op]);
+    }
+
+    /* Publish only a complete profile; a failed second read must not leave
+     * a half-old, half-new image that still looks valid. */
+    memcpy(words, staged, sizeof(staged));
+    return 0;
+}
+
+int nios_fastlock_profile_state(struct bladerf *dev, bool is_tx,
+                                uint8_t nios_profile, uint8_t *state,
+                                uint8_t *rffe_profile)
+{
+    uint64_t data = 0;
+    int status;
+
+    if (dev == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    status = nios_fastlock_profile_access(
+        dev, false,
+        nios_pkt_16x64_fastlock_profile_addr(
+            is_tx, nios_profile, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT),
+        &data);
+    if (status != 0) {
+        return status;
+    }
+    if (state != NULL) {
+        *state = (uint8_t)data;
+    }
+    if (rffe_profile != NULL) {
+        *rffe_profile = (uint8_t)(data >> 8);
+    }
+    return 0;
+}
+
 int nios_ad56x1_vctcxo_trim_dac_read(struct bladerf *dev, uint16_t *value)
 {
     int status;

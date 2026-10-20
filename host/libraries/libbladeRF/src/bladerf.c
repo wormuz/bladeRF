@@ -1577,6 +1577,53 @@ int bladerf_get_quick_tune(struct bladerf *dev,
     return status;
 }
 
+int bladerf_get_quick_tune_profile(struct bladerf *dev,
+                                   bladerf_channel ch,
+                                   const struct bladerf_quick_tune *quick_tune,
+                                   uint8_t *profile)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_NULL(quick_tune);
+    CHECK_NULL(profile);
+    MUTEX_LOCK(&dev->lock);
+
+    status = dev->board->get_quick_tune_profile != NULL
+                 ? dev->board->get_quick_tune_profile(dev, ch, quick_tune,
+                                                      profile)
+                 : BLADERF_ERR_UNSUPPORTED;
+
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+int bladerf_load_quick_tune_profile(struct bladerf *dev,
+                                    bladerf_channel ch,
+                                    const uint8_t *profile,
+                                    uint16_t nios_slot,
+                                    struct bladerf_quick_tune *quick_tune)
+{
+    int status;
+    CHECK_NULL(dev);
+    if (!valid_public_channel(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+    CHECK_NULL(profile);
+    CHECK_NULL(quick_tune);
+    MUTEX_LOCK(&dev->lock);
+
+    status = dev->board->load_quick_tune_profile != NULL
+                 ? dev->board->load_quick_tune_profile(dev, ch, profile,
+                                                       nios_slot, quick_tune)
+                 : BLADERF_ERR_UNSUPPORTED;
+
+    MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
 int bladerf_print_quick_tune(struct bladerf *dev, const struct bladerf_quick_tune *qt) {
     if (dev == NULL || qt == NULL) {
         log_error("Device handle or quick tune structure is NULL.\n");

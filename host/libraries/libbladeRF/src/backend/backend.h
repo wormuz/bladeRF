@@ -219,6 +219,12 @@ struct backend_fns {
                               uint8_t rffe_profile,
                               uint16_t nios_profile);
 
+    /* NIOS fastlock profile cache slot access; NULL when unsupported */
+    int (*fastlock_profile_write)(struct bladerf *dev, bool is_tx,
+                                  uint8_t nios_profile, const uint8_t *words);
+    int (*fastlock_profile_read)(struct bladerf *dev, bool is_tx,
+                                 uint8_t nios_profile, uint8_t *words);
+
     /* AD56X1 VCTCXO Trim DAC accessors */
     int (*ad56x1_vctcxo_trim_dac_write)(struct bladerf *dev, uint16_t value);
     int (*ad56x1_vctcxo_trim_dac_read)(struct bladerf *dev, uint16_t *value);

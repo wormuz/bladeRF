@@ -1962,6 +1962,88 @@ int CALL_CONV bladerf_get_quick_tune(struct bladerf *dev,
                                      struct bladerf_quick_tune *quick_tune);
 
 /**
+ * Size in bytes of a quick tune profile image.
+ *
+ * Layout: [0] format (1), [1] direction (0 = RX, 1 = TX), [2] port,
+ * [3] spdt, [4..19] the 16 AD9361 fastlock program words.
+ */
+#define BLADERF_QUICK_TUNE_PROFILE_LEN 20
+
+/**
+ * Number of bladeRF 2 NIOS fastlock profile slots per direction, the valid
+ * `nios_slot` range of bladerf_load_quick_tune_profile().
+ */
+#define BLADERF_QUICK_TUNE_NIOS_SLOTS 16
+
+/**
+ * Copy the fastlock profile behind a bladeRF 2 quick tune into a host-owned
+ * image, so that the quick tune can be restored later with
+ * bladerf_load_quick_tune_profile() after its NIOS and RFIC slots have been
+ * reused for other frequencies.
+ *
+ * Read the image right after bladerf_get_quick_tune(): a later
+ * bladerf_get_quick_tune() or bladerf_load_quick_tune_profile() may reuse
+ * the same NIOS slot.
+ *
+ * @note These parameters are sensitive to changes in the operating
+ *       environment; see bladerf_get_quick_tune().
+ *
+ * @param       dev         Device handle
+ * @param[in]   ch          Channel the quick tune was obtained for
+ * @param[in]   quick_tune  Quick tune from bladerf_get_quick_tune() or
+ *                          bladerf_load_quick_tune_profile()
+ * @param[out]  profile     ::BLADERF_QUICK_TUNE_PROFILE_LEN bytes
+ *
+ * @return 0 on success, ::BLADERF_ERR_UNSUPPORTED if the FPGA lacks the
+ *         capability (bladeRF 2 FPGA >= v0.31.0), ::BLADERF_ERR_INVAL if the
+ *         quick tune names an empty slot, value from \ref RETCODES list on
+ *         other failures
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_quick_tune_profile(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const struct bladerf_quick_tune *quick_tune,
+    uint8_t *profile);
+
+/**
+ * Write a profile image from bladerf_get_quick_tune_profile() into NIOS
+ * fastlock slot `nios_slot` and fill a quick tune that refers to it.
+ *
+ * The NIOS slot is marked as not resident in the RFIC, so the next
+ * bladerf_schedule_retune() or bladerf_rx_transition_begin_quick_tune()
+ * with this quick tune uploads the words into RFIC fastlock slot
+ * `nios_slot % 8` before recalling it.
+ *
+ * The caller owns slot allocation. Rotation rule: never pass a slot that
+ * a scheduled retune still pending on this direction refers to, nor the slot
+ * of the quick tune currently being applied; its words would change under
+ * it. The library and NIOS reject that case with ::BLADERF_ERR_WOULD_BLOCK,
+ * which is retryable after the pending retune completes. With
+ * Q scheduled retunes in flight, rotating over at least Q + 1 slots never
+ * blocks. bladerf_get_quick_tune() allocates slots from the same pool with
+ * its own rotating counter; do not mix the two allocators on one direction.
+ *
+ * @param       dev         Device handle
+ * @param[in]   ch          Channel; must match the image direction
+ * @param[in]   profile     ::BLADERF_QUICK_TUNE_PROFILE_LEN bytes
+ * @param[in]   nios_slot   0 .. ::BLADERF_QUICK_TUNE_NIOS_SLOTS - 1
+ * @param[out]  quick_tune  Quick tune for the loaded profile
+ *
+ * @return 0 on success, ::BLADERF_ERR_WOULD_BLOCK while the slot is in use,
+ *         ::BLADERF_ERR_UNSUPPORTED if the FPGA lacks the capability,
+ *         ::BLADERF_ERR_INVAL for a malformed image or slot, value from
+ *         \ref RETCODES list on other failures
+ */
+API_EXPORT
+int CALL_CONV bladerf_load_quick_tune_profile(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const uint8_t *profile,
+    uint16_t nios_slot,
+    struct bladerf_quick_tune *quick_tune);
+
+/**
  * @brief Prints the quick retune parameters for a bladeRF device.
  *
  * Outputs the current quick retune parameters of a bladeRF device

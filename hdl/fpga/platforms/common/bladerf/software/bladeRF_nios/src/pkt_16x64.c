@@ -28,6 +28,7 @@
 #include "devices.h"
 #include "debug.h"
 #include "rfic_calibration_policy.h"
+#include "fastlock_profile_cache.h"
 
 static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
                                  uint16_t transaction_id)
@@ -214,6 +215,22 @@ void pkt_16x64(struct pkt_buf *b)
             /* Distinguish a supported command that failed at SPI from an
              * old firmware echo, which must be the only fallback signal. */
             data = (uint64_t)NIOS_PKT_16x64_UPDATE_BITS_ERROR_MARKER << 56;
+        }
+#else
+        success = false;
+#endif
+    } else if (id == NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE) {
+#if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
+        uint64_t read_data = 0;
+        const uint8_t code = is_write
+            ? fastlock_profile_cache_write(addr, data)
+            : fastlock_profile_cache_read(addr, &read_data);
+
+        success = code == NIOS_PKT_16x64_FASTLOCK_PROFILE_OK;
+        if (success) {
+            data = is_write ? 0 : read_data;
+        } else {
+            data = nios_pkt_16x64_fastlock_profile_error(code);
         }
 #else
         success = false;

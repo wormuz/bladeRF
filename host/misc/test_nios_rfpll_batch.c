@@ -6,6 +6,7 @@
 #include "pkt_handler.h"
 #include "pkt_16x64.h"
 #include "devices.h"
+#include "fastlock_profile_cache.h"
 
 static struct pkt_buf make_16x64_packet(uint8_t target, bool write,
                                         uint16_t addr, uint64_t data)
@@ -191,6 +192,52 @@ static int run_nios_phy_gain_row_rejected(void)
 
     return target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW && write &&
            addr == 7 && !success && gain_row_calls == calls_before ? 0 : 1;
+}
+
+static uint16_t fastlock_profile_last_addr;
+static uint64_t fastlock_profile_last_data;
+static uint8_t fastlock_profile_result;
+
+uint8_t fastlock_profile_cache_write(uint16_t addr, uint64_t data)
+{
+    fastlock_profile_last_addr = addr;
+    fastlock_profile_last_data = data;
+    return fastlock_profile_result;
+}
+
+uint8_t fastlock_profile_cache_read(uint16_t addr, uint64_t *data)
+{
+    fastlock_profile_last_addr = addr;
+    *data = UINT64_C(0x0807060504030201);
+    return fastlock_profile_result;
+}
+
+/* Target 0x06 routes to the profile cache; a rejection carries the marked
+ * code and success clear, reads return the cache words. */
+static int run_fastlock_profile_dispatch(bool write, uint8_t result,
+                                         uint64_t expected_response)
+{
+    const uint16_t request_addr = 0x0503;
+    struct pkt_buf packet = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE, write, request_addr,
+        UINT64_C(0x1122334455667788));
+    uint8_t target = 0;
+    uint16_t addr = 0;
+    uint64_t response = 0;
+    bool resp_write = !write;
+    bool success = false;
+
+    fastlock_profile_result = result;
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &resp_write, &addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE &&
+           resp_write == write && addr == request_addr &&
+           fastlock_profile_last_addr == request_addr &&
+           (!write || fastlock_profile_last_data ==
+                          UINT64_C(0x1122334455667788)) &&
+           success == (result == NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) &&
+           response == expected_response ? 0 : 1;
 }
 
 uint64_t rx_epoch_status_snapshot_read(void)
@@ -491,6 +538,12 @@ int main(void)
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_nios_phy_gain_row_rejected() ||
+        run_fastlock_profile_dispatch(true, 0, 0) ||
+        run_fastlock_profile_dispatch(false, 0,
+                                      UINT64_C(0x0807060504030201)) ||
+        run_fastlock_profile_dispatch(
+            true, NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED,
+            UINT64_C(0x5b00000000000003)) ||
         run_update_bits_case(true, true) ||
         run_update_bits_case(false, false) || update_calls != 2 ||
         run_nios_phy_raw_writes_rejected() ||

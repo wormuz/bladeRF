@@ -42,6 +42,7 @@
 #include "rel_assert.h"
 
 #include "backend/usb/nios_access.h"
+#include "nios_pkt_16x64.h"
 #include "nios_pkt_retune2.h"
 #include "nios_pkt_8x32.h"
 #include "../bladerf1/flash.h"
@@ -4024,6 +4025,143 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
     return 0;
 }
 
+#if BLADERF_QUICK_TUNE_NIOS_SLOTS != NUM_BBP_FASTLOCK_PROFILES
+#error "BLADERF_QUICK_TUNE_NIOS_SLOTS must equal NUM_BBP_FASTLOCK_PROFILES"
+#endif
+
+#define QUICK_TUNE_PROFILE_FORMAT 1u
+#define QUICK_TUNE_PROFILE_IDX_FORMAT 0
+#define QUICK_TUNE_PROFILE_IDX_DIRECTION 1
+#define QUICK_TUNE_PROFILE_IDX_PORT 2
+#define QUICK_TUNE_PROFILE_IDX_SPDT 3
+#define QUICK_TUNE_PROFILE_IDX_WORDS 4
+
+static int bladerf2_quick_tune_profile_check(struct bladerf *dev,
+                                             bladerf_channel ch)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+
+    if (ch != BLADERF_CHANNEL_RX(0) && ch != BLADERF_CHANNEL_RX(1) &&
+        ch != BLADERF_CHANNEL_TX(0) && ch != BLADERF_CHANNEL_TX(1)) {
+        RETURN_INVAL_ARG("channel", ch, "is not valid");
+    }
+    if (!have_cap(board_data->capabilities,
+                  BLADERF_CAP_FASTLOCK_PROFILE_UPLOAD) ||
+        dev->backend->fastlock_profile_read == NULL ||
+        dev->backend->fastlock_profile_write == NULL) {
+        log_debug("This FPGA version (%u.%u.%u) does not support fastlock "
+                  "profile upload.\n",
+                  board_data->fpga_version.major,
+                  board_data->fpga_version.minor,
+                  board_data->fpga_version.patch);
+        return BLADERF_ERR_UNSUPPORTED;
+    }
+    return 0;
+}
+
+static int bladerf2_get_quick_tune_profile(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const struct bladerf_quick_tune *quick_tune,
+    uint8_t *profile)
+{
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+    NULL_CHECK(quick_tune);
+    NULL_CHECK(profile);
+
+    const bool tx = BLADERF_CHANNEL_IS_TX(ch);
+    uint8_t words[NIOS_PKT_16x64_FASTLOCK_PROFILE_LEN];
+
+    CHECK_STATUS(bladerf2_quick_tune_profile_check(dev, ch));
+    if (quick_tune->nios_profile >= NUM_BBP_FASTLOCK_PROFILES ||
+        !nios_pkt_retune2_route_valid(
+            tx ? BLADERF_MODULE_TX : BLADERF_MODULE_RX, quick_tune->port,
+            quick_tune->spdt)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    /* Read the NIOS cache entry rather than the AD9361 bank through
+     * ad9361_*_fastlock_save(). The NIOS entry is exactly what retune2
+     * uploads before every recall of this quick tune. The RFIC slot is
+     * shared by NIOS slots n and n + 8 and by every retune2 upload since
+     * this quick tune was created, so it may already hold another
+     * frequency; and in FPGA tuning mode the host has no AD9361 handle to
+     * read it with. */
+    CHECK_STATUS(dev->backend->fastlock_profile_read(
+        dev, tx, (uint8_t)quick_tune->nios_profile, words));
+
+    profile[QUICK_TUNE_PROFILE_IDX_FORMAT] = QUICK_TUNE_PROFILE_FORMAT;
+    profile[QUICK_TUNE_PROFILE_IDX_DIRECTION] = tx ? 1 : 0;
+    profile[QUICK_TUNE_PROFILE_IDX_PORT] = quick_tune->port;
+    profile[QUICK_TUNE_PROFILE_IDX_SPDT] = quick_tune->spdt;
+    memcpy(&profile[QUICK_TUNE_PROFILE_IDX_WORDS], words, sizeof(words));
+    return 0;
+}
+
+static int bladerf2_load_quick_tune_profile(
+    struct bladerf *dev,
+    bladerf_channel ch,
+    const uint8_t *profile,
+    uint16_t nios_slot,
+    struct bladerf_quick_tune *quick_tune)
+{
+    CHECK_BOARD_STATE(STATE_INITIALIZED);
+    NULL_CHECK(profile);
+    NULL_CHECK(quick_tune);
+
+    struct bladerf2_board_data *board_data = dev->board_data;
+    const bool tx = BLADERF_CHANNEL_IS_TX(ch);
+    const uint8_t port = profile[QUICK_TUNE_PROFILE_IDX_PORT];
+    const uint8_t spdt = profile[QUICK_TUNE_PROFILE_IDX_SPDT];
+    bool slot_busy = false;
+    bool outcome_unknown;
+    unsigned int i;
+
+    CHECK_STATUS(bladerf2_quick_tune_profile_check(dev, ch));
+    if (profile[QUICK_TUNE_PROFILE_IDX_FORMAT] != QUICK_TUNE_PROFILE_FORMAT ||
+        profile[QUICK_TUNE_PROFILE_IDX_DIRECTION] != (tx ? 1 : 0) ||
+        nios_slot >= NUM_BBP_FASTLOCK_PROFILES ||
+        !nios_pkt_retune2_route_valid(
+            tx ? BLADERF_MODULE_TX : BLADERF_MODULE_RX, port, spdt)) {
+        return BLADERF_ERR_INVAL;
+    }
+
+    /* A pending retune2 entry commits its own snapshot back into its NIOS
+     * slot when its RFIC upload finishes; NIOS rejects the write too, but
+     * the host ledger also covers a request still in flight. */
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    outcome_unknown = tx
+        ? board_data->tx_retune2_pending_count == 0 &&
+              board_data->tx_retune2_completion_faulted
+        : board_data->rx_retune2_outcome_unknown;
+    for (i = 0; i < NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH; ++i) {
+        if (tx ? board_data->tx_retune2_pending[i].valid &&
+                     board_data->tx_retune2_pending[i].nios_profile ==
+                         nios_slot
+               : board_data->rx_retune2_pending[i].valid &&
+                     board_data->rx_retune2_pending[i].nios_profile ==
+                         nios_slot) {
+            slot_busy = true;
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    if (outcome_unknown || slot_busy) {
+        return BLADERF_ERR_WOULD_BLOCK;
+    }
+
+    CHECK_STATUS(dev->backend->fastlock_profile_write(
+        dev, tx, (uint8_t)nios_slot,
+        &profile[QUICK_TUNE_PROFILE_IDX_WORDS]));
+
+    quick_tune->nios_profile = nios_slot;
+    quick_tune->rffe_profile =
+        (uint8_t)(nios_slot % NUM_RFFE_FASTLOCK_PROFILES);
+    quick_tune->port = port;
+    quick_tune->spdt = spdt;
+    return 0;
+}
+
 /* NIOS retune completion may omit RFIC readback in HOST tuning mode. The host
  * reconciles its current RFIC owner's LO and final TX calibration before
  * admitting the completed retune. */
@@ -7197,6 +7335,8 @@ struct board_fns const bladerf2_board_fns = {
     FIELD_INIT(.get_quick_tune, bladerf2_get_quick_tune),
     FIELD_INIT(.schedule_retune, bladerf2_schedule_retune),
     FIELD_INIT(.cancel_scheduled_retunes, bladerf2_cancel_scheduled_retunes),
+    FIELD_INIT(.get_quick_tune_profile, bladerf2_get_quick_tune_profile),
+    FIELD_INIT(.load_quick_tune_profile, bladerf2_load_quick_tune_profile),
     FIELD_INIT(.get_correction, bladerf2_get_correction),
     FIELD_INIT(.set_correction, bladerf2_set_correction),
     FIELD_INIT(.trigger_init, bladerf2_trigger_init),

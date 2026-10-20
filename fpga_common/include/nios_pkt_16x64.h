@@ -143,6 +143,120 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
      ((uint64_t)(value) << 40))
 #define NIOS_PKT_16x64_UPDATE_BITS_RESERVED_MASK UINT64_C(0x000000ffffffffff)
 
+/* NIOS fastlock profile cache access (FPGA >= 0.31.0).
+ *
+ * One NIOS profile is the 16 AD9361 fastlock program words that
+ * fastlock_profile.profile_data stores. A packet carries 8 of them, so a
+ * write is bounded to exactly three packets: STAGE half 0, STAGE half 1,
+ * COMMIT. Only COMMIT changes fastlocks_{rx,tx}[slot]; the staged bytes are
+ * discarded by every COMMIT and by a STAGE for a different direction/slot.
+ *
+ *    +========+===================================================+
+ *    | addr   |                                                   |
+ *    +========+===================================================+
+ *    | 15:12  | Reserved, 0                                       |
+ *    | 11:10  | Op: 0 = half 0 (words 0..7), 1 = half 1           |
+ *    |        |     (words 8..15), 2 = commit / slot state         |
+ *    | 9      | Reserved, 0                                       |
+ *    | 8      | Direction: 0 = RX, 1 = TX                          |
+ *    | 7:0    | NIOS profile slot (< NUM_BBP_FASTLOCK_PROFILES)    |
+ *    +--------+---------------------------------------------------+
+ *
+ * Write half:   data = words, word (8*half + i) in bits [8i+7:8i].
+ * Write commit: data = 0. Installs the staged words in the slot in state BBP
+ *               (not RFFE-resident), so retune2 uploads them to its RFFE
+ *               slot before recall.
+ * Read half:    response data = the slot's words, same layout.
+ * Read commit:  response data = state[7:0] | profile_num[15:8].
+ *
+ * A request the firmware understood but rejected returns success clear and
+ * data = ERROR_MARKER[63:56] | error code. Firmware without this target
+ * echoes the request data instead. */
+#define NIOS_PKT_16x64_TARGET_FASTLOCK_PROFILE 0x06
+
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0  0u
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1  1u
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT 2u
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_LEN       16u
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERROR_MARKER 0x5bu
+
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_OK            0u
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID   1u /* malformed */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_LOADING   2u /* slot upload job */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED    3u /* retune2 entry */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED 4u /* external write */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED 5u /* commit w/o halves */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_EMPTY     6u /* read INVALID slot */
+
+static inline uint16_t nios_pkt_16x64_fastlock_profile_addr(bool tx,
+                                                            uint8_t slot,
+                                                            uint8_t op)
+{
+    return (uint16_t)(((uint16_t)(op & 0x3u) << 10) |
+                      (tx ? (uint16_t)0x100u : (uint16_t)0u) | slot);
+}
+
+/* Returns false for reserved bits or an undefined op. */
+static inline bool nios_pkt_16x64_fastlock_profile_addr_unpack(
+    uint16_t addr, bool *tx, uint8_t *slot, uint8_t *op)
+{
+    const uint8_t decoded_op = (uint8_t)((addr >> 10) & 0x3u);
+
+    if ((addr & 0xf200u) != 0 ||
+        decoded_op > NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT) {
+        return false;
+    }
+    if (tx != NULL) {
+        *tx = (addr & 0x100u) != 0;
+    }
+    if (slot != NULL) {
+        *slot = (uint8_t)(addr & 0xffu);
+    }
+    if (op != NULL) {
+        *op = decoded_op;
+    }
+    return true;
+}
+
+static inline uint64_t nios_pkt_16x64_fastlock_profile_half_pack(
+    const uint8_t *words)
+{
+    uint64_t data = 0;
+    unsigned int i;
+
+    for (i = 0; i < 8u; i++) {
+        data |= (uint64_t)words[i] << (8u * i);
+    }
+    return data;
+}
+
+static inline void nios_pkt_16x64_fastlock_profile_half_unpack(
+    uint64_t data, uint8_t *words)
+{
+    unsigned int i;
+
+    for (i = 0; i < 8u; i++) {
+        words[i] = (uint8_t)(data >> (8u * i));
+    }
+}
+
+static inline uint64_t nios_pkt_16x64_fastlock_profile_error(uint8_t code)
+{
+    return ((uint64_t)NIOS_PKT_16x64_FASTLOCK_PROFILE_ERROR_MARKER << 56) |
+           code;
+}
+
+/* Returns the error code of an understood rejection, or -1 when the response
+ * data is not an error record (old firmware echo). */
+static inline int nios_pkt_16x64_fastlock_profile_error_code(uint64_t data)
+{
+    if ((data >> 56) != NIOS_PKT_16x64_FASTLOCK_PROFILE_ERROR_MARKER ||
+        (data & UINT64_C(0x00ffffffffffff00)) != 0) {
+        return -1;
+    }
+    return (int)(data & 0xffu);
+}
+
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */
 #define NIOS_PKT_16x64_TARGET_USR1    0x80

@@ -561,6 +561,42 @@ static bool profile_slot_compare_owned(const struct queue_entry *entry)
             entry->state == ENTRY_STATE_TXQ_PENDING);
 }
 
+enum pkt_retune2_slot_use pkt_retune2_profile_slot_use(bladerf_module module,
+                                                       uint16_t nios_profile)
+{
+    struct queue *q;
+    enum pkt_retune2_slot_use use = PKT_RETUNE2_SLOT_FREE;
+    uint32_t i;
+
+    if (module == BLADERF_MODULE_RX) {
+        q = &rx_queue;
+    } else if (module == BLADERF_MODULE_TX) {
+        q = &tx_queue;
+    } else {
+        return PKT_RETUNE2_SLOT_FREE;
+    }
+
+    /* A live entry commits its snapshot back into fastlocks_*[nios_profile]
+     * when its upload finishes (adi_fastlock_profile_cache_commit), which
+     * would silently replace newer bytes written to that slot. Every entry
+     * that has not reached a terminal state therefore leases its slot. */
+    for (i = 0; i < q->count; i++) {
+        const struct queue_entry *entry = peek_next_retune_offset(q, i);
+
+        if (entry == NULL || entry->nios_profile != nios_profile ||
+            entry->state == ENTRY_STATE_INVALID ||
+            entry->state == ENTRY_STATE_DONE ||
+            entry->state == ENTRY_STATE_PROFILE_LOAD_FAILED) {
+            continue;
+        }
+        if (entry->state == ENTRY_STATE_PROFILE_LOAD_PENDING) {
+            return PKT_RETUNE2_SLOT_LOADING;
+        }
+        use = PKT_RETUNE2_SLOT_QUEUED;
+    }
+    return use;
+}
+
 static bool profile_slot_armed(const struct queue *q, uint8_t profile_num)
 {
     uint32_t i;

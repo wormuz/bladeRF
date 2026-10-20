@@ -4,6 +4,7 @@
 #include <errno.h>
 
 #include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c"
+#include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/fastlock_profile_cache.c"
 
 /* Most existing cases isolate timer/retirement behavior and model an
  * already-resident RFIC profile. Dedicated upload cases use
@@ -37,6 +38,12 @@ static bool staged_profile_load_active;
 static bool defer_clear_during_staged_step;
 static bool simulated_rfic_worker_active;
 static bool simulated_rfic_device_owned;
+static bool simulated_fastlock_external_write_owned;
+
+bool adi_fastlock_external_write_owned(void)
+{
+    return simulated_fastlock_external_write_owned;
+}
 
 bool rfic_command_worker_active(void)
 {
@@ -1503,6 +1510,272 @@ static int check_immediate_retune_reuses_matching_rffe_slot(void)
     return 0;
 }
 
+
+static uint8_t profile_cache_write(bool tx, uint8_t slot, uint8_t op,
+                                   uint64_t data)
+{
+    return fastlock_profile_cache_write(
+        nios_pkt_16x64_fastlock_profile_addr(tx, slot, op), data);
+}
+
+static uint8_t profile_cache_upload(bool tx, uint8_t slot,
+                                    const uint8_t *words)
+{
+    uint8_t code;
+
+    code = profile_cache_write(
+        tx, slot, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0,
+        nios_pkt_16x64_fastlock_profile_half_pack(&words[0]));
+    if (code != NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) {
+        return code;
+    }
+    code = profile_cache_write(
+        tx, slot, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1,
+        nios_pkt_16x64_fastlock_profile_half_pack(&words[8]));
+    if (code != NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) {
+        return code;
+    }
+    return profile_cache_write(tx, slot,
+                               NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT, 0);
+}
+
+/* Host upload into a NIOS slot whose old words are still resident in the
+ * RFFE slot: the cache must stop claiming residency, and the next retune2
+ * must upload the new words before recall. */
+static int check_profile_upload_replaces_stale_rffe_residency(void)
+{
+    struct pkt_buf request = { 0 };
+    fastlock_profile *profile;
+    uint8_t old_words[16];
+    uint8_t new_words[16];
+    uint8_t readback[16];
+    uint64_t data = 0;
+    unsigned int i;
+
+    for (i = 0; i < 16; i++) {
+        old_words[i] = (uint8_t)(0xa0 + i);
+        new_words[i] = (uint8_t)(0x10 + 3 * i);
+    }
+
+    pkt_retune2_init();
+    memset(fastlocks_tx, 0, sizeof(fastlocks_tx));
+    memset(simulated_rffe_tx_valid, 0, sizeof(simulated_rffe_tx_valid));
+    profile = &fastlocks_tx[0];
+    profile->profile_num = 3;
+    memcpy(profile->profile_data, old_words, sizeof(old_words));
+    profile->state = FASTLOCK_STATE_BBP_RFFE;
+    simulated_rffe_tx[3] = *profile;
+    simulated_rffe_tx_valid[3] = true;
+
+    if (profile_cache_upload(true, 0, new_words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        profile->state != FASTLOCK_STATE_BBP ||
+        memcmp(profile->profile_data, new_words, sizeof(new_words)) != 0 ||
+        memcmp(simulated_rffe_tx[3].profile_data, old_words,
+               sizeof(old_words)) != 0) {
+        fputs("profile upload did not install BBP-only new words\n", stderr);
+        return 1;
+    }
+
+    for (i = 0; i < 2; i++) {
+        if (fastlock_profile_cache_read(
+                nios_pkt_16x64_fastlock_profile_addr(true, 0, (uint8_t)i),
+                &data) != NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) {
+            fputs("profile readback was rejected\n", stderr);
+            return 1;
+        }
+        nios_pkt_16x64_fastlock_profile_half_unpack(data, &readback[8 * i]);
+    }
+    if (memcmp(readback, new_words, sizeof(new_words)) != 0 ||
+        fastlock_profile_cache_read(
+            nios_pkt_16x64_fastlock_profile_addr(
+                true, 0, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT),
+            &data) != NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        data != (FASTLOCK_STATE_BBP | (3u << 8))) {
+        fputs("profile readback/state does not match the upload\n", stderr);
+        return 1;
+    }
+
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    fail_profile_load = false;
+    fail_profile_recall = false;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    for (i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
+    track_rffe_fastlock_slots = false;
+
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        load_count != 18 || recall_count != 1 ||
+        !simulated_rffe_tx_valid[3] ||
+        memcmp(simulated_rffe_tx[3].profile_data, new_words,
+               sizeof(new_words)) != 0 ||
+        memcmp(profile->profile_data, new_words, sizeof(new_words)) != 0 ||
+        profile->state != FASTLOCK_STATE_BBP_RFFE) {
+        fputs("retune2 recalled stale RFFE words after profile upload\n",
+              stderr);
+        return 1;
+    }
+
+    /* A second retune of the same slot reuses the now-resident upload. */
+    memset(&request, 0, sizeof(request));
+    track_rffe_fastlock_slots = true;
+    load_count = 0;
+    recall_count = 0;
+    nios_pkt_retune2_pack(request.req, BLADERF_MODULE_TX,
+                          NIOS_PKT_RETUNE2_NOW, 0, 3, 0x40, 0xa0);
+    pkt_retune2(&request);
+    for (i = 0; i < 64 && request.response_deferred; i++) {
+        pkt_retune2_work();
+    }
+    track_rffe_fastlock_slots = false;
+    if ((request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+        load_count != 0 || recall_count != 1) {
+        fputs("resident uploaded profile was loaded again\n", stderr);
+        return 1;
+    }
+    return 0;
+}
+
+static int check_profile_upload_rejections(void)
+{
+    struct queue_entry *entry;
+    uint8_t words[16] = { 0 };
+    uint8_t before[16];
+    uint64_t data = 0;
+
+    pkt_retune2_init();
+    memset(fastlocks_rx, 0, sizeof(fastlocks_rx));
+    fastlocks_rx[5].profile_num = 5;
+    fastlocks_rx[5].profile_data[0] = 0x55;
+    fastlocks_rx[5].state = FASTLOCK_STATE_BBP;
+    memcpy(before, fastlocks_rx[5].profile_data, sizeof(before));
+    words[0] = 0x77;
+
+    /* Malformed requests. */
+    if (fastlock_profile_cache_write(0x0c05, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID ||
+        fastlock_profile_cache_write(0x0205, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID ||
+        profile_cache_write(false, NUM_BBP_FASTLOCK_PROFILES,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID ||
+        profile_cache_write(false, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT, 1) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID) {
+        fputs("malformed profile cache request was accepted\n", stderr);
+        return 1;
+    }
+
+    /* COMMIT needs both halves of the same direction and slot. */
+    if (profile_cache_write(false, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED ||
+        profile_cache_write(false, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0, 1) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        profile_cache_write(false, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED ||
+        profile_cache_write(false, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF0, 1) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        profile_cache_write(true, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1, 1) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        profile_cache_write(true, 5,
+                            NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_COMMIT, 0) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED ||
+        memcmp(fastlocks_rx[5].profile_data, before, sizeof(before)) != 0) {
+        fputs("partial profile staging was committed\n", stderr);
+        return 1;
+    }
+
+    /* Reading a never-written slot reports EMPTY, not zero words. */
+    if (fastlock_profile_cache_read(
+            nios_pkt_16x64_fastlock_profile_addr(false, 6, 0), &data) !=
+        NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_EMPTY) {
+        fputs("empty profile slot read as valid\n", stderr);
+        return 1;
+    }
+
+    /* External RFIC write ownership. */
+    simulated_fastlock_external_write_owned = true;
+    if (profile_cache_upload(false, 5, words) !=
+        NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED) {
+        simulated_fastlock_external_write_owned = false;
+        fputs("profile upload accepted while RFIC is owned\n", stderr);
+        return 1;
+    }
+    simulated_fastlock_external_write_owned = false;
+
+    /* A queued retune2 entry leases its NIOS slot; other slots stay free. */
+    if (enqueue_retune_with_identity(&rx_queue, &fastlocks_rx[5], 5,
+                                     UINT64_C(1000000), 0, 0) != 1 ||
+        profile_cache_upload(false, 5, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED ||
+        profile_cache_upload(false, 6, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        profile_cache_upload(true, 5, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK) {
+        fputs("queued retune2 slot lease not enforced\n", stderr);
+        return 1;
+    }
+
+    /* While that entry uploads its words, the slot reports LOADING. */
+    entry = peek_next_retune(&rx_queue);
+    entry->state = ENTRY_STATE_PROFILE_LOAD_PENDING;
+    if (profile_cache_upload(false, 5, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_LOADING ||
+        memcmp(fastlocks_rx[5].profile_data, before, sizeof(before)) != 0) {
+        fputs("profile upload accepted during slot load\n", stderr);
+        return 1;
+    }
+
+    /* A terminal entry no longer leases the slot. */
+    entry->state = ENTRY_STATE_DONE;
+    if (profile_cache_upload(false, 5, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        fastlocks_rx[5].profile_data[0] != 0x77) {
+        fputs("terminal retune2 entry still leased its slot\n", stderr);
+        return 1;
+    }
+    pkt_retune2_init();
+    return 0;
+}
+
+static int check_profile_cache_packet_encoding(void)
+{
+    uint8_t words[8] = { 1, 2, 3, 4, 5, 6, 7, 0xff };
+    uint8_t decoded[8];
+    uint8_t slot = 0, op = 0;
+    bool tx = false;
+    const uint16_t addr = nios_pkt_16x64_fastlock_profile_addr(
+        true, 15, NIOS_PKT_16x64_FASTLOCK_PROFILE_OP_HALF1);
+
+    nios_pkt_16x64_fastlock_profile_half_unpack(
+        nios_pkt_16x64_fastlock_profile_half_pack(words), decoded);
+    if (addr != 0x050f ||
+        !nios_pkt_16x64_fastlock_profile_addr_unpack(addr, &tx, &slot,
+                                                     &op) ||
+        !tx || slot != 15 || op != 1 ||
+        nios_pkt_16x64_fastlock_profile_half_pack(words) !=
+            UINT64_C(0xff07060504030201) ||
+        memcmp(words, decoded, sizeof(words)) != 0 ||
+        nios_pkt_16x64_fastlock_profile_error_code(
+            nios_pkt_16x64_fastlock_profile_error(3)) != 3 ||
+        nios_pkt_16x64_fastlock_profile_error_code(0x5b00000000000003) != 3 ||
+        nios_pkt_16x64_fastlock_profile_error_code(
+            UINT64_C(0xff07060504030201)) != -1) {
+        fputs("fastlock profile packet encoding mismatch\n", stderr);
+        return 1;
+    }
+    return 0;
+}
 static int check_partial_upload_invalidates_slot_residency(void)
 {
     struct pkt_buf request = { 0 };
@@ -3459,6 +3732,15 @@ int main(void)
         return 1;
     }
     if (check_immediate_retune_reuses_matching_rffe_slot() != 0) {
+        return 1;
+    }
+    if (check_profile_cache_packet_encoding() != 0) {
+        return 1;
+    }
+    if (check_profile_upload_replaces_stale_rffe_residency() != 0) {
+        return 1;
+    }
+    if (check_profile_upload_rejections() != 0) {
         return 1;
     }
     if (check_partial_upload_invalidates_slot_residency() != 0) {

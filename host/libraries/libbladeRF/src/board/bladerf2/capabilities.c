@@ -134,5 +134,9 @@ uint64_t bladerf2_get_fpga_capabilities(
         capabilities |= BLADERF_CAP_RFIC_RESULT_DETAIL;
     }
 
+    if (version_fields_greater_or_equal(fpga_version, 0, 31, 0)) {
+        capabilities |= BLADERF_CAP_FASTLOCK_PROFILE_UPLOAD;
+    }
+
     return capabilities;
 }

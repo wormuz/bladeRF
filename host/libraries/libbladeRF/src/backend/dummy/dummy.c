@@ -525,6 +525,8 @@ const struct backend_fns backend_fns_dummy = {
     FIELD_INIT(.rffe_control_read, dummy_rffe_control_read),
 
     FIELD_INIT(.rffe_fastlock_save, dummy_rffe_fastlock_save),
+    FIELD_INIT(.fastlock_profile_write, NULL),
+    FIELD_INIT(.fastlock_profile_read, NULL),
 
     FIELD_INIT(.ad56x1_vctcxo_trim_dac_write,
                dummy_ad56x1_vctcxo_trim_dac_write),

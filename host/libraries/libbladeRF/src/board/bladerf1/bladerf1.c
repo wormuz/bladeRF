@@ -3603,6 +3603,8 @@ const struct board_fns bladerf1_board_fns = {
     FIELD_INIT(.get_quick_tune, bladerf1_get_quick_tune),
     FIELD_INIT(.schedule_retune, bladerf1_schedule_retune),
     FIELD_INIT(.cancel_scheduled_retunes, bladerf1_cancel_scheduled_retunes),
+    FIELD_INIT(.get_quick_tune_profile, NULL),
+    FIELD_INIT(.load_quick_tune_profile, NULL),
     FIELD_INIT(.get_correction, bladerf1_get_correction),
     FIELD_INIT(.set_correction, bladerf1_set_correction),
     FIELD_INIT(.trigger_init, bladerf1_trigger_init),

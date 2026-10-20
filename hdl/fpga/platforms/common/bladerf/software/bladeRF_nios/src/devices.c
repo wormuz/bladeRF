@@ -1319,6 +1319,11 @@ bladerf_module adi_fastlock_load_owner(void)
     return fastlock_load_job.module;
 }
 
+bool adi_fastlock_external_write_owned(void)
+{
+    return rfic_device_owned_for_external_write();
+}
+
 int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p)
 {
     fastlock_profile *profiles;

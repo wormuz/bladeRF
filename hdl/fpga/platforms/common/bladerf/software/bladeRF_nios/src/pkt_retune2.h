@@ -38,6 +38,16 @@ void pkt_retune2(struct pkt_buf *b);
 bool pkt_retune2_defer_clear(bladerf_module module);
 bool pkt_retune2_fastlock_recall_orphaned(void);
 
+/* Whether a non-terminal retune2 entry of this direction references the NIOS
+ * fastlock cache slot, and whether that entry's RFFE upload is in progress. */
+enum pkt_retune2_slot_use {
+    PKT_RETUNE2_SLOT_FREE = 0,
+    PKT_RETUNE2_SLOT_QUEUED,
+    PKT_RETUNE2_SLOT_LOADING,
+};
+enum pkt_retune2_slot_use pkt_retune2_profile_slot_use(bladerf_module module,
+                                                       uint16_t nios_profile);
+
 void pkt_retune2_work(void);
 
 /* Cumulative scheduled execution outcomes, one counter per RF direction. */
