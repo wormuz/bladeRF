@@ -559,6 +559,15 @@ static void service_rfic_status_request_impl(void)
         }
     }
 
+    if (cooperative_pkt->req[PKT_MAGIC_IDX] == NIOS_PKT_8x64_MAGIC &&
+        nios_pkt_8x64_rfic_owner_access_safe(
+            cooperative_pkt->req[NIOS_PKT_8x64_IDX_TARGET_ID],
+            (cooperative_pkt->req[NIOS_PKT_8x64_IDX_FLAGS] &
+             NIOS_PKT_8x64_FLAG_WRITE) != 0)) {
+        pkt_8x64(cooperative_pkt);
+        goto publish_cooperative_response;
+    }
+
     /* Read-only CONTROL PIO and independent INA219 I2C requests remain
      * safe during RFIC ownership. Other peripheral requests were dispatched
      * above only after all owners retired. */

@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "nios_pkt_8x32.h"
+#include "nios_pkt_8x64.h"
 
 /* While an earlier scheduled retune uploads or recalls a profile, NIOS
  * answers 8x32 packets only if nios_pkt_8x32_rfic_owner_access_safe()
@@ -38,6 +39,17 @@ int main(void)
            "RX retune2 success count read");
     /* bladerf2_rfic_reference_clock_status with the ADF400x PLL enabled */
     expect(NIOS_PKT_8x32_TARGET_RFFE_CSR, false, 0, true, "RFFE CSR read");
+
+    /* bladerf_get_timestamp(RX/TX) */
+    if (!nios_pkt_8x64_rfic_owner_access_safe(
+            NIOS_PKT_8x64_TARGET_TIMESTAMP, false) ||
+        nios_pkt_8x64_rfic_owner_access_safe(
+            NIOS_PKT_8x64_TARGET_TIMESTAMP, true) ||
+        nios_pkt_8x64_rfic_owner_access_safe(
+            NIOS_PKT_8x64_TARGET_RFIC_TIMING, false)) {
+        fputs("8x64 timestamp admission wrong\n", stderr);
+        failures++;
+    }
 
     /* Mutations stay fenced. */
     expect(NIOS_PKT_8x32_TARGET_RFFE_CSR, true, 0, false, "RFFE CSR write");

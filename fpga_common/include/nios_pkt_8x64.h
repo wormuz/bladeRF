@@ -104,6 +104,15 @@
 
 #define NIOS_PKT_8x64_TARGET_TIMESTAMP 0x00 /* Timestamp readback (read only) */
 
+/* FPGA timestamp reads touch only the time-tamer registers. Keep them
+ * available while a RETUNE2 upload or recall owns the RFIC: hosts read the
+ * stream time to place the next scheduled retune. */
+static inline bool nios_pkt_8x64_rfic_owner_access_safe(uint8_t target,
+                                                         bool write)
+{
+    return !write && target == NIOS_PKT_8x64_TARGET_TIMESTAMP;
+}
+
 /* Project-owned read-only diagnostics for the hosted xA4 RFIC worker. */
 #define NIOS_PKT_8x64_TARGET_RFIC_TIMING 0x80
 #define NIOS_PKT_8x64_RFIC_TIMING_STATUS 0x00
