@@ -1491,7 +1491,7 @@ static void *rx_fault_monitor_task(void *arg)
                                 completion_status =
                                     bladerf2_quick_tune_readback(
                                         dev, BLADERF_CHANNEL_RX(0),
-                                        rffe_profile,
+                                        nios_profile, rffe_profile,
                                         requested_frequency_hz,
                                         &profile_frequency_hz);
                                 if (completion_status != 0 ||
@@ -2130,7 +2130,7 @@ static void *rx_fault_monitor_task(void *arg)
                                     completion_read_status =
                                         bladerf2_quick_tune_readback(
                                             dev, BLADERF_CHANNEL_TX(0),
-                                            rffe_profile,
+                                            nios_profile, rffe_profile,
                                             requested_frequency_hz,
                                             &profile_frequency_hz);
                                     if (completion_read_status != 0 ||
