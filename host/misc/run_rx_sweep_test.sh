@@ -16,6 +16,8 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-function \
     -I"$repo_root/fpga_common/include" \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
     -I"$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios/src" \
+    -I"$repo_root/host/libraries/libbladeRF/include" \
+    -I"$repo_root/host/libraries/libbladeRF/src" \
     "$repo_root/host/misc/test_nios_retune2_queue.c" \
     -Wl,--gc-sections -o "$out_dir/queue"
 "$out_dir/queue"

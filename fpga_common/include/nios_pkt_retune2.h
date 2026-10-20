@@ -105,6 +105,16 @@
 #define NIOS_PKT_RETUNE2_EXEC_TS_VALID   (1u << 0)
 #define NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED (1u << 1)
 
+/* RX/TX synthesizer readback after a recall (FPGA >= 0.33.0), reported by
+ * NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH. Bytes 0-4 are fastlock profile
+ * words 0-4 (integer word <7:0>, integer <10:8>, fractional <7:0>, <15:8>,
+ * <22:16>), byte 5 is word 12 (VCO divider <3:0>) of the AD9361 profile
+ * slot NIOS recalled, byte 6 is the Fast Lock Setup register (selected
+ * profile <7:5>, mode enable <0>), zero when a read failed. */
+#define NIOS_PKT_RETUNE2_SYNTH_LEN        7
+#define NIOS_PKT_RETUNE2_SYNTH_SETUP      6
+#define NIOS_PKT_RETUNE2_SYNTH_VCO_DIV    5
+
 /* Specify this value instead of a timestamp to clear the retune2 queue */
 #define NIOS_PKT_RETUNE2_CLEAR_QUEUE      ((uint64_t) -1)
 

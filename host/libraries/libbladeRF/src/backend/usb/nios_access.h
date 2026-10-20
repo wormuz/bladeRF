@@ -540,7 +540,8 @@ int nios_fastlock_profile_state(struct bladerf *dev, bool is_tx,
                                 uint8_t *rffe_profile);
 
 /* One RETUNE2 outcome record from NIOS_PKT_16x64_TARGET_RETUNE2_RECORD
- * (FPGA >= 0.32.0): one read for a failure record, two for a success. */
+ * (FPGA >= 0.32.0): one read for a failure record, two for a success, three
+ * with the synthesizer word (FPGA >= 0.33.0). */
 struct nios_retune2_record {
     uint16_t request_token;
     uint8_t nios_profile;
@@ -549,6 +550,10 @@ struct nios_retune2_record {
     uint8_t failure_stage;
     uint32_t executed_delta;        /* executed - scheduled timestamp */
     uint64_t readback_frequency_hz; /* 2 Hz resolution, 0 when not read */
+    /* NIOS_PKT_RETUNE2_SYNTH_* bytes, valid with `synth_read`; the length
+     * is NIOS_PKT_RETUNE2_SYNTH_LEN (checked in nios_access.c). */
+    uint8_t synth[7];
+    bool synth_read;
 };
 
 /* RETUNE2 success and failure counters of one direction, one read. */
@@ -556,10 +561,12 @@ int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
                                uint32_t *success_count,
                                uint32_t *failure_count);
 
-/* Read outcome record `sequence` of the success or failure ring.
+/* Read outcome record `sequence` of the success or failure ring; for a
+ * success record with `read_synth` also its synthesizer word.
  * BLADERF_ERR_WOULD_BLOCK: the slot does not (or no longer) hold it. */
 int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
                              bool failure, uint32_t sequence,
+                             bool read_synth,
                              struct nios_retune2_record *record);
 
 /**

@@ -2202,13 +2202,22 @@ int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
     return 0;
 }
 
+typedef char nios_retune2_record_synth_len[
+    sizeof(((struct nios_retune2_record *)0)->synth) ==
+            NIOS_PKT_RETUNE2_SYNTH_LEN ? 1 : -1];
+
 int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
                              bool failure, uint32_t sequence,
+                             bool read_synth,
                              struct nios_retune2_record *record)
 {
     const bool tx = module == BLADERF_MODULE_TX;
+    const uint64_t known_flags = NIOS_PKT_RETUNE2_EXEC_TS_VALID |
+                                 NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED;
     uint64_t identity = 0;
     uint64_t execution = 0;
+    uint64_t synth = 0;
+    unsigned int i;
     int status;
 
     if (dev == NULL || record == NULL || sequence == 0 ||
@@ -2222,8 +2231,9 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
         nios_pkt_16x64_retune2_record_addr(
             failure, tx, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
         sequence, &identity);
-    /* Failure records have no execution word; a success record's second
-     * word is answered only while the slot still holds this sequence. */
+    /* Failure records have no execution or synthesizer word; a success
+     * record's further words are answered only while the slot still holds
+     * this sequence. */
     if (status == 0 && !failure) {
         status = nios_retune2_record_access(
             dev,
@@ -2231,13 +2241,18 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
                 false, tx, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
             sequence, &execution);
     }
+    if (status == 0 && !failure && read_synth) {
+        status = nios_retune2_record_access(
+            dev,
+            nios_pkt_16x64_retune2_record_addr(
+                false, tx, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH),
+            sequence, &synth);
+    }
     if (status != 0) {
         return status;
     }
-    if ((identity >> 48) != 0 ||
-        (identity >> 24 & 0xffu) &
-            ~(uint64_t)(NIOS_PKT_RETUNE2_EXEC_TS_VALID |
-                        NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)) {
+    if ((identity >> 48) != 0 || (identity >> 24 & 0xffu) & ~known_flags ||
+        (synth & 0xffu & ~known_flags) != 0) {
         /* Unknown layout; do not reinterpret. */
         return BLADERF_ERR_UNEXPECTED;
     }
@@ -2249,6 +2264,12 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
     record->failure_stage = (uint8_t)(identity >> 40);
     record->executed_delta = (uint32_t)execution;
     record->readback_frequency_hz = (execution >> 32) << 1;
+    if (!failure && read_synth) {
+        for (i = 0; i < NIOS_PKT_RETUNE2_SYNTH_LEN; i++) {
+            record->synth[i] = (uint8_t)(synth >> (8 * (i + 1)));
+        }
+        record->synth_read = true;
+    }
     return 0;
 }
 

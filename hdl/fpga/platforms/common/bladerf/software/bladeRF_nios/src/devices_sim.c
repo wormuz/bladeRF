@@ -27,9 +27,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <inttypes.h>
+#include <string.h>
 
 #include "rfic_channel_validation.h"
 
+#include "nios_pkt_retune2.h"
 #include "pkt_handler.h"
 #include "devices.h"
 #include "fpga_version.h"
@@ -783,6 +785,15 @@ bool adi_rfpll_lock_read(bladerf_module m, bool *locked)
     }
     *locked = !sim_recall_job.active || sim_recall_job.module != m;
     return true;
+}
+
+/* The simulation keeps no AD9361 profile bank: report a failed read. */
+void adi_rfpll_synth_read(bladerf_module m, uint8_t rffe_profile,
+                          uint8_t *synth)
+{
+    (void)m;
+    (void)rffe_profile;
+    memset(synth, 0, NIOS_PKT_RETUNE2_SYNTH_LEN);
 }
 
 bool adi_rfport_select(fastlock_profile *p)

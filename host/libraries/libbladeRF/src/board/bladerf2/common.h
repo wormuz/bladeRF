@@ -28,6 +28,7 @@
 
 #include "bladerf2_common.h"
 #include "nios_pkt_8x32.h"
+#include "nios_pkt_retune2.h"
 #include "helpers/version.h"
 #include "streaming/sync.h"
 #include "thread.h"
@@ -311,6 +312,10 @@ struct bladerf2_board_data {
         uint16_t request_token;
         uint32_t session_generation;
         bool valid;
+        /* Sweep only: NIOS_PKT_RETUNE2_SYNTH_* bytes expected from the
+         * profile words the host uploaded, when it knows them. */
+        uint8_t synth_expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
+        bool synth_expected_valid;
         /* Sequence of the owning sweep record, 0 outside a sweep. */
         uint32_t sweep_sequence;
     } rx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
@@ -322,6 +327,9 @@ struct bladerf2_board_data {
         uint64_t settle_samples;
         /* bladerf_rx_gain_table_region() of the table loaded at begin. */
         unsigned int gain_table_region;
+        /* RX RFPLL reference rate read at begin; 0 when unknown (FPGA
+         * tuning mode: no host AD9361 driver). */
+        uint32_t refclk_hz;
         uint32_t next_sequence;
         uint32_t ring_head;
         uint32_t ring_count;

@@ -23,6 +23,7 @@
  */
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <string.h>
 #include "pkt_handler.h"
 #include "pkt_retune2.h"
@@ -86,30 +87,41 @@ enum entry_state {
 
 /* What NIOS observed when a recall finished: the module timestamp after the
  * PLL locked and the RF switches were set, and NIOS_PKT_RETUNE2_EXEC_*
- * flags. Zero flags mean nothing was observed. */
+ * flags, and the synthesizer bytes read after the lock bit
+ * (NIOS_PKT_RETUNE2_SYNTH_*, zero when not read). The bytes fill the
+ * padding after `flags`, so the struct does not grow. Zero flags mean
+ * nothing was observed. */
 struct retune2_execution {
     uint64_t timestamp;
     uint8_t flags;
+    uint8_t synth[NIOS_PKT_RETUNE2_SYNTH_LEN];
 };
+/* pkt_retune2_record_read() copies flags and synth[] as one 8-byte word. */
+typedef char retune2_execution_word3_contiguous[
+    offsetof(struct retune2_execution, synth) ==
+            offsetof(struct retune2_execution, flags) + 1 &&
+        NIOS_PKT_RETUNE2_SYNTH_LEN == 7 ? 1 : -1];
 
+/* Field order packs both structs with retune2_execution's synthesizer
+ * bytes at the size they had without them (NIOS aligns uint64_t to 4). */
 struct queue_entry {
     volatile enum entry_state state;
     /* Snapshot the selected profile. `fastlocks_*[nios_profile]` is a shared
      * upload slot and may be overwritten by a later scheduled request before
      * this timer fires. */
     fastlock_profile profile;
-    uint16_t nios_profile;
-    uint64_t timestamp;
-    uint64_t readback_frequency_hz;
-    struct retune2_execution execution;
-    uint32_t session_generation;
-    uint16_t request_token;
-    struct pkt_buf *deferred_response_pkt;
     bool immediate;
     bool cancel_recovery_seen;
     bool cancel_request_pending;
     bool failure_reported;
     uint8_t cancel_ack_before;
+    uint16_t nios_profile;
+    uint16_t request_token;
+    uint64_t timestamp;
+    uint64_t readback_frequency_hz;
+    struct retune2_execution execution;
+    uint32_t session_generation;
+    struct pkt_buf *deferred_response_pkt;
 };
 
 static struct queue {
@@ -179,8 +191,8 @@ struct retune2_completion {
     volatile uint32_t sequence;
     uint64_t frequency_hz;
     uint64_t scheduled_timestamp;
-    uint16_t nios_profile;
     uint32_t session_generation;
+    uint16_t nios_profile;
     uint16_t request_token;
     struct retune2_execution execution;
 };
@@ -221,8 +233,7 @@ static inline void retune2_completion_publish(
     if (execution != NULL) {
         completion->execution = *execution;
     } else {
-        completion->execution.timestamp = 0;
-        completion->execution.flags = 0;
+        memset(&completion->execution, 0, sizeof(completion->execution));
     }
     __asm__ __volatile__("" ::: "memory");
     completion->sequence = sequence;
@@ -423,6 +434,11 @@ uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
             *data = nios_pkt_16x64_retune2_record_identity(
                 record->request_token, (uint8_t)record->nios_profile, flags,
                 (uint8_t)record->session_generation, 0);
+        } else if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH) {
+            /* flags, then synth[]: word 3 byte order on little-endian NIOS. */
+            memcpy(data, (const uint8_t *)&record->execution +
+                             offsetof(struct retune2_execution, flags),
+                   8);
         } else {
             const uint64_t readback_2hz = record->frequency_hz >> 1;
             *data = delta | ((readback_2hz > UINT32_MAX ? 0 : readback_2hz)
@@ -1109,7 +1125,9 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
     /* Samples at or after this timestamp were taken with the recalled LO
      * locked and the RF path switched. The lock bit is read after the
      * timestamp, so it describes the LO at that sample boundary. A failed
-     * read leaves its flag clear; the host then refuses to certify. */
+     * read leaves its flag clear; the host then refuses to certify. The
+     * synthesizer bytes follow the lock bit; the host compares them with
+     * the profile it uploaded for this slot. */
     if (execution != NULL) {
         bool locked = false;
 
@@ -1123,6 +1141,8 @@ static inline bool profile_activate(bladerf_module module, fastlock_profile *p,
         if (adi_rfpll_lock_read(module, &locked) && locked) {
             execution->flags |= NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED;
         }
+        adi_rfpll_synth_read(module, p->profile_num,
+                             execution->synth);
     }
 #ifdef BLADERF_NIOS_LIBAD936X
     if (readback_frequency_hz != NULL &&

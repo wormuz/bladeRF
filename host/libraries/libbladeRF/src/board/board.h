@@ -182,6 +182,9 @@
 /** FPGA v0.32.0 retune2 success records carry the post-recall timestamp
  * and RFPLL lock bit. */
 #define BLADERF_CAP_RETUNE2_EXECUTION_RECORD (((uint64_t)1) << 49)
+/** FPGA v0.33.0 retune2 success records carry the synthesizer bytes of the
+ * recalled AD9361 fastlock slot (16x64 record word 3). */
+#define BLADERF_CAP_RETUNE2_SYNTH_RECORD (((uint64_t)1) << 50)
 
 /**
  * Max number of gain calibration tables associated to max number of channels

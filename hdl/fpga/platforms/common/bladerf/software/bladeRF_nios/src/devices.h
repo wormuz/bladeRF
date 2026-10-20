@@ -345,6 +345,12 @@ bladerf_module adi_fastlock_recall_owner(void);
  * Returns false if the SPI read failed. */
 bool adi_rfpll_lock_read(bladerf_module m, bool *locked);
 
+/* Read NIOS_PKT_RETUNE2_SYNTH_LEN synthesizer bytes of AD9361 fastlock slot
+ * `rffe_profile` (nios_pkt_retune2.h). A failed read leaves the setup byte
+ * zero. */
+void adi_rfpll_synth_read(bladerf_module m, uint8_t rffe_profile,
+                          uint8_t *synth);
+
 /**
  * Set the AD9361 port.
  *

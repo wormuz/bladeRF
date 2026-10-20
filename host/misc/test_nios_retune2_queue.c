@@ -5,6 +5,7 @@
 
 #include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/pkt_retune2.c"
 #include "../../hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/fastlock_profile_cache.c"
+#include "board/bladerf2/rx_sweep_policy.h"
 
 /* Most existing cases isolate timer/retirement behavior and model an
  * already-resident RFIC profile. Dedicated upload cases use
@@ -440,6 +441,31 @@ bool adi_rfpll_lock_read(bladerf_module module, bool *locked)
     }
     *locked = simulated_rfpll_locked;
     return true;
+}
+
+/* The simulated AD9361 bank holds the recalled profile's words, the setup
+ * register selects its slot; `synth_bank_flip` corrupts fractional word 0
+ * as if the bank held other words than NIOS uploaded. */
+static bool fail_synth_read;
+static uint8_t synth_bank_flip;
+static unsigned synth_reads;
+static uint8_t synth_read_profile_num;
+
+void adi_rfpll_synth_read(bladerf_module module, uint8_t rffe_profile,
+                          uint8_t *synth)
+{
+    (void)module;
+    synth_reads++;
+    synth_read_profile_num = rffe_profile;
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] = 0;
+    if (fail_synth_read || recalled_profile == NULL) {
+        return;
+    }
+    memcpy(synth, recalled_profile->profile_data, 5);
+    synth[2] ^= synth_bank_flip;
+    synth[NIOS_PKT_RETUNE2_SYNTH_VCO_DIV] = recalled_profile->profile_data[12];
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] =
+        (uint8_t)(((recalled_profile->profile_num & 0x7) << 5) | 0x1);
 }
 
 int32_t adi_fastlock_recall_poll(bladerf_module module,
@@ -2144,9 +2170,19 @@ static void reset_execution_test_state(void)
     simulated_rfpll_locked = true;
     fail_rfpll_lock_read = false;
     rfpll_lock_reads = 0;
+    fail_synth_read = false;
+    synth_bank_flip = 0;
+    synth_reads = 0;
+    recalled_profile = NULL;
     port_count = 0;
     spdt_count = 0;
 }
+
+/* 925 MHz RX profile words (integer 96, fractional 2970960, VCO divider 2),
+ * as in test_rx_sweep_policy.c. */
+static const uint8_t profile_925[16] = {
+    0x60, 0x00, 0x50, 0x55, 0x2d, 0, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0
+};
 
 /* Run one scheduled RX retune at `scheduled` and return its success record
  * execution words. The simulated recall needs three polls and advances the
@@ -2158,6 +2194,7 @@ static bool run_scheduled_rx_execution(uint64_t scheduled, uint32_t *ts_lo,
     fastlock_profile profile = { 0 };
 
     profile.profile_num = 3;
+    memcpy(profile.profile_data, profile_925, sizeof(profile_925));
     profile.port = 0x11;
     profile.spdt = 0x02;
     profile.state = FASTLOCK_STATE_BBP_RFFE;
@@ -2323,6 +2360,94 @@ static int check_rx_success_record_carries_execution(void)
     reset_execution_test_state();
     return 0;
 }
+
+/* Word 3 of a success record carries the synthesizer bytes NIOS read after
+ * the lock bit; the host decodes them and refuses words other than the
+ * uploaded profile's. */
+static int read_synth_word(uint32_t successes, uint8_t *flags,
+                           uint8_t synth[NIOS_PKT_RETUNE2_SYNTH_LEN])
+{
+    uint64_t word = 0;
+    unsigned int i;
+
+    if (pkt_retune2_record_read(
+            nios_pkt_16x64_retune2_record_addr(
+                false, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH),
+            successes, &word) != 0) {
+        return 1;
+    }
+    *flags = (uint8_t)word;
+    for (i = 0; i < NIOS_PKT_RETUNE2_SYNTH_LEN; i++) {
+        synth[i] = (uint8_t)(word >> (8 * (i + 1)));
+    }
+    return 0;
+}
+
+static int check_rx_success_record_carries_synth(void)
+{
+    const uint64_t scheduled = UINT64_C(0x1234500000);
+    uint8_t expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
+    uint8_t synth[NIOS_PKT_RETUNE2_SYNTH_LEN];
+    uint32_t ts_lo = 0, ts_hi = 0, flags = 0, successes = 0;
+    uint8_t synth_flags = 0;
+    uint64_t data = 0, hz = 0;
+
+    bladerf2_rx_sweep_synth_expected(profile_925, 3, expected);
+
+    reset_execution_test_state();
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes) ||
+        read_synth_word(successes, &synth_flags, synth) != 0 ||
+        synth_reads != 1 || synth_read_profile_num != 3 ||
+        synth_flags != flags || memcmp(synth, expected, sizeof(synth)) != 0 ||
+        bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_VALID ||
+        hz != 924999999) {
+        fprintf(stderr, "synthesizer word mismatch: reads=%u flags=0x%x "
+                        "hz=%llu\n",
+                synth_reads, synth_flags, (unsigned long long)hz);
+        return 1;
+    }
+
+    /* The bank holds other words than the uploaded profile: the record
+     * carries what was read and the host refuses it. */
+    reset_execution_test_state();
+    synth_bank_flip = 0x01;
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes) ||
+        read_synth_word(successes, &synth_flags, synth) != 0 ||
+        synth[2] != (uint8_t)(profile_925[2] ^ 0x01) ||
+        bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_MISMATCH) {
+        fputs("corrupted bank words not detected\n", stderr);
+        return 1;
+    }
+
+    /* A failed SPI read leaves the setup byte zero: nothing to certify. */
+    reset_execution_test_state();
+    fail_synth_read = true;
+    if (!run_scheduled_rx_execution(scheduled, &ts_lo, &ts_hi, &flags,
+                                    &successes) ||
+        read_synth_word(successes, &synth_flags, synth) != 0 ||
+        synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] != 0 ||
+        bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_NONE) {
+        fputs("failed synthesizer read not reported\n", stderr);
+        return 1;
+    }
+
+    /* Failure records have no synthesizer word. */
+    if (pkt_retune2_record_read(
+            nios_pkt_16x64_retune2_record_addr(
+                true, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH),
+            1, &data) != NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID) {
+        fputs("failure ring answered word 3\n", stderr);
+        return 1;
+    }
+    reset_execution_test_state();
+    return 0;
+}
+
 static int check_preload_preserves_scheduled_profile_slot(void)
 {
     fastlock_profile first = { 0 };
@@ -3955,6 +4080,9 @@ int main(void)
         return 1;
     }
     if (check_rx_success_record_carries_execution() != 0) {
+        return 1;
+    }
+    if (check_rx_success_record_carries_synth() != 0) {
         return 1;
     }
     if (check_schedule_ready_lifecycle() != 0) {

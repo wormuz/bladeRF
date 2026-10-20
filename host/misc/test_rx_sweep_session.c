@@ -20,6 +20,7 @@ struct scripted_request {
     uint64_t executed;
     uint8_t flags;
     uint64_t readback;
+    bool synth_corrupt;
 };
 
 static struct scripted_request requests[MAX_REQUESTS];
@@ -50,11 +51,11 @@ int nios_retune2_record_counts(struct bladerf *dev, bladerf_module module,
 
 int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
                              bool failure, uint32_t sequence,
+                             bool read_synth,
                              struct nios_retune2_record *record)
 {
     const struct scripted_request *r;
 
-    (void)dev;
     (void)module;
     memset(record, 0, sizeof(*record));
     if (failure) {
@@ -73,6 +74,17 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
         record->execution_flags = r->flags;
         record->executed_delta = (uint32_t)(r->executed - r->timestamp);
         record->readback_frequency_hz = r->readback;
+        if (read_synth) {
+            const struct bladerf2_nios_fastlock_words *words =
+                &((struct bladerf2_board_data *)dev->board_data)
+                      ->nios_fastlock_words[0][r->nios_profile];
+
+            bladerf2_rx_sweep_synth_expected(words->words,
+                                             (uint8_t)(r->nios_profile % 8),
+                                             record->synth);
+            record->synth[2] ^= r->synth_corrupt ? 0x01 : 0x00;
+            record->synth_read = true;
+        }
     }
     record->request_token = r->token;
     record->nios_profile = (uint8_t)r->nios_profile;
@@ -125,6 +137,25 @@ void ad9361_fastlock_invalidate_current_lo(struct ad9361_rf_phy *phy,
     (void)phy;
     (void)tx;
 }
+
+/* RX RFPLL reference rate; 100 MHz is integer word 80 at VCO divider 5. */
+static int32_t refclk_status;
+
+int32_t clk_get_rate_checked(struct ad9361_rf_phy *phy,
+                             struct refclk_scale *clk_priv, uint32_t *rate)
+{
+    (void)phy;
+    (void)clk_priv;
+    *rate = 80000000;
+    return refclk_status;
+}
+
+int errno_ad9361_to_bladerf(int err)
+{
+    return err == 0 ? 0 : BLADERF_ERR_UNEXPECTED;
+}
+
+static struct ad9361_rf_phy mock_phy;
 
 static unsigned int events_appended;
 static struct bladerf_rf_event last_event;
@@ -207,6 +238,13 @@ static void setup(void)
     board_data.capabilities = BLADERF_CAP_SCHEDULED_RETUNE |
                               BLADERF_CAP_RETUNE2_REQUEST_TOKEN |
                               BLADERF_CAP_RETUNE2_EXECUTION_RECORD;
+    board_data.capabilities |= BLADERF_CAP_RETUNE2_SYNTH_RECORD;
+    /* HOST tuning mode; NIOS slot 0 holds the 100 MHz profile. */
+    refclk_status = 0;
+    board_data.phy = &mock_phy;
+    board_data.nios_fastlock_words[0][0].words[0] = 80;
+    board_data.nios_fastlock_words[0][0].words[12] = 5;
+    board_data.nios_fastlock_words[0][0].valid = true;
     mock_board.fns.cancel_scheduled_retunes = mock_cancel;
     mock_board.fns.get_timestamp = mock_get_timestamp;
     mock_board.fns.get_frequency = mock_get_frequency;
@@ -354,6 +392,77 @@ static void check_lost_and_rejected(void)
           "end record after loss wrong");
 }
 
+/* The record certifies only an LO read back from the words the host
+ * uploaded for the slot. */
+static void check_lo_readback(void)
+{
+    struct bladerf_rx_sweep_record r[8];
+    unsigned int n;
+    unsigned int i;
+
+    setup();
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              board_data.rx_sweep.refclk_hz == 80000000,
+          "begin failed or reference rate not taken");
+    CHECK(schedule(1000, 100000000, 0) == 1, "sequence 1");
+    CHECK(schedule(2000, 100000000, 0) == 2, "sequence 2");
+    CHECK(schedule(3000, 100000000, 1) == 3, "sequence 3");
+    CHECK(schedule(4000, 100002000, 0) == 4, "sequence 4");
+    for (i = 0; i < 4; i++) {
+        requests[i].executed = requests[i].timestamp + 50;
+        requests[i].flags = OK_FLAGS;
+        success_order[i] = i;
+    }
+    requests[1].synth_corrupt = true;
+    successes_published = 4;
+    n = drain(r, 8);
+    CHECK(n == 4, "expected 4 records, got %u", n);
+    if (n == 4) {
+        CHECK((r[0].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  (r[0].flags & BLADERF_RX_SWEEP_F_READBACK_VALID) &&
+                  r[0].readback_frequency == 100000000,
+              "matching words not certified (flags 0x%x, %llu Hz)",
+              r[0].flags, (unsigned long long)r[0].readback_frequency);
+        CHECK(!(r[1].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  (r[1].flags & BLADERF_RX_SWEEP_F_READBACK_MISMATCH),
+              "corrupted words certified (flags 0x%x)", r[1].flags);
+        CHECK(!(r[2].flags & (BLADERF_RX_SWEEP_F_CERTIFIED |
+                              BLADERF_RX_SWEEP_F_READBACK_VALID)),
+              "slot with unknown words certified (flags 0x%x)", r[2].flags);
+        CHECK(!(r[3].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  (r[3].flags & BLADERF_RX_SWEEP_F_READBACK_MISMATCH),
+              "LO 2 kHz off the request certified (flags 0x%x)",
+              r[3].flags);
+    }
+    now_timestamp = 5000;
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0, "end");
+
+    /* FPGA 0.32.0 has no synthesizer word: HOST tuning mode certifies
+     * nothing. */
+    setup();
+    board_data.capabilities &= ~BLADERF_CAP_RETUNE2_SYNTH_RECORD;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin on 0.32.0 failed");
+    CHECK(schedule(1000, 100000000, 0) == 1, "0.32.0 sequence 1");
+    requests[0].executed = 1050;
+    requests[0].flags = OK_FLAGS;
+    success_order[0] = 0;
+    successes_published = 1;
+    n = drain(r, 8);
+    CHECK(n == 1 && !(r[0].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+              r[0].readback_frequency == 0,
+          "record without readback certified");
+    now_timestamp = 5000;
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0, "end");
+
+    /* An unreadable reference rate refuses the session. */
+    setup();
+    refclk_status = -5;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) != 0 &&
+              !board_data.rx_sweep.active,
+          "session began without a reference rate");
+}
+
 static void check_begin_preconditions(void)
 {
     setup();
@@ -425,6 +534,7 @@ int main(void)
     check_mixed_outcomes();
     check_lost_and_rejected();
     check_gain_table_region();
+    check_lo_readback();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);
         return 1;

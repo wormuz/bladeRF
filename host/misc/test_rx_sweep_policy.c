@@ -28,6 +28,8 @@ static void expect_label(const struct bladerf_rx_sweep_record *records,
     }
 }
 
+/* A success record whose LO readback is `readback` Hz (VALID), or, with 0,
+ * the requested frequency read back exactly. */
 static struct bladerf_rx_sweep_record success(uint32_t sequence,
                                               uint64_t frequency,
                                               uint64_t scheduled,
@@ -42,8 +44,10 @@ static struct bladerf_rx_sweep_record success(uint32_t sequence,
     record.sequence = sequence;
     record.frequency = frequency;
     record.scheduled_timestamp = scheduled;
-    bladerf2_rx_sweep_record_success(&record, readback, executed,
-                                     execution_flags, settle);
+    bladerf2_rx_sweep_record_success(&record,
+                                     BLADERF2_RX_SWEEP_READBACK_VALID,
+                                     readback != 0 ? readback : frequency,
+                                     executed, execution_flags, settle);
     return record;
 }
 
@@ -69,6 +73,7 @@ static void check_record_classification(void)
     r = success(1, 100000000, 1000, 1200, OK_FLAGS, 0, 50);
     if (r.flags != (BLADERF_RX_SWEEP_F_EXECUTED_VALID |
                     BLADERF_RX_SWEEP_F_PLL_LOCKED |
+                    BLADERF_RX_SWEEP_F_READBACK_VALID |
                     BLADERF_RX_SWEEP_F_CERTIFIED) ||
         r.certified_start != 1250 || r.executed_timestamp != 1200) {
         fputs("locked success with valid timestamp not certified\n", stderr);
@@ -101,6 +106,114 @@ static void check_record_classification(void)
     r = success(1, 100000000, 1000, UINT64_MAX - 10, OK_FLAGS, 0, 50);
     if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0) {
         fputs("settle overflow certified\n", stderr);
+        failures++;
+    }
+}
+
+/* 925 MHz RX profile: integer 96, fractional 2970960, VCO divider 2 at a
+ * 76.8 MHz RFPLL reference: (76.8e6 * 2970960 / 8388593 + 76.8e6 * 96)
+ * >> 3 = 924999999 Hz in integer arithmetic. AD9361 slot 5. */
+static const uint8_t profile_925[16] = {
+    0x60, 0x00, 0x50, 0x55, 0x2d, 0, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0
+};
+
+static void check_synth_readback(void)
+{
+    struct bladerf_rx_sweep_record r;
+    enum bladerf2_rx_sweep_readback readback;
+    uint8_t expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
+    uint8_t synth[NIOS_PKT_RETUNE2_SYNTH_LEN];
+    uint64_t hz = 1;
+
+    bladerf2_rx_sweep_synth_expected(profile_925, 5, expected);
+    if (expected[5] != 0x02 || expected[6] != 0xa1) {
+        fputs("expected synthesizer bytes wrong\n", stderr);
+        failures++;
+    }
+
+    /* NIOS read the uploaded words; the setup register also carries bits
+     * outside the compared mask. */
+    memcpy(synth, expected, sizeof(synth));
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] |= 0x0c;
+    readback = bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz);
+    if (readback != BLADERF2_RX_SWEEP_READBACK_VALID || hz != 924999999) {
+        fprintf(stderr, "matching words: readback %d hz %llu\n", readback,
+                (unsigned long long)hz);
+        failures++;
+    }
+    memset(&r, 0, sizeof(r));
+    r.frequency = 925000000;
+    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50);
+    if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) == 0 ||
+        r.readback_frequency != 924999999) {
+        fputs("matching readback not certified\n", stderr);
+        failures++;
+    }
+
+    /* Any differing word: a fractional byte, the divider, another slot. */
+    memcpy(synth, expected, sizeof(synth));
+    synth[2] ^= 0x01;
+    readback = bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz);
+    if (readback != BLADERF2_RX_SWEEP_READBACK_MISMATCH || hz == 0) {
+        fputs("fractional word mismatch not detected\n", stderr);
+        failures++;
+    }
+    memset(&r, 0, sizeof(r));
+    r.frequency = 925000000;
+    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50);
+    if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0 ||
+        (r.flags & BLADERF_RX_SWEEP_F_READBACK_MISMATCH) == 0) {
+        fputs("mismatching words certified\n", stderr);
+        failures++;
+    }
+    memcpy(synth, expected, sizeof(synth));
+    synth[NIOS_PKT_RETUNE2_SYNTH_VCO_DIV] = 0x03;
+    if (bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+        BLADERF2_RX_SWEEP_READBACK_MISMATCH) {
+        fputs("VCO divider mismatch not detected\n", stderr);
+        failures++;
+    }
+    memcpy(synth, expected, sizeof(synth));
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] = 0x81; /* slot 4 selected */
+    if (bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+        BLADERF2_RX_SWEEP_READBACK_MISMATCH) {
+        fputs("selected slot mismatch not detected\n", stderr);
+        failures++;
+    }
+
+    /* Nothing to certify by: old FPGA (no word 3), failed NIOS read, words
+     * the host does not know, unknown reference rate. */
+    memcpy(synth, expected, sizeof(synth));
+    if (bladerf2_rx_sweep_readback(NULL, expected, 76800000, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_NONE ||
+        bladerf2_rx_sweep_readback(synth, NULL, 76800000, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_NONE ||
+        bladerf2_rx_sweep_readback(synth, expected, 0, 0, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_NONE) {
+        fputs("missing readback treated as valid\n", stderr);
+        failures++;
+    }
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] = 0;
+    if (bladerf2_rx_sweep_readback(synth, expected, 76800000, 0, &hz) !=
+        BLADERF2_RX_SWEEP_READBACK_NONE) {
+        fputs("failed NIOS read treated as valid\n", stderr);
+        failures++;
+    }
+    memset(&r, 0, sizeof(r));
+    r.frequency = 925000000;
+    bladerf2_rx_sweep_record_success(&r, BLADERF2_RX_SWEEP_READBACK_NONE, 0,
+                                     1200, OK_FLAGS, 50);
+    if ((r.flags & (BLADERF_RX_SWEEP_F_CERTIFIED |
+                    BLADERF_RX_SWEEP_F_READBACK_VALID)) != 0) {
+        fputs("record without readback certified\n", stderr);
+        failures++;
+    }
+
+    /* FPGA tuning mode: the NIOS AD9361 driver's Hz readback. */
+    if (bladerf2_rx_sweep_readback(NULL, NULL, 0, 925000000, &hz) !=
+            BLADERF2_RX_SWEEP_READBACK_VALID ||
+        hz != 925000000) {
+        fputs("NIOS Hz readback not used\n", stderr);
         failures++;
     }
 }
@@ -164,6 +277,7 @@ static void check_ranges(void)
 int main(void)
 {
     check_record_classification();
+    check_synth_readback();
     check_ranges();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep policy failure(s)\n", failures);

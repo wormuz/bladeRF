@@ -2069,10 +2069,19 @@ typedef enum {
 #define BLADERF_RX_SWEEP_F_EXECUTED_VALID (1u << 0)
 /** NIOS read the RX RFPLL lock bit set after `executed_timestamp`. */
 #define BLADERF_RX_SWEEP_F_PLL_LOCKED (1u << 1)
-/** NIOS read back an LO that differs from `frequency` by more than 1 kHz. */
+/** NIOS read back an LO that differs from `frequency` by more than 1 kHz,
+ * or synthesizer words other than those of the profile the host uploaded
+ * for the slot. */
 #define BLADERF_RX_SWEEP_F_READBACK_MISMATCH (1u << 2)
-/** Success, executed timestamp valid, PLL locked, no readback mismatch. */
+/** Success, executed timestamp valid, PLL locked, LO read back, no
+ * readback mismatch. */
 #define BLADERF_RX_SWEEP_F_CERTIFIED (1u << 3)
+/** `readback_frequency` is the LO read back after the recall: in HOST
+ * tuning mode decoded from the synthesizer words NIOS read from the
+ * recalled AD9361 profile slot (FPGA >= v0.33.0) after they matched the
+ * uploaded profile; in FPGA tuning mode the NIOS AD9361 driver's readback.
+ * Required for BLADERF_RX_SWEEP_F_CERTIFIED. */
+#define BLADERF_RX_SWEEP_F_READBACK_VALID (1u << 4)
 
 /**
  * One scheduled retune of an RX sweep session, in schedule order.
@@ -2090,7 +2099,8 @@ struct bladerf_rx_sweep_record {
     uint16_t nios_profile;
     /** Requested LO */
     bladerf_frequency frequency;
-    /** LO read back by NIOS (FPGA tuning mode), 0 when not read */
+    /** LO read back after the recall (BLADERF_RX_SWEEP_F_READBACK_VALID),
+     * also the decoded LO of mismatching words; 0 when not read */
     bladerf_frequency readback_frequency;
     /** Timestamp passed to bladerf_rx_sweep_schedule() */
     bladerf_timestamp scheduled_timestamp;
@@ -2116,9 +2126,11 @@ struct bladerf_rx_sweep_record {
  * that point the next recall may already be changing the LO.
  * bladerf_rx_sweep_label() applies this rule.
  *
- * Requirements: FPGA >= v0.32.0, no RX retune pending, no RF transition in
- * progress. On a handle with an RX epoch contract (a transition required
- * ::BLADERF_RF_REQUIRE_EPOCH_VALID) the epoch must be open and certified:
+ * Requirements: FPGA >= v0.32.0 (HOST tuning mode certifies records only
+ * with FPGA >= v0.33.0, which reads the LO back), no RX retune pending, no
+ * RF transition in progress. On a handle with an RX epoch contract (a
+ * transition required ::BLADERF_RF_REQUIRE_EPOCH_VALID) the epoch must be
+ * open and certified:
  * the session keeps that epoch open (the FPGA gate fences only on host
  * ARM/ABORT, never on a NIOS recall), so samples keep flowing under the same
  * epoch ID; ::BLADERF_RF_EVT_RX_SWEEP_BEGIN marks where its LO claim ends.

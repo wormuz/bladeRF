@@ -1651,6 +1651,40 @@ bool adi_rfpll_lock_read(bladerf_module m, bool *locked)
     return true;
 }
 
+/* ADI's own LO readback (ad9361_rfpll_int_recalc_rate_checked) reads the
+ * synthesizer registers 0x231-0x235 only when no fastlock profile is
+ * current; with one current it decodes profile words 4..0 and 12 through
+ * ad9361_fastlock_readval(): write Fast Lock Program Addr 0x25C, read Fast
+ * Lock Program Read 0x25E (TX +0x40). Read those words, then Fast Lock
+ * Setup 0x25A with the selected slot: 13 SPI transactions. The setup byte
+ * is read last and cleared first, so a zero setup byte marks a failed
+ * read. */
+void adi_rfpll_synth_read(bladerf_module m, uint8_t rffe_profile,
+                          uint8_t *synth)
+{
+    const uint16_t setup_reg = BLADERF_CHANNEL_IS_TX(m) ? 0x29a : 0x25a;
+    uint64_t value;
+    uint8_t i;
+
+    synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] = 0;
+    for (i = 0; i < NIOS_PKT_RETUNE2_SYNTH_LEN; i++) {
+        if (i != NIOS_PKT_RETUNE2_SYNTH_SETUP &&
+            !adi_spi_write((0x1 << 15) | (setup_reg + 2),
+                           (uint64_t)(((rffe_profile & 0x7) << 4) |
+                                      (i == NIOS_PKT_RETUNE2_SYNTH_VCO_DIV
+                                           ? 12 : i)) << 56)) {
+            return;
+        }
+        if (!adi_spi_read_checked(
+                i == NIOS_PKT_RETUNE2_SYNTH_SETUP ? setup_reg
+                                                  : setup_reg + 4,
+                &value)) {
+            return;
+        }
+        synth[i] = (uint8_t)(value >> 56);
+    }
+}
+
 bool adi_fastlock_recall(bladerf_module m, fastlock_profile *p,
                          uint8_t *failure_stage)
 {

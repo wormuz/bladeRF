@@ -142,5 +142,9 @@ uint64_t bladerf2_get_fpga_capabilities(
         capabilities |= BLADERF_CAP_RETUNE2_EXECUTION_RECORD;
     }
 
+    if (version_fields_greater_or_equal(fpga_version, 0, 33, 0)) {
+        capabilities |= BLADERF_CAP_RETUNE2_SYNTH_RECORD;
+    }
+
     return capabilities;
 }

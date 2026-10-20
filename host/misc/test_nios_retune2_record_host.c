@@ -18,6 +18,7 @@ enum mock_mode {
     MOCK_OLD_FIRMWARE_ECHO,
     MOCK_OVERWRITTEN_BEFORE_SECOND_WORD,
     MOCK_UNKNOWN_FLAG,
+    MOCK_UNKNOWN_SYNTH_FLAG,
 };
 
 static enum mock_mode mock_mode;
@@ -67,6 +68,13 @@ static bool serve(uint16_t addr, uint64_t sequence, uint64_t *data)
                 : (NIOS_PKT_RETUNE2_EXEC_TS_VALID |
                    NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED),
             0x4d, 0);
+    } else if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH) {
+        /* flags, then synthesizer bytes 0x11..0x77 */
+        *data = (mock_mode == MOCK_UNKNOWN_SYNTH_FLAG
+                     ? 0x80u
+                     : (NIOS_PKT_RETUNE2_EXEC_TS_VALID |
+                        NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)) |
+                UINT64_C(0x7766554433221100);
     } else {
         *data = (uint64_t)1234567u |
                 ((uint64_t)(UINT64_C(2400000000) >> 1) << 32);
@@ -167,7 +175,7 @@ int main(void)
 
     transactions = 0;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
-                                      success_sequence, &record);
+                                      success_sequence, false, &record);
     CHECK(status == 0 && transactions == 2 &&
               record.request_token == 0x1234 && record.nios_profile == 9 &&
               record.execution_flags == (NIOS_PKT_RETUNE2_EXEC_TS_VALID |
@@ -179,7 +187,7 @@ int main(void)
 
     transactions = 0;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, true,
-                                      failure_sequence, &record);
+                                      failure_sequence, false, &record);
     CHECK(status == 0 && transactions == 1 &&
               record.request_token == 0xbeef && record.nios_profile == 11 &&
               record.failure_stage == 9 &&
@@ -187,20 +195,43 @@ int main(void)
               record.executed_delta == 0,
           "failure record: status %d tx %u", status, transactions);
 
+    /* FPGA >= 0.33.0: a third read returns the synthesizer bytes; a failure
+     * record has none and still costs one read. */
+    transactions = 0;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
-                                      success_sequence + 16, &record);
+                                      success_sequence, true, &record);
+    CHECK(status == 0 && transactions == 3 && record.synth_read &&
+              record.synth[0] == 0x11 && record.synth[5] == 0x66 &&
+              record.synth[NIOS_PKT_RETUNE2_SYNTH_SETUP] == 0x77 &&
+              record.readback_frequency_hz == UINT64_C(2400000000),
+          "success record with synth: status %d tx %u", status,
+          transactions);
+    transactions = 0;
+    status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, true,
+                                      failure_sequence, true, &record);
+    CHECK(status == 0 && transactions == 1 && !record.synth_read,
+          "failure record with synth: status %d tx %u", status,
+          transactions);
+    mock_mode = MOCK_UNKNOWN_SYNTH_FLAG;
+    status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
+                                      success_sequence, true, &record);
+    CHECK(status == BLADERF_ERR_UNEXPECTED, "unknown synth flag: %d", status);
+    mock_mode = MOCK_RECORDS;
+
+    status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
+                                      success_sequence + 16, false, &record);
     CHECK(status == BLADERF_ERR_WOULD_BLOCK && record.request_token == 0,
           "overwritten record: %d", status);
 
     mock_mode = MOCK_OVERWRITTEN_BEFORE_SECOND_WORD;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
-                                      success_sequence, &record);
+                                      success_sequence, false, &record);
     CHECK(status == BLADERF_ERR_WOULD_BLOCK && record.request_token == 0,
           "record torn between words was accepted: %d", status);
 
     mock_mode = MOCK_UNKNOWN_FLAG;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, false,
-                                      success_sequence, &record);
+                                      success_sequence, false, &record);
     CHECK(status == BLADERF_ERR_UNEXPECTED, "unknown flag: %d", status);
 
     mock_mode = MOCK_OLD_FIRMWARE_ECHO;

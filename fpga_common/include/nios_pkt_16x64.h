@@ -196,10 +196,10 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
  *    | 15:4   | Reserved, 0                                       |
  *    | 3      | Ring: 0 = success, 1 = failure                    |
  *    | 2      | Direction: 0 = RX, 1 = TX                         |
- *    | 1:0    | Word: 0 = identity, 1 = execution, 2 = counts     |
+ *    | 1:0    | Word: 0 identity, 1 execution, 2 counts, 3 synth  |
  *    +--------+---------------------------------------------------+
  *
- * Request data: the record's full 32-bit outcome sequence (words 0/1) or 0
+ * Request data: the record's full 32-bit outcome sequence (words 0/1/3) or 0
  * (counts). NIOS answers from the ring slot only if it still holds exactly
  * that sequence, so each word is self-checking and a record overwritten
  * between the two reads fails the second one.
@@ -214,6 +214,10 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
  *                    does not fit), [63:32] NIOS LO readback in units of
  *                    2 Hz, 0 when not read.
  * Word 2, counts:    [31:0] success count, [63:32] failure count.
+ * Word 3, synth (success ring only, FPGA >= 0.33.0):
+ *                    [7:0] NIOS_PKT_RETUNE2_EXEC_* flags as recorded,
+ *                    [63:8] the NIOS_PKT_RETUNE2_SYNTH_LEN bytes read over
+ *                    SPI after the lock bit, byte i at [8i+15:8i+8].
  *
  * Errors: success clear, data = ERROR_MARKER[63:56] | code. */
 #define NIOS_PKT_16x64_TARGET_RETUNE2_RECORD 0x07
@@ -221,6 +225,7 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY  0u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION 1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS    2u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH     3u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER   0x5cu
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID    1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE   2u /* not / no longer */
@@ -239,7 +244,7 @@ static inline bool nios_pkt_16x64_retune2_record_addr_unpack(
     const uint8_t decoded_word = (uint8_t)(addr & 0x3u);
 
     if ((addr & 0xfff0u) != 0 ||
-        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS) {
+        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH) {
         return false;
     }
     *failure = (addr & 0x8u) != 0;

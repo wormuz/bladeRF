@@ -36,6 +36,8 @@
 #include "helpers/have_cap.h"
 #include "rx_sweep_policy.h"
 
+#include "ad9361_util.h"
+
 #if BLADERF_RX_SWEEP_QUEUE_DEPTH != NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH
 #error "BLADERF_RX_SWEEP_QUEUE_DEPTH must equal the NIOS completion depth"
 #endif
@@ -45,6 +47,9 @@
 #endif
 
 #define SWEEP_DEPTH NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH
+
+typedef char sweep_rfpll_modulus_matches_ad9361[
+    BLADERF2_RFPLL_MODULUS == RFPLL_MODULUS ? 1 : -1];
 
 static uint64_t sweep_monotonic_ns(void)
 {
@@ -113,12 +118,14 @@ static void sweep_record_from_ledger(
 /* Find and retire the ledger entry that a NIOS record identifies. The
  * compact record carries the request token (unique among pending requests,
  * nonzero), the NIOS profile and the low byte of the command session; the
- * scheduled timestamp comes from the ledger. Caller holds
- * rx_async_epoch_lock. */
+ * scheduled timestamp and the expected synthesizer bytes come from the
+ * ledger. Caller holds rx_async_epoch_lock. */
 static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
                               const struct nios_retune2_record *nios,
                               uint8_t status,
-                              struct bladerf_rx_sweep_record *record)
+                              struct bladerf_rx_sweep_record *record,
+                              uint8_t *synth_expected,
+                              bool *synth_expected_valid)
 {
     unsigned int i;
 
@@ -133,6 +140,13 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
             (uint8_t)board_data->rx_retune2_pending[i].session_generation ==
                 nios->session_generation_low) {
             sweep_record_from_ledger(board_data, i, status, record);
+            if (synth_expected != NULL) {
+                memcpy(synth_expected,
+                       board_data->rx_retune2_pending[i].synth_expected,
+                       NIOS_PKT_RETUNE2_SYNTH_LEN);
+                *synth_expected_valid =
+                    board_data->rx_retune2_pending[i].synth_expected_valid;
+            }
             board_data->rx_retune2_pending[i].valid = false;
             if (board_data->rx_retune2_pending_count != 0) {
                 board_data->rx_retune2_pending_count--;
@@ -163,9 +177,12 @@ static int sweep_collect(struct bladerf *dev)
     bool lost = false;
     uint32_t i;
     int status;
+    const bool read_synth = have_cap(board_data->capabilities,
+                                     BLADERF_CAP_RETUNE2_SYNTH_RECORD);
 
     /* One read for both counters; each success record then costs two
-     * reads and each failure record one. */
+     * reads (three with the synthesizer word) and each failure record
+     * one. */
     status = nios_retune2_record_counts(dev, BLADERF_MODULE_RX,
                                         &success_count, &failure_count);
     if (status != 0) {
@@ -190,18 +207,24 @@ static int sweep_collect(struct bladerf *dev)
 
     for (i = 0; i < new_successes && !lost; i++) {
         struct nios_retune2_record nios;
+        uint8_t synth_expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
+        bool synth_expected_valid = false;
+        enum bladerf2_rx_sweep_readback readback;
+        uint64_t readback_hz;
         uint64_t executed_timestamp;
         bool found;
 
         status = nios_retune2_record_read(dev, BLADERF_MODULE_RX, false,
-                                          success_last + 1u + i, &nios);
+                                          success_last + 1u + i, read_synth,
+                                          &nios);
         if (status != 0) {
             lost = true;
             break;
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_SUCCESS,
-                                  &batch[batch_count]);
+                                  &batch[batch_count], synth_expected,
+                                  &synth_expected_valid);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -213,10 +236,14 @@ static int sweep_collect(struct bladerf *dev)
             nios.execution_flags &=
                 (uint8_t)~NIOS_PKT_RETUNE2_EXEC_TS_VALID;
         }
+        readback = bladerf2_rx_sweep_readback(
+            nios.synth_read ? nios.synth : NULL,
+            synth_expected_valid ? synth_expected : NULL,
+            board_data->rx_sweep.refclk_hz, nios.readback_frequency_hz,
+            &readback_hz);
         bladerf2_rx_sweep_record_success(
-            &batch[batch_count], nios.readback_frequency_hz,
-            executed_timestamp, nios.execution_flags,
-            board_data->rx_sweep.settle_samples);
+            &batch[batch_count], readback, readback_hz, executed_timestamp,
+            nios.execution_flags, board_data->rx_sweep.settle_samples);
         batch_count++;
     }
 
@@ -225,14 +252,14 @@ static int sweep_collect(struct bladerf *dev)
         bool found;
 
         status = nios_retune2_record_read(dev, BLADERF_MODULE_RX, true,
-                                          failure_last + 1u + i, &nios);
+                                          failure_last + 1u + i, false, &nios);
         if (status != 0) {
             lost = true;
             break;
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_FAILED,
-                                  &batch[batch_count]);
+                                  &batch[batch_count], NULL, NULL);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -342,6 +369,7 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     bool epoch_certified;
     bool pending;
     unsigned int gain_table_region = 0;
+    uint32_t refclk_hz = 0;
     int status;
 
     if (board_data == NULL || !sweep_channel_valid(ch)) {
@@ -382,6 +410,16 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
         return status;
     }
 
+    /* Decodes the synthesizer words NIOS reads back after each recall. */
+    if (board_data->phy != NULL) {
+        status = clk_get_rate_checked(board_data->phy,
+                                      board_data->phy->ref_clk_scale[RX_REFCLK],
+                                      &refclk_hz);
+        if (status < 0) {
+            return errno_ad9361_to_bladerf(status);
+        }
+    }
+
     status = nios_retune2_record_counts(dev, BLADERF_MODULE_RX,
                                         &success_count, &failure_count);
     if (status != 0) {
@@ -398,6 +436,7 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     board_data->rx_sweep.ch = ch;
     board_data->rx_sweep.settle_samples = settle_samples;
     board_data->rx_sweep.gain_table_region = gain_table_region;
+    board_data->rx_sweep.refclk_hz = refclk_hz;
     board_data->rx_sweep.next_sequence = 1;
     board_data->rx_sweep.ring_head = 0;
     board_data->rx_sweep.ring_count = 0;
@@ -455,11 +494,27 @@ int bladerf2_rx_sweep_schedule(struct bladerf *dev, bladerf_channel ch,
                                                 quick_tune, candidate);
 
     /* The sequence is consumed whenever a ledger entry carries it: also for
-     * an ambiguous transport failure, whose NIOS record may still arrive. */
+     * an ambiguous transport failure, whose NIOS record may still arrive.
+     * The entry also takes the synthesizer bytes NIOS must read back:
+     * NIOS snapshots the slot's profile at enqueue, so take the host's
+     * words for the slot now, not when the record arrives. */
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (i = 0; i < SWEEP_DEPTH; i++) {
         if (board_data->rx_retune2_pending[i].valid &&
             board_data->rx_retune2_pending[i].sweep_sequence == candidate) {
+            /* A ledger entry exists only after
+             * bladerf2_schedule_retune_sequenced() range-checked
+             * nios_profile. */
+            const struct bladerf2_nios_fastlock_words *words =
+                &board_data->nios_fastlock_words[0][quick_tune->nios_profile];
+
+            board_data->rx_retune2_pending[i].synth_expected_valid =
+                words->valid;
+            if (words->valid) {
+                bladerf2_rx_sweep_synth_expected(
+                    words->words, (uint8_t)quick_tune->rffe_profile,
+                    board_data->rx_retune2_pending[i].synth_expected);
+            }
             committed = true;
             break;
         }
