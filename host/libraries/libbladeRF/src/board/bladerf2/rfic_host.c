@@ -1436,7 +1436,17 @@ static int _rfic_host_set_gain(struct bladerf *dev,
             CHECK_STATUS(
                 dev->board->get_gain_stage_range(dev, ch, "dsa", &range));
 
-            CHECK_STATUS(txmute_set_cached(phy, ch, -__scale_int(range, val)));
+            /* Same scaling as the unmuted path (_rfic_host_set_gain_stage),
+             * including its -89 dB special case: clamp_to_range works in
+             * whole dB and rounds the -89.75 dB floor to -90, i.e. 90000
+             * mdB, which the AD9361 rejects. Cached unclamped, a -60 dB
+             * gain stored 90000 and the next TX enable failed in
+             * txmute_set's unmute with BLADERF_ERR_UNEXPECTED (reproduced
+             * 2026-10-20 with bpftrace on txmute_set_cached; BACKLOG
+             * BLADERF-TX-ENABLE-TXMUTE-001). */
+            CHECK_STATUS(txmute_set_cached(
+                phy, ch, val < -89 ? 89750
+                         : -__scale_int(range, clamp_to_range(range, val))));
         } else {
             CHECK_STATUS(rfic->set_gain_stage(dev, ch, "dsa", val));
         }
