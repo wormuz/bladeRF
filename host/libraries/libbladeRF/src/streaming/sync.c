@@ -580,18 +580,32 @@ static int wait_for_buffer(struct buffer_mgmt *b,
                 default: break;
             }
         }
-        log_error("%s: Timed out waiting for buf_ready after %d ms "
-                  "(submitter=%s, in_flight=%u full=%u empty=%u of %u, "
-                  "prod_i=%u cons_i=%u stale_pending=%u overrun_pending=%u "
-                  "cons_state=%u cons_dropped=%u)\n",
-                  __FUNCTION__, timeout_ms,
-                  b->submitter == SYNC_TX_SUBMITTER_CALLBACK ? "CALLBACK"
-                      : (b->submitter == SYNC_TX_SUBMITTER_FN ? "FN" : "-"),
-                  in_flight, full, empty, (unsigned)b->num_buffers,
-                  b->prod_i, b->cons_i, b->stale_pending,
-                  b->overrun_pending,
-                  (unsigned)b->status[b->cons_i],
-                  b->buffer_dropped != NULL ? b->buffer_dropped[b->cons_i] : 0);
+#define WAIT_TIMEOUT_LOG(log_fn)                                              \
+        log_fn("%s: Timed out waiting for buf_ready after %d ms "             \
+               "(submitter=%s, in_flight=%u full=%u empty=%u of %u, "        \
+               "prod_i=%u cons_i=%u stale_pending=%u overrun_pending=%u "    \
+               "cons_state=%u cons_dropped=%u)\n",                           \
+               __FUNCTION__, timeout_ms,                                     \
+               b->submitter == SYNC_TX_SUBMITTER_CALLBACK ? "CALLBACK"       \
+                   : (b->submitter == SYNC_TX_SUBMITTER_FN ? "FN" : "-"),    \
+               in_flight, full, empty, (unsigned)b->num_buffers,             \
+               b->prod_i, b->cons_i, b->stale_pending,                       \
+               b->overrun_pending,                                           \
+               (unsigned)b->status[b->cons_i],                               \
+               b->buffer_dropped != NULL ? b->buffer_dropped[b->cons_i] : 0)
+        /* With transfers in flight a timeout only says no data arrived within
+         * the caller's own deadline - routine for a short poll, at a low
+         * sample rate (one 512 KB transfer outlasts the poll) or before the
+         * first valid epoch. The caller gets BLADERF_ERR_TIMEOUT and decides.
+         * Logged as an error, a draining reader produced ~2000 lines an hour
+         * that buried real faults. Nothing in flight cannot recover by
+         * itself: that stays an error. */
+        if (in_flight == 0) {
+            WAIT_TIMEOUT_LOG(log_error);
+        } else {
+            WAIT_TIMEOUT_LOG(log_debug);
+        }
+#undef WAIT_TIMEOUT_LOG
         status = BLADERF_ERR_TIMEOUT;
     } else if (status != 0) {
         status = BLADERF_ERR_UNEXPECTED;
