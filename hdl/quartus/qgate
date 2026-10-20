@@ -323,6 +323,17 @@ else
                 d101_expect=663
                 held_expect=332
             fi
+            # Same, and the 6 TX retune-gate status source bits are also
+            # recognized as a fitted handshake (2026-10-20, physical
+            # synthesis EXTRA): 326 held-handshake bits remain, the exact
+            # five 64-bit tamer/timestamp handshakes plus the two 3-bit
+            # controller transfers.
+            if [ "$drc_d101" = 657 ] && [ -r "$fit_report" ] &&
+               grep -Fq 'U_rx_epoch_snapshot_handshake|grab_source' "$fit_report" &&
+               grep -Fq 'U_tx_retune_gate_status_handshake|grab_source' "$fit_report"; then
+                d101_expect=657
+                held_expect=326
+            fi
         else
             d101_expect=0
             held_expect=0
@@ -342,7 +353,7 @@ else
                         note ok "Design Assistant D101: all $d101_expect sources classified; fitted CDC bounds required above"
                         note ok "RX fault-status bundle present in fitted D101 inventory; exact hosted handshake count required above"
                         note ok "Design Assistant C105: exact internal JTAG TCK finding dispositioned outside RF datapath"
-                    elif [ "$d101_expect" = 663 ] &&
+                    elif { [ "$d101_expect" = 663 ] || [ "$d101_expect" = 657 ]; } &&
                          [ -r "$fit_report" ] &&
                          grep -Fq 'U_rx_fault_causes_handshake|grab_source' "$fit_report" &&
                          grep -Fq 'U_rx_epoch_snapshot_handshake|grab_source' "$fit_report" &&

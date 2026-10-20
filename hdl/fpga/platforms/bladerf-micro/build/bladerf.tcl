@@ -86,13 +86,17 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_DUPLICATION ON
 set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING    ON
 set_global_assignment -name SYNTH_PROTECT_SDC_CONSTRAINT            ON
 set_global_assignment -name QII_AUTO_PACKED_REGISTERS               "SPARSE AUTO"
-set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT               NORMAL
+# EXTRA: the hosted A4 image sits within 0.5 ns of the 8 ns RX/TX sample
+# clocks, and each RTL change moved the worst path to another 64-bit compare
+# (fifo_writer data_v, packed-mode mux, fifo_reader due_low_borrow).
+set_global_assignment -name PHYSICAL_SYNTHESIS_EFFORT               EXTRA
 set_global_assignment -name SYNTHESIS_EFFORT                        AUTO
 
 
 # Fitting
 set_global_assignment -name FITTER_EFFORT                                "AUTO FIT"
-set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING                "EXTRA EFFORT"
+# Power optimization trades timing for toggle rate; this image is timing-bound.
+set_global_assignment -name OPTIMIZE_POWER_DURING_FITTING                "NORMAL COMPILATION"
 set_global_assignment -name FITTER_AUTO_EFFORT_DESIRED_SLACK_MARGIN      "1 ns"
 set_global_assignment -name ADV_NETLIST_OPT_SYNTH_WYSIWYG_REMAP          ON
 set_global_assignment -name ROUTER_CLOCKING_TOPOLOGY_ANALYSIS            ON

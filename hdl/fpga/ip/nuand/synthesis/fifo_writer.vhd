@@ -331,6 +331,14 @@ begin
                 when 2 => packed_write_cycle_sel_i <= "0100";
                 when 3 => packed_write_cycle_sel_i <= "1000";
             end case;
+            -- Fold the packed-mode enable into the select: "0001" picks no
+            -- SC12 slice. highly_packed_mode_en is the D input of
+            -- highly_packed_mode_en_r, so this select matches the register
+            -- it replaces on every cycle, and the mode bit no longer fans
+            -- into the 64-bit fifo_data mux (-0.53 ns on the 8 ns RX clock).
+            if highly_packed_mode_en = '0' then
+                packed_write_cycle_sel_i <= "0001";
+            end if;
         end if;
     end process;
 
@@ -1183,20 +1191,21 @@ begin
                     ss => in_samples,
                     d => fifo_current.fifo_12b_buf
                 );
-
-                case packed_write_cycle_sel_i is
-                    when "0010" =>
-                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                            fifo_data'length-1 downto fifo_current.fifo_12b_buf'low);
-                    when "0100" =>
-                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                            fifo_data'length-1+16 downto fifo_current.fifo_12b_buf'low+16);
-                    when "1000" =>
-                        fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                            fifo_data'length-1+32 downto fifo_current.fifo_12b_buf'low+32);
-                    when others => null;
-                end case;
             end if;
+
+            -- packed_write_cycle_sel_i is "0001" unless packed mode is on.
+            case packed_write_cycle_sel_i is
+                when "0010" =>
+                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                        fifo_data'length-1 downto fifo_current.fifo_12b_buf'low);
+                when "0100" =>
+                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                        fifo_data'length-1+16 downto fifo_current.fifo_12b_buf'low+16);
+                when "1000" =>
+                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
+                        fifo_data'length-1+32 downto fifo_current.fifo_12b_buf'low+32);
+                when others => null;
+            end case;
 
             if( eight_bit_mode_en = '1' ) then
                 fifo_future.fifo_data <= pack_eight_bit_mode(fifo_current.in_sample_controls_r,
@@ -1374,8 +1383,13 @@ begin
             -- timestamp. Count it as an overflow so the RX loss counter the
             -- host polls names the gap; before this the drop was silent and
             -- the host only saw a timestamp discontinuity inside a transfer.
-            -- An intentional epoch fence is not a loss.
-            if( enable = '1' and in_samples(in_samples'low).data_v = '1' and
+            -- An intentional epoch fence is not a loss. The FSM writes from
+            -- the registered copy (in_samples_r), so that is the sample
+            -- HOLDOFF drops; reading it also keeps this check off the raw
+            -- mux_streams data_v, whose added load put the 8 ns RX-clock
+            -- path 30 ps short.
+            if( enable = '1' and
+                fifo_current.in_samples_r(fifo_current.in_samples_r'low).data_v = '1' and
                 fifo_current.state = HOLDOFF and not fifo_enough and
                 fifo_current.fifo_clear = '0' and
                 rx_epoch_discard_active = '0' ) then

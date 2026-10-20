@@ -28,6 +28,22 @@ create_clock -period "250.0 MHz" [get_ports adi_rx_clock]
 derive_pll_clocks
 derive_clock_uncertainty
 
+# Fitter-only setup margin on the AD9361 sample clock (LVDS divclk, 8 ns).
+# The hosted A4 image closed within 0.5 ns of it, and each small RTL change
+# moved the failing path elsewhere (fifo_writer packed mux, rx_epoch_gate to
+# fifo_writer counters, fifo_reader due compare). Placing and routing for
+# 0.4 ns less leaves sign-off (quartus_sta, which does not see this) real
+# margin. The collection must not be empty: an empty -to silently adds
+# nothing, so the fitter log is checked for this clock name after a build.
+if { [info exists ::quartus(nameofexecutable)] &&
+     $::quartus(nameofexecutable) eq "quartus_fit" } {
+    set adi_sample_clock [get_clocks {*i_altlvds_rx|auto_generated|pll_sclk~PLL_OUTPUT_COUNTER|divclk}]
+    if { [get_collection_size $adi_sample_clock] == 0 } {
+        post_message -type error "fitter margin: AD9361 sample clock not found"
+    }
+    set_clock_uncertainty -setup -add -from $adi_sample_clock -to $adi_sample_clock 0.400
+}
+
 # Platform-specific clock aliases
 # ⛔ These are CLOCK names, used only with get_clocks. Do not reach for
 # get_pins on them.
