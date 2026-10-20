@@ -470,6 +470,10 @@
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_REQUEST_TOKEN 7u
 #define NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH 16u
 
+/* Current command-link session generation captured for each NIOS packet.
+ * Used to distinguish deferred outcomes retained across USB sessions. */
+#define NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION 0x90
+
 /* FPGA status PIOs are independent of the RFIC and remain safe while a
  * retained RETUNE2 operation owns it. Completion-record writes only select
  * which NIOS-owned RAM record subsequent reads observe. Gate COMPLETE and
@@ -495,16 +499,17 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
         target == NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES ||
         target == NIOS_PKT_8x32_TARGET_RF_LINK_STATUS ||
         target == NIOS_PKT_8x32_TARGET_LOSS_COUNTERS ||
-        target == NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS) {
+        target == NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS ||
+        /* NIOS RAM and the RFFE PIO: bladerf_schedule_retune reads both
+         * while an earlier scheduled request still uploads or recalls. */
+        target == NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION ||
+        target == NIOS_PKT_8x32_TARGET_RFFE_CSR) {
         return true;
     }
     return target == NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE &&
            addr == NIOS_PKT_8x32_TX_RETUNE_CMD_STATUS;
 }
 
-/* Current command-link session generation captured for each NIOS packet.
- * Used to distinguish deferred outcomes retained across USB sessions. */
-#define NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION 0x90
 
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
 #define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01

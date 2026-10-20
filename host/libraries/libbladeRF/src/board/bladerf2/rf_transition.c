@@ -3049,12 +3049,8 @@ static void *rx_fault_monitor_task(void *arg)
                     rx_fault_causes_valid, rx_fault_causes_status));
             continue;
         }
-        /* In an RX sweep the epoch stays open across NIOS recalls. RFIC
-         * status is only read with no retune pending; otherwise nothing was
-         * read. The RX LO is certified per retune by its NIOS record (lock
-         * bit read after the recall), not by this poll, which may land
-         * inside a recall that started after the snapshot above. */
-        if (rx_sweep_active && !rfic_status_poll_allowed) {
+        if (!bladerf2_rx_monitor_rfic_checked(rx_sweep_active,
+                                              rfic_status_poll_allowed)) {
             continue;
         }
         if (rfic_status != 0) {
@@ -3065,7 +3061,8 @@ static void *rx_fault_monitor_task(void *arg)
                 rfic_status);
             continue;
         }
-        if (!rx_sweep_active && (pll_status & VCO_LOCK_BIT) == 0) {
+        if (bladerf2_rx_monitor_pll_checked(rx_sweep_active) &&
+            (pll_status & VCO_LOCK_BIT) == 0) {
             _invalidate_faulted_rx_epoch(
                 dev, transaction_id, epoch_id, pll_status,
                 BLADERF_RF_INVALIDATE_RFIC_PLL_UNLOCKED, 0);

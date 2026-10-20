@@ -69,9 +69,12 @@ static uint8_t commit(bool tx, uint8_t slot)
     if (use != PKT_RETUNE2_SLOT_FREE) {
         return NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED;
     }
-    if (adi_fastlock_external_write_owned()) {
-        return NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED;
-    }
+    /* No RFIC-ownership check: COMMIT only writes NIOS RAM, and the one
+     * RFIC operation that reads this slot afterwards (its retune2 entry's
+     * upload) is excluded above. A sweep keeps uploads or recalls of other
+     * slots running almost continuously, so refusing on any RFIC owner made
+     * uploads during a session impossible. ERR_RFIC_OWNED is no longer
+     * returned. */
 
     /* The RFFE slot named by profile_num still holds this entry's previous
      * words. BBP is the only state that is true for the new words: retune2

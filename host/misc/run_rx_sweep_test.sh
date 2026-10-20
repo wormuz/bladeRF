@@ -59,3 +59,8 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter \
     "$repo_root/host/misc/test_rx_sweep_session.c" \
     -Wl,--gc-sections -lpthread -o "$out_dir/session"
 "$out_dir/session"
+
+cc -Wall -Wextra -Werror -I"$repo_root/fpga_common/include" \
+    "$repo_root/host/misc/test_nios_rfic_owner_admission.c" \
+    -o "$out_dir/admission"
+"$out_dir/admission"

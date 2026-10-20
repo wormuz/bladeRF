@@ -340,6 +340,26 @@ static inline bool bladerf2_tuning_mode_change_requires_rx_queue_clear(
 /* Scheduled RX requests may queue behind known RX requests. Immediate tunes
  * and either direction's tunes must wait until that queue is reconciled. An
  * ambiguous queue outcome always requires an acknowledged queue clear. */
+
+/* RX fault monitor, open certified epoch. Outside a sweep session every
+ * RFIC check runs: pending retunes revoke the epoch first, so the monitor
+ * never reaches them with unread status. In an RX sweep session the epoch
+ * stays open across NIOS recalls: RFIC status is only read with no retune
+ * pending (otherwise nothing was read and nothing may be judged), and the
+ * RFPLL lock is not checked at all, because a poll may land inside a recall
+ * that started after the snapshot and the LO is certified per retune by its
+ * NIOS record (lock bit read after the recall). ENSM, BBPLL and status-read
+ * failures still revoke the epoch. */
+static inline bool bladerf2_rx_monitor_rfic_checked(bool rx_sweep_active,
+                                                    bool rfic_status_read)
+{
+    return !rx_sweep_active || rfic_status_read;
+}
+
+static inline bool bladerf2_rx_monitor_pll_checked(bool rx_sweep_active)
+{
+    return !rx_sweep_active;
+}
 static inline bool bladerf2_retune2_blocks_schedule(
     uint8_t rx_pending_count, bool outcome_unknown, bool tx_target,
     bool immediate)

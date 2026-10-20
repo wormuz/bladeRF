@@ -326,9 +326,6 @@ bladerf_module adi_fastlock_load_owner(void);
 void adi_fastlock_profile_cache_commit(bladerf_module m,
                                        uint16_t nios_profile,
                                        fastlock_profile *p);
-/* True while an asynchronous fastlock recall or a NIOS RFIC command owns the
- * AD9361 for an external write; profile cache mutation must wait. */
-bool adi_fastlock_external_write_owned(void);
 
 /**
  * Recall a stored fast lock profile.

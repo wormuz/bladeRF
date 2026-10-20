@@ -184,7 +184,7 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_INVALID   1u /* malformed */
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_LOADING   2u /* slot upload job */
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_QUEUED    3u /* retune2 entry */
-#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED 4u /* external write */
+#define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED 4u /* 0.31.0 only */
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_NOT_STAGED 5u /* commit w/o halves */
 #define NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_EMPTY     6u /* read INVALID slot */
 

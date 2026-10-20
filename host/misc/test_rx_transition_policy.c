@@ -697,5 +697,16 @@ int main(void)
         true, false, false, false, false, false, 0, true, true));
     assert(!bladerf2_tx_rfic_certificate_pending(
         true, false, false, false, false, false, 0, false, false));
+
+    /* RX monitor in a sweep session: no RFIC verdict from status that was
+     * not read (retunes pending), never an RFPLL-lock verdict (a recall can
+     * start after the snapshot; records certify the lock). Outside a sweep
+     * every RFIC check runs as before. */
+    assert(bladerf2_rx_monitor_rfic_checked(false, false));
+    assert(bladerf2_rx_monitor_rfic_checked(false, true));
+    assert(!bladerf2_rx_monitor_rfic_checked(true, false));
+    assert(bladerf2_rx_monitor_rfic_checked(true, true));
+    assert(bladerf2_rx_monitor_pll_checked(false));
+    assert(!bladerf2_rx_monitor_pll_checked(true));
     return 0;
 }

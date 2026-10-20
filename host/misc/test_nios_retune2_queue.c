@@ -38,12 +38,6 @@ static bool staged_profile_load_active;
 static bool defer_clear_during_staged_step;
 static bool simulated_rfic_worker_active;
 static bool simulated_rfic_device_owned;
-static bool simulated_fastlock_external_write_owned;
-
-bool adi_fastlock_external_write_owned(void)
-{
-    return simulated_fastlock_external_write_owned;
-}
 
 bool rfic_command_worker_active(void)
 {
@@ -1720,15 +1714,23 @@ static int check_profile_upload_rejections(void)
         return 1;
     }
 
-    /* External RFIC write ownership. */
-    simulated_fastlock_external_write_owned = true;
-    if (profile_cache_upload(false, 5, words) !=
-        NIOS_PKT_16x64_FASTLOCK_PROFILE_ERR_RFIC_OWNED) {
-        simulated_fastlock_external_write_owned = false;
-        fputs("profile upload accepted while RFIC is owned\n", stderr);
+    /* Live defect on 0.31/0.32: uploads during a sweep session returned
+     * WOULD_BLOCK because COMMIT refused whenever any RFIC owner was
+     * active. Another slot's upload owning the RFIC must not block it. */
+    staged_profile_load_active = true;
+    simulated_rfic_device_owned = true;
+    if (profile_cache_upload(false, 7, words) !=
+            NIOS_PKT_16x64_FASTLOCK_PROFILE_OK ||
+        fastlocks_rx[7].profile_data[0] != 0x77 ||
+        fastlocks_rx[7].state != FASTLOCK_STATE_BBP) {
+        staged_profile_load_active = false;
+        simulated_rfic_device_owned = false;
+        fputs("profile upload refused while another slot owns the RFIC\n",
+              stderr);
         return 1;
     }
-    simulated_fastlock_external_write_owned = false;
+    staged_profile_load_active = false;
+    simulated_rfic_device_owned = false;
 
     /* A queued retune2 entry leases its NIOS slot; other slots stay free. */
     if (enqueue_retune_with_identity(&rx_queue, &fastlocks_rx[5], 5,

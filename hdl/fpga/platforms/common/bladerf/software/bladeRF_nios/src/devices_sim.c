@@ -655,7 +655,7 @@ static struct {
     bladerf_module module;
 } sim_load_job, sim_recall_job;
 
-bool adi_fastlock_external_write_owned(void)
+static bool sim_rfic_owned(void)
 {
     return sim_recall_job.active;
 }
@@ -674,7 +674,7 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
         p->state == FASTLOCK_STATE_BBP_RFFE) {
         return true;
     }
-    if (adi_fastlock_external_write_owned()) {
+    if (sim_rfic_owned()) {
         return false;
     }
     fastlock_cache_invalidate_slot(sim_fastlock_cache(m),
@@ -687,7 +687,7 @@ bool adi_fastlock_load(bladerf_module m, fastlock_profile *p)
 int32_t adi_fastlock_load_start(bladerf_module m, fastlock_profile *p)
 {
     if (p == NULL || (m != BLADERF_MODULE_RX && m != BLADERF_MODULE_TX) ||
-        sim_load_job.active || adi_fastlock_external_write_owned()) {
+        sim_load_job.active || sim_rfic_owned()) {
         return -1;
     }
     if (p->state == FASTLOCK_STATE_RFFE ||
