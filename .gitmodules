@@ -1,6 +1,7 @@
 [submodule "thirdparty/analogdevicesinc/no-OS"]
 	path = thirdparty/analogdevicesinc/no-OS
-	url = https://github.com/analogdevicesinc/no-OS/
+	url = https://github.com/wormuz/no-OS.git
+	branch = nuand/current
 [submodule "host/utilities/bladeRF-fsk"]
 	path = host/utilities/bladeRF-fsk
 	url = https://github.com/Nuand/bladeRF-fsk
