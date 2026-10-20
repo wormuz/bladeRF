@@ -673,6 +673,10 @@ static bool nios_is_retune2_recovery_request(const uint8_t *packet)
     return false;
 }
 
+/* Diagnostics for the slow round-trip log: when this thread got the transaction lock and when its OUT transfer
+ * completed. A slow round trip is then attributed to lock wait, OUT, or waiting for the NIOS response. */
+static __thread uint64_t nios_split_locked_ns, nios_split_out_ns;
+
 static int nios_usb_transaction_impl(struct bladerf_usb *usb, void *buffer,
                          uint32_t buffer_len, uint32_t response_timeout_ms,
                          nios_transaction_out_complete_fn out_complete,
@@ -693,6 +697,8 @@ static int nios_usb_transaction_impl(struct bladerf_usb *usb, void *buffer,
     }
 
     MUTEX_LOCK(&state->lock);
+    (void)bladerf_monotonic_now_ns(&nios_split_locked_ns);
+    nios_split_out_ns = 0;
     if (state->desynchronized) {
         if (stage != NULL) {
             *stage = NIOS_TRANSACTION_DESYNCHRONIZED;
@@ -755,6 +761,7 @@ static int nios_usb_transaction_impl(struct bladerf_usb *usb, void *buffer,
         out_complete(context);
     }
 
+    (void)bladerf_monotonic_now_ns(&nios_split_out_ns);
     if (bladerf_monotonic_now_ns(&response_started_ns) != 0) {
         state->desynchronized = true;
         status = BLADERF_ERR_UNEXPECTED;
@@ -1028,8 +1035,17 @@ int nios_usb_transaction(struct bladerf_usb *usb, void *buffer,
     const int64_t ms = (int64_t)(t1.tv_sec - t0.tv_sec) * 1000 +
                        (t1.tv_nsec - t0.tv_nsec) / 1000000;
     if (ms > 20) {
-        log_warning("NIOS round trip %" PRId64 " ms: pkt=%02x %02x %02x %02x "
-                    "status=%d\n", ms, request[0], request[1], request[2],
+        const int64_t t0_ns = (int64_t)t0.tv_sec * 1000000000 + t0.tv_nsec;
+        const int64_t t1_ns = (int64_t)t1.tv_sec * 1000000000 + t1.tv_nsec;
+        const int64_t lock_ms = nios_split_locked_ns
+            ? ((int64_t)nios_split_locked_ns - t0_ns) / 1000000 : -1;
+        const int64_t out_ms = nios_split_out_ns
+            ? ((int64_t)nios_split_out_ns - (int64_t)nios_split_locked_ns) / 1000000 : -1;
+        const int64_t in_ms = nios_split_out_ns
+            ? (t1_ns - (int64_t)nios_split_out_ns) / 1000000 : -1;
+        log_warning("NIOS round trip %" PRId64 " ms (lock %" PRId64 ", out %" PRId64
+                    ", response %" PRId64 "): pkt=%02x %02x %02x %02x status=%d\n",
+                    ms, lock_ms, out_ms, in_ms, request[0], request[1], request[2],
                     request[3], status);
     }
     return status;
