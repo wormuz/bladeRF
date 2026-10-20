@@ -8,7 +8,15 @@ workdir_rel="${1:-work/bladerf-micro-A4-hosted}"
 workdir_abs="$quartus_dir/$workdir_rel"
 nios_make_dir="$repo_root/hdl/fpga/platforms/bladerf-micro/software/bladeRF_nios"
 
-if [[ ! -f "$workdir_abs/hosted.qpf" ]]; then
+# build_bladerf.sh creates `bladerf.qpf` with revision `hosted`; older work trees carry `hosted.qpf`.
+project=""
+for candidate in hosted bladerf; do
+    if [[ -f "$workdir_abs/$candidate.qpf" ]]; then
+        project="$candidate"
+        break
+    fi
+done
+if [[ -z "$project" ]]; then
     printf 'No hosted Quartus project at %s\n' "$workdir_abs" >&2
     exit 2
 fi
@@ -23,8 +31,8 @@ cp -f "$workdir_abs/bladeRF_nios/mem_init/nios_system_ram.hex" \
 
 (
     cd "$workdir_abs"
-    quartus_cdb hosted -c hosted --update_mif
-    quartus_asm hosted -c hosted
+    quartus_cdb "$project" -c hosted --update_mif
+    quartus_asm "$project" -c hosted
 )
 
 printf 'FPGA version: '
