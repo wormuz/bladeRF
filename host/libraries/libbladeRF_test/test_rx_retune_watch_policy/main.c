@@ -50,16 +50,13 @@ int main(void)
                true, 1, 2, true, true, 7, 8) ==
            BLADERF2_RX_RETUNE_WATCH_NONE);
 
-    /* An epoch on a never-calibrated input needs RFDC even at the same LO;
-     * same-port moves up to 100 MHz do not, larger moves do. */
-    assert(bladerf2_rx_rfdc_calibration_required(
-        rfdc_history, 1u << 0, 1, UINT64_C(2400000000)));
-    assert(!bladerf2_rx_rfdc_calibration_required(
-        rfdc_history, 1u << 0, 0, UINT64_C(2499999999)));
-    assert(!bladerf2_rx_rfdc_calibration_required(
-        rfdc_history, 1u << 0, 0, UINT64_C(2500000000)));
-    assert(bladerf2_rx_rfdc_calibration_required(
-        rfdc_history, 1u << 0, 0, UINT64_C(2500000001)));
+    /* An epoch on a never-calibrated input needs RFDC; on a calibrated one
+     * no LO move does (947.5 <-> 1835 MHz cost 1.3 s per crossing). */
+    assert(bladerf2_rx_rfdc_calibration_required(1u << 0, 1));
+    assert(bladerf2_rx_rfdc_calibration_required(1u << 0,
+                                                 BLADERF2_RX_RF_PORT_COUNT));
+    assert(!bladerf2_rx_rfdc_calibration_required(1u << 0, 0));
+    assert(!bladerf2_rx_rfdc_calibration_required(1u << 1, 1));
 
     /* Inputs B/C share one RFDC LUT: calibrating either invalidates the
      * other selector's cached-frequency proof, while input A stays separate. */

@@ -6,32 +6,21 @@
 
 int main(void)
 {
-    const uint64_t calibrated_lo = 2400000000ULL;
-    const uint64_t distant_lo = 70000000ULL;
-    const uint64_t threshold = 100000000ULL;
     uint64_t history[RFIC_RX_RF_PORT_COUNT] = {0};
 
-    history[0] = calibrated_lo;
-
-    /* Ordinary large moves and an unknown baseline still require RFDC. */
-    if (!rfic_rfdc_calibration_required(
-            calibrated_lo, distant_lo, threshold) ||
-        !rfic_rfdc_calibration_required(0, distant_lo, threshold)) {
-        fputs("runtime or unknown-baseline RFDC requirement was suppressed\n",
-              stderr);
+    /* An input without a resident result still requires RFDC. */
+    if (!rfic_rfdc_port_calibration_required(history, 0) ||
+        !rfic_rfdc_port_calibration_required(history, RFIC_RX_RF_PORT_COUNT) ||
+        !rfic_rfdc_port_calibration_required(0, 0)) {
+        fputs("unknown-baseline RFDC requirement was suppressed\n", stderr);
         return 1;
     }
 
-    /* UG-570 says RFDC is needed when the new carrier is more than 100 MHz
-     * away. Match the host transition policy exactly at the boundary. */
-    if (rfic_rfdc_port_calibration_required(
-            history, 0, calibrated_lo + threshold - 1, threshold) ||
-        rfic_rfdc_port_calibration_required(
-            history, 0, calibrated_lo + threshold, threshold) ||
-        !rfic_rfdc_port_calibration_required(
-            history, 0, calibrated_lo + threshold + 1, threshold)) {
-        fputs("NIOS RFDC threshold does not match strict >100 MHz rule\n",
-              stderr);
+    /* A calibrated input is not recalibrated for an LO move: 947.5 <->
+     * 1835 MHz cost 0.7-1.36 s per crossing and tracking follows the LO. */
+    rfic_rfdc_calibration_record(history, 1, UINT64_C(947500000));
+    if (rfic_rfdc_port_calibration_required(history, 1)) {
+        fputs("LO move on a calibrated input forced RFDC\n", stderr);
         return 1;
     }
 

@@ -3801,9 +3801,11 @@ static int _bladerf_rx_transition_begin(
 
     WITH_MUTEX(&dev->lock, {
         /* An epoch-valid request promises usable RX data. Derive the RFDC
-         * requirement from the actual board-selected AD9361 input and its
-         * last successful calibration instead of relying on each wrapper to
-         * remember the optional flag. Explicit RFDC requests still force a
+         * requirement from the actual board-selected AD9361 input: an input
+         * without a resident result is calibrated once, instead of relying on
+         * each wrapper to remember the optional flag; the LO distance from
+         * that calibration does not count (bladerf2_rx_rfdc_calibration_
+         * required). Explicit RFDC requests still force a
          * fresh calibration below even when this history is current. Under
          * FPGA tuning this host history is not the owner's: NIOS applies the
          * same port-keyed policy inside its FREQUENCY command. */
@@ -3814,9 +3816,7 @@ static int _bladerf_rx_transition_begin(
             const uint32_t requested_events_mask = required_events_mask;
             const bool calibration_required =
                 bladerf2_rx_rfdc_calibration_required(
-                    board_data->rx_rfdc_calibration_frequency_hz,
-                    board_data->rx_rfdc_calibration_valid_mask,
-                    target_port, request->target_frequency_hz);
+                    board_data->rx_rfdc_calibration_valid_mask, target_port);
 
             if (calibration_required) {
                 required_events_mask |= BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE;

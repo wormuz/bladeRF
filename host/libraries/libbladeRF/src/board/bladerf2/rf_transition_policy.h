@@ -12,26 +12,18 @@
 #define BLADERF2_RX_RF_PORT_A RFIC_RFDC_RX_PORT_A
 #define BLADERF2_RX_RF_PORT_B RFIC_RFDC_RX_PORT_B
 #define BLADERF2_RX_RF_PORT_C RFIC_RFDC_RX_PORT_C
-#define BLADERF2_RFDC_RETUNE_THRESHOLD_HZ UINT64_C(100000000)
 
-/* RFDC results are retained per AD9361 RX input. Force calibration when the
- * selected input has no successful result or its last result is more than
- * the documented 100 MHz away from this transition target. */
-static inline bool bladerf2_rx_rfdc_calibration_required(
-    const uint64_t history_hz[BLADERF2_RX_RF_PORT_COUNT], uint8_t valid_mask,
-    uint8_t port, uint64_t target_hz)
+/* An RFDC result is resident per AD9361 RX input bank (A; B/C shared, see
+ * rfic_rfdc_bank_policy.h) and cannot be read back or restored. It is
+ * calibrated once per input and then held by ADI's RF/BB DC tracking, which
+ * the fastlock recall path relies on too: an LO move alone does not force
+ * it (0.7-1.36 s at 1.92-4 Msps per crossing). Callers that want a fresh
+ * result (start-up, temperature) request BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE. */
+static inline bool bladerf2_rx_rfdc_calibration_required(uint8_t valid_mask,
+                                                         uint8_t port)
 {
-    uint64_t delta_hz;
-
-    if (history_hz == NULL || port >= BLADERF2_RX_RF_PORT_COUNT ||
-        (valid_mask & (1u << port)) == 0 || target_hz == 0) {
-        return true;
-    }
-
-    delta_hz = target_hz > history_hz[port]
-        ? target_hz - history_hz[port]
-        : history_hz[port] - target_hz;
-    return delta_hz > BLADERF2_RFDC_RETUNE_THRESHOLD_HZ;
+    return port >= BLADERF2_RX_RF_PORT_COUNT ||
+           (valid_mask & (1u << port)) == 0;
 }
 
 /* The B/C shared-bank rule lives in rfic_rfdc_bank_policy.h, which the NIOS
@@ -712,7 +704,7 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
  * them through the host ADI PHY. In FPGA/NIOS mode the host PHY is gone: the
  * LO is programmed by the NIOS FREQUENCY command, AD9361 status registers are
  * read raw through the NIOS AD9361 target, and RFDC is part of the NIOS
- * command (port-keyed 100 MHz policy, rfic_rfdc_port_calibration_required).
+ * command (once per input bank, rfic_rfdc_port_calibration_required).
  * Two requests have no NIOS equivalent and are rejected before any state
  * changes:
  *  - quick_tune: its LO certificate, ad9361_fastlock_sync_current_lo(), reads

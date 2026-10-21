@@ -87,17 +87,6 @@ static int32_t _rfic_read_cal_done(struct ad9361_rf_phy *phy, uint32_t mask,
     return 0;
 }
 
-/* An LO jump strictly greater than this size invalidates the RF DC offset
- * calibration for the previous frequency (ADI EngineerZone, "AD9361
- * RF DC offset calibration timeout": "if the frequency change is more
- * than 100MHz, you need to run DC offset and QEC init cals in order
- * to get optimum performance"). ad9361_setup() only runs RFDC_CAL
- * once, at init, on whatever LO the init params specify -- nothing
- * in this driver reran it on retune before this fix, so every RX
- * tune more than 100MHz from that one calibrated point carried a
- * stale DC-offset correction indefinitely. */
-#define BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ 100000000ULL
-
 /* The NIOS-owned PHY deliberately has no axi_adc handle. Production uses
  * digital_interface_tune_skip_mode=2 and preset DATA_CLK delays, so the NIOS
  * sample-rate path must not invoke the BIST tuner. The host-owned PHY and its
@@ -131,8 +120,7 @@ static bool _rfic_ensure_rx_rfdc_calibrated(
     }
 
     if (!rfic_rfdc_port_calibration_required(
-            state->last_rfdc_calib_freq[BLADERF_RX], rx_port, frequency,
-            BLADERF_AD9361_RFDC_CAL_RETUNE_THRESHOLD_HZ)) {
+            state->last_rfdc_calib_freq[BLADERF_RX], rx_port)) {
         return true;
     }
 

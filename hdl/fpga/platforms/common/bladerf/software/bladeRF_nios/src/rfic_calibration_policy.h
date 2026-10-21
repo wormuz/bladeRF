@@ -175,31 +175,17 @@ static inline void rfic_rfdc_calibration_history_reset(
     }
 }
 
-static inline bool rfic_rfdc_calibration_required(uint64_t last_hz,
-                                                  uint64_t requested_hz,
-                                                  uint64_t threshold_hz)
-{
-    uint64_t delta_hz = requested_hz > last_hz
-                            ? requested_hz - last_hz
-                            : last_hz - requested_hz;
-
-    return last_hz == 0 || delta_hz > threshold_hz;
-}
-
-/* UG-570's RFDC result is selected by the active RX RF input. A frequency
- * cache without the RF-port dimension can incorrectly reuse A-port
- * calibration for B/C (or vice versa), especially at the 3 GHz switch where
- * the LO delta can be tiny. The caller indexes history by selected port. */
+/* UG-570's RFDC result is selected by the active RX RF input (bank A, or the
+ * B/C bank). The caller indexes history by selected port, so the A/B switch
+ * at 3 GHz cannot reuse the other bank's result even for a tiny LO step. An
+ * input with a resident result is not recalibrated for an LO move: the result
+ * cannot be saved per band and ADI's RF/BB DC tracking follows the LO, as for
+ * fastlock recalls (libbladeRF bladerf2_rx_rfdc_calibration_required). */
 static inline bool rfic_rfdc_port_calibration_required(
-    const uint64_t history[RFIC_RX_RF_PORT_COUNT], uint32_t rf_port,
-    uint64_t requested_hz, uint64_t threshold_hz)
+    const uint64_t history[RFIC_RX_RF_PORT_COUNT], uint32_t rf_port)
 {
-    if (history == 0 || rf_port >= RFIC_RX_RF_PORT_COUNT) {
-        return true;
-    }
-
-    return rfic_rfdc_calibration_required(history[rf_port], requested_hz,
-                                          threshold_hz);
+    return history == 0 || rf_port >= RFIC_RX_RF_PORT_COUNT ||
+           history[rf_port] == 0;
 }
 
 /* UG-570 keeps a separate RFDC result for input A and one shared result for

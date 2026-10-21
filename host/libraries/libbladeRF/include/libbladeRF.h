@@ -5578,15 +5578,17 @@ typedef enum {
 /** Force a fresh AD9361 RX RF DC offset calibration and require its hardware
  * completion before the FPGA opens a new RX epoch, even when calibration
  * history is current. EPOCH_VALID transitions also derive this requirement
- * automatically when the selected input has no recorded successful RFDC
- * result or the LO moves more than 100 MHz from that input's last calibration.
- * Calibration moves
- * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
+ * automatically, once, when the selected input (bank A, or B/C shared) has no
+ * resident successful RFDC result. An LO move does not: AD9361 RF/BB DC
+ * tracking follows it, as for fastlock recalls, and the result cannot be
+ * saved per band. Request this flag for a fresh result (start-up, temperature
+ * change). Calibration moves ENSM to ALERT and takes 0.26-1.36 s at
+ * 23.04-4 Msps (longer at lower rates); it does not imply that LTE/other
  * signal content is present. This explicit operation is supported only in
  * host tuning mode: the NIOS RFIC command set has no calibration command, so
  * FPGA/NIOS tuning rejects it with BLADERF_ERR_UNSUPPORTED before starting a
  * transition. Under FPGA/NIOS tuning the NIOS FREQUENCY command applies the
- * same per-input 100 MHz RFDC policy itself. */
+ * same once-per-input RFDC policy itself. */
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)
 
 /**
