@@ -39,14 +39,6 @@ int32_t ad9361_set_tx_attenuation(struct ad9361_rf_phy *phy, uint8_t ch,
     return 0;
 }
 
-struct band_port_map const *_get_band_port_map_by_freq(bladerf_channel ch,
-                                                       bladerf_frequency freq)
-{
-    (void)ch;
-    (void)freq;
-    return NULL;
-}
-
 int32_t ad9361_set_rx_rf_port_input(struct ad9361_rf_phy *phy, uint32_t mode)
 {
     (void)phy;
@@ -88,8 +80,11 @@ int main(void)
     fake_attenuation[1][0] = 30000;
 
     assert(txmute_set(&first, BLADERF_CHANNEL_TX(0), true) == 0);
-    assert(txmute_get(&second, BLADERF_CHANNEL_TX(0), &muted) == 0);
-    assert(!muted);
+    /* Muting the first RFIC neither mutes nor establishes the mute state of
+     * the second: a state never set reads as unknown (fail closed). */
+    assert(txmute_get(&second, BLADERF_CHANNEL_TX(0), &muted) ==
+           BLADERF_ERR_UNEXPECTED);
+    assert(fake_attenuation[1][0] == 30000);
     assert(txmute_set(&second, BLADERF_CHANNEL_TX(0), true) == 0);
     assert(fake_attenuation[0][0] == 89750);
     assert(fake_attenuation[1][0] == 89750);

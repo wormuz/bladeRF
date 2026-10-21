@@ -19,6 +19,7 @@ cc -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-variable \
   "$root/host/libraries/libbladeRF/src/backend/usb/nios_access.c" \
   "$root/host/libraries/libbladeRF/src/backend/usb/nios_transaction.c" \
   "$root/host/libraries/libbladeRF/src/helpers/timeout.c" \
+  -Wl,--wrap=bladerf_monotonic_now_ns \
   "$script_dir/main.c" -Wl,--gc-sections -o "$test_bin"
 
 "$test_bin"
