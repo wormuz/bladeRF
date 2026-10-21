@@ -198,6 +198,25 @@ int main(void)
     assert(rfic_rfdc_port_calibration_required(
         history, 1, UINT64_C(3100100001), RFDC_THRESHOLD_HZ));
 
+    /* B and C share one RFDC result bank: B -> C -> B must recalibrate B
+     * even though B's last frequency is unchanged. A stays independent. */
+    rfic_rfdc_calibration_history_reset(history);
+    rfic_rfdc_calibration_record(history, 0, UINT64_C(900000000));
+    rfic_rfdc_calibration_record(history, 1, UINT64_C(2400000000));
+    assert(!rfic_rfdc_port_calibration_required(
+        history, 1, UINT64_C(2400000000), RFDC_THRESHOLD_HZ));
+    rfic_rfdc_calibration_record(history, 2, UINT64_C(5800000000));
+    assert(history[1] == 0);
+    assert(rfic_rfdc_port_calibration_required(
+        history, 1, UINT64_C(2400000000), RFDC_THRESHOLD_HZ));
+    assert(!rfic_rfdc_port_calibration_required(
+        history, 0, UINT64_C(900000000), RFDC_THRESHOLD_HZ));
+    rfic_rfdc_calibration_record(history, 1, UINT64_C(2400000000));
+    assert(history[2] == 0 && history[0] == UINT64_C(900000000));
+    rfic_rfdc_calibration_record(history, RFIC_RX_RF_PORT_COUNT,
+                                 UINT64_C(1000000000));
+    assert(history[1] == UINT64_C(2400000000));
+
     assert(!rfic_rfdc_calibration_required(
         reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ - 1,
         RFDC_THRESHOLD_HZ));

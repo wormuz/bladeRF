@@ -6631,9 +6631,10 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
             }
 
             /* Handing the RFIC to NIOS runs _rfic_initialize(), which
-             * changes RFFE ownership and initializes the AD9361. The FPGA
-             * mode does not implement the event/epoch contract, so keep this
-             * transfer outside certified RX operation and fail closed. */
+             * clears RFFE control and re-initializes the AD9361 under any
+             * configured stream. Keep the hand-over outside streaming and
+             * fail closed; transitions are certified again only after the
+             * caller reconfigures the stream under the new owner. */
             if (board_data->module_format[BLADERF_RX] != (bladerf_format)-1 ||
                 board_data->module_format[BLADERF_TX] != (bladerf_format)-1) {
                 log_error("%s: refusing to hand the RFIC to the FPGA while a "
@@ -6717,7 +6718,13 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
     board_data->rfic        = rfic_new;
     board_data->tuning_mode = mode;
 
-    /* Bring RFIC to initialized state */
+    /* Bring RFIC to initialized state. A successful initialize() rebuilds
+     * the owner's AD9361 clock tree from the fixed 38.4 MHz reference
+     * (ad936x_params.c) for either owner, and NIOS rejects raw host AD9361
+     * writes while it holds a PHY (rfic_direct_ad9361_write_allowed), so the
+     * frequency model is known again for HOST and FPGA alike. Leaving it
+     * unknown after an FPGA hand-over made every later set/get_frequency and
+     * enable_module return BLADERF_ERR_WOULD_BLOCK. */
     CHECK_STATUS(rfic_new->get_init_state(dev, &init_state));
 
     switch (init_state) {
@@ -6725,7 +6732,7 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Initializing",
                       tuningmode2str(mode));
             status = rfic_new->initialize(dev);
-            if (status == 0 && mode == BLADERF_TUNING_MODE_HOST) {
+            if (status == 0) {
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rfic_frequency_model_known = true;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -6736,7 +6743,7 @@ static int bladerf2_set_tuning_mode(struct bladerf *dev,
             log_debug("%s: %s %s RFIC control\n", __FUNCTION__, "Restoring",
                       tuningmode2str(mode));
             status = rfic_new->initialize(dev);
-            if (status == 0 && mode == BLADERF_TUNING_MODE_HOST) {
+            if (status == 0) {
                 MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                 board_data->rfic_frequency_model_known = true;
                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);

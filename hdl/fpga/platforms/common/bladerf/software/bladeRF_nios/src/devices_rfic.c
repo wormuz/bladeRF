@@ -571,6 +571,15 @@ static bool rfic_latch_calibration_fault(void)
     return true;
 }
 
+/* One out-of-line commit for the three successful RFDC job endings keeps
+ * the shared-bank rule in a single call site of the NIOS image. */
+static void __attribute__((noinline)) rfic_rfdc_job_record(void)
+{
+    rfic_rfdc_calibration_record(state.last_rfdc_calib_freq[BLADERF_RX],
+                                 state.rfdc_job_port,
+                                 state.rfdc_job_frequency);
+}
+
 static void rfic_command_work_wq(struct rfic_queue *q)
 {
     struct rfic_queue_entry *e = rfic_queue_peek(q);
@@ -926,9 +935,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     if (step_status < 0) {
                         rfic_command_record_error(step_status);
                     } else {
-                        state.last_rfdc_calib_freq[BLADERF_RX]
-                                                    [state.rfdc_job_port] =
-                            state.rfdc_job_frequency;
+                        rfic_rfdc_job_record();
                         if (state.rfdc_commit_rx_frequency)
                             state.frequency_invalid[BLADERF_MODULE_RX] = false;
                     }
@@ -943,9 +950,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                     if (step_status < 0) {
                         rfic_command_record_error(step_status);
                     } else {
-                        state.last_rfdc_calib_freq[BLADERF_RX]
-                                                    [state.rfdc_job_port] =
-                            state.rfdc_job_frequency;
+                        rfic_rfdc_job_record();
                     }
                     /* Re-enter only the saved RX-enable continuation, which
                      * performs its RFFE commit or fail-closed cleanup. */
@@ -955,9 +960,7 @@ static void rfic_command_work_wq(struct rfic_queue *q)
                 if (step_status < 0) {
                     rfic_command_record_error(step_status);
                 } else {
-                    state.last_rfdc_calib_freq[BLADERF_RX]
-                                                [state.rfdc_job_port] =
-                        state.rfdc_job_frequency;
+                    rfic_rfdc_job_record();
                     if (state.rfdc_commit_rx_frequency)
                         state.frequency_invalid[BLADERF_MODULE_RX] = false;
                     e->rv = true;

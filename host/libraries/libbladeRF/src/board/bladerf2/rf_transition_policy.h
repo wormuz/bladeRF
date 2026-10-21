@@ -695,14 +695,35 @@ static inline bool bladerf2_rf_transition_normalize_requirements(
     return true;
 }
 
-/* The event-driven transition wait reads RFIC status through the host-owned
- * AD9361 PHY object. FPGA tuning mode removes that object and assigns RFIC
- * ownership to NIOS, so the current transition API must reject that mode
- * before beginning rather than dereference a NULL PHY. */
+/* Which transitions each RFIC owner can certify. HOST mode certifies all of
+ * them through the host ADI PHY. In FPGA/NIOS mode the host PHY is gone: the
+ * LO is programmed by the NIOS FREQUENCY command, AD9361 status registers are
+ * read raw through the NIOS AD9361 target, and RFDC is part of the NIOS
+ * command (port-keyed 100 MHz policy, rfic_rfdc_port_calibration_required).
+ * Two requests have no NIOS equivalent and are rejected before any state
+ * changes:
+ *  - quick_tune: its LO certificate, ad9361_fastlock_sync_current_lo(), reads
+ *    the recalled profile through the host ADI fastlock cache;
+ *  - explicit RX_RFDC_CAL_DONE: the NIOS RFIC command set
+ *    (BLADERF_RFIC_COMMAND_*) has no calibration command, so the host cannot
+ *    force a fresh calibration.
+ * An epoch-valid NIOS transition additionally needs firmware whose RFDC
+ * history models the shared B/C result bank; otherwise a successful
+ * FREQUENCY command does not prove the selected input's correction is
+ * resident. */
 static inline bool bladerf2_rf_transition_mode_supported(
-    bladerf_tuning_mode mode)
+    bladerf_tuning_mode mode, bool quick_tune, uint32_t required_events_mask,
+    bool nios_rfdc_shared_bank)
 {
-    return mode == BLADERF_TUNING_MODE_HOST;
+    if (mode == BLADERF_TUNING_MODE_HOST) {
+        return true;
+    }
+    if (mode != BLADERF_TUNING_MODE_FPGA || quick_tune ||
+        (required_events_mask & BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE) != 0) {
+        return false;
+    }
+    return (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) == 0 ||
+           nios_rfdc_shared_bank;
 }
 
 static inline bool bladerf2_rf_event_is_transition_terminal(

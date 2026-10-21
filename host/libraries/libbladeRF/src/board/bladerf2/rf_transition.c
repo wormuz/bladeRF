@@ -323,6 +323,23 @@ static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;
+
+    /* FPGA tuning has no host PHY. A raw status read through the NIOS AD9361
+     * target is a single-register SPI read with no driver state; NIOS
+     * defers it while one of its own RFIC jobs owns the bus. */
+    if (board_data->tuning_mode == BLADERF_TUNING_MODE_FPGA) {
+        uint64_t data = 0;
+        int status = dev->backend->ad9361_spi_read(
+            dev, (uint16_t)(AD936X_READ | AD936X_CNT(1) | AD936X_ADDR(addr)),
+            &data);
+
+        if (status != 0) {
+            return status;
+        }
+        *val = (uint8_t)((data >> 56) & 0xff);
+        return 0;
+    }
+
     int32_t ret = ad9361_spi_read(phy->spi, addr);
 
     if (ret < 0) {
@@ -3591,6 +3608,65 @@ void bladerf2_rx_transition_spi_observe_rollback(struct bladerf *dev,
     }
 }
 
+/* Failed FIR programming can leave either coefficient RAM partial; RFPLL and
+ * ENSM status alone cannot certify it. The host PHY records this in its FIR
+ * masks. NIOS keeps a per-direction latch instead, and its FILTER read fails
+ * while that latch is set (_rfic_cmd_rd_filter), so a successful read is the
+ * FPGA-tuning certificate. Called with dev->lock held. */
+static bool _rx_fir_configuration_known(
+    struct bladerf *dev, struct bladerf2_board_data *board_data)
+{
+    struct ad9361_rf_phy *phy = board_data->phy;
+
+    if (board_data->tuning_mode == BLADERF_TUNING_MODE_FPGA) {
+        bladerf_rfic_rxfir rxfir;
+
+        return board_data->rfic->get_filter(
+                   dev, BLADERF_CHANNEL_RX(0), &rxfir, NULL) == 0;
+    }
+
+    return bladerf2_rx_fir_configuration_valid(
+        phy != NULL && phy->pdata != NULL,
+        phy != NULL && phy->fir_config_valid,
+        phy != NULL && phy->pdata != NULL && phy->pdata->rx2tx2,
+        phy != NULL ? phy->rx_fir_coefficients_valid_mask : 0,
+        phy != NULL ? phy->tx_fir_coefficients_valid_mask : 0);
+}
+
+/* NIOS keys RFDC to the AD9361 input it has selected, and its FREQUENCY
+ * command moves the RX input selector only while an RX channel is enabled in
+ * RFFE (_rfic_cmd_wr_frequency_internal -> set_ad9361_port_by_freq). The host
+ * path selects the target input itself before its RFDC. Under FPGA tuning an
+ * epoch-valid transition therefore needs RX enabled when the command is
+ * issued, or NIOS would calibrate the previous input. Called with dev->lock
+ * held, so enable_module cannot interleave with the FREQUENCY command. */
+static int _nios_rfdc_input_selected(struct bladerf *dev,
+                                     struct bladerf2_board_data *board_data,
+                                     bladerf_channel ch,
+                                     uint32_t required_events_mask)
+{
+    uint32_t reg = 0;
+    int status;
+
+    if (board_data->tuning_mode != BLADERF_TUNING_MODE_FPGA ||
+        (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) == 0) {
+        return 0;
+    }
+
+    status = dev->backend->rffe_control_read(dev, &reg);
+    if (status != 0) {
+        return status;
+    }
+    if (!_rffe_ch_enabled(reg, BLADERF_CHANNEL_RX(0)) &&
+        !_rffe_ch_enabled(reg, BLADERF_CHANNEL_RX(1))) {
+        log_error("%s: FPGA tuning selects the RX input (and its RFDC) only "
+                  "for an enabled RX channel; enable channel %u before an "
+                  "epoch-valid transition\n", __FUNCTION__, (unsigned)ch);
+        return BLADERF_ERR_INVAL;
+    }
+    return 0;
+}
+
 static int _bladerf_rx_transition_begin(
     struct bladerf *dev, bladerf_channel ch,
     const struct bladerf_rx_transition_request *request,
@@ -3693,8 +3769,11 @@ static int _bladerf_rx_transition_begin(
          * requirement from the actual board-selected AD9361 input and its
          * last successful calibration instead of relying on each wrapper to
          * remember the optional flag. Explicit RFDC requests still force a
-         * fresh calibration below even when this history is current. */
-        if (required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) {
+         * fresh calibration below even when this history is current. Under
+         * FPGA tuning this host history is not the owner's: NIOS applies the
+         * same port-keyed policy inside its FREQUENCY command. */
+        if ((required_events_mask & BLADERF_RF_REQUIRE_EPOCH_VALID) &&
+            board_data->tuning_mode == BLADERF_TUNING_MODE_HOST) {
             const uint8_t target_port =
                 (uint8_t)target_rx_port_map->rfic_port;
             const uint32_t requested_events_mask = required_events_mask;
@@ -3757,27 +3836,14 @@ static int _bladerf_rx_transition_begin(
             board_data->tx_rf_config_operation_active) {
             transition_busy = true;
         } else if (!bladerf2_rf_transition_mode_supported(
-                       board_data->tuning_mode)) {
-            /* Transition wait reads status through the host-owned AD9361
-             * PHY. NIOS mode has a separate RFIC owner and event path; fail
+                       board_data->tuning_mode, quick_tune != NULL,
+                       required_events_mask,
+                       have_cap(board_data->capabilities,
+                                BLADERF_CAP_NIOS_RFDC_SHARED_BANK))) {
+            /* The owner cannot certify this request (see the policy); fail
              * before allocating a transaction or invalidating the RX epoch. */
             tuning_mode_unsupported = true;
-        } else if (!bladerf2_rx_fir_configuration_valid(
-                       board_data->phy != NULL &&
-                           board_data->phy->pdata != NULL,
-                       board_data->phy != NULL &&
-                           board_data->phy->fir_config_valid,
-                       board_data->phy != NULL &&
-                           board_data->phy->pdata != NULL &&
-                           board_data->phy->pdata->rx2tx2,
-                       board_data->phy != NULL
-                           ? board_data->phy->rx_fir_coefficients_valid_mask
-                           : 0,
-                       board_data->phy != NULL
-                           ? board_data->phy->tx_fir_coefficients_valid_mask
-                           : 0)) {
-            /* Failed FIR programming can leave either coefficient RAM
-             * partial; RFPLL and ENSM status alone cannot certify it. */
+        } else if (!_rx_fir_configuration_known(dev, board_data)) {
             rfic_fir_configuration_invalid = true;
         } else if (bladerf2_rx_epoch_transition_blocked_by_async_format(
                        (required_events_mask &
@@ -4188,8 +4254,12 @@ static int _bladerf_rx_transition_begin(
             board_data->rf_transition_spi_last_status = 0;
             board_data->rf_transition_spi_trace_enabled = true;
             board_data->rf_transition_setter_active = true;
-            status = bladerf_set_frequency_locked(
-                dev, ch, request->target_frequency_hz);
+            status = _nios_rfdc_input_selected(
+                dev, board_data, ch, required_events_mask);
+            if (status == 0) {
+                status = bladerf_set_frequency_locked(
+                    dev, ch, request->target_frequency_hz);
+            }
             board_data->rf_transition_setter_active = false;
             board_data->rf_transition_scheduling_quick_tune = false;
             board_data->rf_transition_spi_trace_enabled = false;
@@ -4623,6 +4693,13 @@ static int _bladerf_rx_transition_wait(struct bladerf *dev,
             target_port_map->rfic_port >= BLADERF2_RX_RF_PORT_COUNT) {
             return _fail_transition(dev, board_data,
                                     BLADERF_ERR_RANGE, final_event);
+        }
+        /* Begin admits this host-ADI calibration only in HOST mode; the PHY
+         * below is NULL if ownership moved to NIOS since then. */
+        if (board_data->tuning_mode != BLADERF_TUNING_MODE_HOST ||
+            board_data->phy == NULL) {
+            return _fail_transition(dev, board_data,
+                                    BLADERF_ERR_UNSUPPORTED, final_event);
         }
         adi_status = ad9361_get_rx_rf_port_input(board_data->phy, &rx_port);
         if (adi_status < 0) {

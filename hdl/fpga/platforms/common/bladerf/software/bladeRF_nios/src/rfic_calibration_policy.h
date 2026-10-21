@@ -200,4 +200,26 @@ static inline bool rfic_rfdc_port_calibration_required(
                                           threshold_hz);
 }
 
+/* UG-570 keeps a separate RFDC result for input A and one shared result for
+ * inputs B and C (port indices 1 and 2, as in the host's
+ * bladerf2_rx_rfdc_calibration_record()). A calibration on B or C replaces
+ * that shared bank, so the other selector's history no longer proves its
+ * correction is resident; without this a successful FREQUENCY command could
+ * skip a required calibration after a B -> C -> B sequence. */
+static inline void rfic_rfdc_calibration_record(
+    uint64_t history[RFIC_RX_RF_PORT_COUNT], uint32_t rf_port,
+    uint64_t calibrated_hz)
+{
+    if (history == 0 || rf_port >= RFIC_RX_RF_PORT_COUNT) {
+        return;
+    }
+
+    history[rf_port] = calibrated_hz;
+    if (rf_port == 1u) {
+        history[2] = 0;
+    } else if (rf_port == 2u) {
+        history[1] = 0;
+    }
+}
+
 #endif

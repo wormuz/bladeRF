@@ -185,6 +185,10 @@
 /** FPGA v0.33.0 retune2 success records carry the synthesizer bytes of the
  * recalled AD9361 fastlock slot (16x64 record word 3). */
 #define BLADERF_CAP_RETUNE2_SYNTH_RECORD (((uint64_t)1) << 50)
+/** FPGA v0.34.0 NIOS RFDC history treats AD9361 inputs B and C as one
+ * shared result bank, so a successful NIOS FREQUENCY/ENABLE certifies RFDC
+ * residency for the selected input (FPGA-tuning RX transitions). */
+#define BLADERF_CAP_NIOS_RFDC_SHARED_BANK (((uint64_t)1) << 51)
 
 /**
  * Max number of gain calibration tables associated to max number of channels
