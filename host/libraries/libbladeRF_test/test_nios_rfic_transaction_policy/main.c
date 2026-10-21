@@ -31,6 +31,17 @@ int main(void)
     assert(bladerf2_rfic_next_poll_delay_us(0, 20000) == 20000);
     assert(bladerf2_rfic_next_poll_delay_us(1000, 0) == 0);
 
+    /* Stall deadman: only an unchanged counter expires. */
+    {
+        struct bladerf2_rfic_stall_watch w = {false, 0, 0};
+        assert(!bladerf2_rfic_stall_expired(&w, 5, 100, 10));
+        assert(!bladerf2_rfic_stall_expired(&w, 5, 109, 10));
+        assert(bladerf2_rfic_stall_expired(&w, 5, 110, 10));
+        assert(!bladerf2_rfic_stall_expired(&w, 6, 1000, 10));
+        assert(!bladerf2_rfic_stall_expired(&w, 6, 1009, 10));
+        assert(bladerf2_rfic_stall_expired(&w, 6, 1010, 10));
+    }
+
     /* Boot nonce: only a recorded value that changed is a reboot. */
     assert(!bladerf2_rfic_boot_nonce_rebooted(false, 0, 0x1234));
     assert(!bladerf2_rfic_boot_nonce_rebooted(true, 0x1234, 0x1234));

@@ -6,14 +6,16 @@
  */
 #include <assert.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 
 static unsigned int test_sleeps;
+static uint64_t test_now_ns;
 static void test_usleep(unsigned int us)
 {
-    (void)us;
+    test_now_ns += (uint64_t)us * 1000u;
     ++test_sleeps;
 }
 #define usleep(us) test_usleep(us)
@@ -41,10 +43,13 @@ struct fake_nios {
     int reboot_at_status_read;     /* reboot on the Nth STATUS read */
     int displace_at_status_read;   /* same boot, retirement record jumps */
     bool foreign_before_next_write;
+    bool progress_advances;      /* worker steps while active */
+    unsigned int active_status_limit; /* abort the test if exceeded */
     uint8_t force_wqlen;
     /* observations */
     unsigned int executed;
     unsigned int nonce_reads;
+    uint32_t progress;
     unsigned int nonce_writes;
 };
 
@@ -93,6 +98,11 @@ static int fake_status(uint64_t *data)
 
     if (nios.active) {
         nios.status_reads++;
+        if (nios.progress_advances) {
+            nios.progress++;
+        }
+        assert(nios.active_status_limit == 0 ||
+               nios.status_reads <= nios.active_status_limit);
         if (nios.fail_status_read_at != 0 &&
             (int)nios.status_reads == nios.fail_status_read_at) {
             nios.fail_status_read_at = 0;
@@ -144,7 +154,7 @@ static int fake_read(struct bladerf *d, uint16_t addr, uint64_t *data)
             return 0;
         case BLADERF_RFIC_COMMAND_PROGRESS:
             memset(&progress, 0, sizeof(progress));
-            progress.sequence = nios.seq;
+            progress.sequence = nios.progress;
             progress.transaction_id = nios.active ? nios.active_id
                                                   : nios.last_id;
             progress.command = (uint8_t)(nios.active ? nios.active_addr
@@ -221,8 +231,7 @@ int nios_boot_nonce_write(struct bladerf *d, uint32_t nonce)
 
 int bladerf_monotonic_now_ns(uint64_t *now_ns)
 {
-    static uint64_t t;
-    *now_ns = ++t;
+    *now_ns = ++test_now_ns;
     return 0;
 }
 
@@ -370,6 +379,63 @@ static void test_status_beyond_queue_depth(void)
     assert(_rfic_fpga_get_status(&dev, &status) == BLADERF_ERR_UNEXPECTED);
 }
 
+/* A worker whose progress counter freezes fails the wait after the stall
+ * budget; the command stays pending and its real outcome is collected by the
+ * next call without executing it again. */
+static void test_stalled_worker_times_out_and_stays_pending(void)
+{
+    setup(all_caps);
+    nios.active_status_limit = 100000;
+    assert(write_freq(1000000000u) == BLADERF_ERR_TIMEOUT);
+    assert(board_data.rfic_wq_pending);
+    assert(nios.active && nios.executed == 1);
+    assert((uint64_t)test_now_ns >= (uint64_t)RFIC_SPINWAIT_STALL_NS);
+
+    nios.retire_after_status_reads = 1;
+    assert(write_freq(1000000000u) == 0);
+    assert(!board_data.rfic_wq_pending);
+    assert(nios.executed == 1);
+}
+
+/* Long but progressing work is never failed by elapsed time. */
+static void test_progressing_worker_is_not_timed_out(void)
+{
+    uint64_t started;
+
+    setup(all_caps);
+    nios.progress_advances = true;
+    nios.retire_after_status_reads = 3000;
+    started = test_now_ns;
+    assert(write_freq(1000000000u) == 0);
+    assert((uint64_t)(test_now_ns - started) >
+           2u * (uint64_t)RFIC_SPINWAIT_STALL_NS);
+    assert(nios.executed == 1 && !board_data.rfic_wq_pending);
+}
+
+static void test_invalid_channel_rejected_before_nios(void)
+{
+    bladerf_frequency freq = 0;
+    uint64_t raw = 0;
+
+    setup(all_caps);
+    assert(_rfic_cmd_write(&dev, 5, BLADERF_RFIC_COMMAND_FREQUENCY,
+                           1000000000u) == BLADERF_ERR_INVAL);
+    assert(_rfic_cmd_write(&dev, 0x11, BLADERF_RFIC_COMMAND_FREQUENCY,
+                           1000000000u) == BLADERF_ERR_INVAL);
+    assert(_rfic_cmd_read(&dev, -2, BLADERF_RFIC_COMMAND_FREQUENCY, &raw) ==
+           BLADERF_ERR_INVAL);
+    assert(_rfic_fpga_get_frequency(&dev, 7, &freq) == BLADERF_ERR_INVAL);
+    assert(_rfic_fpga_select_band(&dev, 4, 1000000000u) ==
+           BLADERF_ERR_INVAL);
+    assert(_rfic_fpga_set_sample_rate(&dev, 9, 1000000u) ==
+           BLADERF_ERR_INVAL);
+    assert(nios.executed == 0 && nios.nonce_reads == 0);
+    assert(_rfic_cmd_read(&dev, BLADERF_CHANNEL_INVALID,
+                          BLADERF_RFIC_COMMAND_STATUS, &raw) == 0);
+    assert(_rfic_fpga_select_band(&dev, BLADERF_CHANNEL_RX(1),
+                                  1000000000u) == 0);
+}
+
 int main(void)
 {
     test_normal_stamps_once();
@@ -379,6 +445,9 @@ int main(void)
     test_same_boot_mismatch_unexpected();
     test_queue_full_is_terminal();
     test_status_beyond_queue_depth();
-    printf("rfic_fpga pending/reboot/queue-depth: PASS\n");
+    test_stalled_worker_times_out_and_stays_pending();
+    test_progressing_worker_is_not_timed_out();
+    test_invalid_channel_rejected_before_nios();
+    printf("rfic_fpga pending/reboot/queue-depth/stall/channel: PASS\n");
     return 0;
 }

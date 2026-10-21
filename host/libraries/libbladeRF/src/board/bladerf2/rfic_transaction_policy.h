@@ -53,6 +53,31 @@ static inline bool bladerf2_rfic_deadline_expired(uint64_t started_ns,
     return (uint64_t)(now_ns - started_ns) >= budget_ns;
 }
 
+/* Failure-only stall deadman over the NIOS progress counter, which advances
+ * on every worker step of the active command. Only a counter that stays
+ * unchanged for budget_ns expires; total elapsed time is never bounded, so a
+ * long but progressing calibration is not failed. Expiry never means
+ * retirement or success. */
+struct bladerf2_rfic_stall_watch {
+    bool armed;
+    uint32_t sequence;
+    uint64_t changed_ns;
+};
+
+static inline bool bladerf2_rfic_stall_expired(
+    struct bladerf2_rfic_stall_watch *watch, uint32_t sequence,
+    uint64_t now_ns, uint64_t budget_ns)
+{
+    if (!watch->armed || sequence != watch->sequence) {
+        watch->armed = true;
+        watch->sequence = sequence;
+        watch->changed_ns = now_ns;
+        return false;
+    }
+    return bladerf2_rfic_deadline_expired(watch->changed_ns, now_ns,
+                                          budget_ns);
+}
+
 /* NIOS boot nonce: the value recorded before the pending command was issued
  * no longer matches, so NIOS rebooted (FPGA reconfiguration included) and
  * the retirement sequence and transaction IDs restarted under it. */

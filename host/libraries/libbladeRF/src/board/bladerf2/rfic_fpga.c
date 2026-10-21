@@ -34,6 +34,7 @@
 #include "rfic_transaction_policy.h"
 #include "rfic_rssi_policy.h"
 #include "rfic_progress_policy.h"
+#include "rf_transition_policy.h"
 
 /* board_data holds exactly one pending tagged command (rfic_wq_pending_*),
  * which is only sound while NIOS admits one tagged command at a time. */
@@ -94,6 +95,13 @@ static int _rfic_cmd_write(struct bladerf *dev,
 
 /* Build RFIC address from bladerf_rfic_command and bladerf_channel */
 #define RFIC_ADDRESS(cmd, ch) ((cmd & 0xFF) + ((ch & 0xF) << 8))
+
+/* RFIC_ADDRESS keeps only ch & 0xF, so any other value would alias a real
+ * channel or the system-wide 0xF selector. */
+static bool _rfic_cmd_channel_valid(bladerf_channel ch)
+{
+    return ch == BLADERF_CHANNEL_INVALID || bladerf2_channel_valid(ch);
+}
 
 static int _rfic_fpga_get_status(
     struct bladerf *dev, struct bladerf_rfic_status_register *rfic_status)
@@ -192,6 +200,14 @@ static const char *_rfic_fpga_init_stage_name(uint8_t stage)
 #define RFIC_SPINWAIT_DELAY_US     1000
 #define RFIC_SPINWAIT_INIT_DELAY_US 5000
 #define RFIC_SPINWAIT_EVENT_MAX_DELAY_US 20000
+
+/* Failure-only stall deadman while a command is active (FPGA >= v0.19.0
+ * progress counter). Documented single NIOS worker steps are at most a few
+ * hundred ms and a whole TX quadrature calibration about 3.2 s; ADI jobs carry
+ * their own deadlines, so a counter frozen for 10 s means the worker stopped.
+ * The progress counter is read at most once per second. */
+#define RFIC_SPINWAIT_STALL_NS          UINT64_C(10000000000)
+#define RFIC_SPINWAIT_PROGRESS_CHECK_NS UINT64_C(1000000000)
 
 static int _rfic_cmd_read(struct bladerf *dev, bladerf_channel ch,
                           bladerf_rfic_command cmd, uint64_t *data);
@@ -309,6 +325,53 @@ static int _rfic_fpga_retirement_mismatch(struct bladerf *dev)
     return status < 0 ? status : BLADERF_ERR_UNEXPECTED;
 }
 
+/* Returns BLADERF_ERR_TIMEOUT when the active command's NIOS progress counter
+ * has not moved for RFIC_SPINWAIT_STALL_NS. The command is not cancelled; a
+ * pending record stays so the next write resolves its real outcome. */
+static int _rfic_fpga_check_stall(struct bladerf *dev,
+                                  uint16_t expected_transaction_id,
+                                  uint32_t expected_sequence,
+                                  struct bladerf2_rfic_stall_watch *watch,
+                                  uint64_t *next_check_ns)
+{
+    uint64_t now_ns;
+    uint16_t progress_id = 0;
+    uint8_t command = 0;
+    uint8_t phase = 0;
+    uint32_t progress_sequence = 0;
+
+    if (bladerf_monotonic_now_ns(&now_ns) != 0) {
+        log_error("%s: monotonic clock unavailable while waiting for RFIC "
+                  "transaction %u; outcome remains unresolved\n",
+                  __FUNCTION__, (unsigned int)expected_transaction_id);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    if (watch->armed && now_ns < *next_check_ns) {
+        return 0;
+    }
+    *next_check_ns = now_ns + RFIC_SPINWAIT_PROGRESS_CHECK_NS;
+
+    CHECK_STATUS(_rfic_fpga_get_progress(dev, &progress_id, &command, &phase,
+                                         &progress_sequence));
+    if (progress_id != expected_transaction_id) {
+        /* Retired between the reads; the next status poll observes it. */
+        return 0;
+    }
+    if (!bladerf2_rfic_stall_expired(watch, progress_sequence, now_ns,
+                                     RFIC_SPINWAIT_STALL_NS)) {
+        return 0;
+    }
+
+    log_error("%s: NIOS RFIC transaction %u (command 0x%02x, phase %s, "
+              "expected_sequence=%u) made no progress for %u s; it is not "
+              "cancelled and its outcome remains unresolved\n",
+              __FUNCTION__, (unsigned int)expected_transaction_id,
+              (unsigned int)command, bladerf_rfic_progress_phase_name(phase),
+              expected_sequence,
+              (unsigned int)(RFIC_SPINWAIT_STALL_NS / UINT64_C(1000000000)));
+    return BLADERF_ERR_TIMEOUT;
+}
+
 static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                    unsigned int delay_us,
                                    bool sequence_supported,
@@ -324,6 +387,8 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
         dev, BLADERF_CAP_RFIC_WQ_RESULT_VALID);
     const bool progress_supported = have_cap_dev(
         dev, BLADERF_CAP_RFIC_PROGRESS);
+    struct bladerf2_rfic_stall_watch stall_watch = {false, 0, 0};
+    uint64_t next_progress_check_ns = 0;
 
     if (retired != NULL) {
         *retired = false;
@@ -386,6 +451,15 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
             if (active_id != expected_transaction_id ||
                 transaction_sequence + 1u != expected_sequence) {
                 return _rfic_fpga_retirement_mismatch(dev);
+            }
+
+            if (progress_supported) {
+                read_status = _rfic_fpga_check_stall(
+                    dev, expected_transaction_id, expected_sequence,
+                    &stall_watch, &next_progress_check_ns);
+                if (read_status < 0) {
+                    return read_status;
+                }
             }
         } else if (bladerf2_rfic_status_matches_retirement(
                        rfic_status.write_queue_length, sequence_supported,
@@ -911,6 +985,9 @@ static int _rfic_cmd_read(struct bladerf *dev,
                           bladerf_rfic_command cmd,
                           uint64_t *data)
 {
+    if (!_rfic_cmd_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     return dev->backend->rfic_command_read(dev, RFIC_ADDRESS(cmd, ch), data);
 }
 
@@ -933,6 +1010,10 @@ static int _rfic_cmd_write(struct bladerf *dev,
     uint32_t transaction_sequence = 0;
     bool retired = false;
     int status;
+
+    if (!_rfic_cmd_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     /* Resolve a command whose host wait timed out before admitting another
      * write. Retrying the exact payload reuses its transaction token; a late
@@ -1239,6 +1320,10 @@ static int _rfic_fpga_enable_module(struct bladerf *dev,
     bool be_teardown; /* Backend: disable backend module */
     bool be_setup;    /* Backend: enable backend module */
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     /* Read RFFE control register */
     CHECK_STATUS(dev->backend->rffe_control_read(dev, &reg));
 
@@ -1325,6 +1410,10 @@ static int _rfic_fpga_get_sample_rate(struct bladerf *dev,
 {
     uint64_t readval;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(
         _rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_SAMPLERATE, &readval));
 
@@ -1337,6 +1426,10 @@ static int _rfic_fpga_set_sample_rate(struct bladerf *dev,
                                       bladerf_channel ch,
                                       bladerf_sample_rate rate)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     return _rfic_cmd_write(dev, ch, BLADERF_RFIC_COMMAND_SAMPLERATE, rate);
 }
 
@@ -1350,6 +1443,10 @@ static int _rfic_fpga_get_frequency(struct bladerf *dev,
                                     bladerf_frequency *frequency)
 {
     bladerf_frequency freq;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     CHECK_STATUS(
         _rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_FREQUENCY, &freq));
@@ -1365,6 +1462,10 @@ static int _rfic_fpga_set_frequency(struct bladerf *dev,
 {
     struct bladerf_range const *range = NULL;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(dev->board->get_frequency_range(dev, ch, &range));
 
     if (!is_within_range(range, frequency)) {
@@ -1378,6 +1479,10 @@ static int _rfic_fpga_select_band(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_frequency frequency)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     // This functionality is unnecessary with the headless architecture.
     return 0;
 }
@@ -1392,6 +1497,10 @@ static int _rfic_fpga_get_bandwidth(struct bladerf *dev,
                                     bladerf_bandwidth *bandwidth)
 {
     uint64_t readval;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     CHECK_STATUS(
         _rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_BANDWIDTH, &readval));
@@ -1409,6 +1518,10 @@ static int _rfic_fpga_set_bandwidth(struct bladerf *dev,
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const *range      = NULL;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     CHECK_STATUS(dev->board->get_bandwidth_range(dev, ch, &range));
 
@@ -1442,6 +1555,10 @@ static int _rfic_fpga_get_gain(struct bladerf *dev,
     int val;
     float offset;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(get_gain_offset(dev, ch, &offset));
 
     CHECK_STATUS(rfic->get_gain_stage(dev, ch, stage, &val));
@@ -1460,6 +1577,10 @@ static int _rfic_fpga_set_gain(struct bladerf *dev,
     char const *stage = BLADERF_CHANNEL_IS_TX(ch) ? "dsa" : "full";
     float offset;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(get_gain_offset(dev, ch, &offset));
 
     return rfic->set_gain_stage(dev, ch, stage, __round_int(gain - offset));
@@ -1475,6 +1596,10 @@ static int _rfic_fpga_get_gain_mode(struct bladerf *dev,
                                     bladerf_gain_mode *mode)
 {
     uint64_t readval;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         log_warning("%s: automatic gain control not valid for TX channels\n",
@@ -1495,6 +1620,10 @@ static int _rfic_fpga_set_gain_mode(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_gain_mode mode)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         log_debug("%s: gain-control modes are unsupported on TX channels\n",
                   __FUNCTION__);
@@ -1517,6 +1646,10 @@ static int _rfic_fpga_get_gain_stage(struct bladerf *dev,
 {
     struct bladerf_range const *range = NULL;
     uint64_t val;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     if ((BLADERF_CHANNEL_IS_TX(ch) && strcmp(stage, "dsa") != 0) ||
         (!BLADERF_CHANNEL_IS_TX(ch) && strcmp(stage, "full") != 0)) {
@@ -1544,6 +1677,10 @@ static int _rfic_fpga_set_gain_stage(struct bladerf *dev,
 {
     struct bladerf_range const *range = NULL;
     int64_t val;
+
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
 
     if ((BLADERF_CHANNEL_IS_TX(ch) && strcmp(stage, "dsa") != 0) ||
         (!BLADERF_CHANNEL_IS_TX(ch) && strcmp(stage, "full") != 0)) {
@@ -1579,6 +1716,10 @@ static int _rfic_fpga_get_rssi(struct bladerf *dev,
     uint64_t readval;
     int16_t mult, pre, sym;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(_rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_RSSI, &readval));
 
     mult = (int16_t)((readval >> BLADERF_RFIC_RSSI_MULT_SHIFT) &
@@ -1610,6 +1751,10 @@ static int _rfic_fpga_get_filter(struct bladerf *dev,
 {
     uint64_t readval;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     CHECK_STATUS(
         _rfic_cmd_read(dev, ch, BLADERF_RFIC_COMMAND_FILTER, &readval));
 
@@ -1637,6 +1782,10 @@ static int _rfic_fpga_set_filter(struct bladerf *dev,
 {
     uint64_t data;
 
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         data = (uint64_t)txfir;
     } else {
@@ -1655,6 +1804,10 @@ static int _rfic_fpga_get_txmute(struct bladerf *dev,
                                  bladerf_channel ch,
                                  bool *state)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         uint64_t readval;
 
@@ -1676,6 +1829,10 @@ static int _rfic_fpga_set_txmute(struct bladerf *dev,
                                  bladerf_channel ch,
                                  bool state)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     if (BLADERF_CHANNEL_IS_TX(ch)) {
         return _rfic_cmd_write(dev, ch, BLADERF_RFIC_COMMAND_TXMUTE,
                                state ? 1 : 0);
@@ -1693,6 +1850,10 @@ static int _rfic_fpga_store_fastlock_profile(struct bladerf *dev,
                                              bladerf_channel ch,
                                              uint32_t profile)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
+
     return _rfic_cmd_write(dev, ch, BLADERF_RFIC_COMMAND_FASTLOCK, profile);
 }
 
