@@ -120,6 +120,17 @@ bladerf2_rx_invalidation_policy(bladerf_channel channel,
     return policy;
 }
 
+/* The FPGA RX epoch gate is closed once it reports ERROR, and ABORT is a
+ * toggle-edge command that takes effect asynchronously. A second ABORT sent
+ * while the gate is already closed (back-to-back RX reconfigurations) is
+ * redundant; only a state that was read and is not ERROR needs the command. A
+ * failed state read keeps the old behaviour: issue ABORT. */
+static inline bool bladerf2_rx_epoch_abort_required(bool state_read_ok,
+                                                    bool state_is_error)
+{
+    return !(state_read_ok && state_is_error);
+}
+
 #define BLADERF2_RF_LINK_STATUS_VERSION_MASK 0xf0000000u
 #define BLADERF2_RF_LINK_STATUS_VERSION_2    0x20000000u
 #define BLADERF2_RF_LINK_STATUS_RX_PREVIOUS_FAULT (1u << 3)
