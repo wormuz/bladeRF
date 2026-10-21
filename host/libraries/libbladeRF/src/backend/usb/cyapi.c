@@ -112,13 +112,14 @@ static int open_device(CCyUSBDevice *dev, int instance, HANDLE *mutex)
         goto out;
     }
 
-    wcstombs(mutex_name + strlen(prefix), dev->SerialNumber, sizeof(mutex_name) - BLADERF_SERIAL_LENGTH - 1);
+    wcstombs(mutex_name + strlen(prefix), dev->SerialNumber,
+            BLADERF_SERIAL_LENGTH - 1);
     log_verbose("Mutex name: %s\n", mutex_name);
 
     SetLastError(0);
     *mutex = CreateMutex(NULL, true, mutex_name);
     last_error = GetLastError();
-    if (mutex == NULL || last_error != 0) {
+    if (*mutex == NULL || last_error != 0) {
         log_debug("Unable to create device mutex: mutex=%p, last_error=%ld\n",
                   mutex, last_error);
         dev->Close();
@@ -239,7 +240,7 @@ static int open_via_info(void **driver, backend_probe_target probe_target,
                 *driver = cyapi_data;
                 if (info_out != NULL) {
                     memcpy(info_out,
-                           &info_list.elt[instance],
+                           &info_list.elt[i],
                            sizeof(info_out[0]));
                 }
                 status = 0;
@@ -254,8 +255,11 @@ static int open_via_info(void **driver, backend_probe_target probe_target,
 
     if (status != 0) {
         delete dev;
-        ReleaseMutex(cyapi_data->mutex);
-        CloseHandle(cyapi_data->mutex);
+        if (cyapi_data->mutex != NULL) {
+            ReleaseMutex(cyapi_data->mutex);
+            CloseHandle(cyapi_data->mutex);
+        }
+        free(cyapi_data);
     }
 
     free(info_list.elt);
@@ -263,11 +267,51 @@ static int open_via_info(void **driver, backend_probe_target probe_target,
 }
 
 
+static void cyapi_close(void *driver);
+
+#if ENABLE_USB_DEV_RESET_ON_OPEN
+/* Same contract as reset_and_reopen() in libusb.c: reset the port, drop the
+ * old handle and device mutex, then find the re-enumerated device again by
+ * serial only. On failure *driver is NULL and nothing stays held. */
+static int reset_and_reopen(void **driver, struct bladerf_devinfo *info)
+{
+    struct bladerf_devinfo new_info;
+
+    get_device(*driver)->Reset();
+    cyapi_close(*driver);
+    *driver = NULL;
+
+    log_verbose("Re-scan required after port reset for bladeRF %s\n",
+                info->serial);
+
+    memcpy(&new_info, info, sizeof(new_info));
+    new_info.usb_bus  = DEVINFO_BUS_ANY;
+    new_info.usb_addr = DEVINFO_ADDR_ANY;
+
+    return open_via_info(driver, BACKEND_PROBE_BLADERF, &new_info, info);
+}
+#endif
+
 static int cyapi_open(void **driver,
                      struct bladerf_devinfo *info_in,
                      struct bladerf_devinfo *info_out)
 {
-    return open_via_info(driver, BACKEND_PROBE_BLADERF, info_in, info_out);
+    int status;
+    struct bladerf_devinfo info_local;
+
+    if (info_out == NULL) {
+        info_out = &info_local;
+    }
+
+    status = open_via_info(driver, BACKEND_PROBE_BLADERF, info_in, info_out);
+
+#   if ENABLE_USB_DEV_RESET_ON_OPEN
+    if (status == 0 && bladerf_usb_reset_device_on_open) {
+        status = reset_and_reopen(driver, info_out);
+    }
+#   endif
+
+    return status;
 }
 
 static int cyapi_change_setting(void *driver, uint8_t setting)

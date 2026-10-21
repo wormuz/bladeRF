@@ -2611,7 +2611,9 @@ int main(void)
     }
 
     {
+        struct ad9361_phy_platform_data cleared_pdata = {0};
         struct ad9361_rf_phy cleared_phy = {
+            .pdata = &cleared_pdata,
             .rfpll_requested_valid = { true, true },
             .bbpll_initialized = true,
             .current_bw_valid = true,
@@ -9092,6 +9094,21 @@ int main(void)
             return EXIT_FAILURE;
         }
         agc_pdata.gain_ctrl.lmt_overload_low_thresh = 16;
+        for (uint32_t duration = 1; duration < 16; duration++) {
+            agc_pdata.gain_ctrl.dec_pow_measuremnt_duration = duration;
+            agc_pdata.gain_ctrl.f_agc_dec_pow_measuremnt_duration = duration;
+            writes_before = write_count;
+            ret = ad9361_gc_setup(&agc_phy, &agc_pdata.gain_ctrl);
+            if (ret != -EINVAL || write_count != writes_before) {
+                fprintf(stderr,
+                        "AGC setup accepted measurement duration %" PRIu32
+                        ": ret=%" PRId32 " writes=%u/%u\n",
+                        duration, ret, write_count, writes_before);
+                return EXIT_FAILURE;
+            }
+        }
+        agc_pdata.gain_ctrl.dec_pow_measuremnt_duration = 16;
+        agc_pdata.gain_ctrl.f_agc_dec_pow_measuremnt_duration = 16;
         if (ad9361_gc_gain_update_counter(0, 30720000, 20,
                                          &gain_update_counter) != -EINVAL ||
             gain_update_counter != UINT32_MAX ||
