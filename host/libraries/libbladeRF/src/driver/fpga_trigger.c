@@ -194,3 +194,22 @@ int fpga_trigger_state(struct bladerf *dev, const struct bladerf_trigger *trigge
     return status;
 }
 
+
+int fpga_trigger_disarm_all(struct bladerf *dev)
+{
+    static const bladerf_channel channels[] = {BLADERF_CHANNEL_RX(0),
+                                               BLADERF_CHANNEL_TX(0)};
+    int first_error = 0;
+
+    /* One control register per channel serves every external signal, so
+     * writing 0 (role disabled: not armed, no fire request) through any valid
+     * signal clears it. Both channels are attempted even if one fails. */
+    for (size_t i = 0; i < sizeof(channels) / sizeof(channels[0]); ++i) {
+        const int status = fpga_trigger_write(
+            dev, channels[i], BLADERF_TRIGGER_MINI_EXP_1, 0);
+        if (status != 0 && first_error == 0) {
+            first_error = status;
+        }
+    }
+    return first_error;
+}

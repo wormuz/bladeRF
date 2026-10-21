@@ -57,6 +57,19 @@ int fpga_trigger_write(struct bladerf *dev,
                        bladerf_trigger_signal trigger,
                        uint8_t val);
 
+/**
+ * Clear the RX and TX trigger control registers (not armed, no fire request).
+ * The FPGA holds trigger state across host processes, and an armed RX trigger
+ * withholds samples from the next session, so close must call this. It writes
+ * the registers directly and therefore does not depend on RX transition state.
+ *
+ * @param       dev     Device handle
+ *
+ * @return 0 on success, otherwise the first BLADERF_ERR_* value (both
+ *         channels are always attempted)
+ */
+int fpga_trigger_disarm_all(struct bladerf *dev);
+
 
 /**
  * Initialize a bladerf_trigger structure based upon the current state

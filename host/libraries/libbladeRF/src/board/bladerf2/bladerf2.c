@@ -710,6 +710,21 @@ static void bladerf2_close(struct bladerf *dev)
         if (board_data != NULL) {
             bladerf_direction dir;
 
+            /* The FPGA keeps trigger state after this process exits, and an
+             * armed RX trigger withholds samples from the next session.
+             * Clear it first, before any step below can fail or return, and
+             * through the register path: the public disarm is fenced while an
+             * RX transition is pending. */
+            if (board_data->state >= STATE_INITIALIZED &&
+                dev->backend->is_fpga_configured(dev)) {
+                int trigger_status = fpga_trigger_disarm_all(dev);
+                if (trigger_status != 0) {
+                    log_error("%s: could not disarm triggers during close: "
+                              "%s\n", __FUNCTION__,
+                              bladerf_strerror(trigger_status));
+                }
+            }
+
             FOR_EACH_DIRECTION(dir)
             {
                 size_t idx;
