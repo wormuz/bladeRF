@@ -44,7 +44,8 @@ set adi_sclk_divisor 2
 create_generated_clock -name adi_sclk_reg -source [get_nodes $system_clock] -divide_by $adi_sclk_divisor [get_registers {*rffe_spi|SCLK_reg}]
 create_generated_clock -name adi_sclk_pin -source [get_registers -no_duplicates {*rffe_spi|SCLK_reg}] [get_ports {adi_spi_sclk}]
 
-set_max_skew -from [get_clocks {adi_sclk_pin}] -to [get_ports {adi_spi_sclk}] 0.2
+# No set_max_skew here: the pin clock is defined on this very port, so no
+# data path runs from it to the port and Quartus drops the assignment (332182).
 
 # Clock to Data-out times
 set adi_spi_data_tco_min 3.0

@@ -37,8 +37,8 @@ create_generated_clock -name peri_sclk_reg -source [get_nodes $system_clock] -di
 create_generated_clock -name adf_sclk_pin  -source [get_registers -no_duplicates {*peripheral_spi|SCLK_reg}] -phase 180 [get_ports {adf_sclk}]
 create_generated_clock -name dac_sclk_pin  -source [get_registers -no_duplicates {*peripheral_spi|SCLK_reg}]            [get_ports {dac_sclk}]
 
-set_max_skew -from [get_clocks {adf_sclk_pin}] -to [get_ports {adf_sclk}] 0.2
-set_max_skew -from [get_clocks {dac_sclk_pin}] -to [get_ports {dac_sclk}] 0.2
+# No set_max_skew here: the pin clock is defined on this very port, so no
+# data path runs from it to the port and Quartus drops the assignment (332182).
 
 # Data-in to Clock setup and hold times
 set adf_spi_data_ts     10.0

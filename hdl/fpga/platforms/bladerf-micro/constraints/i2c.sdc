@@ -27,7 +27,8 @@ set pwr_scl_divisor 200
 create_generated_clock -name i2c_scl_reg -source [get_nodes $system_clock] -divide_by $pwr_scl_divisor [get_registers {*bit_controller|scl_oen}]
 create_generated_clock -name pwr_scl_pin -source [get_registers -no_duplicates {*bit_controller|scl_oen}] [get_ports {pwr_scl}]
 
-set_max_skew -from [get_clocks {pwr_scl_pin}] -to [get_ports {pwr_scl}] 0.2
+# No set_max_skew here: the pin clock is defined on this very port, so no
+# data path runs from it to the port and Quartus drops the assignment (332182).
 
 # Constraints for INA219 data
 set ina_i2c_data_ts 100.0
