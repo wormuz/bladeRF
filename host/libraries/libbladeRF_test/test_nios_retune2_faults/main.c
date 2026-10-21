@@ -32,6 +32,8 @@ enum mode {
     M_INVALID_TS,
     M_RESET_DURING,  /* accepted, then NIOS resets before completing */
     M_NODEV_DURING,  /* accepted, then every transfer fails with NODEV */
+    M_ACK_LOST,      /* accepted, but the acceptance response never arrives */
+    M_COMPLETION_TIMEOUT, /* accepted and ACKed; completion reads time out */
 };
 
 struct record {
@@ -62,6 +64,11 @@ static struct {
     bool fail_instead;
     bool stale_first;       /* publish a same-token record of the old session first */
     bool nodev;
+    bool ack_dropped;       /* the one-shot acceptance-response loss happened */
+    bool ack_never_arrives; /* ... and the response is gone for good */
+    bool late_valid, late_ready;
+    uint8_t late[NIOS_PKT_LEN];
+    unsigned timed_out_reads;
     unsigned out_count;
     bool runaway;
     uint16_t last_token;
@@ -170,8 +177,15 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         *transferred_valid = true;
     if (nios.nodev)
         return BLADERF_ERR_NODEV;
+    if (endpoint == PERIPHERAL_EP_IN && nios.late_ready) {
+        memcpy(b, nios.late, NIOS_PKT_LEN);
+        nios.late_valid = nios.late_ready = false;
+        return mock_transfer(length, transferred, transferred_valid);
+    }
     if (endpoint == PERIPHERAL_EP_OUT) {
         ++nios.out_count;
+        if (nios.late_valid)
+            nios.late_ready = true;
         memcpy(nios.req, b, NIOS_PKT_LEN);
         return mock_transfer(length, transferred, transferred_valid);
     }
@@ -181,6 +195,11 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         uint32_t data;
 
         nios_pkt_8x32_unpack(nios.req, &target, &write, &addr, &data);
+        if (!write && nios.mode == M_COMPLETION_TIMEOUT && nios.pending &&
+            target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES) {
+            ++nios.timed_out_reads;
+            return BLADERF_ERR_TIMEOUT;
+        }
         if (write) {
             if (target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION) {
                 nios.sel_kind = addr >= NIOS_PKT_8x32_RETUNE2_FAILURE_SELECT_RX;
@@ -224,6 +243,16 @@ static int mock_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
         if (flags & NIOS_PKT_RETUNE2_RESP_FLAG_ASYNC_PENDING)
             nios_pkt_retune2_resp_set_async_baseline(
                 b, nios.succ[nios.pending_mod], nios.fail[nios.pending_mod]);
+        if (nios.mode == M_ACK_LOST && !nios.ack_dropped) {
+            /* Accepted by the NIOS, but the host never sees this response;
+             * unless lost for good it is still in the ordered UART stream. */
+            nios.ack_dropped = true;
+            if (!nios.ack_never_arrives) {
+                memcpy(nios.late, b, NIOS_PKT_LEN);
+                nios.late_valid = true;
+            }
+            return BLADERF_ERR_TIMEOUT;
+        }
         return mock_transfer(length, transferred, transferred_valid);
     }
     return BLADERF_ERR_UNEXPECTED;
@@ -464,11 +493,79 @@ static int test_nodev_during_wait(void)
     return 0;
 }
 
+
+static int test_lost_ack_vs_terminal_timeout(void)
+{
+    /* Both end in BLADERF_ERR_TIMEOUT, but the board layer must tell them
+     * apart: a lost acceptance response leaves it unknown whether the NIOS
+     * took the command (transport status != 0, no wait started); a timeout
+     * after a received acceptance leaves the completion unknown (transport
+     * status == 0, terminal-unknown set). Neither may read as success. */
+    int status;
+    unsigned out_before;
+
+    fresh(M_ACK_LOST, 41);
+    status = now(BLADERF_CHANNEL_RX(0), 5, 17);
+    CHECK(status == BLADERF_ERR_TIMEOUT, "lost ACK: status %d", status);
+    CHECK(nios.ack_dropped, "lost ACK was not injected");
+    CHECK(dev.nios_retune_trace.valid &&
+              dev.nios_retune_trace.status == BLADERF_ERR_TIMEOUT,
+          "lost ACK: transport result not recorded as a failure (%d)",
+          dev.nios_retune_trace.status);
+    CHECK(!dev.nios_retune_trace.retune2_terminal_unknown,
+          "lost ACK reported as a completion-wait timeout");
+    CHECK(nios.out_count == 2,
+          "lost ACK: %u requests sent, no completion wait expected",
+          nios.out_count);
+
+    /* The late acceptance response is still in the ordered stream: the
+     * recovery read ahead of the next request consumes it, and the next,
+     * distinct request then completes on its own identity. */
+    out_before = nios.out_count;
+    nios.mode = M_ACCEPT;
+    nios.complete_after = 1;
+    status = now(BLADERF_CHANNEL_RX(0), 6, 18);
+    CHECK(status == 0, "request after a late ACK: status %d", status);
+    CHECK(nios.last_token == 18, "request after a late ACK not on the wire");
+    CHECK(nios.out_count > out_before, "request after a late ACK not sent");
+    done();
+
+    /* The response is gone for good. The ambiguity cannot be resolved, so no
+     * new command may overtake the accepted one: it is refused before the
+     * wire (only the ordered recovery read is sent). */
+    fresh(M_ACK_LOST, 41);
+    nios.ack_never_arrives = true;
+    status = now(BLADERF_CHANNEL_RX(0), 5, 17);
+    CHECK(status == BLADERF_ERR_TIMEOUT, "lost-for-good ACK: status %d", status);
+    out_before = nios.out_count;
+    nios.mode = M_ACCEPT;
+    status = now(BLADERF_CHANNEL_RX(0), 6, 18);
+    CHECK(status == BLADERF_ERR_WOULD_BLOCK,
+          "request behind an unresolved accepted command: status %d", status);
+    CHECK(nios.out_count == out_before + 1,
+          "only the recovery read may reach the wire (%u)",
+          nios.out_count - out_before);
+    CHECK(nios.last_token == 17, "the blocked request reached the NIOS");
+    done();
+
+    fresh(M_COMPLETION_TIMEOUT, 41);
+    status = now(BLADERF_CHANNEL_TX(0), 5, 19);
+    CHECK(status == BLADERF_ERR_TIMEOUT, "terminal timeout: status %d", status);
+    CHECK(nios.timed_out_reads >= 1, "terminal timeout was not injected");
+    CHECK(dev.nios_retune_trace.valid && dev.nios_retune_trace.status == 0,
+          "terminal timeout: the acceptance response was complete (%d)",
+          dev.nios_retune_trace.status);
+    CHECK(dev.nios_retune_trace.retune2_terminal_unknown,
+          "terminal timeout not flagged terminal-unknown");
+    done();
+    return 0;
+}
+
 int main(void)
 {
     if (test_queue_responses() || test_token_sequence_across_wrap() ||
         test_counter_wrap() || test_reset_during_wait() ||
-        test_nodev_during_wait())
+        test_nodev_during_wait() || test_lost_ack_vs_terminal_timeout())
         return 1;
     puts("libbladeRF RETUNE2 transport fault injection: PASS");
     return 0;

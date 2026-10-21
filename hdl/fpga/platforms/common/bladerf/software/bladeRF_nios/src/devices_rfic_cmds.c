@@ -759,7 +759,10 @@ ad9361_init_ready:
             if (!_rfic_cmd_wr_frequency_internal(
                     state, ch, target_frequency, true))
                 return false;
-            if (state->rfdc_job_pending || state->tx_quad_job_pending) {
+            /* The LO write may itself leave a retained RFPLL job; the same
+             * frequency callback is re-entered after it, so hold this phase. */
+            if (state->rfpll_job_pending || state->rfdc_job_pending ||
+                state->tx_quad_job_pending) {
                 state->init_tail_pending = true;
                 return true;
             }
