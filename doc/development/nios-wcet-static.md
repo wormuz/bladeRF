@@ -324,6 +324,24 @@ now reads NIOS INIT first and returns an error unless it is ON
 existing status-read-failure paths revoke the RX epoch
 (`BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE`) and mark TX invalid. Test:
 `test_rx_monitor_nios_state` (policy only; not run against a device).
+HOST tuning with NIOS RETUNE2 sweep sessions (checked, no gap): NIOS can
+latch `calibration_faulted` only through its own RFIC commands, and those are
+issued only by `rfic_fpga_control`. `rfic_latch_calibration_fault` returns at
+once without a NIOS PHY (`devices_rfic.c:557-560`), and in HOST mode NIOS has
+none: `bladerf2_set_tuning_mode` runs `rfic_other->deinitialize` before
+setting `tuning_mode = HOST` and returns on failure (`bladerf2.c`, the
+`CHECK_STATUS(rfic_other->deinitialize(dev))` step), so a failed NIOS deinit
+(the paths that set the flag without a PHY, `devices_rfic_cmds.c:192,306,479,
+1146`) keeps the board in FPGA mode, where the monitor now reads NIOS INIT.
+In HOST mode NIOS RETUNE2 failures (lock read failure, timeout, rejected
+request) are not a latch: each one goes through `record_retune2_failure`
+(`pkt_retune2.c`), which the host reads as a failure count plus exact
+records. The sweep session turns them into `BLADERF_RX_SWEEP_FAILED` or, if
+records are lost or the counts disagree, `BLADERF_RX_SWEEP_LOST`
+(`rx_sweep.c:160-300`), and the monitor's `should_poll_rx_retune` path
+consumes the same counters (`bladerf2.c:5098-5160`). Not exercised on a
+device.
+
 
 ## 7. Int-only wrappers
 
