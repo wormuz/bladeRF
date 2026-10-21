@@ -968,6 +968,9 @@ static int _rfic_host_set_sample_rate(struct bladerf *dev,
                                       bladerf_channel ch,
                                       bladerf_sample_rate rate)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     bladerf2_axi_io_set_dev(dev);
     struct bladerf2_board_data *board_data = dev->board_data;
     struct ad9361_rf_phy *phy              = board_data->phy;

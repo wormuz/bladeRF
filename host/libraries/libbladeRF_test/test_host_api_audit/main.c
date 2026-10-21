@@ -60,10 +60,13 @@ static void reset_fixture(void)
     qt.port = 0x83;
 }
 
+extern struct controller_fns const rfic_host_control;
+
 typedef int (*entry_fn)(struct bladerf *, bladerf_channel);
 
 #define NEEDS_SWEEP 1u
 #define NEEDS_EPOCH 2u
+#define NEEDS_CALFAULT 4u
 
 struct entry {
     const char *name;
@@ -148,6 +151,7 @@ B(rx_sweep_schedule,
 B(rx_sweep_completions,
   d->board->rx_sweep_completions(d, ch, records, 2, &count_out))
 B(rx_sweep_end, d->board->rx_sweep_end(d, ch))
+B(rfic_host_set_sample_rate, rfic_host_control.set_sample_rate(d, ch, 1000000))
 
 P(set_gain, bladerf_set_gain(d, ch, 10))
 P(get_gain, bladerf_get_gain(d, ch, &ival))
@@ -225,7 +229,7 @@ static const struct entry entries[] = {
     BE(set_correction), BE(trigger_init), BE(read_trigger), BE(write_trigger),
     BE(invalidate_rx_data), BE(tx_frequency_reconfigure_begin),
     BE(rx_sweep_begin), BES(rx_sweep_schedule), BE(rx_sweep_completions),
-    BES(rx_sweep_end),
+    BES(rx_sweep_end), { "board.rfic_host_set_sample_rate", b_rfic_host_set_sample_rate, NEEDS_CALFAULT },
     PE(set_gain), PE(get_gain), PE(set_gain_mode), PE(get_gain_mode),
     PE(get_gain_modes), PE(get_gain_range), PE(set_gain_stage),
     PE(get_gain_stage), PE(get_gain_stage_range), PE(get_gain_stages),
@@ -252,6 +256,9 @@ static void apply_needs(const struct entry *e)
     if (e->needs & NEEDS_SWEEP) {
         bd.rx_sweep.active = true;
         bd.rx_sweep.ch = BLADERF_CHANNEL_RX(0);
+    }
+    if (e->needs & NEEDS_CALFAULT) {
+        bd.calibration_faulted = true;
     }
     if (e->needs & NEEDS_EPOCH) {
         bd.rf_transition_epoch_contract_enabled = true;
@@ -440,6 +447,32 @@ static int test_nios_busy_deadline(void)
     return failures;
 }
 
+/* A pending TX certificate that never arrives must time out, not block. */
+static int test_tx_validity_deadline(void)
+{
+    struct timespec t0, t1;
+    double elapsed;
+    int status;
+
+    reset_fixture();
+    assert(COND_INIT(&bd.rx_async_epoch_cond) == 0);
+    bd.rx_async_epoch_cond_initialized = true;
+    bd.tx_async_link_certified = true;
+    alarm(10);
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    status = bladerf2_tx_wait_for_validity(&dev);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    alarm(0);
+    elapsed = (double)(t1.tv_sec - t0.tv_sec) +
+              (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+    if (status != BLADERF_ERR_TIMEOUT || elapsed < 1.9 || elapsed > 4.0) {
+        printf("FAIL tx_wait_for_validity: status=%d elapsed=%.3f s\n",
+               status, elapsed);
+        return 1;
+    }
+    return 0;
+}
+
 int main(void)
 {
     struct sigaction sa;
@@ -458,6 +491,7 @@ int main(void)
     failures = test_channel_validation();
     failures += test_adc_channel_index();
     failures += test_nios_busy_deadline();
+    failures += test_tx_validity_deadline();
     if (failures != 0) {
         printf("%d failure(s)\n", failures);
         return 1;

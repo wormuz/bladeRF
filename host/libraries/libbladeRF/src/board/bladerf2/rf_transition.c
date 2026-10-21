@@ -129,6 +129,10 @@ static void _emit_event(struct bladerf *dev,
  * polling granularity. */
 #define POLL_INTERVAL_US 120
 
+/* Failure detection only: certification normally lands within the monitor
+ * interval. */
+#define BLADERF2_TX_VALIDITY_TIMEOUT_MS 2000
+
 static uint64_t _monotonic_ns(void)
 {
     uint64_t now_ns = 0;
@@ -209,6 +213,12 @@ int bladerf2_tx_wait_for_validity(struct bladerf *dev)
     if (!board_data->rx_async_epoch_cond_initialized) {
         return BLADERF_ERR_UNEXPECTED;
     }
+    const uint64_t start_ns = _monotonic_ns();
+    if (start_ns == 0) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
+    const uint64_t deadline_ns =
+        start_ns + (uint64_t)BLADERF2_TX_VALIDITY_TIMEOUT_MS * 1000000ULL;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     for (;;) {
         if (board_data->tx_async_fault_flush_required) {
@@ -250,10 +260,22 @@ int bladerf2_tx_wait_for_validity(struct bladerf *dev)
             return BLADERF_ERR_WOULD_BLOCK;
         }
 
-        const int wait_status = COND_WAIT(
+        const uint64_t now_ns = _monotonic_ns();
+        if (now_ns == 0) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (now_ns >= deadline_ns) {
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            return BLADERF_ERR_TIMEOUT;
+        }
+        uint64_t remaining_ms = (deadline_ns - now_ns + 999999ULL) / 1000000ULL;
+        const int wait_status = COND_TIMED_WAIT(
             &board_data->rx_async_epoch_cond,
-            &board_data->rx_async_epoch_lock);
-        if (wait_status != THREAD_SUCCESS) {
+            &board_data->rx_async_epoch_lock,
+            (uint32_t)remaining_ms);
+        if (wait_status != THREAD_SUCCESS &&
+            wait_status != THREAD_TIMEOUT) {
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
             return BLADERF_ERR_UNEXPECTED;
         }

@@ -41,6 +41,7 @@ internal caller reached side effects with an invalid channel.
 | `bladerf_rx_sweep_begin/_schedule/_completions/_end` | yes (+ RX only) | `sweep_channel_valid`, session channel compare | `*.rx_sweep_*` (session active for schedule/end) |
 | `bladerf_enable/print/get_gain_calibration`, `_get_gain_calibration_copy`, `_load_gain_calibration`, `_get_gain_target` | `valid_gain_cal_channel` first | n/a | `public.*_gain_*` |
 | `bladerf_get/set_bias_tee`, `_set/get_rx_qec_tracking`, `_get_rx_bbdc_tracking_words`, `_get_rfic_rssi` | n/a (bladeRF2 API) | channel check first | `public.*` |
+| `rfic_host_control.set_sample_rate` | n/a | added (non-TX used to fall into the RX branch) | `board.rfic_host_set_sample_rate` |
 | `bladerf_get_rx_fpga_adc_chan_regs` (raw bank 0..3, not a `bladerf_channel`) | n/a | `ch > 3` first | `test_adc_channel_index` |
 
 Not channel-indexed (mask/array arguments checked at entry, no change):
@@ -56,7 +57,7 @@ Not channel-indexed (mask/array arguments checked at entry, no change):
 | `nios_retune_clear_wait` | 1 s | ok |
 | TX gate abort / flush / release polls | `timeout_ms` argument | ok |
 | `nios_retune2_wait_now_terminal` | none: `for (;;)` with `usleep(120)` until a completion record matches | open, reported (NIOS RETUNE2 owner) |
-| `bladerf2_tx_wait_for_validity` | none: `COND_WAIT` until the monitor thread certifies | open, reported (TX recovery owner) |
+| `bladerf2_tx_wait_for_validity` | none: `COND_WAIT` until the monitor thread certifies | fixed: 2 s monotonic deadline, `BLADERF_ERR_TIMEOUT` (`test_tx_validity_deadline`) |
 | `rf_transition.c` calibration and first-host-data waits | `_deadline_expired`, failure detection only | ok |
 | `_rfic_cmd_write` / `_rfic_fpga_*` (`rfic_fpga.c`) | not audited | channel check absent at layer 2, reported (NIOS RFIC owner) |
 
@@ -64,9 +65,6 @@ Not channel-indexed (mask/array arguments checked at entry, no change):
 
 - `nios_retune2_wait_now_terminal`: add a deadline; terminal cleanup must keep
   the fence when the ACK arrives late.
-- `bladerf2_tx_wait_for_validity`: bounded wait or caller-visible timeout.
 - `rfic_fpga.c` `_rfic_cmd_write`, `_rfic_fpga_{get,set}_{sample_rate,frequency,bandwidth}`,
   `_rfic_fpga_select_band`, `_rfic_fpga_get_rssi`, `_rfic_fpga_store_fastlock_profile`:
   no channel check; reachable only through the validated board table today.
-- `rfic_host.c` `_rfic_host_set_sample_rate`: no channel check (non-TX falls to
-  the RX branch); reachable only through the validated board table today.
