@@ -1069,6 +1069,12 @@ int bladerf_set_sample_rate(struct bladerf *dev,
             return BLADERF_ERR_UNEXPECTED;
         }
         if (!is_within_range(range, rate)) {
+            /* The active range depends on the feature mode (OVERSAMPLE
+             * raises the minimum), so a concurrent mode change can turn an
+             * accepted rate into this rejection. */
+            log_error("Sample rate %u Hz is outside the active range "
+                      "%" PRIi64 "-%" PRIi64 " Hz\n",
+                      rate, range->min, range->max);
             return BLADERF_ERR_RANGE;
         }
     }

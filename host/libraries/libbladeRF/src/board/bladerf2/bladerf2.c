@@ -49,6 +49,7 @@
 #include "board/board.h"
 #include "capabilities.h"
 #include "rx_spatial_fir_policy.h"
+#include "rate_fir_policy.h"
 #include "compatibility.h"
 
 #include "ad936x.h"
@@ -2396,7 +2397,7 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const *range      = NULL;
     bladerf_sample_rate current;
-    bool old_low, new_low;
+    struct bladerf2_rate_fir_plan plan;
     bladerf_rfic_rxfir rxfir;
     bladerf_rfic_txfir txfir;
 
@@ -2418,36 +2419,43 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
         return BLADERF_ERR_RANGE;
     }
 
-    /* Get current sample rate, and check it against the low-rate range */
-    CHECK_STATUS(dev->board->get_sample_rate(dev, ch, &current));
+    /* The 4x filter decision belongs to the AD9361 rate. The board getter
+     * doubles it under OVERSAMPLE, so read the controller directly. */
+    CHECK_STATUS(rfic->get_sample_rate(dev, ch, &current));
 
-    old_low = is_within_range(&bladerf2_sample_rate_range_4x, current);
-    new_low = is_within_range(&bladerf2_sample_rate_range_4x, rate);
+    plan = bladerf2_rate_fir_classify(
+        current, rate, dev->feature == BLADERF_FEATURE_OVERSAMPLE,
+        bladerf2_sample_rate_range_4x.min, bladerf2_sample_rate_range_4x.max);
 
     /* Get current filter status */
-    if (new_low || old_low) {
+    if (plan.new_low || plan.old_low) {
         CHECK_STATUS(
             rfic->get_filter(dev, BLADERF_CHANNEL_RX(0), &rxfir, NULL));
         CHECK_STATUS(
             rfic->get_filter(dev, BLADERF_CHANNEL_TX(0), NULL, &txfir));
+        bladerf2_rate_fir_actions(
+            &plan,
+            rxfir == BLADERF_RFIC_RXFIR_DEC4 &&
+                txfir == BLADERF_RFIC_TXFIR_INT4,
+            rxfir == BLADERF_RFIC_RXFIR_DEFAULT &&
+                txfir == BLADERF_RFIC_TXFIR_DEFAULT);
     }
 
     /* If the requested sample rate is below the native range, we must implement
      * a 4x decimation/interpolation filter on the RFIC. */
-    if (new_low) {
+    if (plan.new_low) {
         bool fir_set_failed = false;
         int status;
 
-        if (rxfir != BLADERF_RFIC_RXFIR_DEC4 ||
-            txfir != BLADERF_RFIC_TXFIR_INT4) {
+        if (plan.enter_4x) {
             bool tx_quad_was_manual = board_data->phy->manual_tx_quad_cal_en;
             log_debug("%s: enabling 4x decimation/interpolation filters\n",
                       __FUNCTION__);
 
-            /* Intermidiate sample rate assignment to circumvent rfic->set_filter error */
-            if ((current > 40e6 && rate < 2083334) || (rate > 40e6 && current < 2083334)) {
-                CHECK_STATUS(rfic->set_sample_rate(dev, ch, 30e6));
-            }
+            /* DEC4 validates only from a rate whose clock chain leaves
+             * ADC/2 / RX_SAMPL >= 8 (rate_fir_policy.h). */
+            CHECK_STATUS(rfic->set_sample_rate(
+                dev, ch, BLADERF2_RATE_FIR_INTERMEDIATE));
 
             /* The RX and TX FIRs form one sample-rate configuration. During
              * the RX half, the clock domains are temporarily 4:1; TX QUAD
@@ -2522,42 +2530,34 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
      * too. Resetting the filters after set_sample_rate() (as before) made
      * that reset unreachable, since CHECK_STATUS() had already returned.
      *
-     * The intermediate-rate step is the same trick the low-rate path above
-     * already uses. That guard even spells out this direction:
-     *
-     *   (rate > 40e6 && current < 2083334)
-     *
-     * but it lives inside "if (new_low)", where the new rate is low by
-     * definition, so that half of the condition can never run. The step is
-     * applied here instead, where the transition actually happens.
+     * The intermediate-rate step is the same one the low-rate path above
+     * takes.
      *
      * 30 MSPS works for both sides of the switch: it is inside the native
      * range (no FIR needed) and 30 * 4 = 120 MHz stays under MAX_TX_HB1, so
      * it is valid with the 4x filters still active and after they are
      * cleared. */
-    if (old_low && !new_low) {
-        if (rxfir != BLADERF_RFIC_RXFIR_DEFAULT ||
-            txfir != BLADERF_RFIC_TXFIR_DEFAULT) {
-            log_debug("%s: disabling 4x decimation/interpolation filters\n",
-                      __FUNCTION__);
+    if (plan.leave_4x) {
+        log_debug("%s: disabling 4x decimation/interpolation filters\n",
+                  __FUNCTION__);
 
-            CHECK_STATUS(rfic->set_sample_rate(dev, ch, 30e6));
+        CHECK_STATUS(rfic->set_sample_rate(
+            dev, ch, BLADERF2_RATE_FIR_INTERMEDIATE));
 
-            /* As when entering 4x mode, changing the RX FIR while the TX
-             * interpolation filter is still active presents a transient
-             * 30/120 MHz clock pair to AD9361 TX quadrature calibration.
-             * That pair has no supported calibration NCO mapping. Defer the
-             * automatic calibration until the TX FIR is restored below. */
-            bool tx_quad_was_manual = board_data->phy->manual_tx_quad_cal_en;
-            board_data->phy->manual_tx_quad_cal_en = true;
-            int filter_status = rfic->set_filter(
-                dev, BLADERF_CHANNEL_RX(0), BLADERF_RFIC_RXFIR_DEFAULT, 0);
-            board_data->phy->manual_tx_quad_cal_en = tx_quad_was_manual;
-            CHECK_STATUS(filter_status);
+        /* As when entering 4x mode, changing the RX FIR while the TX
+         * interpolation filter is still active presents a transient
+         * 30/120 MHz clock pair to AD9361 TX quadrature calibration.
+         * That pair has no supported calibration NCO mapping. Defer the
+         * automatic calibration until the TX FIR is restored below. */
+        bool tx_quad_was_manual = board_data->phy->manual_tx_quad_cal_en;
+        board_data->phy->manual_tx_quad_cal_en = true;
+        int filter_status = rfic->set_filter(
+            dev, BLADERF_CHANNEL_RX(0), BLADERF_RFIC_RXFIR_DEFAULT, 0);
+        board_data->phy->manual_tx_quad_cal_en = tx_quad_was_manual;
+        CHECK_STATUS(filter_status);
 
-            CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
-                                          BLADERF_RFIC_TXFIR_DEFAULT));
-        }
+        CHECK_STATUS(rfic->set_filter(dev, BLADERF_CHANNEL_TX(0), 0,
+                                      BLADERF_RFIC_TXFIR_DEFAULT));
     }
 
     /* Set the sample rate */
@@ -9732,6 +9732,7 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic      = board_data->rfic;
     struct bladerf_range const sr_range    = bladerf2_sample_rate_range_4x;
+    /* AD9361 rate: the board getter doubles it under OVERSAMPLE. */
     bladerf_channel const ch               = BLADERF_CHANNEL_RX(0);
     int status = 0;
 
@@ -9739,7 +9740,7 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
         bladerf_sample_rate sr;
 
         WITH_MUTEX(&dev->lock, {
-            status = dev->board->get_sample_rate(dev, ch, &sr);
+            status = rfic->get_sample_rate(dev, ch, &sr);
         });
         if (status != 0) {
             return status;
@@ -9760,7 +9761,7 @@ int bladerf_set_rfic_rx_fir(struct bladerf *dev, bladerf_rfic_rxfir rxfir)
         if (rxfir != BLADERF_RFIC_RXFIR_DEC4) {
             bladerf_sample_rate sr;
 
-            status = dev->board->get_sample_rate(dev, ch, &sr);
+            status = rfic->get_sample_rate(dev, ch, &sr);
             if (status == 0 && is_within_range(&sr_range, sr)) {
                 log_error("%s: sample rate too low for filter (%d < %d)\n",
                           __FUNCTION__, sr, sr_range.min);
@@ -9833,7 +9834,7 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
         bladerf_sample_rate sr;
 
         WITH_MUTEX(&dev->lock, {
-            status = dev->board->get_sample_rate(dev, ch, &sr);
+            status = rfic->get_sample_rate(dev, ch, &sr);
         });
         if (status != 0) {
             return status;
@@ -9857,7 +9858,7 @@ int bladerf_set_rfic_tx_fir(struct bladerf *dev, bladerf_rfic_txfir txfir)
         if (txfir != BLADERF_RFIC_TXFIR_INT4) {
             bladerf_sample_rate sr;
 
-            status = dev->board->get_sample_rate(dev, ch, &sr);
+            status = rfic->get_sample_rate(dev, ch, &sr);
             if (status == 0 && is_within_range(&sr_range, sr)) {
                 log_error("%s: sample rate too low for filter (%d < %d)\n",
                           __FUNCTION__, sr, sr_range.min);
