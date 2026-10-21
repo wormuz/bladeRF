@@ -506,6 +506,10 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
         }
         status = nios_rx_gain_table_index_write(dev, (uint8_t)region,
                                                 indices);
+        log_debug("%s: region %u RX1 index %u RX2 index %u (0x7f keeps the "
+                  "re-map): status %d\n", __FUNCTION__, region,
+                  (unsigned)(indices & 0x7f), (unsigned)((indices >> 8) & 0x7f),
+                  status);
         if (status != 0) {
             return status;
         }
