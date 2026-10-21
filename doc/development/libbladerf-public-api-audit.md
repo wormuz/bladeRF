@@ -59,12 +59,10 @@ Not channel-indexed (mask/array arguments checked at entry, no change):
 | `nios_retune2_wait_now_terminal` | none: `for (;;)` with `usleep(120)` until a completion record matches | open, reported (NIOS RETUNE2 owner) |
 | `bladerf2_tx_wait_for_validity` | none: `COND_WAIT` until the monitor thread certifies | fixed: 2 s monotonic deadline, `BLADERF_ERR_TIMEOUT` (`test_tx_validity_deadline`) |
 | `rf_transition.c` calibration and first-host-data waits | `_deadline_expired`, failure detection only | ok |
-| `_rfic_cmd_write` / `_rfic_fpga_*` (`rfic_fpga.c`) | not audited | channel check absent at layer 2, reported (NIOS RFIC owner) |
+| `_rfic_fpga_spinwait_for` (`rfic_fpga.c`) | none: polls until retirement | fixed: failure-only stall deadman, `BLADERF_ERR_TIMEOUT` when the NIOS progress counter of the active command is unchanged for 10 s (read once per second); total time unbounded, command stays pending and is resolved by the next write; test `host/misc/run_rfic_fpga_pending_reboot_test.sh` |
+| `_rfic_cmd_read` / `_rfic_cmd_write` and every per-channel `_rfic_fpga_*` (`rfic_fpga.c`) | none | fixed: `bladerf2_channel_valid` (or `BLADERF_CHANNEL_INVALID` for system-wide commands at the accessors), `BLADERF_ERR_INVAL` before any NIOS traffic; same test |
 
 ## Open items outside this change
 
 - `nios_retune2_wait_now_terminal`: add a deadline; terminal cleanup must keep
   the fence when the ACK arrives late.
-- `rfic_fpga.c` `_rfic_cmd_write`, `_rfic_fpga_{get,set}_{sample_rate,frequency,bandwidth}`,
-  `_rfic_fpga_select_band`, `_rfic_fpga_get_rssi`, `_rfic_fpga_store_fastlock_profile`:
-  no channel check; reachable only through the validated board table today.

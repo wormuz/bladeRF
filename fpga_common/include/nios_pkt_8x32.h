@@ -541,6 +541,34 @@
 #define NIOS_PKT_8x32_SFIR_STATUS_VERSION_MASK  0xFu
 #define NIOS_PKT_8x32_SFIR_VERSION              1u
 
+/* NIOS boot nonce (FPGA >= v0.34.0), addr 0. NIOS RAM only.
+ *
+ * The value is 0 after every NIOS boot, including a full FPGA
+ * reconfiguration. A write with non-zero data stores it only while the
+ * current value is 0, and succeeds only if the value afterwards equals the
+ * written data; a write of 0 fails. Read returns the current value.
+ *
+ * libbladeRF stamps a host-chosen value before a tagged RFIC command and
+ * compares it while that command is pending. A changed value means NIOS
+ * rebooted under the pending command: the retirement sequence and
+ * transaction IDs restarted, and the command result is gone. The RTL
+ * command-session generation cannot show this, because it restarts at 0 on
+ * reconfiguration and may count back to the old value. */
+#define NIOS_PKT_8x32_TARGET_BOOT_NONCE         0x94
+
+/* Write-once store rule shared by NIOS and the host tests. */
+static inline bool nios_pkt_8x32_boot_nonce_store(uint32_t *current,
+                                                  uint32_t requested)
+{
+    if (requested == 0) {
+        return false;
+    }
+    if (*current == 0) {
+        *current = requested;
+    }
+    return *current == requested;
+}
+
 /* FPGA status PIOs are independent of the RFIC and remain safe while a
  * retained RETUNE2 operation owns it. Completion-record writes only select
  * which NIOS-owned RAM record subsequent reads observe. Gate COMPLETE and
@@ -553,6 +581,11 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
 {
     if (target == NIOS_PKT_8x32_TARGET_RETUNE2_COMPLETION) {
         return true;
+    }
+    /* A host resolving a pending RFIC command checks the nonce while that
+     * command's callback still owns the RFIC. */
+    if (target == NIOS_PKT_8x32_TARGET_BOOT_NONCE) {
+        return addr == 0;
     }
     if (target == NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE && write) {
         return data == 0 &&

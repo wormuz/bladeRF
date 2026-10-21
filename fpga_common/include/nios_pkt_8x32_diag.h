@@ -35,6 +35,7 @@ static inline bool nios_pkt_8x32_diagnostic_read_addr_valid(uint8_t target,
     switch (target) {
         case NIOS_PKT_8x32_TARGET_VERSION:
         case NIOS_PKT_8x32_TARGET_CONTROL:
+        case NIOS_PKT_8x32_TARGET_BOOT_NONCE:
         case NIOS_PKT_8x32_TARGET_RFFE_CSR:
             return addr == 0;
 

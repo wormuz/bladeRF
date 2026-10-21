@@ -501,6 +501,14 @@ static int nios_16x64_write_with_transaction_id(struct bladerf *dev,
                    : BLADERF_ERR_FPGA_OP;
     }
 
+    if (id == NIOS_PKT_16x64_TARGET_RFIC &&
+        nios_pkt_16x64_resp_is_queue_full(buf)) {
+        log_debug("RFIC write refused: NIOS command queue full "
+                  "(address=0x%04x id=%u)\n",
+                  addr, (unsigned int)transaction_id);
+        return BLADERF_ERR_QUEUE_FULL;
+    }
+
     nios_pkt_16x64_resp_unpack(buf, NULL, NULL, NULL, &response_data,
                                &success);
 
@@ -1125,6 +1133,19 @@ int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value)
 #endif
 
     return status;
+}
+
+int nios_boot_nonce_read(struct bladerf *dev, uint32_t *nonce)
+{
+    if (nonce == NULL) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_BOOT_NONCE, 0, nonce);
+}
+
+int nios_boot_nonce_write(struct bladerf *dev, uint32_t nonce)
+{
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_BOOT_NONCE, 0, nonce);
 }
 
 int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value)

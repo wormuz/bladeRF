@@ -461,6 +461,46 @@ static void test_tagged_rfic_busy_response_is_a_valid_terminal_reply(void)
     teardown(&usb);
 }
 
+static void test_rfic_queue_full_response_is_terminal_and_scoped(void)
+{
+    struct bladerf_usb usb;
+    struct usb_fns fns;
+    struct fake_usb fake;
+    enum nios_transaction_stage stage = NIOS_TRANSACTION_DESYNCHRONIZED;
+    uint8_t request[NIOS_PKT_LEN] = {0};
+
+    setup(&usb, &fns, &fake);
+    nios_pkt_16x64_pack_with_transaction_id(
+        request, NIOS_PKT_16x64_TARGET_RFIC, true, 0x0104, 0x1234, 0x5a31);
+    nios_pkt_16x64_resp_pack_queue_full(
+        fake.scripted_responses[0], NIOS_PKT_16x64_TARGET_RFIC, 0x0104,
+        0x1234, 0x5a31);
+    fake.scripted_response_count = 1;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
+                                NULL, &stage) == 0);
+    assert(stage == NIOS_TRANSACTION_COMPLETE);
+    assert(nios_pkt_16x64_resp_is_queue_full(fake.scripted_responses[0]));
+    assert(!usb.peripheral->pending_rfic_write);
+    assert(!usb.peripheral->desynchronized);
+    teardown(&usb);
+
+    /* QUEUE_FULL belongs to RFIC writes only. */
+    setup(&usb, &fns, &fake);
+    stage = NIOS_TRANSACTION_COMPLETE;
+    nios_pkt_16x64_pack(request, NIOS_PKT_16x64_TARGET_AD9361, true, 0x42,
+                        0x12);
+    nios_pkt_16x64_resp_pack(fake.scripted_responses[0],
+                             NIOS_PKT_16x64_TARGET_AD9361, true, 0x42, 0x12,
+                             false);
+    fake.scripted_responses[0][NIOS_PKT_16x64_IDX_FLAGS] |=
+        NIOS_PKT_16x64_FLAG_QUEUE_FULL;
+    fake.scripted_response_count = 1;
+    assert(nios_usb_transaction(&usb, request, sizeof(request), 250, NULL,
+                                NULL, &stage) != 0);
+    assert(stage != NIOS_TRANSACTION_COMPLETE);
+    teardown(&usb);
+}
+
 static void test_retune_busy_responses_are_terminal_and_correlated(void)
 {
     struct bladerf_usb usb;
@@ -1674,6 +1714,7 @@ int main(void)
     test_retune_failure_readout_drains_late_rfic_ack();
     test_tagged_write_full_ack_with_timeout_status_is_consumed();
     test_tagged_rfic_busy_response_is_a_valid_terminal_reply();
+    test_rfic_queue_full_response_is_terminal_and_scoped();
     test_retune_busy_responses_are_terminal_and_correlated();
     test_tagged_write_partial_timeout_fails_closed();
     test_tagged_write_unknown_timeout_length_fails_closed();

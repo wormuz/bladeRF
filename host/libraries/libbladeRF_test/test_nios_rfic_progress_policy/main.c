@@ -224,5 +224,11 @@ int main(void)
     assert(bladerf_rfic_tagged_write_allowed(0, true, 0));
     assert(!bladerf_rfic_tagged_write_allowed(1, false, 0));
     assert(!bladerf_rfic_tagged_write_allowed(0, true, 0x1234));
+    assert(BLADERF_RFIC_TAGGED_QUEUE_DEPTH == 1u);
+    assert(BLADERF_RFIC_QUEUE_DEPTH == 16u);
+    assert(!bladerf_rfic_tagged_write_allowed(BLADERF_RFIC_QUEUE_DEPTH, false,
+                                              0));
+    assert(BLADERF_RFIC_WRITE_ACCEPTED == 0);
+    assert(BLADERF_RFIC_WRITE_QUEUE_FULL != BLADERF_RFIC_WRITE_REJECTED);
     return 0;
 }

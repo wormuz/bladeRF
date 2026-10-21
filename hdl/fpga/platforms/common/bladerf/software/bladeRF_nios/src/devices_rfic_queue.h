@@ -29,7 +29,12 @@
 
 #include "rfic_progress_policy.h"
 
-#define COMMAND_QUEUE_MAX 16
+#define COMMAND_QUEUE_MAX BLADERF_RFIC_QUEUE_DEPTH
+
+/* Ring indices wrap with a mask. */
+_Static_assert((COMMAND_QUEUE_MAX & (COMMAND_QUEUE_MAX - 1u)) == 0,
+               "RFIC command queue depth must be a power of two");
+
 #define COMMAND_QUEUE_FULL 0xff
 #define COMMAND_QUEUE_EMPTY 0xfe
 

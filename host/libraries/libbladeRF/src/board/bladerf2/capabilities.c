@@ -150,5 +150,9 @@ uint64_t bladerf2_get_fpga_capabilities(
         capabilities |= BLADERF_CAP_NIOS_RFDC_SHARED_BANK;
     }
 
+    if (version_fields_greater_or_equal(fpga_version, 0, 35, 0)) {
+        capabilities |= BLADERF_CAP_NIOS_BOOT_NONCE;
+    }
+
     return capabilities;
 }

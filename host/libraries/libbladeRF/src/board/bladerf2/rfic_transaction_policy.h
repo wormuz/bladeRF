@@ -53,6 +53,56 @@ static inline bool bladerf2_rfic_deadline_expired(uint64_t started_ns,
     return (uint64_t)(now_ns - started_ns) >= budget_ns;
 }
 
+/* Failure-only stall deadman over the NIOS progress counter, which advances
+ * on every worker step of the active command. Only a counter that stays
+ * unchanged for budget_ns expires; total elapsed time is never bounded, so a
+ * long but progressing calibration is not failed. Expiry never means
+ * retirement or success. */
+struct bladerf2_rfic_stall_watch {
+    bool armed;
+    uint32_t sequence;
+    uint64_t changed_ns;
+};
+
+static inline bool bladerf2_rfic_stall_expired(
+    struct bladerf2_rfic_stall_watch *watch, uint32_t sequence,
+    uint64_t now_ns, uint64_t budget_ns)
+{
+    if (!watch->armed || sequence != watch->sequence) {
+        watch->armed = true;
+        watch->sequence = sequence;
+        watch->changed_ns = now_ns;
+        return false;
+    }
+    return bladerf2_rfic_deadline_expired(watch->changed_ns, now_ns,
+                                          budget_ns);
+}
+
+/* NIOS boot nonce: the value recorded before the pending command was issued
+ * no longer matches, so NIOS rebooted (FPGA reconfiguration included) and
+ * the retirement sequence and transaction IDs restarted under it. */
+static inline bool bladerf2_rfic_boot_nonce_rebooted(bool recorded_valid,
+                                                     uint32_t recorded,
+                                                     uint32_t current)
+{
+    return recorded_valid && current != recorded;
+}
+
+/* The nonce must differ between NIOS boots, it need not be secret. Hash the
+ * caller's entropy (clocks, handle address) with the splitmix64 finalizer;
+ * 0 is reserved for "not stamped since boot". */
+static inline uint32_t bladerf2_rfic_boot_nonce_from_seed(uint64_t seed)
+{
+    uint64_t x = seed + UINT64_C(0x9e3779b97f4a7c15);
+    uint32_t nonce;
+
+    x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+    x ^= x >> 31;
+    nonce = (uint32_t)(x ^ (x >> 32));
+    return nonce != 0 ? nonce : 1u;
+}
+
 /* Polling is only the transport mechanism for observing the firmware's
  * retirement event. Start promptly, then reduce USB/NIOS traffic while a
  * bounded calibration callback owns the single NIOS execution context. */

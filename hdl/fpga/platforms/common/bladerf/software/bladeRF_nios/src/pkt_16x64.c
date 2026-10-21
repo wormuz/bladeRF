@@ -32,9 +32,11 @@
 #include "pkt_retune2.h"
 
 static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
-                                 uint16_t transaction_id)
+                                 uint16_t transaction_id, bool *queue_full)
 {
     bool success = true;
+
+    (void)queue_full;
 
     switch (id) {
 #if defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)
@@ -70,10 +72,13 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
 #endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
 
 #ifdef BLADERF_NIOS_LIBAD936X
-        case NIOS_PKT_16x64_TARGET_RFIC:
-            success = rfic_command_write_with_transaction_id(
-                addr, data, transaction_id);
+        case NIOS_PKT_16x64_TARGET_RFIC: {
+            const enum bladerf_rfic_write_admission admission =
+                rfic_command_write_admit(addr, data, transaction_id);
+            *queue_full = admission == BLADERF_RFIC_WRITE_QUEUE_FULL;
+            success = admission == BLADERF_RFIC_WRITE_ACCEPTED;
             break;
+        }
 #endif  // BLADERF_NIOS_LIBAD936X
 
         /* Add user customizations here
@@ -138,6 +143,7 @@ void pkt_16x64(struct pkt_buf *b)
     bool     is_write;
     bool     success;
     uint16_t transaction_id;
+    bool     queue_full = false;
 
     nios_pkt_16x64_unpack(b->req, &id, &is_write, &addr, &data);
     transaction_id = nios_pkt_16x64_transaction_id(b->req);
@@ -250,7 +256,7 @@ void pkt_16x64(struct pkt_buf *b)
         success = false;
 #endif
     } else if (is_write) {
-        success = perform_write(id, addr, data, transaction_id);
+        success = perform_write(id, addr, data, transaction_id, &queue_full);
     } else {
         success = perform_read(id, addr, &data);
     }
@@ -258,6 +264,11 @@ void pkt_16x64(struct pkt_buf *b)
 
 
     if (is_write && id == NIOS_PKT_16x64_TARGET_RFIC) {
+        if (queue_full) {
+            nios_pkt_16x64_resp_pack_queue_full(b->resp, id, addr, data,
+                                                transaction_id);
+            return;
+        }
         nios_pkt_16x64_resp_pack_with_transaction_id(
             b->resp, id, is_write, addr, data, success, transaction_id);
     } else {

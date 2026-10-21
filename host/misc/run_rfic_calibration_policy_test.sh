@@ -7,6 +7,7 @@ trap 'rm -f "$test_bin"' EXIT
 
 cc -std=c99 -Wall -Wextra -Werror \
     -I"$repo_root/hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src" \
+    -I"$repo_root/fpga_common/include" \
     "$repo_root/host/misc/test_rfic_calibration_policy.c" \
     -o "$test_bin"
 

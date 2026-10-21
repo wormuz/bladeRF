@@ -253,10 +253,18 @@ static bool nios_response_matches_request(const uint8_t *request,
                               &req_data);
         nios_pkt_16x64_unpack(response, &resp_target, &resp_write, &resp_addr,
                               &resp_data);
-        /* BUSY is a response-only extension for tagged RFIC writes. All
-         * other flag bits and the reserved header byte remain zero. */
-        if ((response[NIOS_PKT_16x64_IDX_FLAGS] & 0xf8u) != 0 ||
+        /* BUSY (tagged RFIC writes) and QUEUE_FULL (RFIC writes) are
+         * response-only extensions. All other flag bits and the reserved
+         * header byte remain zero. */
+        if ((response[NIOS_PKT_16x64_IDX_FLAGS] & 0xf0u) != 0 ||
             response[NIOS_PKT_16x64_IDX_RESV1] != 0) {
+            return false;
+        }
+        if (nios_pkt_16x64_resp_is_queue_full(response) &&
+            (req_target != NIOS_PKT_16x64_TARGET_RFIC || !req_write ||
+             nios_pkt_16x64_resp_is_busy(response) ||
+             (response[NIOS_PKT_16x64_IDX_FLAGS] &
+              NIOS_PKT_16x64_FLAG_SUCCESS) != 0)) {
             return false;
         }
         if (req_target == NIOS_PKT_16x64_TARGET_RFIC && req_write) {

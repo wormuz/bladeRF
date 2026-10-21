@@ -666,11 +666,10 @@ ad9361_init_ready:
     /* Use the board-routed AD9361 completion signal after constructor
      * completion, then seed the RFDC history from setup's verified RX LO. */
     state->phy->read_cal_done = _rfic_read_cal_done;
-    if (init_param->rx_rf_port_input_select < RFIC_RX_RF_PORT_COUNT) {
-        state->last_rfdc_calib_freq[BLADERF_RX]
-                                   [init_param->rx_rf_port_input_select] =
-            init_param->rx_synthesizer_frequency_hz;
-    }
+    rfic_rfdc_calibration_record(
+        state->last_rfdc_calib_freq[BLADERF_RX],
+        init_param->rx_rf_port_input_select,
+        init_param->rx_synthesizer_frequency_hz);
 
     if (state->init_tail_phase == RFIC_INIT_TAIL_IDLE) {
         state->init_restore_standby = restore_standby_state;

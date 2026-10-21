@@ -83,10 +83,30 @@ static inline bool bladerf_rfic_result_ack_matches(
            result_sequence == ack_sequence;
 }
 
+/* NIOS RFIC write queue depth. The physical ring bounds untagged writes;
+ * the tagged protocol is stop-and-wait, so one tagged command occupies the
+ * queue from acceptance until its terminal result is ACKed. libbladeRF keeps
+ * exactly one pending-command record and relies on this depth. */
+#define BLADERF_RFIC_QUEUE_DEPTH 16u
+#define BLADERF_RFIC_TAGGED_QUEUE_DEPTH 1u
+
+/* Why NIOS refused an RFIC write. QUEUE_FULL is reported on the wire with
+ * NIOS_PKT_16x64_FLAG_QUEUE_FULL; the command never executes. */
+enum bladerf_rfic_write_admission {
+    BLADERF_RFIC_WRITE_ACCEPTED = 0,
+    BLADERF_RFIC_WRITE_REJECTED,
+    BLADERF_RFIC_WRITE_QUEUE_FULL,
+};
+
+/* A retained, unACKed tagged result still occupies the single tagged slot.
+ * A legacy untagged result has no token to ACK and does not. */
 static inline bool bladerf_rfic_tagged_write_allowed(
     uint8_t queue_count, bool result_pending, uint16_t last_result_id)
 {
-    return queue_count == 0 && (!result_pending || last_result_id == 0);
+    uint32_t occupied = (uint32_t)queue_count +
+                        (result_pending && last_result_id != 0 ? 1u : 0u);
+
+    return occupied < BLADERF_RFIC_TAGGED_QUEUE_DEPTH;
 }
 
 static inline uint8_t bladerf_rfic_result_from_status(int32_t status)
