@@ -458,6 +458,7 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
     int gain_db[2];
     unsigned int lane;
     unsigned int region;
+    uint32_t indices[3];
 
     if (!have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
         return 0;
@@ -482,9 +483,7 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
 
     for (region = 0; region < 3; region++) {
         const struct gain_table_info *info = NULL;
-        uint32_t indices = 0;
         unsigned int i;
-        int status;
 
         for (i = 0; gt[i].tab != NULL; i++) {
             if (!!gt[i].split_table == split &&
@@ -493,6 +492,7 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
                 break;
             }
         }
+        indices[region] = 0;
         for (lane = 0; lane < 2; lane++) {
             int32_t index = -1;
 
@@ -500,20 +500,33 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
                 index = ad9361_gain_table_index(
                     info, gain_table_full_db(region, gain_db[lane]));
             }
-            indices |= (uint32_t)(index < 0 ? NIOS_PKT_8x32_RX_GT_INDEX_KEEP
-                                            : (uint32_t)index)
-                       << (8 * lane);
+            indices[region] |=
+                (uint32_t)(index < 0 ? NIOS_PKT_8x32_RX_GT_INDEX_KEEP
+                                     : (uint32_t)index)
+                << (8 * lane);
         }
-        status = nios_rx_gain_table_index_write(dev, (uint8_t)region,
-                                                indices);
+    }
+    /* NIOS keeps them until it reboots, which reopens the handle. */
+    if (board_data->rx_gain_table_index_sent_valid &&
+        memcmp(indices, board_data->rx_gain_table_index_sent,
+               sizeof(indices)) == 0) {
+        return 0;
+    }
+    board_data->rx_gain_table_index_sent_valid = false;
+    for (region = 0; region < 3; region++) {
+        int status = nios_rx_gain_table_index_write(dev, (uint8_t)region,
+                                                    indices[region]);
+
         log_debug("%s: region %u RX1 index %u RX2 index %u (0x7f keeps the "
                   "re-map): status %d\n", __FUNCTION__, region,
-                  (unsigned)(indices & 0x7f), (unsigned)((indices >> 8) & 0x7f),
-                  status);
+                  (unsigned)(indices[region] & 0x7f),
+                  (unsigned)((indices[region] >> 8) & 0x7f), status);
         if (status != 0) {
             return status;
         }
     }
+    memcpy(board_data->rx_gain_table_index_sent, indices, sizeof(indices));
+    board_data->rx_gain_table_index_sent_valid = true;
     return 0;
 }
 

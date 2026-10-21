@@ -51,6 +51,19 @@ int main(void)
         failures++;
     }
 
+    /* bladerf2_rx_gain_table_index_upload with an earlier retune queued
+     * (rx_epoch_deferred_load_live: FPGA_OP on the second schedule), and the
+     * fail-closed RX epoch ABORT of a legacy setter. Neither touches the
+     * RFIC. */
+    expect(NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX, true, 0, true,
+           "gain-table index write");
+    expect(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, true,
+           NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, true, "RX epoch ABORT");
+    expect(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, true,
+           NIOS_PKT_8x32_RX_EPOCH_CMD_ARM, false, "RX epoch ARM");
+    expect(NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL, true,
+           NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE, false, "RX epoch COMPLETE");
+
     /* Mutations stay fenced. */
     expect(NIOS_PKT_8x32_TARGET_RFFE_CSR, true, 0, false, "RFFE CSR write");
     expect(NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION, true, 0, false,

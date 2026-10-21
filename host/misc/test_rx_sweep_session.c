@@ -717,6 +717,18 @@ static void check_gain_table_index_upload(void)
           uploaded[2]);
     (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
 
+    /* NIOS still holds them: an unchanged gain sends nothing, which also
+     * keeps the write off a queue whose RFIC work refuses it (FPGA_OP). */
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              uploads == 3,
+          "unchanged indices re-sent: %u writes", uploads);
+    (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
+    board_data.rx_gain_api_db[0] = 21;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              uploads == 6 && uploaded[0] == (38u | 73u << 8),
+          "changed gain not re-sent: %u writes, %04x", uploads, uploaded[0]);
+    (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
+
     /* AGC owns lane 1's index; an unset gain leaves lane 0's. */
     setup_gain_table();
     board_data.rx_gain_api_known[1] = true;

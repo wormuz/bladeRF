@@ -201,6 +201,10 @@ struct bladerf2_board_data {
      * resulting gain with this value and warns when they differ. */
     bool rx_gain_api_known[2];
     int rx_gain_api_db[2];
+    /* Gain-table indices NIOS holds per region (target 0x95), valid once
+     * all three were written on this handle. */
+    bool rx_gain_table_index_sent_valid;
+    uint32_t rx_gain_table_index_sent[3];
 
     /* Bitmask of capabilities determined by version numbers */
     uint64_t capabilities;

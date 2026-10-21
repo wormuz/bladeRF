@@ -356,6 +356,9 @@
  * safely be assumed valid. A later explicit ARM starts recovery directly
  * from ERROR; it never reopens the failed epoch. */
 #define NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL   0x87
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
+#define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
 
 /* Deprecated legacy target retained for old host packets. NIOS accepts but
  * ignores writes; epoch validity never uses fixed sample discard. */
@@ -607,6 +610,16 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
     if (target == NIOS_PKT_8x32_TARGET_BOOT_NONCE) {
         return addr == 0;
     }
+    /* NIOS RAM only; a gain-table load already in flight copied its index
+     * at start, so the write affects the next load. */
+    if (target == NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX && write) {
+        return true;
+    }
+    /* RX epoch ABORT only toggles the fail-closed gate PIO, as the TX gate
+     * ABORT below; a queued retune's RFIC work must not refuse it. */
+    if (target == NIOS_PKT_8x32_TARGET_RX_EPOCH_CTRL && write) {
+        return addr == NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT && data == 0;
+    }
     if (target == NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE && write) {
         return data == 0 &&
             (addr == NIOS_PKT_8x32_TX_RETUNE_CMD_COMPLETE ||
@@ -639,9 +652,6 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
 }
 
 
-#define NIOS_PKT_8x32_RX_EPOCH_CMD_ARM       0x00 /* data: 8-bit epoch_id */
-#define NIOS_PKT_8x32_RX_EPOCH_CMD_COMPLETE  0x01
-#define NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT     0x02
 
 /* RX_EPOCH_STATUS word layout, shared between the Nios firmware that
  * composes it (rx_epoch_gate.vhd via bladerf_core.vhd) and the host that
