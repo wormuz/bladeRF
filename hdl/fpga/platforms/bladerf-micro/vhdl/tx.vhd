@@ -156,7 +156,7 @@ architecture arch of tx is
     signal tx_fifo_flush_aclr              : std_logic;
     signal tx_fifo_write_block             : std_logic;
     signal tx_fifo_reader_block            : std_logic;
-    signal tx_fifo_reader_block_tx         : std_logic;
+    signal tx_fifo_reader_block_tx         : std_logic := '1';
     signal tx_fifo_reader_fault_block_tx   : std_logic;
     signal tx_fifo_reader_tx_reset_block_tx : std_logic;
     signal tx_fifo_reader_sys_reset_block_tx : std_logic;
@@ -236,9 +236,18 @@ begin
             sync => tx_fifo_reader_sys_reset_block_tx
         );
 
-    tx_fifo_reader_block_tx <= tx_fifo_reader_fault_block_tx or
-                               tx_fifo_reader_tx_reset_block_tx or
-                               tx_fifo_reader_sys_reset_block_tx;
+    -- Registered: the OR fans out to ~500 loads ending at the sample FIFO
+    -- RAM read enable (fifo_reader fifo_read), and as one combinational
+    -- level it missed setup by 0.7 ns. Its inputs are already synchronized
+    -- asynchronous events, so one more tx_clock of latency changes nothing.
+    process(tx_clock)
+    begin
+        if rising_edge(tx_clock) then
+            tx_fifo_reader_block_tx <= tx_fifo_reader_fault_block_tx or
+                                       tx_fifo_reader_tx_reset_block_tx or
+                                       tx_fifo_reader_sys_reset_block_tx;
+        end if;
+    end process;
 
     -- TX sample fifo. This private clear is scoped to TX; tx_reset remains
     -- the shared fabric reset and is never pulsed for this recovery operation.
