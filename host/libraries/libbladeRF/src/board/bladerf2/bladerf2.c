@@ -1571,6 +1571,9 @@ static int bladerf2_enable_module(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bool enable)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2010,6 +2013,9 @@ static int bladerf2_get_gain_stage_range(struct bladerf *dev,
                                          char const *stage,
                                          struct bladerf_range const **range)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(range);
 
@@ -2058,6 +2064,9 @@ static int bladerf2_get_gain_modes(struct bladerf *dev,
                                    bladerf_channel ch,
                                    struct bladerf_gain_modes const **modes)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf_gain_modes const *mode_infos;
     unsigned int mode_infos_len;
 
@@ -2081,6 +2090,9 @@ static int bladerf2_get_gain_stages(struct bladerf *dev,
                                     char const **stages,
                                     size_t count)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     NULL_CHECK(dev);
 
     struct bladerf_gain_range const *ranges = NULL;
@@ -2146,6 +2158,9 @@ static int bladerf2_get_gain_mode(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_gain_mode *mode)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(mode);
 
@@ -2158,6 +2173,9 @@ static int bladerf2_set_gain_mode(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_gain_mode mode)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2170,6 +2188,9 @@ static int bladerf2_set_gain_mode(struct bladerf *dev,
 
 static int bladerf2_get_gain(struct bladerf *dev, bladerf_channel ch, int *gain)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(gain);
 
@@ -2180,6 +2201,9 @@ static int bladerf2_get_gain(struct bladerf *dev, bladerf_channel ch, int *gain)
 
 static int bladerf2_set_gain(struct bladerf *dev, bladerf_channel ch, int gain)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2207,6 +2231,9 @@ static int bladerf2_get_gain_stage(struct bladerf *dev,
                                    char const *stage,
                                    int *gain)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(stage);
     NULL_CHECK(gain);
@@ -2221,6 +2248,9 @@ static int bladerf2_set_gain_stage(struct bladerf *dev,
                                    char const *stage,
                                    int gain)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(stage);
 
@@ -2246,6 +2276,9 @@ static int bladerf2_get_sample_rate_range(struct bladerf *dev,
                                           bladerf_channel ch,
                                           struct bladerf_range const **range)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     NULL_CHECK(range);
 
     *range = &bladerf2_sample_rate_range_base;
@@ -2261,6 +2294,9 @@ static int bladerf2_get_rational_sample_rate(struct bladerf *dev,
                                              bladerf_channel ch,
                                              struct bladerf_rational_rate *rate)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(rate);
 
@@ -2281,6 +2317,9 @@ static int bladerf2_set_rational_sample_rate(
     struct bladerf_rational_rate *rate,
     struct bladerf_rational_rate *actual)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(rate);
 
@@ -2304,6 +2343,9 @@ static int bladerf2_get_sample_rate(struct bladerf *dev,
                                     bladerf_channel ch,
                                     bladerf_sample_rate *rate)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(rate);
 
@@ -2326,6 +2368,9 @@ static int bladerf2_set_sample_rate(struct bladerf *dev,
                                     bladerf_sample_rate rate,
                                     bladerf_sample_rate *actual)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2522,6 +2567,9 @@ static int bladerf2_get_bandwidth_range(struct bladerf *dev,
                                         bladerf_channel ch,
                                         struct bladerf_range const **range)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     NULL_CHECK(range);
 
     *range = &bladerf2_bandwidth_range;
@@ -2533,6 +2581,9 @@ static int bladerf2_get_bandwidth(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_bandwidth *bandwidth)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2545,6 +2596,9 @@ static int bladerf2_set_bandwidth(struct bladerf *dev,
                                   bladerf_bandwidth bandwidth,
                                   bladerf_bandwidth *actual)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     if (dev->feature == BLADERF_FEATURE_OVERSAMPLE) {
@@ -2569,6 +2623,9 @@ static int bladerf2_get_frequency_range(struct bladerf *dev,
                                         bladerf_channel ch,
                                         const struct bladerf_range **range)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     NULL_CHECK(range);
 
     if (BLADERF_CHANNEL_IS_TX(ch)) {
@@ -2598,6 +2655,9 @@ static int bladerf2_select_band(struct bladerf *dev,
                                 bladerf_channel ch,
                                 bladerf_frequency frequency)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2644,6 +2704,9 @@ static int bladerf2_get_frequency(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_frequency *frequency)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(frequency);
 
@@ -2673,6 +2736,9 @@ static int bladerf2_set_frequency(struct bladerf *dev,
                                   bladerf_channel ch,
                                   bladerf_frequency frequency)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -2725,12 +2791,18 @@ static int bladerf2_set_frequency(struct bladerf *dev,
 static int bladerf2_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch,
                                        uint32_t reason)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     return bladerf2_rx_data_invalidate(dev, ch, reason);
 }
 
 static void bladerf2_reconfigure_complete_cb(struct bladerf *dev,
                                              bladerf_channel ch)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return;
+    }
     bladerf2_rx_reconfigure_complete(dev, ch);
 }
 
@@ -2787,6 +2859,9 @@ int bladerf2_tx_gate_abort_fail_closed(
 static int bladerf2_tx_frequency_reconfigure_begin(
     struct bladerf *dev, bladerf_channel ch, bladerf_frequency target_hz)
 {
+    if (ch != BLADERF_CHANNEL_TX(0) && ch != BLADERF_CHANNEL_TX(1)) {
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf2_board_data *board_data = dev->board_data;
     int status = 0;
 
@@ -2888,6 +2963,9 @@ static void bladerf2_tx_frequency_reconfigure_complete(
     struct bladerf *dev, bladerf_channel ch, bladerf_frequency target_hz,
     int tune_status)
 {
+    if (ch != BLADERF_CHANNEL_TX(0) && ch != BLADERF_CHANNEL_TX(1)) {
+        return;
+    }
     struct bladerf2_board_data *board_data = dev->board_data;
     bladerf_frequency readback_hz = 0;
     int readback_status;
@@ -3719,6 +3797,9 @@ static int bladerf2_set_rf_port(struct bladerf *dev,
                                 bladerf_channel ch,
                                 const char *port)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data      = dev->board_data;
@@ -3770,6 +3851,9 @@ static int bladerf2_get_rf_port(struct bladerf *dev,
                                 bladerf_channel ch,
                                 char const **port)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(port);
 
@@ -3820,6 +3904,9 @@ static int bladerf2_get_rf_ports(struct bladerf *dev,
                                  char const **ports,
                                  unsigned int count)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf_rfic_port_name_map const *pm = NULL;
     unsigned int pm_len;
     size_t i;
@@ -3880,6 +3967,9 @@ static int bladerf2_get_quick_tune(struct bladerf *dev,
                                    bladerf_channel ch,
                                    struct bladerf_quick_tune *quick_tune)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(quick_tune);
 
@@ -4104,6 +4194,9 @@ static int bladerf2_get_quick_tune_profile(
     const struct bladerf_quick_tune *quick_tune,
     uint8_t *profile)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(quick_tune);
     NULL_CHECK(profile);
@@ -4144,6 +4237,9 @@ static int bladerf2_load_quick_tune_profile(
     uint16_t nios_slot,
     struct bladerf_quick_tune *quick_tune)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(profile);
     NULL_CHECK(quick_tune);
@@ -4215,6 +4311,9 @@ int bladerf2_quick_tune_readback(
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf2_board_data *board_data = dev->board_data;
     struct controller_fns const *rfic = board_data->rfic;
 
@@ -4302,6 +4401,9 @@ int bladerf2_schedule_retune_sequenced(
     const struct bladerf_quick_tune *quick_tune,
     uint32_t sweep_sequence)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(quick_tune);
 
@@ -4829,6 +4931,9 @@ static int bladerf2_schedule_retune(struct bladerf *dev,
 static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
                                              bladerf_channel ch)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     struct {
@@ -5339,6 +5444,9 @@ static int bladerf2_get_correction(struct bladerf *dev,
                                    bladerf_correction corr,
                                    int16_t *value)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(value);
 
@@ -5564,6 +5672,9 @@ static int bladerf2_set_correction(struct bladerf *dev,
                                    bladerf_correction corr,
                                    int16_t value)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -5714,6 +5825,9 @@ static int bladerf2_trigger_init(struct bladerf *dev,
                                  bladerf_trigger_signal signal,
                                  struct bladerf_trigger *trigger)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_INITIALIZED);
     NULL_CHECK(trigger);
 
@@ -7114,6 +7228,9 @@ static int bladerf2_read_trigger(struct bladerf *dev,
                                  bladerf_trigger_signal trigger,
                                  uint8_t *val)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
     NULL_CHECK(val);
 
@@ -7125,6 +7242,9 @@ static int bladerf2_write_trigger(struct bladerf *dev,
                                   bladerf_trigger_signal trigger,
                                   uint8_t val)
 {
+    if (!bladerf2_channel_valid(ch)) {
+        return BLADERF_ERR_INVAL;
+    }
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
     return fpga_trigger_write(dev, ch, trigger, val);

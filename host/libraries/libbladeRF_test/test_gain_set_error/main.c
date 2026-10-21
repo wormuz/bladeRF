@@ -82,6 +82,18 @@ static int mock_get_gain_range(struct bladerf *dev, bladerf_channel ch,
     return 0;
 }
 
+static int mock_get_frequency_range(struct bladerf *dev, bladerf_channel ch,
+                                    const struct bladerf_range **range)
+{
+    static const struct bladerf_range supported = {
+        .min = 0, .max = INT64_MAX, .step = 1, .scale = 1.0f,
+    };
+    (void)dev;
+    (void)ch;
+    *range = &supported;
+    return 0;
+}
+
 static int mock_invalidate_rx_data(struct bladerf *dev, bladerf_channel ch,
                                   uint32_t reason)
 {
@@ -107,6 +119,7 @@ static const struct board_fns mock_board = {
     .get_frequency = mock_get_frequency,
     .set_gain = mock_set_gain,
     .set_frequency = mock_set_frequency,
+    .get_frequency_range = mock_get_frequency_range,
     .get_gain_range = mock_get_gain_range,
     .invalidate_rx_data = mock_invalidate_rx_data,
     .rx_reconfigure_complete = mock_rx_reconfigure_complete,

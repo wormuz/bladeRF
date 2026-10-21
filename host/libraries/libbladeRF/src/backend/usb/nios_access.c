@@ -265,12 +265,24 @@ static int nios_8x16_read(struct bladerf *dev, uint8_t id,
     }
 }
 
+/* BUSY means NIOS rejected the write unexecuted; bound the retries. */
+#define NIOS_8X16_BUSY_RETRY_NS 1000000000ULL
+
 static int nios_8x16_write(struct bladerf *dev, uint8_t id,
                            uint8_t addr, uint16_t data)
 {
     int status;
     uint8_t buf[NIOS_PKT_LEN];
     bool success;
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
+
+    status = bladerf_monotonic_now_ns(&now_ns);
+    if (!nios_deadline_start(status, now_ns, NIOS_8X16_BUSY_RETRY_NS,
+                             &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
     while (true) {
         nios_pkt_8x16_pack(buf, id, true, addr, data);
 
@@ -286,6 +298,15 @@ static int nios_8x16_write(struct bladerf *dev, uint8_t id,
             /* NIOS explicitly rejected this request before executing it, so
              * retrying the same peripheral write cannot duplicate a side
              * effect. */
+            status = bladerf_monotonic_now_ns(&now_ns);
+            if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+                return BLADERF_ERR_UNEXPECTED;
+            }
+            if (expired) {
+                log_debug("%s: peripheral BUSY past deadline.\n",
+                          __FUNCTION__);
+                return BLADERF_ERR_TIMEOUT;
+            }
             usleep(120);
             continue;
         }

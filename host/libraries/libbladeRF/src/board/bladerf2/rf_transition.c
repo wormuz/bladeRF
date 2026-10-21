@@ -4314,6 +4314,12 @@ int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
                                 const struct bladerf_rx_transition_request *request,
                                 uint32_t *transaction_id)
 {
+    if (!bladerf2_rx_channel_valid(ch)) {
+        if (transaction_id != NULL) {
+            *transaction_id = 0;
+        }
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf2_board_data *board_data;
     int status = bladerf2_rx_transition_call_enter(dev, &board_data);
     if (status != 0) {
@@ -4334,6 +4340,12 @@ int bladerf_rx_transition_begin_quick_tune(
     const struct bladerf_quick_tune *quick_tune,
     uint32_t *transaction_id)
 {
+    if (!bladerf2_rx_channel_valid(ch)) {
+        if (transaction_id != NULL) {
+            *transaction_id = 0;
+        }
+        return BLADERF_ERR_INVAL;
+    }
     struct bladerf2_board_data *board_data;
     int status;
 
