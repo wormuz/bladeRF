@@ -10,6 +10,15 @@
 
 static int failures;
 
+#define CHECK(cond, ...)                         \
+    do {                                         \
+        if (!(cond)) {                           \
+            fprintf(stderr, __VA_ARGS__);        \
+            fputc('\n', stderr);                 \
+            failures++;                          \
+        }                                        \
+    } while (0)
+
 static void expect_label(const struct bladerf_rx_sweep_record *records,
                          unsigned int count, uint64_t timestamp,
                          bool certified, unsigned int expected_index,
@@ -47,7 +56,7 @@ static struct bladerf_rx_sweep_record success(uint32_t sequence,
     bladerf2_rx_sweep_record_success(&record,
                                      BLADERF2_RX_SWEEP_READBACK_VALID,
                                      readback != 0 ? readback : frequency,
-                                     executed, execution_flags, settle);
+                                     executed, execution_flags, settle, false);
     return record;
 }
 
@@ -143,7 +152,8 @@ static void check_synth_readback(void)
     }
     memset(&r, 0, sizeof(r));
     r.frequency = 925000000;
-    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50);
+    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50,
+                                     false);
     if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) == 0 ||
         r.readback_frequency != 924999999) {
         fputs("matching readback not certified\n", stderr);
@@ -160,7 +170,8 @@ static void check_synth_readback(void)
     }
     memset(&r, 0, sizeof(r));
     r.frequency = 925000000;
-    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50);
+    bladerf2_rx_sweep_record_success(&r, readback, hz, 1200, OK_FLAGS, 50,
+                                     false);
     if ((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0 ||
         (r.flags & BLADERF_RX_SWEEP_F_READBACK_MISMATCH) == 0) {
         fputs("mismatching words certified\n", stderr);
@@ -202,7 +213,7 @@ static void check_synth_readback(void)
     memset(&r, 0, sizeof(r));
     r.frequency = 925000000;
     bladerf2_rx_sweep_record_success(&r, BLADERF2_RX_SWEEP_READBACK_NONE, 0,
-                                     1200, OK_FLAGS, 50);
+                                     1200, OK_FLAGS, 50, false);
     if ((r.flags & (BLADERF_RX_SWEEP_F_CERTIFIED |
                     BLADERF_RX_SWEEP_F_READBACK_VALID)) != 0) {
         fputs("record without readback certified\n", stderr);
@@ -274,11 +285,69 @@ static void check_ranges(void)
     expect_label(NULL, 0, 1500, false, 0, "no records");
 }
 
+/* FPGA >= 0.36.0: a request with a gain-table byte certifies only when NIOS
+ * reports the table of the LO's region loaded. */
+static void check_gain_table(void)
+{
+    struct bladerf_rx_sweep_record r;
+    const uint8_t mid = (uint8_t)(NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+                                  (1u << NIOS_PKT_RETUNE2_EXEC_GT_SHIFT));
+
+    CHECK(bladerf2_rx_gain_table_region(1300000000) == 0 &&
+              bladerf2_rx_gain_table_region(1300000001) == 1 &&
+              bladerf2_rx_gain_table_region(4000000000ULL) == 1 &&
+              bladerf2_rx_gain_table_region(4000000001ULL) == 2,
+          "gain-table region boundaries");
+
+    memset(&r, 0, sizeof(r));
+    r.frequency = 1310000000;
+    bladerf2_rx_sweep_record_success(
+        &r, BLADERF2_RX_SWEEP_READBACK_VALID, r.frequency, 1200,
+        OK_FLAGS | mid | NIOS_PKT_RETUNE2_EXEC_GT_LOADED, 50, true);
+    CHECK((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0 &&
+              (r.flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID) != 0 &&
+              (r.flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_LOADED) != 0 &&
+              r.gain_table == 1,
+          "crossing with the region's table not certified");
+
+    memset(&r, 0, sizeof(r));
+    r.frequency = 1290000000;
+    bladerf2_rx_sweep_record_success(&r, BLADERF2_RX_SWEEP_READBACK_VALID,
+                                     r.frequency, 1200, OK_FLAGS | mid, 50,
+                                     true);
+    CHECK((r.flags & (BLADERF_RX_SWEEP_F_CERTIFIED |
+                      BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID)) == 0 &&
+              r.gain_table == 1,
+          "table of another region certified");
+
+    memset(&r, 0, sizeof(r));
+    r.frequency = 1290000000;
+    bladerf2_rx_sweep_record_success(&r, BLADERF2_RX_SWEEP_READBACK_VALID,
+                                     r.frequency, 1200, OK_FLAGS, 50, true);
+    CHECK((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) == 0,
+          "record without a reported table certified");
+
+    /* Without a gain-table byte (older FPGA) nothing changes. */
+    memset(&r, 0, sizeof(r));
+    r.frequency = 1290000000;
+    bladerf2_rx_sweep_record_success(&r, BLADERF2_RX_SWEEP_READBACK_VALID,
+                                     r.frequency, 1200, OK_FLAGS, 50, false);
+    CHECK((r.flags & BLADERF_RX_SWEEP_F_CERTIFIED) != 0,
+          "record of an older FPGA not certified");
+
+    CHECK(nios_pkt_retune2_gain_table(false, false, 1, 0) == 0x84 &&
+              NIOS_PKT_RETUNE2_GT_FROM(0x84u) == 1 &&
+              NIOS_PKT_RETUNE2_GT_TO(0x84u) == 0 &&
+              nios_pkt_retune2_gain_table(true, true, 3, 2) == 0xee,
+          "gain-table byte layout");
+}
+
 int main(void)
 {
     check_record_classification();
     check_synth_readback();
     check_ranges();
+    check_gain_table();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep policy failure(s)\n", failures);
         return 1;

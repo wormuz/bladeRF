@@ -869,7 +869,9 @@ int nios_retune(struct bladerf *dev,
  * @param       dev          Device handle
  * @param[in]   ch           Channel
  * @param[in]   timestamp    Time to schedule retune at
- * @param[in]   nios_profile Nios profile number (0-N) to load into the RFFE
+ * @param[in]   nios_profile Nios profile number (0-N) to load into the RFFE;
+ *                           bits 15:8 carry the RX gain-table byte
+ *                           (nios_pkt_retune2.h, Note 3), zero otherwise
  * @param[in]   rffe_profile RFFE fast lock profile number (0-7) into which
  *                           the Nios profile will be loaded.
  * @param[in]   port         RFFE port settings

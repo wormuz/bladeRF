@@ -192,6 +192,10 @@
 /** FPGA v0.35.0 NIOS boot nonce (8x32 BOOT_NONCE): detects a NIOS reboot,
  * including FPGA reconfiguration, under a pending tagged RFIC command. */
 #define BLADERF_CAP_NIOS_BOOT_NONCE (((uint64_t)1) << 52)
+/** FPGA v0.36.0 RX retune2 requests carry a gain-table byte: NIOS loads the
+ * AD9361 RX gain table of the LO region before the recall and reports the
+ * loaded region in the success record. */
+#define BLADERF_CAP_RETUNE2_GAIN_TABLE (((uint64_t)1) << 53)
 
 /**
  * Max number of gain calibration tables associated to max number of channels

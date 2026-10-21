@@ -21,6 +21,7 @@ struct scripted_request {
     uint8_t flags;
     uint64_t readback;
     bool synth_corrupt;
+    uint8_t gain_table;
 };
 
 static struct scripted_request requests[MAX_REQUESTS];
@@ -120,6 +121,12 @@ int bladerf2_schedule_retune_sequenced(
     board_data->rx_retune2_pending[i].request_token = ++next_token;
     board_data->rx_retune2_pending[i].session_generation = 5;
     board_data->rx_retune2_pending[i].sweep_sequence = sweep_sequence;
+    board_data->rx_retune2_pending[i].gain_table =
+        bladerf2_rx_retune_gain_table(dev, frequency, sweep_sequence != 0,
+                                      board_data->rx_retune2_pending_count ==
+                                          0);
+    requests[request_count].gain_table =
+        board_data->rx_retune2_pending[i].gain_table;
     board_data->rx_retune2_pending[i].valid = true;
     board_data->rx_retune2_pending_count++;
 
@@ -528,12 +535,139 @@ static void check_gain_table_region(void)
               sequence == 1,
           "retune inside the region was refused");
 }
+/* Full ADI tables of the three regions, as ad9361_adi_gt_info lays them
+ * out; only the bounds and the terminator matter here. */
+static uint8_t mock_table_rows[1][3];
+static struct gain_table_info mock_gt_info[] = {
+    { 0, 1300000000ULL, 77, 0, NULL, mock_table_rows },
+    { 1300000000ULL, 4000000000ULL, 77, 0, NULL, mock_table_rows },
+    { 4000000000ULL, 6000000000ULL, 77, 0, NULL, mock_table_rows },
+    { 0, 0, 0, 0, NULL, NULL },
+};
+static struct ad9361_phy_platform_data mock_pdata;
+
+static void setup_gain_table(void)
+{
+    setup();
+    board_data.capabilities |= BLADERF_CAP_RETUNE2_GAIN_TABLE;
+    memset(&mock_pdata, 0, sizeof(mock_pdata));
+    mock_phy.pdata = &mock_pdata;
+    mock_phy.gt_info = mock_gt_info;
+    mock_phy.current_table = 1;
+    lo_frequency = 2500000000ULL;
+}
+
+static void complete(unsigned int request, uint64_t executed, uint64_t lo,
+                     unsigned int region, bool loaded)
+{
+    requests[request].executed = executed;
+    requests[request].readback = lo;
+    requests[request].flags = (uint8_t)(
+        OK_FLAGS | NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+        (loaded ? NIOS_PKT_RETUNE2_EXEC_GT_LOADED : 0u) |
+        (region << NIOS_PKT_RETUNE2_EXEC_GT_SHIFT));
+    success_order[successes_published++] = request;
+}
+
+/* FPGA >= 0.36.0: the session crosses regions; each request names the
+ * table it needs and the one the previous request leaves, the host driver's
+ * table is unknown while NIOS may load one, and comes back at the end. */
+static void check_gain_table_crossing(void)
+{
+    struct bladerf_rx_sweep_record r[16];
+    unsigned int n;
+
+    setup_gain_table();
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin failed");
+    CHECK(schedule(1000, 925000000, 1) == 1 &&
+              schedule(2000, 930000000, 2) == 2 &&
+              schedule(3000, 1310000000, 3) == 3,
+          "crossing retunes refused");
+    CHECK(requests[0].gain_table ==
+                  nios_pkt_retune2_gain_table(false, false, 1, 0) &&
+              requests[1].gain_table ==
+                  nios_pkt_retune2_gain_table(false, false, 0, 0) &&
+              requests[2].gain_table ==
+                  nios_pkt_retune2_gain_table(false, false, 0, 1),
+          "gain-table bytes %02x %02x %02x", requests[0].gain_table,
+          requests[1].gain_table, requests[2].gain_table);
+    CHECK(mock_phy.current_table == NO_GAIN_TABLE,
+          "driver table still claimed while NIOS may load another");
+
+    complete(0, 1100, 925000000, 0, true);
+    complete(1, 2100, 930000000, 0, false);
+    complete(2, 3100, 1310000000, 1, true);
+    n = drain(r, 16);
+    CHECK(n == 3, "expected 3 records, got %u", n);
+    if (n == 3) {
+        CHECK((r[0].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  (r[0].flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_LOADED) &&
+                  r[0].gain_table == 0,
+              "crossing down not certified: %02x", r[0].flags);
+        CHECK((r[1].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  !(r[1].flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_LOADED),
+              "stop inside the new region not certified: %02x",
+              r[1].flags);
+        CHECK((r[2].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+                  r[2].gain_table == 1,
+              "crossing up not certified: %02x", r[2].flags);
+    }
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              mock_phy.current_table == 1,
+          "driver table after the session: %u", mock_phy.current_table);
+
+    /* A record reporting another region's table is not certified, and the
+     * driver is not handed a table after it. */
+    setup_gain_table();
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin failed");
+    CHECK(schedule(1000, 925000000, 1) == 1, "crossing refused");
+    complete(0, 1100, 925000000, 1, false);
+    n = drain(r, 16);
+    CHECK(n == 1 && !(r[0].flags & BLADERF_RX_SWEEP_F_CERTIFIED) &&
+              !(r[0].flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID),
+          "record with the old region's table certified");
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              mock_phy.current_table == NO_GAIN_TABLE,
+          "driver handed a table after a wrong one was reported");
+
+    /* A crossing still pending at the end may or may not have run. */
+    setup_gain_table();
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin failed");
+    CHECK(schedule(1000, 1900000000, 1) == 1 &&
+              schedule(2000, 5000000000ULL, 2) == 2,
+          "retunes refused");
+    complete(0, 1100, 1900000000, 1, false);
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              mock_phy.current_table == NO_GAIN_TABLE,
+          "driver handed a table after a cancelled crossing");
+
+    /* Within one region the driver keeps its table throughout. */
+    setup_gain_table();
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              schedule(1000, 1900000000, 1) == 1 &&
+              mock_phy.current_table == 1 &&
+              requests[0].gain_table ==
+                  nios_pkt_retune2_gain_table(false, false, 1, 1),
+          "retune inside the region disturbed the driver table");
+    complete(0, 1100, 1900000000, 1, false);
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              mock_phy.current_table == 1,
+          "driver table lost inside one region");
+    mock_phy.pdata = NULL;
+    mock_phy.gt_info = NULL;
+    mock_phy.current_table = 0;
+}
+
 int main(void)
 {
     check_begin_preconditions();
     check_mixed_outcomes();
     check_lost_and_rejected();
     check_gain_table_region();
+    check_gain_table_crossing();
     check_lo_readback();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);

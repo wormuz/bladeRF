@@ -36,6 +36,8 @@ static unsigned batch_commits;
 static unsigned batch_fail_row;
 static bool batch_bad_payload;
 static bool batch_bad_delay;
+static uint8_t read_rx_gain_index;
+static int written_rx_gain_index[2];
 
 uint32_t find_first_bit(uint32_t word)
 {
@@ -117,10 +119,21 @@ int32_t no_os_spi_write_and_read(struct no_os_spi_desc *desc, uint8_t *data,
         return -EIO;
     }
 
+    if (is_write && bytes_number >= 3 &&
+        (addr == REG_RX1_MANUAL_LMT_FULL_GAIN ||
+         addr == REG_RX2_MANUAL_LMT_FULL_GAIN)) {
+        written_rx_gain_index[addr == REG_RX2_MANUAL_LMT_FULL_GAIN] =
+            data[2] & RX_FULL_TBL_IDX_MASK;
+    }
+
     if (!is_write && bytes_number > 2) {
         memset(data + 2, 0, bytes_number - 2);
         if (read_state_alert && addr == REG_STATE) {
             data[2] = ENSM_STATE_ALERT;
+        }
+        if (addr == REG_RX1_MANUAL_LMT_FULL_GAIN ||
+            addr == REG_RX2_MANUAL_LMT_FULL_GAIN) {
+            data[2] = read_rx_gain_index;
         }
     }
     return 0;
@@ -198,6 +211,9 @@ static void setup_phy(struct ad9361_rf_phy *phy,
     batch_fail_row = UINT_MAX;
     batch_bad_payload = false;
     batch_bad_delay = false;
+    read_rx_gain_index = 0;
+    written_rx_gain_index[0] = -1;
+    written_rx_gain_index[1] = -1;
 }
 
 static int test_rssi_setup_propagates_each_write_error(void)
@@ -484,6 +500,112 @@ static int test_batched_row_failure_invalidates_cache(void)
     return 0;
 }
 
+/* NIOS loads a table on a fastlock recall without a PHY: the same rows,
+ * the manual gain kept in dB of the table it replaces. */
+static int run_phy_free_load(const struct gain_table_info *info,
+                             const struct gain_table_info *old_info)
+{
+    struct ad9361_gain_table_transaction transaction;
+    struct no_os_spi_desc spi;
+    int32_t status;
+
+    memset(&spi, 0, sizeof(spi));
+    memset(&transaction, 0, sizeof(transaction));
+    status = ad9361_gain_table_load_start(&spi, info, old_info, false, false,
+                                          GT_RX1 + GT_RX2, &transaction);
+    if (status != 0) {
+        return status;
+    }
+    while ((status = ad9361_gain_table_load_poll(&transaction)) == 1) {
+        uint32_t delay =
+            ad9361_gain_table_transaction_poll_delay_us(&transaction);
+        if (delay) {
+            no_os_udelay(delay);
+        }
+    }
+    if (!transaction.terminal || transaction.active ||
+        transaction.phy != NULL) {
+        return -1000;
+    }
+    return status;
+}
+
+static int test_phy_free_load_keeps_gain_in_db(void)
+{
+    struct ad9361_rf_phy phy;
+    struct ad9361_phy_platform_data pdata;
+    struct no_os_spi_desc spi;
+    const struct gain_table_info *low = &ad9361_adi_gt_info[TBL_200_1300_MHZ];
+    const struct gain_table_info *mid = &ad9361_adi_gt_info[TBL_1300_4000_MHZ];
+    int32_t expected;
+    int status;
+
+    setup_phy(&phy, &pdata, &spi);
+    read_rx_gain_index = 40;
+    expected = ad9361_gain_table_find_index(mid->abs_gain_tbl, mid->max_index,
+                                            low->abs_gain_tbl[40]);
+    status = run_phy_free_load(mid, low);
+    if (status != 0 || table_commits != SIZE_FULL_TABLE ||
+        !cleanup_clock_stop_seen || expected < 0 ||
+        written_rx_gain_index[0] != expected ||
+        written_rx_gain_index[1] != expected) {
+        fprintf(stderr,
+                "phy-free load: status=%d commits=%u stop=%d rx=%d/%d "
+                "expected=%d\n", status, table_commits,
+                cleanup_clock_stop_seen, written_rx_gain_index[0],
+                written_rx_gain_index[1], expected);
+        return -1;
+    }
+
+    /* Unknown loaded table: the index read is clamped to the new table. */
+    setup_phy(&phy, &pdata, &spi);
+    read_rx_gain_index = 100;
+    status = run_phy_free_load(mid, NULL);
+    expected = ad9361_gain_table_find_index(
+        mid->abs_gain_tbl, mid->max_index,
+        mid->abs_gain_tbl[mid->max_index - 1]);
+    if (status != 0 || written_rx_gain_index[0] != expected) {
+        fprintf(stderr, "phy-free load without old table: status=%d rx=%d "
+                "expected=%d\n", status, written_rx_gain_index[0], expected);
+        return -1;
+    }
+
+    /* An index outside the known old table is an error before any row. */
+    setup_phy(&phy, &pdata, &spi);
+    read_rx_gain_index = 100;
+    status = run_phy_free_load(mid, low);
+    if (status != -EINVAL || table_commits != 0) {
+        fprintf(stderr, "phy-free load, bad index: status=%d commits=%u\n",
+                status, table_commits);
+        return -1;
+    }
+
+    setup_phy(&phy, &pdata, &spi);
+    fail_write_reg = REG_GAIN_TABLE_WRITE_DATA2;
+    fail_after_commits = 3;
+    status = run_phy_free_load(mid, low);
+    if (status != -EIO || table_commits != 3 || cleanup_clock_stop_seen) {
+        fprintf(stderr, "phy-free load, row failure: status=%d commits=%u\n",
+                status, table_commits);
+        return -1;
+    }
+
+    /* Split-table mode needs a split table. */
+    {
+        struct ad9361_gain_table_transaction transaction;
+
+        memset(&transaction, 0, sizeof(transaction));
+        if (ad9361_gain_table_load_start(&spi, mid, low, true, false,
+                                         GT_RX1 + GT_RX2,
+                                         &transaction) != -EINVAL) {
+            fprintf(stderr, "phy-free load accepted a full table in split "
+                    "mode\n");
+            return -1;
+        }
+    }
+    return 0;
+}
+
 static int test_gain_access_rejects_unknown_table_before_spi(void)
 {
     struct ad9361_rf_phy phy;
@@ -566,6 +688,7 @@ int main(void)
         test_retry_reloads_complete_table() != 0 ||
         test_batched_rows_preserve_payload_and_delay() != 0 ||
         test_batched_row_failure_invalidates_cache() != 0 ||
+        test_phy_free_load_keeps_gain_in_db() != 0 ||
         test_gain_access_rejects_unknown_table_before_spi() != 0 ||
 	    test_bist_api_rejects_missing_state_and_outputs() != 0) {
         return EXIT_FAILURE;

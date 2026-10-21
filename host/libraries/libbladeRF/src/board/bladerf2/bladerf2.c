@@ -4460,6 +4460,7 @@ int bladerf2_schedule_retune_sequenced(
                   BLADERF_CAP_RETUNE2_REQUEST_TOKEN));
     uint8_t pending_slot = UINT8_MAX;
     uint8_t rx_pending_slot = UINT8_MAX;
+    uint8_t rx_gain_table = 0;
     unsigned int i;
 
     if (board_data->tx_frequency_reconfigure_active ||
@@ -4498,6 +4499,14 @@ int bladerf2_schedule_retune_sequenced(
             bladerf2_retune2_token_next(
                 &board_data->retune2_request_token_next);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    }
+
+    /* The recall changes the LO, not the RX gain table: name the table this
+     * LO needs so NIOS loads it before the recall when it differs. */
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        rx_gain_table = bladerf2_rx_retune_gain_table(
+            dev, frequency, sweep_sequence != 0,
+            rx_retune_pending_count == 0 && !rx_retune_outcome_unknown);
     }
 
     /* A queued RX retune revokes the RX data certificate before reaching
@@ -4553,6 +4562,8 @@ int bladerf2_schedule_retune_sequenced(
             retune2_session_generation;
         board_data->rx_retune2_pending[rx_pending_slot].sweep_sequence =
             sweep_sequence;
+        board_data->rx_retune2_pending[rx_pending_slot].gain_table =
+            rx_gain_table;
         board_data->rx_retune2_pending[rx_pending_slot].valid = true;
         board_data->rx_retune2_pending_count++;
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -4673,8 +4684,10 @@ int bladerf2_schedule_retune_sequenced(
     }
 
     dev->nios_retune_trace.valid = false;
+    /* NIOS_PROFILE[15:8] on the wire is the RX gain-table byte. */
     int status = dev->backend->retune2(dev, ch, timestamp,
-                                       quick_tune->nios_profile,
+                                       (uint16_t)(quick_tune->nios_profile |
+                                                  (rx_gain_table << 8)),
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt,
                                        retune2_request_token);
@@ -4904,6 +4917,12 @@ int bladerf2_schedule_retune_sequenced(
             bladerf2_rf_event_append(board_data, &event);
             ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
             return event.error_code;
+        }
+        /* NIOS reports success only with the table of this LO's region
+         * loaded (nios_pkt_retune2.h Note 3). */
+        if (rx_gain_table != 0) {
+            bladerf2_rx_gain_table_loaded(
+                board_data, NIOS_PKT_RETUNE2_GT_TO(rx_gain_table));
         }
     }
 

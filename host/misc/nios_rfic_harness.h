@@ -193,6 +193,28 @@ int32_t ad9361_tx_quad_calibration_transaction_poll(
     struct ad9361_rf_phy *p, struct ad9361_tx_quad_calibration_transaction *t)
 { (void)p; (void)t; return job_poll(J_TXQ); }
 
+/* RETUNE2 RX gain-table load (devices_rfic.c): not part of the RFIC command
+ * lifecycle; a call shows up as an event and fails. */
+struct gain_table_info ad9361_adi_gt_info[] = { { 0, 0, 0, 0, NULL, NULL } };
+const struct no_os_spi_platform_ops bladerf2_spi_ops = { 0 };
+int32_t ad9361_gain_table_transaction_start(
+    struct ad9361_rf_phy *p, uint64_t f, uint32_t dest,
+    struct ad9361_gain_table_transaction *t)
+{ (void)p; (void)f; (void)dest; (void)t; ev("gain_table"); return -EIO; }
+int32_t ad9361_gain_table_transaction_poll(
+    struct ad9361_rf_phy *p, struct ad9361_gain_table_transaction *t)
+{ (void)p; (void)t; ev("gain_table"); return -EIO; }
+int32_t ad9361_gain_table_load_start(
+    struct no_os_spi_desc *spi, const struct gain_table_info *info,
+    const struct gain_table_info *old_info, bool split_gt, bool elna,
+    uint32_t dest, struct ad9361_gain_table_transaction *t)
+{
+    (void)spi; (void)info; (void)old_info; (void)split_gt; (void)elna;
+    (void)dest; (void)t; ev("gain_table"); return -EIO;
+}
+int32_t ad9361_gain_table_load_poll(struct ad9361_gain_table_transaction *t)
+{ (void)t; ev("gain_table"); return -EIO; }
+
 bool ad9361_calibration_state_unknown(const struct ad9361_rf_phy *p)
 { (void)p; return false; }
 void ad9361_mark_calibration_state_unknown(struct ad9361_rf_phy *p)

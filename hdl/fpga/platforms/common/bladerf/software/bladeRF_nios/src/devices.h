@@ -737,6 +737,7 @@ bool rfic_command_owns_device(void);
 uint8_t rfic_command_pending_mask(void);
 bool rfic_command_has_orphaned_jobs(void);
 bool rfic_tx_quad_retune_owner(void);
+bool rfic_gain_table_retune_owner(void);
 void rfic_command_progress_tick(void);
 bool rfic_command_state_faulted(void);
 bool rfic_phy_present(void);

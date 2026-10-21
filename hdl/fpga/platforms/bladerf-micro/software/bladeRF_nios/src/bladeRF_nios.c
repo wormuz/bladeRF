@@ -206,6 +206,7 @@ static void run_deferred_packet_work(void)
      * command queue. Route exactly that owner's poll and keep every other
      * RFIC-capable worker out until the transaction terminates. */
     if (adi_fastlock_load_active() || adi_fastlock_recall_active() ||
+        rfic_gain_table_retune_owner() ||
         rfic_tx_quad_retune_owner()) {
         for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
             if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
@@ -435,7 +436,7 @@ static void service_rfic_status_request_impl(void)
             NIOS_PKT_32x32_TARGET_ADI_AXI &&
         (rfic_command_worker_active() || rfic_command_owns_device() ||
          rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
-         adi_fastlock_recall_active())) {
+         adi_fastlock_recall_active() || rfic_gain_table_retune_owner())) {
         return;
     }
 
@@ -450,7 +451,7 @@ static void service_rfic_status_request_impl(void)
          NIOS_PKT_8x32_FLAG_WRITE) != 0 &&
         (rfic_command_worker_active() || rfic_command_owns_device() ||
          rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
-         adi_fastlock_recall_active())) {
+         adi_fastlock_recall_active() || rfic_gain_table_retune_owner())) {
         return;
     }
 
@@ -463,7 +464,7 @@ static void service_rfic_status_request_impl(void)
              NIOS_PKT_8x16_TARGET_AD56X1_DAC) &&
         (rfic_command_worker_active() || rfic_command_owns_device() ||
          rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
-         adi_fastlock_recall_active())) {
+         adi_fastlock_recall_active() || rfic_gain_table_retune_owner())) {
         return;
     }
 
@@ -650,7 +651,7 @@ static void service_rfic_status_request_impl(void)
         if (!is_write &&
             (rfic_command_worker_active() || rfic_command_owns_device() ||
              rfic_tx_quad_retune_owner() || adi_fastlock_load_active() ||
-             adi_fastlock_recall_active())) {
+             adi_fastlock_recall_active() || rfic_gain_table_retune_owner())) {
             nios_pkt_16x64_resp_pack(
                 cooperative_pkt->resp, target, is_write, addr, data, false);
         } else {

@@ -154,5 +154,9 @@ uint64_t bladerf2_get_fpga_capabilities(
         capabilities |= BLADERF_CAP_NIOS_BOOT_NONCE;
     }
 
+    if (version_fields_greater_or_equal(fpga_version, 0, 36, 0)) {
+        capabilities |= BLADERF_CAP_RETUNE2_GAIN_TABLE;
+    }
+
     return capabilities;
 }

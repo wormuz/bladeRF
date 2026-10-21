@@ -346,6 +346,107 @@ bool rfic_tx_quad_retune_owner(void)
     return state.tx_quad_job_pending && state.tx_quad_retune_owner;
 }
 
+/* RX gain table of a RETUNE2 recall, nios_pkt_retune2.h Note 3. RETUNE2 owns
+ * the RFIC while the load runs (run_deferred_packet_work), so it uses the
+ * RFIC job context. */
+static const struct gain_table_info *rfic_gain_table_info(bool split,
+                                                          unsigned int region)
+{
+    const struct gain_table_info *gt;
+
+    for (gt = ad9361_adi_gt_info; gt->tab != NULL; gt++) {
+        if (!!gt->split_table == split &&
+            nios_pkt_retune2_gain_table_region(gt->end) == region) {
+            return gt;
+        }
+    }
+    return NULL;
+}
+
+/* HOST tuning mode has no PHY; the table rows go over this transport. */
+static const struct no_os_spi_desc rfic_gain_table_spi = {
+    .platform_ops = &bladerf2_spi_ops,
+};
+
+int32_t rfic_start_gain_table_for_retune(uint8_t request)
+{
+    static const uint64_t region_end_hz[3] = {
+        NIOS_PKT_RETUNE2_GT_REGION_0_END_HZ,
+        NIOS_PKT_RETUNE2_GT_REGION_1_END_HZ,
+        UINT64_C(6000000000),
+    };
+    struct ad9361_gain_table_transaction *load = &state.job_context.gain_table_job;
+    unsigned int from = NIOS_PKT_RETUNE2_GT_FROM(request);
+    unsigned int const to = NIOS_PKT_RETUNE2_GT_TO(request);
+    bool const split = (request & NIOS_PKT_RETUNE2_GT_SPLIT) != 0;
+    const struct gain_table_info *info = rfic_gain_table_info(split, to);
+    const struct gain_table_info *old = NULL;
+    int32_t status;
+
+    if (state.phy != NULL) {
+        /* FPGA tuning mode: the PHY knows the loaded table and skips the
+         * load when it is already the one of this region. */
+        status = ad9361_gain_table_transaction_start(
+            state.phy, region_end_hz[to], GT_RX1 | GT_RX2, load);
+        if (status == 0 && load->terminal) {
+            return 0;
+        }
+    } else {
+        if (state.gain_table_doubt) {
+            from = NIOS_PKT_RETUNE2_GT_UNKNOWN;
+        }
+        if (from == to) {
+            return 0;
+        }
+        if (from != NIOS_PKT_RETUNE2_GT_UNKNOWN) {
+            old = rfic_gain_table_info(split, from);
+            if (old == NULL) {
+                return -EINVAL;
+            }
+        }
+        status = info == NULL ? -EINVAL : ad9361_gain_table_load_start(
+            (struct no_os_spi_desc *)&rfic_gain_table_spi, info, old, split,
+            (request & NIOS_PKT_RETUNE2_GT_ELNA) != 0, GT_RX1 | GT_RX2, load);
+    }
+    if (status < 0) {
+        return status;
+    }
+    state.gain_table_retune_owner = true;
+    return 1;
+}
+
+/* 1 while loading, 0 loaded, negative: the table is unknown. */
+int32_t rfic_poll_gain_table_for_retune(void)
+{
+    struct ad9361_gain_table_transaction *load = &state.job_context.gain_table_job;
+    int32_t status;
+
+    if (!state.gain_table_retune_owner) {
+        return -EINVAL;
+    }
+    status = state.phy != NULL
+        ? ad9361_gain_table_transaction_poll(state.phy, load)
+        : ad9361_gain_table_load_poll(load);
+    if (status == 1) {
+        return 1;
+    }
+    state.gain_table_retune_owner = false;
+    state.gain_table_doubt = status != 0;
+    return status;
+}
+
+bool rfic_gain_table_retune_owner(void)
+{
+    return state.gain_table_retune_owner;
+}
+
+/* A RETUNE2 request that would have loaded the table failed before its load
+ * finished: the host's idea of the loaded table no longer holds. */
+void rfic_doubt_gain_table(void)
+{
+    state.gain_table_doubt = true;
+}
+
 /******************************************************************************/
 /* Dispatching */
 /******************************************************************************/

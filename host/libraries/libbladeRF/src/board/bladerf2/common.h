@@ -326,6 +326,9 @@ struct bladerf2_board_data {
          * profile words the host uploaded, when it knows them. */
         uint8_t synth_expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
         bool synth_expected_valid;
+        /* RX gain-table byte sent with the request (nios_pkt_retune2.h
+         * Note 3), 0 when none. */
+        uint8_t gain_table;
         /* Sequence of the owning sweep record, 0 outside a sweep. */
         uint32_t sweep_sequence;
     } rx_retune2_pending[NIOS_PKT_8x32_RETUNE2_COMPLETION_DEPTH];
@@ -337,6 +340,13 @@ struct bladerf2_board_data {
         uint64_t settle_samples;
         /* bladerf_rx_gain_table_region() of the table loaded at begin. */
         unsigned int gain_table_region;
+        /* Region of the table the next scheduled retune starts from, as
+         * the requests scheduled so far leave it. */
+        uint8_t gain_table_planned;
+        /* Region of the table loaded after the records collected so far;
+         * NIOS_PKT_RETUNE2_GT_UNKNOWN after a crossing whose outcome is not
+         * a success. At session end it becomes the AD9361 driver's table. */
+        uint8_t gain_table_known;
         /* RX RFPLL reference rate read at begin; 0 when unknown (FPGA
          * tuning mode: no host AD9361 driver). */
         uint32_t refclk_hz;
@@ -604,6 +614,20 @@ int bladerf2_rx_sweep_completions(struct bladerf *dev, bladerf_channel ch,
                                   unsigned int max_records,
                                   unsigned int *count);
 int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch);
+
+/* RX gain-table byte of an RX retune2 to `frequency` (nios_pkt_retune2.h
+ * Note 3), 0 without BLADERF_CAP_RETUNE2_GAIN_TABLE. Inside a sweep session
+ * (`sweep`) the source table is the one the session's requests leave,
+ * otherwise the AD9361 driver's when no RX retune is pending
+ * (`queue_idle`). A request that may load a table makes the driver's table
+ * unknown until its outcome is known. */
+uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
+                                      bladerf_frequency frequency, bool sweep,
+                                      bool queue_idle);
+/* Record the RX gain table of `region` as the AD9361 driver's loaded one
+ * (NIOS_PKT_RETUNE2_GT_UNKNOWN: none known). */
+void bladerf2_rx_gain_table_loaded(struct bladerf2_board_data *board_data,
+                                   unsigned int region);
 void bladerf2_rx_stream_overrun(struct bladerf *dev, uint32_t source_flags,
                                 uint8_t epoch_id, uint64_t fpga_timestamp,
                                 bool fpga_timestamp_valid);

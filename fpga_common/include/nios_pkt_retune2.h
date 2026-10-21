@@ -86,6 +86,30 @@
  * |       1        |  NIOS_PROFILE[15:8]   |
  * +----------------+-----------------------+
  *
+ * NIOS profiles are below NUM_BBP_FASTLOCK_PROFILES, so NIOS_PROFILE[15:8]
+ * is free. From FPGA v0.36.0 it is the RX gain-table byte (Note 3); TX
+ * requests keep it zero. Firmware before v0.36.0 reads a nonzero byte as
+ * a NIOS profile >= 256 and rejects the request.
+ *
+ * (Note 3) RX gain-table byte. A fastlock recall changes the LO but not the
+ * AD9361 RX gain table, whose region is chosen by the LO (start < f <= end,
+ * nios_pkt_retune2_gain_table_region()). Zero: no request, the recall keeps
+ * the loaded table. Otherwise:
+ *
+ *      bit 7:      request present
+ *      bit 6:      split gain-table mode (AD9361 pdata split_gt)
+ *      bit 5:      external LNA bit in every row
+ *                  (elna_in_gaintable_all_index_en)
+ *      bits [3:2]: region of the table loaded before this retune as the
+ *                  host knows it, NIOS_PKT_RETUNE2_GT_UNKNOWN if it does not
+ *      bits [1:0]: region of this LO
+ *
+ * Unless the two regions are equal and NIOS has no reason to doubt the
+ * loaded table, NIOS loads the table of the LO region before the recall,
+ * keeping the manual gain in dB (the AD9361 driver's gain-table load), and
+ * reports the loaded region in the execution flags. A failed load, or a
+ * failure of a request whose load had not finished, leaves NIOS doubting
+ * the table: every later request then loads it.
  */
 
 #define NIOS_PKT_RETUNE2_IDX_MAGIC        0
@@ -104,6 +128,51 @@
  * bit read over SPI after that timestamp. */
 #define NIOS_PKT_RETUNE2_EXEC_TS_VALID   (1u << 0)
 #define NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED (1u << 1)
+/* RX request with a gain-table byte (FPGA >= 0.36.0): GT_VALID when the
+ * table of region NIOS_PKT_RETUNE2_EXEC_GT_REGION(flags) was loaded at
+ * `timestamp`, GT_LOADED when this retune loaded it. */
+#define NIOS_PKT_RETUNE2_EXEC_GT_VALID   (1u << 2)
+#define NIOS_PKT_RETUNE2_EXEC_GT_LOADED  (1u << 3)
+#define NIOS_PKT_RETUNE2_EXEC_GT_SHIFT   4
+#define NIOS_PKT_RETUNE2_EXEC_GT_REGION(flags) \
+    (((flags) >> NIOS_PKT_RETUNE2_EXEC_GT_SHIFT) & 0x3u)
+
+/* RX gain-table byte, Note 3. */
+#define NIOS_PKT_RETUNE2_IDX_GAIN_TABLE   (NIOS_PKT_RETUNE2_IDX_NIOS_PROFILE + 1)
+#define NIOS_PKT_RETUNE2_GT_REQUEST       (1u << 7)
+#define NIOS_PKT_RETUNE2_GT_SPLIT         (1u << 6)
+#define NIOS_PKT_RETUNE2_GT_ELNA          (1u << 5)
+#define NIOS_PKT_RETUNE2_GT_UNKNOWN       3u
+#define NIOS_PKT_RETUNE2_GT_FROM(byte)    (((byte) >> 2) & 0x3u)
+#define NIOS_PKT_RETUNE2_GT_TO(byte)      ((byte) & 0x3u)
+/* Upper bounds of the AD9361 RX gain-table regions 0 and 1 (ADI tables,
+ * full and split alike); region 2 is above 4 GHz. */
+#define NIOS_PKT_RETUNE2_GT_REGION_0_END_HZ UINT64_C(1300000000)
+#define NIOS_PKT_RETUNE2_GT_REGION_1_END_HZ UINT64_C(4000000000)
+
+/* Gain-table region of an LO, as ad9361_gt_tableindex() selects the table:
+ * start < f <= end. */
+static inline unsigned int nios_pkt_retune2_gain_table_region(
+    uint64_t frequency)
+{
+    if (frequency <= NIOS_PKT_RETUNE2_GT_REGION_0_END_HZ) {
+        return 0;
+    }
+    if (frequency <= NIOS_PKT_RETUNE2_GT_REGION_1_END_HZ) {
+        return 1;
+    }
+    return 2;
+}
+
+static inline uint8_t nios_pkt_retune2_gain_table(bool split, bool elna,
+                                                  unsigned int from,
+                                                  unsigned int to)
+{
+    return (uint8_t)(NIOS_PKT_RETUNE2_GT_REQUEST |
+                     (split ? NIOS_PKT_RETUNE2_GT_SPLIT : 0u) |
+                     (elna ? NIOS_PKT_RETUNE2_GT_ELNA : 0u) |
+                     ((from & 0x3u) << 2) | (to & 0x3u));
+}
 
 /* RX/TX synthesizer readback after a recall (FPGA >= 0.33.0), reported by
  * NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH. Bytes 0-4 are fastlock profile
@@ -381,6 +450,8 @@ typedef enum {
     NIOS_PKT_RETUNE2_FAILURE_INTERNAL,
     NIOS_PKT_RETUNE2_FAILURE_CANCELLED,
     NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE,
+    /* RX gain-table byte invalid or its table load failed (Note 3). */
+    NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE,
 } nios_pkt_retune2_failure;
 
 #define NIOS_PKT_RETUNE2_FAILURE_DURATION_TAG UINT64_C(0xa75c000000000000)

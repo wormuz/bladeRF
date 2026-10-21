@@ -105,8 +105,21 @@ static int32_t bladerf2_headless_spi_write_and_read(struct no_os_spi_desc *desc,
     return 0;
 }
 
+/* One AD9361 gain-table row (address, three data bytes, commit, settle) in a
+ * single SPI arbiter hold, as the host transport's 16x64 GAIN_TABLE_ROW; one
+ * gain-table transaction poll per row instead of six. */
+static int32_t bladerf2_headless_spi_write_gain_table_row(
+    struct no_os_spi_desc *desc, uint16_t row, uint8_t data1, uint8_t data2,
+    uint8_t data3, uint8_t config, uint32_t delay_us)
+{
+    (void)desc;
+    return adi_spi_gain_table_row(row, data1, data2, data3, config, delay_us)
+        ? 0 : -EIO;
+}
+
 const struct no_os_spi_platform_ops bladerf2_spi_ops = {
     .init = bladerf2_headless_spi_init,
     .write_and_read = bladerf2_headless_spi_write_and_read,
+    .write_gain_table_row = bladerf2_headless_spi_write_gain_table_row,
     .remove = bladerf2_headless_spi_remove,
 };

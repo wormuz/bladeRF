@@ -136,6 +136,57 @@ bool rfic_tx_quad_retune_owner(void)
     return simulated_txq_owner;
 }
 
+/* RX gain-table load (devices_rfic.c, HOST tuning mode): load unless the
+ * source region equals the target and nothing cast doubt on it. */
+static bool simulated_gt_owner;
+static bool simulated_gt_doubt;
+static unsigned simulated_gt_polls;
+static unsigned simulated_gt_pending_polls;
+static int32_t simulated_gt_terminal_status;
+static unsigned simulated_gt_loads;
+static uint8_t simulated_gt_last_request;
+
+int32_t rfic_start_gain_table_for_retune(uint8_t request)
+{
+    unsigned int from = NIOS_PKT_RETUNE2_GT_FROM(request);
+
+    simulated_gt_last_request = request;
+    if (simulated_gt_doubt) {
+        from = NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    }
+    if (from == NIOS_PKT_RETUNE2_GT_TO(request)) {
+        return 0;
+    }
+    simulated_gt_owner = true;
+    simulated_gt_pending_polls = simulated_gt_polls;
+    simulated_gt_loads++;
+    return 1;
+}
+
+int32_t rfic_poll_gain_table_for_retune(void)
+{
+    if (!simulated_gt_owner) {
+        return -EINVAL;
+    }
+    if (simulated_gt_pending_polls > 0) {
+        simulated_gt_pending_polls--;
+        return 1;
+    }
+    simulated_gt_owner = false;
+    simulated_gt_doubt = simulated_gt_terminal_status != 0;
+    return simulated_gt_terminal_status;
+}
+
+bool rfic_gain_table_retune_owner(void)
+{
+    return simulated_gt_owner;
+}
+
+void rfic_doubt_gain_table(void)
+{
+    simulated_gt_doubt = true;
+}
+
 static unsigned load_count;
 static unsigned staged_profile_write_count;
 static bladerf_module staged_profile_load_module;
@@ -3986,6 +4037,255 @@ static int check_pll_lock_yield_preserves_retune_ownership(void)
     return 0;
 }
 
+static void reset_gain_table_test_state(void)
+{
+    reset_execution_test_state();
+    simulated_gt_owner = false;
+    simulated_gt_doubt = false;
+    simulated_gt_polls = 2;
+    simulated_gt_pending_polls = 0;
+    simulated_gt_terminal_status = 0;
+    simulated_gt_loads = 0;
+    simulated_gt_last_request = 0;
+}
+
+/* Arm one RX retune whose entry carries `gain_table`, fire its compare,
+ * run it to the end and return the record flags (0 for a failure). */
+static uint8_t run_gain_table_retune(uint64_t scheduled, uint8_t gain_table,
+                                     bool *failed, uint8_t *stage)
+{
+    fastlock_profile profile = { 0 };
+    uint32_t successes = pkt_retune2_success_count(BLADERF_MODULE_RX);
+    uint32_t failures = pkt_retune2_failure_count(BLADERF_MODULE_RX);
+    uint64_t identity = 0;
+
+    *failed = false;
+    *stage = 0;
+    profile.profile_num = 3;
+    memcpy(profile.profile_data, profile_925, sizeof(profile_925));
+    profile.state = FASTLOCK_STATE_BBP_RFFE;
+    if (enqueue_retune_resident(&rx_queue, &profile, 4, scheduled) != 1) {
+        *failed = true;
+        return 0;
+    }
+    rx_queue.entries[rx_queue.rem_idx].gain_table = gain_table;
+    if (!run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED, 24)) {
+        *failed = true;
+        return 0;
+    }
+    tamer_timestamp = scheduled;
+    simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+    (void)run_until_queue_empty(&rx_queue, 32);
+    if (pkt_retune2_failure_count(BLADERF_MODULE_RX) != failures) {
+        *failed = true;
+        (void)pkt_retune2_record_read(
+            nios_pkt_16x64_retune2_record_addr(
+                true, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
+            failures + 1u, &identity);
+        *stage = (uint8_t)(identity >> 40);
+        return 0;
+    }
+    if (pkt_retune2_success_count(BLADERF_MODULE_RX) != successes + 1u ||
+        pkt_retune2_record_read(
+            nios_pkt_16x64_retune2_record_addr(
+                false, false, NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY),
+            successes + 1u, &identity) != 0) {
+        *failed = true;
+        return 0;
+    }
+    return (uint8_t)(identity >> 24);
+}
+
+static int check_gain_table_crossing(void)
+{
+    const uint8_t locked = NIOS_PKT_RETUNE2_EXEC_TS_VALID |
+                           NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED;
+    uint8_t flags;
+    uint8_t stage;
+    bool failed;
+
+    /* Crossing 1 -> 0: the table loads before the recall, which only
+     * starts once the load ended; the record reports region 0, loaded. */
+    reset_gain_table_test_state();
+    flags = run_gain_table_retune(
+        UINT64_C(0x100000), nios_pkt_retune2_gain_table(false, false, 1, 0),
+        &failed, &stage);
+    if (failed || simulated_gt_loads != 1 || recall_count != 1 ||
+        flags != (locked | NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+                  NIOS_PKT_RETUNE2_EXEC_GT_LOADED)) {
+        fprintf(stderr, "crossing retune: failed=%d loads=%u recalls=%u "
+                        "flags=0x%02x\n", failed, simulated_gt_loads,
+                recall_count, flags);
+        return 1;
+    }
+
+    /* Inside the region: no load, the record still names the table. */
+    reset_gain_table_test_state();
+    flags = run_gain_table_retune(
+        UINT64_C(0x100000), nios_pkt_retune2_gain_table(false, false, 2, 2),
+        &failed, &stage);
+    if (failed || simulated_gt_loads != 0 ||
+        flags != (locked | NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+                  (2u << NIOS_PKT_RETUNE2_EXEC_GT_SHIFT))) {
+        fprintf(stderr, "same-region retune: loads=%u flags=0x%02x\n",
+                simulated_gt_loads, flags);
+        return 1;
+    }
+
+    /* Without a gain-table byte nothing about tables happens. */
+    reset_gain_table_test_state();
+    flags = run_gain_table_retune(UINT64_C(0x100000), 0, &failed, &stage);
+    if (failed || simulated_gt_loads != 0 || flags != locked) {
+        fprintf(stderr, "legacy retune: loads=%u flags=0x%02x\n",
+                simulated_gt_loads, flags);
+        return 1;
+    }
+
+    /* A failed load fails the request before any recall, and the next
+     * request, whose host plan assumed that load, loads again. */
+    reset_gain_table_test_state();
+    simulated_gt_terminal_status = -EIO;
+    flags = run_gain_table_retune(
+        UINT64_C(0x100000), nios_pkt_retune2_gain_table(false, false, 1, 0),
+        &failed, &stage);
+    if (!failed || stage != NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE ||
+        recall_count != 0 || !simulated_gt_doubt) {
+        fprintf(stderr, "failed load: failed=%d stage=%u recalls=%u\n",
+                failed, stage, recall_count);
+        return 1;
+    }
+    simulated_gt_terminal_status = 0;
+    flags = run_gain_table_retune(
+        UINT64_C(0x200000), nios_pkt_retune2_gain_table(false, false, 0, 0),
+        &failed, &stage);
+    if (failed || simulated_gt_loads != 2 || simulated_gt_doubt ||
+        (flags & NIOS_PKT_RETUNE2_EXEC_GT_LOADED) == 0) {
+        fprintf(stderr, "retune after a failed load: loads=%u flags=0x%02x\n",
+                simulated_gt_loads, flags);
+        return 1;
+    }
+
+    /* A crossing that fails after its load (RF switch): the table is the
+     * one the host planned, so no doubt is cast. */
+    reset_gain_table_test_state();
+    fail_spdt_select = true;
+    flags = run_gain_table_retune(
+        UINT64_C(0x100000), nios_pkt_retune2_gain_table(false, false, 1, 0),
+        &failed, &stage);
+    fail_spdt_select = false;
+    if (!failed || stage != NIOS_PKT_RETUNE2_FAILURE_SPDT_SELECT ||
+        simulated_gt_doubt) {
+        fprintf(stderr, "failure after the load cast doubt: stage=%u\n",
+                stage);
+        return 1;
+    }
+
+    /* A crossing that never reaches its load (its compare cannot be armed)
+     * leaves the host plan wrong: NIOS doubts the table. */
+    reset_gain_table_test_state();
+    fail_tamer_schedule = true;
+    flags = run_gain_table_retune(
+        UINT64_C(0x100000), nios_pkt_retune2_gain_table(false, false, 1, 0),
+        &failed, &stage);
+    fail_tamer_schedule = false;
+    (void)run_until_queue_empty(&rx_queue, 32);
+    if (!simulated_gt_doubt || simulated_gt_loads != 0) {
+        fprintf(stderr, "crossing that never loaded cast no doubt\n");
+        return 1;
+    }
+
+    /* While the load runs the RX head owns the RFIC: a queue clear waits
+     * for it, then retires the request without a recall. */
+    reset_gain_table_test_state();
+    {
+        fastlock_profile profile = { 0 };
+        bool cancel_failed = false;
+
+        simulated_gt_polls = 4;
+        profile.profile_num = 3;
+        profile.state = FASTLOCK_STATE_BBP_RFFE;
+        if (enqueue_retune_resident(&rx_queue, &profile, 4,
+                                    UINT64_C(0x100000)) != 1) {
+            return 1;
+        }
+        rx_queue.entries[rx_queue.rem_idx].gain_table =
+            nios_pkt_retune2_gain_table(false, false, 1, 0);
+        if (!run_until_queue_head_state(&rx_queue, ENTRY_STATE_SCHEDULED,
+                                        24)) {
+            fputs("gain-table clear case did not arm\n", stderr);
+            return 1;
+        }
+        tamer_timestamp = UINT64_C(0x100000);
+        simulate_tamer_irq(&rx_queue, BLADERF_MODULE_RX);
+        if (!run_until_queue_head_state(&rx_queue,
+                                        ENTRY_STATE_GAIN_TABLE_PENDING, 4) ||
+            !rfic_gain_table_retune_owner() ||
+            clear_queue_async(&rx_queue, BLADERF_MODULE_RX, &cancel_failed) ||
+            rx_queue.count != 1) {
+            fputs("queue clear did not wait for the gain-table load\n",
+                  stderr);
+            return 1;
+        }
+        (void)run_until_queue_empty(&rx_queue, 16);
+        if (rx_queue.count != 0 || !rx_queue.clear_complete ||
+            recall_count != 0 || simulated_gt_owner) {
+            fprintf(stderr, "cleared load: count=%u recalls=%u\n",
+                    rx_queue.count, recall_count);
+            return 1;
+        }
+    }
+
+    /* Request validation: TX never carries a table, bit 4 is reserved and a
+     * target region must be named. */
+    if (!retune2_gain_table_valid(BLADERF_MODULE_RX, 0) ||
+        !retune2_gain_table_valid(BLADERF_MODULE_RX, 0x84) ||
+        !retune2_gain_table_valid(BLADERF_MODULE_RX, 0x8e) ||
+        retune2_gain_table_valid(BLADERF_MODULE_TX, 0x84) ||
+        retune2_gain_table_valid(BLADERF_MODULE_RX, 0x04) ||
+        retune2_gain_table_valid(BLADERF_MODULE_RX, 0x94) ||
+        retune2_gain_table_valid(BLADERF_MODULE_RX, 0x87)) {
+        fputs("gain-table byte validation accepted invalid input\n", stderr);
+        return 1;
+    }
+
+    /* Packet path: the byte rides in NIOS_PROFILE[15:8]. */
+    reset_gain_table_test_state();
+    {
+        struct pkt_buf request = { 0 };
+
+        simulated_rfic_device_owned = false;
+        simulated_rfic_worker_active = false;
+        tamer_timestamp = 10;
+        fastlocks_rx[4].profile_num = 3;
+        fastlocks_rx[4].state = FASTLOCK_STATE_BBP;
+        nios_pkt_retune2_pack_token(
+            request.req, BLADERF_MODULE_RX, 100,
+            (uint16_t)(4 | (nios_pkt_retune2_gain_table(false, false, 1, 0)
+                            << 8)),
+            3, 0x83, 0, 0x55);
+        pkt_retune2(&request);
+        if (rx_queue.count != 1 ||
+            (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) == 0 ||
+            rx_queue.entries[rx_queue.rem_idx].nios_profile != 4 ||
+            rx_queue.entries[rx_queue.rem_idx].gain_table != 0x84) {
+            fputs("gain-table byte not taken from the RX request\n", stderr);
+            return 1;
+        }
+        memset(&request, 0, sizeof(request));
+        nios_pkt_retune2_pack_token(
+            request.req, BLADERF_MODULE_TX, 200, (uint16_t)(4 | (0x84 << 8)),
+            3, 0x00, 0, 0x56);
+        pkt_retune2(&request);
+        if (tx_queue.count != 0 ||
+            (request.resp[9] & NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS) != 0) {
+            fputs("TX request with a gain-table byte accepted\n", stderr);
+            return 1;
+        }
+    }
+    reset_gain_table_test_state();
+    return 0;
+}
+
 int main(void)
 {
     uint8_t retune_request[16] = { 0 };
@@ -4198,6 +4498,9 @@ int main(void)
         return 1;
     }
 
+    if (check_gain_table_crossing() != 0) {
+        return 1;
+    }
     puts("NIOS retune2 queue, time-tamer failure, and completion ring: PASS");
     return 0;
 }

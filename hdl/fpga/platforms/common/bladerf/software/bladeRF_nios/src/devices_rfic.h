@@ -120,6 +120,8 @@ struct rfic_state {
             struct ad9361_fir_load_transaction fir_load_job;
             struct ad9361_rfdc_calibration_job rfdc_job;
             struct ad9361_tx_quad_calibration_transaction tx_quad_job;
+            /* RX gain table of a RETUNE2 recall (devices_rfic.c). */
+            struct ad9361_gain_table_transaction gain_table_job;
         } job_context;
     };
     uint8_t init_job_stage;
@@ -236,6 +238,10 @@ struct rfic_state {
     /* TX enable resumes its queue callback only after TXQ has restored the
      * RFIC transaction state; the RFFE enable commit must remain after QEC. */
     bool tx_quad_resume_command;
+    /* RETUNE2 owns gain_table_job; the RX gain table cannot be trusted
+     * after a failed RETUNE2 load (HOST tuning mode, nios_pkt_retune2.h). */
+    bool gain_table_retune_owner;
+    bool gain_table_doubt;
     bladerf_channel tx_quad_resume_channel;
     uint32_t tx_quad_resume_value;
     uint32_t tx_quad_resume_rffe_reg;
@@ -307,6 +313,14 @@ bool rfic_start_tx_quad_calibration_for_command(bool *pending,
 bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
                                                uint8_t *failure_stage);
 int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage);
+/* RX gain table of a RETUNE2 recall (nios_pkt_retune2.h Note 3): start
+ * returns 0 when nothing must be loaded, 1 when a load started, negative
+ * for an invalid request. */
+int32_t rfic_start_gain_table_for_retune(uint8_t request);
+int32_t rfic_poll_gain_table_for_retune(void);
+void rfic_doubt_gain_table(void);
+/* The headless platform SPI transport (platform_bladerf2_headless). */
+extern const struct no_os_spi_platform_ops bladerf2_spi_ops;
 bool rfic_tx_quad_retune_owner(void);
 void rfic_fail_tx_quad_calibration(int32_t status,
                                    uint8_t *failure_stage);
