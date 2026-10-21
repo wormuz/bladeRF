@@ -2807,7 +2807,21 @@ static int nios_retune2_wait_now_terminal(
 {
     bladerf_module const module = BLADERF_CHANNEL_IS_TX(ch)
         ? BLADERF_MODULE_TX : BLADERF_MODULE_RX;
+    /* The same bound as the tokenless NOW response wait: profile upload,
+     * RX gain table and recall, or TX quadrature calibration. Past it the
+     * outcome is unknown (BLADERF_ERR_TIMEOUT), never success. */
+    uint64_t const wait_ns = 1000000ULL *
+        (BLADERF_CHANNEL_IS_TX(ch) ? NIOS_RETUNE2_LEGACY_TX_RESPONSE_TIMEOUT_MS
+                                   : NIOS_RETUNE2_LEGACY_RX_RESPONSE_TIMEOUT_MS);
+    uint64_t now_ns = 0;
+    uint64_t deadline_ns;
+    bool expired = false;
     int status;
+
+    status = bladerf_monotonic_now_ns(&now_ns);
+    if (!nios_deadline_start(status, now_ns, wait_ns, &deadline_ns)) {
+        return BLADERF_ERR_UNEXPECTED;
+    }
 
     for (;;) {
         uint32_t success_count;
@@ -2898,6 +2912,17 @@ static int nios_retune2_wait_now_terminal(
             }
         }
 
+        /* Checked after the records were read, so a terminal record that
+         * arrived before the deadline is never discarded. */
+        status = bladerf_monotonic_now_ns(&now_ns);
+        if (!nios_deadline_check(status, now_ns, deadline_ns, &expired)) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
+        if (expired) {
+            log_debug("%s: no terminal record before the deadline.\n",
+                      __FUNCTION__);
+            return BLADERF_ERR_TIMEOUT;
+        }
         usleep(120);
     }
 }

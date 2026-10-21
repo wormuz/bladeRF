@@ -102,6 +102,23 @@ static void complete_pending(void)
     nios.pending = false;
 }
 
+
+/* Test clock (run_test.sh wraps bladerf_monotonic_now_ns): real time unless
+ * a case sets fake_step_ns; then it stands still within a transaction and
+ * advances by fake_step_ns per RETUNE2 success-count read. */
+int __real_bladerf_monotonic_now_ns(uint64_t *now_ns);
+static uint64_t fake_now_ns;
+static uint64_t fake_step_ns;
+
+int __wrap_bladerf_monotonic_now_ns(uint64_t *now_ns)
+{
+    if (fake_step_ns == 0) {
+        return __real_bladerf_monotonic_now_ns(now_ns);
+    }
+    *now_ns = fake_now_ns;
+    return 0;
+}
+
 static uint32_t read_8x32(uint8_t target, uint8_t addr)
 {
     const struct record *r;
@@ -111,6 +128,10 @@ static uint32_t read_8x32(uint8_t target, uint8_t addr)
     if (target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES ||
         target == NIOS_PKT_8x32_TARGET_RETUNE2_FAILURES) {
         bool succ = target == NIOS_PKT_8x32_TARGET_RETUNE2_SUCCESSES;
+
+        if (succ) {
+            fake_now_ns += fake_step_ns;
+        }
 
         if (succ && nios.pending) {
             if (nios.mode == M_RESET_DURING) {
@@ -561,11 +582,49 @@ static int test_lost_ack_vs_terminal_timeout(void)
     return 0;
 }
 
+static int test_terminal_record_never_arrives(void)
+{
+    /* Accepted and ACKed, the session stays, the counters never move: the
+     * wait ends at its deadline (RX 5 s, TX 120 s, as the tokenless NOW
+     * response wait) with an unknown outcome, never success. */
+    static const struct {
+        bladerf_channel ch;
+        uint64_t step_ns;
+        unsigned polls;     /* deadline / step */
+    } cases[] = {
+        { BLADERF_CHANNEL_RX(0), 1000000ULL, 5000 },    /* 1 ms per poll */
+        { BLADERF_CHANNEL_TX(0), 100000000ULL, 1200 },  /* 100 ms per poll */
+    };
+    unsigned i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int status;
+
+        fresh(M_ACCEPT, 41);
+        nios.complete_after = UINT32_MAX;
+        (void)__real_bladerf_monotonic_now_ns(&fake_now_ns);
+        fake_step_ns = cases[i].step_ns;
+        status = now(cases[i].ch, 8, 30);
+        fake_step_ns = 0;
+        CHECK(status == BLADERF_ERR_TIMEOUT, "case %u: status %d", i, status);
+        CHECK(dev.nios_retune_trace.retune2_terminal_unknown,
+              "case %u: deadline not flagged terminal-unknown", i);
+        /* The mock counts each success-count read twice. */
+        CHECK(nios.count_polls >= 2 * cases[i].polls &&
+                  nios.count_polls <= 2 * cases[i].polls + 4,
+              "case %u: %u count polls before the deadline", i,
+              nios.count_polls);
+        done();
+    }
+    return 0;
+}
+
 int main(void)
 {
     if (test_queue_responses() || test_token_sequence_across_wrap() ||
         test_counter_wrap() || test_reset_during_wait() ||
-        test_nodev_during_wait() || test_lost_ack_vs_terminal_timeout())
+        test_nodev_during_wait() || test_lost_ack_vs_terminal_timeout() ||
+        test_terminal_record_never_arrives())
         return 1;
     puts("libbladeRF RETUNE2 transport fault injection: PASS");
     return 0;
