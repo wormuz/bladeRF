@@ -2790,6 +2790,18 @@ static int nios_retune2_wait_now_terminal(
         uint32_t failure_count;
         uint32_t success_delta;
         uint32_t failure_delta;
+        uint32_t current_session;
+
+        /* A NIOS/FPGA session reset discards the accepted command and restarts
+         * the completion counters; with a zero baseline nothing would ever
+         * differ again. The command's outcome is unknown, so end the wait. */
+        status = nios_command_session_generation_read(dev, &current_session);
+        if (status != 0) {
+            return status;
+        }
+        if (current_session != session_generation) {
+            return BLADERF_ERR_UNEXPECTED;
+        }
 
         status = nios_retune2_success_count_read(dev, module, &success_count);
         if (status == 0) {

@@ -83,6 +83,7 @@ extern void bladerf2_axi_io_set_dev(struct bladerf *dev);
 #include "bladerf2_common.h"
 #include "common.h"
 #include "rf_transition_policy.h"
+#include "retune2_token_policy.h"
 #include "rfic_rssi_policy.h"
 #include "nios_ram_policy.h"
 
@@ -4493,10 +4494,9 @@ int bladerf2_schedule_retune_sequenced(
         CHECK_STATUS(nios_command_session_generation_read(
             dev, &retune2_session_generation));
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-        retune2_request_token = ++board_data->retune2_request_token_next;
-        if (retune2_request_token == 0) {
-            retune2_request_token = ++board_data->retune2_request_token_next;
-        }
+        retune2_request_token =
+            bladerf2_retune2_token_next(
+                &board_data->retune2_request_token_next);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     }
 
