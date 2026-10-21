@@ -104,6 +104,18 @@ set_global_assignment -name ENABLE_DRC_SETTINGS                          ON
 set_global_assignment -name ROUTER_LCELL_INSERTION_AND_LOGIC_DUPLICATION ON
 set_global_assignment -name ROUTER_TIMING_OPTIMIZATION_LEVEL             MAXIMUM
 set_global_assignment -name AUTO_PACKED_REGISTERS_STRATIXII              NORMAL
+# rx_spatial_fir: keep the S1 coefficient registers out of the DSP blocks.
+# The Fitter packed them into the multiplier BY input registers ("Register
+# Packing, Timing optimization"). Their source is the coefficient bank (act_*),
+# a LAB register on the same RX clock with no logic in between; the DSP input
+# register's clock arrives about 0.5 ns later than a LAB's (fast corner), and
+# the Fitter could not add hold delay on that short path into the DSP
+# (-0.118 ns hold, act_re[16] -> s1_re[16], hosted A4 2026-10-21). In LABs
+# the bank-to-S1 copy has LAB-to-LAB skew, and S1 reaches the DSP through
+# the multiplier into the S2 output register.
+foreach coef {s1_re s1_im s1_nim} {
+    set_instance_assignment -name ADV_NETLIST_OPT_ALLOWED "NEVER ALLOW" -to "*U_rx_spatial_fir|${coef}*"
+}
 set_global_assignment -name OPTIMIZE_TIMING                             "NORMAL COMPILATION"
 
 set_instance_assignment -name FAST_INPUT_REGISTER                       ON -to fx3_gpif[*]
