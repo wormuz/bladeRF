@@ -2074,7 +2074,8 @@ typedef enum {
  * for the slot. */
 #define BLADERF_RX_SWEEP_F_READBACK_MISMATCH (1u << 2)
 /** Success, executed timestamp valid, PLL locked, LO read back, no
- * readback mismatch. */
+ * readback mismatch, and (FPGA >= v0.36.0) the RX gain table of the LO's
+ * region loaded (BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID). */
 #define BLADERF_RX_SWEEP_F_CERTIFIED (1u << 3)
 /** `readback_frequency` is the LO read back after the recall: in HOST
  * tuning mode decoded from the synthesizer words NIOS read from the
@@ -2082,6 +2083,14 @@ typedef enum {
  * uploaded profile; in FPGA tuning mode the NIOS AD9361 driver's readback.
  * Required for BLADERF_RX_SWEEP_F_CERTIFIED. */
 #define BLADERF_RX_SWEEP_F_READBACK_VALID (1u << 4)
+/** NIOS reported the AD9361 RX gain table loaded at `executed_timestamp`
+ * (`gain_table`) and it is that of bladerf_rx_gain_table_region(`frequency`).
+ * With FPGA >= v0.36.0 NIOS loads that table before the recall when the LO
+ * changes region, and BLADERF_RX_SWEEP_F_CERTIFIED requires this flag. */
+#define BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID (1u << 5)
+/** This retune loaded the RX gain table (it crossed a region boundary, or
+ * NIOS could not rely on the table loaded before). */
+#define BLADERF_RX_SWEEP_F_GAIN_TABLE_LOADED (1u << 6)
 
 /**
  * One scheduled retune of an RX sweep session, in schedule order.
@@ -2095,6 +2104,10 @@ struct bladerf_rx_sweep_record {
     uint8_t flags;
     /** NIOS failure stage for BLADERF_RX_SWEEP_FAILED, otherwise 0 */
     uint8_t failure_stage;
+    /** AD9361 RX gain-table region NIOS reported loaded after the retune
+     * (0..2, bladerf_rx_gain_table_region()), 0 when not reported; see
+     * BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID. Fills former padding. */
+    uint8_t gain_table;
     /** NIOS profile slot of the quick tune */
     uint16_t nios_profile;
     /** Requested LO */
@@ -2135,11 +2148,15 @@ struct bladerf_rx_sweep_record {
  * ARM/ABORT, never on a NIOS recall), so samples keep flowing under the same
  * epoch ID; ::BLADERF_RF_EVT_RX_SWEEP_BEGIN marks where its LO claim ends.
  * Inside the session only sweep records certify the LO. Other RX setters
- * still revoke the epoch as usual. The session sweeps one gain-table region,
- * that of the current LO (bladerf_rx_gain_table_region()); if the loaded
- * table belongs to another region, begin returns ::BLADERF_ERR_WOULD_BLOCK.
- * Otherwise ::BLADERF_ERR_UNSUPPORTED or
- * ::BLADERF_ERR_WOULD_BLOCK.
+ * still revoke the epoch as usual. The RX gain table loaded at begin must be
+ * that of the current LO's region (bladerf_rx_gain_table_region()),
+ * otherwise begin returns ::BLADERF_ERR_WOULD_BLOCK. With FPGA >= v0.36.0
+ * the session may cross gain-table regions: NIOS loads the table of the new
+ * region before the recall of a crossing retune (NIOS SPI work, up to 77 table
+ * rows between `scheduled_timestamp` and `executed_timestamp`; schedule the
+ * next retune with room for it) and the record reports it. With older FPGAs the
+ * session stays inside the region it began in. Otherwise
+ * ::BLADERF_ERR_UNSUPPORTED or ::BLADERF_ERR_WOULD_BLOCK.
  *
  * While the session is active, bladerf_schedule_retune() on RX behaves as
  * bladerf_rx_sweep_schedule() and RX transitions return
@@ -2162,7 +2179,7 @@ int CALL_CONV bladerf_rx_sweep_begin(struct bladerf *dev,
  *
  * Same contract as bladerf_schedule_retune() (strictly increasing future
  * timestamps; ::BLADERF_ERR_RANGE if `frequency` lies in another gain-table
- * region than the session (bladerf_rx_gain_table_region());
+ * region than the session began in and the FPGA is older than v0.36.0;
  * ::BLADERF_ERR_WOULD_BLOCK or ::BLADERF_ERR_QUEUE_FULL when the
  * queue of ::BLADERF_RX_SWEEP_QUEUE_DEPTH entries is full), without
  * revoking the RX stream. Collects already completed records first.
@@ -2201,12 +2218,10 @@ int CALL_CONV bladerf_rx_sweep_schedule(
 /**
  * AD9361 RX gain-table region of an LO frequency.
  *
- * A NIOS fastlock recall changes the LO but not the gain table, so gain is
- * only calibrated within the region whose table is loaded. Inside a sweep
- * session bladerf_rx_sweep_schedule() therefore rejects a retune into
- * another region with ::BLADERF_ERR_RANGE. Order a sweep plan by region and
- * cross a region boundary with an RX transition (which loads the table)
- * between sessions.
+ * A NIOS fastlock recall changes the LO but not the gain table. FPGA >=
+ * v0.36.0 loads the table of the LO's region with the recall (sweep records
+ * report it, BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID); with older FPGAs a sweep
+ * session stays inside one region (bladerf_rx_sweep_schedule()).
  *
  * @param[in]   frequency   LO frequency in Hz
  *
@@ -5362,7 +5377,10 @@ typedef enum {
     BLADERF_RF_NIOS_FAILURE_TIMER_STOPPED,
     BLADERF_RF_NIOS_FAILURE_INTERNAL,
     BLADERF_RF_NIOS_FAILURE_CANCELLED = 19,
-    BLADERF_RF_NIOS_FAILURE_RFIC_CONTEXT_UNAVAILABLE = 20
+    BLADERF_RF_NIOS_FAILURE_RFIC_CONTEXT_UNAVAILABLE = 20,
+    /** RX gain-table request invalid or its table load failed (FPGA >=
+     * v0.36.0). */
+    BLADERF_RF_NIOS_FAILURE_GAIN_TABLE = 21
 } bladerf_rf_nios_failure_stage;
 
 #define BLADERF_RF_EVENT_F_RX_CLIPPING_RX1 (1U << 0)

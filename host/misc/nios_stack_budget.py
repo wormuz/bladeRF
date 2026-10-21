@@ -58,10 +58,12 @@ INDIRECT = {
     # phy->read_cal_done = _rfic_read_cal_done (devices_rfic_cmds.c)
     "ad9361_calibration_wait_start": [r"_rfic_read_cal_done"],
     "ad9361_calibration_wait_poll": [r"_rfic_read_cal_done"],
-    # spi platform_ops update_register_bits / write_gain_table_row /
+    # spi platform_ops update_register_bits /
     # write_register_batch: not set in bladerf2_spi_ops
     "__ad9361_spi_writef": [],
-    "ad9361_gain_table_transaction_poll": [],
+    # write_gain_table_row: bladerf2_headless_spi.c (RETUNE2 gain-table load)
+    "ad9361_gain_table_load_poll":
+        [r"bladerf2_headless_spi_write_gain_table_row"],
     "ad9361_spi_write_register_run.constprop.0": [],
     # phy->ad9361_rfpll_ext_*: NULL in ad936x_params.c (external LO unused)
     "ad9361_rfpll_recalc_rate_checked": [],

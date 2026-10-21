@@ -48,6 +48,10 @@ bool rfic_frequency_state_available(void);
 bool rfic_frequency_peer_unknown(bladerf_module target);
 bool rfic_command_state_faulted(void);
 bool rfic_phy_present(void);
+int32_t rfic_start_gain_table_for_retune(uint8_t request);
+int32_t rfic_poll_gain_table_for_retune(void);
+bool rfic_gain_table_retune_owner(void);
+void rfic_doubt_gain_table(void);
 #endif  // BLADERF_NIOS_LIBAD936X
 
 #ifdef BLADERF_NIOS_DEBUG
@@ -62,6 +66,9 @@ bool rfic_phy_present(void);
 #define QUEUE_FULL          0xff
 #define QUEUE_EMPTY         0xfe
 #define QUEUE_INVALID_TIMESTAMP 0xfd
+/* queue_entry.gain_table: this entry loaded the table (bit 4 is zero on the
+ * wire, see retune2_gain_table_valid()). */
+#define QUEUE_GT_LOADED     (1u << 4)
 
 #if RETUNE2_QUEUE_MAX < 2 || \
     (RETUNE2_QUEUE_MAX & (RETUNE2_QUEUE_MAX - 1)) != 0
@@ -80,6 +87,7 @@ enum entry_state {
     ENTRY_STATE_PROFILE_LOAD_FAILED, /* Deferred upload failure is terminal */
     ENTRY_STATE_READY,        /* The timer interrupt has fired - we should
                                * handle this retune */
+    ENTRY_STATE_GAIN_TABLE_PENDING, /* RX gain table loads before recall */
     ENTRY_STATE_PLL_PENDING,  /* Fastlock recalled; poll RFPLL lock */
     ENTRY_STATE_TXQ_PENDING,  /* TX profile active; await TXQ before success */
     ENTRY_STATE_DONE,         /* Retune is complete */
@@ -117,6 +125,10 @@ struct queue_entry {
     uint8_t cancel_ack_before;
     uint16_t nios_profile;
     uint16_t request_token;
+    /* RX gain-table byte (nios_pkt_retune2.h Note 3); once this entry has
+     * loaded the table its source region is set to the target and
+     * QUEUE_GT_LOADED marks the load. Fills padding before timestamp. */
+    uint8_t gain_table;
     uint64_t timestamp;
     uint64_t readback_frequency_hz;
     struct retune2_execution execution;
@@ -491,6 +503,15 @@ static void record_retune2_entry_failure(bladerf_module module,
                                          uint8_t failure_stage)
 {
     if (entry != NULL && !entry->failure_reported) {
+#ifdef BLADERF_NIOS_LIBAD936X
+        /* The host plans the next request's source table from this one's
+         * target. Without this entry's load that plan no longer holds. */
+        if ((entry->gain_table & NIOS_PKT_RETUNE2_GT_REQUEST) != 0 &&
+            NIOS_PKT_RETUNE2_GT_FROM(entry->gain_table) !=
+                NIOS_PKT_RETUNE2_GT_TO(entry->gain_table)) {
+            rfic_doubt_gain_table();
+        }
+#endif
         record_retune2_failure(module, entry, failure_stage);
         entry->failure_reported = true;
         if (entry->deferred_response_pkt != NULL) {
@@ -511,6 +532,17 @@ static bool retune2_profile_indices_valid(uint16_t nios_profile,
 {
     return nios_profile < NUM_BBP_FASTLOCK_PROFILES &&
            rffe_profile < NUM_RFFE_FASTLOCK_PROFILES;
+}
+
+/* Zero, or an RX request with a target region and the reserved bit clear. */
+static bool retune2_gain_table_valid(bladerf_module module,
+                                     uint8_t gain_table)
+{
+    return gain_table == 0 ||
+           (module == BLADERF_MODULE_RX &&
+            (gain_table & NIOS_PKT_RETUNE2_GT_REQUEST) != 0 &&
+            (gain_table & QUEUE_GT_LOADED) == 0 &&
+            NIOS_PKT_RETUNE2_GT_TO(gain_table) != NIOS_PKT_RETUNE2_GT_UNKNOWN);
 }
 
 /* Returns queue size after enqueue operation, or QUEUE_FULL if we could
@@ -549,6 +581,7 @@ static inline uint8_t enqueue_retune_with_identity(
     q->entries[q->ins_idx].execution.flags = 0;
     q->entries[q->ins_idx].session_generation = session_generation;
     q->entries[q->ins_idx].request_token = request_token;
+    q->entries[q->ins_idx].gain_table = 0;
     q->entries[q->ins_idx].deferred_response_pkt = NULL;
     q->entries[q->ins_idx].immediate = false;
     q->entries[q->ins_idx].cancel_recovery_seen = false;
@@ -590,6 +623,7 @@ static inline uint8_t enqueue_retune_now_with_identity(
     entry->execution.flags = 0;
     entry->session_generation = session_generation;
     entry->request_token = request_token;
+    entry->gain_table = 0;
     entry->deferred_response_pkt = NULL;
     entry->immediate = true;
     entry->cancel_recovery_seen = false;
@@ -676,6 +710,7 @@ static bool profile_slot_compare_owned(const struct queue_entry *entry)
             entry->state == ENTRY_STATE_CANCEL_PENDING ||
             entry->state == ENTRY_STATE_PROFILE_LOAD_PENDING ||
             entry->state == ENTRY_STATE_READY ||
+            entry->state == ENTRY_STATE_GAIN_TABLE_PENDING ||
             entry->state == ENTRY_STATE_PLL_PENDING ||
             entry->state == ENTRY_STATE_TXQ_PENDING);
 }
@@ -798,6 +833,7 @@ static bool clear_queue_async(struct queue *q, bladerf_module module,
         }
         cancel_nonhead_profile_upload(q, module, e);
         if (e != NULL && (e->state == ENTRY_STATE_TXQ_PENDING ||
+                          e->state == ENTRY_STATE_GAIN_TABLE_PENDING ||
                           e->state == ENTRY_STATE_PLL_PENDING)) {
             /* The compare already fired and AD9361 calibration owns RFIC.
              * Let its exact request reach a terminal result before clearing
@@ -853,6 +889,7 @@ static bool clear_queue_async(struct queue *q, bladerf_module module,
     }
     cancel_nonhead_profile_upload(q, module, e);
     if (e != NULL && (e->state == ENTRY_STATE_TXQ_PENDING ||
+                      e->state == ENTRY_STATE_GAIN_TABLE_PENDING ||
                       e->state == ENTRY_STATE_PLL_PENDING)) {
         return false;
     }
@@ -960,6 +997,7 @@ static void fail_queue_for_rfic_fault(struct queue *q,
     }
 
     if (head->state == ENTRY_STATE_TXQ_PENDING ||
+        head->state == ENTRY_STATE_GAIN_TABLE_PENDING ||
         head->state == ENTRY_STATE_PLL_PENDING) {
         /* The active TXQ/PLL poll owns the queue entry and must reach a
          * terminal hardware observation before fault retirement. */
@@ -1222,6 +1260,16 @@ static void publish_retune2_success(bladerf_module module,
     if (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX) {
         return;
     }
+    if ((entry->gain_table & NIOS_PKT_RETUNE2_GT_REQUEST) != 0) {
+        /* Before success the table of the target region was loaded, by
+         * this entry or already (rfic_start_gain_table_for_retune). */
+        entry->execution.flags |= (uint8_t)(
+            NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+            ((entry->gain_table & QUEUE_GT_LOADED) != 0
+                 ? NIOS_PKT_RETUNE2_EXEC_GT_LOADED : 0u) |
+            (NIOS_PKT_RETUNE2_GT_TO(entry->gain_table)
+             << NIOS_PKT_RETUNE2_EXEC_GT_SHIFT));
+    }
     sequence = pkt_retune2_success_count(module) + 1u;
     completion = module == BLADERF_MODULE_RX
         ? &rx_retune2_completions[(sequence - 1u) & (RETUNE2_QUEUE_MAX - 1u)]
@@ -1278,6 +1326,7 @@ static inline void retune_isr(struct queue *q, bladerf_module module)
                 INCREMENT_ERROR_COUNT();
             }
         } else if (e->state != ENTRY_STATE_READY &&
+                   e->state != ENTRY_STATE_GAIN_TABLE_PENDING &&
                    e->state != ENTRY_STATE_PLL_PENDING &&
                    e->state != ENTRY_STATE_TXQ_PENDING) {
             INCREMENT_ERROR_COUNT();
@@ -1592,6 +1641,28 @@ static inline void perform_work(struct queue *q, bladerf_module module)
             bool pll_pending = false;
             bool txq_pending = false;
 
+#ifdef BLADERF_NIOS_LIBAD936X
+            /* The recall changes the LO, not the RX gain table: load the
+             * table of the LO's region first. Samples keep their old LO
+             * meanwhile; the executed timestamp follows both. */
+            if ((e->gain_table & NIOS_PKT_RETUNE2_GT_REQUEST) != 0 &&
+                (e->gain_table & QUEUE_GT_LOADED) == 0) {
+                int32_t gt_status =
+                    rfic_start_gain_table_for_retune(e->gain_table);
+
+                if (gt_status > 0) {
+                    e->state = ENTRY_STATE_GAIN_TABLE_PENDING;
+                    break;
+                }
+                if (gt_status < 0) {
+                    record_retune2_entry_failure(
+                        module, e, NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE);
+                    dequeue_retune(q, NULL);
+                    break;
+                }
+            }
+#endif
+
             /* Activate the fast lock profile for this retune */
             if (!profile_activate(module, &e->profile,
                                  &readback_frequency_hz, &failure_stage,
@@ -1618,6 +1689,39 @@ static inline void perform_work(struct queue *q, bladerf_module module)
 
             break;
         }
+
+#ifdef BLADERF_NIOS_LIBAD936X
+        case ENTRY_STATE_GAIN_TABLE_PENDING: {
+            int32_t gt_status = rfic_poll_gain_table_for_retune();
+
+            if (gt_status == 1) {
+                break;
+            }
+            if (gt_status == 0) {
+                /* Loaded: the table now is that of the target region. */
+                e->gain_table = (uint8_t)(
+                    (e->gain_table & ~(0x3u << 2)) | QUEUE_GT_LOADED |
+                    (NIOS_PKT_RETUNE2_GT_TO(e->gain_table) << 2));
+                if (!q->clear_requested) {
+                    e->state = ENTRY_STATE_READY;
+                    break;
+                }
+            }
+            record_retune2_entry_failure(
+                module, e, gt_status == 0
+                               ? NIOS_PKT_RETUNE2_FAILURE_CANCELLED
+                               : NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE);
+            if (q->clear_requested) {
+                /* As PLL_PENDING: the fired compare's load was the last
+                 * hardware owner; the rest of the queue was never armed. */
+                reset_queue(q);
+                q->clear_complete = true;
+            } else {
+                dequeue_retune(q, NULL);
+            }
+            break;
+        }
+#endif
 
         case ENTRY_STATE_PLL_PENDING: {
             uint64_t readback_frequency_hz = 0;
@@ -1778,6 +1882,11 @@ void pkt_retune2_work(void)
         fail_queue_for_rfic_fault(&rx_queue, BLADERF_MODULE_RX);
         fail_queue_for_rfic_fault(&tx_queue, BLADERF_MODULE_TX);
     }
+    if (rfic_gain_table_retune_owner()) {
+        /* The RX head owns the RFIC until its gain-table load ends. */
+        perform_work(&rx_queue, BLADERF_MODULE_RX);
+        return;
+    }
     if (adi_fastlock_load_active()) {
         bladerf_module const owner = adi_fastlock_load_owner();
         if (owner == BLADERF_MODULE_RX)
@@ -1872,12 +1981,18 @@ void pkt_retune2(struct pkt_buf *b)
     uint16_t request_token;
     fastlock_profile *profile;
     fastlock_profile requested_profile;
+    uint8_t gain_table = 0;
 
     flags = NIOS_PKT_RETUNE2_RESP_FLAG_SUCCESS;
 
     nios_pkt_retune2_unpack_token(
         b->req, &module, &timestamp, &nios_profile, &rffe_profile, &port,
         &spdt, &request_token);
+#ifdef BLADERF_NIOS_LIBAD936X
+    /* NIOS_PROFILE[15:8] is the RX gain-table byte, nios_pkt_retune2.h. */
+    gain_table = (uint8_t)(nios_profile >> 8);
+    nios_profile &= 0xffu;
+#endif
 
     if (timestamp != NIOS_PKT_RETUNE_NOW &&
         timestamp != NIOS_PKT_RETUNE2_CLEAR_QUEUE) {
@@ -1942,7 +2057,8 @@ void pkt_retune2(struct pkt_buf *b)
         INCREMENT_ERROR_COUNT();
         failure_stage = NIOS_PKT_RETUNE2_FAILURE_INVALID_REQUEST;
         status = -1;
-    } else if (!retune2_profile_indices_valid(nios_profile, rffe_profile)) {
+    } else if (!retune2_profile_indices_valid(nios_profile, rffe_profile) ||
+               !retune2_gain_table_valid(module, gain_table)) {
         /* Do not index the per-direction profile arrays or shift a
          * caller-controlled RFFE slot into the preload bitmask unchecked. */
         INCREMENT_ERROR_COUNT();
@@ -2055,6 +2171,7 @@ void pkt_retune2(struct pkt_buf *b)
                                      * profile port can be modified. */
                                     entry->state =
                                         ENTRY_STATE_PROFILE_LOAD_PENDING;
+                                    entry->gain_table = gain_table;
                                     if (deferred_legacy_now) {
                                         entry->deferred_response_pkt = b;
                                         b->response_deferred = true;
@@ -2162,6 +2279,12 @@ void pkt_retune2(struct pkt_buf *b)
                     flags |= NIOS_PKT_RETUNE2_RESP_FLAG_INVALID_TIMESTAMP;
                     status = -1;
                 } else {
+                    struct queue *q = module == BLADERF_MODULE_TX
+                        ? &tx_queue : &rx_queue;
+
+                    q->entries[(q->ins_idx - 1) &
+                               (RETUNE2_QUEUE_MAX - 1)].gain_table =
+                        gain_table;
                     status = 0;
                 }
             }

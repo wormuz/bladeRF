@@ -32,14 +32,14 @@
  * start < f <= end over ad9361_adi_gt_info. */
 static inline unsigned int bladerf2_rx_gain_table_region(uint64_t frequency)
 {
-    if (frequency <= BLADERF_RX_GAIN_TABLE_REGION_0_END_HZ) {
-        return 0;
-    }
-    if (frequency <= BLADERF_RX_GAIN_TABLE_REGION_1_END_HZ) {
-        return 1;
-    }
-    return 2;
+    return nios_pkt_retune2_gain_table_region(frequency);
 }
+
+typedef char bladerf2_rx_gain_table_regions_match[
+    BLADERF_RX_GAIN_TABLE_REGION_0_END_HZ ==
+            NIOS_PKT_RETUNE2_GT_REGION_0_END_HZ &&
+        BLADERF_RX_GAIN_TABLE_REGION_1_END_HZ ==
+            NIOS_PKT_RETUNE2_GT_REGION_1_END_HZ ? 1 : -1];
 
 /* RFPLL_MODULUS of ad9361.h; rx_sweep.c checks that they agree. */
 #define BLADERF2_RFPLL_MODULUS 8388593u
@@ -129,12 +129,14 @@ static inline enum bladerf2_rx_sweep_readback bladerf2_rx_sweep_readback(
  * Certification needs all of: a valid post-recall timestamp, the RFPLL lock
  * bit read after it, a valid LO readback within 1 kHz of the request, and a
  * settle window that does not overflow. Without a readback the record is
- * not certified. */
+ * not certified. With `gain_table_required` (the request carried a
+ * gain-table byte) it also needs the RX gain table NIOS reports loaded to be
+ * that of the requested LO's region. */
 static inline void bladerf2_rx_sweep_record_success(
     struct bladerf_rx_sweep_record *record,
     enum bladerf2_rx_sweep_readback readback, uint64_t readback_frequency_hz,
     uint64_t executed_timestamp, uint8_t execution_flags,
-    uint64_t settle_samples)
+    uint64_t settle_samples, bool gain_table_required)
 {
     const uint64_t delta =
         record->frequency > readback_frequency_hz
@@ -142,11 +144,15 @@ static inline void bladerf2_rx_sweep_record_success(
             : readback_frequency_hz - record->frequency;
     const uint8_t required = BLADERF_RX_SWEEP_F_EXECUTED_VALID |
                              BLADERF_RX_SWEEP_F_PLL_LOCKED |
-                             BLADERF_RX_SWEEP_F_READBACK_VALID;
+                             BLADERF_RX_SWEEP_F_READBACK_VALID |
+                             (gain_table_required
+                                  ? BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID
+                                  : 0u);
 
     record->status = BLADERF_RX_SWEEP_SUCCESS;
     record->flags = 0;
     record->failure_stage = 0;
+    record->gain_table = 0;
     record->readback_frequency = readback_frequency_hz;
     record->executed_timestamp = 0;
     record->certified_start = 0;
@@ -156,6 +162,17 @@ static inline void bladerf2_rx_sweep_record_success(
     }
     if ((execution_flags & NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED) != 0) {
         record->flags |= BLADERF_RX_SWEEP_F_PLL_LOCKED;
+    }
+    if ((execution_flags & NIOS_PKT_RETUNE2_EXEC_GT_VALID) != 0) {
+        record->gain_table =
+            (uint8_t)NIOS_PKT_RETUNE2_EXEC_GT_REGION(execution_flags);
+        if (record->gain_table ==
+            bladerf2_rx_gain_table_region(record->frequency)) {
+            record->flags |= BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID;
+        }
+        if ((execution_flags & NIOS_PKT_RETUNE2_EXEC_GT_LOADED) != 0) {
+            record->flags |= BLADERF_RX_SWEEP_F_GAIN_TABLE_LOADED;
+        }
     }
     if (readback == BLADERF2_RX_SWEEP_READBACK_VALID) {
         record->flags |= BLADERF_RX_SWEEP_F_READBACK_VALID;

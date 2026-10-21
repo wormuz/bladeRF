@@ -1421,7 +1421,7 @@ int nios_retune2_failure_completion_read(struct bladerf *dev,
     }
     if (!nios_retune_profile_word_valid(profile) ||
         stage == NIOS_PKT_RETUNE2_FAILURE_NONE ||
-        stage > NIOS_PKT_RETUNE2_FAILURE_RFIC_CONTEXT_UNAVAILABLE ||
+        stage > NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE ||
         token > UINT16_MAX) {
         return BLADERF_ERR_UNEXPECTED;
     }
@@ -2309,7 +2309,10 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
 {
     const bool tx = module == BLADERF_MODULE_TX;
     const uint64_t known_flags = NIOS_PKT_RETUNE2_EXEC_TS_VALID |
-                                 NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED;
+                                 NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED |
+                                 NIOS_PKT_RETUNE2_EXEC_GT_VALID |
+                                 NIOS_PKT_RETUNE2_EXEC_GT_LOADED |
+                                 (0x3u << NIOS_PKT_RETUNE2_EXEC_GT_SHIFT);
     uint64_t identity = 0;
     uint64_t execution = 0;
     uint64_t synth = 0;
@@ -2982,7 +2985,7 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
             return BLADERF_ERR_UNEXPECTED;
         }
         status = nios_retune2_wait_now_terminal(
-            dev, ch, nios_profile, request_token,
+            dev, ch, nios_profile & 0xffu, request_token,
             response_session_generation, success_baseline,
             failure_baseline, &failure_stage);
         if (dev->nios_retune_trace.valid) {

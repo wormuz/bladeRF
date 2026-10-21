@@ -25,11 +25,13 @@
  * success records and reads whole records (16x64 target 0x07); 0.33.0
  * adds the synthesizer bytes of the recalled profile slot to retune2
  * success records (16x64 target 0x07 word 3); 0.34.0 invalidates the
- * shared B/C RFDC result history when either input is calibrated.
+ * shared B/C RFDC result history when either input is calibrated; 0.35.0
+ * adds the NIOS boot nonce; 0.36.0 loads the AD9361 RX gain table of the
+ * LO region with a RETUNE2 recall (gain-table byte, nios_pkt_retune2.h).
  * The host gates each format through version-derived capabilities. */
 #define FPGA_VERSION_ID         0x7778
 #define FPGA_VERSION_MAJOR      0
-#define FPGA_VERSION_MINOR      35
+#define FPGA_VERSION_MINOR      36
 #define FPGA_VERSION_PATCH      0
 #define FPGA_VERSION ((uint32_t)( FPGA_VERSION_MAJOR        | \
                                  (FPGA_VERSION_MINOR << 8)  | \

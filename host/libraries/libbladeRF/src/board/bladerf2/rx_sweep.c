@@ -84,6 +84,23 @@ static void sweep_push(struct bladerf2_board_data *board_data,
     board_data->rx_sweep.ring_count++;
 }
 
+/* The RX gain table after `record`, records taken in sequence order: what a
+ * success reports, unknown after any other outcome (a failed crossing may
+ * have left the table half written). Without NIOS gain-table support the
+ * session never leaves its region and the table never changes. */
+static void sweep_gain_table_follow(struct bladerf2_board_data *board_data,
+                                    const struct bladerf_rx_sweep_record *record)
+{
+    if (!have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
+        return;
+    }
+    board_data->rx_sweep.gain_table_known =
+        record->status == BLADERF_RX_SWEEP_SUCCESS &&
+                (record->flags & BLADERF_RX_SWEEP_F_GAIN_TABLE_VALID) != 0
+            ? record->gain_table
+            : NIOS_PKT_RETUNE2_GT_UNKNOWN;
+}
+
 static void sweep_sort(struct bladerf_rx_sweep_record *records,
                        unsigned int count)
 {
@@ -125,7 +142,8 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
                               uint8_t status,
                               struct bladerf_rx_sweep_record *record,
                               uint8_t *synth_expected,
-                              bool *synth_expected_valid)
+                              bool *synth_expected_valid,
+                              uint8_t *gain_table)
 {
     unsigned int i;
 
@@ -146,6 +164,9 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
                        NIOS_PKT_RETUNE2_SYNTH_LEN);
                 *synth_expected_valid =
                     board_data->rx_retune2_pending[i].synth_expected_valid;
+            }
+            if (gain_table != NULL) {
+                *gain_table = board_data->rx_retune2_pending[i].gain_table;
             }
             board_data->rx_retune2_pending[i].valid = false;
             if (board_data->rx_retune2_pending_count != 0) {
@@ -209,6 +230,7 @@ static int sweep_collect(struct bladerf *dev)
         struct nios_retune2_record nios;
         uint8_t synth_expected[NIOS_PKT_RETUNE2_SYNTH_LEN];
         bool synth_expected_valid = false;
+        uint8_t gain_table = 0;
         enum bladerf2_rx_sweep_readback readback;
         uint64_t readback_hz;
         uint64_t executed_timestamp;
@@ -224,7 +246,7 @@ static int sweep_collect(struct bladerf *dev)
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_SUCCESS,
                                   &batch[batch_count], synth_expected,
-                                  &synth_expected_valid);
+                                  &synth_expected_valid, &gain_table);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -243,7 +265,8 @@ static int sweep_collect(struct bladerf *dev)
             &readback_hz);
         bladerf2_rx_sweep_record_success(
             &batch[batch_count], readback, readback_hz, executed_timestamp,
-            nios.execution_flags, board_data->rx_sweep.settle_samples);
+            nios.execution_flags, board_data->rx_sweep.settle_samples,
+            gain_table != 0);
         batch_count++;
     }
 
@@ -259,7 +282,7 @@ static int sweep_collect(struct bladerf *dev)
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_FAILED,
-                                  &batch[batch_count], NULL, NULL);
+                                  &batch[batch_count], NULL, NULL, NULL);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -302,6 +325,7 @@ static int sweep_collect(struct bladerf *dev)
 
     sweep_sort(batch, batch_count);
     for (i = 0; i < batch_count; i++) {
+        sweep_gain_table_follow(board_data, &batch[i]);
         sweep_push(board_data, &batch[i]);
     }
     return 0;
@@ -348,6 +372,79 @@ static int sweep_gain_table_region(struct bladerf *dev, bladerf_channel ch,
         }
     }
     return 0;
+}
+
+/* Region of the AD9361 driver's loaded RX gain table. */
+static unsigned int gain_table_driver_region(const struct ad9361_rf_phy *phy)
+{
+    if (phy == NULL || phy->gt_info == NULL ||
+        phy->current_table >= RXGAIN_TBLS_END) {
+        return NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    }
+    return bladerf2_rx_gain_table_region(
+        phy->gt_info[phy->current_table].end);
+}
+
+void bladerf2_rx_gain_table_loaded(struct bladerf2_board_data *board_data,
+                                   unsigned int region)
+{
+    struct ad9361_rf_phy *phy = board_data->phy;
+    unsigned int i;
+
+    if (phy == NULL || phy->gt_info == NULL || phy->pdata == NULL) {
+        return;
+    }
+    phy->current_table = NO_GAIN_TABLE;
+    if (region == NIOS_PKT_RETUNE2_GT_UNKNOWN) {
+        return;
+    }
+    for (i = 0; phy->gt_info[i].tab != NULL; i++) {
+        if (!!phy->gt_info[i].split_table == !!phy->pdata->split_gt &&
+            bladerf2_rx_gain_table_region(phy->gt_info[i].end) == region) {
+            phy->current_table = i;
+            return;
+        }
+    }
+}
+
+uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
+                                      bladerf_frequency frequency, bool sweep,
+                                      bool queue_idle)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    const struct ad9361_rf_phy *phy = board_data->phy;
+    const unsigned int to = bladerf2_rx_gain_table_region(frequency);
+    unsigned int from = NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    bool split = false;
+    bool elna = false;
+
+    if (!have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
+        return 0;
+    }
+    if (frequency == 0) {
+        /* No LO to name a table for: the recall keeps whichever is loaded,
+         * which may then not match it. */
+        bladerf2_rx_gain_table_loaded(board_data,
+                                      NIOS_PKT_RETUNE2_GT_UNKNOWN);
+        return 0;
+    }
+    /* In FPGA tuning mode NIOS's own driver knows the table and these
+     * fields are ignored. */
+    if (phy != NULL && phy->pdata != NULL) {
+        split = phy->pdata->split_gt;
+        elna = phy->pdata->elna_ctrl.elna_in_gaintable_all_index_en;
+    }
+    if (sweep) {
+        from = board_data->rx_sweep.gain_table_planned;
+    } else if (queue_idle) {
+        from = gain_table_driver_region(phy);
+    }
+    if (from != to) {
+        /* NIOS may load another table at a time the host does not see. */
+        bladerf2_rx_gain_table_loaded(board_data,
+                                      NIOS_PKT_RETUNE2_GT_UNKNOWN);
+    }
+    return nios_pkt_retune2_gain_table(split, elna, from, to);
 }
 
 bool bladerf2_rx_sweep_active(struct bladerf *dev, bladerf_channel ch)
@@ -436,6 +533,8 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     board_data->rx_sweep.ch = ch;
     board_data->rx_sweep.settle_samples = settle_samples;
     board_data->rx_sweep.gain_table_region = gain_table_region;
+    board_data->rx_sweep.gain_table_planned = (uint8_t)gain_table_region;
+    board_data->rx_sweep.gain_table_known = (uint8_t)gain_table_region;
     board_data->rx_sweep.refclk_hz = refclk_hz;
     board_data->rx_sweep.next_sequence = 1;
     board_data->rx_sweep.ring_head = 0;
@@ -475,11 +574,12 @@ int bladerf2_rx_sweep_schedule(struct bladerf *dev, bladerf_channel ch,
         timestamp == BLADERF_RETUNE_NOW) {
         return BLADERF_ERR_INVAL;
     }
-    /* A fastlock recall keeps the loaded gain table; outside its region the
-     * gain would be off by several dB (measured 6.4 dB at 925 MHz coming
-     * from a 2.5 GHz table). */
-    if (bladerf2_rx_gain_table_region(frequency) !=
-        board_data->rx_sweep.gain_table_region) {
+    /* Without NIOS gain-table loading a recall keeps the loaded table;
+     * outside its region the gain would be off by several dB (measured
+     * 6.4 dB at 925 MHz coming from a 2.5 GHz table). */
+    if (!have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE) &&
+        bladerf2_rx_gain_table_region(frequency) !=
+            board_data->rx_sweep.gain_table_region) {
         return BLADERF_ERR_RANGE;
     }
 
@@ -521,6 +621,12 @@ int bladerf2_rx_sweep_schedule(struct bladerf *dev, bladerf_channel ch,
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
     if (committed) {
+        /* The next request starts from this one's table; after an
+         * ambiguous transport failure this one may never run, so the next
+         * names no source table and NIOS loads its own. */
+        board_data->rx_sweep.gain_table_planned =
+            status == 0 ? (uint8_t)bladerf2_rx_gain_table_region(frequency)
+                        : (uint8_t)NIOS_PKT_RETUNE2_GT_UNKNOWN;
         board_data->rx_sweep.next_sequence = candidate + 1u;
         if (sequence != NULL) {
             *sequence = candidate;
@@ -594,6 +700,15 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
             sweep_record_from_ledger(board_data, i,
                                      BLADERF_RX_SWEEP_CANCELLED,
                                      &cancelled[cancelled_count++]);
+            /* It may or may not have run; if it may load a table, which
+             * one is loaded is unknown. */
+            if (NIOS_PKT_RETUNE2_GT_FROM(
+                    board_data->rx_retune2_pending[i].gain_table) !=
+                NIOS_PKT_RETUNE2_GT_TO(
+                    board_data->rx_retune2_pending[i].gain_table)) {
+                board_data->rx_sweep.gain_table_known =
+                    NIOS_PKT_RETUNE2_GT_UNKNOWN;
+            }
         }
     }
     MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
@@ -633,7 +748,12 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
     sweep_push(board_data, &end_record);
 
     board_data->rx_sweep.active = false;
-    /* NIOS recalled profiles outside the host clock driver. */
+    /* NIOS recalled profiles outside the host clock driver, and loaded RX
+     * gain tables outside the AD9361 driver: hand it the one loaded now. */
+    if (have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
+        bladerf2_rx_gain_table_loaded(board_data,
+                                      board_data->rx_sweep.gain_table_known);
+    }
     ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
 
     /* The caller (bladerf_rx_sweep_end) then revokes the epoch: its LO is
