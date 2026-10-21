@@ -437,7 +437,7 @@ static int cyapi_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
 
     if (ep != NULL) {
         LONG len = buffer_len;
-        dev->ControlEndPt->TimeOut = timeout_ms ? timeout_ms : INFINITE;
+        ep->TimeOut = timeout_ms ? timeout_ms : INFINITE;
         success = ep->XferData((PUCHAR)buffer, len);
 
         if (success) {
@@ -447,7 +447,7 @@ static int cyapi_bulk_transfer(void *driver, uint8_t endpoint, void *buffer,
             if (transferred_valid != NULL && len >= 0) {
                 *transferred_valid = true;
             }
-            if (len == buffer_len) {
+            if ((uint32_t)len == buffer_len) {
                 status = 0;
             } else if (transferred != NULL && len >= 0) {
                 /* The caller requested the actual length and can assemble a
@@ -541,7 +541,6 @@ static int cyapi_init_stream(void *driver, struct bladerf_stream *stream,
                             size_t num_transfers)
 {
     int status = BLADERF_ERR_MEM;
-    CCyUSBDevice *dev = get_device(driver);
     struct stream_data *data;
 
     data = (struct stream_data *) calloc(1, sizeof(data[0]));
@@ -563,6 +562,7 @@ static int cyapi_init_stream(void *driver, struct bladerf_stream *stream,
         data->transfers[i].event.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
         if (data->transfers[i].event.hEvent == NULL) {
             log_debug("%s: Failed to create EventObject for transfer %u\n",
+                      __FUNCTION__,
                       (unsigned int) i);
             goto out;
         }
@@ -692,7 +692,6 @@ static int cyapi_stream(void *driver, struct bladerf_stream *stream,
                         bladerf_channel_layout layout)
 {
     int status;
-    int idx = 0;
     long len;
     void *next_buffer;
     ULONG timeout_ms;
