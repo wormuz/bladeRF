@@ -1,6 +1,6 @@
 # 2x2 complex MIMO FIR spatial whitening in the xA4 RX path: implementation design
 
-Status: stage A (datapath, T1-T7) and B1 (rx.vhd/core/Qsys/SDC, NIOS target 0x92, libbladeRF, T8) implemented; not synthesized, not run on hardware. Fork: `~/projects/bladerf` @ `5d833830`.
+Status: stage A (datapath, T1-T7) and B1 (rx.vhd/core/Qsys/SDC, NIOS target 0x93, libbladeRF, T8) implemented; not synthesized, not run on hardware. Fork: `~/projects/bladerf` @ `5d833830`.
 Input decision: OC `sdr-scanner/rx-precalibration-plan-2026-10-18.md`, last three sections
 (5 taps reproduce the per-10-RB oracle in float emulation `tmp/wh_fir.py`; 9 taps also OK).
 
@@ -176,8 +176,8 @@ by which time data is already stable (same argument as TX retune target lo/hi th
 
 ### 2.4 NIOS firmware (`hdl/fpga/platforms/common/bladerf/software/bladeRF_nios/src/`)
 
-- `fpga_common/include/nios_pkt_8x32.h`: `NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR 0x92` (0x91 is the
-  last used, `:388`); addr 0..19 = coefficient word; `..._SFIR_CMD_COMMIT 0x80` (data = 8-bit tag);
+- `fpga_common/include/nios_pkt_8x32.h`: `NIOS_PKT_8x32_TARGET_RX_SPATIAL_FIR 0x93` (0x92 is the
+  last used); addr 0..19 = coefficient word; `..._SFIR_CMD_COMMIT 0x80` (data = 8-bit tag);
   `..._SFIR_CMD_IDENTITY 0x81` (data 0); read addr 0x80 = status word, 0..19 = NIOS mirror of the active bank, 0x20+i = mirror of the shadow bank. IDENTITY writes and all reads stay allowed while a retained RETUNE2 owns the RFIC (`nios_pkt_8x32_rfic_owner_access_safe`).
 - `fpga_common/include/nios_pkt_8x32_diag.h:32`: allow the new read addresses.
 - `devices_inline.h` (next to `dwell_cfg_write`, `:301-311`, and RX_EPOCH bits `:488`):
