@@ -226,6 +226,19 @@ void rfic_fail_tx_quad_calibration(int32_t status,
     }
 }
 
+int32_t rfic_job_context_claim(struct rfic_state *s, size_t job_size)
+{
+    if (s->init_job_pending || s->fir_load_job_pending ||
+        s->fir_enable_job_pending || s->sample_rate_job_pending ||
+        s->bandwidth_job_pending || s->rfpll_job_pending ||
+        s->rfdc_job_pending || s->tx_quad_job_pending ||
+        s->gain_table_retune_owner || job_size > sizeof(s->job_context)) {
+        return -EBUSY;
+    }
+    memset(&s->job_context, 0, job_size);
+    return 0;
+}
+
 bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
                                                    uint8_t *failure_stage)
 {
@@ -236,8 +249,11 @@ bool rfic_start_tx_quad_calibration_for_frequency(bool *pending,
         return false;
     }
     *pending = false;
-    status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.job_context.tx_quad_job);
+    status = rfic_job_context_claim(&state,
+                                    sizeof(state.job_context.tx_quad_job));
+    if (status == 0)
+        status = ad9361_ensure_tx_quad_calib_start(
+            state.phy, &state.job_context.tx_quad_job);
     if (status == 1) {
         return true;
     }
@@ -265,8 +281,11 @@ bool rfic_start_tx_quad_calibration_for_command(bool *pending,
         return false;
     }
     *pending = false;
-    status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.job_context.tx_quad_job);
+    status = rfic_job_context_claim(&state,
+                                    sizeof(state.job_context.tx_quad_job));
+    if (status == 0)
+        status = ad9361_ensure_tx_quad_calib_start(
+            state.phy, &state.job_context.tx_quad_job);
     if (status == 1) {
         return true;
     }
@@ -293,8 +312,11 @@ bool rfic_start_tx_quad_calibration_for_retune(bool *pending,
         return false;
     }
     *pending = false;
-    status = ad9361_ensure_tx_quad_calib_start(state.phy,
-                                                &state.job_context.tx_quad_job);
+    status = rfic_job_context_claim(&state,
+                                    sizeof(state.job_context.tx_quad_job));
+    if (status == 0)
+        status = ad9361_ensure_tx_quad_calib_start(
+            state.phy, &state.job_context.tx_quad_job);
     if (status == 1) {
         state.frequency_invalid[BLADERF_MODULE_TX] = false;
         return true;
@@ -397,6 +419,10 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
     const struct gain_table_info *old = NULL;
     int32_t status;
 
+    status = rfic_job_context_claim(&state, sizeof(*load));
+    if (status < 0) {
+        return status;
+    }
     if (state.phy != NULL) {
         /* FPGA tuning mode: the PHY knows the loaded table and skips the
          * load when it is already the one of this region. */

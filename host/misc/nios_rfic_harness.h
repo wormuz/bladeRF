@@ -179,16 +179,60 @@ int32_t ad9361_rfpll_clock_transaction_start(
 }
 int32_t ad9361_rfpll_clock_transaction_poll(
     struct ad9361_rf_phy *p, struct ad9361_rfpll_clock_transaction *t)
-{ (void)p; (void)t; return job_poll(J_RFPLL); }
+{
+    int32_t s = job_poll(J_RFPLL);
+
+    (void)p;
+    if (s != 1) {
+        /* ADI's terminal poll clears only the top-level flag: the rate
+         * child keeps its last stage, VCO and LO words. */
+        t->rate_transaction.stage = 9;
+        t->rate_transaction.vco = 7350000000ull;
+        t->rate_transaction.rx_lo_freq = 1000000000ull;
+        t->rate_transaction.tx_lo_freq = 1000000000ull;
+        t->active = false;
+        t->terminal = true;
+        t->terminal_status = s;
+    }
+    return s;
+}
+
+/* The ADI calibration starts reject a context whose child flags are set
+ * before they clear it (ad9361_tx_quad_calibration_transaction_start,
+ * ad9361_rfdc_calibration_start). Which stale byte of the shared NIOS
+ * job_context lands on such a flag depends on the target ABI, so any byte
+ * left by a retired job counts. */
+static int32_t job_start_in_clean_context(enum job_id id, const void *ctx,
+                                          size_t size)
+{
+    const uint8_t *b = ctx;
+    size_t i;
+
+    for (i = 0; i < size; i++) {
+        if (b[i] != 0) {
+            ev(job_name[id]);
+            starts[id]++;
+            return -EBUSY;
+        }
+    }
+    return job_start(id);
+}
+
 int32_t ad9361_rfdc_calibration_start(struct ad9361_rf_phy *p,
                                       struct ad9361_rfdc_calibration_job *j)
-{ (void)p; (void)j; return job_start(J_RFDC); }
+{
+    (void)p;
+    return job_start_in_clean_context(J_RFDC, j, sizeof(*j));
+}
 int32_t ad9361_rfdc_calibration_poll(struct ad9361_rf_phy *p,
                                      struct ad9361_rfdc_calibration_job *j)
 { (void)p; (void)j; return job_poll(J_RFDC); }
 int32_t ad9361_ensure_tx_quad_calib_start(
     struct ad9361_rf_phy *p, struct ad9361_tx_quad_calibration_transaction *t)
-{ (void)p; (void)t; return job_start(J_TXQ); }
+{
+    (void)p;
+    return job_start_in_clean_context(J_TXQ, t, sizeof(*t));
+}
 int32_t ad9361_tx_quad_calibration_transaction_poll(
     struct ad9361_rf_phy *p, struct ad9361_tx_quad_calibration_transaction *t)
 { (void)p; (void)t; return job_poll(J_TXQ); }

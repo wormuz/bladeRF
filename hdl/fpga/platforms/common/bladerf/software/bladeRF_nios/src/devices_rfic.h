@@ -258,6 +258,14 @@ typedef char rfic_init_context_overlay_must_save_memory[
     sizeof(((struct rfic_state *)0)->init_job) >
         sizeof(((struct rfic_state *)0)->job_context) ? 1 : -1];
 
+/* job_context overlays every retained ADI transaction, and a terminal ADI
+ * object keeps its child flags and words: the next start() on that storage
+ * reads them as a job already active (INIT final LO: the TX quadrature start
+ * after the retained RFPLL job returned -EBUSY). The pending and owner flags
+ * say whether the storage is owned; a job starts on free storage, cleared
+ * over its own size. */
+int32_t rfic_job_context_claim(struct rfic_state *s, size_t job_size);
+
 
 /******************************************************************************/
 /* Function declarations */
