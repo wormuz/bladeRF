@@ -6,7 +6,8 @@
  * Usage: [iterations_per_thread, default 100] [seed, 0 = time]
  * PASS (criteria fixed before the run):
  *   - every call returns 0 or a fail-closed rejection (WOULD_BLOCK, INVAL,
- *     UNSUPPORTED); any other status (IO, TIMEOUT, FPGA_OP, UNEXPECTED, ...)
+ *     UNSUPPORTED, RANGE: the rate range depends on the feature mode,
+ *     bladerf2.c:2391); any other status (IO, TIMEOUT, FPGA_OP, UNEXPECTED, ...)
  *     is a FAIL
  *   - after the threads join and the feature is reset to DEFAULT: sample
  *     rate set to 3840000 reads back 3840000, get_feature == DEFAULT, a fresh
@@ -38,6 +39,7 @@ struct worker {
 static bool fail_closed(int s)
 {
     return s == BLADERF_ERR_WOULD_BLOCK || s == BLADERF_ERR_INVAL ||
+           s == BLADERF_ERR_RANGE ||
            s == BLADERF_ERR_UNSUPPORTED;
 }
 
@@ -88,6 +90,10 @@ int main(int argc, char **argv)
     if ((s = bladerf_open(&dev, NULL)) != 0) {
         hq_fail("open", s);
         return 1;
+    }
+    if ((s = hq_require_trigger_disarmed(dev)) != 0) {
+        bladerf_close(dev);
+        return 3;
     }
     if ((s = bladerf_set_sample_rate(dev, RX_CH, RATE_A, NULL)) != 0 ||
         (s = bladerf_set_frequency(dev, RX_CH, FREQ)) != 0) {

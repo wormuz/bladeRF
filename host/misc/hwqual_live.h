@@ -109,4 +109,25 @@ static inline int hq_count_events(struct bladerf *dev, uint64_t *cursor,
     return status;
 }
 
+/* The FPGA RX trigger state outlives the process (the library never disarms
+ * on open or close). An armed trigger gates RX samples, so an epoch waits in
+ * WAIT_FIRST_SAMPLE until it times out. Returns 0 when RX is not armed. */
+static inline int hq_require_trigger_disarmed(struct bladerf *dev)
+{
+    struct bladerf_trigger t;
+    bool armed = false, fired = false, requested = false;
+    int s = bladerf_trigger_init(dev, BLADERF_CHANNEL_RX(0),
+                                 BLADERF_TRIGGER_MINI_EXP_1, &t);
+    if (s == 0)
+        s = bladerf_trigger_state(dev, &t, &armed, &fired, &requested, NULL,
+                                  NULL);
+    if (s != 0) return hq_fail("trigger state", s);
+    if (armed) {
+        fprintf(stderr, "NOT_EVALUATED: RX trigger is armed from an earlier "
+                "run (run rx_trigger_live --disarm)\n");
+        return BLADERF_ERR_INVAL;
+    }
+    return 0;
+}
+
 #endif

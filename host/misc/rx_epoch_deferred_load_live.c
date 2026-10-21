@@ -1,6 +1,6 @@
 /* Deferred (scheduled) RX retune activation while a reader thread streams.
  *
- * Per trial: queue DEPTH scheduled quick-tune retunes at now + k*SPACING
+ * Per trial: queue DEPTH scheduled quick-tune retunes at now + LEAD + k*SPACING
  * samples (alternating two profiles), wait until the device timestamp is past
  * the last one, then establish a new epoch with an event-driven transition.
  * A reader thread runs sync RX the whole time (the load) and checks every
@@ -28,6 +28,7 @@
 #define FREQ_B UINT64_C(1835400000)
 #define DEPTH 4u
 #define SPACING_MS 20u
+#define LEAD_MS 100u
 #define BLOCK 8192u
 
 struct reader {
@@ -78,6 +79,7 @@ int main(int argc, char **argv)
                                      : 50;
     const unsigned long rate = argc > 2 ? strtoul(argv[2], NULL, 10) : 7680000;
     const uint64_t spacing = (uint64_t)rate * SPACING_MS / 1000u;
+    const uint64_t lead = (uint64_t)rate * LEAD_MS / 1000u;
     struct bladerf *dev = NULL;
     struct bladerf_quick_tune qt[2];
     struct reader rd;
@@ -105,6 +107,10 @@ int main(int argc, char **argv)
         return 1;
     }
     rd.dev = dev;
+    if (hq_require_trigger_disarmed(dev) != 0) {
+        bladerf_close(dev);
+        return 3;
+    }
     if ((s = bladerf_set_sample_rate(dev, RX_CH, (bladerf_sample_rate)rate,
                                      NULL)) != 0 ||
         (s = bladerf_set_bandwidth(dev, RX_CH, (unsigned)(rate * 3 / 4),
@@ -142,12 +148,25 @@ int main(int argc, char **argv)
         bladerf_timestamp now = 0, last = 0;
         uint64_t t0 = hq_mono_ns(), t_wait;
 
-        s = bladerf_get_timestamp(dev, BLADERF_RX, &now);
+        s = 0;
+
         for (unsigned k = 0; s == 0 && k < DEPTH; ++k) {
-            last = now + (k + 1) * spacing;
+            /* NIOS rejects a timestamp that is not strictly in the future
+             * when it reads its timer (nios pkt_retune2.c:2251), and the call
+             * itself takes host time: take a fresh reference per call. */
+            s = bladerf_get_timestamp(dev, BLADERF_RX, &now);
+            if (s != 0) break;
+            last = now + lead + k * spacing;
             s = bladerf_schedule_retune(dev, RX_CH, last,
                                         (k & 1u) ? FREQ_B : FREQ_A,
                                         &qt[(k & 1u) ? 1 : 0]);
+            if (s != 0) {
+                bladerf_timestamp cur = 0;
+                (void)bladerf_get_timestamp(dev, BLADERF_RX, &cur);
+                fprintf(stderr, "schedule k=%u: %s; target-now_at_failure=%"
+                        PRId64 " samples (lead %" PRIu64 ")\n", k,
+                        bladerf_strerror(s), (int64_t)(last - cur), lead);
+            }
         }
         t_wait = hq_mono_ns();
         while (s == 0) {
