@@ -1136,6 +1136,9 @@ int usb_clear_endpoint_halt(struct bladerf *dev, uint8_t endpoint)
     }
 
     usb = dev->backend_data;
+    if (usb->fn != NULL && usb->fn->clear_halt != NULL) {
+        return usb->fn->clear_halt(usb->driver, endpoint);
+    }
     if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
         return BLADERF_ERR_UNSUPPORTED;
     }
@@ -1148,52 +1151,6 @@ int usb_clear_endpoint_halt(struct bladerf *dev, uint8_t endpoint)
         usb->driver, USB_TARGET_ENDPOINT, USB_REQUEST_STANDARD,
         USB_DIR_HOST_TO_DEVICE, 0x01 /* CLEAR_FEATURE */, 0 /* ENDPOINT_HALT */,
         endpoint, NULL, 0, CTRL_TIMEOUT_MS);
-}
-
-int usb_pause_tx_dma(struct bladerf *dev)
-{
-    struct bladerf_usb *usb;
-    int status;
-
-    if (dev == NULL || dev->backend_data == NULL) {
-        return BLADERF_ERR_INVAL;
-    }
-    usb = dev->backend_data;
-    if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
-        return BLADERF_ERR_UNSUPPORTED;
-    }
-    /* The caller must have revoked TX admission before requesting the pause.
-     * Drain accepted submissions and their completion callbacks first; do
-     * not cancel partial transfers because FX3 AUTO-DMA may still own their
-     * payload. This function must be called without dev->lock or a stream
-     * lock held so the callback pump can retire leases. */
-    if (dev->board != NULL && dev->board->wait_tx_async_idle != NULL) {
-        status = dev->board->wait_tx_async_idle(dev, CTRL_TIMEOUT_MS);
-        if (status != 0) {
-            return status;
-        }
-    }
-    return usb->fn->control_transfer(
-        usb->driver, USB_TARGET_DEVICE, USB_REQUEST_VENDOR,
-        USB_DIR_HOST_TO_DEVICE, BLADE_USB_CMD_PAUSE_TX_DMA,
-        0, 0, NULL, 0, CTRL_TIMEOUT_MS);
-}
-
-int usb_query_tx_dma_pause(struct bladerf *dev, uint32_t *state)
-{
-    struct bladerf_usb *usb;
-
-    if (dev == NULL || dev->backend_data == NULL || state == NULL) {
-        return BLADERF_ERR_INVAL;
-    }
-    usb = dev->backend_data;
-    if (usb->fn == NULL || usb->fn->control_transfer == NULL) {
-        return BLADERF_ERR_UNSUPPORTED;
-    }
-    return usb->fn->control_transfer(
-        usb->driver, USB_TARGET_DEVICE, USB_REQUEST_VENDOR,
-        USB_DIR_DEVICE_TO_HOST, BLADE_USB_CMD_QUERY_TX_DMA_PAUSE,
-        0, 0, state, sizeof(*state), CTRL_TIMEOUT_MS);
 }
 
 static void usb_deinit_stream(struct bladerf_stream *stream)

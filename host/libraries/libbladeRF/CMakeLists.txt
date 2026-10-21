@@ -318,6 +318,8 @@ set(LIBBLADERF_SOURCE_BLADERF2
         src/board/bladerf2/rx_sweep.c
         src/board/bladerf2/rx_transition_lifecycle.c
         src/board/bladerf2/tx_status_event.c
+        src/board/bladerf2/tx_fault_recovery.c
+        src/board/bladerf2/tx_fault_recovery_board.c
         src/board/bladerf2/rf_transition.c
 )
 

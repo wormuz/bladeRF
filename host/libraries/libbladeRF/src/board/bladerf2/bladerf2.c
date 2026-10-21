@@ -2744,6 +2744,7 @@ int bladerf2_tx_gate_abort_fail_closed(
 
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
     board_data->tx_async_fault_flush_required = true;
+    board_data->tx_async_fault_flush_generation++;
     board_data->tx_retune2_completion_faulted = true;
     board_data->tx_retune2_applied_waiting_rf_valid = false;
     board_data->tx_retune_recovery_pending = true;
@@ -9820,11 +9821,39 @@ static int bladerf2_get_clock_select_internal(
     return status;
 }
 
+static int bladerf_pll_configure_latches(struct bladerf *dev, uint16_t R,
+                                         uint16_t N);
+
 static int bladerf_pll_configure(struct bladerf *dev, uint16_t R, uint16_t N)
 {
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_FPGA_LOADED);
 
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = 0;
+
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->pll_refclk_write_active) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            board_data->pll_refclk_write_active = true;
+        }
+    });
+    if (status != 0) {
+        return status;
+    }
+
+    status = bladerf_pll_configure_latches(dev, R, N);
+
+    WITH_MUTEX(&dev->lock, {
+        board_data->pll_refclk_write_active = false;
+    });
+    return status;
+}
+
+static int bladerf_pll_configure_latches(struct bladerf *dev, uint16_t R,
+                                         uint16_t N)
+{
     uint32_t init_array[3];
     bool is_enabled = false;
     uint8_t i;
@@ -10081,16 +10110,35 @@ int bladerf_get_pll_refclk(struct bladerf *dev, bladerf_frequency *frequency)
     uint8_t const N_LATCH_REG   = 1;
     size_t const N_LATCH_SHIFT  = 8;
     uint32_t const N_LATCH_MASK = 0x1fff;
-    uint32_t reg;
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t r_reg = 0;
+    uint32_t n_reg = 0;
     uint16_t R, N;
+    int status;
 
-    // Get the current R value (latch 0, bits 2-15)
-    CHECK_STATUS(bladerf_get_pll_register(dev, R_LATCH_REG, &reg));
-    R = (reg >> R_LATCH_SHIFT) & R_LATCH_MASK;
+    /* R and N must come from one divider configuration: read both under a
+     * single dev->lock hold, and refuse while bladerf_pll_configure() is
+     * between its unlocked per-latch writes. */
+    WITH_MUTEX(&dev->lock, {
+        if (board_data->rfic_lifecycle_active ||
+            board_data->state < STATE_FPGA_LOADED ||
+            board_data->pll_refclk_write_active) {
+            status = BLADERF_ERR_WOULD_BLOCK;
+        } else {
+            status = dev->backend->adf400x_read(dev, R_LATCH_REG, &r_reg);
+            if (status == 0) {
+                status = dev->backend->adf400x_read(dev, N_LATCH_REG,
+                                                    &n_reg);
+            }
+        }
+    });
+    if (status != 0) {
+        return status;
+    }
 
-    // Get the current N value (latch 1, bits 8-20)
-    CHECK_STATUS(bladerf_get_pll_register(dev, N_LATCH_REG, &reg));
-    N = (reg >> N_LATCH_SHIFT) & N_LATCH_MASK;
+    // R value (latch 0, bits 2-15), N value (latch 1, bits 8-20)
+    R = (r_reg >> R_LATCH_SHIFT) & R_LATCH_MASK;
+    N = (n_reg >> N_LATCH_SHIFT) & N_LATCH_MASK;
 
     if (R == 0 || N == 0) {
         return BLADERF_ERR_UNEXPECTED;

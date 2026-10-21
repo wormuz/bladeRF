@@ -5330,7 +5330,12 @@ typedef enum {
     /** The RX sweep session ended. The LO is the last executed sweep retune;
      * the RX epoch certificate was revoked and a new RX transition is
      * required before samples are valid again. */
-    BLADERF_RF_EVT_RX_SWEEP_END
+    BLADERF_RF_EVT_RX_SWEEP_END,
+    /** bladerf_tx_fault_recover() completed the stale-TX barrier: host
+     * submissions retired, FPGA TX FIFOs flushed and released on a running
+     * AD9361 data clock, FX3 TX endpoint reset. TX remains invalid until a
+     * new TX link START and RFIC/gate certification. */
+    BLADERF_RF_EVT_TX_FAULT_FLUSH_COMPLETE
 } bladerf_rf_event_type;
 
 /** Detailed NIOS RETUNE2 activation failure carried by the
@@ -5735,6 +5740,27 @@ int CALL_CONV bladerf_rx_transition_wait(
 API_EXPORT
 int CALL_CONV bladerf_rx_capture_close(struct bladerf *dev,
                                       bladerf_channel ch);
+
+/** Recover TX after a fault latched the stale-payload barrier (FPGA TX gate
+ * ABORT), without reopening the device. In order: wait for accepted async TX
+ * submissions to complete (no cancellation), block FPGA TX FIFO writes and
+ * wait for an idle GPIF TX parser, reset the FX3 TX endpoint, require an
+ * initialized RFIC, release the FIFO clear on a fresh AD9361 TX clock with
+ * both FIFOs empty, then clear the latch and record
+ * ::BLADERF_RF_EVT_TX_FAULT_FLUSH_COMPLETE.
+ *
+ * This does not certify TX: disable and re-enable the TX module and retune
+ * TX to obtain a new link epoch and RFIC/gate certificate.
+ *
+ * Do not call from a stream callback. Returns BLADERF_ERR_INVAL if no fault
+ * is latched; BLADERF_ERR_WOULD_BLOCK if the RFIC needs reinitialization or
+ * a newer fault arrived during the pass; BLADERF_ERR_TIMEOUT if a step did
+ * not complete within timeout_ms (applied per waiting step). On any failure
+ * TX stays fenced and the call may be repeated.
+ */
+API_EXPORT
+int CALL_CONV bladerf_tx_fault_recover(struct bladerf *dev,
+                                       unsigned int timeout_ms);
 
 /**
  * Copy the retained event history for one RX transition.

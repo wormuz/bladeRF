@@ -24,8 +24,11 @@ bool bladerf2_tx_status_recovery_event(struct bladerf *dev,
 
     board_data = dev->board_data;
     MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    /* Healthy status reads do not prove the FX3/FPGA path was purged after
+     * a gate ABORT; only bladerf_tx_fault_recover() clears that latch. */
     if (board_data->tx_async_transport_faulted ||
-        board_data->tx_gate_abort_pending) {
+        board_data->tx_gate_abort_pending ||
+        board_data->tx_async_fault_flush_required) {
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         return false;
     }

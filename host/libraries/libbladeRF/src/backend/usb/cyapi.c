@@ -1198,6 +1198,7 @@ extern "C" {
         FIELD_INIT(.shutdown_stream, cyapi_shutdown_stream),
         FIELD_INIT(.submit_stream_buffer, cyapi_submit_stream_buffer),
         FIELD_INIT(.deinit_stream, cyapi_deinit_stream),
+        FIELD_INIT(.clear_halt, NULL),
         FIELD_INIT(.open_bootloader, cyapi_open_bootloader),
         FIELD_INIT(.close_bootloader, cyapi_close),
     };

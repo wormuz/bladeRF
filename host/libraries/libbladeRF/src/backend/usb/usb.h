@@ -183,6 +183,11 @@ struct usb_fns {
 
     int (*deinit_stream)(void *driver, struct bladerf_stream *stream);
 
+    /* Optional standard CLEAR_FEATURE(ENDPOINT_HALT) through the host stack,
+     * which also resets the host-side endpoint state (data toggle/sequence)
+     * that a raw control transfer would leave stale. */
+    int (*clear_halt)(void *driver, uint8_t endpoint);
+
     int (*open_bootloader)(void **driver, uint8_t bus, uint8_t addr);
     void (*close_bootloader)(void *driver);
 };
@@ -238,7 +243,5 @@ struct bladerf_usb {
  * resets and restarts the DMA channel bound to the endpoint. Caller must first
  * ensure no stream transfers remain in flight. */
 int usb_clear_endpoint_halt(struct bladerf *dev, uint8_t endpoint);
-int usb_pause_tx_dma(struct bladerf *dev);
-int usb_query_tx_dma_pause(struct bladerf *dev, uint32_t *state);
 
 #endif
