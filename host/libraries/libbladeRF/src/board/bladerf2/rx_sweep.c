@@ -143,7 +143,8 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
                               struct bladerf_rx_sweep_record *record,
                               uint8_t *synth_expected,
                               bool *synth_expected_valid,
-                              uint8_t *gain_table)
+                              uint8_t *gain_table,
+                              uint8_t *rffe_profile)
 {
     unsigned int i;
 
@@ -165,6 +166,10 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
                 *synth_expected_valid =
                     board_data->rx_retune2_pending[i].synth_expected_valid;
             }
+            if (rffe_profile != NULL) {
+                *rffe_profile =
+                    (uint8_t)board_data->rx_retune2_pending[i].rffe_profile;
+            }
             if (gain_table != NULL) {
                 *gain_table = board_data->rx_retune2_pending[i].gain_table;
             }
@@ -178,6 +183,25 @@ static bool sweep_ledger_take(struct bladerf2_board_data *board_data,
     return false;
 }
 
+/* The RX LO after `record`, the latest by sequence winning: an executed
+ * success leaves its AD9361 slot recalled at its LO; a failure or a lost
+ * outcome may have stopped the recall half way, so the LO is unknown. */
+static void sweep_lo_follow(struct bladerf2_board_data *board_data,
+                            const struct bladerf_rx_sweep_record *record,
+                            uint8_t rffe_profile)
+{
+    if (record->sequence <= board_data->rx_sweep.lo_sequence) {
+        return;
+    }
+    board_data->rx_sweep.lo_sequence = record->sequence;
+    board_data->rx_sweep.lo_known =
+        record->status == BLADERF_RX_SWEEP_SUCCESS &&
+        (record->flags & BLADERF_RX_SWEEP_F_EXECUTED_VALID) != 0 &&
+        rffe_profile < NUM_RFFE_FASTLOCK_PROFILES;
+    board_data->rx_sweep.lo_rffe_profile = rffe_profile;
+    board_data->rx_sweep.lo_frequency = record->frequency;
+}
+
 /* Read every NIOS RX success and failure record since the last call and
  * turn it into a sweep record. Any record that cannot be read and matched
  * makes the outcome of every still pending request unknown: they become
@@ -186,6 +210,7 @@ static int sweep_collect(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     struct bladerf_rx_sweep_record batch[2 * SWEEP_DEPTH];
+    uint8_t batch_rffe[2 * SWEEP_DEPTH] = {0};
     unsigned int batch_count = 0;
     uint32_t success_count = 0;
     uint32_t failure_count = 0;
@@ -246,7 +271,8 @@ static int sweep_collect(struct bladerf *dev)
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_SUCCESS,
                                   &batch[batch_count], synth_expected,
-                                  &synth_expected_valid, &gain_table);
+                                  &synth_expected_valid, &gain_table,
+                                  &batch_rffe[batch_count]);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -282,7 +308,7 @@ static int sweep_collect(struct bladerf *dev)
         }
         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
         found = sweep_ledger_take(board_data, &nios, BLADERF_RX_SWEEP_FAILED,
-                                  &batch[batch_count], NULL, NULL, NULL);
+                                  &batch[batch_count], NULL, NULL, NULL, NULL);
         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
         if (!found) {
             lost = true;
@@ -323,6 +349,10 @@ static int sweep_collect(struct bladerf *dev)
                   pending_count);
     }
 
+    /* Before the sort: batch_rffe is indexed like the unsorted batch. */
+    for (i = 0; i < batch_count; i++) {
+        sweep_lo_follow(board_data, &batch[i], batch_rffe[i]);
+    }
     sweep_sort(batch, batch_count);
     for (i = 0; i < batch_count; i++) {
         sweep_gain_table_follow(board_data, &batch[i]);
@@ -665,6 +695,8 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     board_data->rx_sweep.gain_table_planned = (uint8_t)gain_table_region;
     board_data->rx_sweep.gain_table_known = (uint8_t)gain_table_region;
     board_data->rx_sweep.refclk_hz = refclk_hz;
+    board_data->rx_sweep.lo_known = false;
+    board_data->rx_sweep.lo_sequence = 0;
     board_data->rx_sweep.next_sequence = 1;
     board_data->rx_sweep.ring_head = 0;
     board_data->rx_sweep.ring_count = 0;
@@ -802,31 +834,49 @@ int bladerf2_rx_sweep_completions(struct bladerf *dev, bladerf_channel ch,
     return 0;
 }
 
-/* Hand the host AD9361 driver the RX LO the session left. NIOS recalled
- * profiles behind the driver; marking the LO unknown (current_profile 0xff,
- * RX_RFPLL rate 0) made every later operation that recalculates the RF clock
- * chain fail with -EINVAL: ad9361_rfpll_int_recalc_rate_checked() rejects
- * the 0xff profile, so a sample-rate change or the gain range lookup after
- * a session returned BLADERF_ERR_INVAL. The chip itself names the recalled
- * profile; its words are read from the chip, not from the driver cache,
- * since NIOS uploads slots the cache never saw. */
-static void sweep_sync_host_lo(struct ad9361_rf_phy *phy)
+/* Hand the host AD9361 driver the RX LO the session left: the last executed
+ * NIOS record (sweep_lo_follow), checked against the chip. NIOS recalls
+ * profiles behind the driver; marking the LO unknown instead (profile 0xff,
+ * RX_RFPLL rate 0) failed every later RF clock-chain recalculation with
+ * -EINVAL (ad9361_rfpll_int_recalc_rate_checked): a sample-rate change or
+ * the gain range after a session. The chip must have that AD9361 slot
+ * recalled, and its words (read from the chip: NIOS uploads slots the
+ * driver cache never saw) must decode to the record's LO; a request
+ * cancelled at the end may have run without a record. Otherwise unknown. */
+static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
 {
+    struct ad9361_rf_phy *phy = board_data->phy;
+    const unsigned int profile = board_data->rx_sweep.lo_rffe_profile;
     int32_t setup;
-    unsigned int profile;
+    int32_t status;
 
     if (phy == NULL || phy->spi == NULL) {
         return;
     }
-    setup = ad9361_spi_read(phy->spi, REG_RX_FAST_LOCK_SETUP);
-    if (setup < 0 || !(setup & RX_FAST_LOCK_MODE_ENABLE)) {
+    if (!board_data->rx_sweep.lo_known) {
+        log_debug("%s: last RX sweep record leaves the LO unknown\n",
+                  __FUNCTION__);
         ad9361_fastlock_invalidate_current_lo(phy, false);
         return;
     }
-    profile = ((uint32_t)setup >> 5) & 0x7u;
+    setup = ad9361_spi_read(phy->spi, REG_RX_FAST_LOCK_SETUP);
+    if (setup < 0 || !(setup & RX_FAST_LOCK_MODE_ENABLE) ||
+        (((uint32_t)setup >> 5) & 0x7u) != profile) {
+        log_warning("%s: chip fastlock setup %d, last executed record "
+                    "slot %u: RX LO unknown\n", __FUNCTION__, setup,
+                    profile);
+        ad9361_fastlock_invalidate_current_lo(phy, false);
+        return;
+    }
     phy->fastlock.entry[0][profile].flags = 0;
-    /* Invalidates on failure. */
-    (void)ad9361_fastlock_sync_current_lo(phy, false, profile, 0, NULL);
+    status = ad9361_fastlock_sync_current_lo(
+        phy, false, profile, board_data->rx_sweep.lo_frequency, NULL);
+    if (status != 0) {
+        /* The sync invalidated the LO itself. */
+        log_warning("%s: RX LO slot %u does not read back as %" PRIu64
+                    " Hz (%d): RX LO unknown\n", __FUNCTION__, profile,
+                    (uint64_t)board_data->rx_sweep.lo_frequency, status);
+    }
 }
 
 int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
@@ -910,7 +960,7 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
         bladerf2_rx_gain_table_loaded(board_data,
                                       board_data->rx_sweep.gain_table_known);
     }
-    sweep_sync_host_lo(board_data->phy);
+    sweep_sync_host_lo(board_data);
 
     /* The caller (bladerf_rx_sweep_end) then revokes the epoch: its LO is
      * no longer the one the transition certified. */

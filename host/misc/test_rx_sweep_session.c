@@ -144,6 +144,7 @@ int bladerf2_schedule_retune_sequenced(
 static unsigned int lo_invalidated;
 static int32_t fastlock_setup_reg;
 static uint32_t lo_synced_profile;
+static uint64_t lo_synced_expected;
 
 void ad9361_fastlock_invalidate_current_lo(struct ad9361_rf_phy *phy,
                                            bool tx)
@@ -165,7 +166,7 @@ int32_t ad9361_fastlock_sync_current_lo(struct ad9361_rf_phy *phy, bool tx,
                                         uint64_t *freq_hz)
 {
     (void)tx;
-    (void)expected_freq_hz;
+    lo_synced_expected = expected_freq_hz;
     (void)freq_hz;
     lo_synced_profile = profile;
     phy->fastlock.current_profile[0] = profile + 1;
@@ -823,33 +824,61 @@ static void check_rx2_only_session(void)
           "RX2 end failed");
 }
 
-/* Session end hands the driver the profile NIOS left recalled (else
- * sample-rate and gain-range lookups hit the 0xff profile: -EINVAL). */
-static void check_end_syncs_host_lo(void)
+
+/* Session end hands the AD9361 driver the LO of the last executed NIOS
+ * record (slot 3 at 300 MHz here), checked against the chip; without it a
+ * later sample-rate change hits profile 0xff (-EINVAL). Unknown when the
+ * last record failed or the chip has another slot recalled. */
+static void end_session(bool last_fails, uint8_t chip_slot)
 {
     static uint8_t spi_dummy;
 
     setup();
     mock_phy.spi = (struct no_os_spi_desc *)&spi_dummy;
     mock_phy.fastlock.entry[0][3].flags = FASTLOOK_INIT;
-    fastlock_setup_reg = RX_FAST_LOCK_PROFILE(3) | RX_FAST_LOCK_MODE_ENABLE;
+    fastlock_setup_reg =
+        (int32_t)(RX_FAST_LOCK_PROFILE(chip_slot) | RX_FAST_LOCK_MODE_ENABLE);
     lo_invalidated = 0;
-    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
-              bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
-              lo_invalidated == 0 && lo_synced_profile == 3 &&
+    lo_synced_profile = 0xff;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin failed");
+    CHECK(schedule(1000, 200000000, 2) == 1, "first sequence");
+    CHECK(schedule(2000, 300000000, 3) == 2, "second sequence");
+    requests[0].executed = 1050;
+    requests[0].flags = OK_FLAGS;
+    success_order[0] = 0;
+    if (last_fails) {
+        requests[1].failure_stage = 9;
+        failure_order[0] = 1;
+        failures_published = 1;
+        successes_published = 1;
+    } else {
+        requests[1].executed = 2050;
+        requests[1].flags = OK_FLAGS;
+        success_order[1] = 1;
+        successes_published = 2;
+    }
+    now_timestamp = 3000;
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0, "end");
+}
+
+static void check_end_syncs_host_lo(void)
+{
+    end_session(false, 3);
+    CHECK(lo_invalidated == 0 && lo_synced_profile == 3 &&
+              lo_synced_expected == 300000000 &&
               mock_phy.fastlock.current_profile[0] == 4 &&
               mock_phy.fastlock.entry[0][3].flags == 0,
-          "end did not sync the recalled profile 3 (invalidated %u)",
-          lo_invalidated);
-
-    setup();
-    mock_phy.spi = (struct no_os_spi_desc *)&spi_dummy;
-    fastlock_setup_reg = 0;
-    lo_invalidated = 0;
-    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
-              bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
-              lo_invalidated == 1,
-          "end without fastlock mode kept a stale LO");
+          "end did not sync the last executed record (slot %u, %llu Hz, "
+          "profile byte %u, invalidated %u)", lo_synced_profile,
+          (unsigned long long)lo_synced_expected,
+          mock_phy.fastlock.current_profile[0], lo_invalidated);
+    end_session(true, 3);
+    CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
+          "failed last record left a known LO");
+    end_session(false, 2);
+    CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
+          "chip slot 2 against record slot 3 left a known LO");
 }
 
 int main(void)

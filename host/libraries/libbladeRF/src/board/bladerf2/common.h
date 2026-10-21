@@ -351,6 +351,14 @@ struct bladerf2_board_data {
          * NIOS_PKT_RETUNE2_GT_UNKNOWN after a crossing whose outcome is not
          * a success. At session end it becomes the AD9361 driver's table. */
         uint8_t gain_table_known;
+        /* RX LO the records collected so far leave, in sequence order: the
+         * last executed success (AD9361 slot, requested LO); false after any
+         * outcome that may have left the synthesizer elsewhere. At session
+         * end it becomes the AD9361 driver's LO (bladerf2_rx_sweep_end). */
+        bool lo_known;
+        uint32_t lo_sequence;
+        uint8_t lo_rffe_profile;
+        bladerf_frequency lo_frequency;
         /* RX RFPLL reference rate read at begin; 0 when unknown (FPGA
          * tuning mode: no host AD9361 driver). */
         uint32_t refclk_hz;
