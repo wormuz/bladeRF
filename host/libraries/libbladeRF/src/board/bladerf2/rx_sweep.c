@@ -802,6 +802,33 @@ int bladerf2_rx_sweep_completions(struct bladerf *dev, bladerf_channel ch,
     return 0;
 }
 
+/* Hand the host AD9361 driver the RX LO the session left. NIOS recalled
+ * profiles behind the driver; marking the LO unknown (current_profile 0xff,
+ * RX_RFPLL rate 0) made every later operation that recalculates the RF clock
+ * chain fail with -EINVAL: ad9361_rfpll_int_recalc_rate_checked() rejects
+ * the 0xff profile, so a sample-rate change or the gain range lookup after
+ * a session returned BLADERF_ERR_INVAL. The chip itself names the recalled
+ * profile; its words are read from the chip, not from the driver cache,
+ * since NIOS uploads slots the cache never saw. */
+static void sweep_sync_host_lo(struct ad9361_rf_phy *phy)
+{
+    int32_t setup;
+    unsigned int profile;
+
+    if (phy == NULL || phy->spi == NULL) {
+        return;
+    }
+    setup = ad9361_spi_read(phy->spi, REG_RX_FAST_LOCK_SETUP);
+    if (setup < 0 || !(setup & RX_FAST_LOCK_MODE_ENABLE)) {
+        ad9361_fastlock_invalidate_current_lo(phy, false);
+        return;
+    }
+    profile = ((uint32_t)setup >> 5) & 0x7u;
+    phy->fastlock.entry[0][profile].flags = 0;
+    /* Invalidates on failure. */
+    (void)ad9361_fastlock_sync_current_lo(phy, false, profile, 0, NULL);
+}
+
 int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -883,7 +910,7 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch)
         bladerf2_rx_gain_table_loaded(board_data,
                                       board_data->rx_sweep.gain_table_known);
     }
-    ad9361_fastlock_invalidate_current_lo(board_data->phy, false);
+    sweep_sync_host_lo(board_data->phy);
 
     /* The caller (bladerf_rx_sweep_end) then revokes the epoch: its LO is
      * no longer the one the transition certified. */

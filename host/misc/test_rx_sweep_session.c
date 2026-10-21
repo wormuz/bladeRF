@@ -141,11 +141,35 @@ int bladerf2_schedule_retune_sequenced(
     return schedule_status;
 }
 
+static unsigned int lo_invalidated;
+static int32_t fastlock_setup_reg;
+static uint32_t lo_synced_profile;
+
 void ad9361_fastlock_invalidate_current_lo(struct ad9361_rf_phy *phy,
                                            bool tx)
 {
     (void)phy;
     (void)tx;
+    lo_invalidated++;
+}
+
+int32_t ad9361_spi_read(struct no_os_spi_desc *spi, uint32_t reg)
+{
+    (void)spi;
+    return reg == REG_RX_FAST_LOCK_SETUP ? fastlock_setup_reg : -EIO;
+}
+
+int32_t ad9361_fastlock_sync_current_lo(struct ad9361_rf_phy *phy, bool tx,
+                                        uint32_t profile,
+                                        uint64_t expected_freq_hz,
+                                        uint64_t *freq_hz)
+{
+    (void)tx;
+    (void)expected_freq_hz;
+    (void)freq_hz;
+    lo_synced_profile = profile;
+    phy->fastlock.current_profile[0] = profile + 1;
+    return 0;
 }
 
 /* RX RFPLL reference rate; 100 MHz is integer word 80 at VCO divider 5. */
@@ -799,6 +823,35 @@ static void check_rx2_only_session(void)
           "RX2 end failed");
 }
 
+/* Session end hands the driver the profile NIOS left recalled (else
+ * sample-rate and gain-range lookups hit the 0xff profile: -EINVAL). */
+static void check_end_syncs_host_lo(void)
+{
+    static uint8_t spi_dummy;
+
+    setup();
+    mock_phy.spi = (struct no_os_spi_desc *)&spi_dummy;
+    mock_phy.fastlock.entry[0][3].flags = FASTLOOK_INIT;
+    fastlock_setup_reg = RX_FAST_LOCK_PROFILE(3) | RX_FAST_LOCK_MODE_ENABLE;
+    lo_invalidated = 0;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
+              bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              lo_invalidated == 0 && lo_synced_profile == 3 &&
+              mock_phy.fastlock.current_profile[0] == 4 &&
+              mock_phy.fastlock.entry[0][3].flags == 0,
+          "end did not sync the recalled profile 3 (invalidated %u)",
+          lo_invalidated);
+
+    setup();
+    mock_phy.spi = (struct no_os_spi_desc *)&spi_dummy;
+    fastlock_setup_reg = 0;
+    lo_invalidated = 0;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 0) == 0 &&
+              bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0 &&
+              lo_invalidated == 1,
+          "end without fastlock mode kept a stale LO");
+}
+
 int main(void)
 {
     check_begin_preconditions();
@@ -809,6 +862,7 @@ int main(void)
     check_gain_table_index_upload();
     check_rx2_only_session();
     check_lo_readback();
+    check_end_syncs_host_lo();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);
         return 1;
