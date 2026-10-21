@@ -721,7 +721,7 @@ static void service_rfic_status_request(void)
     static bool servicing;
     uint64_t service_start_ticks = 0;
     bool measuring_init_service = false;
-    uint64_t window_start_ticks = nios_op_window_now();
+    uint64_t window_start_ticks;
     bool measuring_window = false;
 
     /* An admitted packet may call SPI/AXI or delay helpers, which invoke
@@ -732,6 +732,7 @@ static void service_rfic_status_request(void)
     }
     measuring_init_service =
         rfic_command_init_timing_hook_begin(&service_start_ticks);
+    window_start_ticks = nios_op_window_now();
     measuring_window =
         nios_op_window_hook_begin(&nios_op_window, window_start_ticks);
     servicing = true;

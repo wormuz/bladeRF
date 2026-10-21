@@ -35,6 +35,7 @@ INDIRECT = {
     "main": [r"pkt_(8x8|8x16|8x32|8x64|16x64|32x32|legacy|retune2)"
              r"(_init)?"],
     "run_deferred_packet_work": [r"pkt_(16x64|retune2)_work"],
+    "run_do_work": [r"pkt_(16x64|retune2)_work"],
     # devices_rfic.c funcs[]: pkt_16x64 calls .read32/.read64 (line 1286/90),
     # pkt_16x64_work calls .write32/.write64 (line 980/2)
     "pkt_16x64": [r"_rfic_cmd_rd_.*"],
