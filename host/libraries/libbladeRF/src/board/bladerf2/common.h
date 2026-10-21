@@ -624,6 +624,10 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch);
 uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
                                       bladerf_frequency frequency, bool sweep,
                                       bool queue_idle);
+/* Hand NIOS the manual gain indices bladerf_set_gain() would write for the
+ * last API RX gain at each gain-table region (KEEP where unknown or not
+ * MGC), for RETUNE2 gain-table loads. Needs an idle RETUNE2 queue. */
+int bladerf2_rx_gain_table_index_upload(struct bladerf *dev);
 /* Record the RX gain table of `region` as the AD9361 driver's loaded one
  * (NIOS_PKT_RETUNE2_GT_UNKNOWN: none known). */
 void bladerf2_rx_gain_table_loaded(struct bladerf2_board_data *board_data,

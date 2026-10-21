@@ -348,6 +348,12 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
             return addr == 0 &&
                    nios_pkt_8x32_boot_nonce_store(&boot_nonce, data);
 
+#ifdef BLADERF_NIOS_LIBAD936X
+        case NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX:
+            return nios_pkt_8x32_rx_gt_index_valid(addr, data) &&
+                   rfic_set_gain_table_index(addr, (uint16_t)data);
+#endif
+
         case NIOS_PKT_8x32_TARGET_ADF4351:
             if (addr != 0) {
                 return false;

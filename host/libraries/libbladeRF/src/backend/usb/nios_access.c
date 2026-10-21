@@ -1148,6 +1148,16 @@ int nios_boot_nonce_write(struct bladerf *dev, uint32_t nonce)
     return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_BOOT_NONCE, 0, nonce);
 }
 
+int nios_rx_gain_table_index_write(struct bladerf *dev, uint8_t region,
+                                   uint32_t indices)
+{
+    if (!nios_pkt_8x32_rx_gt_index_valid(region, indices)) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_8x32_write(dev, NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX,
+                           region, indices);
+}
+
 int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value)
 {
     return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_NIOS_RAM, field, value);

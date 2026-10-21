@@ -556,6 +556,26 @@
  * reconfiguration and may count back to the old value. */
 #define NIOS_PKT_8x32_TARGET_BOOT_NONCE         0x94
 
+/* RX manual gain indices for RETUNE2 gain-table loads (FPGA >= v0.36.0).
+ * Write only, NIOS RAM. addr: gain-table region 0..2
+ * (nios_pkt_retune2_gain_table_region()). data[6:0] RX1, data[14:8] RX2
+ * full-table index; NIOS_PKT_8x32_RX_GT_INDEX_KEEP for a lane: no index
+ * known, keep the driver's dB-preserving re-map; other bits zero.
+ *
+ * After it loads the table of a region, NIOS writes these indices. They are
+ * what bladerf_set_gain() would write for the last requested gain at that
+ * region, as libbladeRF re-applies it after a host table reload; the AD9361
+ * driver's own re-map keeps the table dB, not the bladeRF gain, whose
+ * per-region offset differs. */
+#define NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX 0x95
+#define NIOS_PKT_8x32_RX_GT_INDEX_KEEP           0x7fu
+
+static inline bool nios_pkt_8x32_rx_gt_index_valid(uint8_t addr,
+                                                   uint32_t data)
+{
+    return addr <= 2 && (data & ~UINT32_C(0x7f7f)) == 0;
+}
+
 /* Write-once store rule shared by NIOS and the host tests. */
 static inline bool nios_pkt_8x32_boot_nonce_store(uint32_t *current,
                                                   uint32_t requested)

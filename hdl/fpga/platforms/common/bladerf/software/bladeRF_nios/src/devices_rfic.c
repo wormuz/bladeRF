@@ -35,6 +35,7 @@
 #include "ad936x_helpers.h"
 #include "nios_pkt_8x64.h"
 #include "nios_pkt_retune2.h"
+#include "nios_pkt_8x32.h"
 #include "rfic_frequency_policy.h"
 #include "rfic_scheduler_policy.h"
 
@@ -368,6 +369,19 @@ static const struct no_os_spi_desc rfic_gain_table_spi = {
     .platform_ops = &bladerf2_spi_ops,
 };
 
+/* Per gain-table region: RX1 index in [6:0], RX2 in [14:8], 0x7f = keep the
+ * driver's re-map (NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX). */
+static uint16_t rfic_gain_table_index[3] = { 0x7f7f, 0x7f7f, 0x7f7f };
+
+bool rfic_set_gain_table_index(uint8_t region, uint16_t indices)
+{
+    if (region > 2) {
+        return false;
+    }
+    rfic_gain_table_index[region] = indices;
+    return true;
+}
+
 int32_t rfic_start_gain_table_for_retune(uint8_t request)
 {
     static const uint64_t region_end_hz[3] = {
@@ -410,6 +424,17 @@ int32_t rfic_start_gain_table_for_retune(uint8_t request)
     }
     if (status < 0) {
         return status;
+    }
+    /* After the rows write the host's gain for this region, as
+     * bladerf_set_gain() does after a host table reload; a 0x7f lane keeps
+     * the driver's dB-preserving re-map. */
+    if ((rfic_gain_table_index[to] & 0x7fu) != NIOS_PKT_8x32_RX_GT_INDEX_KEEP) {
+        load->rx1_index_set = (uint8_t)(rfic_gain_table_index[to] & 0x7fu);
+    }
+    if (((rfic_gain_table_index[to] >> 8) & 0x7fu) !=
+        NIOS_PKT_8x32_RX_GT_INDEX_KEEP) {
+        load->rx2_index_set =
+            (uint8_t)((rfic_gain_table_index[to] >> 8) & 0x7fu);
     }
     state.gain_table_retune_owner = true;
     return 1;

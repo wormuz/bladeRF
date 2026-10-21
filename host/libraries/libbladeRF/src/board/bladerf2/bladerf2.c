@@ -4507,6 +4507,12 @@ int bladerf2_schedule_retune_sequenced(
         rx_gain_table = bladerf2_rx_retune_gain_table(
             dev, frequency, sweep_sequence != 0,
             rx_retune_pending_count == 0 && !rx_retune_outcome_unknown);
+        if (rx_gain_table != 0 && sweep_sequence == 0 &&
+            NIOS_PKT_RETUNE2_GT_FROM(rx_gain_table) !=
+                NIOS_PKT_RETUNE2_GT_TO(rx_gain_table)) {
+            /* A session uploads at begin; here the load may happen now. */
+            CHECK_STATUS(bladerf2_rx_gain_table_index_upload(dev));
+        }
     }
 
     /* A queued RX retune revokes the RX data certificate before reaching

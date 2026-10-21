@@ -738,6 +738,9 @@ uint8_t rfic_command_pending_mask(void);
 bool rfic_command_has_orphaned_jobs(void);
 bool rfic_tx_quad_retune_owner(void);
 bool rfic_gain_table_retune_owner(void);
+/* NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX: indices written after a RETUNE2
+ * gain-table load of `region`, RX1 in [6:0], RX2 in [14:8] (0x7f: keep). */
+bool rfic_set_gain_table_index(uint8_t region, uint16_t indices);
 void rfic_command_progress_tick(void);
 bool rfic_command_state_faulted(void);
 bool rfic_phy_present(void);

@@ -407,6 +407,112 @@ void bladerf2_rx_gain_table_loaded(struct bladerf2_board_data *board_data,
     }
 }
 
+/* The full-table gain bladerf_set_gain(gain_db) writes at `region`: the gain
+ * minus the region's offset, clamped to its "full" stage range, as
+ * get_gain_offset() and _rfic_host_set_gain_stage() do at an LO there. */
+static int gain_table_full_db(unsigned int region, int gain_db)
+{
+    static const int64_t inside[3] = {
+        INT64_C(1000000000), INT64_C(2000000000), INT64_C(5000000000),
+    };
+    float offset = 0.0f;
+    struct bladerf_range const *full = NULL;
+    int val;
+    size_t i;
+
+    for (i = 0; i < ARRAY_SIZE(bladerf2_rx_gain_ranges); i++) {
+        struct bladerf_gain_range const *r = &bladerf2_rx_gain_ranges[i];
+
+        if (inside[region] < r->frequency.min ||
+            inside[region] > r->frequency.max) {
+            continue;
+        }
+        if (r->name == NULL) {
+            offset = r->offset;
+        } else if (strcmp(r->name, "full") == 0) {
+            full = &r->gain;
+        }
+    }
+    val = gain_db - offset;
+    if (full != NULL) {
+        if (val < full->min) {
+            val = (int)full->min;
+        }
+        if (val > full->max) {
+            val = (int)full->max;
+        }
+    }
+    return val;
+}
+
+int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    const struct ad9361_rf_phy *phy = board_data->phy;
+    const struct gain_table_info *gt =
+        phy != NULL && phy->gt_info != NULL ? phy->gt_info
+                                            : ad9361_adi_gt_info;
+    const bool split = phy != NULL && phy->pdata != NULL &&
+                       phy->pdata->split_gt;
+    bool known[2];
+    int gain_db[2];
+    unsigned int lane;
+    unsigned int region;
+
+    if (!have_cap(board_data->capabilities, BLADERF_CAP_RETUNE2_GAIN_TABLE)) {
+        return 0;
+    }
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    for (lane = 0; lane < 2; lane++) {
+        known[lane] = board_data->rx_gain_api_known[lane];
+        gain_db[lane] = board_data->rx_gain_api_db[lane];
+    }
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    /* bladerf2_rx_reapply_mgc_gain(): only a manual gain the API set. */
+    for (lane = 0; lane < 2; lane++) {
+        bladerf_gain_mode mode;
+
+        if (known[lane] &&
+            (board_data->rfic->get_gain_mode(dev, BLADERF_CHANNEL_RX(lane),
+                                             &mode) != 0 ||
+             mode != BLADERF_GAIN_MGC)) {
+            known[lane] = false;
+        }
+    }
+
+    for (region = 0; region < 3; region++) {
+        const struct gain_table_info *info = NULL;
+        uint32_t indices = 0;
+        unsigned int i;
+        int status;
+
+        for (i = 0; gt[i].tab != NULL; i++) {
+            if (!!gt[i].split_table == split &&
+                bladerf2_rx_gain_table_region(gt[i].end) == region) {
+                info = &gt[i];
+                break;
+            }
+        }
+        for (lane = 0; lane < 2; lane++) {
+            int32_t index = -1;
+
+            if (known[lane] && info != NULL) {
+                index = ad9361_gain_table_index(
+                    info, gain_table_full_db(region, gain_db[lane]));
+            }
+            indices |= (uint32_t)(index < 0 ? NIOS_PKT_8x32_RX_GT_INDEX_KEEP
+                                            : (uint32_t)index)
+                       << (8 * lane);
+        }
+        status = nios_rx_gain_table_index_write(dev, (uint8_t)region,
+                                                indices);
+        if (status != 0) {
+            return status;
+        }
+    }
+    return 0;
+}
+
 uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
                                       bladerf_frequency frequency, bool sweep,
                                       bool queue_idle)
@@ -503,6 +609,12 @@ int bladerf2_rx_sweep_begin(struct bladerf *dev, bladerf_channel ch,
     }
 
     status = sweep_gain_table_region(dev, ch, &gain_table_region);
+    if (status != 0) {
+        return status;
+    }
+    /* Crossing retunes write the manual gain index for the API gain at the
+     * new region, as the slow path re-applies it. */
+    status = bladerf2_rx_gain_table_index_upload(dev);
     if (status != 0) {
         return status;
     }

@@ -213,6 +213,39 @@ static int mock_get_timestamp(struct bladerf *dev, bladerf_direction dir,
     return 0;
 }
 
+/* Index = full-table dB, so the upload exposes the dB it asked for. */
+struct gain_table_info ad9361_adi_gt_info[1];
+int32_t ad9361_gain_table_index(const struct gain_table_info *info,
+                                int32_t gain_db)
+{
+    (void)info;
+    return gain_db;
+}
+
+static uint32_t uploaded[3];
+static unsigned int uploads;
+
+int nios_rx_gain_table_index_write(struct bladerf *dev, uint8_t region,
+                                   uint32_t indices)
+{
+    (void)dev;
+    uploaded[region] = indices;
+    uploads++;
+    return 0;
+}
+
+static bladerf_gain_mode lane_mode[2];
+
+static int mock_get_gain_mode(struct bladerf *dev, bladerf_channel ch,
+                              bladerf_gain_mode *mode)
+{
+    (void)dev;
+    *mode = lane_mode[ch >> 1];
+    return 0;
+}
+
+static struct controller_fns mock_rfic;
+
 static struct bladerf_board_fns_mock {
     struct board_fns fns;
 } mock_board;
@@ -234,6 +267,7 @@ static int failures;
 static void setup(void)
 {
     memset(&board_data, 0, sizeof(board_data));
+    memset(&mock_phy, 0, sizeof(mock_phy));
     memset(requests, 0, sizeof(requests));
     request_count = 0;
     successes_published = 0;
@@ -256,6 +290,10 @@ static void setup(void)
     mock_board.fns.get_timestamp = mock_get_timestamp;
     mock_board.fns.get_frequency = mock_get_frequency;
     lo_frequency = 925000000;
+    mock_rfic.get_gain_mode = mock_get_gain_mode;
+    lane_mode[0] = lane_mode[1] = BLADERF_GAIN_MGC;
+    board_data.rfic = &mock_rfic;
+    uploads = 0;
     dev.board = &mock_board.fns;
     dev.board_data = &board_data;
 }
@@ -661,6 +699,43 @@ static void check_gain_table_crossing(void)
     mock_phy.current_table = 0;
 }
 
+/* Session begin hands NIOS the manual index bladerf_set_gain() would write
+ * in each region: API gain minus the region offset, clamped to "full". */
+static void check_gain_table_index_upload(void)
+{
+    setup_gain_table();
+    board_data.rx_gain_api_known[0] = true;
+    board_data.rx_gain_api_db[0] = 20;
+    board_data.rx_gain_api_known[1] = true;
+    board_data.rx_gain_api_db[1] = 70;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0,
+          "begin failed");
+    CHECK(uploads == 3 && uploaded[0] == (37u | 73u << 8) &&
+              uploaded[1] == (31u | 71u << 8) &&
+              uploaded[2] == (22u | 62u << 8),
+          "indices %u: %04x %04x %04x", uploads, uploaded[0], uploaded[1],
+          uploaded[2]);
+    (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
+
+    /* AGC owns lane 1's index; an unset gain leaves lane 0's. */
+    setup_gain_table();
+    board_data.rx_gain_api_known[1] = true;
+    board_data.rx_gain_api_db[1] = 20;
+    lane_mode[1] = BLADERF_GAIN_DEFAULT;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              uploads == 3 && uploaded[0] == 0x7f7f &&
+              uploaded[2] == 0x7f7f,
+          "kept indices %u: %04x %04x", uploads, uploaded[0], uploaded[2]);
+    (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
+
+    setup();
+    board_data.rx_gain_api_known[0] = true;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) == 0 &&
+              uploads == 0,
+          "index upload without the gain-table capability");
+    (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
+}
+
 int main(void)
 {
     check_begin_preconditions();
@@ -668,6 +743,7 @@ int main(void)
     check_lost_and_rejected();
     check_gain_table_region();
     check_gain_table_crossing();
+    check_gain_table_index_upload();
     check_lo_readback();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);

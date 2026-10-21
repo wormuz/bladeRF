@@ -336,6 +336,10 @@ int nios_command_session_generation_read(struct bladerf *dev,
  * NIOS now holds exactly that non-zero value; see nios_pkt_8x32.h. */
 int nios_boot_nonce_read(struct bladerf *dev, uint32_t *nonce);
 int nios_boot_nonce_write(struct bladerf *dev, uint32_t nonce);
+/** RX manual gain indices for RETUNE2 gain-table loads of `region`
+ * (NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX, BLADERF_CAP_RETUNE2_GAIN_TABLE). */
+int nios_rx_gain_table_index_write(struct bladerf *dev, uint8_t region,
+                                   uint32_t indices);
 /** Read the cumulative successful NIOS retune2 activation counter. */
 int nios_retune2_success_count_read(struct bladerf *dev,
                                     bladerf_module module,

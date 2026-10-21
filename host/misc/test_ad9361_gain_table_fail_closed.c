@@ -502,6 +502,10 @@ static int test_batched_row_failure_invalidates_cache(void)
 
 /* NIOS loads a table on a fastlock recall without a PHY: the same rows,
  * the manual gain kept in dB of the table it replaces. */
+static uint8_t index_set[2] = {
+    AD9361_GAIN_TABLE_INDEX_KEEP, AD9361_GAIN_TABLE_INDEX_KEEP,
+};
+
 static int run_phy_free_load(const struct gain_table_info *info,
                              const struct gain_table_info *old_info)
 {
@@ -516,6 +520,8 @@ static int run_phy_free_load(const struct gain_table_info *info,
     if (status != 0) {
         return status;
     }
+    transaction.rx1_index_set = index_set[0];
+    transaction.rx2_index_set = index_set[1];
     while ((status = ad9361_gain_table_load_poll(&transaction)) == 1) {
         uint32_t delay =
             ad9361_gain_table_transaction_poll_delay_us(&transaction);
@@ -567,6 +573,23 @@ static int test_phy_free_load_keeps_gain_in_db(void)
     if (status != 0 || written_rx_gain_index[0] != expected) {
         fprintf(stderr, "phy-free load without old table: status=%d rx=%d "
                 "expected=%d\n", status, written_rx_gain_index[0], expected);
+        return -1;
+    }
+
+    /* The host's index for the new table replaces the kept dB; an index
+     * past the table, as KEEP, leaves it. */
+    setup_phy(&phy, &pdata, &spi);
+    read_rx_gain_index = 40;
+    index_set[0] = 36;
+    status = run_phy_free_load(mid, low);
+    index_set[0] = AD9361_GAIN_TABLE_INDEX_KEEP;
+    expected = ad9361_gain_table_find_index(mid->abs_gain_tbl, mid->max_index,
+                                            low->abs_gain_tbl[40]);
+    if (status != 0 || written_rx_gain_index[0] != 36 ||
+        written_rx_gain_index[1] != expected) {
+        fprintf(stderr, "phy-free load, host index: status=%d rx=%d/%d "
+                "expected=36/%d\n", status, written_rx_gain_index[0],
+                written_rx_gain_index[1], expected);
         return -1;
     }
 
