@@ -38,8 +38,7 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint64_t data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x64_TARGET_RFIC_TIMING:
-            return nios_op_window_write(&nios_op_window, addr, data,
-                                        nios_op_window_now());
+            return nios_op_window_write(&nios_op_window, addr, data);
 #endif
 
         /* Add user customizations here
@@ -85,8 +84,7 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint64_t *data)
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x64_TARGET_RFIC_TIMING:
             success = addr >= NIOS_PKT_8x64_OPWIN_CONTROL
-                ? nios_op_window_read(&nios_op_window, addr,
-                                      nios_op_window_now(), data)
+                ? nios_op_window_read(&nios_op_window, addr, data)
                 : rfic_command_init_timing_read(addr, data);
             break;
 #endif

@@ -133,14 +133,13 @@ static inline bool nios_pkt_8x64_rfic_owner_access_safe(uint8_t target,
 #define NIOS_PKT_8x64_RFIC_TIMING_MAX_SERVICE_HOOK_TICKS 0x0f
 
 /* Host-armed operation window (nios_op_window.h): write 1 to CONTROL opens
- * and clears, 0 closes. Reads of 0x10..0x16 return the window maxima. */
+ * and clears, 0 closes. Reads of 0x10..0x15 return the window maxima. */
 #define NIOS_PKT_8x64_OPWIN_CONTROL 0x10
 #define NIOS_PKT_8x64_OPWIN_MAX_WORKER_TICKS 0x11
 #define NIOS_PKT_8x64_OPWIN_MAX_SERVICE_GAP_TICKS 0x12
 #define NIOS_PKT_8x64_OPWIN_MAX_HOOK_GAP_TICKS 0x13
 #define NIOS_PKT_8x64_OPWIN_MAX_HOOK_TICKS 0x14
-#define NIOS_PKT_8x64_OPWIN_ELAPSED_TICKS 0x15
-#define NIOS_PKT_8x64_OPWIN_PASSES 0x16
+#define NIOS_PKT_8x64_OPWIN_PASSES 0x15
 
 /* IDs 0x80 through 0xff will not be assigned by Nuand. These are reserved
  * for user customizations */

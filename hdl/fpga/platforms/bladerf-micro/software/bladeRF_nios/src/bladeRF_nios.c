@@ -197,7 +197,7 @@ static void end_deferred_worker(void)
 static void run_do_work(size_t i)
 {
     begin_deferred_worker();
-    const uint64_t start = nios_op_window_now();
+    const uint32_t start = nios_op_window_now();
     pkt_handlers[i].do_work();
     nios_op_window_worker(&nios_op_window, start, nios_op_window_now());
     end_deferred_worker();
@@ -721,7 +721,7 @@ static void service_rfic_status_request(void)
     static bool servicing;
     uint64_t service_start_ticks = 0;
     bool measuring_init_service = false;
-    uint64_t window_start_ticks;
+    uint32_t window_start_ticks;
     bool measuring_window = false;
 
     /* An admitted packet may call SPI/AXI or delay helpers, which invoke

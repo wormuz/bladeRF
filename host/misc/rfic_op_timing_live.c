@@ -16,7 +16,7 @@
  * minimum.
  *
  * PASS: every operation returned success; window valid (hz>0, passes>0,
- * max_worker<=elapsed, max_service_gap<=elapsed); per phase the host
+ * max_worker and max_service_gap <= window wall time (host clock, in ticks)); per phase the host
  * lifetime max and NIOS max service gap are below the phase watchdog
  * (rx/samplerate/fastlock_load 5000 ms, tx/txq 120000 ms). Maxima are a
  * sample, not a WCET bound.
@@ -215,7 +215,7 @@ static int run_phase(struct bladerf *dev, const char *name, unsigned reps,
 {
     double *life = calloc(reps, sizeof(*life));
     uint64_t hz = 0, worker = 0, gap = 0, hook_gap = 0, hook = 0, elapsed = 0,
-             passes = 0;
+             passes = 0, t_open, t_close;
     int s, rs = 0;
     bool ok;
 
@@ -228,8 +228,10 @@ static int run_phase(struct bladerf *dev, const char *name, unsigned reps,
         free(life);
         return s;
     }
+    t_open = hq_mono_ns();
     s = op(dev, reps, life);
     rs = write_metric(dev, NIOS_PKT_8x64_OPWIN_CONTROL, 0);
+    t_close = hq_mono_ns();
     if (rs == 0)
         rs = read_metric(dev, NIOS_PKT_8x64_OPWIN_MAX_WORKER_TICKS, &worker);
     if (rs == 0)
@@ -240,14 +242,13 @@ static int run_phase(struct bladerf *dev, const char *name, unsigned reps,
     if (rs == 0)
         rs = read_metric(dev, NIOS_PKT_8x64_OPWIN_MAX_HOOK_TICKS, &hook);
     if (rs == 0)
-        rs = read_metric(dev, NIOS_PKT_8x64_OPWIN_ELAPSED_TICKS, &elapsed);
-    if (rs == 0)
         rs = read_metric(dev, NIOS_PKT_8x64_OPWIN_PASSES, &passes);
     if (rs == 0)
         rs = read_metric(dev, NIOS_PKT_8x64_RFIC_TIMING_COUNTER_HZ, &hz);
     if (s != 0) hq_fail(name, s);
     if (rs != 0) hq_fail("window read", rs);
 
+    elapsed = hz ? (uint64_t)((double)(t_close - t_open) * (double)hz / 1e9) : 0;
     ok = s == 0 && rs == 0 && hz != 0 && passes != 0 && worker <= elapsed &&
          gap <= elapsed;
     if (ok) {
