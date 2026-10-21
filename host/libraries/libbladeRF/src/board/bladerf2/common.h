@@ -158,6 +158,11 @@ struct bladerf2_board_data {
      * TX-only controls that bypass RX data invalidation's setter reservation. */
     bool rfic_lifecycle_active;
 
+    /* Set under dev->lock while bladerf_pll_configure() writes the ADF400x
+     * R/N/function latches; the writes release the lock between registers,
+     * so a refclk read in that window would mix old and new dividers. */
+    bool pll_refclk_write_active;
+
     /* AD9361 PHY Handle */
     struct ad9361_rf_phy *phy;
     /* Snapshot used by the reversible RX correction-bypass diagnostic API.
@@ -381,6 +386,9 @@ struct bladerf2_board_data {
     /* Latched after an acknowledged/attempted TX gate ABORT. A new link ACK
      * alone cannot reopen TX until the end-to-end DMA/FIFO flush completes. */
     bool tx_async_fault_flush_required;
+    /* Advanced with every latch request so bladerf_tx_fault_recover() does
+     * not retire a fault that arrived after its FIFO flush began. */
+    uint64_t tx_async_fault_flush_generation;
     uint8_t tx_async_link_epoch_id;
     bool tx_recovery_blocked;
     bool tx_status_unavailable_reported;

@@ -867,6 +867,13 @@ static int lusb_change_setting(void *driver, uint8_t setting)
     return error_conv(status);
 }
 
+static int lusb_clear_halt(void *driver, uint8_t endpoint)
+{
+    struct bladerf_lusb *lusb = (struct bladerf_lusb *) driver;
+
+    return error_conv(libusb_clear_halt(lusb->handle, endpoint));
+}
+
 static void lusb_close(void *driver)
 {
     int status;
@@ -2548,6 +2555,7 @@ static const struct usb_fns libusb_fns = {
     FIELD_INIT(.shutdown_stream, lusb_shutdown_stream),
     FIELD_INIT(.submit_stream_buffer, lusb_submit_stream_buffer),
     FIELD_INIT(.deinit_stream, lusb_deinit_stream),
+    FIELD_INIT(.clear_halt, lusb_clear_halt),
     FIELD_INIT(.open_bootloader, lusb_open_bootloader),
     FIELD_INIT(.close_bootloader, lusb_close_bootloader),
 };
