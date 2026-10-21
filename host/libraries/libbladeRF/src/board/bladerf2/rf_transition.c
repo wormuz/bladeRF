@@ -129,9 +129,11 @@ static void _emit_event(struct bladerf *dev,
  * polling granularity. */
 #define POLL_INTERVAL_US 120
 
-/* Failure detection only: certification normally lands within the monitor
- * interval. */
-#define BLADERF2_TX_VALIDITY_TIMEOUT_MS 2000
+#define RX_FAULT_MONITOR_INTERVAL_MS 100
+
+/* TX validity is certified by the fault monitor thread (one pass per
+ * RX_FAULT_MONITOR_INTERVAL_MS); 20 missed passes = failure, not latency. */
+#define BLADERF2_TX_VALIDITY_TIMEOUT_MS (20 * RX_FAULT_MONITOR_INTERVAL_MS)
 
 static uint64_t _monotonic_ns(void)
 {
@@ -762,7 +764,6 @@ static void _emit_event(struct bladerf *dev,
                                epoch_id, 0, 0, 0);
 }
 
-#define RX_FAULT_MONITOR_INTERVAL_MS 100
 #define RF_LINK_STATUS_VERSION_MASK BLADERF2_RF_LINK_STATUS_VERSION_MASK
 #define RF_LINK_STATUS_VERSION_2 BLADERF2_RF_LINK_STATUS_VERSION_2
 
