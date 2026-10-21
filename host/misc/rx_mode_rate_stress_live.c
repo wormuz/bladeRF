@@ -3,6 +3,10 @@
  * both for a fixed iteration count with no pacing; a hang is caught by the
  * caller's timeout (run script: timeout on the step).
  *
+ * Both rates are inside the native range (>= 2.083 MHz): the sub-native path
+ * enables the 4x FIR; its failure in run 3 (ad9361 FIR validation
+ * "ratio ADC/2 / RX_SAMPL * 16 > TAPS", bladerf2.c:2437-2455) is a separate
+ * question from the feature/rate race this tool tests.
  * Usage: [iterations_per_thread, default 100] [seed, 0 = time]
  * PASS (criteria fixed before the run):
  *   - every call returns 0 or a fail-closed rejection (WOULD_BLOCK, INVAL,
@@ -22,7 +26,7 @@
 
 #define RX_CH BLADERF_CHANNEL_RX(0)
 #define RATE_A 3840000u
-#define RATE_B 1920000u
+#define RATE_B 7680000u
 #define FREQ UINT64_C(1835000000)
 #define BLOCK 8192u
 

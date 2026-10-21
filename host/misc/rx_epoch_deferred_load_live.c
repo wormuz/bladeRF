@@ -166,6 +166,20 @@ int main(int argc, char **argv)
                 fprintf(stderr, "schedule k=%u: %s; target-now_at_failure=%"
                         PRId64 " samples (lead %" PRIu64 ")\n", k,
                         bladerf_strerror(s), (int64_t)(last - cur), lead);
+                {
+                    struct bladerf_rf_event ev2[BLADERF_RF_EVENT_HISTORY_SIZE];
+                    uint32_t n2 = 0;
+                    uint64_t c2 = cursor, next2 = 0;
+                    bool hc = true;
+                    if (bladerf_rf_events_get_since(
+                            dev, c2, ev2, BLADERF_RF_EVENT_HISTORY_SIZE, &n2,
+                            &next2, &hc) == 0)
+                        for (uint32_t e = 0; e < n2; ++e)
+                            fprintf(stderr, "  event type=%u error=%d flags=0x%x "
+                                    "rfic_status=0x%x\n", ev2[e].event_type,
+                                    ev2[e].error_code, ev2[e].flags,
+                                    ev2[e].rfic_status);
+                }
             }
         }
         t_wait = hq_mono_ns();
