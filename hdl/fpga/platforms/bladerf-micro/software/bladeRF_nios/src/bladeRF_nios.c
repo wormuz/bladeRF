@@ -47,6 +47,7 @@
 #include "pkt_legacy.h"
 #include "rfic_scheduler_policy.h"
 #include "nios_ram_watermark.h"
+#include "nios_op_window.h"
 #include "debug.h"
 #ifdef BLADERF_NIOS_LIBAD936X
 void bladerf_platform_set_service_hook(void (*hook)(void));
@@ -192,9 +193,18 @@ static void end_deferred_worker(void)
         cooperative_pkt->deferred_work_active_at_accept = true;
     }
 }
+
+static void run_do_work(size_t i)
+{
+    begin_deferred_worker();
+    const uint64_t start = nios_op_window_now();
+    pkt_handlers[i].do_work();
+    nios_op_window_worker(&nios_op_window, start, nios_op_window_now());
+    end_deferred_worker();
+}
 #endif
 
-static void run_deferred_packet_work(void)
+static void run_deferred_packet_work_pass(void)
 {
     size_t i;
 
@@ -211,9 +221,7 @@ static void run_deferred_packet_work(void)
         for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
             if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
                 if (pkt_handlers[i].do_work != NULL) {
-                    begin_deferred_worker();
-                    pkt_handlers[i].do_work();
-                    end_deferred_worker();
+                    run_do_work(i);
                 }
                 break;
             }
@@ -229,9 +237,7 @@ static void run_deferred_packet_work(void)
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
         if (pkt_handlers[i].magic == NIOS_PKT_16x64_MAGIC) {
             if (pkt_handlers[i].do_work != NULL) {
-                begin_deferred_worker();
-                pkt_handlers[i].do_work();
-                end_deferred_worker();
+                run_do_work(i);
             }
             break;
         }
@@ -242,9 +248,7 @@ static void run_deferred_packet_work(void)
             for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
                 if (pkt_handlers[i].magic == NIOS_PKT_RETUNE2_MAGIC) {
                     if (pkt_handlers[i].do_work != NULL) {
-                        begin_deferred_worker();
-                        pkt_handlers[i].do_work();
-                        end_deferred_worker();
+                        run_do_work(i);
                     }
                     break;
                 }
@@ -257,9 +261,7 @@ static void run_deferred_packet_work(void)
     for (i = 0; i < ARRAY_SIZE(pkt_handlers); i++) {
         if (pkt_handlers[i].magic != NIOS_PKT_16x64_MAGIC &&
             pkt_handlers[i].do_work != NULL) {
-            begin_deferred_worker();
-            pkt_handlers[i].do_work();
-            end_deferred_worker();
+            run_do_work(i);
         }
     }
 #else
@@ -281,6 +283,13 @@ static void run_deferred_packet_work(void)
                                   cooperative_pkt->response_deferred));
     retry_prepared_cooperative_response();
 #endif
+}
+
+static void run_deferred_packet_work(void)
+{
+    nios_op_window_pass_begin(&nios_op_window, nios_op_window_now());
+    run_deferred_packet_work_pass();
+    nios_op_window_pass_end(&nios_op_window, nios_op_window_now());
 }
 
 #ifdef BLADERF_NIOS_LIBAD936X
@@ -712,6 +721,8 @@ static void service_rfic_status_request(void)
     static bool servicing;
     uint64_t service_start_ticks = 0;
     bool measuring_init_service = false;
+    uint64_t window_start_ticks = nios_op_window_now();
+    bool measuring_window = false;
 
     /* An admitted packet may call SPI/AXI or delay helpers, which invoke
      * this hook themselves. The immutable request is still ready until its
@@ -721,11 +732,16 @@ static void service_rfic_status_request(void)
     }
     measuring_init_service =
         rfic_command_init_timing_hook_begin(&service_start_ticks);
+    measuring_window =
+        nios_op_window_hook_begin(&nios_op_window, window_start_ticks);
     servicing = true;
     service_rfic_status_request_impl();
     servicing = false;
     if (measuring_init_service)
         rfic_command_init_timing_hook_end(service_start_ticks);
+    if (measuring_window)
+        nios_op_window_hook_end(&nios_op_window, window_start_ticks,
+                                nios_op_window_now());
 }
 #endif
 

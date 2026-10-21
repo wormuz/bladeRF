@@ -42,6 +42,7 @@ C_SRCS              += $(FPGA_COMMON_DIR)/src/bladerf2_common.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/devices_rfic.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/devices_rfic_cmds.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/devices_rfic_queue.c
+C_SRCS              += $(BLADERF_COMMON_DIR)/src/nios_op_window.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/pkt_retune2.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/fastlock_profile_cache.c
 C_SRCS              += $(BLADERF_COMMON_DIR)/src/nios_ram_watermark.c

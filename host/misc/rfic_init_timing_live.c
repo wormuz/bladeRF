@@ -1,7 +1,5 @@
 #include <libbladeRF.h>
-#include "backend/usb/usb.h"
-#include "board/board.h"
-#include "nios_pkt_8x64.h"
+#include "rfic_timing_access.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -9,44 +7,6 @@
 
 #define DEFAULT_SERIAL "f695006ba84a40daa7b777c6a6eba78"
 
-static int read_metric(struct bladerf *dev, uint8_t addr, uint64_t *value)
-{
-    struct bladerf_usb *usb = dev->backend_data;
-    uint8_t packet[NIOS_PKT_8x64_LEN];
-    uint32_t transferred = 0;
-    bool transferred_valid = false;
-    bool success = false;
-    uint8_t target = 0;
-    uint8_t response_addr = 0;
-    int status;
-
-    nios_pkt_8x64_pack(packet, NIOS_PKT_8x64_TARGET_RFIC_TIMING,
-                       false, addr, 0);
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_OUT,
-                                    packet, sizeof(packet), 0,
-                                    &transferred, &transferred_valid);
-    if (status != 0 || !transferred_valid || transferred != sizeof(packet)) {
-        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
-    }
-
-    transferred = 0;
-    transferred_valid = false;
-    status = usb->fn->bulk_transfer(usb->driver, PERIPHERAL_EP_IN,
-                                    packet, sizeof(packet), 0,
-                                    &transferred, &transferred_valid);
-    if (status != 0 || !transferred_valid || transferred != sizeof(packet)) {
-        return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
-    }
-
-    nios_pkt_8x64_resp_unpack(packet, &target, NULL, &response_addr,
-                              value, &success);
-    if (!success || target != NIOS_PKT_8x64_TARGET_RFIC_TIMING ||
-        response_addr != addr) {
-        return BLADERF_ERR_FPGA_OP;
-    }
-
-    return 0;
-}
 
 int main(int argc, char **argv)
 {

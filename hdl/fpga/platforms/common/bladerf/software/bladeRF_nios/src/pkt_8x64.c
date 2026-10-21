@@ -26,6 +26,7 @@
 #include "pkt_handler.h"
 #include "pkt_8x64.h"
 #include "devices.h"
+#include "nios_op_window.h"
 #include "debug.h"
 
 static inline bool perform_write(uint8_t id, uint8_t addr, uint64_t data)
@@ -34,6 +35,12 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint64_t data)
         case NIOS_PKT_8x64_TARGET_TIMESTAMP:
             DBG("Invalid write access to timestamp: 0x%x\n", addr);
             return false;
+
+#ifdef BOARD_BLADERF_MICRO
+        case NIOS_PKT_8x64_TARGET_RFIC_TIMING:
+            return nios_op_window_write(&nios_op_window, addr, data,
+                                        nios_op_window_now());
+#endif
 
         /* Add user customizations here
 
@@ -77,7 +84,10 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint64_t *data)
 
 #ifdef BOARD_BLADERF_MICRO
         case NIOS_PKT_8x64_TARGET_RFIC_TIMING:
-            success = rfic_command_init_timing_read(addr, data);
+            success = addr >= NIOS_PKT_8x64_OPWIN_CONTROL
+                ? nios_op_window_read(&nios_op_window, addr,
+                                      nios_op_window_now(), data)
+                : rfic_command_init_timing_read(addr, data);
             break;
 #endif
 

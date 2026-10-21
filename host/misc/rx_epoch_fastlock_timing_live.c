@@ -1,4 +1,14 @@
+/* Fastlock (NIOS RETUNE2) vs host-tuned RX transition timing.
+ * Mode "ab": paired A/B. Trials 2k and 2k+1 form a pair; which of the two
+ * runs fastlock is drawn from a seeded PRNG (seed printed; replay with
+ * --seed=N), so arm assignment is independent of trial parity and of the
+ * transition direction. Usage: [trials] [fastlock|host|ab] [--cross-band]
+ * [--seed=N].
+ * PASS: every trial valid (complete trace, ordered events, no NIOS transport
+ * error), no USB timeout; p50/p99/max total_to_epoch_us printed per arm. No
+ * latency threshold is defined; the numbers are the result. */
 #include <libbladeRF.h>
+#include "hwqual_live.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -35,7 +45,19 @@ int main(int argc, char **argv)
 {
     const unsigned trials = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 20;
     const char *mode = argc > 2 ? argv[2] : "fastlock";
-    const bool cross_band = argc > 3 && strcmp(argv[3], "--cross-band") == 0;
+    bool cross_band = false;
+    uint64_t seed = 0;
+    for (int a = 3; a < argc; ++a) {
+        if (strcmp(argv[a], "--cross-band") == 0) cross_band = true;
+        else if (strncmp(argv[a], "--seed=", 7) == 0)
+            seed = strtoull(argv[a] + 7, NULL, 0);
+        else if (argv[a][0] != 0) {
+            fprintf(stderr, "unknown argument: %s\n", argv[a]);
+            return 2;
+        }
+    }
+    seed = hq_seed_or_time(seed);
+    uint64_t rng = seed;
     if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL) {
         bladerf_log_set_verbosity(BLADERF_LOG_LEVEL_DEBUG);
     }
@@ -45,6 +67,10 @@ int main(int argc, char **argv)
     };
     struct bladerf *dev = NULL;
     struct bladerf_quick_tune profiles[2];
+    bool *arm_fastlock = NULL;
+    double *total_us[2] = {NULL, NULL};
+    size_t arm_n[2] = {0, 0};
+    unsigned arm_dir[2][2] = {{0, 0}, {0, 0}};
     uint32_t first_transaction_id = 0;
     uint32_t last_transaction_id = 0;
     bool last_transaction_fastlock = false;
@@ -77,6 +103,21 @@ int main(int argc, char **argv)
         goto done;
     }
 
+    arm_fastlock = calloc(trials, sizeof(*arm_fastlock));
+    total_us[0] = calloc(trials, sizeof(double));
+    total_us[1] = calloc(trials, sizeof(double));
+    if (arm_fastlock == NULL || total_us[0] == NULL || total_us[1] == NULL) {
+        fputs("allocation failed\n", stderr);
+        goto done;
+    }
+    for (unsigned p = 0; p < trials; p += 2) {
+        const bool first = strcmp(mode, "fastlock") == 0 ||
+            (strcmp(mode, "ab") == 0 && (hq_rng_next(&rng) >> 63));
+        arm_fastlock[p] = first;
+        if (p + 1 < trials)
+            arm_fastlock[p + 1] = strcmp(mode, "ab") == 0 ? !first : first;
+    }
+    printf("seed=%" PRIu64 "\n", seed);
     printf("transition timing mode=%s trials=%u profiles=%u/%u frequencies=%llu/%llu\n",
            mode, trials, profiles[0].rffe_profile, profiles[1].rffe_profile,
            (unsigned long long)frequencies[0],
@@ -84,8 +125,7 @@ int main(int argc, char **argv)
 
     for (unsigned i = 0; i < trials; ++i) {
         const unsigned target = (i + 1) & 1u;
-        const bool use_fastlock = strcmp(mode, "fastlock") == 0 ||
-                                  (strcmp(mode, "ab") == 0 && (i & 1u));
+        const bool use_fastlock = arm_fastlock[i];
         const struct bladerf_rx_transition_request request = {
             .target_frequency_hz = frequencies[target],
             .required_events_mask = BLADERF_RF_REQUIRE_PLL_LOCKED |
@@ -187,6 +227,11 @@ int main(int argc, char **argv)
                        events[j].flags);
             }
         }
+        {
+            const double t = (final_event.host_monotonic_ns - config_ns) / 1000.0;
+            total_us[use_fastlock][arm_n[use_fastlock]++] = t;
+            ++arm_dir[use_fastlock][target];
+        }
         if (use_fastlock) {
             /* Tokened asynchronous NOW acceptance has no device duration. */
             printf("trial=%u mode=fastlock txn=%u epoch=%u usb_out_us=%.3f "
@@ -244,8 +289,21 @@ int main(int argc, char **argv)
                (unsigned long long)timing.device_duration_ticks);
     }
 
+    for (int arm = 0; arm < 2; ++arm) {
+        if (arm_n[arm] == 0) continue;
+        hq_print_stats(arm ? "fastlock_total_to_epoch_us" :
+                             "host_total_to_epoch_us",
+                       total_us[arm], arm_n[arm]);
+        printf("ARM %s n=%zu to_profile0=%u to_profile1=%u\n",
+               arm ? "fastlock" : "host", arm_n[arm], arm_dir[arm][0],
+               arm_dir[arm][1]);
+    }
+    printf("PASS seed=%" PRIu64 " trials=%u\n", seed, trials);
     result = 0;
 done:
+    free(arm_fastlock);
+    free(total_us[0]);
+    free(total_us[1]);
     if (dev != NULL) {
         bladerf_enable_module(dev, RX_CHANNEL, false);
         bladerf_close(dev);
