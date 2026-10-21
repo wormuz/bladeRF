@@ -586,9 +586,31 @@ static void test_rf_transition_calibration_is_explicit(void)
     assert((effective & BLADERF_RF_REQUIRE_ENSM_RX) != 0);
     assert((effective & BLADERF_RF_REQUIRE_BBPLL_LOCKED) != 0);
     assert(bladerf2_rf_transition_mode_supported(
-        BLADERF_TUNING_MODE_HOST));
+        BLADERF_TUNING_MODE_HOST, true,
+        BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE | BLADERF_RF_REQUIRE_EPOCH_VALID,
+        false));
+    /* FPGA/NIOS owner: plain LO transitions are certifiable; epoch-valid ones
+     * only on firmware that models the shared B/C RFDC bank. */
+    assert(bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_FPGA, false,
+        BLADERF_RF_REQUIRE_PLL_LOCKED | BLADERF_RF_REQUIRE_ENSM_RX, false));
+    assert(bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_FPGA, false,
+        BLADERF_RF_REQUIRE_EPOCH_VALID | BLADERF_RF_REQUIRE_PLL_LOCKED, true));
     assert(!bladerf2_rf_transition_mode_supported(
-        BLADERF_TUNING_MODE_FPGA));
+        BLADERF_TUNING_MODE_FPGA, false,
+        BLADERF_RF_REQUIRE_EPOCH_VALID | BLADERF_RF_REQUIRE_PLL_LOCKED,
+        false));
+    /* No NIOS certificate exists for a fastlock recall's LO or for a forced
+     * RFDC calibration. */
+    assert(!bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_FPGA, true, BLADERF_RF_REQUIRE_PLL_LOCKED, true));
+    assert(!bladerf2_rf_transition_mode_supported(
+        BLADERF_TUNING_MODE_FPGA, false,
+        BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE | BLADERF_RF_REQUIRE_EPOCH_VALID,
+        true));
+    assert(!bladerf2_rf_transition_mode_supported(
+        (bladerf_tuning_mode)7, false, 0, true));
 }
 
 static void test_rf_link_status_v2_epoch_policy(void)

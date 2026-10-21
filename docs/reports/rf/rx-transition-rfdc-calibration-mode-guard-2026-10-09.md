@@ -23,3 +23,7 @@ This is a fail-closed boundary, not NIOS event-chain support. NIOS-owned tuning 
 - `git diff --check` passed.
 
 The release profile for the event-driven API must select Host tuning mode. Legacy NIOS tuning remains available through its existing APIs but is not qualified as event-driven by this change.
+
+## Superseded boundary (2026-10-21)
+
+FPGA/NIOS mode now certifies plain-LO and apply() transitions. Status registers are read raw through the NIOS AD9361 target (`_read_rfic_reg`), FIR validity comes from the NIOS FILTER read, and RFDC comes from the NIOS FREQUENCY command's own port-keyed policy. Epoch-valid requests need FPGA v0.34.0 (`BLADERF_CAP_NIOS_RFDC_SHARED_BANK`, NIOS RFDC history models the shared B/C bank) and an enabled RX channel. Quick-tune and explicit `RX_RFDC_CAL_DONE` stay `BLADERF_ERR_UNSUPPORTED` in FPGA mode: the first is certified through the host ADI fastlock cache, and the NIOS command set has no calibration command for the second. Policy: `bladerf2_rf_transition_mode_supported()`. Not run on hardware.

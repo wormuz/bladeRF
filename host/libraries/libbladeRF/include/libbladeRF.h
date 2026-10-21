@@ -5564,10 +5564,11 @@ typedef enum {
  * result or the LO moves more than 100 MHz from that input's last calibration.
  * Calibration moves
  * ENSM to ALERT and adds measured latency; it does not imply that LTE/other
- * signal content is present. Event-driven transitions, including this
- * explicit operation, are supported only in host tuning mode; FPGA/NIOS
- * tuning owns a separate RFIC control path and is rejected with
- * BLADERF_ERR_UNSUPPORTED before starting a transition. */
+ * signal content is present. This explicit operation is supported only in
+ * host tuning mode: the NIOS RFIC command set has no calibration command, so
+ * FPGA/NIOS tuning rejects it with BLADERF_ERR_UNSUPPORTED before starting a
+ * transition. Under FPGA/NIOS tuning the NIOS FREQUENCY command applies the
+ * same per-input 100 MHz RFDC policy itself. */
 #define BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE (1U << 7)
 
 /**
@@ -5653,9 +5654,14 @@ struct bladerf_rx_transition_request {
  * changing RF state while an RX async stream using a format without sample
  * epoch metadata is active. Stop that stream or use a supported sample-META
  * format before requesting an epoch.
- * Event-driven transitions require host RFIC ownership and return
- * ::BLADERF_ERR_UNSUPPORTED in FPGA/NIOS tuning mode without allocating a
- * transaction or changing RF state.
+ * In FPGA/NIOS tuning mode the LO is programmed by NIOS and status is read
+ * from the AD9361 registers directly. Quick-tune transitions and explicit
+ * ::BLADERF_RF_REQUIRE_RX_RFDC_CAL_DONE return ::BLADERF_ERR_UNSUPPORTED
+ * there without allocating a transaction or changing RF state; so does an
+ * epoch-valid request on FPGA images older than v0.34.0, whose NIOS RFDC
+ * history does not model the shared B/C result bank. An epoch-valid FPGA-mode
+ * transition also needs an RX channel enabled (NIOS selects the RX input and
+ * calibrates it only then) and otherwise fails with ::BLADERF_ERR_INVAL.
  * Epoch-valid transitions also require the live baseband RX mux. Counter
  * generator and digital-loopback muxes have independent sample provenance
  * that this RF epoch gate cannot certify; those requests return
