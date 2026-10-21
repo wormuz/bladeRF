@@ -706,6 +706,11 @@ int main(void)
     assert(bladerf2_rx_monitor_rfic_checked(false, true));
     assert(!bladerf2_rx_monitor_rfic_checked(true, false));
     assert(bladerf2_rx_monitor_rfic_checked(true, true));
+    /* ABORT only when the gate was not read as already closed (ERROR). */
+    assert(bladerf2_rx_epoch_abort_required(true, false));
+    assert(bladerf2_rx_epoch_abort_required(false, false));
+    assert(bladerf2_rx_epoch_abort_required(false, true));
+    assert(!bladerf2_rx_epoch_abort_required(true, true));
     assert(bladerf2_rx_monitor_pll_checked(false));
     assert(!bladerf2_rx_monitor_pll_checked(true));
     return 0;

@@ -482,6 +482,44 @@ static int _rx_epoch_abort_command(struct bladerf *dev)
         dev, NIOS_PKT_8x32_RX_EPOCH_CMD_ABORT, 0);
 }
 
+/* Close the FPGA RX gate for a legacy setter and confirm it. ABORT is a
+ * toggle that crosses clock domains asynchronously; a second one sent before
+ * the first has landed (two RX reconfigurations in a row) was rejected by the
+ * NIOS with FPGA_OP and surfaced as RX_EPOCH_ABORT_FAILED. Skip it when the
+ * gate already reports ERROR, and wait for ERROR after sending it so the next
+ * caller sees a settled gate. */
+static int _rx_epoch_close_gate(struct bladerf *dev)
+{
+    uint32_t word = 0;
+    uint8_t state = 0, epoch = 0;
+    uint64_t now_ns = 0;
+    int status = _read_rx_epoch_state(dev, &word, &state, &epoch);
+
+    if (!bladerf2_rx_epoch_abort_required(
+            status == 0, state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR)) {
+        return 0;
+    }
+    status = _rx_epoch_abort_command(dev);
+    if (status != 0) {
+        return status;
+    }
+    if (bladerf_monotonic_now_ns(&now_ns) != 0) {
+        return 0;
+    }
+    const uint64_t deadline_ns = now_ns + UINT64_C(100000000);
+    do {
+        status = _read_rx_epoch_state(dev, &word, &state, &epoch);
+        if (status != 0) {
+            return status;
+        }
+        if (state == NIOS_PKT_8x32_RX_EPOCH_STATE_ERROR) {
+            return 0;
+        }
+        usleep(POLL_INTERVAL_US);
+    } while (!_deadline_expired(deadline_ns));
+    return BLADERF_ERR_TIMEOUT;
+}
+
 /* A previous handle may have closed while its FPGA gate was still fenced.
  * Invalidate that incomplete epoch, then allocate the next ID relative to
  * the persistent FPGA epoch rather than the new handle. The gate remains
@@ -3345,7 +3383,7 @@ int bladerf2_rx_data_invalidate(struct bladerf *dev, bladerf_channel ch,
 #endif
         /* Close the FPGA gate for both sync and async epoch consumers before
          * the legacy setter mutates the RFIC. ABORT is fail-closed (ERROR). */
-        status = _rx_epoch_abort_command(dev);
+        status = _rx_epoch_close_gate(dev);
         if (status != 0) {
             event.host_monotonic_ns = _monotonic_ns();
             event.event_type = BLADERF_RF_EVT_RX_EPOCH_ABORT_FAILED;
