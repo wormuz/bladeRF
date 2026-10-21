@@ -713,25 +713,19 @@ static uint8_t spi_arbiter_read_grant(void *context)
 #define BLADERF_SPI_ARBITER_TIMEOUT_US    10000
 
 #ifdef BOARD_BLADERF_MICRO
-static bool bladerf_monotonic_deadline_expired(struct no_os_time start,
-                                         uint64_t timeout_us)
+/* Raw sys_clock ticks: no_os_get_time() costs three bit-serial 64-bit
+ * divisions (divmod_u64), and every SPI command and arbiter grant checks
+ * its deadline, so a gain-table row paid for a dozen of them. */
+static bool bladerf_monotonic_deadline_expired(uint64_t start_ticks,
+                                               uint64_t timeout_us)
 {
-    struct no_os_time now = no_os_get_time();
-    uint64_t elapsed_us =
-        (uint64_t)(uint32_t)(now.s - start.s) * 1000000ULL;
-
-    if (now.us >= start.us) {
-        elapsed_us += now.us - start.us;
-    } else {
-        elapsed_us -= start.us - now.us;
-    }
-
-    return elapsed_us >= timeout_us;
+    return bladerf_platform_monotonic_ticks() - start_ticks >=
+           timeout_us * (ALT_CPU_FREQ / 1000000ULL);
 }
 
 static bool bladerf_spi_arbiter_deadline_expired(void *context)
 {
-    const struct no_os_time *start = context;
+    const uint64_t *start = context;
 
     return start == NULL ||
            bladerf_monotonic_deadline_expired(*start,
@@ -743,7 +737,7 @@ bool spi_arbiter_lock()
 {
 #ifdef ARBITER_0_BASE
 #ifdef BOARD_BLADERF_MICRO
-    struct no_os_time start = no_os_get_time();
+    uint64_t start = bladerf_platform_monotonic_ticks();
 
     /* Use the sys_clock deadline; the finite read count remains a fallback
      * if the timebase stops advancing. */
@@ -777,7 +771,7 @@ bool spi_arbiter_unlock()
 // Built only when this board exposes the shared SPI arbiter.
 #ifdef ARBITER_0_BASE
 #ifdef BOARD_BLADERF_MICRO
-    struct no_os_time start = no_os_get_time();
+    uint64_t start = bladerf_platform_monotonic_ticks();
 
     if (!bladerf_spi_arbiter_release_until(
             BLADERF_SPI_ARBITER_WAIT_ATTEMPTS, NULL,
@@ -835,7 +829,7 @@ static int bladerf_spi_command_bounded(alt_u32 base, alt_u32 slave,
     const alt_u32 poll_limit = 1000000;
 #ifdef BOARD_BLADERF_MICRO
     const uint64_t timeout_us = 10000;
-    const struct no_os_time start_time = no_os_get_time();
+    const uint64_t start_time = bladerf_platform_monotonic_ticks();
 #endif
     alt_u32 polls = 0;
     alt_u32 write_index = 0;
@@ -1534,7 +1528,7 @@ static struct {
     bladerf_module owner;
     uint16_t lock_reg;
     uint32_t defer_count;
-    struct no_os_time last_poll;
+    uint64_t last_poll;
 } fastlock_recall_job;
 
 void adi_fastlock_jobs_init(void)
@@ -1587,7 +1581,7 @@ bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
     fastlock_recall_job.lock_reg = is_tx ? AD9361_REG_TX_PLL_LOCK
                                          : AD9361_REG_RX_PLL_LOCK;
     fastlock_recall_job.defer_count = 0;
-    fastlock_recall_job.last_poll = no_os_get_time();
+    fastlock_recall_job.last_poll = bladerf_platform_monotonic_ticks();
     return true;
 }
 
@@ -1596,7 +1590,7 @@ bool adi_fastlock_recall_start(bladerf_module m, fastlock_profile *p,
  * has no elapsed-time or poll-count completion cutoff. */
 int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
 {
-    struct no_os_time now;
+    uint64_t now;
     uint16_t status_addr;
     uint64_t value;
 
@@ -1608,7 +1602,7 @@ int32_t adi_fastlock_recall_poll(bladerf_module m, uint8_t *failure_stage)
         return -EINVAL;
     }
 
-    now = no_os_get_time();
+    now = bladerf_platform_monotonic_ticks();
     if (!bladerf_monotonic_deadline_expired(
             fastlock_recall_job.last_poll,
             AD9361_PLL_LOCK_POLL_INTERVAL_US) &&
