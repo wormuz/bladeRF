@@ -138,8 +138,12 @@ static bool _rfic_ensure_rx_rfdc_calibrated(
 
     /* This NIOS command path must never wait for a complete RFDC calibration
      * in one worker turn. The retained job owns completion and cache commit. */
-    int32_t status = ad9361_rfdc_calibration_start(state->phy,
-                                                   &state->job_context.rfdc_job);
+    int32_t status = rfic_job_context_claim(
+        state, sizeof(state->job_context.rfdc_job));
+
+    if (status == 0)
+        status = ad9361_rfdc_calibration_start(
+            state->phy, &state->job_context.rfdc_job);
     if (status < 0) {
         RFIC_ERR("ad9361_rfdc_calibration_start", status);
         return false;
@@ -1449,9 +1453,12 @@ bool _rfic_cmd_wr_samplerate(struct rfic_state *state,
                 state->bandwidth_invalid[i];
         }
 
-        status = ad9361_sample_rate_transaction_start(
-            state->phy, rate, BLADERF_CHANNEL_IS_TX(channel),
-            &state->job_context.sample_rate_job);
+        status = rfic_job_context_claim(
+            state, sizeof(state->job_context.sample_rate_job));
+        if (status == 0)
+            status = ad9361_sample_rate_transaction_start(
+                state->phy, rate, BLADERF_CHANNEL_IS_TX(channel),
+                &state->job_context.sample_rate_job);
         if (status < 0) {
             enum rfic_sample_rate_cache_action cache_action =
                 rfic_sample_rate_cache_action(
@@ -1647,9 +1654,13 @@ static bool _rfic_cmd_wr_frequency_internal(struct rfic_state *state,
     {
         uint32_t source = BLADERF_CHANNEL_IS_TX(channel)
             ? TX_RFPLL : RX_RFPLL;
-        int32_t status = ad9361_rfpll_clock_transaction_start(
-            state->phy, state->phy->ref_clk_scale[source],
-            ad9361_to_clk(frequency), &state->job_context.rfpll_job);
+        int32_t status = rfic_job_context_claim(
+            state, sizeof(state->job_context.rfpll_job));
+
+        if (status == 0)
+            status = ad9361_rfpll_clock_transaction_start(
+                state->phy, state->phy->ref_clk_scale[source],
+                ad9361_to_clk(frequency), &state->job_context.rfpll_job);
 
         /* External-LO callbacks do not yet expose a retained contract. Keep
          * their established path explicit; the xA4 NIOS configuration uses
@@ -1775,8 +1786,12 @@ bool _rfic_cmd_wr_bandwidth(struct rfic_state *state,
 
     /* ADI updates both analog filter chains and may run TXQ. Keep this queue
      * entry resident while the operation yields between completion polls. */
-    status = ad9361_rf_bandwidth_transaction_start(
-        state->phy, rx_bandwidth, tx_bandwidth, &state->job_context.bandwidth_job);
+    status = rfic_job_context_claim(
+        state, sizeof(state->job_context.bandwidth_job));
+    if (status == 0)
+        status = ad9361_rf_bandwidth_transaction_start(
+            state->phy, rx_bandwidth, tx_bandwidth,
+            &state->job_context.bandwidth_job);
     if (status < 0) {
         if (!state->phy->current_bw_valid ||
             ad9361_calibration_state_unknown(state->phy)) {
@@ -2065,8 +2080,12 @@ static bool _rfic_start_init_fir_pair(struct rfic_state *state,
                                      bladerf_channel channel,
                                      uint32_t filter)
 {
-    int32_t status = ad9361_fir_enable_pair_transaction_start(
-        state->phy, 1, 1, &state->job_context.fir_enable_job);
+    int32_t status = rfic_job_context_claim(
+        state, sizeof(state->job_context.fir_enable_job));
+
+    if (status == 0)
+        status = ad9361_fir_enable_pair_transaction_start(
+            state->phy, 1, 1, &state->job_context.fir_enable_job);
 
     if (status < 0) {
         rfic_command_record_cleanup_error(
@@ -2208,8 +2227,13 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
             return _rfic_start_init_fir_pair(state, channel, filter);
         }
         {
-            int32_t status = ad9361_fir_enable_transaction_start(
-                state->phy, true, enable, &state->job_context.fir_enable_job);
+            int32_t status = rfic_job_context_claim(
+                state, sizeof(state->job_context.fir_enable_job));
+
+            if (status == 0)
+                status = ad9361_fir_enable_transaction_start(
+                    state->phy, true, enable,
+                    &state->job_context.fir_enable_job);
 
             if (status < 0) {
                 rfic_command_record_cleanup_error(
@@ -2335,8 +2359,13 @@ static bool _rfic_cmd_wr_filter_internal(struct rfic_state *state,
             return _rfic_start_init_fir_pair(state, channel, filter);
         }
         {
-            int32_t status = ad9361_fir_enable_transaction_start(
-                state->phy, false, enable, &state->job_context.fir_enable_job);
+            int32_t status = rfic_job_context_claim(
+                state, sizeof(state->job_context.fir_enable_job));
+
+            if (status == 0)
+                status = ad9361_fir_enable_transaction_start(
+                    state->phy, false, enable,
+                    &state->job_context.fir_enable_job);
 
             if (status < 0) {
                 rfic_command_record_cleanup_error(
