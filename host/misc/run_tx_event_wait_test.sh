@@ -26,6 +26,7 @@ cc "${flags[@]}" "${includes[@]}" -c \
   -o "$test_dir/rf_transition.o"
 cc "${flags[@]}" "${includes[@]}" \
   "$script_dir/test_tx_event_wait.c" "$test_dir/rf_transition.o" \
-  -Wl,--gc-sections -Wl,--wrap=pthread_cond_wait -pthread \
+  "$repo_root/host/libraries/libbladeRF/src/helpers/timeout.c" \
+  -Wl,--gc-sections -Wl,--wrap=pthread_cond_timedwait -pthread \
   -o "$test_dir/test_tx_event_wait"
 "$test_dir/test_tx_event_wait"

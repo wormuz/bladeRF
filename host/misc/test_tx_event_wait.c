@@ -1,7 +1,7 @@
 /* Exercise the production TX condition-variable wait with two simultaneous
  * observers. Both must finish on readiness and both must finish on a fault;
  * there is no elapsed-time fallback to conceal a missed notification. The
- * cond_wait wrapper synchronizes the test with actual production wait entry.
+ * cond_timedwait wrapper synchronizes the test with actual production wait entry.
  */
 #include <assert.h>
 #include <pthread.h>
@@ -19,8 +19,10 @@ static unsigned waiting;
 static int results[2];
 static struct bladerf dev;
 
-int __real_pthread_cond_wait(pthread_cond_t *, pthread_mutex_t *);
-int __wrap_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lock)
+int __real_pthread_cond_timedwait(pthread_cond_t *, pthread_mutex_t *,
+                                  const struct timespec *);
+int __wrap_pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *lock,
+                                  const struct timespec *abstime)
 {
     if (cond == &board->rx_async_epoch_cond) {
         pthread_mutex_lock(&sync_lock);
@@ -28,7 +30,7 @@ int __wrap_pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *lock)
         pthread_cond_signal(&sync_cond);
         pthread_mutex_unlock(&sync_lock);
     }
-    return __real_pthread_cond_wait(cond, lock);
+    return __real_pthread_cond_timedwait(cond, lock, abstime);
 }
 static void *waiter(void *arg)
 {
@@ -48,7 +50,7 @@ static void run_case(bool fault)
         assert(pthread_create(&threads[i], NULL, waiter, (void *)i) == 0);
     pthread_mutex_lock(&sync_lock);
     while (waiting < 2)
-        __real_pthread_cond_wait(&sync_cond, &sync_lock);
+        pthread_cond_wait(&sync_cond, &sync_lock);
     pthread_mutex_unlock(&sync_lock);
     /* Both waiters entered the production wait while holding this mutex.
      * Taking it now confirms the second has atomically entered cond_wait. */
@@ -67,7 +69,7 @@ int main(void)
     assert(board != NULL);
     dev.board_data = board;
     assert(pthread_mutex_init(&board->rx_async_epoch_lock, NULL) == 0);
-    assert(pthread_cond_init(&board->rx_async_epoch_cond, NULL) == 0);
+    assert(COND_INIT(&board->rx_async_epoch_cond) == 0);
     board->rx_async_epoch_cond_initialized = true;
     run_case(false);
     run_case(true);
