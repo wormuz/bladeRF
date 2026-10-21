@@ -1674,8 +1674,12 @@ int CALL_CONV bladerf_trigger_init(struct bladerf *dev,
  *
  * RX trigger-arm changes revoke the current RX epoch before programming the
  * trigger. After arming or disarming RX, establish a fresh event-driven RX
- * transition before consuming samples. Trigger fire is the operational edge
- * within that newly configured capture and does not itself reconfigure RX.
+ * transition before consuming samples. bladerf_trigger_fire() revokes the RX
+ * epoch the same way (bladerf.c, BLADERF_RF_INVALIDATE_TRIGGER), so start
+ * the transition after the fire. Arm, disarm and fire return
+ * ::BLADERF_ERR_WOULD_BLOCK while an RX transition is pending. The trigger
+ * state is held by the FPGA and survives bladerf_close(); an armed RX trigger
+ * withholds samples until it fires or is disarmed.
  *
  * @param       dev     Device to configure
  * @param[in]   trigger Trigger configure

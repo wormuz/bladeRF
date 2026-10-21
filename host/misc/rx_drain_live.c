@@ -68,6 +68,10 @@ int main(int argc, char **argv)
         hq_fail("open", s);
         return 1;
     }
+    if (hq_require_trigger_disarmed(dev) != 0) {
+        bladerf_close(dev);
+        return 3;
+    }
     if ((s = bladerf_set_sample_rate(dev, ch, (bladerf_sample_rate)rate,
                                      NULL)) != 0 ||
         (s = bladerf_set_bandwidth(dev, ch, rate > 23040000 ? 20000000u
@@ -84,6 +88,15 @@ int main(int argc, char **argv)
     if ((s = hq_transition(dev, ch, freq, 2000, &ev)) != 0) {
         hq_fail("transition", s);
         goto out;
+    }
+    {
+        FILE *la = fopen("/proc/loadavg", "r");
+        char line[64] = "";
+        if (la != NULL) {
+            if (fgets(line, sizeof(line), la) == NULL) line[0] = 0;
+            fclose(la);
+        }
+        printf("LOADAVG %s", line);
     }
     printf("START layout=%s rate=%lu seconds=%.3f block=%u blocks=%" PRIu64
            " epoch=%u\n", layout_name, rate, seconds, block, blocks,

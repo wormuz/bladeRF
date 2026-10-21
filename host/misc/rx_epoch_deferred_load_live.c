@@ -105,6 +105,10 @@ int main(int argc, char **argv)
         return 1;
     }
     rd.dev = dev;
+    if (hq_require_trigger_disarmed(dev) != 0) {
+        bladerf_close(dev);
+        return 3;
+    }
     if ((s = bladerf_set_sample_rate(dev, RX_CH, (bladerf_sample_rate)rate,
                                      NULL)) != 0 ||
         (s = bladerf_set_bandwidth(dev, RX_CH, (unsigned)(rate * 3 / 4),

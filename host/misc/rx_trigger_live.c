@@ -2,21 +2,28 @@
  * (BLADERF_TRIGGER_ROLE_MASTER on MINI_EXP_1; no external pin is driven by
  * this tool beyond the master configuration, and no slave is attached).
  *
- * Per trial: arm (revokes the RX epoch), begin an event-driven transition,
- * read trigger state, try one short sync RX (200 ms) and record whether IQ
- * arrived before the fire, fire, complete the transition, read one block,
- * read trigger state, disarm, read trigger state.
+ * libbladeRF behaviour this tool is built around (bladerf.c:1985-2030):
+ * trigger arm, disarm AND fire each revoke the RX epoch for RX channels, and
+ * all three return WOULD_BLOCK while an RX transition is pending
+ * (rf_transition.c:3259). So a transition may only be started after the
+ * fire, never between arm and fire. The FPGA trigger state outlives the
+ * process; an armed trigger gates RX samples. `--disarm` clears it.
  *
- * Usage: [trials, default 20]
+ * Per trial: arm, read state, try one short sync RX (200 ms; the epoch is
+ * revoked, so IQ is expected to be withheld, recorded as pre_fire_iq), fire,
+ * read state, begin+wait an event-driven transition, read one block, disarm,
+ * read state.
+ *
+ * Usage: [trials, default 20] | --disarm
  * PASS (criteria fixed before the run):
  *   - state after arm: armed, not fired; after fire: has_fired; after
  *     disarm: not armed (any state-read failure is a FAIL)
  *   - the transition completes after the fire and its epoch is valid
  *   - the first post-fire block is full, epoch-valid with the transition
  *     epoch, no OVERRUN
- * Printed, not gated: pre_fire_iq (0/1 per trial and total), p50/p99/max of
- * fire-to-first-block latency (ms). Whether the gate withholds IQ before the
- * fire is a measurement here, not an assumption. */
+ *   - at exit the trigger is verified disarmed (otherwise FAIL)
+ * Printed, not gated: pre_fire_iq per trial and total, p50/p99/max of
+ * fire-to-first-block latency (ms). */
 #include <libbladeRF.h>
 #include "hwqual_live.h"
 
@@ -33,10 +40,22 @@ static int state(struct bladerf *dev, const struct bladerf_trigger *t,
                                  NULL);
 }
 
+static int disarm_verified(struct bladerf *dev, struct bladerf_trigger t)
+{
+    bool armed = true, fired = false;
+    int s;
+    t.role = BLADERF_TRIGGER_ROLE_DISABLED;
+    s = bladerf_trigger_arm(dev, &t, false, 0, 0);
+    if (s == 0) s = state(dev, &t, &armed, &fired);
+    if (s == 0 && armed) s = BLADERF_ERR_UNEXPECTED;
+    return s;
+}
+
 int main(int argc, char **argv)
 {
-    const unsigned trials = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10)
-                                     : 20;
+    const bool disarm_only = argc > 1 && strcmp(argv[1], "--disarm") == 0;
+    const unsigned trials = disarm_only ? 0 :
+        (argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 20);
     struct bladerf *dev = NULL;
     struct bladerf_trigger trig;
     int16_t *buf = calloc(BLOCK * 2, sizeof(*buf));
@@ -45,10 +64,26 @@ int main(int argc, char **argv)
     int s;
     bool ok = true;
 
-    if (trials == 0 || trials > 10000 || buf == NULL || lat == NULL) return 2;
+    if ((!disarm_only && (trials == 0 || trials > 10000)) || buf == NULL ||
+        lat == NULL)
+        return 2;
     if ((s = bladerf_open(&dev, NULL)) != 0) {
         hq_fail("open", s);
         return 1;
+    }
+    if ((s = bladerf_trigger_init(dev, RX_CH, BLADERF_TRIGGER_MINI_EXP_1,
+                                  &trig)) != 0) {
+        hq_fail("trigger_init", s);
+        bladerf_close(dev);
+        return 1;
+    }
+    trig.role = BLADERF_TRIGGER_ROLE_MASTER;
+    if (disarm_only) {
+        s = disarm_verified(dev, trig);
+        printf("%s disarm\n", s == 0 ? "PASS" : "FAIL");
+        if (s != 0) hq_fail("disarm", s);
+        bladerf_close(dev);
+        return s == 0 ? 0 : 1;
     }
     if ((s = bladerf_set_sample_rate(dev, RX_CH, RATE, NULL)) != 0 ||
         (s = bladerf_set_bandwidth(dev, RX_CH, 1500000u, NULL)) != 0 ||
@@ -56,22 +91,16 @@ int main(int argc, char **argv)
         (s = bladerf_sync_config(dev, BLADERF_RX_X1,
                                  BLADERF_FORMAT_SC16_Q11_META, 16, BLOCK, 8,
                                  3000)) != 0 ||
-        (s = bladerf_enable_module(dev, RX_CH, true)) != 0 ||
-        (s = bladerf_trigger_init(dev, RX_CH, BLADERF_TRIGGER_MINI_EXP_1,
-                                  &trig)) != 0) {
+        (s = bladerf_enable_module(dev, RX_CH, true)) != 0) {
         hq_fail("configure", s);
         ok = false;
         goto out;
     }
-    trig.role = BLADERF_TRIGGER_ROLE_MASTER;
 
     for (unsigned i = 0; ok && i < trials; ++i) {
-        const struct bladerf_rx_transition_request rq =
-            hq_rx_request(FREQ, 2000);
         struct bladerf_rf_event ev = {0};
         struct bladerf_metadata meta = { .flags = BLADERF_META_FLAG_RX_NOW };
         bool armed = false, fired = false;
-        uint32_t txn = 0;
         uint64_t t_fire = 0;
         bool pre = false;
 
@@ -83,18 +112,13 @@ int main(int argc, char **argv)
             ok = false;
             break;
         }
-        s = bladerf_rx_transition_begin(dev, RX_CH, &rq, &txn);
-        if (s == 0) {
-            meta = (struct bladerf_metadata){ .flags =
-                                              BLADERF_META_FLAG_RX_NOW };
-            s = bladerf_sync_rx(dev, buf, BLOCK, &meta, 200);
-            pre = (s == 0 && meta.actual_count > 0);
-            if (s == BLADERF_ERR_TIMEOUT || s == BLADERF_ERR_WOULD_BLOCK)
-                s = 0;
-        }
+        s = bladerf_sync_rx(dev, buf, BLOCK, &meta, 200);
+        pre = (s == 0 && meta.actual_count > 0);
+        if (s == BLADERF_ERR_TIMEOUT || s == BLADERF_ERR_WOULD_BLOCK) s = 0;
         if (s == 0) {
             t_fire = hq_mono_ns();
             s = bladerf_trigger_fire(dev, &trig);
+            if (s != 0) hq_fail("trigger_fire", s);
         }
         if (s == 0) s = state(dev, &trig, &armed, &fired);
         if (s != 0 || !fired) {
@@ -103,7 +127,7 @@ int main(int argc, char **argv)
             ok = false;
             break;
         }
-        s = bladerf_rx_transition_wait(dev, txn, &ev, 2000);
+        s = hq_transition(dev, RX_CH, FREQ, 2000, &ev);
         if (s == 0) {
             meta = (struct bladerf_metadata){ .flags =
                                               BLADERF_META_FLAG_RX_NOW };
@@ -121,18 +145,11 @@ int main(int argc, char **argv)
         }
         lat[done++] = (hq_mono_ns() - t_fire) / 1e6;
         pre_fire_iq += pre;
-
-        {
-            struct bladerf_trigger off = trig;
-            off.role = BLADERF_TRIGGER_ROLE_DISABLED;
-            s = bladerf_trigger_arm(dev, &off, false, 0, 0);
-            if (s == 0) s = state(dev, &off, &armed, &fired);
-            if (s != 0 || armed) {
-                fprintf(stderr, "trial %u after disarm: s=%s armed=%u\n", i,
-                        bladerf_strerror(s), armed);
-                ok = false;
-                break;
-            }
+        s = disarm_verified(dev, trig);
+        if (s != 0) {
+            hq_fail("disarm", s);
+            ok = false;
+            break;
         }
         printf("trial=%u pre_fire_iq=%u epoch=%u\n", i, pre, ev.epoch_id);
     }
@@ -140,13 +157,13 @@ int main(int argc, char **argv)
     printf("TOTAL trials=%u completed=%u pre_fire_iq=%u\n", trials, done,
            pre_fire_iq);
 out:
-    if (dev != NULL) {
-        struct bladerf_trigger off = trig;
-        off.role = BLADERF_TRIGGER_ROLE_DISABLED;
-        (void)bladerf_trigger_arm(dev, &off, false, 0, 0);
-        (void)bladerf_enable_module(dev, RX_CH, false);
-        bladerf_close(dev);
+    (void)bladerf_enable_module(dev, RX_CH, false);
+    s = disarm_verified(dev, trig);
+    if (s != 0) {
+        hq_fail("final disarm (trigger may still be armed)", s);
+        ok = false;
     }
+    bladerf_close(dev);
     free(buf);
     free(lat);
     printf("%s\n", ok && done == trials ? "PASS" : "FAIL");
