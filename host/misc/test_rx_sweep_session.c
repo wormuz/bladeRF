@@ -7,6 +7,9 @@
 /* Host RX sweep session against a scripted NIOS: sequence assignment,
  * record assembly from success and failure records, LOST on an unreadable
  * record, CANCELLED and END on session end. */
+struct gain_table_info;
+int32_t ad9361_gain_table_index(const struct gain_table_info *info,
+                                int32_t gain_db);
 #include "board/bladerf2/rx_sweep.c"
 
 #define MAX_REQUESTS 32
@@ -298,8 +301,8 @@ static void setup(void)
     dev.board_data = &board_data;
 }
 
-static uint32_t schedule(uint64_t timestamp, uint64_t frequency,
-                         uint16_t profile)
+static uint32_t schedule_on(bladerf_channel ch, uint64_t timestamp,
+                              uint64_t frequency, uint16_t profile)
 {
     struct bladerf_quick_tune qt;
     uint32_t sequence = 0;
@@ -307,19 +310,31 @@ static uint32_t schedule(uint64_t timestamp, uint64_t frequency,
     memset(&qt, 0, sizeof(qt));
     qt.nios_profile = profile;
     qt.rffe_profile = (uint8_t)(profile % 8);
-    (void)bladerf2_rx_sweep_schedule(&dev, BLADERF_CHANNEL_RX(0), timestamp,
-                                     frequency, &qt, &sequence);
+    (void)bladerf2_rx_sweep_schedule(&dev, ch, timestamp, frequency, &qt,
+                                     &sequence);
     return sequence;
+}
+
+static uint32_t schedule(uint64_t timestamp, uint64_t frequency,
+                         uint16_t profile)
+{
+    return schedule_on(BLADERF_CHANNEL_RX(0), timestamp, frequency, profile);
+}
+
+static unsigned int drain_on(bladerf_channel ch,
+                             struct bladerf_rx_sweep_record *out,
+                             unsigned int max)
+{
+    unsigned int count = 0;
+    int status = bladerf2_rx_sweep_completions(&dev, ch, out, max, &count);
+    CHECK(status == 0, "completions failed: %d", status);
+    return count;
 }
 
 static unsigned int drain(struct bladerf_rx_sweep_record *out,
                           unsigned int max)
 {
-    unsigned int count = 0;
-    int status = bladerf2_rx_sweep_completions(&dev, BLADERF_CHANNEL_RX(0),
-                                               out, max, &count);
-    CHECK(status == 0, "completions failed: %d", status);
-    return count;
+    return drain_on(BLADERF_CHANNEL_RX(0), out, max);
 }
 
 #define OK_FLAGS (NIOS_PKT_RETUNE2_EXEC_TS_VALID | \
@@ -748,6 +763,42 @@ static void check_gain_table_index_upload(void)
     (void)bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0));
 }
 
+/* A session on RX2 alone: its index goes up, the unused RX1 lane keeps the
+ * re-map (0x7f), and the session on RX2 is the same state machine. */
+static void check_rx2_only_session(void)
+{
+    struct bladerf_rx_sweep_record r[16];
+    unsigned int n;
+
+    setup_gain_table();
+    board_data.rx_gain_api_known[1] = true;
+    board_data.rx_gain_api_db[1] = 20;
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(1), 10) == 0,
+          "RX2 begin failed");
+    CHECK(uploads == 3 && uploaded[0] == (0x7fu | 37u << 8) &&
+              uploaded[1] == (0x7fu | 31u << 8) &&
+              uploaded[2] == (0x7fu | 22u << 8),
+          "RX2 indices %u: %04x %04x %04x", uploads, uploaded[0],
+          uploaded[1], uploaded[2]);
+    CHECK(bladerf2_rx_sweep_active(&dev, BLADERF_CHANNEL_RX(1)),
+          "RX2 session not reported active");
+    CHECK(bladerf2_rx_sweep_begin(&dev, BLADERF_CHANNEL_RX(0), 10) != 0,
+          "second session opened on the other lane");
+    CHECK(schedule_on(BLADERF_CHANNEL_RX(0), 1000, 925000000, 1) != 1,
+          "schedule on the RX1 lane accepted in an RX2 session");
+    CHECK(schedule_on(BLADERF_CHANNEL_RX(1), 1000, 925000000, 1) == 1,
+          "RX2 retune refused");
+    complete(0, 1100, 925000000, 0, false);
+    CHECK(bladerf2_rx_sweep_completions(&dev, BLADERF_CHANNEL_RX(0), r, 16,
+                                        &n) != 0,
+          "completions of the RX1 lane read an RX2 session");
+    n = drain_on(BLADERF_CHANNEL_RX(1), r, 16);
+    CHECK(n == 1 && (r[0].flags & BLADERF_RX_SWEEP_F_CERTIFIED),
+          "RX2 record not certified: %u", n);
+    CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(1)) == 0,
+          "RX2 end failed");
+}
+
 int main(void)
 {
     check_begin_preconditions();
@@ -756,6 +807,7 @@ int main(void)
     check_gain_table_region();
     check_gain_table_crossing();
     check_gain_table_index_upload();
+    check_rx2_only_session();
     check_lo_readback();
     if (failures != 0) {
         fprintf(stderr, "%d RX sweep session failure(s)\n", failures);
