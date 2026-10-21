@@ -357,6 +357,18 @@ static inline bool bladerf2_rx_monitor_rfic_checked(bool rx_sweep_active,
     return !rx_sweep_active || rfic_status_read;
 }
 
+/* On the NIOS-owned path the chip registers stay readable by raw SPI after
+ * NIOS latches an unknown calibration state (pkt_16x64.c serves AD9361 reads
+ * while faulted), so a healthy-looking PLL/ENSM read proves nothing. The
+ * latch clears NIOS init_state to OFF, and the INIT read is served while
+ * faulted: the monitor accepts a raw status read only when NIOS reports ON.
+ * A failed INIT read is also not accepted. */
+static inline bool bladerf2_rx_monitor_nios_state_readable(
+    int init_read_status, bool nios_init_on)
+{
+    return init_read_status == 0 && nios_init_on;
+}
+
 static inline bool bladerf2_rx_monitor_pll_checked(bool rx_sweep_active)
 {
     return !rx_sweep_active;

@@ -353,7 +353,19 @@ static int _read_rfic_reg(struct bladerf *dev, uint16_t addr, uint8_t *val)
      * defers it while one of its own RFIC jobs owns the bus. */
     if (board_data->tuning_mode == BLADERF_TUNING_MODE_FPGA) {
         uint64_t data = 0;
-        int status = dev->backend->ad9361_spi_read(
+        bladerf_rfic_init_state nios_state = BLADERF_RFIC_INIT_STATE_OFF;
+        int status = board_data->rfic != NULL &&
+                             board_data->rfic->get_init_state != NULL
+            ? board_data->rfic->get_init_state(dev, &nios_state)
+            : BLADERF_ERR_UNEXPECTED;
+
+        /* NIOS keeps serving raw reads after it latches an unknown RFIC
+         * state, so the latch itself (init_state OFF) is the only evidence. */
+        if (!bladerf2_rx_monitor_nios_state_readable(
+                status, nios_state == BLADERF_RFIC_INIT_STATE_ON)) {
+            return status != 0 ? status : BLADERF_ERR_UNEXPECTED;
+        }
+        status = dev->backend->ad9361_spi_read(
             dev, (uint16_t)(AD936X_READ | AD936X_CNT(1) | AD936X_ADDR(addr)),
             &data);
 

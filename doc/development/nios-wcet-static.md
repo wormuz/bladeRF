@@ -310,15 +310,20 @@ Per configuration:
 | RX_X2 | same revocation; there is a single RX sync stream and epoch (`sync_rx_epoch_revoke_delivery_with_callback(&board_data->sync[BLADERF_RX], ...)`, `rfic_fault.c:66`) | same event; the layout does not change the revocation, `rfic_host.c:803,817` only changes MIMO enable handling |
 | TX | `bladerf2_tx_stream_set_faulted`, `tx_async_rfic_state_certified = false` (`rf_transition.c:170-175`, `rx_event_history.c:531`), RFFE disconnect at the NIOS latch (`devices_rfic.c:566`) | `BLADERF_RF_EVT_TX_RFIC_STATE_INVALID` (host-owned), `BLADERF_RF_EVT_TX_RETUNE_FAILED` with failure stage (NIOS-owned RETUNE2) |
 
-Open item found while tracing, not changed here: on the NIOS-owned path the
-NIOS latch reaches the host through a failed command result, a RETUNE2 failure
-record, or `get_init_state` (`bladerf2.c:6506,6822,6843`,
-`tx_fault_recovery_board.c:111`). The RX monitor loop
-(`rf_transition.c:3066-3125`) reads chip registers by raw SPI
-(`_read_rfic_reg`, `:346-362`), which NIOS keeps serving while faulted
-(`pkt_16x64.c:96-107`), and does not read NIOS STATUS. I did not run a case in
-which the latch is set by NIOS without any of the three first signals reaching
-the host, so whether such a case exists is not established.
+Monitor gap (found while tracing, fixed): on the NIOS-owned path the RX/TX
+monitor (`rf_transition.c:3066-3125`) judged health only from raw AD9361 SPI
+reads (`_read_rfic_reg`), which NIOS serves while faulted
+(`pkt_16x64.c:96-107`). A NIOS latch that set no failed command result or
+RETUNE2 failure record (for example a fault latched by a poll after the
+setter returned) therefore left healthy-looking PLL/ENSM/BBPLL values and no
+host signal. The single source of truth is the NIOS latch, which clears
+`init_state` to OFF (`devices_rfic.c:566`); the INIT read is served while
+faulted (`devices_rfic.c:1279-1286`). In FPGA tuning mode `_read_rfic_reg`
+now reads NIOS INIT first and returns an error unless it is ON
+(`bladerf2_rx_monitor_nios_state_readable`, `rf_transition_policy.h`), so the
+existing status-read-failure paths revoke the RX epoch
+(`BLADERF_RF_INVALIDATE_RFIC_STATUS_UNAVAILABLE`) and mark TX invalid. Test:
+`test_rx_monitor_nios_state` (policy only; not run against a device).
 
 ## 7. Int-only wrappers
 
@@ -370,4 +375,4 @@ reads `tx_quad_job.cleanup_status` (`devices_rfic.c:212,862`).
 - Elapsed time of any section on the Nios II (HW-NIOS-WCET-001).
 - Overshoot of the 10 ms deadlines (checked every 64/256 polls).
 - Per-stage SPI counts of the poll state machines.
-- The open item at the end of section 6.
+- Hardware behaviour of the monitor INIT read (USB cost per poll, behaviour during a legitimate INIT in flight).
