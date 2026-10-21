@@ -33,6 +33,10 @@
 #include "rffe_csr_policy.h"
 #include "debug.h"
 
+/* Zero-initialized: every NIOS boot, including a full FPGA reconfiguration,
+ * starts from 0. See NIOS_PKT_8x32_TARGET_BOOT_NONCE. */
+static uint32_t boot_nonce;
+
 #ifdef BOARD_BLADERF_MICRO
 /* Page base for pre-trigger ring reads. See the PRETRIG_READ case below:
  * the packet carries an 8-bit address and the ring is 4096 deep, so the
@@ -72,6 +76,14 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
 
         case NIOS_PKT_8x32_TARGET_CONTROL:
             *data = control_reg_read();
+            break;
+
+        case NIOS_PKT_8x32_TARGET_BOOT_NONCE:
+            if (addr != 0) {
+                *data = 0;
+                return false;
+            }
+            *data = boot_nonce;
             break;
 
         case NIOS_PKT_8x32_TARGET_ADF4351:
@@ -331,6 +343,10 @@ static inline bool perform_write(uint8_t id, uint8_t addr, uint32_t data)
                 return false;
             }
             return control_reg_write(data);
+
+        case NIOS_PKT_8x32_TARGET_BOOT_NONCE:
+            return addr == 0 &&
+                   nios_pkt_8x32_boot_nonce_store(&boot_nonce, data);
 
         case NIOS_PKT_8x32_TARGET_ADF4351:
             if (addr != 0) {

@@ -346,6 +346,7 @@ static inline int nios_pkt_16x64_fastlock_profile_error_code(uint64_t data)
 #define NIOS_PKT_16x64_FLAG_WRITE     (1 << 0)
 #define NIOS_PKT_16x64_FLAG_SUCCESS   (1 << 1)
 #define NIOS_PKT_16x64_FLAG_BUSY      (1 << 2)
+#define NIOS_PKT_16x64_FLAG_QUEUE_FULL (1 << 3) /* FPGA >= v0.35.0 */
 
 /**
  * Sub-addresses for rfic target.
@@ -476,6 +477,25 @@ static inline void nios_pkt_16x64_resp_pack_busy(
 static inline bool nios_pkt_16x64_resp_is_busy(const uint8_t *buf)
 {
     return (buf[NIOS_PKT_16x64_IDX_FLAGS] & NIOS_PKT_16x64_FLAG_BUSY) != 0;
+}
+
+/* An RFIC write refused because the command queue is at its depth: the
+ * physical ring for untagged writes, or BLADERF_RFIC_TAGGED_QUEUE_DEPTH for
+ * the tagged stop-and-wait protocol. The command was not accepted and will
+ * never execute. Response-only. */
+static inline void nios_pkt_16x64_resp_pack_queue_full(
+    uint8_t *buf, uint8_t target, uint16_t addr, uint64_t data,
+    uint16_t transaction_id)
+{
+    nios_pkt_16x64_resp_pack_with_transaction_id(
+        buf, target, true, addr, data, false, transaction_id);
+    buf[NIOS_PKT_16x64_IDX_FLAGS] |= NIOS_PKT_16x64_FLAG_QUEUE_FULL;
+}
+
+static inline bool nios_pkt_16x64_resp_is_queue_full(const uint8_t *buf)
+{
+    return (buf[NIOS_PKT_16x64_IDX_FLAGS] &
+            NIOS_PKT_16x64_FLAG_QUEUE_FULL) != 0;
 }
 
 /* Unpack the response buffer */

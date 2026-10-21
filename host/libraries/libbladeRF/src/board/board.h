@@ -189,6 +189,9 @@
  * shared result bank, so a successful NIOS FREQUENCY/ENABLE certifies RFDC
  * residency for the selected input (FPGA-tuning RX transitions). */
 #define BLADERF_CAP_NIOS_RFDC_SHARED_BANK (((uint64_t)1) << 51)
+/** FPGA v0.35.0 NIOS boot nonce (8x32 BOOT_NONCE): detects a NIOS reboot,
+ * including FPGA reconfiguration, under a pending tagged RFIC command. */
+#define BLADERF_CAP_NIOS_BOOT_NONCE (((uint64_t)1) << 52)
 
 /**
  * Max number of gain calibration tables associated to max number of channels

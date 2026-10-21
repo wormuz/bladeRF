@@ -718,6 +718,8 @@ uint8_t rx_trigger_ctl_read(void);
 bool agc_dc_corr_write(uint16_t addr, uint16_t value);
 
 #ifdef BLADERF_NIOS_LIBAD936X
+#include "rfic_progress_policy.h"
+
 /**
  * Initialize the RFIC command handler. Run once at startup.
  */
@@ -752,6 +754,9 @@ bool rfic_phy_present(void);
 bool rfic_command_write(uint16_t addr, uint64_t data);
 bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
                                             uint16_t transaction_id);
+/* As above, but reports why a write was refused (QUEUE_FULL vs invalid). */
+enum bladerf_rfic_write_admission rfic_command_write_admit(
+    uint16_t addr, uint64_t data, uint16_t transaction_id);
 bool rfic_command_transaction_is_duplicate(uint16_t addr, uint64_t data,
                                            uint16_t transaction_id);
 bool rfic_command_ack_result(uint16_t transaction_id, uint32_t sequence);

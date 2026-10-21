@@ -21,17 +21,25 @@
 
 #include <libbladeRF.h>
 
+#include "backend/usb/nios_access.h"
 #include "board/board.h"
 #include "common.h"
 #include "conversions.h"
 #include "helpers/have_cap.h"
 #include "helpers/timeout.h"
+#include "helpers/wallclock.h"
 #include "iterators.h"
 #include "log.h"
 #include "rfic_status_policy.h"
 #include "rfic_transaction_policy.h"
 #include "rfic_rssi_policy.h"
 #include "rfic_progress_policy.h"
+
+/* board_data holds exactly one pending tagged command (rfic_wq_pending_*),
+ * which is only sound while NIOS admits one tagged command at a time. */
+#if BLADERF_RFIC_TAGGED_QUEUE_DEPTH != 1
+#error "rfic_fpga.c tracks a single pending tagged RFIC command"
+#endif
 
 // #define BLADERF_HEADLESS_C_DEBUG
 
@@ -130,6 +138,17 @@ static int _rfic_fpga_get_status(
             BLADERF_RFIC_STATUS_ACTIVE_STATE_MASK;
     }
 
+    /* The 8-bit field can encode more than the NIOS ring holds; such a
+     * status word is not a queue state this host can reason about. */
+    if (status == 0 &&
+        rfic_status->write_queue_length > BLADERF_RFIC_QUEUE_DEPTH) {
+        log_error("%s: NIOS RFIC status reports %zu queued commands, more "
+                  "than the queue depth %u\n",
+                  __FUNCTION__, rfic_status->write_queue_length,
+                  BLADERF_RFIC_QUEUE_DEPTH);
+        return BLADERF_ERR_UNEXPECTED;
+    }
+
     return status;
 }
 
@@ -200,6 +219,96 @@ static int _rfic_fpga_ack_retired_result(struct bladerf *dev,
                                          uint32_t sequence,
                                          bool expected_success);
 
+/* Stamp or re-read the NIOS boot nonce before this host issues or adopts a
+ * tagged command, so a later reboot under that command is detectable. */
+static int _rfic_fpga_boot_nonce_refresh(struct bladerf *dev,
+                                         struct bladerf2_board_data *board_data)
+{
+    uint32_t current = 0;
+    uint64_t now_ns = 0;
+    int status;
+
+    if (!have_cap_dev(dev, BLADERF_CAP_NIOS_BOOT_NONCE)) {
+        return 0;
+    }
+
+    CHECK_STATUS(nios_boot_nonce_read(dev, &current));
+    if (current == 0) {
+        (void)bladerf_monotonic_now_ns(&now_ns);
+        /* A concurrent host may stamp first; NIOS keeps the first value and
+         * refuses ours, so the re-read below is authoritative either way. */
+        status = nios_boot_nonce_write(
+            dev, bladerf2_rfic_boot_nonce_from_seed(
+                     now_ns ^ wallclock_get_current_nsec() ^
+                     (uint64_t)(uintptr_t)dev));
+        if (status < 0 && status != BLADERF_ERR_FPGA_OP) {
+            return status;
+        }
+        CHECK_STATUS(nios_boot_nonce_read(dev, &current));
+        if (current == 0) {
+            log_error("%s: NIOS boot nonce stayed 0 after stamping\n",
+                      __FUNCTION__);
+            return BLADERF_ERR_UNEXPECTED;
+        }
+    }
+
+    if (bladerf2_rfic_boot_nonce_rebooted(board_data->rfic_boot_nonce_valid,
+                                          board_data->rfic_boot_nonce,
+                                          current)) {
+        log_warning("%s: NIOS rebooted since this host's last RFIC command "
+                    "(boot nonce 0x%08x -> 0x%08x); its RFIC state was "
+                    "reset\n",
+                    __FUNCTION__, board_data->rfic_boot_nonce, current);
+    }
+    board_data->rfic_boot_nonce = current;
+    board_data->rfic_boot_nonce_valid = true;
+    return 0;
+}
+
+/* A pending command belongs to the NIOS boot that accepted it. After a
+ * reboot (FPGA reconfiguration, NIOS reset) its result is gone and the
+ * restarted retirement sequence and transaction IDs can alias it, so drop the
+ * record and fail instead of waiting on, or re-sending to, the new image.
+ * Returns 0 when the same boot still runs. */
+static int _rfic_fpga_pending_boot_check(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    uint32_t current = 0;
+
+    if (!have_cap_dev(dev, BLADERF_CAP_NIOS_BOOT_NONCE) ||
+        !board_data->rfic_wq_pending) {
+        return 0;
+    }
+
+    CHECK_STATUS(nios_boot_nonce_read(dev, &current));
+    if (!bladerf2_rfic_boot_nonce_rebooted(board_data->rfic_boot_nonce_valid,
+                                           board_data->rfic_boot_nonce,
+                                           current)) {
+        return 0;
+    }
+
+    log_error("%s: NIOS rebooted while RFIC command 0x%04x (transaction=%u) "
+              "was pending (boot nonce 0x%08x -> 0x%08x); its result is lost "
+              "and it will not be re-sent\n",
+              __FUNCTION__, board_data->rfic_wq_pending_addr,
+              (unsigned int)board_data->rfic_wq_pending_id,
+              board_data->rfic_boot_nonce, current);
+    board_data->rfic_wq_pending = false;
+    board_data->rfic_wq_pending_adopted = false;
+    board_data->rfic_wq_pending_result_valid = false;
+    board_data->rfic_boot_nonce_valid = false;
+    return BLADERF_ERR_NOT_INIT;
+}
+
+/* The firmware's retirement record contradicts the pending command. Report a
+ * NIOS reboot explicitly when that is the cause. */
+static int _rfic_fpga_retirement_mismatch(struct bladerf *dev)
+{
+    int status = _rfic_fpga_pending_boot_check(dev);
+
+    return status < 0 ? status : BLADERF_ERR_UNEXPECTED;
+}
+
 static int _rfic_fpga_spinwait_for(struct bladerf *dev,
                                    unsigned int delay_us,
                                    bool sequence_supported,
@@ -265,15 +374,18 @@ static int _rfic_fpga_spinwait_for(struct bladerf *dev,
             if (rfic_status.write_queue_length == 0) {
                 if (transaction_sequence != expected_sequence ||
                     active_id != 0 || last_id != expected_transaction_id) {
-                    return BLADERF_ERR_UNEXPECTED;
+                    return _rfic_fpga_retirement_mismatch(dev);
                 }
+                /* A first command after a reboot can retire with the same
+                 * ID and sequence as ours; confirm it is still our boot. */
+                CHECK_STATUS(_rfic_fpga_pending_boot_check(dev));
                 status = 0;
                 break;
             }
 
             if (active_id != expected_transaction_id ||
                 transaction_sequence + 1u != expected_sequence) {
-                return BLADERF_ERR_UNEXPECTED;
+                return _rfic_fpga_retirement_mismatch(dev);
             }
         } else if (bladerf2_rfic_status_matches_retirement(
                        rfic_status.write_queue_length, sequence_supported,
@@ -617,6 +729,11 @@ static int _rfic_resolve_pending_write(
                     board_data->rfic_wq_pending_addr == requested_addr &&
                     board_data->rfic_wq_pending_data == requested_data;
 
+    result = _rfic_fpga_pending_boot_check(dev);
+    if (result < 0) {
+        return result;
+    }
+
     result = _rfic_fpga_get_transaction_status(
         dev, &active_id, &last_id, &transaction_sequence);
     if (result < 0) {
@@ -751,6 +868,12 @@ static int _rfic_resolve_pending_write(
     result = dev->backend->rfic_command_write(
         dev, board_data->rfic_wq_pending_addr,
         board_data->rfic_wq_pending_data, board_data->rfic_wq_pending_id);
+    if (result == BLADERF_ERR_QUEUE_FULL) {
+        /* Not a duplicate and not admitted: the original never reached NIOS
+         * and this retry will not execute either. */
+        board_data->rfic_wq_pending = false;
+        return result;
+    }
     if (result < 0) {
         return result;
     }
@@ -833,6 +956,13 @@ static int _rfic_cmd_write(struct bladerf *dev,
         }
 
         if (transaction_supported) {
+            /* Bind the command this call issues or adopts to the current
+             * NIOS boot. Read the nonce before the queue snapshot so a reboot
+             * in between changes the nonce rather than going unseen. */
+            if (have_cap_dev(dev, BLADERF_CAP_NIOS_BOOT_NONCE)) {
+                CHECK_STATUS(_rfic_fpga_boot_nonce_refresh(dev, board_data));
+                CHECK_STATUS(_rfic_fpga_get_status(dev, &before));
+            }
             CHECK_STATUS(_rfic_fpga_get_transaction_status(
                 dev, &active_id, &last_id, &transaction_sequence));
             if (transaction_sequence != before.last_write_sequence) {
@@ -888,7 +1018,7 @@ static int _rfic_cmd_write(struct bladerf *dev,
             }
         }
 
-        if (before.write_queue_length != 0) {
+        if (before.write_queue_length >= BLADERF_RFIC_TAGGED_QUEUE_DEPTH) {
             /* A new libbladeRF context can outlive the old host context while
              * NIOS is still executing its accepted callback. Adopt exactly
              * one tagged active command and wait for its own retirement
@@ -925,7 +1055,8 @@ static int _rfic_cmd_write(struct bladerf *dev,
             }
 
             CHECK_STATUS(_rfic_fpga_get_status(dev, &before));
-            if (before.write_queue_length != 0) {
+            if (before.write_queue_length >=
+                BLADERF_RFIC_TAGGED_QUEUE_DEPTH) {
                 return BLADERF_ERR_WOULD_BLOCK;
             }
             CHECK_STATUS(_rfic_fpga_get_transaction_status(
@@ -954,9 +1085,12 @@ static int _rfic_cmd_write(struct bladerf *dev,
     status = dev->backend->rfic_command_write(dev, address, data,
                                              transaction_id);
     if (status < 0) {
+        /* QUEUE_FULL: NIOS refused the command at its queue depth, so it
+         * will never execute; this is not an uncertain outcome. */
         if (transaction_supported &&
             (status == BLADERF_ERR_FPGA_OP ||
-             status == BLADERF_ERR_WOULD_BLOCK)) {
+             status == BLADERF_ERR_WOULD_BLOCK ||
+             status == BLADERF_ERR_QUEUE_FULL)) {
             board_data->rfic_wq_pending = false;
             board_data->rfic_wq_pending_adopted = false;
             board_data->rfic_wq_pending_result_valid = false;

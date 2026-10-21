@@ -217,6 +217,12 @@ int main(void)
                                  UINT64_C(1000000000));
     assert(history[1] == UINT64_C(2400000000));
 
+    /* The bank rule is the one shared with the host policy. */
+    assert(rfic_rfdc_rx_bank_peer(RFIC_RFDC_RX_PORT_B) == RFIC_RFDC_RX_PORT_C);
+    assert(rfic_rfdc_rx_bank_peer(RFIC_RFDC_RX_PORT_C) == RFIC_RFDC_RX_PORT_B);
+    assert(rfic_rfdc_rx_bank_peer(RFIC_RFDC_RX_PORT_A) ==
+           RFIC_RFDC_RX_PORT_COUNT);
+
     assert(!rfic_rfdc_calibration_required(
         reinit_frequency_hz, reinit_frequency_hz + RFDC_THRESHOLD_HZ - 1,
         RFDC_THRESHOLD_HZ));

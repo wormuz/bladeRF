@@ -10,6 +10,7 @@ cc -std=gnu11 -Wall -Wextra -Werror \
   -I"$bladerf_root/host/libraries/libbladeRF/include" \
   -I"$bladerf_root/host/libraries/libbladeRF/src" \
   -I"$bladerf_root/host/libraries/libbladeRF/src/board/bladerf2" \
+  -I"$bladerf_root/fpga_common/include" \
   "$script_dir/test_rx_transition_policy.c" -o "$test_bin"
 
 "$test_bin"

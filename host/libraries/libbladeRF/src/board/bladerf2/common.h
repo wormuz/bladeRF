@@ -217,6 +217,11 @@ struct bladerf2_board_data {
     uint16_t rfic_wq_pending_addr;
     uint64_t rfic_wq_pending_data;
     uint32_t rfic_wq_pending_sequence;
+    /* NIOS boot nonce observed before the pending command was issued
+     * (BLADERF_CAP_NIOS_BOOT_NONCE). A different value while the command is
+     * pending means NIOS rebooted under it. */
+    bool rfic_boot_nonce_valid;
+    uint32_t rfic_boot_nonce;
 
     /* Format currently being used with a module, or -1 if module is not used */
     bladerf_format module_format[NUM_MODULES];

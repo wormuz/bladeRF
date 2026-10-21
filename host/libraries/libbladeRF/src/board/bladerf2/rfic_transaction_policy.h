@@ -53,6 +53,31 @@ static inline bool bladerf2_rfic_deadline_expired(uint64_t started_ns,
     return (uint64_t)(now_ns - started_ns) >= budget_ns;
 }
 
+/* NIOS boot nonce: the value recorded before the pending command was issued
+ * no longer matches, so NIOS rebooted (FPGA reconfiguration included) and
+ * the retirement sequence and transaction IDs restarted under it. */
+static inline bool bladerf2_rfic_boot_nonce_rebooted(bool recorded_valid,
+                                                     uint32_t recorded,
+                                                     uint32_t current)
+{
+    return recorded_valid && current != recorded;
+}
+
+/* The nonce must differ between NIOS boots, it need not be secret. Hash the
+ * caller's entropy (clocks, handle address) with the splitmix64 finalizer;
+ * 0 is reserved for "not stamped since boot". */
+static inline uint32_t bladerf2_rfic_boot_nonce_from_seed(uint64_t seed)
+{
+    uint64_t x = seed + UINT64_C(0x9e3779b97f4a7c15);
+    uint32_t nonce;
+
+    x = (x ^ (x >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)) * UINT64_C(0x94d049bb133111eb);
+    x ^= x >> 31;
+    nonce = (uint32_t)(x ^ (x >> 32));
+    return nonce != 0 ? nonce : 1u;
+}
+
 /* Polling is only the transport mechanism for observing the firmware's
  * retirement event. Start promptly, then reduce USB/NIOS traffic while a
  * bounded calibration callback owns the single NIOS execution context. */

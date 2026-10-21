@@ -6610,9 +6610,22 @@ static int bladerf2_load_fpga(struct bladerf *dev,
         return status;
     }
 
-    /* Update device state */
+    /* Update device state. The new image booted a fresh NIOS: a tagged RFIC
+     * command still pending from the old image has no result to resolve,
+     * and its sequence/ID would alias the new image's first command. */
     MUTEX_LOCK(&dev->lock);
     board_data->state = STATE_FPGA_LOADED;
+    if (board_data->rfic_wq_pending) {
+        log_warning("FPGA reload dropped pending RFIC command 0x%04x "
+                    "(transaction=%u); it did not complete on the old "
+                    "image and is not re-sent\n",
+                    board_data->rfic_wq_pending_addr,
+                    (unsigned int)board_data->rfic_wq_pending_id);
+    }
+    board_data->rfic_wq_pending = false;
+    board_data->rfic_wq_pending_adopted = false;
+    board_data->rfic_wq_pending_result_valid = false;
+    board_data->rfic_boot_nonce_valid = false;
     MUTEX_UNLOCK(&dev->lock);
 
     status = _bladerf2_initialize(dev);

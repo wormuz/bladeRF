@@ -1145,41 +1145,51 @@ bool rfic_command_ack_result(uint16_t transaction_id, uint32_t sequence)
 bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
                                             uint16_t transaction_id)
 {
+    return rfic_command_write_admit(addr, data, transaction_id) ==
+           BLADERF_RFIC_WRITE_ACCEPTED;
+}
+
+enum bladerf_rfic_write_admission rfic_command_write_admit(
+    uint16_t addr, uint64_t data, uint16_t transaction_id)
+{
     if (!_rfic_address_fields_valid(addr)) {
-        return false;
+        return BLADERF_RFIC_WRITE_REJECTED;
     }
 
     uint8_t cmd                      = _rfic_unpack_cmd(addr);
     uint8_t const ch                 = _rfic_unpack_chan(addr);
     struct rfic_command_fns const *f = _get_cmd_ptr(cmd);
-    bool rv                          = false;
+    enum bladerf_rfic_write_admission rv = BLADERF_RFIC_WRITE_REJECTED;
     bool clear_legacy_result         = false;
 
     if (cmd == BLADERF_RFIC_COMMAND_RESULT_ACK) {
         if ((data >> 32) != 0 || transaction_id == 0) {
-            return false;
+            return BLADERF_RFIC_WRITE_REJECTED;
         }
-        return rfic_command_ack_result(transaction_id, (uint32_t)data);
+        return rfic_command_ack_result(transaction_id, (uint32_t)data)
+                   ? BLADERF_RFIC_WRITE_ACCEPTED
+                   : BLADERF_RFIC_WRITE_REJECTED;
     }
 
     if (!rfic_calibration_command_allowed(
             state.calibration_faulted,
             cmd == BLADERF_RFIC_COMMAND_INIT)) {
-        return false;
+        return BLADERF_RFIC_WRITE_REJECTED;
     }
 
     /* Once a host opts into tagged stop-and-wait transactions, accepting a
      * legacy untagged write would make its terminal result unacknowledgeable. */
     if (transaction_id == 0 &&
         state.write_queue.tagged_protocol_enabled) {
-        return false;
+        return BLADERF_RFIC_WRITE_REJECTED;
     }
 
     if (transaction_id != 0) {
         int duplicate = rfic_find_transaction(&state.write_queue,
                                               transaction_id, ch, cmd, data);
         if (duplicate != 0) {
-            return duplicate > 0;
+            return duplicate > 0 ? BLADERF_RFIC_WRITE_ACCEPTED
+                                 : BLADERF_RFIC_WRITE_REJECTED;
         }
 
         /* Tagged protocol is stop-and-wait. A second tagged command must not
@@ -1190,7 +1200,7 @@ bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
         if (!bladerf_rfic_tagged_write_allowed(
                 state.write_queue.count, state.write_queue.last_rv_valid,
                 state.write_queue.last_rv_transaction_id)) {
-            return false;
+            return BLADERF_RFIC_WRITE_QUEUE_FULL;
         }
         clear_legacy_result = state.write_queue.last_rv_valid;
     }
@@ -1198,8 +1208,10 @@ bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
     if (NULL != f && (NULL != f->write64 || NULL != f->write32) &&
         _check_validity(f, ch)) {
         rv = rfic_enqueue(&state.write_queue, ch, cmd, data,
-                          transaction_id) != COMMAND_QUEUE_FULL;
-        if (rv) {
+                          transaction_id) != COMMAND_QUEUE_FULL
+                 ? BLADERF_RFIC_WRITE_ACCEPTED
+                 : BLADERF_RFIC_WRITE_QUEUE_FULL;
+        if (rv == BLADERF_RFIC_WRITE_ACCEPTED) {
             if (transaction_id != 0 && clear_legacy_result) {
                 state.write_queue.last_rv_valid = false;
                 state.write_queue.last_result_code =
@@ -1213,8 +1225,8 @@ bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
         }
     }
 
-    RFIC_DBG("WR ", _rfic_cmdstr(cmd), _rfic_chanstr(ch), rv ? "ENQ" : "BAD",
-             addr, data);
+    RFIC_DBG("WR ", _rfic_cmdstr(cmd), _rfic_chanstr(ch),
+             rv == BLADERF_RFIC_WRITE_ACCEPTED ? "ENQ" : "BAD", addr, data);
 
     return rv;
 }

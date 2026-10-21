@@ -67,6 +67,15 @@ bool rfic_command_write_with_transaction_id(uint16_t addr, uint64_t data,
     return false;
 }
 
+enum bladerf_rfic_write_admission rfic_command_write_admit(
+    uint16_t addr, uint64_t data, uint16_t transaction_id)
+{
+    (void)addr;
+    (void)data;
+    (void)transaction_id;
+    return BLADERF_RFIC_WRITE_REJECTED;
+}
+
 bool rfic_command_read(uint16_t addr, uint64_t *data)
 {
     (void)addr;

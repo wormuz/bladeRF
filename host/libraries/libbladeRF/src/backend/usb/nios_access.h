@@ -332,6 +332,10 @@ int nios_retune2_failure_count_read(struct bladerf *dev,
                                     uint32_t *value);
 int nios_command_session_generation_read(struct bladerf *dev,
                                          uint32_t *generation);
+/** NIOS boot nonce (BLADERF_CAP_NIOS_BOOT_NONCE). The write succeeds only if
+ * NIOS now holds exactly that non-zero value; see nios_pkt_8x32.h. */
+int nios_boot_nonce_read(struct bladerf *dev, uint32_t *nonce);
+int nios_boot_nonce_write(struct bladerf *dev, uint32_t nonce);
 /** Read the cumulative successful NIOS retune2 activation counter. */
 int nios_retune2_success_count_read(struct bladerf *dev,
                                     bladerf_module module,
