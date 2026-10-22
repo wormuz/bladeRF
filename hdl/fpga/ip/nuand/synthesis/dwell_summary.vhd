@@ -667,6 +667,11 @@ begin
                 dwell_clips   <= (others => '0');
                 dwell_samples <= (others => '0');
                 dwell_windows <= (others => '0');
+                -- A window that closed on the edge before keeps its pulse
+                -- otherwise: one stale cycle more, a second compare of the
+                -- same total that skipped the extrema clear on the publish
+                -- edge and leaked them into the next dwell.
+                window_done_pulse <= '0';
 
 
             elsif( inst_valid = '1' ) then
@@ -769,7 +774,12 @@ begin
                 first_window    <= (others => '0');
                 first_timestamp <= (others => '0');
             elsif( rising_edge(clock) ) then
-                if( dwell_start_d = '1' ) then
+                -- Closed on the publish edge, not dwell_start_d: the trigger
+                -- compare of a window lands two edges after it closes, so the
+                -- last two windows of a dwell (closing one and two edges
+                -- before the boundary) were dropped or counted into the next
+                -- dwell when the stream ran through the boundary.
+                if( dwell_start_pub = '1' ) then
                     triggered       <= trig_latched;
                     first_window    <= trig_window;
                     first_timestamp <= trig_time;
@@ -795,7 +805,14 @@ begin
                     if( trig_latched = '0' and
                         ones(next_history) >= TRIGGER_K ) then
                         trig_latched <= '1';
-                        trig_window  <= dwell_windows;
+                        -- dwell_windows is already cleared on the edge after
+                        -- the boundary; the old dwell's count is in the
+                        -- snapshot then.
+                        if( dwell_start_cmp = '1' ) then
+                            trig_window <= snap_windows;
+                        else
+                            trig_window <= dwell_windows;
+                        end if;
                         -- Sampled here, at the crossing, not at the dwell
                         -- boundary: by then the timestamp has advanced by
                         -- the rest of the dwell and would name the wrong

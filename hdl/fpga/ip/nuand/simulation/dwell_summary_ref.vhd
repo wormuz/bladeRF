@@ -318,6 +318,10 @@ begin
                 dwell_windows <= (others => '0');
                 win_min       <= (others => '1');
                 win_max       <= (others => '0');
+                -- The last window's pulse is consumed by this boundary
+                -- (trigger_stage folds it in); held, it would count again
+                -- into the next dwell.
+                window_done_pulse <= '0';
 
             elsif( inst_valid = '1' ) then
                 window_sum_next := window_sum + resize(inst_energy, 48);
@@ -401,6 +405,9 @@ begin
             -- also converged in 17:46 -- so the offending proof is not
             -- ones() itself, it is this duplicated concatenation.
             variable next_history : std_logic_vector(TRIGGER_OF-1 downto 0);
+            variable fold_latched : std_logic;
+            variable fold_window  : unsigned(trig_window'range);
+            variable fold_time    : unsigned(trig_time'range);
         begin
             if( reset = '1' ) then
                 over_history  <= (others => '0');
@@ -411,15 +418,14 @@ begin
                 first_window    <= (others => '0');
                 first_timestamp <= (others => '0');
             elsif( rising_edge(clock) ) then
-                if( dwell_start = '1' ) then
-                    triggered       <= trig_latched;
-                    first_window    <= trig_window;
-                    first_timestamp <= trig_time;
-                    over_history    <= (others => '0');
-                    trig_latched    <= '0';
-                    trig_window     <= (others => '0');
-                    trig_time       <= (others => '0');
-                elsif( window_done_pulse = '1' ) then
+                -- The window that closed on the edge before a boundary is
+                -- this dwell's last one: fold it in before publishing, rather
+                -- than letting the boundary branch drop it and a stale pulse
+                -- count it into the next dwell.
+                fold_latched := trig_latched;
+                fold_window  := trig_window;
+                fold_time    := trig_time;
+                if( window_done_pulse = '1' ) then
                     -- A zero threshold means "measure but never trigger",
                     -- which is how the host runs a survey before it knows
                     -- what a sensible threshold would be.
@@ -429,23 +435,37 @@ begin
                     else
                         over := '0';
                     end if;
-
                     next_history := over_history(TRIGGER_OF-2 downto 0) & over;
-                    over_history <= next_history;
-
                     if( BISECT_STAGE3B ) then
                         if( trig_latched = '0' and
                             ones(next_history) >= TRIGGER_K ) then
-                            trig_latched <= '1';
-                            trig_window  <= dwell_windows;
+                            fold_latched := '1';
+                            fold_window  := dwell_windows;
                             -- Sampled here, at the crossing, not at the dwell
                             -- boundary: by then the timestamp has advanced by
                             -- the rest of the dwell and would name the wrong
                             -- instant. Latched once, since trig_latched gates
                             -- this branch.
-                            trig_time    <= timestamp;
+                            fold_time    := timestamp;
                         end if;
                     end if;
+                else
+                    next_history := over_history;
+                end if;
+
+                if( dwell_start = '1' ) then
+                    triggered       <= fold_latched;
+                    first_window    <= fold_window;
+                    first_timestamp <= fold_time;
+                    over_history    <= (others => '0');
+                    trig_latched    <= '0';
+                    trig_window     <= (others => '0');
+                    trig_time       <= (others => '0');
+                else
+                    over_history <= next_history;
+                    trig_latched <= fold_latched;
+                    trig_window  <= fold_window;
+                    trig_time    <= fold_time;
                 end if;
             end if;
         end process;
