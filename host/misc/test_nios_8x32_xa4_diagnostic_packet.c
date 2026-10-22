@@ -68,6 +68,16 @@ bool nios_ram_watermark_read(uint8_t field, uint32_t *bytes)
     *bytes = UINT32_C(0x5a000000) | field;
     return true;
 }
+static unsigned int i2c_diag_read_calls;
+bool i2c_diag_read(uint8_t addr, uint32_t *value)
+{
+    i2c_diag_read_calls++;
+    if (addr > NIOS_PKT_8x32_I2C_DIAG_RECOVERY) {
+        return false;
+    }
+    *value = UINT32_C(0x12c00000) | addr;
+    return true;
+}
 uint32_t dwell_word_read(uint8_t word)
 { return UINT32_C(0xd0000000) | word; }
 uint32_t command_uart_current_session_generation(void) { return 0; }
@@ -239,6 +249,9 @@ int main(void)
             NIOS_PKT_8x32_TARGET_NIOS_RAM, false,
             NIOS_PKT_8x32_NIOS_RAM_UNTOUCHED, 0) ||
         !nios_pkt_8x32_rfic_owner_access_safe(
+            NIOS_PKT_8x32_TARGET_I2C_DIAG, false,
+            NIOS_PKT_8x32_I2C_DIAG_REGS, 0) ||
+        !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, false, 0, 0) ||
         !nios_pkt_8x32_rfic_owner_access_safe(
             NIOS_PKT_8x32_TARGET_TX_RETUNE_GATE, false,
@@ -323,6 +336,16 @@ int main(void)
     if (nios_ram_read_calls != 1) {
         fputs("NIOS RAM read reached the firmware for a reserved field\n",
               stderr);
+        return 1;
+    }
+    CHECK_READ(NIOS_PKT_8x32_TARGET_I2C_DIAG,
+               NIOS_PKT_8x32_I2C_DIAG_RECOVERY, true,
+               UINT32_C(0x12c00000) | NIOS_PKT_8x32_I2C_DIAG_RECOVERY);
+    CHECK_READ(NIOS_PKT_8x32_TARGET_I2C_DIAG,
+               NIOS_PKT_8x32_I2C_DIAG_RECOVERY + 1, false, 0);
+    if (i2c_diag_read_calls != 1) {
+        fputs("I2C diagnostic read reached the firmware for a reserved "
+              "field\n", stderr);
         return 1;
     }
     CHECK_READ(NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS, 0, true, 0);

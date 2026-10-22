@@ -159,6 +159,30 @@ static struct bladerf_loopback_modes const bladerf2_loopback_modes[] = {
 /* Low-level Initialization */
 /******************************************************************************/
 
+/* An INA219 failure aborts the open, so no handle is left to read the
+ * controller state with; log it from here. Gateware without the read
+ * answers FPGA_OP, which is logged too. */
+static void bladerf2_log_nios_i2c_diag(struct bladerf *dev)
+{
+    uint32_t v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY + 1] = { 0 };
+    uint8_t field;
+    int status = 0;
+
+    for (field = 0; field <= NIOS_PKT_8x32_I2C_DIAG_RECOVERY; ++field) {
+        status = nios_i2c_diag_read(dev, field, &v[field]);
+        if (status != 0) {
+            break;
+        }
+    }
+    log_error("NIOS I2C diag: status=%d regs=0x%08x core=0x%08x "
+              "failure=0x%08x failures=%u recovery=0x%08x\n",
+              status, v[NIOS_PKT_8x32_I2C_DIAG_REGS],
+              v[NIOS_PKT_8x32_I2C_DIAG_CORE],
+              v[NIOS_PKT_8x32_I2C_DIAG_FAILURE],
+              v[NIOS_PKT_8x32_I2C_DIAG_FAILURES],
+              v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY]);
+}
+
 static int _bladerf2_initialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
@@ -252,7 +276,11 @@ static int _bladerf2_initialize(struct bladerf *dev)
     }
 
     /* Initialize INA219 after the NIOS work queue has been reconciled. */
-    CHECK_STATUS(ina219_init(dev, ina219_r_shunt));
+    status = ina219_init(dev, ina219_r_shunt);
+    if (status < 0) {
+        bladerf2_log_nios_i2c_diag(dev);
+        return status;
+    }
 
     /* Set tuning mode. This will trigger initialization of the RFIC.
      *
@@ -380,6 +408,55 @@ static bool bladerf2_matches(struct bladerf *dev)
 /******************************************************************************/
 /* Open/close */
 /******************************************************************************/
+
+/* The image the open path loads when the FPGA is unconfigured: the first
+ * hostedx<size>.rbf in the libbladeRF search path. *path is NULL if none
+ * exists; the caller frees it. */
+static int bladerf2_find_fpga_image(bladerf_fpga_size fpga_size, char **path)
+{
+    *path = NULL;
+    switch (fpga_size) {
+        case BLADERF_FPGA_A4:
+            *path = file_find("hostedxA4.rbf");
+            break;
+
+        case BLADERF_FPGA_A5:
+            *path = file_find("hostedxA5.rbf");
+            break;
+
+        case BLADERF_FPGA_A9:
+            *path = file_find("hostedxA9.rbf");
+            break;
+
+        case BLADERF_FPGA_UNKNOWN:
+            /* The size lives in the flash calibration region, and a board
+             * whose calibration region has gone unreadable reports
+             * UNKNOWN forever. This used to return outright, leaving such
+             * a board with no gateware at all -- it could not even load
+             * the stock image sitting in the search path.
+             *
+             * There are only three sizes for this board, so try each
+             * name. Guessing the file name is safe; guessing the CONTENT
+             * is not, and we do not: load_fpga rejects a bitstream that
+             * does not match the device. */
+            log_warning("Unknown FPGA size; trying each known image "
+                        "name in the search path.\n");
+            *path = file_find("hostedxA4.rbf");
+            if (NULL == *path) {
+                *path = file_find("hostedxA5.rbf");
+            }
+            if (NULL == *path) {
+                *path = file_find("hostedxA9.rbf");
+            }
+            break;
+
+        default:
+            log_error("%s: invalid FPGA size: %d\n", __FUNCTION__,
+                      fpga_size);
+            return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
+}
 
 static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
 {
@@ -617,46 +694,8 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         board_data->state = STATE_FPGA_LOADED;
     } else if (status != 1) {
         /* Try searching for an FPGA in the config search path */
-        switch (board_data->fpga_size) {
-            case BLADERF_FPGA_A4:
-                full_path = file_find("hostedxA4.rbf");
-                break;
-
-            case BLADERF_FPGA_A5:
-                full_path = file_find("hostedxA5.rbf");
-                break;
-
-            case BLADERF_FPGA_A9:
-                full_path = file_find("hostedxA9.rbf");
-                break;
-
-            case BLADERF_FPGA_UNKNOWN:
-                /* The size lives in the flash calibration region, and a board
-                 * whose calibration region has gone unreadable reports
-                 * UNKNOWN forever. This used to return outright, leaving such
-                 * a board with no gateware at all -- it could not even load
-                 * the stock image sitting in the search path.
-                 *
-                 * There are only three sizes for this board, so try each
-                 * name. Guessing the file name is safe; guessing the CONTENT
-                 * is not, and we do not: load_fpga rejects a bitstream that
-                 * does not match the device. */
-                log_warning("Unknown FPGA size; trying each known image "
-                            "name in the search path.\n");
-                full_path = file_find("hostedxA4.rbf");
-                if (NULL == full_path) {
-                    full_path = file_find("hostedxA5.rbf");
-                }
-                if (NULL == full_path) {
-                    full_path = file_find("hostedxA9.rbf");
-                }
-                break;
-
-            default:
-                log_error("%s: invalid FPGA size: %d\n", __FUNCTION__,
-                          board_data->fpga_size);
-                return BLADERF_ERR_UNEXPECTED;
-        }
+        CHECK_STATUS(bladerf2_find_fpga_image(board_data->fpga_size,
+                                              &full_path));
 
         if (full_path != NULL) {
             uint8_t *buf;
@@ -7830,6 +7869,62 @@ int bladerf_get_nios_ram_usage(struct bladerf *dev,
     status = BLADERF_ERR_WOULD_BLOCK;
 out:
     MUTEX_UNLOCK(&dev->lock);
+    return status;
+}
+
+int bladerf_get_fpga_image_path(struct bladerf *dev, char *path, size_t len)
+{
+    struct bladerf2_board_data *board_data;
+    char *found = NULL;
+    int status;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
+    NULL_CHECK(path);
+
+    board_data = dev->board_data;
+    status = bladerf2_find_fpga_image(board_data->fpga_size, &found);
+    if (status != 0) {
+        return status;
+    }
+    if (found == NULL) {
+        return BLADERF_ERR_NO_FILE;
+    }
+    if (strlen(found) >= len) {
+        free(found);
+        return BLADERF_ERR_INVAL;
+    }
+    strcpy(path, found);
+    free(found);
+    return 0;
+}
+
+int bladerf_get_nios_i2c_diag(struct bladerf *dev,
+                              struct bladerf_nios_i2c_diag *diag)
+{
+    uint32_t v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY + 1];
+    uint8_t field;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(diag);
+
+    MUTEX_LOCK(&dev->lock);
+    for (field = 0; field <= NIOS_PKT_8x32_I2C_DIAG_RECOVERY; ++field) {
+        status = nios_i2c_diag_read(dev, field, &v[field]);
+        if (status != 0) {
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&dev->lock);
+    if (status == 0) {
+        diag->regs = v[NIOS_PKT_8x32_I2C_DIAG_REGS];
+        diag->core = v[NIOS_PKT_8x32_I2C_DIAG_CORE];
+        diag->failure = v[NIOS_PKT_8x32_I2C_DIAG_FAILURE];
+        diag->failures = v[NIOS_PKT_8x32_I2C_DIAG_FAILURES];
+        diag->recovery = v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY];
+    }
     return status;
 }
 

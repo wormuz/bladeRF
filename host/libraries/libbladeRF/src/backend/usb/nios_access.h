@@ -326,6 +326,17 @@ int nios_loss_counter_read(struct bladerf *dev, uint8_t half, uint32_t *value);
  */
 int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value);
 
+/**
+ * Read one NIOS I2C controller diagnostic word (bladeRF 2 xA4).
+ *
+ * @param       dev     Device handle
+ * @param[in]   field   NIOS_PKT_8x32_I2C_DIAG_* selector
+ * @param[out]  value   Word, layout in nios_pkt_8x32.h
+ *
+ * @return 0 on success, BLADERF_ERR_* value on failure
+ */
+int nios_i2c_diag_read(struct bladerf *dev, uint8_t field, uint32_t *value);
+
 /** Read the cumulative deferred NIOS retune2 execution-failure counter. */
 int nios_retune2_failure_count_read(struct bladerf *dev,
                                     bladerf_module module,

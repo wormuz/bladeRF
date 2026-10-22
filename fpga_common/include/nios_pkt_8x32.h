@@ -573,6 +573,50 @@
 #define NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX 0x95
 #define NIOS_PKT_8x32_RX_GT_INDEX_KEEP           0x7fu
 
+/* OpenCores I2C controller state (read only, bladeRF 2 xA4 power-monitor
+ * bus). addr selects one word:
+ *   REGS      live core registers: [7:0] PRER lo, [15:8] PRER hi,
+ *             [23:16] CTRL, [31:24] SR (RXACK 7, BUSY 6, AL 5, TIP 1)
+ *   CORE      [7:0] CR readback (pending STA 7, STO 6, RD 5, WR 4),
+ *             [15:8] gateware diagnostic byte: [7] SDA and [6] SCL as the
+ *             core samples them, [5] slave_wait (SCL released but low),
+ *             [4:0] byte controller state, one-hot, 0 = idle
+ *             (START 0, READ 1, WRITE 2, ACK 3, STOP 4)
+ *   FAILURE   last failed transfer since boot: [7:0] NIOS_I2C_OP_*,
+ *             [15:8] 1-based byte step within the operation,
+ *             [23:16] NIOS_I2C_FAIL_*, [31:24] SR when it failed
+ *   FAILURES  failed transfers since boot
+ *   RECOVERY  [15:0] controller re-initialisations since boot (boot and
+ *             first I2C request of each host command session),
+ *             [23:16] NIOS_I2C_RECOVERY_* flags of the last one,
+ *             [31:24] diagnostic byte after it
+ * Reads do not touch the bus. */
+#define NIOS_PKT_8x32_TARGET_I2C_DIAG           0x96
+#define NIOS_PKT_8x32_I2C_DIAG_REGS             0u
+#define NIOS_PKT_8x32_I2C_DIAG_CORE             1u
+#define NIOS_PKT_8x32_I2C_DIAG_FAILURE          2u
+#define NIOS_PKT_8x32_I2C_DIAG_FAILURES         3u
+#define NIOS_PKT_8x32_I2C_DIAG_RECOVERY         4u
+
+#define NIOS_I2C_OP_SI5338_READ                 1u
+#define NIOS_I2C_OP_SI5338_WRITE                2u
+#define NIOS_I2C_OP_INA219_READ                 3u
+#define NIOS_I2C_OP_INA219_WRITE                4u
+#define NIOS_I2C_OP_RECOVERY                    5u
+
+#define NIOS_I2C_FAIL_TIP_ASSERT                1u  /* TIP never rose */
+#define NIOS_I2C_FAIL_TIP_CLEAR                 2u  /* TIP never fell */
+#define NIOS_I2C_FAIL_NACK                      3u
+#define NIOS_I2C_FAIL_ARBITRATION               4u  /* AL: SDA low when
+                                                       released, or a STOP
+                                                       not requested */
+
+#define NIOS_I2C_RECOVERY_SOFT_RESET            (1u << 0)
+#define NIOS_I2C_RECOVERY_SDA_LOW               (1u << 1)
+#define NIOS_I2C_RECOVERY_CLOCKED               (1u << 2)
+#define NIOS_I2C_RECOVERY_STOP                  (1u << 3)
+#define NIOS_I2C_RECOVERY_FAILED                (1u << 4)
+
 static inline bool nios_pkt_8x32_rx_gt_index_valid(uint8_t addr,
                                                    uint32_t data)
 {
@@ -641,6 +685,7 @@ static inline bool nios_pkt_8x32_rfic_owner_access_safe(uint8_t target,
         target == NIOS_PKT_8x32_TARGET_LOSS_COUNTERS ||
         target == NIOS_PKT_8x32_TARGET_RX_EPOCH_STATUS ||
         target == NIOS_PKT_8x32_TARGET_NIOS_RAM ||
+        target == NIOS_PKT_8x32_TARGET_I2C_DIAG ||
         /* NIOS RAM and the RFFE PIO: bladerf_schedule_retune reads both
          * while an earlier scheduled request still uploads or recalls. */
         target == NIOS_PKT_8x32_TARGET_COMMAND_SESSION_GENERATION ||

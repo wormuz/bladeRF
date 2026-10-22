@@ -1163,6 +1163,11 @@ int nios_ram_usage_read(struct bladerf *dev, uint8_t field, uint32_t *value)
     return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_NIOS_RAM, field, value);
 }
 
+int nios_i2c_diag_read(struct bladerf *dev, uint8_t field, uint32_t *value)
+{
+    return nios_8x32_read(dev, NIOS_PKT_8x32_TARGET_I2C_DIAG, field, value);
+}
+
 int nios_retune2_failure_count_read(struct bladerf *dev,
                                     bladerf_module module,
                                     uint32_t *value)
