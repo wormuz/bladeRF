@@ -8508,6 +8508,32 @@ static void bladerf2_rx_sfir_fill_status(
     st->rx_transaction_id = board_data->rx_sfir_transaction_id;
 }
 
+/* bladerf2_sfir_fence_ready() under the locks that own its inputs. Caller
+ * holds dev->lock; the contract flag is read under rx_async_epoch_lock. */
+static int bladerf2_rx_sfir_fence_ready_locked(struct bladerf *dev,
+                                               bool contract_enabled)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_sfir_fence_ready(contract_enabled,
+                                           board_data->rf_link_dir_on[0]);
+    if (status != 0) {
+        log_error("%s: RX is disabled; an epoch-fenced spatial FIR change "
+                  "needs RX samples\n", __FUNCTION__);
+    }
+    return status;
+}
+
+static bool bladerf2_rx_sfir_contract_enabled(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bool enabled;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    enabled = board_data->rf_transition_epoch_contract_enabled;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return enabled;
+}
+
 int bladerf_set_rx_spatial_fir(struct bladerf *dev,
                                const int16_t coef[2][2][5][2])
 {
@@ -8524,10 +8550,15 @@ int bladerf_set_rx_spatial_fir(struct bladerf *dev,
     ctx.board_data = board_data;
     ctx.identity_level = false;
     ctx.bank_identity = bladerf2_sfir_bank_is_identity(words);
+    const bool contract_enabled = bladerf2_rx_sfir_contract_enabled(dev);
 
     WITH_MUTEX(&dev->lock, {
         if (!board_data->rx_sfir_supported) {
             status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (status == 0) {
+            status = bladerf2_rx_sfir_fence_ready_locked(dev,
+                                                         contract_enabled);
         }
         /* W is estimated for one gain state; AGC changes gain without the
          * host, so a W under AGC is wrong by construction. */
@@ -8551,7 +8582,7 @@ int bladerf_set_rx_spatial_fir(struct bladerf *dev,
             }
         }
     });
-    if (status == BLADERF_ERR_UNSUPPORTED) {
+    if (status == BLADERF_ERR_UNSUPPORTED || status == BLADERF_ERR_NOT_INIT) {
         return status;
     }
     if (status != 0) {
@@ -8566,20 +8597,29 @@ int bladerf_reset_rx_spatial_fir(struct bladerf *dev)
 {
     struct bladerf2_sfir_apply_ctx ctx = {0};
     bool supported;
+    int status = 0;
 
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    const bool contract_enabled = bladerf2_rx_sfir_contract_enabled(dev);
     WITH_MUTEX(&dev->lock, {
         supported = board_data->rx_sfir_supported;
         if (supported) {
+            status = bladerf2_rx_sfir_fence_ready_locked(dev,
+                                                         contract_enabled);
+        }
+        if (supported && status == 0) {
             board_data->rx_sfir_host_generation++;
             board_data->rx_sfir_may_be_active = true;
         }
     });
     if (!supported) {
         return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (status != 0) {
+        return status;
     }
 
     ctx.board_data = board_data;

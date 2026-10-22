@@ -169,6 +169,17 @@ static inline bool bladerf2_sfir_status_supported(uint32_t word)
            NIOS_PKT_8x32_SFIR_VERSION;
 }
 
+/* Under the RX epoch contract a commit or identity reset is an RX
+ * transaction, and with the FIR in the chain the gate sees COMPLETE only
+ * after TAPS-1 ADC samples. With RX disabled none arrive: the transaction
+ * would wait out its timeout and fall back to forced identity. Refuse it
+ * before touching the fabric instead. */
+static inline int bladerf2_sfir_fence_ready(bool contract_enabled,
+                                            bool rx_enabled)
+{
+    return (contract_enabled && !rx_enabled) ? BLADERF_ERR_NOT_INIT : 0;
+}
+
 /* After NIOS acknowledged a commit: the fabric must report this tag, the
  * identity bit that matches the bank, and no force_identity level. */
 static inline int bladerf2_sfir_commit_verify(uint32_t word, uint8_t tag,
