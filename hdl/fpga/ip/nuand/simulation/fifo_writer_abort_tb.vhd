@@ -313,7 +313,9 @@ begin
             severity failure;
 
         meta_writes_b := 0;
-        for i in 1 to 400 loop
+        -- enable stayed high, so the RX FIFOs were not reset: the packet the
+        -- stop cut short is completed first (up to 1022 pad words at SS).
+        for i in 1 to 1500 loop
             wait until rising_edge(clock);
             if meta_write = '1' then
                 meta_writes_b := meta_writes_b + 1;

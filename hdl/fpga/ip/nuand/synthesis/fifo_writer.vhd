@@ -200,6 +200,19 @@ architecture simple of fifo_writer is
     signal wrote_this_epoch    : std_logic := '0';
     signal abort_active_i      : std_logic := '0';
     signal abort_active_out    : std_logic := '0';
+    -- fx3_gpif pairs META and sample FIFO positionally: one header, then
+    -- (dma_buf_size - 4) dwords. An abort that lands after a header leaves
+    -- its packet short in the sample FIFO (no clear until RX is disabled),
+    -- and every later header would be read with samples (missing count)
+    -- ticks newer than its timestamp, accumulating per abort. Committed
+    -- words since the last committed header are counted, and the packet is
+    -- completed with zero words before ABORTED may issue the next header.
+    signal pkt_open            : std_logic := '0';
+    signal pkt_words           : natural range 0 to 65536 := 0;
+    signal pkt_short           : std_logic;
+    signal pad_write           : std_logic := '0';
+    signal fifo_write_i        : std_logic;
+    signal meta_fifo_write_i   : std_logic;
     signal epoch_ack_i         : std_logic := '0';
     signal epoch_valid_i       : std_logic := '0';
     signal stop_toggle_prev    : std_logic := '0';
@@ -361,7 +374,7 @@ begin
                   settle_count = 0 then
                 wrote_this_epoch <= '0';
             elsif link_active_i = '1' and enable = '1' and
-                  rx_epoch_discard_active = '0' and fifo_write = '1' then
+                  rx_epoch_discard_active = '0' and fifo_write = '1' and pad_write = '0' then
                 wrote_this_epoch <= '1';
             end if;
         end if;
@@ -517,7 +530,7 @@ begin
                     -- suppression as a second no-progress transport fault
                     -- would report the wrong cause.
                     progress_count   <= (others => '0');
-                elsif( fifo_write = '1' ) then
+                elsif( fifo_write = '1' and pad_write = '0' ) then
                     progress_count   <= (others => '0');
                 elsif( progress_count(PROGRESS_TIMEOUT_LOG2) = '0' ) then
                     -- Saturates instead of wrapping: once the top bit is
@@ -802,7 +815,8 @@ begin
             (meta_state_current(META_DOWNCOUNT_BIT) and downcount_done) or
             (meta_state_current(META_PACKET_WAIT_BIT) and
              packet_control.data_valid and packet_control.pkt_eop) or
-            (meta_state_current(META_ABORTED_BIT) and not abort_active_out);
+            (meta_state_current(META_ABORTED_BIT) and not abort_active_out and
+             not pkt_short);
         next_state(META_WRITE_BIT) :=
             (meta_state_current(META_IDLE_BIT) and fifo_enough_i and
              not packet_en) or
@@ -817,7 +831,8 @@ begin
              packet_en and packet_control.pkt_sop) or
             (meta_state_current(META_PACKET_WAIT_BIT) and
              not (packet_control.data_valid and packet_control.pkt_eop));
-        next_state(META_ABORTED_BIT) := abort_active_out;
+        next_state(META_ABORTED_BIT) := abort_active_out or
+            (meta_state_current(META_ABORTED_BIT) and pkt_short);
 
         -- Abort dominates disable, matching the prior sticky-halt behavior.
         if abort_active_out = '1' then
@@ -948,6 +963,56 @@ begin
                            not rx_epoch_gate_fault;
         meta_fifo_data  <= meta_current.meta_data;
 
+    end process;
+
+    -- Committed-word accounting per META packet (see pkt_open). Uses the
+    -- masked FIFO write strobes, so a write cancelled on a fault edge is
+    -- not counted. Packet mode frames by its own EOP and is not padded.
+    meta_fifo_write_i <= meta_current.meta_write and
+                         not abort_active_i and
+                         not rx_epoch_gate_fault;
+    fifo_write_i <= fifo_write;
+
+    pkt_short <= '1' when pkt_open = '1' and
+                          pkt_words < ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH
+                 else '0';
+
+    packet_pad : process( clock, reset )
+        variable words_v : natural range 0 to 65536;
+    begin
+        if( reset = '1' ) then
+            pkt_open  <= '0';
+            pkt_words <= 0;
+            pad_write <= '0';
+        elsif( rising_edge(clock) ) then
+            words_v := pkt_words;
+            if( meta_fifo_write_i = '1' ) then
+                -- A word committed on the header edge sits after the
+                -- previous (complete) packet in the sample FIFO.
+                words_v := 0;
+                if( fifo_write_i = '1' ) then
+                    words_v := 1;
+                end if;
+                pkt_open <= '1';
+            elsif( fifo_write_i = '1' and words_v < 65536 ) then
+                words_v := words_v + 1;
+            end if;
+            -- Disabling RX resets both RX FIFOs (rx_fifo_read_reset).
+            if( enable = '0' or meta_en = '0' or packet_en = '1' ) then
+                pkt_open <= '0';
+                words_v := 0;
+            end if;
+            pkt_words <= words_v;
+
+            pad_write <= '0';
+            if( meta_state_current(META_ABORTED_BIT) = '1' and
+                abort_active_out = '0' and enable = '1' and meta_en = '1' and
+                packet_en = '0' and link_active_i = '1' and fifo_full = '0' and
+                pkt_open = '1' and
+                words_v < ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH ) then
+                pad_write <= '1';
+            end if;
+        end if;
     end process;
 
     -- Detect signed SC16 samples at or beyond the ADC's usable rail.  The
@@ -1353,10 +1418,16 @@ begin
         -- Gate faults can arrive between the writer FSM's clock edges. Mask
         -- both sides of the sample/META pair immediately so a previously
         -- registered keepalive write cannot cross the fault boundary alone.
-    fifo_write <= fifo_current.fifo_write and
-                  not abort_active_i and
-                  not rx_epoch_gate_fault;
-        fifo_data  <= std_logic_vector(fifo_current.fifo_data);
+        -- A pad word is written only from ABORTED with meta_written low, so
+        -- the sample path never commits on the same edge.
+    fifo_write <= (fifo_current.fifo_write and
+                   not abort_active_i and
+                   not rx_epoch_gate_fault) or pad_write;
+        if( pad_write = '1' ) then
+            fifo_data <= (others => '0');
+        else
+            fifo_data <= std_logic_vector(fifo_current.fifo_data);
+        end if;
 
     end process;
 
