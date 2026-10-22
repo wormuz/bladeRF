@@ -12,9 +12,11 @@ ghdl -a --std=08 \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/reset_synchronizer.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/handshake.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_dac_output.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_retune_gate_controller.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tx_fifo_fault_flush.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/tx_retune_gate_tb.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/tx_dac_output_tb.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tb/tx_retune_gate_controller_tb.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/synthesis/tb/tx_fifo_fault_flush_tb.vhd"
 
@@ -81,3 +83,6 @@ ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
     -gCASE_ID=7 -gHDR_TIME=0000000000000000000000000000000000000000000000000000000000000000 \
     -gEXPECT_RELEASE=true -gSTART_EMPTY=true -gEMPTY_FIFO_CYCLES=30 \
     -gPROGRESS_TIMEOUT_LOG2=4 -gSTOP_AFTER_CYCLES=80
+
+ghdl -e --std=08 tx_dac_output_tb
+ghdl -r --std=08 tx_dac_output_tb --assert-level=error

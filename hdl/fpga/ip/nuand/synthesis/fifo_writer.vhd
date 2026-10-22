@@ -314,6 +314,23 @@ architecture simple of fifo_writer is
         return true;
     end function;
 
+    -- SC12 slice for a one-hot packed_write_cycle_sel_i with bit 0 low: an
+    -- AND-OR of the three slices by their own select bits. A case on the
+    -- whole 4-bit word decoded the select into a fanout-35 LUT before the
+    -- 64-bit mux (setup -0.023 ns, sweep A4 2026-10-22).
+    function packed_slice( buf : unsigned(95 downto 0);
+                           sel : std_logic_vector(3 downto 0) )
+                           return unsigned is
+        variable rv : unsigned(FIFO_DATA_WIDTH-1 downto 0) := (others => '0');
+    begin
+        for b in rv'range loop
+            rv(b) := (sel(1) and buf(b)) or
+                     (sel(2) and buf(b + 16)) or
+                     (sel(3) and buf(b + 32));
+        end loop;
+        return rv;
+    end function;
+
 begin
 
     -- Keep the wide sample formatter's mode select local to this clock
@@ -1259,18 +1276,10 @@ begin
             end if;
 
             -- packed_write_cycle_sel_i is "0001" unless packed mode is on.
-            case packed_write_cycle_sel_i is
-                when "0010" =>
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1 downto fifo_current.fifo_12b_buf'low);
-                when "0100" =>
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1+16 downto fifo_current.fifo_12b_buf'low+16);
-                when "1000" =>
-                    fifo_future.fifo_data <= fifo_current.fifo_12b_buf(
-                        fifo_data'length-1+32 downto fifo_current.fifo_12b_buf'low+32);
-                when others => null;
-            end case;
+            if( packed_write_cycle_sel_i(0) = '0' ) then
+                fifo_future.fifo_data <= packed_slice(fifo_current.fifo_12b_buf,
+                                                      packed_write_cycle_sel_i);
+            end if;
 
             if( eight_bit_mode_en = '1' ) then
                 fifo_future.fifo_data <= pack_eight_bit_mode(fifo_current.in_sample_controls_r,

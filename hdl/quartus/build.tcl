@@ -144,17 +144,7 @@ set_global_assignment -name PLACEMENT_EFFORT_MULTIPLIER 4.0
 #
 # None of these weaken a constraint. They spend compile time.
 set_global_assignment -name ROUTER_EFFORT_MULTIPLIER 4.0
-# Hosted keeps the default: with ALWAYS the router duplicated the
-# rx_spatial_fir delay-line registers next to the DSP blocks and left no
-# detour for the hold delay their S1 input registers need (+0.53 ns DSP
-# clock skew): fast-corner hold -0.113 ns. Isolated hosted fit with
-# AUTOMATICALLY, same synthesis: no negative slack, worst setup +0.046 ns
-# (ALWAYS: +0.041 ns), 2026-10-22.
-if { $opts(rev) == "hosted" } {
-    set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION AUTOMATICALLY
-} else {
-    set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
-}
+set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
 set_global_assignment -name FINAL_PLACEMENT_OPTIMIZATION ALWAYS
 
 # Save all the options

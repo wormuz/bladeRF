@@ -44,7 +44,11 @@ entity bladerf_core is
     -- 2x2 RX spatial FIR in rx.vhd. The control/status path below exists in
     -- every revision; with this false the status version field reads 0 and
     -- libbladeRF reports the feature as unsupported.
-    ENABLE_SPATIAL_FIR     : boolean := false
+    ENABLE_SPATIAL_FIR     : boolean := false;
+    -- log2 of the TX sample FIFO depth in write words (tx.vhd); 0 keeps the
+    -- full FIFO. The sweep revision, whose host never transmits, shrinks it
+    -- to give the M10K back.
+    TX_SAMPLE_FIFO_LOG2    : natural := 0
   );
   port (
     -- Main 38.4MHz system clock (3.3 V)
@@ -1826,7 +1830,8 @@ begin
     -- TX Submodule
     U_tx : entity work.tx
         generic map (
-            NUM_STREAMS          => dac_controls'length
+            NUM_STREAMS          => dac_controls'length,
+            TX_SAMPLE_FIFO_LOG2  => TX_SAMPLE_FIFO_LOG2
         )
         port map (
             sys_clock            => sys_clock,
@@ -1937,10 +1942,9 @@ begin
                                         channel_enable_v and
                                         mimo_tx_enables(i);
 
-            if (rising_edge(tx_clock) and dac_streams(i).data_v = '1') then
-                ad9361.ch(i).dac.i.data  <= std_logic_vector(dac_streams(i).data_i(11 downto 0)) & "0000";
-                ad9361.ch(i).dac.q.data  <= std_logic_vector(dac_streams(i).data_q(11 downto 0)) & "0000";
-            end if;
+            -- Registered and held in tx_dac_output, after the mute.
+            ad9361.ch(i).dac.i.data  <= std_logic_vector(dac_streams(i).data_i(11 downto 0)) & "0000";
+            ad9361.ch(i).dac.q.data  <= std_logic_vector(dac_streams(i).data_q(11 downto 0)) & "0000";
         end loop;
     end process;
 

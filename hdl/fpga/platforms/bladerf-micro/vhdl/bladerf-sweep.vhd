@@ -44,7 +44,10 @@ begin
             ENABLE_SWEEP_ANALYZER  => true,
             ENABLE_TRIGGER_CAPTURE => false,
             ENABLE_GAIN_SEQUENCER  => false,
-            ENABLE_SPATIAL_FIR     => true
+            ENABLE_SPATIAL_FIR     => true,
+            -- 2048 of 8192 TX words: the sweep host never transmits, and the
+            -- freed M10K relieve a device at 304/308 (TX dcfifo setup).
+            TX_SAMPLE_FIFO_LOG2    => 11
         )
         port map (
             c5_clock2      => c5_clock2,

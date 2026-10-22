@@ -28,7 +28,10 @@ library work;
 
 entity tx is
     generic (
-        NUM_STREAMS          : natural := 2
+        NUM_STREAMS          : natural := 2;
+        -- log2 of the TX sample FIFO depth in write words; 0 keeps the full
+        -- TX_FIFO_LENGTH. See gen_tx_sample_fifo_small.
+        TX_SAMPLE_FIFO_LOG2  : natural := 0
     );
     port (
         sys_clock            : in    std_logic := '0';
@@ -253,26 +256,73 @@ begin
     -- the shared fabric reset and is never pulsed for this recovery operation.
     sample_fifo.aclr   <= tx_fifo_flush_aclr;
     sample_fifo.rclock <= tx_clock;
-    U_tx_sample_fifo : entity work.tx_fifo
-        generic map (
-            LPM_NUMWORDS        => 2**(sample_fifo.wused'length)
-        ) port map (
-            aclr                => sample_fifo.aclr,
+    gen_tx_sample_fifo_full : if TX_SAMPLE_FIFO_LOG2 = 0 generate
+        U_tx_sample_fifo : entity work.tx_fifo
+            generic map (
+                LPM_NUMWORDS        => 2**(sample_fifo.wused'length)
+            ) port map (
+                aclr                => sample_fifo.aclr,
 
-            wrclk               => sample_fifo_wclock,
-            wrreq               => sample_fifo_wreq and not tx_fifo_write_block,
-            data                => sample_fifo_wdata,
-            wrempty             => sample_fifo_wempty,
-            wrfull              => sample_fifo_wfull,
-            wrusedw             => sample_fifo_wused,
+                wrclk               => sample_fifo_wclock,
+                wrreq               => sample_fifo_wreq and not tx_fifo_write_block,
+                data                => sample_fifo_wdata,
+                wrempty             => sample_fifo_wempty,
+                wrfull              => sample_fifo_wfull,
+                wrusedw             => sample_fifo_wused,
 
-            rdclk               => sample_fifo.rclock,
-            rdreq               => sample_fifo.rreq,
-            q                   => sample_fifo.rdata,
-            rdempty             => sample_fifo_rempty_untriggered,
-            rdfull              => sample_fifo.rfull,
-            rdusedw             => sample_fifo.rused
-        );
+                rdclk               => sample_fifo.rclock,
+                rdreq               => sample_fifo.rreq,
+                q                   => sample_fifo.rdata,
+                rdempty             => sample_fifo_rempty_untriggered,
+                rdfull              => sample_fifo.rfull,
+                rdusedw             => sample_fifo.rused
+            );
+    end generate;
+
+    -- A revision whose host never transmits (sweep) keeps 2**TX_SAMPLE_FIFO_LOG2
+    -- write words instead of the full 8192 to give the M10K back. The used
+    -- counts keep the full widths: the write side reads as the small FIFO
+    -- sitting at the top of the full one (upper bits ones, no adder), so
+    -- fx3_gpif's "room for one DMA buffer" test (usedw < 2**W - buf) holds
+    -- exactly when the small FIFO has room; the read side is the true count.
+    gen_tx_sample_fifo_small : if TX_SAMPLE_FIFO_LOG2 /= 0 generate
+        signal wused_small : std_logic_vector(TX_SAMPLE_FIFO_LOG2-1 downto 0);
+        -- The read side is wider words, so its count is that many bits
+        -- shorter than the write side, as for the full FIFO.
+        signal rused_small : std_logic_vector(
+            TX_SAMPLE_FIFO_LOG2 - 1 -
+            (sample_fifo.wused'length - sample_fifo.rused'length) downto 0);
+    begin
+        assert TX_SAMPLE_FIFO_LOG2 < sample_fifo.wused'length
+            report "TX_SAMPLE_FIFO_LOG2 must be below the full FIFO depth"
+            severity failure;
+
+        U_tx_sample_fifo : entity work.tx_fifo
+            generic map (
+                LPM_NUMWORDS        => 2**TX_SAMPLE_FIFO_LOG2
+            ) port map (
+                aclr                => sample_fifo.aclr,
+
+                wrclk               => sample_fifo_wclock,
+                wrreq               => sample_fifo_wreq and not tx_fifo_write_block,
+                data                => sample_fifo_wdata,
+                wrempty             => sample_fifo_wempty,
+                wrfull              => sample_fifo_wfull,
+                wrusedw             => wused_small,
+
+                rdclk               => sample_fifo.rclock,
+                rdreq               => sample_fifo.rreq,
+                q                   => sample_fifo.rdata,
+                rdempty             => sample_fifo_rempty_untriggered,
+                rdfull              => sample_fifo.rfull,
+                rdusedw             => rused_small
+            );
+
+        sample_fifo_wused <= (sample_fifo_wused'high downto TX_SAMPLE_FIFO_LOG2 => '1') &
+                             wused_small;
+        sample_fifo.rused <= std_logic_vector(resize(unsigned(rused_small),
+                                                     sample_fifo.rused'length));
+    end generate;
 
     -- TX metadata fifo
     meta_fifo.aclr   <= tx_fifo_flush_aclr;
@@ -453,13 +503,26 @@ begin
                                     not retune_gate_muted_status and
                                     tx_stream_data_seen,
             in_samples           => dac_streams_raw,
-            out_samples          => dac_streams,
+            -- Gated in tx_dac_output, after registers.
+            out_samples          => open,
             state                => retune_gate_state,
             muted                => retune_gate_muted,
             mute_start_event     => retune_gate_mute_event,
             resume_event         => retune_gate_resume_event,
             mute_start_timestamp => retune_gate_mute_timestamp,
             muted_sample_count  => retune_gate_muted_sample_count
+        );
+
+    -- The gate's mute applied after registers (tx_dac_output.vhd).
+    U_tx_dac_output : entity work.tx_dac_output
+        generic map (
+            NUM_STREAMS => NUM_STREAMS
+        )
+        port map (
+            clock       => tx_clock,
+            in_samples  => dac_streams_raw,
+            muted       => retune_gate_muted,
+            out_samples => dac_streams
         );
 
     tx_underflow_led <= tx_underflow_led_i;

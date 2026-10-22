@@ -880,11 +880,15 @@ post_message -type info "readout crossings cut: $dwell_pairs_written"
 # 2026-10-21). The check describes no real hazard: a shadow word changes
 # only on an edge with coef_wr_en, and S1 captures only on an edge with
 # coef_commit, and rx_spatial_fir_controller never asserts both in one
-# cycle (a capture issues the write first and the commit one cycle later;
+# cycle (a capture issues the write first and the commit two cycles later;
 # captures are a full handshake apart). Both RTL files assert it in
 # simulation. Setup on this path stays timed.
 set sfir_shadow [get_keepers -nowarn {*U_rx_spatial_fir|shadow[*]}]
-set sfir_s1 [get_keepers -nowarn {*U_rx_spatial_fir|s1_re[*] *U_rx_spatial_fir|s1_im[*] *U_rx_spatial_fir|s1_nim[*]}]
+# The S1 coefficient registers are packed into the DSP blocks and some keep
+# only the multiplier's name (Add52~244), so the destinations are every
+# rx_spatial_fir keeper but the shadow bank and its identity flags; -from
+# shadow restricts that to the shadow fanout, which is S1 alone.
+set sfir_s1 [remove_from_collection [get_keepers -nowarn {*U_rx_spatial_fir|*}] [get_keepers -nowarn {*U_rx_spatial_fir|shadow*}]]
 if { [get_collection_size $sfir_shadow] > 0 && [get_collection_size $sfir_s1] > 0 } {
     set_false_path -hold -from $sfir_shadow -to $sfir_s1
     post_message -type info "rx_spatial_fir shadow -> S1 hold waived: [get_collection_size $sfir_shadow] -> [get_collection_size $sfir_s1] keepers"

@@ -167,6 +167,19 @@ architecture arch of dwell_summary is
     signal inst_energy      : unsigned(31 downto 0) := (others => '0');
     signal inst_valid       : std_logic := '0';
     signal inst_clip        : std_logic := '0';
+    -- Peak decision "inst_energy > dwell_peak" from bits registered a cycle
+    -- earlier. dwell_peak during a cycle is 0 after a dwell start, the
+    -- previous inst_energy after a peak update, else the peak before it;
+    -- each case is compared against the next inst_energy (sq_i + sq_q) one
+    -- cycle ahead. The direct compare closed a 32-bit compare -> load-select
+    -- (fanout 48) -> compare loop through dwell_peak in one 8 ns cycle
+    -- (sweep setup -0.450 ns, 2026-10-22).
+    signal peak_gt0         : std_logic := '0';
+    signal peak_gtx         : std_logic := '0';
+    signal peak_gtp         : std_logic := '0';
+    signal peak_start_d     : std_logic := '0';
+    signal peak_upd_d       : std_logic := '0';
+    signal peak_gt          : std_logic;
 
     -- Per-window accumulator. WINDOW_LOG2 samples of a 32-bit value fits in
     -- 32 + WINDOW_LOG2 bits; 48 covers any window up to 2^16 samples.
@@ -573,17 +586,30 @@ begin
     end process;
 
     energy_stage : process( clock, reset )
+        variable energy_next : unsigned(31 downto 0);
     begin
         if( reset = '1' ) then
             inst_energy <= (others => '0');
             inst_valid  <= '0';
             inst_clip   <= '0';
+            peak_gt0    <= '0';
+            peak_gtx    <= '0';
+            peak_gtp    <= '0';
         elsif( rising_edge(clock) ) then
+            energy_next := sq_i + sq_q;
             inst_valid  <= sq_valid;
             inst_clip   <= sq_clip;
-            inst_energy <= sq_i + sq_q;
+            inst_energy <= energy_next;
+            -- energy_gt(energy_next, 0)
+            if( energy_next /= 0 ) then peak_gt0 <= '1'; else peak_gt0 <= '0'; end if;
+            if( energy_gt(energy_next, inst_energy) ) then peak_gtx <= '1'; else peak_gtx <= '0'; end if;
+            if( energy_gt(energy_next, dwell_peak) ) then peak_gtp <= '1'; else peak_gtp <= '0'; end if;
         end if;
     end process;
+
+    peak_gt <= peak_gt0 when peak_start_d = '1' else
+               peak_gtx when peak_upd_d = '1' else
+               peak_gtp;
 
 
     -- Stage 2: window accumulation and dwell totals.
@@ -612,7 +638,11 @@ begin
             dwell_windows <= (others => '0');
             window_done_pulse <= '0';
             window_done_total <= (others => '0');
+            peak_start_d  <= '0';
+            peak_upd_d    <= '0';
         elsif( rising_edge(clock) ) then
+            peak_start_d <= dwell_start_d;
+            peak_upd_d   <= '0';
             -- outputs are driven by the publish process
 
             -- A dwell boundary clears the accumulators. It no longer
@@ -637,6 +667,11 @@ begin
                 dwell_clips   <= (others => '0');
                 dwell_samples <= (others => '0');
                 dwell_windows <= (others => '0');
+                -- A window that closed on the edge before keeps its pulse
+                -- otherwise: one stale cycle more, a second compare of the
+                -- same total that skipped the extrema clear on the publish
+                -- edge and leaked them into the next dwell.
+                window_done_pulse <= '0';
 
 
             elsif( inst_valid = '1' ) then
@@ -650,8 +685,9 @@ begin
                     dwell_clips <= dwell_clips + 1;
                 end if;
 
-                if( energy_gt(inst_energy, dwell_peak) ) then
+                if( peak_gt = '1' ) then
                     dwell_peak <= inst_energy;
+                    peak_upd_d <= '1';
                 end if;
 
                 -- Window boundary.
@@ -738,7 +774,12 @@ begin
                 first_window    <= (others => '0');
                 first_timestamp <= (others => '0');
             elsif( rising_edge(clock) ) then
-                if( dwell_start_d = '1' ) then
+                -- Closed on the publish edge, not dwell_start_d: the trigger
+                -- compare of a window lands two edges after it closes, so the
+                -- last two windows of a dwell (closing one and two edges
+                -- before the boundary) were dropped or counted into the next
+                -- dwell when the stream ran through the boundary.
+                if( dwell_start_pub = '1' ) then
                     triggered       <= trig_latched;
                     first_window    <= trig_window;
                     first_timestamp <= trig_time;
@@ -764,7 +805,14 @@ begin
                     if( trig_latched = '0' and
                         ones(next_history) >= TRIGGER_K ) then
                         trig_latched <= '1';
-                        trig_window  <= dwell_windows;
+                        -- dwell_windows is already cleared on the edge after
+                        -- the boundary; the old dwell's count is in the
+                        -- snapshot then.
+                        if( dwell_start_cmp = '1' ) then
+                            trig_window <= snap_windows;
+                        else
+                            trig_window <= dwell_windows;
+                        end if;
                         -- Sampled here, at the crossing, not at the dwell
                         -- boundary: by then the timestamp has advanced by
                         -- the rest of the dwell and would name the wrong

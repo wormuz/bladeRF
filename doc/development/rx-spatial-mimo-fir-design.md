@@ -74,14 +74,14 @@ boundary by construction: every product of output n is formed in one cycle from 
 | stage | content |
 |---|---|
 | S0 | on input `data_v` (lane 0; both lanes strobe together in 2R2T): shift per-lane delay line x[0..4]; shift timestamp line `ts[0..2]`; `valid0 <= data_v` |
-| S1 | DSP input registers: data from delay line, coefficients from ACTIVE bank, plus a sampled `mode` bit (FIR vs bypass) and `support_clean` marker (section 3) that travel with the sample from here on |
-| S2 | DSP multiply + sum-of-two, output register inside the DSP block |
+| S1 | sampled `mode` bit (FIR vs bypass), bank generation and `support_clean` marker (section 3) that travel with the sample from here on; the coefficient DSP input registers are the ACTIVE bank (loaded on commit). There is no S1 data register: a delay-line LAB register into a DSP input register failed hold against the later DSP clock |
+| S2 | DSP multiply + sum-of-two straight from the delay line (same edge as S1), output register inside the DSP block |
 | S3-S6 | registered adder tree 10 -> 5 -> 3 -> 2 -> 1 per component (4 levels) |
 | S7 | round + saturate, registered |
-| S8 | output select (FIR result vs bypass tap) by the carried `mode` bit, registered; `data_v` is the carried valid |
+| S8 | output select (FIR result vs bypass tap) by the carried `mode` bit, registered; `data_v` is the carried valid. With no S1 data register each arithmetic stage registers one edge earlier, so S0..S8 span 8 edges |
 
-Latency L = 9 `rx_clock` cycles, constant in every mode. Bypass path = `x_own[2]` (center tap of
-the lane's own delay line) carried through a 7-register shift so both paths align exactly.
+Latency L = 8 `rx_clock` cycles, constant in every mode. Bypass path = `x_own[2]` (center tap of
+the lane's own delay line) carried through a 6-register shift so both paths align exactly.
 
 `mode = BYPASS` when any of: `adc_controls(0).enable = '0'`, `adc_controls(1).enable = '0'`
 (RX_X1 on either channel), active bank flagged identity (`active_is_identity`), or the
@@ -91,7 +91,7 @@ is bit-exact even for an input outside 12 bits.
 ### 1.4 Timestamp alignment (answers "does tagging need the latency accounted": yes)
 
 The gate stamps a sample with the live counter at its input (`rx_epoch_gate.vhd:155`, `:266`).
-Inserting L = 9 cycles and the 2-sample center delay would shift META timestamps by 4.5 + 2
+Inserting L = 8 cycles and the 2-sample center delay would shift META timestamps by 4.5 + 2
 samples against the stock gateware and against the TX/tamer clock. The block therefore carries
 the timestamp with the data instead of adding constants:
 
@@ -285,7 +285,7 @@ asserts `fir_epoch_complete` together with the output sample immediately before 
 through the mux register the gate sees COMPLETE, enters WAIT_FIRST_SAMPLE, and admits the tagged
 sample as the first valid one, timestamped with `ts_in(n-2)`. ARM or ABORT arriving during the
 count cancels the pending COMPLETE. The same delay applies in bypass (one rule, 2 extra samples
-withheld; no special case). Cost: 4 samples + 9 cycles more before EPOCH_VALID.
+withheld; no special case). Cost: 4 samples + 8 cycles more before EPOCH_VALID.
 
 ## 4. Reset to identity
 
