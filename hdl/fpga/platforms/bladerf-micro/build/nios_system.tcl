@@ -166,7 +166,9 @@ set_instance_parameter_value nios2 {tracefilename} {}
 set_instance_parameter_value nios2 {resetSlave} {ram.s1}
 set_instance_parameter_value nios2 {mmu_TLBMissExcSlave} {}
 set_instance_parameter_value nios2 {exceptionSlave} {ram.s1}
-set_instance_parameter_value nios2 {breakSlave} {None}
+# Without the debug module the break vector still needs a memory; a
+# break instruction (none in the image) lands on the exception handler.
+set_instance_parameter_value nios2 {breakSlave} {ram.s1}
 set_instance_parameter_value nios2 {setting_interruptControllerType} {Internal}
 set_instance_parameter_value nios2 {setting_branchpredictiontype} {Dynamic}
 set_instance_parameter_value nios2 {setting_bhtPtrSz} {8}
