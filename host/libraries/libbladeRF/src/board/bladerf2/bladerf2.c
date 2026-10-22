@@ -4367,6 +4367,25 @@ int bladerf2_quick_tune_readback(
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency)
 {
+    int status = bladerf2_quick_tune_lo_readback(
+        dev, ch, nios_profile, profile, expected_frequency,
+        readback_frequency);
+
+    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch) &&
+        ((struct bladerf2_board_data *)dev->board_data)->rfic->command_mode ==
+            RFIC_COMMAND_HOST) {
+        status = bladerf2_tx_quad_calibration_finalize(dev);
+        return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
+    }
+    return status;
+}
+
+int bladerf2_quick_tune_lo_readback(
+    struct bladerf *dev, bladerf_channel ch, uint16_t nios_profile,
+    uint8_t profile,
+    bladerf_frequency expected_frequency,
+    bladerf_frequency *readback_frequency)
+{
     if (!bladerf2_channel_valid(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -4390,9 +4409,6 @@ int bladerf2_quick_tune_readback(
         int status = ad9361_fastlock_sync_current_lo(
             board_data->phy, BLADERF_CHANNEL_IS_TX(ch), profile,
             expected_frequency, readback_frequency);
-        if (status == 0 && BLADERF_CHANNEL_IS_TX(ch)) {
-            status = bladerf2_tx_quad_calibration_finalize(dev);
-        }
         return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
     }
 

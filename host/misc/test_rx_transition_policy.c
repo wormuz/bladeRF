@@ -379,6 +379,10 @@ int main(void)
     assert(bladerf2_retune_completion_readback_retry(-1, 1, 1));
     assert(!bladerf2_retune_completion_readback_retry(-1, 1, 0));
     assert(!bladerf2_retune_completion_readback_retry(0, 4, 1));
+    /* TX monitor: own = TX queue, other = RX queue. A failed readback of the
+     * last TX request while an RX request is queued is retried too. */
+    assert(bladerf2_retune_completion_readback_retry(-1, 1, 3));
+    assert(!bladerf2_retune_completion_readback_retry(0, 1, 0));
     assert(bladerf2_tx_retune_release_request_after_cancel(true, 0));
     assert(!bladerf2_tx_retune_release_request_after_cancel(true, 1));
     assert(!bladerf2_tx_retune_release_request_after_cancel(false, 0));

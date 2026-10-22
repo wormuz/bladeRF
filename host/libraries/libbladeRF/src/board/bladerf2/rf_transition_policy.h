@@ -201,17 +201,18 @@ static inline bool bladerf2_retune_completion_batch_valid(
     return completed <= ring_depth && completed <= pending;
 }
 
-/* Verifying an RX completion reads the RX reference divider over AD9361 SPI.
- * NIOS refuses direct AD9361 reads while a queued RETUNE2 uploads, recalls
- * or loads a gain table (bladeRF_nios.c cooperative dispatch), which is
- * exactly when the next queued request follows this completion. A failed
- * read is then retried on a later poll with the record unconsumed; only with
- * no other queued request (RX or TX) can it mean a lost completion. */
+/* Verifying a RETUNE2 completion reads the reference divider over AD9361
+ * SPI (bladerf2_quick_tune_lo_readback). NIOS refuses direct AD9361 reads
+ * while a queued RETUNE2 of either module uploads, recalls or loads a gain
+ * table (bladeRF_nios.c cooperative dispatch), which is exactly when the next
+ * queued request follows this completion. A failed read is then retried on a
+ * later poll with the record unconsumed; only with no other queued request on
+ * either module can it mean a lost completion. */
 static inline bool bladerf2_retune_completion_readback_retry(
-    int readback_status, uint8_t rx_pending_with_this, uint8_t tx_pending)
+    int readback_status, uint8_t own_pending_with_this, uint8_t other_pending)
 {
     return readback_status != 0 &&
-           (rx_pending_with_this > 1 || tx_pending != 0);
+           (own_pending_with_this > 1 || other_pending != 0);
 }
 
 /* A matched completion batch remains unresolved while any accepted request
