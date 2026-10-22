@@ -166,7 +166,7 @@ set_instance_parameter_value nios2 {tracefilename} {}
 set_instance_parameter_value nios2 {resetSlave} {ram.s1}
 set_instance_parameter_value nios2 {mmu_TLBMissExcSlave} {}
 set_instance_parameter_value nios2 {exceptionSlave} {ram.s1}
-set_instance_parameter_value nios2 {breakSlave} {nios2_qsys_0.jtag_debug_module}
+set_instance_parameter_value nios2 {breakSlave} {None}
 set_instance_parameter_value nios2 {setting_interruptControllerType} {Internal}
 set_instance_parameter_value nios2 {setting_branchpredictiontype} {Dynamic}
 set_instance_parameter_value nios2 {setting_bhtPtrSz} {8}
@@ -213,7 +213,11 @@ set_instance_parameter_value nios2 {mmu_ramBlockType} {Automatic}
 set_instance_parameter_value nios2 {bht_ramBlockType} {Automatic}
 set_instance_parameter_value nios2 {cdx_enabled} {0}
 set_instance_parameter_value nios2 {mpx_enabled} {0}
-set_instance_parameter_value nios2 {debug_enabled} {1}
+# No JTAG debug module: the board has no JTAG programmer (the image is
+# loaded over USB and the Nios program from the embedded MIF), and its tck
+# shift register failed fast-corner hold on local tck routing (-0.082 ns,
+# sweep A4 2026-10-22). jtag_uart keeps the JTAG hub.
+set_instance_parameter_value nios2 {debug_enabled} {0}
 set_instance_parameter_value nios2 {debug_triggerArming} {1}
 set_instance_parameter_value nios2 {debug_debugReqSignals} {0}
 set_instance_parameter_value nios2 {debug_assignJtagInstanceID} {0}
@@ -931,10 +935,6 @@ set_connection_parameter_value nios2.data_master/jtag_uart.avalon_jtag_slave arb
 set_connection_parameter_value nios2.data_master/jtag_uart.avalon_jtag_slave baseAddress {0x9100}
 set_connection_parameter_value nios2.data_master/jtag_uart.avalon_jtag_slave defaultConnection {0}
 
-add_connection nios2.data_master nios2.debug_mem_slave
-set_connection_parameter_value nios2.data_master/nios2.debug_mem_slave arbitrationPriority {1}
-set_connection_parameter_value nios2.data_master/nios2.debug_mem_slave baseAddress {0x8800}
-set_connection_parameter_value nios2.data_master/nios2.debug_mem_slave defaultConnection {0}
 
 add_connection nios2.data_master opencores_i2c.bladerf_oc_i2c_master
 set_connection_parameter_value nios2.data_master/opencores_i2c.bladerf_oc_i2c_master arbitrationPriority {1}
@@ -1088,10 +1088,6 @@ set_connection_parameter_value nios2.data_master/arbiter_0.avalon_slave_0 arbitr
 set_connection_parameter_value nios2.data_master/arbiter_0.avalon_slave_0 baseAddress {0x9500}
 set_connection_parameter_value nios2.data_master/arbiter_0.avalon_slave_0 defaultConnection {0}
 
-add_connection nios2.instruction_master nios2.debug_mem_slave
-set_connection_parameter_value nios2.instruction_master/nios2.debug_mem_slave arbitrationPriority {1}
-set_connection_parameter_value nios2.instruction_master/nios2.debug_mem_slave baseAddress {0x8800}
-set_connection_parameter_value nios2.instruction_master/nios2.debug_mem_slave defaultConnection {0}
 
 add_connection nios2.instruction_master ram.s1
 set_connection_parameter_value nios2.instruction_master/ram.s1 arbitrationPriority {1}
