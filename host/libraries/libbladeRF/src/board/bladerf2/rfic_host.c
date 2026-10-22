@@ -384,6 +384,58 @@ int bladerf2_tx_quad_calibration_finalize(struct bladerf *dev)
     return errno_ad9361_to_bladerf(status);
 }
 
+/* RX LO for the open-time RFDC of input A: inside the A band (3-6 GHz) and
+ * at or below 4 GHz, so the same low-range RFDC count as setup applies. */
+#define RFIC_HOST_RFDC_SEED_A_LO_HZ UINT64_C(3500000000)
+
+/* Calibrate RX input A once at open, at the init sample rate, so that no RX
+ * transition after open runs the implicit RFDC (RX-TRANSITION-1S3-001). ADI
+ * setup calibrates only the configured input (B, bank B/C, at the 2.4 GHz
+ * init LO). Cost by the ADI formula (ad9361_rf_dc_offset_timeout_us):
+ * 21 * (50 * 256 + 287) * (77 + 1) ~= 21.4 M CLKRF cycles, ~0.7 s at the
+ * 30.72 MHz init CLKRF, once per open; without it the first transition into
+ * a not yet calibrated input paid it at the application's rate (1.32 s at
+ * 4 Msps). Banks A and B/C are separate (rfic_rfdc_bank_policy.h), so this
+ * does not disturb B/C. The input is restored here; the caller moves the RX
+ * LO back to the init frequency. */
+static int _rfic_host_seed_rfdc_bank_a(struct bladerf2_board_data *board_data)
+{
+    struct ad9361_rf_phy *phy = board_data->phy;
+    uint32_t input = 0;
+    int32_t ret, restore;
+
+    if (!bladerf2_rfdc_init_seed_a_needed(
+            board_data->rx_rfdc_calibration_valid_mask)) {
+        return 0;
+    }
+    ret = ad9361_get_rx_rf_port_input(phy, &input);
+    if (ret < 0) {
+        return errno_ad9361_to_bladerf(ret);
+    }
+    ret = ad9361_set_rx_lo_freq(phy, RFIC_HOST_RFDC_SEED_A_LO_HZ);
+    if (ret >= 0) {
+        ret = ad9361_set_rx_rf_port_input(phy, AD936X_A_BALANCED);
+    }
+    if (ret >= 0) {
+        ret = ad9361_do_calib_bounded(phy, RFDC_CAL, 0);
+    }
+    if (ret >= 0) {
+        bladerf2_rx_rfdc_calibration_record(
+            board_data->rx_rfdc_calibration_frequency_hz,
+            &board_data->rx_rfdc_calibration_valid_mask, AD936X_A_BALANCED,
+            RFIC_HOST_RFDC_SEED_A_LO_HZ);
+    }
+    restore = ad9361_set_rx_rf_port_input(phy, input);
+    log_debug("%s: RFDC seed input A lo=%" PRIu64 " status=%d restore=%d "
+              "valid_mask=0x%02x\n", __FUNCTION__,
+              (uint64_t)RFIC_HOST_RFDC_SEED_A_LO_HZ, ret, restore,
+              board_data->rx_rfdc_calibration_valid_mask);
+    if (ret < 0) {
+        return errno_ad9361_to_bladerf(ret);
+    }
+    return restore < 0 ? errno_ad9361_to_bladerf(restore) : 0;
+}
+
 static int _rfic_host_initialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
@@ -534,6 +586,11 @@ static int _rfic_host_initialize(struct bladerf *dev)
                   __FUNCTION__, port,
                   (uint64_t)init_param->rx_synthesizer_frequency_hz,
                   board_data->rx_rfdc_calibration_valid_mask);
+    }
+
+    status = _rfic_host_seed_rfdc_bank_a(board_data);
+    if (status < 0) {
+        goto init_fail;
     }
 
     /* ad9361_init() programs both configured operating LOs and completes its

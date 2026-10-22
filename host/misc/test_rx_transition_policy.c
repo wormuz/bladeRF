@@ -42,6 +42,16 @@ int main(void)
     assert(!bladerf2_rfic_frequency_model_valid(false, true));
     assert(!bladerf2_rfic_frequency_model_valid(true, false));
     assert(!bladerf2_rfic_frequency_model_valid(false, false));
+
+    /* Open-time RFDC seeding: setup calibrates the init input B (bit 1);
+     * input A (bit 0) is seeded right after, and then neither low-band (B)
+     * nor high-band (A) transitions require an implicit RFDC. */
+    assert(bladerf2_rfdc_init_seed_a_needed(0x2));
+    assert(!bladerf2_rfdc_init_seed_a_needed(0x3));
+    assert(!bladerf2_rfdc_init_seed_a_needed(0x1));
+    assert(!bladerf2_rx_rfdc_calibration_required(0x3, 0));
+    assert(!bladerf2_rx_rfdc_calibration_required(0x3, 1));
+    assert(bladerf2_rx_rfdc_calibration_required(0x2, 0));
 /* Reference certificate at an RX boundary: a locked (or bypassed) * readback re-certifies after an earlier unlock or read failure; a failed * read or an unlocked reference keeps it revoked; a modified clock tree * is restored only by the reference setters. */ assert(bladerf2_rfic_reference_known_at_boundary(true, 0)); assert(!bladerf2_rfic_reference_known_at_boundary(true, BLADERF_ERR_FPGA_OP)); assert(!bladerf2_rfic_reference_known_at_boundary(true, BLADERF_ERR_IO)); assert(!bladerf2_rfic_reference_known_at_boundary(false, 0));
     assert(bladerf2_rfic_register_is_gain_only(0x109));
     assert(bladerf2_rfic_register_is_gain_only(0x10c));

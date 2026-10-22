@@ -47,6 +47,13 @@ static inline void bladerf2_rx_rfdc_calibration_record(
     }
 }
 
+/* Open-time RFDC of input A (index 0, A_BALANCED): needed unless setup
+ * already calibrated it. Setup calibrates the configured init input. */
+static inline bool bladerf2_rfdc_init_seed_a_needed(uint8_t valid_mask)
+{
+    return (valid_mask & 1u) == 0;
+}
+
 #include <libbladeRF.h>
 
 static inline bool bladerf2_rfic_frequency_model_valid(

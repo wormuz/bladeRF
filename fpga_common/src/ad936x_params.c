@@ -124,7 +124,9 @@ AD9361_InitParam bladerf2_rfic_init_params = {
     .rf_tx_bandwidth_hz = 18000000,	// DEFAULT                                                          // rf_tx_bandwidth_hz *** adi,rf-tx-bandwidth-hz
 
     /* RF Port Control */
-    .rx_rf_port_input_select = 0,	// DEFAULT                                                          // rx_rf_port_input_select *** adi,rx-rf-port-input-select
+    /* The board maps the 2.4 GHz init LO to B_BALANCED (bladerf2_rx_band_port_map): setup RFDC then
+     * calibrates the low-band bank B/C; rfic_host.c seeds bank A right after init. */
+    .rx_rf_port_input_select = 1,	// B_BALANCED                                                        // rx_rf_port_input_select *** adi,rx-rf-port-input-select
     .tx_rf_port_input_select = 0,	// DEFAULT                                                          // tx_rf_port_input_select *** adi,tx-rf-port-input-select
 
     /* TX Attenuation Control */
@@ -444,7 +446,9 @@ AD9361_InitParam bladerf2_rfic_init_params_fastagc_burst = {
     .rf_tx_bandwidth_hz = 18000000,	// DEFAULT                                                          // rf_tx_bandwidth_hz *** adi,rf-tx-bandwidth-hz
 
     /* RF Port Control */
-    .rx_rf_port_input_select = 0,	// DEFAULT                                                          // rx_rf_port_input_select *** adi,rx-rf-port-input-select
+    /* The board maps the 2.4 GHz init LO to B_BALANCED (bladerf2_rx_band_port_map): setup RFDC then
+     * calibrates the low-band bank B/C; rfic_host.c seeds bank A right after init. */
+    .rx_rf_port_input_select = 1,	// B_BALANCED                                                        // rx_rf_port_input_select *** adi,rx-rf-port-input-select
     .tx_rf_port_input_select = 0,	// DEFAULT                                                          // tx_rf_port_input_select *** adi,tx-rf-port-input-select
 
     /* TX Attenuation Control */
