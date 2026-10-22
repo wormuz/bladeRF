@@ -157,6 +157,12 @@ begin
             cm_echo      <= '0';
             last_idx     <= (others => '0');
         elsif rising_edge(rx_clock) then
+            -- rx_spatial_fir's shadow -> S1 hold waiver needs these apart:
+            -- one capture issues the write first and the commit a cycle
+            -- later, and captures are a full handshake apart.
+            assert not (wr_en_q = '1' and commit_q = '1')
+                report "rx_spatial_fir_controller: write and commit together"
+                severity failure;
             wr_en_q    <= '0';
             commit_req <= '0';
             commit_q   <= commit_req;

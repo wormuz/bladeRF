@@ -154,9 +154,7 @@ architecture rtl of rx_spatial_fir is
     -- Banks
     signal shadow          : coef_word_t := identity_bank;
     signal shadow_word_id  : std_logic_vector(NCOEF-1 downto 0) := (others => '1');
-    signal act_re          : c16_t;
-    signal act_im          : c16_t;
-    signal act_nim         : c17_t;
+    signal shadow_all_id   : std_logic;
     signal act_identity    : std_logic := '1';
     signal act_tag         : unsigned(7 downto 0) := (others => '0');
     signal bank_gen        : std_logic := '0';
@@ -196,31 +194,27 @@ architecture rtl of rx_spatial_fir is
     signal complete_q      : std_logic := '0';
 begin
 
+    -- The active coefficients live in the S1 multiplier input registers (see
+    -- arith); this process keeps only the shadow bank and the active bank's
+    -- identity flag, tag and generation.
+    shadow_all_id <= '1' when shadow_word_id = (shadow_word_id'range => '1') else '0';
+
     banks : process(clock, reset)
         variable n : natural;
-        variable all_id : std_logic;
     begin
         if reset = '1' then
             shadow         <= identity_bank;
             shadow_word_id <= (others => '1');
-            for m in 0 to NCOEF-1 loop
-                act_re(m)  <= signed(identity_word(m)(15 downto 0));
-                act_im(m)  <= (others => '0');
-                act_nim(m) <= (others => '0');
-            end loop;
             act_identity   <= '1';
             act_tag        <= (others => '0');
             bank_gen       <= '0';
         elsif rising_edge(clock) then
+            -- The shadow -> S1 hold waiver (bladerf.sdc) rests on this.
+            assert not (coef_wr_en = '1' and coef_commit = '1')
+                report "rx_spatial_fir: shadow write and commit in one cycle"
+                severity failure;
             if coef_commit = '1' then
-                all_id := '1';
-                for m in 0 to NCOEF-1 loop
-                    all_id := all_id and shadow_word_id(m);
-                    act_re(m)  <= signed(shadow(m)(15 downto 0));
-                    act_im(m)  <= signed(shadow(m)(31 downto 16));
-                    act_nim(m) <= -resize(signed(shadow(m)(31 downto 16)), 17);
-                end loop;
-                act_identity <= all_id;
+                act_identity <= shadow_all_id;
                 act_tag      <= coef_commit_tag;
                 bank_gen     <= not bank_gen;
             end if;
@@ -338,14 +332,17 @@ begin
                 gen(s)   <= gen(s-1);
             end loop;
             -- S1: mode and bank generation sampled with the coefficients.
+            -- The bank after this edge: S1 takes a commit on this edge.
             if in_sample_controls(0).enable = '0' or
                in_sample_controls(1).enable = '0' or
-               act_identity = '1' or force_identity = '1' then
+               (coef_commit = '1' and shadow_all_id = '1') or
+               (coef_commit = '0' and act_identity = '1') or
+               force_identity = '1' then
                 mode(1) <= '1';
             else
                 mode(1) <= '0';
             end if;
-            gen(1) <= bank_gen;
+            gen(1) <= bank_gen xor coef_commit;
             both_lanes_q <= in_sample_controls(0).enable and
                             in_sample_controls(1).enable;
             -- A newer ARM/ABORT cancels a COMPLETE already in flight.
@@ -391,13 +388,23 @@ begin
         variable qr, qi : signed(16 downto 0);
     begin
         if rising_edge(clock) then
-            -- S1
+            -- S1. The coefficient registers are the active bank, loaded from
+            -- the shadow on commit (their own DSP ENA). A separate active
+            -- bank copied here on every sample was a zero-logic LAB -> DSP
+            -- input path that failed hold. The sample loaded on the edge of
+            -- a commit uses the new bank; sideband gen/mode follow (S1).
+            -- Shadow -> S1 hold is waived in bladerf.sdc: the controller
+            -- never asserts coef_wr_en and coef_commit in the same cycle.
             if v0 = '1' then
                 s1_xi  <= dl_i;
                 s1_xq  <= dl_q;
-                s1_re  <= act_re;
-                s1_im  <= act_im;
-                s1_nim <= act_nim;
+            end if;
+            if coef_commit = '1' then
+                for m in 0 to NCOEF-1 loop
+                    s1_re(m)  <= signed(shadow(m)(15 downto 0));
+                    s1_im(m)  <= signed(shadow(m)(31 downto 16));
+                    s1_nim(m) <= -resize(signed(shadow(m)(31 downto 16)), 17);
+                end loop;
             end if;
             -- S2: Re = hr*xr + (-hi)*xi, Im = hr*xi + hi*xr
             if v(1) = '1' then

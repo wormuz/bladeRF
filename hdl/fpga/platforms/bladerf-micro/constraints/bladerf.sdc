@@ -872,3 +872,22 @@ the crossing; anchor it to the instance"
 # defect survived a full revision. Four pairs expected in sweep, zero in
 # revisions that do not instantiate the analyser.
 post_message -type info "readout crossings cut: $dwell_pairs_written"
+
+# rx_spatial_fir: shadow bank -> S1 coefficient registers, HOLD ONLY.
+# S1 is the active bank, packed into the DSP input registers with its own
+# enable, coef_commit; the DSP clock arrives ~0.5 ns after a LAB's, so this
+# zero-logic same-clock path fails the fast-corner hold check (-0.118 ns,
+# 2026-10-21). The check describes no real hazard: a shadow word changes
+# only on an edge with coef_wr_en, and S1 captures only on an edge with
+# coef_commit, and rx_spatial_fir_controller never asserts both in one
+# cycle (a capture issues the write first and the commit one cycle later;
+# captures are a full handshake apart). Both RTL files assert it in
+# simulation. Setup on this path stays timed.
+set sfir_shadow [get_keepers -nowarn {*U_rx_spatial_fir|shadow[*]}]
+set sfir_s1 [get_keepers -nowarn {*U_rx_spatial_fir|s1_re[*] *U_rx_spatial_fir|s1_im[*] *U_rx_spatial_fir|s1_nim[*]}]
+if { [get_collection_size $sfir_shadow] > 0 && [get_collection_size $sfir_s1] > 0 } {
+    set_false_path -hold -from $sfir_shadow -to $sfir_s1
+    post_message -type info "rx_spatial_fir shadow -> S1 hold waived: [get_collection_size $sfir_shadow] -> [get_collection_size $sfir_s1] keepers"
+} elseif { [get_collection_size $sfir_shadow] > 0 } {
+    post_message -type critical_warning "rx_spatial_fir S1 coefficient registers not matched: shadow -> S1 hold not waived"
+}
