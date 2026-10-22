@@ -145,7 +145,7 @@ int main(int argc, char **argv)
 
     for (unsigned i = 0; ok && i < trials; ++i) {
         struct bladerf_rf_event ev = {0};
-        bladerf_timestamp now = 0, last = 0;
+        bladerf_timestamp now = 0, last = 0, sched[DEPTH] = {0};
         uint64_t t0 = hq_mono_ns(), t_wait;
 
         s = 0;
@@ -157,6 +157,7 @@ int main(int argc, char **argv)
             s = bladerf_get_timestamp(dev, BLADERF_RX, &now);
             if (s != 0) break;
             last = now + lead + k * spacing;
+            sched[k] = last;
             s = bladerf_schedule_retune(dev, RX_CH, last,
                                         (k & 1u) ? FREQ_B : FREQ_A,
                                         &qt[(k & 1u) ? 1 : 0]);
@@ -213,8 +214,35 @@ int main(int argc, char **argv)
             ok = false;
             break;
         }
-        s = hq_count_events(dev, &cursor, BLADERF_RF_EVT_RX_RETUNE_FAILED,
-                            &failed_events, &history_complete);
+        {
+            /* Each failure with its NIOS stage (rfic_status when
+             * BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID) and the scheduled
+             * slot it matches, so a FAIL names its cause. */
+            struct bladerf_rf_event ev2[BLADERF_RF_EVENT_HISTORY_SIZE];
+            uint32_t n2 = 0;
+            s = bladerf_rf_events_get_since(dev, cursor, ev2,
+                                            BLADERF_RF_EVENT_HISTORY_SIZE,
+                                            &n2, &cursor, &history_complete);
+            for (uint32_t e = 0; s == 0 && e < n2; ++e) {
+                int slot = -1;
+                if (ev2[e].event_type != BLADERF_RF_EVT_RX_RETUNE_FAILED)
+                    continue;
+                ++failed_events;
+                for (unsigned k = 0; k < DEPTH; ++k)
+                    if (ev2[e].fpga_timestamp == sched[k]) slot = (int)k;
+                if (failed_events <= 40)
+                    fprintf(stderr, "RETUNE_FAILED trial=%u slot=%d "
+                            "stage=%u stage_valid=%u flags=0x%x error=%d "
+                            "fpga_ts=%" PRIu64 " last_sched=%" PRIu64
+                            " lo=%" PRIu64 " epoch=%u\n", i, slot,
+                            ev2[e].rfic_status,
+                            (ev2[e].flags &
+                             BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID) != 0,
+                            ev2[e].flags, ev2[e].error_code,
+                            ev2[e].fpga_timestamp, (uint64_t)sched[DEPTH - 1],
+                            ev2[e].requested_rx_lo_hz, ev2[e].epoch_id);
+            }
+        }
         if (s != 0 || !history_complete) {
             fprintf(stderr, "trial %u: event history s=%s complete=%u\n", i,
                     bladerf_strerror(s), history_complete);

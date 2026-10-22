@@ -1433,6 +1433,9 @@ static void *rx_fault_monitor_task(void *arg)
             rx_retune2_success_status == 0) {
             bool completion_lost = false;
             uint32_t completed = 0;
+            uint32_t verified_through = rx_retune2_success_count;
+            uint8_t rx_pending_with_this = 0;
+            uint8_t tx_pending = 0;
             uint32_t baseline = 0;
             bool baseline_valid = false;
             uint8_t pending_snapshot = 0;
@@ -1531,13 +1534,14 @@ static void *rx_fault_monitor_task(void *arg)
                                             rffe_profile =
                                                 board_data->rx_retune2_pending[i].
                                                     rffe_profile;
-                                            board_data->rx_retune2_pending[i].valid =
-                                                false;
-                                            board_data->rx_retune2_pending_count--;
                                         }
                                         break;
                                     }
                                 }
+                                rx_pending_with_this =
+                                    board_data->rx_retune2_pending_count;
+                                tx_pending =
+                                    board_data->tx_retune2_pending_count;
                                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 if (!request_found || completion_lost) {
                                     completion_lost = true;
@@ -1551,6 +1555,23 @@ static void *rx_fault_monitor_task(void *arg)
                                         nios_profile, rffe_profile,
                                         requested_frequency_hz,
                                         &profile_frequency_hz);
+                                if (bladerf2_retune_completion_readback_retry(
+                                        completion_status,
+                                        rx_pending_with_this, tx_pending)) {
+                                    /* Leave this record and its request for
+                                     * the next poll. */
+                                    verified_through = sequence - 1u;
+                                    break;
+                                }
+                                if (completion_status == 0) {
+                                    MUTEX_LOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                    board_data->rx_retune2_pending[i].valid =
+                                        false;
+                                    board_data->rx_retune2_pending_count--;
+                                    MUTEX_UNLOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                }
                                 if (completion_status != 0 ||
                                     !bladerf2_rfic_frequency_matches(
                                         profile_frequency_hz,
@@ -1564,7 +1585,7 @@ static void *rx_fault_monitor_task(void *arg)
                         }
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         board_data->rx_retune2_success_count_last =
-                            rx_retune2_success_count;
+                            verified_through;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                     }
 
@@ -2082,6 +2103,9 @@ static void *rx_fault_monitor_task(void *arg)
                         uint32_t completed = tx_retune2_success_count -
                             tx_success_baseline;
                         bool completion_lost = false;
+                        uint32_t verified_through = tx_retune2_success_count;
+                        uint8_t tx_pending_with_this = 0;
+                        uint8_t rx_pending = 0;
 
                         if (!bladerf2_retune_completion_batch_valid(
                                 completed,
@@ -2165,31 +2189,44 @@ static void *rx_fault_monitor_task(void *arg)
                                             rffe_profile =
                                                 board_data->tx_retune2_pending[i].
                                                     rffe_profile;
-                                            board_data->tx_retune2_pending[i].
-                                                valid = false;
-                                            board_data->tx_retune2_pending_count--;
-                                            board_data->tx_retune2_completion_faulted =
-                                                bladerf2_retune_completion_unresolved(
-                                                    board_data->tx_retune2_pending_count);
-                                            board_data->tx_retune2_applied_frequency_hz =
-                                                readback_frequency_hz;
-                                            board_data->tx_retune2_applied_waiting_rf_valid =
-                                                board_data->tx_retune2_pending_count == 0;
-                                            pending_after =
-                                                board_data->tx_retune2_pending_count;
                                         }
                                         break;
                                     }
                                 }
+                                tx_pending_with_this =
+                                    board_data->tx_retune2_pending_count;
+                                rx_pending =
+                                    board_data->rx_retune2_pending_count;
                                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 if (request_found && !completion_lost) {
                                     uint64_t profile_frequency_hz = 0;
                                     completion_read_status =
-                                        bladerf2_quick_tune_readback(
+                                        bladerf2_quick_tune_lo_readback(
                                             dev, BLADERF_CHANNEL_TX(0),
                                             nios_profile, rffe_profile,
                                             requested_frequency_hz,
                                             &profile_frequency_hz);
+                                    if (bladerf2_retune_completion_readback_retry(
+                                            completion_read_status,
+                                            tx_pending_with_this,
+                                            rx_pending)) {
+                                        /* Nothing of this completion is
+                                         * committed yet: leave the record,
+                                         * its request and the TX gate state
+                                         * for the next poll. */
+                                        verified_through = sequence - 1u;
+                                        break;
+                                    }
+                                    /* TX QUAD finalize can disconnect TX on
+                                     * failure, so it runs once, only after
+                                     * the LO readback succeeded. */
+                                    if (completion_read_status == 0 &&
+                                        board_data->rfic->command_mode ==
+                                            RFIC_COMMAND_HOST) {
+                                        completion_read_status =
+                                            bladerf2_tx_quad_calibration_finalize(
+                                                dev);
+                                    }
                                     if (completion_read_status != 0 ||
                                         !bladerf2_rfic_frequency_matches(
                                             profile_frequency_hz,
@@ -2202,8 +2239,18 @@ static void *rx_fault_monitor_task(void *arg)
                                             profile_frequency_hz;
                                         MUTEX_LOCK(
                                             &board_data->rx_async_epoch_lock);
+                                        board_data->tx_retune2_pending[i].
+                                            valid = false;
+                                        board_data->tx_retune2_pending_count--;
+                                        board_data->tx_retune2_completion_faulted =
+                                            bladerf2_retune_completion_unresolved(
+                                                board_data->tx_retune2_pending_count);
                                         board_data->tx_retune2_applied_frequency_hz =
                                             profile_frequency_hz;
+                                        board_data->tx_retune2_applied_waiting_rf_valid =
+                                            board_data->tx_retune2_pending_count == 0;
+                                        pending_after =
+                                            board_data->tx_retune2_pending_count;
                                         MUTEX_UNLOCK(
                                             &board_data->rx_async_epoch_lock);
                                         bladerf2_tx_retune_event(
@@ -2224,7 +2271,7 @@ static void *rx_fault_monitor_task(void *arg)
                         }
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         board_data->tx_retune2_success_count_last =
-                            tx_retune2_success_count;
+                            verified_through;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                         if (completion_lost) {
                             unsigned int i;
@@ -3845,19 +3892,28 @@ static int _bladerf_rx_transition_begin(
             }
         }
         if (rx_source_status == 0 && !rx_source_unsupported) {
+            bool clock_tree_known;
+            bool reference_known;
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            clock_tree_known = board_data->rfic_frequency_model_known;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            /* Read the reference on every boundary, also when an earlier
+             * unlock or read failure revoked it: only the setters used to
+             * restore it, so a transient unlock blocked every later
+             * transition (fault_live RUNTIME_REFERENCE_PLL_UNLOCKED). */
+            reference_known = bladerf2_rfic_reference_known_at_boundary(
+                clock_tree_known,
+                clock_tree_known ? bladerf2_rfic_reference_clock_status(dev)
+                                 : BLADERF_ERR_WOULD_BLOCK);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (board_data->rfic_frequency_model_known == clock_tree_known) {
+                board_data->rfic_reference_clock_known = reference_known;
+            }
             frequency_model_unknown =
                 !bladerf2_rfic_frequency_model_valid(
                     board_data->rfic_reference_clock_known,
                     board_data->rfic_frequency_model_known);
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            if (!frequency_model_unknown &&
-                bladerf2_rfic_reference_clock_status(dev) != 0) {
-                frequency_model_unknown = true;
-                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                board_data->rfic_reference_clock_known = false;
-                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            }
         }
         if (rx_source_status != 0 || rx_source_unsupported) {
             /* Reported after leaving dev->lock; no RF or epoch state changed. */

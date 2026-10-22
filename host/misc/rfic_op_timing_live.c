@@ -176,8 +176,14 @@ static int op_tx(struct bladerf *dev, unsigned reps, double *life)
                                 BLADERF_FORMAT_SC16_Q11_META, 16, 8192, 8, 0);
     if (s == 0) s = bladerf_enable_module(dev, TX_CH, true);
     if (s != 0) return hq_fail("tx start", s);
-    s = hq_count_events(dev, &cursor, BLADERF_RF_EVT_TX_RETUNE_VALID, &ignore,
-                        &complete);
+    /* Seek to the present. Earlier phases overflow the history from cursor
+     * 0, which get_since reports as BLADERF_ERR_MEM + incomplete while
+     * still moving the cursor to the current sequence: not a failure of
+     * this phase. Events from here on must be complete. */
+    (void)hq_count_events(dev, &cursor, BLADERF_RF_EVT_TX_RETUNE_VALID, &ignore,
+                          &complete);
+    complete = true;
+    s = 0;
     for (unsigned i = 0; s == 0 && i < reps; ++i) {
         const unsigned t = (i + 1) & 1u;
         unsigned valid = 0, failed = 0;
@@ -190,12 +196,13 @@ static int op_tx(struct bladerf *dev, unsigned reps, double *life)
                 s = BLADERF_ERR_TIMEOUT;
                 break;
             }
-            s = hq_count_events(dev, &cursor, BLADERF_RF_EVT_TX_RETUNE_VALID,
-                                &valid, &complete);
-            if (s == 0)
-                s = hq_count_events(dev, &cursor,
-                                    BLADERF_RF_EVT_TX_RETUNE_FAILED, &failed,
-                                    &complete);
+            s = hq_count_events2(dev, &cursor, BLADERF_RF_EVT_TX_RETUNE_VALID,
+                                 &valid, BLADERF_RF_EVT_TX_RETUNE_FAILED,
+                                 &failed, &complete);
+            if (s == 0 && !complete) {
+                fprintf(stderr, "TX retune %u: event history lost\n", i);
+                s = BLADERF_ERR_MEM;
+            }
             if (s == 0 && failed) {
                 fprintf(stderr, "TX retune %u: failed event\n", i);
                 s = BLADERF_ERR_UNEXPECTED;

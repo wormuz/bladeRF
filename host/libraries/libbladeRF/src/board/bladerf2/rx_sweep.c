@@ -563,7 +563,7 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
 
 uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
                                       bladerf_frequency frequency, bool sweep,
-                                      bool queue_idle)
+                                      bool queue_idle, bool queue_known)
 {
     struct bladerf2_board_data *board_data = dev->board_data;
     const struct ad9361_rf_phy *phy = board_data->phy;
@@ -590,8 +590,14 @@ uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
     }
     if (sweep) {
         from = board_data->rx_sweep.gain_table_planned;
-    } else if (queue_idle) {
-        from = gain_table_driver_region(phy);
+    } else if (queue_known) {
+        /* Behind a queued request NIOS starts from the table that request
+         * leaves; if it fails before its own load, NIOS doubts the table
+         * and loads anyway. An unnamed source makes NIOS reload the table
+         * before every queued recall, which delays the recall by the whole
+         * load past its timestamp. */
+        from = queue_idle ? gain_table_driver_region(phy)
+                          : board_data->rx_gain_table_planned;
     }
     if (from != to) {
         /* NIOS may load another table at a time the host does not see. */

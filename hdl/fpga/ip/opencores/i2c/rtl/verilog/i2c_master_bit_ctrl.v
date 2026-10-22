@@ -161,7 +161,11 @@ module i2c_master_bit_ctrl (
     output reg        scl_oen,  // i2c clock line output enable (active low)
     input             sda_i,    // i2c data line input
     output            sda_o,    // i2c data line output
-    output reg        sda_oen   // i2c data line output enable (active low)
+    output reg        sda_oen,  // i2c data line output enable (active low)
+
+    output            diag_slave_wait, // SCL released but read low
+    output            diag_scl,        // filtered SCL as the core sees it
+    output            diag_sda         // filtered SDA as the core sees it
 );
 
 
@@ -195,9 +199,16 @@ module i2c_master_bit_ctrl (
 
     // slave_wait is asserted when master wants to drive SCL high, but the slave pulls it low
     // slave_wait remains asserted until the slave releases SCL
+    // rst clears it too: a wait latched before a soft reset must not hold
+    // clk_en low in the reset core.
     always @(posedge clk or negedge nReset)
-      if (!nReset) slave_wait <= 1'b0;
-      else         slave_wait <= (scl_oen & ~dscl_oen & ~sSCL) | (slave_wait & ~sSCL);
+      if (!nReset)  slave_wait <= 1'b0;
+      else if (rst) slave_wait <= 1'b0;
+      else          slave_wait <= (scl_oen & ~dscl_oen & ~sSCL) | (slave_wait & ~sSCL);
+
+    assign diag_slave_wait = slave_wait;
+    assign diag_scl        = sSCL;
+    assign diag_sda        = sSDA;
 
     // master drives SCL high, but another master pulls it low
     // master start counting down its low cycle now (clock synchronization)

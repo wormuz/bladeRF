@@ -102,6 +102,21 @@ static inline bool timestamp_is_strictly_after(uint64_t candidate,
 #   define OC_I2C_TIP          (1<<1)
 #   define OC_I2C_RXACK        (1<<7)
 #   define OC_I2C_NACK         (1<<3)
+#   define OC_I2C_IACK         (1<<0)
+#   define OC_I2C_IF           (1<<0)
+#   define OC_I2C_AL           (1<<5)
+#   define OC_I2C_BUSY         (1<<6)
+
+/* bladeRF additions to the OpenCores core (i2c_master_top.v): reading
+ * offset 7 returns {SDA, SCL, slave_wait, byte state[4:0]}; writing
+ * OC_I2C_SOFT_RESET_KEY there resets the transfer logic, keeping PRER and
+ * CTRL. Offset 6 reads back CR. */
+#   define OC_I2C_CR_READBACK  6
+#   define OC_I2C_DIAG         7
+#   define OC_I2C_SOFT_RESET_KEY 0xa5
+#   define OC_I2C_DIAG_SDA     (1<<7)
+#   define OC_I2C_DIAG_STATE   0x1f
+#   define OC_I2C_PRESCALER_400KHZ 39   /* 80 MHz / (5 * 400 kHz) - 1 */
 
 /* IQ balance correction */
 #   define DEFAULT_GAIN_CORRECTION     0x1000
@@ -399,6 +414,23 @@ bool ina219_read(uint8_t addr, uint16_t *data);
  * @param   data    Data to write
  */
 bool ina219_write(uint8_t addr, uint16_t data);
+
+/**
+ * Read one NIOS_PKT_8x32_I2C_DIAG_* word (see nios_pkt_8x32.h)
+ *
+ * @return false for an address outside the set
+ */
+bool i2c_diag_read(uint8_t addr, uint32_t *value);
+
+/**
+ * Re-initialise the I2C controller and bus once per host command session.
+ *
+ * The controller and the slave on its bus are not reset by a host
+ * reconnect (FX3 SYS_RST leaves the Nios system running), so their state
+ * would otherwise outlive the session that left it. Call before serving an
+ * I2C request; it acts only when the session generation changed.
+ */
+void i2c_session_begin(uint32_t session_generation);
 
 /**
  * Write a command to the VCTCXO trim DAC

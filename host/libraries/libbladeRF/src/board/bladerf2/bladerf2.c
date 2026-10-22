@@ -159,6 +159,30 @@ static struct bladerf_loopback_modes const bladerf2_loopback_modes[] = {
 /* Low-level Initialization */
 /******************************************************************************/
 
+/* An INA219 failure aborts the open, so no handle is left to read the
+ * controller state with; log it from here. Gateware without the read
+ * answers FPGA_OP, which is logged too. */
+static void bladerf2_log_nios_i2c_diag(struct bladerf *dev)
+{
+    uint32_t v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY + 1] = { 0 };
+    uint8_t field;
+    int status = 0;
+
+    for (field = 0; field <= NIOS_PKT_8x32_I2C_DIAG_RECOVERY; ++field) {
+        status = nios_i2c_diag_read(dev, field, &v[field]);
+        if (status != 0) {
+            break;
+        }
+    }
+    log_error("NIOS I2C diag: status=%d regs=0x%08x core=0x%08x "
+              "failure=0x%08x failures=%u recovery=0x%08x\n",
+              status, v[NIOS_PKT_8x32_I2C_DIAG_REGS],
+              v[NIOS_PKT_8x32_I2C_DIAG_CORE],
+              v[NIOS_PKT_8x32_I2C_DIAG_FAILURE],
+              v[NIOS_PKT_8x32_I2C_DIAG_FAILURES],
+              v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY]);
+}
+
 static int _bladerf2_initialize(struct bladerf *dev)
 {
     struct bladerf2_board_data *board_data;
@@ -252,7 +276,11 @@ static int _bladerf2_initialize(struct bladerf *dev)
     }
 
     /* Initialize INA219 after the NIOS work queue has been reconciled. */
-    CHECK_STATUS(ina219_init(dev, ina219_r_shunt));
+    status = ina219_init(dev, ina219_r_shunt);
+    if (status < 0) {
+        bladerf2_log_nios_i2c_diag(dev);
+        return status;
+    }
 
     /* Set tuning mode. This will trigger initialization of the RFIC.
      *
@@ -381,6 +409,55 @@ static bool bladerf2_matches(struct bladerf *dev)
 /* Open/close */
 /******************************************************************************/
 
+/* The image the open path loads when the FPGA is unconfigured: the first
+ * hostedx<size>.rbf in the libbladeRF search path. *path is NULL if none
+ * exists; the caller frees it. */
+static int bladerf2_find_fpga_image(bladerf_fpga_size fpga_size, char **path)
+{
+    *path = NULL;
+    switch (fpga_size) {
+        case BLADERF_FPGA_A4:
+            *path = file_find("hostedxA4.rbf");
+            break;
+
+        case BLADERF_FPGA_A5:
+            *path = file_find("hostedxA5.rbf");
+            break;
+
+        case BLADERF_FPGA_A9:
+            *path = file_find("hostedxA9.rbf");
+            break;
+
+        case BLADERF_FPGA_UNKNOWN:
+            /* The size lives in the flash calibration region, and a board
+             * whose calibration region has gone unreadable reports
+             * UNKNOWN forever. This used to return outright, leaving such
+             * a board with no gateware at all -- it could not even load
+             * the stock image sitting in the search path.
+             *
+             * There are only three sizes for this board, so try each
+             * name. Guessing the file name is safe; guessing the CONTENT
+             * is not, and we do not: load_fpga rejects a bitstream that
+             * does not match the device. */
+            log_warning("Unknown FPGA size; trying each known image "
+                        "name in the search path.\n");
+            *path = file_find("hostedxA4.rbf");
+            if (NULL == *path) {
+                *path = file_find("hostedxA5.rbf");
+            }
+            if (NULL == *path) {
+                *path = file_find("hostedxA9.rbf");
+            }
+            break;
+
+        default:
+            log_error("%s: invalid FPGA size: %d\n", __FUNCTION__,
+                      fpga_size);
+            return BLADERF_ERR_UNEXPECTED;
+    }
+    return 0;
+}
+
 static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
 {
     NULL_CHECK(dev);
@@ -406,6 +483,7 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
      * Force set_tuning_mode() during first initialization to release any
      * FPGA-side owner left by a prior process before host initialization. */
     board_data->tuning_mode = (bladerf_tuning_mode)-1;
+    board_data->rx_gain_table_planned = NIOS_PKT_RETUNE2_GT_UNKNOWN;
     status = MUTEX_INIT(&board_data->rx_async_epoch_lock);
     if (status != THREAD_SUCCESS) {
         free(board_data);
@@ -617,46 +695,8 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
         board_data->state = STATE_FPGA_LOADED;
     } else if (status != 1) {
         /* Try searching for an FPGA in the config search path */
-        switch (board_data->fpga_size) {
-            case BLADERF_FPGA_A4:
-                full_path = file_find("hostedxA4.rbf");
-                break;
-
-            case BLADERF_FPGA_A5:
-                full_path = file_find("hostedxA5.rbf");
-                break;
-
-            case BLADERF_FPGA_A9:
-                full_path = file_find("hostedxA9.rbf");
-                break;
-
-            case BLADERF_FPGA_UNKNOWN:
-                /* The size lives in the flash calibration region, and a board
-                 * whose calibration region has gone unreadable reports
-                 * UNKNOWN forever. This used to return outright, leaving such
-                 * a board with no gateware at all -- it could not even load
-                 * the stock image sitting in the search path.
-                 *
-                 * There are only three sizes for this board, so try each
-                 * name. Guessing the file name is safe; guessing the CONTENT
-                 * is not, and we do not: load_fpga rejects a bitstream that
-                 * does not match the device. */
-                log_warning("Unknown FPGA size; trying each known image "
-                            "name in the search path.\n");
-                full_path = file_find("hostedxA4.rbf");
-                if (NULL == full_path) {
-                    full_path = file_find("hostedxA5.rbf");
-                }
-                if (NULL == full_path) {
-                    full_path = file_find("hostedxA9.rbf");
-                }
-                break;
-
-            default:
-                log_error("%s: invalid FPGA size: %d\n", __FUNCTION__,
-                          board_data->fpga_size);
-                return BLADERF_ERR_UNEXPECTED;
-        }
+        CHECK_STATUS(bladerf2_find_fpga_image(board_data->fpga_size,
+                                              &full_path));
 
         if (full_path != NULL) {
             uint8_t *buf;
@@ -4327,6 +4367,25 @@ int bladerf2_quick_tune_readback(
     bladerf_frequency expected_frequency,
     bladerf_frequency *readback_frequency)
 {
+    int status = bladerf2_quick_tune_lo_readback(
+        dev, ch, nios_profile, profile, expected_frequency,
+        readback_frequency);
+
+    if (status == 0 && BLADERF_CHANNEL_IS_TX(ch) &&
+        ((struct bladerf2_board_data *)dev->board_data)->rfic->command_mode ==
+            RFIC_COMMAND_HOST) {
+        status = bladerf2_tx_quad_calibration_finalize(dev);
+        return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
+    }
+    return status;
+}
+
+int bladerf2_quick_tune_lo_readback(
+    struct bladerf *dev, bladerf_channel ch, uint16_t nios_profile,
+    uint8_t profile,
+    bladerf_frequency expected_frequency,
+    bladerf_frequency *readback_frequency)
+{
     if (!bladerf2_channel_valid(ch)) {
         return BLADERF_ERR_INVAL;
     }
@@ -4350,9 +4409,6 @@ int bladerf2_quick_tune_readback(
         int status = ad9361_fastlock_sync_current_lo(
             board_data->phy, BLADERF_CHANNEL_IS_TX(ch), profile,
             expected_frequency, readback_frequency);
-        if (status == 0 && BLADERF_CHANNEL_IS_TX(ch)) {
-            status = bladerf2_tx_quad_calibration_finalize(dev);
-        }
         return status < 0 ? errno_ad9361_to_bladerf(status) : 0;
     }
 
@@ -4521,7 +4577,7 @@ int bladerf2_schedule_retune_sequenced(
     if (!BLADERF_CHANNEL_IS_TX(ch)) {
         rx_gain_table = bladerf2_rx_retune_gain_table(
             dev, frequency, sweep_sequence != 0,
-            rx_retune_pending_count == 0 && !rx_retune_outcome_unknown);
+            rx_retune_pending_count == 0, !rx_retune_outcome_unknown);
         if (rx_gain_table != 0 && sweep_sequence == 0) {
             /* A session uploads at begin. Here on every retune, not only a
              * crossing: the first one, usually with an idle queue, seeds
@@ -4712,6 +4768,12 @@ int bladerf2_schedule_retune_sequenced(
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt,
                                        retune2_request_token);
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        board_data->rx_gain_table_planned =
+            status == 0 && rx_gain_table != 0
+                ? (uint8_t)NIOS_PKT_RETUNE2_GT_TO(rx_gain_table)
+                : (uint8_t)NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    }
     if (timestamp == BLADERF_RETUNE_NOW && retune2_request_token != 0 &&
         dev->nios_retune_trace.valid &&
         dev->nios_retune_trace.status == 0 &&
@@ -7833,6 +7895,62 @@ out:
     return status;
 }
 
+int bladerf_get_fpga_image_path(struct bladerf *dev, char *path, size_t len)
+{
+    struct bladerf2_board_data *board_data;
+    char *found = NULL;
+    int status;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FIRMWARE_LOADED);
+    NULL_CHECK(path);
+
+    board_data = dev->board_data;
+    status = bladerf2_find_fpga_image(board_data->fpga_size, &found);
+    if (status != 0) {
+        return status;
+    }
+    if (found == NULL) {
+        return BLADERF_ERR_NO_FILE;
+    }
+    if (strlen(found) >= len) {
+        free(found);
+        return BLADERF_ERR_INVAL;
+    }
+    strcpy(path, found);
+    free(found);
+    return 0;
+}
+
+int bladerf_get_nios_i2c_diag(struct bladerf *dev,
+                              struct bladerf_nios_i2c_diag *diag)
+{
+    uint32_t v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY + 1];
+    uint8_t field;
+    int status = 0;
+
+    CHECK_BOARD_IS_BLADERF2(dev);
+    CHECK_BOARD_STATE(STATE_FPGA_LOADED);
+    NULL_CHECK(diag);
+
+    MUTEX_LOCK(&dev->lock);
+    for (field = 0; field <= NIOS_PKT_8x32_I2C_DIAG_RECOVERY; ++field) {
+        status = nios_i2c_diag_read(dev, field, &v[field]);
+        if (status != 0) {
+            break;
+        }
+    }
+    MUTEX_UNLOCK(&dev->lock);
+    if (status == 0) {
+        diag->regs = v[NIOS_PKT_8x32_I2C_DIAG_REGS];
+        diag->core = v[NIOS_PKT_8x32_I2C_DIAG_CORE];
+        diag->failure = v[NIOS_PKT_8x32_I2C_DIAG_FAILURE];
+        diag->failures = v[NIOS_PKT_8x32_I2C_DIAG_FAILURES];
+        diag->recovery = v[NIOS_PKT_8x32_I2C_DIAG_RECOVERY];
+    }
+    return status;
+}
+
 
 int bladerf_get_rx_fpga_iqcor_mask(struct bladerf *dev, uint8_t *mask)
 {
@@ -8406,6 +8524,32 @@ static void bladerf2_rx_sfir_fill_status(
     st->rx_transaction_id = board_data->rx_sfir_transaction_id;
 }
 
+/* bladerf2_sfir_fence_ready() under the locks that own its inputs. Caller
+ * holds dev->lock; the contract flag is read under rx_async_epoch_lock. */
+static int bladerf2_rx_sfir_fence_ready_locked(struct bladerf *dev,
+                                               bool contract_enabled)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    int status = bladerf2_sfir_fence_ready(contract_enabled,
+                                           board_data->rf_link_dir_on[0]);
+    if (status != 0) {
+        log_error("%s: RX is disabled; an epoch-fenced spatial FIR change "
+                  "needs RX samples\n", __FUNCTION__);
+    }
+    return status;
+}
+
+static bool bladerf2_rx_sfir_contract_enabled(struct bladerf *dev)
+{
+    struct bladerf2_board_data *board_data = dev->board_data;
+    bool enabled;
+
+    MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+    enabled = board_data->rf_transition_epoch_contract_enabled;
+    MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+    return enabled;
+}
+
 int bladerf_set_rx_spatial_fir(struct bladerf *dev,
                                const int16_t coef[2][2][5][2])
 {
@@ -8422,10 +8566,15 @@ int bladerf_set_rx_spatial_fir(struct bladerf *dev,
     ctx.board_data = board_data;
     ctx.identity_level = false;
     ctx.bank_identity = bladerf2_sfir_bank_is_identity(words);
+    const bool contract_enabled = bladerf2_rx_sfir_contract_enabled(dev);
 
     WITH_MUTEX(&dev->lock, {
         if (!board_data->rx_sfir_supported) {
             status = BLADERF_ERR_UNSUPPORTED;
+        }
+        if (status == 0) {
+            status = bladerf2_rx_sfir_fence_ready_locked(dev,
+                                                         contract_enabled);
         }
         /* W is estimated for one gain state; AGC changes gain without the
          * host, so a W under AGC is wrong by construction. */
@@ -8449,7 +8598,7 @@ int bladerf_set_rx_spatial_fir(struct bladerf *dev,
             }
         }
     });
-    if (status == BLADERF_ERR_UNSUPPORTED) {
+    if (status == BLADERF_ERR_UNSUPPORTED || status == BLADERF_ERR_NOT_INIT) {
         return status;
     }
     if (status != 0) {
@@ -8464,20 +8613,29 @@ int bladerf_reset_rx_spatial_fir(struct bladerf *dev)
 {
     struct bladerf2_sfir_apply_ctx ctx = {0};
     bool supported;
+    int status = 0;
 
     CHECK_BOARD_IS_BLADERF2(dev);
     CHECK_BOARD_STATE(STATE_INITIALIZED);
 
     struct bladerf2_board_data *board_data = dev->board_data;
+    const bool contract_enabled = bladerf2_rx_sfir_contract_enabled(dev);
     WITH_MUTEX(&dev->lock, {
         supported = board_data->rx_sfir_supported;
         if (supported) {
+            status = bladerf2_rx_sfir_fence_ready_locked(dev,
+                                                         contract_enabled);
+        }
+        if (supported && status == 0) {
             board_data->rx_sfir_host_generation++;
             board_data->rx_sfir_may_be_active = true;
         }
     });
     if (!supported) {
         return BLADERF_ERR_UNSUPPORTED;
+    }
+    if (status != 0) {
+        return status;
     }
 
     ctx.board_data = board_data;

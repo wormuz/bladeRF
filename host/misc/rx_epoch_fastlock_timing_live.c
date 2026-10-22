@@ -22,6 +22,10 @@
 #define LOCAL_FREQ_B 1835400000ULL
 #define CROSS_FREQ_A 947500000ULL
 #define CROSS_FREQ_B 1835000000ULL
+/* Diagnostics only, not a PASS limit: a transition slower than this prints
+ * its full event trace (event types incl. RX_RFDC_CAL_DONE, rfic_status), so
+ * a single slow transition in a long run names its stage. */
+#define TRACE_SLOW_US 100000.0
 
 static int fail_status(const char *what, int status)
 {
@@ -71,6 +75,7 @@ int main(int argc, char **argv)
     double *total_us[2] = {NULL, NULL};
     size_t arm_n[2] = {0, 0};
     unsigned arm_dir[2][2] = {{0, 0}, {0, 0}};
+    unsigned rfdc_transitions = 0, first_rfdc_trial = 0;
     uint32_t first_transaction_id = 0;
     uint32_t last_transaction_id = 0;
     bool last_transaction_fastlock = false;
@@ -216,21 +221,29 @@ int main(int argc, char **argv)
                 goto done;
             }
         }
-        if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL) {
+        if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL ||
+            (final_event.host_monotonic_ns - config_ns) / 1000.0 > TRACE_SLOW_US) {
             for (uint32_t j = 0; j < count; ++j) {
                 printf("event txn=%u index=%u type=%u state=%u "
-                       "since_config_us=%.3f fpga_ts=%llu flags=0x%x\n",
+                       "since_config_us=%.3f fpga_ts=%llu flags=0x%x "
+                       "rfic_status=0x%x error=%d\n",
                        transaction, j, events[j].event_type,
                        events[j].fpga_state,
                        (events[j].host_monotonic_ns - config_ns) / 1000.0,
                        (unsigned long long)events[j].fpga_timestamp,
-                       events[j].flags);
+                       events[j].flags, events[j].rfic_status, events[j].error_code);
             }
         }
         {
             const double t = (final_event.host_monotonic_ns - config_ns) / 1000.0;
             total_us[use_fastlock][arm_n[use_fastlock]++] = t;
             ++arm_dir[use_fastlock][target];
+            for (uint32_t j = 0; j < count; ++j) {
+                if (events[j].event_type == BLADERF_RF_EVT_RX_RFDC_CAL_DONE) {
+                    if (rfdc_transitions++ == 0) first_rfdc_trial = i;
+                    break;
+                }
+            }
         }
         if (use_fastlock) {
             /* Tokened asynchronous NOW acceptance has no device duration. */
@@ -298,6 +311,11 @@ int main(int argc, char **argv)
                arm ? "fastlock" : "host", arm_n[arm], arm_dir[arm][0],
                arm_dir[arm][1]);
     }
+    /* Informational: transitions that ran an RX RFDC (RX_RFDC_CAL_DONE in
+     * their event history). Expected 0 once both input banks are seeded at
+     * open (RX-TRANSITION-1S3-001). */
+    printf("RFDC_TRANSITIONS n=%u first_trial=%d\n", rfdc_transitions,
+           rfdc_transitions ? (int)first_rfdc_trial : -1);
     printf("PASS seed=%" PRIu64 " trials=%u\n", seed, trials);
     result = 0;
 done:

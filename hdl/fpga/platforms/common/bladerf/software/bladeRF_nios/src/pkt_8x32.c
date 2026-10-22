@@ -181,6 +181,12 @@ static inline bool perform_read(uint8_t id, uint8_t addr, uint32_t *data)
             }
             break;
 
+        case NIOS_PKT_8x32_TARGET_I2C_DIAG:
+            if (!i2c_diag_read(addr, data)) {
+                return false;
+            }
+            break;
+
         /* Sample-loss counters, one 32-bit half per packet. Each PIO word
          * comes from a 64-bit capture register in the fabric. Separate
          * requests can straddle a low-word carry; the host uses high-low-high

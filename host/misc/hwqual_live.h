@@ -53,8 +53,11 @@ static inline double hq_percentile(double *v, size_t n, double pct)
 
 static inline void hq_print_stats(const char *label, double *v, size_t n)
 {
-    printf("STATS %s n=%zu p50=%.3f p99=%.3f max=%.3f\n", label, n,
-           hq_percentile(v, n, 50.0), hq_percentile(v, n, 99.0),
+    /* Argument evaluation order is unspecified: read max only after the
+     * sort, not in the same call (GCC took v[n-1] unsorted: max < p50). */
+    const double p50 = hq_percentile(v, n, 50.0);
+    const double p99 = hq_percentile(v, n, 99.0);
+    printf("STATS %s n=%zu p50=%.3f p99=%.3f max=%.3f\n", label, n, p50, p99,
            n ? v[n - 1] : 0.0);
 }
 
@@ -94,19 +97,34 @@ static inline int hq_transition(struct bladerf *dev, bladerf_channel ch,
     return status;
 }
 
-/* Count RF events of one type after `*cursor`; advances the cursor. */
-static inline int hq_count_events(struct bladerf *dev, uint64_t *cursor,
-                                  bladerf_rf_event_type type,
-                                  unsigned *count_type, bool *complete)
+/* Count RF events of two types after `*cursor` in ONE read; advances the
+ * cursor. Two separate reads would lose the second type: the first read
+ * already moved the cursor past the whole batch. */
+static inline int hq_count_events2(struct bladerf *dev, uint64_t *cursor,
+                                   bladerf_rf_event_type type_a,
+                                   unsigned *count_a,
+                                   bladerf_rf_event_type type_b,
+                                   unsigned *count_b, bool *complete)
 {
     struct bladerf_rf_event ev[BLADERF_RF_EVENT_HISTORY_SIZE];
     uint32_t n = 0;
     int status = bladerf_rf_events_get_since(
         dev, *cursor, ev, BLADERF_RF_EVENT_HISTORY_SIZE, &n, cursor,
         complete);
-    for (uint32_t i = 0; status == 0 && i < n; ++i)
-        if (ev[i].event_type == type) ++*count_type;
+    for (uint32_t i = 0; status == 0 && i < n; ++i) {
+        if (ev[i].event_type == type_a) ++*count_a;
+        if (count_b != NULL && ev[i].event_type == type_b) ++*count_b;
+    }
     return status;
+}
+
+/* Count RF events of one type after `*cursor`; advances the cursor. */
+static inline int hq_count_events(struct bladerf *dev, uint64_t *cursor,
+                                  bladerf_rf_event_type type,
+                                  unsigned *count_type, bool *complete)
+{
+    return hq_count_events2(dev, cursor, type, count_type, type, NULL,
+                            complete);
 }
 
 /* The FPGA RX trigger state outlives the process (the library never disarms

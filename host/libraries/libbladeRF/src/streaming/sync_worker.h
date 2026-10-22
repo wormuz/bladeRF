@@ -309,66 +309,81 @@ void sync_worker_rx_ring_full_recycle(struct bladerf_sync *s,
  * RX ring has no EMPTY slots. The caller holds buf_mgmt.lock. */
 unsigned int sync_worker_rx_select_producer_slot(struct bladerf_sync *s);
 
-/* Epoch-fenced packets can visit every ring slot while the application is
- * paused. If every dropped marker is skipped, cons_i wraps to its old value,
- * which may now refer to a much later in-flight sequence. Re-anchor the
- * consumer to the slot carrying expected_seq so it waits for the oldest live
- * completion rather than blocking behind a stale ring index. Caller holds
- * buf_mgmt.lock. */
-static inline bool sync_worker_reanchor_rx_consumer_to_expected(
+/* The RX producer does not fill ring slots in index order: a rejected
+ * completion rotates to the next EMPTY slot, and the producer cursor repair
+ * skips occupied slots. The consumer must therefore follow sequence order,
+ * not cons_i + 1. Point cons_i at the oldest undelivered sequence:
+ *
+ *   - FULL slots were released in sequence order and are older than every
+ *     live in-flight transfer, so the oldest FULL slot comes first;
+ *   - otherwise the in-flight slot carrying expected_seq.
+ *
+ * Index-order consumption leaves released buffers behind cons_i. When epoch
+ * fence rejections cover more than a ring of completions while nobody reads,
+ * the producer re-issues the consumer's slot for a later sequence; cons_i
+ * then waits there and the older FULL slots are skipped (reproduced in
+ * libbladeRF_test_sync_rx_ring_order). A lap later the producer meets them,
+ * which is the xA4 RX_X2 signature "RX sync producer cursor repair ...
+ * old_state=2", and the reader returns their old timestamps as a
+ * discontinuity: a short read with BLADERF_META_STATUS_OVERRUN.
+ *
+ * A PARTIAL slot is the buffer currently being read and is never moved.
+ * In-flight slots behind expected_seq carry retired sequences and are not
+ * candidates. Caller holds buf_mgmt.lock. Returns true when cons_i moved. */
+static inline bool sync_worker_reanchor_rx_consumer_to_oldest(
     struct bladerf_sync *s)
 {
     struct buffer_mgmt *b;
+    unsigned int best = BUFFER_MGMT_INVALID_INDEX;
+    uint64_t best_key = UINT64_MAX;
 
     if (s == NULL || !s->initialized) {
         return false;
     }
 
     b = &s->buf_mgmt;
-    if (b->status == NULL || b->buffer_seq == NULL || b->num_buffers == 0) {
+    if (b->status == NULL || b->buffer_seq == NULL || b->num_buffers == 0 ||
+        b->cons_i >= b->num_buffers ||
+        b->status[b->cons_i] == SYNC_BUFFER_PARTIAL) {
         return false;
     }
 
+    /* Order key: released FULL sequences behind expected_seq first, oldest
+     * (largest lag) first; then sequences at or after expected_seq (the
+     * expected in-flight transfer, forwarded or held completions) by their
+     * distance. Rejected completions advance expected_seq without occupying
+     * a slot, so a FULL slot's lag is not bounded by the ring size. */
     for (unsigned int i = 0; i < b->num_buffers; ++i) {
-        if (b->status[i] != SYNC_BUFFER_EMPTY &&
-            b->buffer_seq[i] == b->expected_seq) {
-            b->cons_i = i;
-            b->partial_off = 0;
-            return true;
+        const uint32_t ahead = b->buffer_seq[i] - b->expected_seq;
+        const bool behind = ahead > UINT32_MAX / 2;
+        uint64_t key;
+
+        if (b->status[i] == SYNC_BUFFER_PARTIAL) {
+            return false;
+        }
+        if (b->status[i] == SYNC_BUFFER_FULL && behind) {
+            key = (uint64_t)(UINT32_MAX - (uint32_t)(0u - ahead));
+        } else if ((b->status[i] == SYNC_BUFFER_FULL ||
+                    b->status[i] == SYNC_BUFFER_IN_FLIGHT) && !behind) {
+            key = ((uint64_t)1 << 32) + ahead;
+        } else {
+            /* EMPTY, or an in-flight slot whose sequence was retired. */
+            continue;
+        }
+
+        if (key < best_key) {
+            best = i;
+            best_key = key;
         }
     }
 
-    return false;
-}
-
-/* A rejected-marker run can end just short of a full ring when an EMPTY slot
- * retains a sequence from an older epoch. If that slot is not marked dropped,
- * the consumer otherwise waits there forever even though the producer has
- * advanced expected_seq and the matching live transfer occupies another
- * slot. Preserve a FULL/expected head; re-anchor only from a stale EMPTY slot
- * or after a complete ring of rejected markers. Caller holds buf_mgmt.lock. */
-static inline bool sync_worker_reanchor_rx_consumer_after_rejections(
-    struct bladerf_sync *s, unsigned int skipped)
-{
-    struct buffer_mgmt *b;
-    bool stale_empty;
-
-    if (s == NULL || !s->initialized) {
-        return false;
-    }
-    b = &s->buf_mgmt;
-    if (b->status == NULL || b->buffer_seq == NULL || b->num_buffers == 0 ||
-        b->cons_i >= b->num_buffers) {
+    if (best == BUFFER_MGMT_INVALID_INDEX || best == b->cons_i) {
         return false;
     }
 
-    stale_empty = b->status[b->cons_i] == SYNC_BUFFER_EMPTY &&
-                  b->buffer_seq[b->cons_i] != b->expected_seq;
-    if (skipped != b->num_buffers && !stale_empty) {
-        return false;
-    }
-
-    return sync_worker_reanchor_rx_consumer_to_expected(s);
+    b->cons_i = best;
+    b->partial_off = 0;
+    return true;
 }
 
 /* Hold an out-of-order RX buffer for later ordered delivery when it fits the

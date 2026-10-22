@@ -455,7 +455,10 @@ struct bladerf_rx_spatial_fir_status {
  * @param[in]   coef  Q2.14 bank, see the group description
  *
  * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
- *         block or an RX channel uses an AGC gain mode, or a value from
+ *         block or an RX channel uses an AGC gain mode,
+ *         BLADERF_ERR_NOT_INIT if the RX epoch contract is enabled and RX
+ *         is disabled (the fenced commit needs RX samples; nothing is
+ *         written), or a value from
  *         \ref RETCODES list on other failure
  */
 API_EXPORT
@@ -486,7 +489,8 @@ int CALL_CONV bladerf_get_rx_spatial_fir(struct bladerf *dev,
  * @param       dev   Device handle
  *
  * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
- *         block, or a value from \ref RETCODES list on other failure
+ *         block, BLADERF_ERR_NOT_INIT as for ::bladerf_set_rx_spatial_fir,
+ *         or a value from \ref RETCODES list on other failure
  */
 API_EXPORT
 int CALL_CONV bladerf_reset_rx_spatial_fir(struct bladerf *dev);
@@ -992,6 +996,71 @@ int CALL_CONV bladerf_get_nios_ram_usage(struct bladerf *dev,
                                          struct bladerf_nios_ram_usage *usage);
 
 /** @} (End of FN_BLADERF2_LOW_LEVEL_NIOS_RAM) */
+
+/**
+ * @defgroup FN_BLADERF2_LOW_LEVEL_NIOS_I2C NIOS I2C controller state
+ *
+ * State of the OpenCores I2C controller that NIOS uses for the INA219 power
+ * monitor, and its last failure. Readable while an INA219 access fails.
+ *
+ * @{
+ */
+
+/**
+ * NIOS I2C diagnostic words; bit layouts are documented with
+ * NIOS_PKT_8x32_TARGET_I2C_DIAG in nios_pkt_8x32.h.
+ */
+struct bladerf_nios_i2c_diag {
+    /** [7:0] PRER lo, [15:8] PRER hi, [23:16] CTRL, [31:24] SR */
+    uint32_t regs;
+    /** [7:0] CR readback, [15:8] {SDA, SCL, slave_wait, byte state} */
+    uint32_t core;
+    /** Last failure: [7:0] operation, [15:8] byte step, [23:16] reason,
+     *  [31:24] SR then; 0 if none since the FPGA load */
+    uint32_t failure;
+    /** Failed transfers since the FPGA load */
+    uint32_t failures;
+    /** [15:0] controller re-initialisations, [23:16] flags of the last,
+     *  [31:24] diagnostic byte after it */
+    uint32_t recovery;
+};
+
+/**
+ * Read the NIOS I2C controller state and failure record.
+ *
+ * @param       dev     Device handle
+ * @param[out]  diag    Diagnostic words
+ *
+ * @return 0 on success, value from \ref RETCODES list on failure.
+ *         Returns ::BLADERF_ERR_FPGA_OP on FPGA images that predate the
+ *         read.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_nios_i2c_diag(struct bladerf *dev,
+                                        struct bladerf_nios_i2c_diag *diag);
+
+/**
+ * Path of the FPGA image bladerf_open() loads into an unconfigured FPGA:
+ * the first hostedx<size>.rbf for this board in the libbladeRF search path.
+ *
+ * Usable on a handle opened without FPGA initialization
+ * (BLADERF_FORCE_NO_FPGA_PRESENT), so a caller can reload the same image
+ * with bladerf_load_fpga() when initialization of the running one fails.
+ *
+ * @param       dev     Device handle
+ * @param[out]  path    Buffer for the NUL-terminated path
+ * @param[in]   len     Buffer size
+ *
+ * @return 0 on success, ::BLADERF_ERR_NO_FILE if no image is found,
+ *         ::BLADERF_ERR_INVAL if the buffer is too small, other value from
+ *         \ref RETCODES on failure.
+ */
+API_EXPORT
+int CALL_CONV bladerf_get_fpga_image_path(struct bladerf *dev,
+                                          char *path,
+                                          size_t len);
+
+/** @} (End of FN_BLADERF2_LOW_LEVEL_NIOS_I2C) */
 
 /** @} (End of FN_BLADERF2_LOW_LEVEL) */
 

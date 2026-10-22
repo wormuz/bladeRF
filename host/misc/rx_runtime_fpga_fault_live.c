@@ -338,9 +338,25 @@ int main(int argc, char **argv)
         goto cleanup;
     }
     request.target_frequency_hz += 100000;
-    status = bladerf_rx_transition_begin(dev, transition_channel, &request,
-                                         &transaction_id);
-    if (status != 0) goto cleanup;
+    /* The monitor publishes the invalidation (and releases the blocked
+     * reader) before it sends the NIOS epoch ABORT and clears its RF-setter
+     * claim; until then transition_begin returns WOULD_BLOCK, the documented
+     * "transition or RF setter active" answer. Retry that answer only, for
+     * a bounded time; anything else, or WOULD_BLOCK past the bound, fails. */
+    unsigned begin_busy = 0;
+    for (;;) {
+        status = bladerf_rx_transition_begin(dev, transition_channel,
+                                             &request, &transaction_id);
+        if (status != BLADERF_ERR_WOULD_BLOCK || begin_busy >= 200) break;
+        ++begin_busy;
+        usleep(10000);
+    }
+    if (status != 0) {
+        fprintf(stderr, "explicit recovery transition_begin failed: %s "
+                "after %u busy retries\n", bladerf_strerror(status),
+                begin_busy);
+        goto cleanup;
+    }
     struct bladerf_rf_event recovery_event = {0};
     status = bladerf_rx_transition_wait(dev, transaction_id, &recovery_event,
                                         2000);
@@ -377,11 +393,12 @@ int main(int argc, char **argv)
     }
 
     printf("runtime FPGA RX fault monitor: PASS layout=%s epoch=%u "
-           "reason=0x%x iq_count=0 recovered_epoch=%u recovered_iq=%u\n",
+           "reason=0x%x iq_count=0 recovered_epoch=%u recovered_iq=%u "
+           "begin_busy=%u\n",
            layout == BLADERF_RX_X2 ? "RX_X2" :
            (transition_channel == BLADERF_CHANNEL_RX(1) ? "RX2" : "RX1"),
            transition_event.epoch_id, expected_reason, recovery_event.epoch_id,
-           recovery_metadata.actual_count);
+           recovery_metadata.actual_count, begin_busy);
     status = 0;
 
 cleanup:

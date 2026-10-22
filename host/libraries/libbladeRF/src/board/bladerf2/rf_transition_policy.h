@@ -47,12 +47,35 @@ static inline void bladerf2_rx_rfdc_calibration_record(
     }
 }
 
+/* Open-time RFDC of input A (index 0, A_BALANCED): needed unless setup
+ * already calibrated it. Setup calibrates the configured init input. */
+static inline bool bladerf2_rfdc_init_seed_a_needed(uint8_t valid_mask)
+{
+    return (valid_mask & 1u) == 0;
+}
+
 #include <libbladeRF.h>
 
 static inline bool bladerf2_rfic_frequency_model_valid(
     bool reference_clock_known, bool rfic_clock_tree_known)
 {
     return reference_clock_known && rfic_clock_tree_known;
+}
+
+/* Reference certificate at an RX transition boundary. An unlock or a failed
+ * status read revokes it (reference_clock_known=false); it means "check the
+ * hardware again", not a permanent state. With the clock-tree model intact,
+ * a successful readback showing a locked (or bypassed) reference re-certifies
+ * it: an unlock does not change the ADF4002 or AD9361 dividers, and the
+ * transition re-locks and checks the AD9361 PLLs itself. A failed read or an
+ * unlocked reference keeps it revoked. A modified clock tree is re-certified
+ * only by the reference setters. `hw_status` is
+ * bladerf2_rfic_reference_clock_status(); read whenever the tree is known.
+ * Returns the new reference_clock_known. */
+static inline bool bladerf2_rfic_reference_known_at_boundary(
+    bool rfic_clock_tree_known, int hw_status)
+{
+    return rfic_clock_tree_known && hw_status == 0;
 }
 
 /* AD9361 RX1/RX2 manual LMT/full-gain controls (REG_RX1_MANUAL_LMT_FULL_GAIN
@@ -176,6 +199,20 @@ static inline bool bladerf2_retune_completion_batch_valid(
     uint32_t completed, uint32_t pending, uint32_t ring_depth)
 {
     return completed <= ring_depth && completed <= pending;
+}
+
+/* Verifying a RETUNE2 completion reads the reference divider over AD9361
+ * SPI (bladerf2_quick_tune_lo_readback). NIOS refuses direct AD9361 reads
+ * while a queued RETUNE2 of either module uploads, recalls or loads a gain
+ * table (bladeRF_nios.c cooperative dispatch), which is exactly when the next
+ * queued request follows this completion. A failed read is then retried on a
+ * later poll with the record unconsumed; only with no other queued request on
+ * either module can it mean a lost completion. */
+static inline bool bladerf2_retune_completion_readback_retry(
+    int readback_status, uint8_t own_pending_with_this, uint8_t other_pending)
+{
+    return readback_status != 0 &&
+           (own_pending_with_this > 1 || other_pending != 0);
 }
 
 /* A matched completion batch remains unresolved while any accepted request

@@ -150,6 +150,12 @@ int main(void)
                status_word(1, 0, false, true, true, true, false, false),
                7, false) == BLADERF_ERR_UNEXPECTED);
 
+    /* Epoch-fenced apply needs RX samples; without the contract it does not. */
+    assert(bladerf2_sfir_fence_ready(true, false) == BLADERF_ERR_NOT_INIT);
+    assert(bladerf2_sfir_fence_ready(true, true) == 0);
+    assert(bladerf2_sfir_fence_ready(false, false) == 0);
+    assert(bladerf2_sfir_fence_ready(false, true) == 0);
+
     puts("RX spatial FIR policy: PASS");
     return 0;
 }
