@@ -127,7 +127,13 @@ int bladerf2_schedule_retune_sequenced(
     board_data->rx_retune2_pending[i].gain_table =
         bladerf2_rx_retune_gain_table(dev, frequency, sweep_sequence != 0,
                                       board_data->rx_retune2_pending_count ==
-                                          0);
+                                          0,
+                                      !board_data->rx_retune2_outcome_unknown);
+    board_data->rx_gain_table_planned =
+        schedule_status == 0 && board_data->rx_retune2_pending[i].gain_table
+            ? (uint8_t)NIOS_PKT_RETUNE2_GT_TO(
+                  board_data->rx_retune2_pending[i].gain_table)
+            : (uint8_t)NIOS_PKT_RETUNE2_GT_UNKNOWN;
     requests[request_count].gain_table =
         board_data->rx_retune2_pending[i].gain_table;
     board_data->rx_retune2_pending[i].valid = true;
@@ -760,6 +766,46 @@ static void check_gain_table_crossing(void)
     mock_phy.current_table = 0;
 }
 
+/* Outside a session, queued retunes inside one region name the table the
+ * request ahead leaves: an unnamed source makes NIOS reload the table before
+ * each recall, which then executes a whole table load past its timestamp
+ * (rx_epoch_deferred_load_live: last of 4 queued retunes CANCELLED in its
+ * gain-table load by the next transition). */
+static void check_gain_table_queued_plain(void)
+{
+    uint8_t gt;
+
+    setup_gain_table();
+    board_data.rx_gain_table_planned = NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    gt = bladerf2_rx_retune_gain_table(&dev, 1835000000, false, true, true);
+    CHECK(gt == nios_pkt_retune2_gain_table(false, false, 1, 1),
+          "idle queue: %02x", gt);
+    board_data.rx_gain_table_planned = (uint8_t)NIOS_PKT_RETUNE2_GT_TO(gt);
+    gt = bladerf2_rx_retune_gain_table(&dev, 1835400000, false, false, true);
+    CHECK(gt == nios_pkt_retune2_gain_table(false, false, 1, 1) &&
+              mock_phy.current_table == 1,
+          "queued retune in the same region: %02x, driver table %u", gt,
+          mock_phy.current_table);
+    board_data.rx_gain_table_planned = (uint8_t)NIOS_PKT_RETUNE2_GT_TO(gt);
+    gt = bladerf2_rx_retune_gain_table(&dev, 925000000, false, false, true);
+    CHECK(gt == nios_pkt_retune2_gain_table(false, false, 1, 0) &&
+              mock_phy.current_table == NO_GAIN_TABLE,
+          "queued crossing: %02x", gt);
+    board_data.rx_gain_table_planned = NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    gt = bladerf2_rx_retune_gain_table(&dev, 930000000, false, false, true);
+    CHECK(gt == nios_pkt_retune2_gain_table(false, false,
+                                            NIOS_PKT_RETUNE2_GT_UNKNOWN, 0),
+          "behind an ambiguous request: %02x", gt);
+    board_data.rx_gain_table_planned = 0;
+    gt = bladerf2_rx_retune_gain_table(&dev, 930000000, false, false, false);
+    CHECK(gt == nios_pkt_retune2_gain_table(false, false,
+                                            NIOS_PKT_RETUNE2_GT_UNKNOWN, 0),
+          "with an unknown queue outcome: %02x", gt);
+    mock_phy.pdata = NULL;
+    mock_phy.gt_info = NULL;
+    mock_phy.current_table = 0;
+}
+
 /* Session begin hands NIOS the manual index bladerf_set_gain() would write
  * in each region: API gain minus the region offset, clamped to "full". */
 static void check_gain_table_index_upload(void)
@@ -920,6 +966,7 @@ int main(void)
     check_lost_and_rejected();
     check_gain_table_region();
     check_gain_table_crossing();
+    check_gain_table_queued_plain();
     check_gain_table_index_upload();
     check_rx2_only_session();
     check_lo_readback();

@@ -205,6 +205,10 @@ struct bladerf2_board_data {
      * all three were written on this handle. */
     bool rx_gain_table_index_sent_valid;
     uint32_t rx_gain_table_index_sent[3];
+    /* Region of the RX gain table the last queued RETUNE2 request leaves
+     * (NIOS_PKT_RETUNE2_GT_UNKNOWN when its acceptance is unknown): the
+     * source table of the next request queued behind it. */
+    uint8_t rx_gain_table_planned;
 
     /* Bitmask of capabilities determined by version numbers */
     uint64_t capabilities;
@@ -631,12 +635,13 @@ int bladerf2_rx_sweep_end(struct bladerf *dev, bladerf_channel ch);
 /* RX gain-table byte of an RX retune2 to `frequency` (nios_pkt_retune2.h
  * Note 3), 0 without BLADERF_CAP_RETUNE2_GAIN_TABLE. Inside a sweep session
  * (`sweep`) the source table is the one the session's requests leave,
- * otherwise the AD9361 driver's when no RX retune is pending
- * (`queue_idle`). A request that may load a table makes the driver's table
- * unknown until its outcome is known. */
+ * otherwise, while every queued RX retune was accepted (`queue_known`), the
+ * AD9361 driver's when none is pending (`queue_idle`) and the one the last
+ * queued request leaves when some are. A request that may load a table
+ * makes the driver's table unknown until its outcome is known. */
 uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,
                                       bladerf_frequency frequency, bool sweep,
-                                      bool queue_idle);
+                                      bool queue_idle, bool queue_known);
 /* Hand NIOS the manual gain indices bladerf_set_gain() would write for the
  * last API RX gain at each gain-table region (KEEP where unknown or not
  * MGC), for RETUNE2 gain-table loads. Needs an idle RETUNE2 queue. */

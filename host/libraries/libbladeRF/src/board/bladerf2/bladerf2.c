@@ -483,6 +483,7 @@ static int bladerf2_open(struct bladerf *dev, struct bladerf_devinfo *devinfo)
      * Force set_tuning_mode() during first initialization to release any
      * FPGA-side owner left by a prior process before host initialization. */
     board_data->tuning_mode = (bladerf_tuning_mode)-1;
+    board_data->rx_gain_table_planned = NIOS_PKT_RETUNE2_GT_UNKNOWN;
     status = MUTEX_INIT(&board_data->rx_async_epoch_lock);
     if (status != THREAD_SUCCESS) {
         free(board_data);
@@ -4560,7 +4561,7 @@ int bladerf2_schedule_retune_sequenced(
     if (!BLADERF_CHANNEL_IS_TX(ch)) {
         rx_gain_table = bladerf2_rx_retune_gain_table(
             dev, frequency, sweep_sequence != 0,
-            rx_retune_pending_count == 0 && !rx_retune_outcome_unknown);
+            rx_retune_pending_count == 0, !rx_retune_outcome_unknown);
         if (rx_gain_table != 0 && sweep_sequence == 0) {
             /* A session uploads at begin. Here on every retune, not only a
              * crossing: the first one, usually with an idle queue, seeds
@@ -4751,6 +4752,12 @@ int bladerf2_schedule_retune_sequenced(
                                        quick_tune->rffe_profile,
                                        quick_tune->port, quick_tune->spdt,
                                        retune2_request_token);
+    if (!BLADERF_CHANNEL_IS_TX(ch)) {
+        board_data->rx_gain_table_planned =
+            status == 0 && rx_gain_table != 0
+                ? (uint8_t)NIOS_PKT_RETUNE2_GT_TO(rx_gain_table)
+                : (uint8_t)NIOS_PKT_RETUNE2_GT_UNKNOWN;
+    }
     if (timestamp == BLADERF_RETUNE_NOW && retune2_request_token != 0 &&
         dev->nios_retune_trace.valid &&
         dev->nios_retune_trace.status == 0 &&
