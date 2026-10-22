@@ -235,6 +235,7 @@ begin
     end process;
 
     stim : process
+        variable lfsr : std_logic_vector(15 downto 0) := x"ACE1";
 
         procedure feed( n : natural; i_val : integer; q_val : integer ) is
         begin
@@ -334,6 +335,30 @@ begin
         dwell_start <= '0';
         feed(WINDOW_LEN, 700, 700);
         boundary;
+
+        -- 9. Peak tracking: a different amplitude every sample, rising and
+        --    falling, back to back and with gaps, across several dwells,
+        --    some starting under a running stream. Cases 1-8 feed constant
+        --    amplitudes, which cannot tell a peak decision taken from
+        --    stale operands from the reference one.
+        for d in 0 to 11 loop
+            for k in 1 to WINDOW_LEN * 2 + d loop
+                wait until rising_edge(clock);
+                lfsr := lfsr(14 downto 0) &
+                        (lfsr(15) xor lfsr(13) xor lfsr(12) xor lfsr(10));
+                sample.data_i <= signed("00000" & lfsr(10 downto 0)) - 1024;
+                sample.data_q <= signed("00000" & lfsr(15 downto 5)) - 1024;
+                sample.data_v <= lfsr(3) or lfsr(7) or to_unsigned(d, 4)(0);
+            end loop;
+            if d mod 3 = 0 then
+                wait until rising_edge(clock);
+                dwell_start <= '1';
+                wait until rising_edge(clock);
+                dwell_start <= '0';
+            else
+                boundary;
+            end if;
+        end loop;
 
         idle(20);
 
