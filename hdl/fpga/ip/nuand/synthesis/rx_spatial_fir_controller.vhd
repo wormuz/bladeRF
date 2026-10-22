@@ -15,8 +15,9 @@
 --   23:16  commit tag
 --
 -- If one capture carries both a write and a commit edge, the write is issued
--- first and the commit one cycle later, so the commit takes the new word.
--- The echo bits change only after the datapath has taken the action, so a
+-- first and the commit two cycles later, so the commit takes the new word
+-- and its identity flag. The echo bits change only after the datapath has
+-- taken the action, so a
 -- status snapshot with the new echo also carries the new bank state.
 --
 -- After rx_reset the first capture only adopts the surviving toggle levels
@@ -88,6 +89,7 @@ architecture rtl of rx_spatial_fir_controller is
     signal wr_idx_q        : unsigned(4 downto 0) := (others => '0');
     signal wr_data_q       : std_logic_vector(31 downto 0) := (others => '0');
     signal commit_req      : std_logic := '0';
+    signal commit_p        : std_logic := '0';
     signal commit_q        : std_logic := '0';
     signal commit_tag_q    : unsigned(7 downto 0) := (others => '0');
     signal force_q         : std_logic := '0';
@@ -148,6 +150,7 @@ begin
             wr_idx_q     <= (others => '0');
             wr_data_q    <= (others => '0');
             commit_req   <= '0';
+            commit_p     <= '0';
             commit_q     <= '0';
             commit_tag_q <= (others => '0');
             force_q      <= '0';
@@ -158,14 +161,17 @@ begin
             last_idx     <= (others => '0');
         elsif rising_edge(rx_clock) then
             -- rx_spatial_fir's shadow -> S1 hold waiver needs these apart:
-            -- one capture issues the write first and the commit a cycle
+            -- one capture issues the write first and the commit two cycles
             -- later, and captures are a full handshake apart.
             assert not (wr_en_q = '1' and commit_q = '1')
                 report "rx_spatial_fir_controller: write and commit together"
                 severity failure;
             wr_en_q    <= '0';
             commit_req <= '0';
-            commit_q   <= commit_req;
+            -- Two edges after the write: rx_spatial_fir compares each
+            -- shadow word with its identity one edge after the write lands.
+            commit_p   <= commit_req;
+            commit_q   <= commit_p;
 
             -- Echo follows the action: write lands in the shadow on the edge
             -- after wr_en_q, commit in the bank on the edge after commit_q.

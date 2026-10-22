@@ -210,7 +210,9 @@ begin
                     bank_word(m);
                     wait until rising_edge(clock);
                 end loop;
+                -- The controller commits two edges after a write.
                 wr_en  <= '0';
+                wait until rising_edge(clock);
                 commit <= '1';
                 tag    <= (others => '0');
                 wait until rising_edge(clock);

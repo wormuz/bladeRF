@@ -155,6 +155,7 @@ architecture rtl of rx_spatial_fir is
     signal shadow          : coef_word_t := identity_bank;
     signal shadow_word_id  : std_logic_vector(NCOEF-1 downto 0) := (others => '1');
     signal shadow_all_id   : std_logic;
+    signal wr_en_d         : std_logic := '0';
     signal act_identity    : std_logic := '1';
     signal act_tag         : unsigned(7 downto 0) := (others => '0');
     signal bank_gen        : std_logic := '0';
@@ -208,11 +209,16 @@ begin
             act_identity   <= '1';
             act_tag        <= (others => '0');
             bank_gen       <= '0';
+            wr_en_d        <= '0';
         elsif rising_edge(clock) then
-            -- The shadow -> S1 hold waiver (bladerf.sdc) rests on this.
-            assert not (coef_wr_en = '1' and coef_commit = '1')
-                report "rx_spatial_fir: shadow write and commit in one cycle"
+            -- The shadow -> S1 hold waiver (bladerf.sdc) needs a commit
+            -- never on a write edge; the identity flags need it two edges
+            -- after one.
+            assert not (coef_commit = '1' and
+                        (coef_wr_en = '1' or wr_en_d = '1'))
+                report "rx_spatial_fir: commit within one cycle of a shadow write"
                 severity failure;
+            wr_en_d <= coef_wr_en;
             if coef_commit = '1' then
                 act_identity <= shadow_all_id;
                 act_tag      <= coef_commit_tag;
@@ -221,12 +227,20 @@ begin
             if coef_wr_en = '1' and coef_wr_idx < NCOEF then
                 n := to_integer(coef_wr_idx);
                 shadow(n) <= coef_wr_data;
-                if coef_wr_data = identity_word(n) then
-                    shadow_word_id(n) <= '1';
-                else
-                    shadow_word_id(n) <= '0';
-                end if;
             end if;
+            -- Per word against its own constant, one edge after the shadow:
+            -- comparing the incoming word against identity_word(idx) put a
+            -- 32-bit compare behind an index mux and a fanout-20 decode in
+            -- one cycle (setup -0.142 ns, hosted A4 2026-10-22). The
+            -- controller commits at least two edges after a write, so the
+            -- flags are current at every commit.
+            for m in 0 to NCOEF-1 loop
+                if shadow(m) = identity_word(m) then
+                    shadow_word_id(m) <= '1';
+                else
+                    shadow_word_id(m) <= '0';
+                end if;
+            end loop;
         end if;
     end process;
 
