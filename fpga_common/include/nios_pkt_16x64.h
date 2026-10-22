@@ -221,6 +221,9 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
  *
  * Errors: success clear, data = ERROR_MARKER[63:56] | code. */
 #define NIOS_PKT_16x64_TARGET_RETUNE2_RECORD 0x07
+/* Whole RX gain table from the NIOS copy (RX-TRANSITION-1S3-001); encoding
+ * and contract at nios_pkt_16x64_gain_table_region_addr() below. */
+#define NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION 0x08
 
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY  0u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION 1u
@@ -511,6 +514,58 @@ static inline void nios_pkt_16x64_resp_unpack(const uint8_t *buf,
     } else {
         *success = false;
     }
+}
+
+/* NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION (RX-TRANSITION-1S3-001)
+ *
+ * The host ADI driver reloads the whole 77-row RX gain table on every RX
+ * gain-table band change. One NIOS_PKT_16x64_TARGET_GAIN_TABLE_ROW request
+ * per row cost ~77 USB round trips (~21 ms); this target writes every row
+ * from the NIOS copy of the same ADI table in one request.
+ *
+ * addr: bits 1:0 region (nios_pkt_retune2_gain_table_region of the table's
+ *       end frequency), bit 2 split table, bits 15:8 row count
+ *       (gain_table_info.max_index); other bits zero.
+ * read:  data = nios_pkt_16x64_gain_table_digest() of the NIOS rows. The host
+ *        uses the region write only when this equals the digest of its own
+ *        table; a failed read (an image without this target) keeps the
+ *        per-row path.
+ * write: data bits 7:0 LNA bits ORed into each row's first byte, bits 15:8
+ *        REG_GAIN_TABLE_CONFIG value written to commit each row (the same
+ *        value the row request carries); other bits zero. NIOS writes rows
+ *        0..count-1 with the row request's sequence and settle time. */
+static inline uint16_t nios_pkt_16x64_gain_table_region_addr(
+    uint8_t region, bool split, uint8_t rows)
+{
+    return (uint16_t)((region & 0x3u) | (split ? 0x4u : 0u) |
+                      ((uint16_t)rows << 8));
+}
+
+static inline bool nios_pkt_16x64_gain_table_region_unpack(
+    uint16_t addr, uint8_t *region, bool *split, uint8_t *rows)
+{
+    if ((addr & 0x00f8u) != 0 || (addr & 0x3u) > 2) {
+        return false;
+    }
+    *region = (uint8_t)(addr & 0x3u);
+    *split = (addr & 0x4u) != 0;
+    *rows = (uint8_t)(addr >> 8);
+    return *rows != 0;
+}
+
+/* FNV-1a over the three bytes of each row. */
+static inline uint64_t nios_pkt_16x64_gain_table_digest(
+    uint8_t (*tab)[3], uint8_t rows)
+{
+    uint64_t digest = UINT64_C(1469598103934665603);
+    uint8_t r, k;
+
+    for (r = 0; r < rows; ++r) {
+        for (k = 0; k < 3; ++k) {
+            digest = (digest ^ tab[r][k]) * UINT64_C(1099511628211);
+        }
+    }
+    return digest;
 }
 
 #endif

@@ -183,6 +183,17 @@ int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
                                uint8_t data1, uint8_t data2, uint8_t data3,
                                uint8_t config, uint32_t delay_us);
 
+/* NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION (nios_pkt_16x64.h): whether the
+ * NIOS copy of one RX gain table (region, split, rows) equals `tab` (by
+ * digest), and the whole-table write from that copy. A digest read
+ * rejected by an image without the target returns BLADERF_ERR_FPGA_OP. */
+int nios_ad9361_gain_table_region_matches(struct bladerf *dev, uint8_t region,
+                                          bool split, uint8_t rows,
+                                          uint8_t (*tab)[3], bool *match);
+int nios_ad9361_gain_table_region_write(struct bladerf *dev, uint8_t region,
+                                        bool split, uint8_t rows,
+                                        uint8_t lna, uint8_t config);
+
 /**
  * Read the ADI AXI memory mapped region.
  *

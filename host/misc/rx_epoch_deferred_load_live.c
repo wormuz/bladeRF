@@ -10,13 +10,16 @@
  * Usage: [trials, default 50] [rate_hz, default 7680000]
  * PASS (criteria fixed before the run):
  *   - every schedule_retune returns 0 and every transition completes
- *   - zero BLADERF_RF_EVT_RX_RETUNE_FAILED events and a complete event
+ *   - zero BLADERF_RF_EVT_RX_RETUNE_FAILED events without
+ *     BLADERF_RF_EVENT_F_RETUNE_SUPERSEDED, and a complete event
  *     history over the run
  *   - reader: no OVERRUN block, no block with a hard error other than
  *     TIMEOUT/WOULD_BLOCK (withheld IQ), epoch ids never go backwards
  *   - after each transition the reader receives a block of the new epoch
  *     within 2 s
- * Printed: blocks, withheld reads, p50/p99/max schedule-to-new-epoch ms. */
+ * Printed: blocks, withheld reads, p50/p99/max schedule-to-new-epoch ms,
+ * and retunes this tool's own transitions superseded (RETUNE_SUPERSEDED: still
+ * held by NIOS when the transition cleared the queue; not a failure). */
 #include <libbladeRF.h>
 #include "hwqual_live.h"
 
@@ -86,7 +89,7 @@ int main(int argc, char **argv)
     pthread_t th;
     double *lat = calloc(trials ? trials : 1, sizeof(*lat));
     uint64_t cursor = 0;
-    unsigned failed_events = 0, done = 0;
+    unsigned failed_events = 0, superseded_events = 0, done = 0;
     bool history_complete = true, ok = true, reader_started = false;
     int s;
 
@@ -227,14 +230,18 @@ int main(int argc, char **argv)
                 int slot = -1;
                 if (ev2[e].event_type != BLADERF_RF_EVT_RX_RETUNE_FAILED)
                     continue;
-                ++failed_events;
+                const bool superseded = (ev2[e].flags &
+                    BLADERF_RF_EVENT_F_RETUNE_SUPERSEDED) != 0;
+                if (superseded) ++superseded_events; else ++failed_events;
                 for (unsigned k = 0; k < DEPTH; ++k)
                     if (ev2[e].fpga_timestamp == sched[k]) slot = (int)k;
-                if (failed_events <= 40)
-                    fprintf(stderr, "RETUNE_FAILED trial=%u slot=%d "
+                if (failed_events + superseded_events <= 40)
+                    fprintf(stderr, "%s trial=%u slot=%d "
                             "stage=%u stage_valid=%u flags=0x%x error=%d "
                             "fpga_ts=%" PRIu64 " last_sched=%" PRIu64
-                            " lo=%" PRIu64 " epoch=%u\n", i, slot,
+                            " lo=%" PRIu64 " epoch=%u\n",
+                            superseded ? "RETUNE_SUPERSEDED" : "RETUNE_FAILED",
+                            i, slot,
                             ev2[e].rfic_status,
                             (ev2[e].flags &
                              BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID) != 0,
@@ -262,11 +269,12 @@ out:
     }
     if (done > 0) hq_print_stats("schedule_to_new_epoch_ms", lat, done);
     printf("TOTAL trials=%u completed=%u blocks=%u withheld=%u overruns=%u "
-           "hard_errors=%u(first=%d) epoch_regress=%u retune_failed=%u\n",
+           "hard_errors=%u(first=%d) epoch_regress=%u retune_failed=%u "
+           "retune_superseded=%u\n",
            trials, done, atomic_load(&rd.blocks), atomic_load(&rd.withheld),
            atomic_load(&rd.overruns), atomic_load(&rd.hard_errors),
            atomic_load(&rd.first_hard), atomic_load(&rd.regress),
-           failed_events);
+           failed_events, superseded_events);
     ok = ok && done == trials && failed_events == 0 &&
          atomic_load(&rd.overruns) == 0 && atomic_load(&rd.hard_errors) == 0 &&
          atomic_load(&rd.regress) == 0;

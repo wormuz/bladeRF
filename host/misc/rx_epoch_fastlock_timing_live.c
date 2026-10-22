@@ -50,6 +50,10 @@ int main(int argc, char **argv)
     const unsigned trials = argc > 1 ? (unsigned)strtoul(argv[1], NULL, 10) : 20;
     const char *mode = argc > 2 ? argv[2] : "fastlock";
     bool cross_band = false;
+    /* HQ_TRACE_SLOW_MS lowers the trace threshold for a diagnostic run. */
+    const char *trace_env = getenv("HQ_TRACE_SLOW_MS");
+    const double trace_slow_us =
+        trace_env != NULL ? strtod(trace_env, NULL) * 1000.0 : TRACE_SLOW_US;
     uint64_t seed = 0;
     for (int a = 3; a < argc; ++a) {
         if (strcmp(argv[a], "--cross-band") == 0) cross_band = true;
@@ -222,7 +226,7 @@ int main(int argc, char **argv)
             }
         }
         if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL ||
-            (final_event.host_monotonic_ns - config_ns) / 1000.0 > TRACE_SLOW_US) {
+            (final_event.host_monotonic_ns - config_ns) / 1000.0 > trace_slow_us) {
             for (uint32_t j = 0; j < count; ++j) {
                 printf("event txn=%u index=%u type=%u state=%u "
                        "since_config_us=%.3f fpga_ts=%llu flags=0x%x "
@@ -258,11 +262,17 @@ int main(int argc, char **argv)
                    (unsigned long long)nios_timing.device_duration_ticks,
                    (final_event.host_monotonic_ns - config_ns) / 1000.0);
         } else {
+            /* SPI_DONE flags carry the number of SPI writes of the tune in
+             * the low bits; channel flags sit in the top bits. */
+            uint32_t spi_writes = 0;
+            for (uint32_t j = 0; j < count; ++j)
+                if (events[j].event_type == BLADERF_RF_EVT_SPI_DONE)
+                    spi_writes = events[j].flags & 0xffffu;
             printf("trial=%u mode=host txn=%u epoch=%u spi_write_us=%.3f "
-                   "post_spi_to_lo_return_us=%.3f "
+                   "spi_writes=%u post_spi_to_lo_return_us=%.3f "
                    "total_to_epoch_us=%.3f\n", i, transaction,
                    final_event.epoch_id, (spi_done_ns - spi_begin_ns) / 1000.0,
-                   (lo_return_ns - spi_done_ns) / 1000.0,
+                   spi_writes, (lo_return_ns - spi_done_ns) / 1000.0,
                    (final_event.host_monotonic_ns - config_ns) / 1000.0);
         }
     }

@@ -573,6 +573,102 @@ static int run_read_case(bool requested_success, bool expected_success)
     return 0;
 }
 
+
+/* NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION dispatch (RX-TRANSITION-1S3-001). */
+static unsigned int region_write_calls;
+static unsigned int region_digest_calls;
+static uint8_t region_last[5];
+
+bool rfic_gain_table_region_write(uint8_t region, bool split, uint8_t rows,
+                                  uint8_t lna, uint8_t config)
+{
+    region_write_calls++;
+    region_last[0] = region;
+    region_last[1] = split;
+    region_last[2] = rows;
+    region_last[3] = lna;
+    region_last[4] = config;
+    return rows == 77;
+}
+
+bool rfic_gain_table_region_digest(uint8_t region, bool split, uint8_t rows,
+                                   uint64_t *digest)
+{
+    region_digest_calls++;
+    if (rows != 77) {
+        return false;
+    }
+    *digest = UINT64_C(0xfeed000000000000) | ((uint64_t)region << 8) |
+              (split ? 1u : 0u);
+    return true;
+}
+
+static int run_region_case(bool write, uint16_t addr, uint64_t data,
+                           bool expected_success, uint64_t expected_response)
+{
+    struct pkt_buf packet = make_16x64_packet(
+        NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION, write, addr, data);
+    uint8_t target = 0;
+    uint16_t resp_addr = 0;
+    uint64_t response = 0;
+    bool resp_write = !write, success = !expected_success;
+
+    pkt_16x64(&packet);
+    nios_pkt_16x64_resp_unpack(packet.resp, &target, &resp_write, &resp_addr,
+                               &response, &success);
+    return target == NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION &&
+           resp_write == write && resp_addr == addr &&
+           success == expected_success &&
+           (!expected_success || write || response == expected_response)
+           ? 0 : 1;
+}
+
+static int run_region_cases(void)
+{
+    const uint16_t a1 = nios_pkt_16x64_gain_table_region_addr(1, false, 77);
+    const uint16_t a2s = nios_pkt_16x64_gain_table_region_addr(2, true, 77);
+    uint8_t region = 9, rows = 0;
+    bool split = false;
+    uint8_t tab[2][3] = { { 1, 2, 3 }, { 4, 5, 6 } };
+
+    /* Encoding round trip and rejects. */
+    if (!nios_pkt_16x64_gain_table_region_unpack(a2s, &region, &split,
+                                                  &rows) ||
+        region != 2 || !split || rows != 77 ||
+        nios_pkt_16x64_gain_table_region_unpack(3, &region, &split, &rows) ||
+        nios_pkt_16x64_gain_table_region_unpack(0x4d08, &region, &split,
+                                                &rows) ||
+        nios_pkt_16x64_gain_table_region_unpack(1, &region, &split, &rows) ||
+        nios_pkt_16x64_gain_table_digest(tab, 2) ==
+            nios_pkt_16x64_gain_table_digest(tab, 1)) {
+        return 1;
+    }
+    /* Write: LNA in bits 7:0, commit config in 15:8, nothing above. */
+    if (run_region_case(true, a1, 0x4480, true, 0) ||
+        region_write_calls != 1 || region_last[0] != 1 || region_last[1] ||
+        region_last[2] != 77 || region_last[3] != 0x80 ||
+        region_last[4] != 0x44 ||
+        run_region_case(true, a1, UINT64_C(0x14480), false, 0) ||
+        run_region_case(true, 3, 0x44, false, 0) ||
+        region_write_calls != 1 ||
+        run_region_case(true, nios_pkt_16x64_gain_table_region_addr(1, false,
+                                                                     76),
+                        0x44, false, 0) || region_write_calls != 2) {
+        return 1;
+    }
+    /* A NIOS PHY (FPGA tuning) owns the table: refuse as the row write. */
+    nios_phy_present = true;
+    if (run_region_case(true, a1, 0x44, false, 0) || region_write_calls != 2) {
+        nios_phy_present = false;
+        return 1;
+    }
+    nios_phy_present = false;
+    /* Read: digest of the NIOS copy. */
+    return run_region_case(false, a2s, 0, true,
+                           UINT64_C(0xfeed000000000201)) ||
+           run_region_case(false, 3, 0, false, 0) ||
+           region_digest_calls != 1 ? 1 : 0;
+}
 int main(void)
 {
     if (run_case(BATCH_SUCCESS, true, 3) ||
@@ -586,6 +682,7 @@ int main(void)
         run_gain_row_case(UINT64_C(0x44332211), true, 1) ||
         run_gain_row_case(UINT64_C(0x1000044332211), false, 1) ||
         run_nios_phy_gain_row_rejected() ||
+        run_region_cases() ||
         run_retune2_record_dispatch(false, 0, true,
                                     UINT64_C(0x1122334455667788)) ||
         run_retune2_record_dispatch(

@@ -46,6 +46,12 @@ int main(void)
     /* Open-time RFDC seeding: setup calibrates the init input B (bit 1);
      * input A (bit 0) is seeded right after, and then neither low-band (B)
      * nor high-band (A) transitions require an implicit RFDC. */
+    /* A queue clear the application requested supersedes, it does not fail,
+     * a request NIOS reports CANCELLED; other stages stay failures. */
+    assert(bladerf2_retune_failure_superseded(NIOS_PKT_RETUNE2_FAILURE_CANCELLED));
+    assert(!bladerf2_retune_failure_superseded(NIOS_PKT_RETUNE2_FAILURE_GAIN_TABLE));
+    assert(!bladerf2_retune_failure_superseded(NIOS_PKT_RETUNE2_FAILURE_NONE));
+
     assert(bladerf2_rfdc_init_seed_a_needed(0x2));
     assert(!bladerf2_rfdc_init_seed_a_needed(0x3));
     assert(!bladerf2_rfdc_init_seed_a_needed(0x1));

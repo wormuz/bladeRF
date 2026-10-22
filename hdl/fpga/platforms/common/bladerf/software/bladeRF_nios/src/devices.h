@@ -773,6 +773,11 @@ bool rfic_gain_table_retune_owner(void);
 /* NIOS_PKT_8x32_TARGET_RX_GAIN_TABLE_INDEX: indices written after a RETUNE2
  * gain-table load of `region`, RX1 in [6:0], RX2 in [14:8] (0x7f: keep). */
 bool rfic_set_gain_table_index(uint8_t region, uint16_t indices);
+/* NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION (nios_pkt_16x64.h). */
+bool rfic_gain_table_region_digest(uint8_t region, bool split, uint8_t rows,
+                                   uint64_t *digest);
+bool rfic_gain_table_region_write(uint8_t region, bool split, uint8_t rows,
+                                  uint8_t lna, uint8_t config);
 void rfic_command_progress_tick(void);
 bool rfic_command_state_faulted(void);
 bool rfic_phy_present(void);

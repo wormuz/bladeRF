@@ -7,6 +7,7 @@
 #include <stdint.h>
 
 #include "rfic_rfdc_bank_policy.h"
+#include "nios_pkt_retune2.h"
 
 #define BLADERF2_RX_RF_PORT_COUNT RFIC_RFDC_RX_PORT_COUNT
 #define BLADERF2_RX_RF_PORT_A RFIC_RFDC_RX_PORT_A
@@ -272,6 +273,14 @@ static inline bool bladerf2_retune_failure_matches(
     uint32_t pending_session_generation, uint16_t pending_request_token,
     uint64_t failure_timestamp, uint16_t failure_profile,
     uint32_t failure_session_generation, uint16_t failure_request_token);
+
+/* A failure record that NIOS reports for a request removed by a queue clear
+ * the application asked for (explicit cancel or an RX transition): CANCELLED
+ * means superseded, not failed (BLADERF_RF_EVENT_F_RETUNE_SUPERSEDED). */
+static inline bool bladerf2_retune_failure_superseded(uint8_t failure_stage)
+{
+    return failure_stage == NIOS_PKT_RETUNE2_FAILURE_CANCELLED;
+}
 
 static inline bool bladerf2_retune_completion_matches(
     uint64_t requested_timestamp, uint64_t requested_frequency_hz,

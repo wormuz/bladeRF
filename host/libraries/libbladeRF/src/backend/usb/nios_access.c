@@ -971,6 +971,39 @@ int nios_ad9361_gain_table_row(struct bladerf *dev, uint16_t row,
                             row, data);
 }
 
+int nios_ad9361_gain_table_region_matches(struct bladerf *dev, uint8_t region,
+                                          bool split, uint8_t rows,
+                                          uint8_t (*tab)[3], bool *match)
+{
+    uint64_t digest = 0;
+    int status;
+
+    if (tab == NULL || match == NULL || region > 2 || rows == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+    *match = false;
+    status = nios_16x64_read(
+        dev, NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION,
+        nios_pkt_16x64_gain_table_region_addr(region, split, rows), &digest);
+    if (status == 0) {
+        *match = digest == nios_pkt_16x64_gain_table_digest(tab, rows);
+    }
+    return status;
+}
+
+int nios_ad9361_gain_table_region_write(struct bladerf *dev, uint8_t region,
+                                        bool split, uint8_t rows,
+                                        uint8_t lna, uint8_t config)
+{
+    if (region > 2 || rows == 0) {
+        return BLADERF_ERR_INVAL;
+    }
+    return nios_16x64_write(
+        dev, NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION,
+        nios_pkt_16x64_gain_table_region_addr(region, split, rows),
+        (uint64_t)lna | ((uint64_t)config << 8));
+}
+
 int nios_adi_axi_read(struct bladerf *dev, uint32_t addr, uint32_t *data)
 {
     int status;

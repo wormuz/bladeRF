@@ -35,6 +35,7 @@
 #include "backend/usb/nios_access.h"
 #include "helpers/have_cap.h"
 #include "rx_sweep_policy.h"
+#include "rfic_gain_table_load.h"
 
 #include "ad9361_util.h"
 
@@ -559,6 +560,33 @@ int bladerf2_rx_gain_table_index_upload(struct bladerf *dev)
     memcpy(board_data->rx_gain_table_index_sent, indices, sizeof(indices));
     board_data->rx_gain_table_index_sent_valid = true;
     return 0;
+}
+
+bool bladerf2_rfic_gain_table_load_current(struct bladerf *dev,
+                                           struct bladerf2_gain_table_load *out)
+{
+    const struct bladerf2_board_data *board_data;
+    const struct ad9361_gain_table_transaction *load;
+
+    if (dev == NULL || out == NULL || dev->board_data == NULL) {
+        return false;
+    }
+    board_data = dev->board_data;
+    if (board_data->phy == NULL) {
+        return false;
+    }
+    load = board_data->phy->gain_table_transaction;
+    if (load == NULL || !load->active || load->info == NULL ||
+        load->info->tab == NULL || load->info->max_index == 0) {
+        return false;
+    }
+    out->tab = load->info->tab;
+    out->rows = load->info->max_index;
+    out->lna = load->lna;
+    out->split = load->split_gt;
+    out->region =
+        (uint8_t)nios_pkt_retune2_gain_table_region(load->info->end);
+    return true;
 }
 
 uint8_t bladerf2_rx_retune_gain_table(struct bladerf *dev,

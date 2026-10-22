@@ -1294,11 +1294,19 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
 
     /* AD9361 REG_GAIN_TABLE_ADDRESS/WRITE_DATA1/2/3/CONFIG are 0x130-0x133
      * and 0x137. Keep the row programming indivisible with respect to other
-     * users of the shared RFIC SPI bus. */
-    if (!adi_spi_write_unlocked(0x130, (uint64_t)row << 56) ||
-        !adi_spi_write_unlocked(0x131, (uint64_t)data1 << 56) ||
-        !adi_spi_write_unlocked(0x132, (uint64_t)data2 << 56) ||
-        !adi_spi_write_unlocked(0x133, (uint64_t)data3 << 56) ||
+     * users of the shared RFIC SPI bus.
+     *
+     * 0x133..0x130 go in one 4-byte streaming write: in MSB-first mode the
+     * AD9361 decrements the address per byte, so the transfer starts at
+     * 0x133 (the same form as ADI's ad9361_spi_writem of REG_TX1_ATTEN_1).
+     * Two SPI commands per row instead of five: the per-command overhead
+     * dominates the NIOS-local table load (77 rows on every RX gain-table
+     * band change, RX-TRANSITION-1S3-001). The commit 0x137 stays last. */
+    if (!adi_spi_write_unlocked(0x133 | ((4u - 1u) << 12),
+                                ((uint64_t)data3 << 56) |
+                                ((uint64_t)data2 << 48) |
+                                ((uint64_t)data1 << 40) |
+                                ((uint64_t)row << 32)) ||
         !adi_spi_write_unlocked(0x137, (uint64_t)config << 56)) {
         goto done;
     }

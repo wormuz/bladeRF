@@ -49,6 +49,7 @@
 #include "board/board.h"
 #include "bladerf2_status.h"
 #include "backend/usb/nios_access.h"
+#include "board/bladerf2/rfic_gain_table_load.h"
 #include "log.h"
 
 #include "no_os_delay.h"
@@ -83,11 +84,26 @@ enum register_bits_update_state {
     REGISTER_BITS_UPDATE_UNSUPPORTED,
 };
 
+enum gain_table_region_state {
+    GAIN_TABLE_REGION_UNKNOWN,
+    GAIN_TABLE_REGION_UNSUPPORTED,
+};
+
 struct bladerf2_spi_context {
     struct bladerf *dev;
     enum gain_table_batch_state gain_table_batch;
     enum register_batch_state register_batch;
     enum register_bits_update_state register_bits_update;
+    /* Whole-table NIOS write (NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION). Bit
+     * region * 2 + split: NIOS digest equals ours (ok) or differs (bad). */
+    enum gain_table_region_state gain_table_region;
+    uint8_t gain_table_region_ok;
+    uint8_t gain_table_region_bad;
+    /* Rows already written by the last whole-table write; the driver's
+     * following per-row calls for exactly these rows complete locally. */
+    struct bladerf2_gain_table_load written;
+    uint8_t written_config;
+    bool written_active;
 };
 #ifdef BLADERF_ENABLE_TEST_SPI_FAULT_INJECTION
 extern int bladerf2_rx_transition_spi_test_should_fail(struct bladerf *dev);
@@ -124,6 +140,17 @@ static int32_t bladerf2_spi_init(struct no_os_spi_desc **desc,
         if (disable_batch != NULL && disable_batch[0] != '\0' &&
             strcmp(disable_batch, "0") != 0) {
             ctx->gain_table_batch = GAIN_TABLE_BATCH_UNSUPPORTED;
+        }
+    }
+    {
+        /* The per-register fallback above also bypasses the whole-table
+         * write: it is the reference for comparing the two. */
+        const char *disable_region =
+            getenv("BLADERF_DISABLE_GAIN_TABLE_REGION");
+        if (ctx->gain_table_batch == GAIN_TABLE_BATCH_UNSUPPORTED ||
+            (disable_region != NULL && disable_region[0] != '\0' &&
+             strcmp(disable_region, "0") != 0)) {
+            ctx->gain_table_region = GAIN_TABLE_REGION_UNSUPPORTED;
         }
     }
     {
@@ -239,6 +266,88 @@ static int32_t bladerf2_spi_write_and_read(struct no_os_spi_desc *desc,
     return 0;
 }
 
+static bool gain_table_row_matches(const struct bladerf2_gain_table_load *gt,
+                                   uint16_t row, uint8_t data1, uint8_t data2,
+                                   uint8_t data3)
+{
+    return row < gt->rows && data1 == (uint8_t)(gt->tab[row][0] | gt->lna) &&
+           data2 == gt->tab[row][1] && data3 == gt->tab[row][2];
+}
+
+/* RX-TRANSITION-1S3-001: the ADI driver reloads all rows of the RX gain
+ * table on a gain-table band change, and each row cost one NIOS USB round
+ * trip (~21 ms for 77 rows). On row 0 of a load write the whole table with
+ * one NIOS request from NIOS's copy of the same ADI table (used only after
+ * its digest matched ours), then complete the driver's calls for the rows
+ * already written locally. Returns 1: row done, 0: use the per-row path,
+ * negative errno: the NIOS command failed (execution uncertain, no
+ * fallback writes, as the per-row path). */
+static int32_t gain_table_written_or_region(struct bladerf2_spi_context *ctx,
+                                            uint16_t row, uint8_t data1,
+                                            uint8_t data2, uint8_t data3,
+                                            uint8_t config, uint32_t delay_us)
+{
+    struct bladerf2_gain_table_load gt;
+    uint8_t key;
+    bool match = false;
+    int status;
+
+    if (ctx->written_active) {
+        if (row != 0 && config == ctx->written_config && delay_us == 2 &&
+            gain_table_row_matches(&ctx->written, row, data1, data2, data3)) {
+            if (row + 1u == ctx->written.rows) {
+                ctx->written_active = false;
+            }
+            return 1;
+        }
+        /* Any other request ends the run; it is written as asked. */
+        ctx->written_active = false;
+    }
+
+    if (row != 0 || delay_us != 2 ||
+        ctx->gain_table_region == GAIN_TABLE_REGION_UNSUPPORTED ||
+        !bladerf2_rfic_gain_table_load_current(ctx->dev, &gt) ||
+        !gain_table_row_matches(&gt, row, data1, data2, data3)) {
+        return 0;
+    }
+
+    key = (uint8_t)(1u << (gt.region * 2u + (gt.split ? 1u : 0u)));
+    if ((ctx->gain_table_region_bad & key) != 0) {
+        return 0;
+    }
+    if ((ctx->gain_table_region_ok & key) == 0) {
+        status = nios_ad9361_gain_table_region_matches(
+            ctx->dev, gt.region, gt.split, gt.rows, gt.tab, &match);
+        if (status == BLADERF_ERR_FPGA_OP) {
+            /* An image without the target rejects the request. */
+            ctx->gain_table_region = GAIN_TABLE_REGION_UNSUPPORTED;
+            log_debug("Gain-table region write unavailable; per-row path\n");
+            return 0;
+        }
+        if (status != 0) {
+            return bladerf2_status_to_errno(status);
+        }
+        if (!match) {
+            ctx->gain_table_region_bad |= key;
+            log_warning("NIOS RX gain table region %u split %u differs from "
+                        "the host table; per-row path\n",
+                        (unsigned)gt.region, (unsigned)gt.split);
+            return 0;
+        }
+        ctx->gain_table_region_ok |= key;
+    }
+
+    status = nios_ad9361_gain_table_region_write(
+        ctx->dev, gt.region, gt.split, gt.rows, gt.lna, config);
+    if (status != 0) {
+        return bladerf2_status_to_errno(status);
+    }
+    ctx->written = gt;
+    ctx->written_config = config;
+    ctx->written_active = gt.rows > 1;
+    return 1;
+}
+
 static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
                                                   uint16_t row,
                                                   uint8_t data1,
@@ -258,6 +367,13 @@ static int32_t bladerf2_spi_write_gain_table_row(struct no_os_spi_desc *desc,
     ctx = desc->extra;
     dev = ctx->dev;
     no_os_mutex_lock(desc->bus->mutex);
+
+    status = gain_table_written_or_region(ctx, row, data1, data2, data3,
+                                          config, delay_us);
+    if (status != 0) {
+        no_os_mutex_unlock(desc->bus->mutex);
+        return status > 0 ? 0 : status;
+    }
 
     if (ctx->gain_table_batch != GAIN_TABLE_BATCH_UNSUPPORTED) {
         status = nios_ad9361_gain_table_row(dev, row, data1, data2, data3,
