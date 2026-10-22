@@ -12,7 +12,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int rfic_timing_xfer(struct bladerf *dev, bool is_write, uint8_t addr,
+static inline int rfic_timing_xfer(struct bladerf *dev, bool is_write, uint8_t addr,
                             uint64_t *value)
 {
     struct bladerf_usb *usb = dev->backend_data;
@@ -48,12 +48,12 @@ static int rfic_timing_xfer(struct bladerf *dev, bool is_write, uint8_t addr,
     return 0;
 }
 
-static int read_metric(struct bladerf *dev, uint8_t addr, uint64_t *value)
+static inline int read_metric(struct bladerf *dev, uint8_t addr, uint64_t *value)
 {
     return rfic_timing_xfer(dev, false, addr, value);
 }
 
-static int write_metric(struct bladerf *dev, uint8_t addr, uint64_t value)
+static inline int write_metric(struct bladerf *dev, uint8_t addr, uint64_t value)
 {
     return rfic_timing_xfer(dev, true, addr, &value);
 }

@@ -2911,15 +2911,23 @@ static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
     sequences[65] = 641;
     states[66] = SYNC_BUFFER_IN_FLIGHT;
     sequences[66] = 642;
-    assert(!sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 12));
+    assert(!sync_worker_reanchor_rx_consumer_to_oldest(&f.sync));
     assert(f.sync.buf_mgmt.cons_i == 65);
 
-    /* A 95/96 marker lap leaves an EMPTY slot with an old sequence. The live
-     * expected transfer is in flight at slot 66; do not wait on stale slot 53. */
+    /* A 95/96 marker lap leaves an EMPTY slot with an old sequence. Slot 65
+     * still holds released, unread sequence 641: it is older than the
+     * expected in-flight transfer and must be read first, not skipped. */
     f.sync.buf_mgmt.cons_i = 53;
     states[53] = SYNC_BUFFER_EMPTY;
     sequences[53] = 629;
-    assert(sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 83));
+    assert(sync_worker_reanchor_rx_consumer_to_oldest(&f.sync));
+    assert(f.sync.buf_mgmt.cons_i == 65);
+
+    /* Once 641 is consumed, the live expected transfer in flight at slot 66
+     * is next; do not wait on stale slot 53. */
+    f.sync.buf_mgmt.cons_i = 53;
+    states[65] = SYNC_BUFFER_EMPTY;
+    assert(sync_worker_reanchor_rx_consumer_to_oldest(&f.sync));
     assert(f.sync.buf_mgmt.cons_i == 66);
 
     /* The established full-ring-fence case still re-anchors. */
@@ -2930,7 +2938,7 @@ static void test_rx_consumer_reanchors_after_partial_rejected_ring_lap(void)
     }
     states[66] = SYNC_BUFFER_IN_FLIGHT;
     sequences[66] = 642;
-    assert(sync_worker_reanchor_rx_consumer_after_rejections(&f.sync, 96));
+    assert(sync_worker_reanchor_rx_consumer_to_oldest(&f.sync));
     assert(f.sync.buf_mgmt.cons_i == 66);
 
     fixture_destroy(&f);

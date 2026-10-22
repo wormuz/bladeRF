@@ -51,16 +51,23 @@ static bool size_multiplication_overflows(size_t count, size_t element_size)
 #ifdef ENABLE_LIBBLADERF_SYNC_LOG_VERBOSE
 static inline void dump_buf_states(struct bladerf_sync *s)
 {
-    static char *out      = NULL;
     struct buffer_mgmt *b = &s->buf_mgmt;
     char *statestr        = "UNKNOWN";
+    char *out;
 
-    if (out == NULL) {
-        out = malloc((b->num_buffers + 1) * sizeof(char));
+    /* The string is only ever consumed by log_verbose(); do not build it
+     * on every sync_rx() iteration at the default log level. */
+    if (log_get_verbosity() > BLADERF_LOG_LEVEL_VERBOSE) {
+        return;
     }
 
+    /* Size per call. A process-wide buffer sized for the first ring was
+     * overrun by every later, larger ring (512 then 2048 buffers in one
+     * process: "malloc(): corrupted top size"), and it was shared by
+     * concurrent sync handles without a lock. */
+    out = malloc((b->num_buffers + 1) * sizeof(char));
     if (out == NULL) {
-        log_verbose("%s: malloc failed\n");
+        log_verbose("%s: malloc failed\n", __FUNCTION__);
         return;
     }
 
@@ -111,6 +118,7 @@ static inline void dump_buf_states(struct bladerf_sync *s)
     }
 
     log_verbose("%s: %s (%s)\n", __FUNCTION__, out, statestr);
+    free(out);
 }
 #else
 #define dump_buf_states(...)
@@ -1440,13 +1448,14 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                                   b->buffer_seq != NULL
                                       ? b->buffer_seq[b->cons_i] : 0);
                     }
-                    if (sync_worker_reanchor_rx_consumer_after_rejections(
-                            s, skipped)) {
-                        log_debug("%s: re-anchored consumer to expected RX "
-                                  "sequence=%u buffer=%u after %u rejected "
-                                  "slots (ring=%u)\n", __FUNCTION__,
-                                  b->expected_seq, b->cons_i, skipped,
-                                  b->num_buffers);
+                    if (sync_worker_reanchor_rx_consumer_to_oldest(s)) {
+                        log_debug("%s: re-anchored consumer to oldest RX "
+                                  "sequence=%u buffer=%u state=%u "
+                                  "expected_seq=%u after %u rejected slots "
+                                  "(ring=%u)\n", __FUNCTION__,
+                                  b->buffer_seq[b->cons_i], b->cons_i,
+                                  (unsigned)b->status[b->cons_i],
+                                  b->expected_seq, skipped, b->num_buffers);
                     }
                 }
 
@@ -1508,11 +1517,15 @@ int sync_rx(struct bladerf_sync *s, void *samples, unsigned num_samples,
                             dropped++;
                         }
                     } else {
-                        while (b->status[b->cons_i] == SYNC_BUFFER_FULL &&
-                               dropped < b->num_buffers) {
-                            b->status[b->cons_i] = SYNC_BUFFER_EMPTY;
-                            b->cons_i = (b->cons_i + 1) % b->num_buffers;
-                            dropped++;
+                        /* Producer slots are not filled in index order, so
+                         * a contiguous walk from cons_i can leave stale FULL
+                         * slots that a sample-only reader would later return
+                         * as live IQ. Every FULL slot predates the overrun. */
+                        for (unsigned int i = 0; i < b->num_buffers; ++i) {
+                            if (b->status[i] == SYNC_BUFFER_FULL) {
+                                b->status[i] = SYNC_BUFFER_EMPTY;
+                                dropped++;
+                            }
                         }
                     }
 

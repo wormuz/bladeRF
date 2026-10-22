@@ -273,7 +273,7 @@ int main(void)
             skipped++;
         }
         assert(skipped == sync.buf_mgmt.num_buffers);
-        assert(sync_worker_reanchor_rx_consumer_to_expected(&sync));
+        assert(sync_worker_reanchor_rx_consumer_to_oldest(&sync));
         assert(sync.buf_mgmt.cons_i == 2);
         assert(sync.buf_mgmt.partial_off == 0);
         MUTEX_UNLOCK(&sync.buf_mgmt.lock);
