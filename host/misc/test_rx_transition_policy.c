@@ -373,6 +373,12 @@ int main(void)
     assert(!bladerf2_retune_completion_batch_valid(2, 1, 16));
     assert(bladerf2_retune_completion_unresolved(1));
     assert(!bladerf2_retune_completion_unresolved(0));
+    /* A refused completion readback with the next request still queued is
+     * retried, not a lost completion (deferred_load trial 4). */
+    assert(bladerf2_retune_completion_readback_retry(-1, 2, 0));
+    assert(bladerf2_retune_completion_readback_retry(-1, 1, 1));
+    assert(!bladerf2_retune_completion_readback_retry(-1, 1, 0));
+    assert(!bladerf2_retune_completion_readback_retry(0, 4, 1));
     assert(bladerf2_tx_retune_release_request_after_cancel(true, 0));
     assert(!bladerf2_tx_retune_release_request_after_cancel(true, 1));
     assert(!bladerf2_tx_retune_release_request_after_cancel(false, 0));

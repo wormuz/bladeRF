@@ -1433,6 +1433,9 @@ static void *rx_fault_monitor_task(void *arg)
             rx_retune2_success_status == 0) {
             bool completion_lost = false;
             uint32_t completed = 0;
+            uint32_t verified_through = rx_retune2_success_count;
+            uint8_t rx_pending_with_this = 0;
+            uint8_t tx_pending = 0;
             uint32_t baseline = 0;
             bool baseline_valid = false;
             uint8_t pending_snapshot = 0;
@@ -1531,13 +1534,14 @@ static void *rx_fault_monitor_task(void *arg)
                                             rffe_profile =
                                                 board_data->rx_retune2_pending[i].
                                                     rffe_profile;
-                                            board_data->rx_retune2_pending[i].valid =
-                                                false;
-                                            board_data->rx_retune2_pending_count--;
                                         }
                                         break;
                                     }
                                 }
+                                rx_pending_with_this =
+                                    board_data->rx_retune2_pending_count;
+                                tx_pending =
+                                    board_data->tx_retune2_pending_count;
                                 MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                                 if (!request_found || completion_lost) {
                                     completion_lost = true;
@@ -1551,6 +1555,23 @@ static void *rx_fault_monitor_task(void *arg)
                                         nios_profile, rffe_profile,
                                         requested_frequency_hz,
                                         &profile_frequency_hz);
+                                if (bladerf2_retune_completion_readback_retry(
+                                        completion_status,
+                                        rx_pending_with_this, tx_pending)) {
+                                    /* Leave this record and its request for
+                                     * the next poll. */
+                                    verified_through = sequence - 1u;
+                                    break;
+                                }
+                                if (completion_status == 0) {
+                                    MUTEX_LOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                    board_data->rx_retune2_pending[i].valid =
+                                        false;
+                                    board_data->rx_retune2_pending_count--;
+                                    MUTEX_UNLOCK(
+                                        &board_data->rx_async_epoch_lock);
+                                }
                                 if (completion_status != 0 ||
                                     !bladerf2_rfic_frequency_matches(
                                         profile_frequency_hz,
@@ -1564,7 +1585,7 @@ static void *rx_fault_monitor_task(void *arg)
                         }
                         MUTEX_LOCK(&board_data->rx_async_epoch_lock);
                         board_data->rx_retune2_success_count_last =
-                            rx_retune2_success_count;
+                            verified_through;
                         MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
                     }
 
