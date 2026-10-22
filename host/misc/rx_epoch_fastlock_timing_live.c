@@ -22,6 +22,10 @@
 #define LOCAL_FREQ_B 1835400000ULL
 #define CROSS_FREQ_A 947500000ULL
 #define CROSS_FREQ_B 1835000000ULL
+/* Diagnostics only, not a PASS limit: a transition slower than this prints
+ * its full event trace (event types incl. RX_RFDC_CAL_DONE, rfic_status), so
+ * a single slow transition in a long run names its stage. */
+#define TRACE_SLOW_US 100000.0
 
 static int fail_status(const char *what, int status)
 {
@@ -216,15 +220,17 @@ int main(int argc, char **argv)
                 goto done;
             }
         }
-        if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL) {
+        if (getenv("BLADERF_RX_EPOCH_POLL_TRACE") != NULL ||
+            (final_event.host_monotonic_ns - config_ns) / 1000.0 > TRACE_SLOW_US) {
             for (uint32_t j = 0; j < count; ++j) {
                 printf("event txn=%u index=%u type=%u state=%u "
-                       "since_config_us=%.3f fpga_ts=%llu flags=0x%x\n",
+                       "since_config_us=%.3f fpga_ts=%llu flags=0x%x "
+                       "rfic_status=0x%x error=%d\n",
                        transaction, j, events[j].event_type,
                        events[j].fpga_state,
                        (events[j].host_monotonic_ns - config_ns) / 1000.0,
                        (unsigned long long)events[j].fpga_timestamp,
-                       events[j].flags);
+                       events[j].flags, events[j].rfic_status, events[j].error_code);
             }
         }
         {
