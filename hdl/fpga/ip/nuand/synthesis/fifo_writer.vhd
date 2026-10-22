@@ -208,7 +208,11 @@ architecture simple of fifo_writer is
     -- words since the last committed header are counted, and the packet is
     -- completed with zero words before ABORTED may issue the next header.
     signal pkt_open            : std_logic := '0';
-    signal pkt_words           : natural range 0 to 65536 := 0;
+    signal pkt_words           : natural range 0 to 65536;
+    signal pkt_words_base      : natural range 0 to 65536 := 0;
+    signal pkt_write_d         : std_logic := '0';
+    signal pkt_meta_d          : std_logic := '0';
+    signal pkt_rst_d           : std_logic := '1';
     signal pkt_short           : std_logic;
     signal pad_write           : std_logic := '0';
     signal fifo_write_i        : std_logic;
@@ -990,45 +994,69 @@ begin
                          not rx_epoch_gate_fault;
     fifo_write_i <= fifo_write;
 
+    -- The write strobes are registered before they reach the count: as a
+    -- live operand of the 17-bit increment they put the RX epoch gate's
+    -- valid/fault mux (fanout 63) in front of a carry chain (setup
+    -- -0.466 ns, sweep A4 2026-10-22). pkt_words is the count through the
+    -- previous cycle, built from the registered strobes of that cycle.
+    pkt_words <= 0 when pkt_rst_d = '1' else
+                 1 when pkt_meta_d = '1' and pkt_write_d = '1' else
+                 0 when pkt_meta_d = '1' else
+                 pkt_words_base + 1 when pkt_write_d = '1' and
+                                         pkt_words_base < 65536 else
+                 pkt_words_base;
+
     pkt_short <= '1' when pkt_open = '1' and
                           pkt_words < ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH
                  else '0';
 
     packet_pad : process( clock, reset )
-        variable words_v : natural range 0 to 65536;
+        variable pad_target : natural;
     begin
         if( reset = '1' ) then
-            pkt_open  <= '0';
-            pkt_words <= 0;
-            pad_write <= '0';
+            pkt_open       <= '0';
+            pkt_words_base <= 0;
+            pkt_write_d    <= '0';
+            pkt_meta_d     <= '0';
+            pkt_rst_d      <= '1';
+            pad_write      <= '0';
         elsif( rising_edge(clock) ) then
-            words_v := pkt_words;
+            pkt_words_base <= pkt_words;
+            pkt_write_d    <= fifo_write_i;
+            pkt_meta_d     <= meta_fifo_write_i;
+            if( enable = '0' or meta_en = '0' or packet_en = '1' ) then
+                pkt_rst_d <= '1';
+            else
+                pkt_rst_d <= '0';
+            end if;
+
             if( meta_fifo_write_i = '1' ) then
-                -- A word committed on the header edge sits after the
-                -- previous (complete) packet in the sample FIFO.
-                words_v := 0;
-                if( fifo_write_i = '1' ) then
-                    words_v := 1;
-                end if;
                 pkt_open <= '1';
-            elsif( fifo_write_i = '1' and words_v < 65536 ) then
-                words_v := words_v + 1;
             end if;
             -- Disabling RX resets both RX FIFOs (rx_fifo_read_reset).
             if( enable = '0' or meta_en = '0' or packet_en = '1' ) then
                 pkt_open <= '0';
-                words_v := 0;
             end if;
-            pkt_words <= words_v;
 
+            -- The count after this cycle's write. In ABORTED the only write
+            -- is the pad itself (registered), so it is pkt_words plus
+            -- pad_write and the live strobe stays out of the decision.
+            pad_target := ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH;
             pad_write <= '0';
             if( meta_state_current(META_ABORTED_BIT) = '1' and
                 abort_active_out = '0' and enable = '1' and meta_en = '1' and
                 packet_en = '0' and link_active_i = '1' and fifo_full = '0' and
-                pkt_open = '1' and
-                words_v < ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH ) then
-                pad_write <= '1';
+                pkt_open = '1' ) then
+                if( (pad_write = '1' and pkt_words + 1 < pad_target) or
+                    (pad_write = '0' and pkt_words < pad_target) ) then
+                    pad_write <= '1';
+                end if;
             end if;
+            -- Holds by construction: ABORTED masks the sample path.
+            assert not( meta_state_current(META_ABORTED_BIT) = '1' and
+                        fifo_write_i = '1' and pad_write = '0' )
+                report "fifo_writer: a sample write in ABORTED is not counted by the pad decision"
+                severity failure;
         end if;
     end process;
 
