@@ -20,7 +20,8 @@ ghdl -a --std=08 -frelaxed \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_epoch_fence_tb.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_abort_tb.vhd" \
     "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_enable_tb.vhd" \
-    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_holdoff_loss_tb.vhd"
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_holdoff_loss_tb.vhd" \
+    "${repo_root}/hdl/fpga/ip/nuand/simulation/fifo_writer_fault_packet_tb.vhd"
 ghdl -e --std=08 rx_epoch_gate_tb
 ghdl -r --std=08 rx_epoch_gate_tb --assert-level=error
 
@@ -32,7 +33,8 @@ for testbench in \
     fifo_writer_epoch_fence_tb \
     fifo_writer_abort_tb \
     fifo_writer_enable_tb \
-    fifo_writer_holdoff_loss_tb; do
+    fifo_writer_holdoff_loss_tb \
+    fifo_writer_fault_packet_tb; do
     ghdl -e --std=08 -frelaxed "${testbench}"
     ghdl -r --std=08 -frelaxed "${testbench}" --assert-level=error
 done
