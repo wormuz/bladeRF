@@ -455,7 +455,10 @@ struct bladerf_rx_spatial_fir_status {
  * @param[in]   coef  Q2.14 bank, see the group description
  *
  * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
- *         block or an RX channel uses an AGC gain mode, or a value from
+ *         block or an RX channel uses an AGC gain mode,
+ *         BLADERF_ERR_NOT_INIT if the RX epoch contract is enabled and RX
+ *         is disabled (the fenced commit needs RX samples; nothing is
+ *         written), or a value from
  *         \ref RETCODES list on other failure
  */
 API_EXPORT
@@ -486,7 +489,8 @@ int CALL_CONV bladerf_get_rx_spatial_fir(struct bladerf *dev,
  * @param       dev   Device handle
  *
  * @return 0 on success, BLADERF_ERR_UNSUPPORTED if the gateware lacks the
- *         block, or a value from \ref RETCODES list on other failure
+ *         block, BLADERF_ERR_NOT_INIT as for ::bladerf_set_rx_spatial_fir,
+ *         or a value from \ref RETCODES list on other failure
  */
 API_EXPORT
 int CALL_CONV bladerf_reset_rx_spatial_fir(struct bladerf *dev);
