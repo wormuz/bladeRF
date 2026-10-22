@@ -2,7 +2,7 @@
 -- (rx_spatial_fir_vectors.py -> sdr-scanner rfcore/spatial_fir.apply_fixed).
 -- Covers design 6.1 T1 (identity / force_identity), T3 (random and fitted
 -- coefficients), T4 (saturation, sticky), T5 (commit atomicity), T6 (RX_X1
--- bypass, enable toggled). Every test also checks: latency 9 cycles for every
+-- bypass, enable toggled). Every test also checks: latency 8 cycles for every
 -- sample, per-lane output valid, and the carried timestamp = ts_in(n-2).
 --
 -- STROBE: 0 = data_v every 2nd clock (rx_clock = 2 x fs), 1 = every clock,
@@ -34,7 +34,7 @@ architecture sim of rx_spatial_fir_tb is
 
     constant NMAX    : natural := 600;
     constant KMAX    : natural := 3;
-    constant LATENCY : natural := 9;
+    constant LATENCY : natural := 8;
 
     type name_list_t is array (natural range <>) of string(1 to 14);
     constant TESTS : name_list_t := (

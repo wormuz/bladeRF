@@ -5,7 +5,7 @@
 --     y_i[n] = sum_j sum_k h_ij[k] * x_j[n-k],  k = 0..4, center tap 2
 -- Data SC16, coefficients Q2.14 (1.0 = 16384), products summed at full width,
 -- round (+2^13, asr 14), saturate to [-2048, 2047]. Output sample n carries
--- the timestamp of its center input x[n-2]. Constant latency 9 rx_clock cycles
+-- the timestamp of its center input x[n-2]. Constant latency 8 rx_clock cycles
 -- from input data_v to output data_v in every mode.
 -- Bypass (pure pass-through of x_own[n-2], no rounding or saturation) when any
 -- lane is disabled (RX_X1), the active bank is the identity, or force_identity
@@ -95,7 +95,7 @@ architecture rtl of rx_spatial_fir is
     constant ONE_Q14  : signed(15 downto 0) := to_signed(16384, 16);
     constant SAT_HI   : integer := 2047;
     constant SAT_LO   : integer := -2048;
-    constant STAGES   : natural := 9;   -- S0..S8
+    constant STAGES   : natural := 8;   -- S0..S7
 
     type tap_line_t   is array (0 to TAPS-1) of signed(15 downto 0);
     type lane_line_t  is array (0 to 1) of tap_line_t;
@@ -180,7 +180,6 @@ architecture rtl of rx_spatial_fir is
     signal ts_p            : ts_pipe_t := (others => (others => '0'));
 
     -- Arithmetic (no reset: DSP input/output registers)
-    signal s1_xi, s1_xq    : lane_line_t;
     signal s1_re, s1_im    : c16_t;
     signal s1_nim          : c17_t;
     signal s2_pr, s2_pi    : prod_t;
@@ -345,18 +344,16 @@ begin
                 mode(s)  <= mode(s-1);
                 gen(s)   <= gen(s-1);
             end loop;
-            -- S1: mode and bank generation sampled with the coefficients.
-            -- The bank after this edge: S1 takes a commit on this edge.
+            -- S1: mode and bank generation of the coefficients S2 multiplies
+            -- with on this edge, i.e. before a commit on it.
             if in_sample_controls(0).enable = '0' or
                in_sample_controls(1).enable = '0' or
-               (coef_commit = '1' and shadow_all_id = '1') or
-               (coef_commit = '0' and act_identity = '1') or
-               force_identity = '1' then
+               act_identity = '1' or force_identity = '1' then
                 mode(1) <= '1';
             else
                 mode(1) <= '0';
             end if;
-            gen(1) <= bank_gen xor coef_commit;
+            gen(1) <= bank_gen;
             both_lanes_q <= in_sample_controls(0).enable and
                             in_sample_controls(1).enable;
             -- A newer ARM/ABORT cancels a COMPLETE already in flight.
@@ -402,17 +399,14 @@ begin
         variable qr, qi : signed(16 downto 0);
     begin
         if rising_edge(clock) then
-            -- S1. The coefficient registers are the active bank, loaded from
-            -- the shadow on commit (their own DSP ENA). A separate active
-            -- bank copied here on every sample was a zero-logic LAB -> DSP
-            -- input path that failed hold. The sample loaded on the edge of
-            -- a commit uses the new bank; sideband gen/mode follow (S1).
-            -- Shadow -> S1 hold is waived in bladerf.sdc: the controller
-            -- never asserts coef_wr_en and coef_commit in the same cycle.
-            if v0 = '1' then
-                s1_xi  <= dl_i;
-                s1_xq  <= dl_q;
-            end if;
+            -- S1 coefficient registers are the active bank, loaded from the
+            -- shadow on commit (their own DSP ENA); shadow -> S1 hold is
+            -- waived in bladerf.sdc (the controller never commits on a write
+            -- edge). There is no S1 data register: a LAB register into a DSP
+            -- input register, with no logic between, failed hold against the
+            -- later DSP clock (-0.113 ns, delay line -> S1, 2026-10-22). The
+            -- multipliers take the delay line directly; S2 registers the
+            -- products on the S0 valid.
             if coef_commit = '1' then
                 for m in 0 to NCOEF-1 loop
                     s1_re(m)  <= signed(shadow(m)(15 downto 0));
@@ -421,29 +415,29 @@ begin
                 end loop;
             end if;
             -- S2: Re = hr*xr + (-hi)*xi, Im = hr*xi + hi*xr
-            if v(1) = '1' then
+            if v0 = '1' then
                 for i in 0 to 1 loop
                     for j in 0 to 1 loop
                         for k in 0 to TAPS-1 loop
                             n := idx_of(i, j, k);
-                            s2_pr(n) <= resize(s1_re(n) * s1_xi(j)(k), PROD_W) +
-                                        resize(s1_nim(n) * s1_xq(j)(k), PROD_W);
-                            s2_pi(n) <= resize(s1_re(n) * s1_xq(j)(k), PROD_W) +
-                                        resize(s1_im(n) * s1_xi(j)(k), PROD_W);
+                            s2_pr(n) <= resize(s1_re(n) * dl_i(j)(k), PROD_W) +
+                                        resize(s1_nim(n) * dl_q(j)(k), PROD_W);
+                            s2_pi(n) <= resize(s1_re(n) * dl_q(j)(k), PROD_W) +
+                                        resize(s1_im(n) * dl_i(j)(k), PROD_W);
                         end loop;
                     end loop;
                 end loop;
             end if;
             -- S3..S6: adder tree 10 -> 5 -> 3 -> 2 -> 1 per component
             for i in 0 to 1 loop
-                if v(2) = '1' then
+                if v(1) = '1' then
                     for a in 0 to 4 loop
                         n := i * 2 * TAPS + 2 * a;
                         s3_r(i)(a) <= resize(s2_pr(n), ACC_W) + resize(s2_pr(n+1), ACC_W);
                         s3_i(i)(a) <= resize(s2_pi(n), ACC_W) + resize(s2_pi(n+1), ACC_W);
                     end loop;
                 end if;
-                if v(3) = '1' then
+                if v(2) = '1' then
                     s4_r(i)(0) <= s3_r(i)(0) + s3_r(i)(1);
                     s4_r(i)(1) <= s3_r(i)(2) + s3_r(i)(3);
                     s4_r(i)(2) <= s3_r(i)(4);
@@ -451,18 +445,18 @@ begin
                     s4_i(i)(1) <= s3_i(i)(2) + s3_i(i)(3);
                     s4_i(i)(2) <= s3_i(i)(4);
                 end if;
-                if v(4) = '1' then
+                if v(3) = '1' then
                     s5_r(i)(0) <= s4_r(i)(0) + s4_r(i)(1);
                     s5_r(i)(1) <= s4_r(i)(2);
                     s5_i(i)(0) <= s4_i(i)(0) + s4_i(i)(1);
                     s5_i(i)(1) <= s4_i(i)(2);
                 end if;
-                if v(5) = '1' then
+                if v(4) = '1' then
                     s6_r(i) <= s5_r(i)(0) + s5_r(i)(1);
                     s6_i(i) <= s5_i(i)(0) + s5_i(i)(1);
                 end if;
                 -- S7
-                if v(6) = '1' then
+                if v(5) = '1' then
                     qr := round_sat(s6_r(i));
                     qi := round_sat(s6_i(i));
                     s7_r(i)   <= qr(15 downto 0);
