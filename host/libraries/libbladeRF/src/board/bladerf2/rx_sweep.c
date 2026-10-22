@@ -199,6 +199,7 @@ static void sweep_lo_follow(struct bladerf2_board_data *board_data,
         (record->flags & BLADERF_RX_SWEEP_F_EXECUTED_VALID) != 0 &&
         rffe_profile < NUM_RFFE_FASTLOCK_PROFILES;
     board_data->rx_sweep.lo_rffe_profile = rffe_profile;
+    board_data->rx_sweep.lo_nios_profile = record->nios_profile;
     board_data->rx_sweep.lo_frequency = record->frequency;
 }
 
@@ -849,6 +850,7 @@ static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
     const unsigned int profile = board_data->rx_sweep.lo_rffe_profile;
     int32_t setup;
     int32_t status;
+    unsigned int nios;
 
     if (phy == NULL || phy->spi == NULL) {
         return;
@@ -871,6 +873,25 @@ static void sweep_sync_host_lo(struct bladerf2_board_data *board_data)
     phy->fastlock.entry[0][profile].flags = 0;
     status = ad9361_fastlock_sync_current_lo(
         phy, false, profile, board_data->rx_sweep.lo_frequency, NULL);
+    nios = board_data->rx_sweep.lo_nios_profile;
+    if (status != 0 && nios < NUM_BBP_FASTLOCK_PROFILES &&
+        board_data->nios_fastlock_words[0][nios].valid) {
+        /* NIOS stages queued profiles into AD9361 slots in the background
+         * (pkt_retune2.c profile_preload_next), so a request cancelled at
+         * the end may have overwritten the bank slot of the recalled
+         * profile; the synthesizer keeps the recalled LO. Put the words of
+         * the last executed record back into the slot and read again. */
+        if (ad9361_fastlock_load(phy, false, profile,
+                                 board_data->nios_fastlock_words[0][nios]
+                                     .words) == 0) {
+            phy->fastlock.entry[0][profile].flags = 0;
+            status = ad9361_fastlock_sync_current_lo(
+                phy, false, profile, board_data->rx_sweep.lo_frequency,
+                NULL);
+            log_debug("%s: RX LO slot %u restored from NIOS slot %u: %d\n",
+                      __FUNCTION__, profile, nios, status);
+        }
+    }
     if (status != 0) {
         /* The sync invalidated the LO itself. */
         log_warning("%s: RX LO slot %u does not read back as %" PRIu64

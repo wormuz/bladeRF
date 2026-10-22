@@ -160,14 +160,35 @@ int32_t ad9361_spi_read(struct no_os_spi_desc *spi, uint32_t reg)
     return reg == REG_RX_FAST_LOCK_SETUP ? fastlock_setup_reg : -EIO;
 }
 
+/* Bank slot words: `bank_stale` - NIOS staged a later profile into the
+ * recalled slot, the words decode to another LO until reloaded. */
+static bool bank_stale;
+static unsigned int bank_loads;
+
+int32_t ad9361_fastlock_load(struct ad9361_rf_phy *phy, bool tx,
+                             uint32_t profile, uint8_t *values)
+{
+    (void)phy;
+    (void)tx;
+    (void)profile;
+    (void)values;
+    bank_loads++;
+    bank_stale = false;
+    return 0;
+}
+
 int32_t ad9361_fastlock_sync_current_lo(struct ad9361_rf_phy *phy, bool tx,
                                         uint32_t profile,
                                         uint64_t expected_freq_hz,
                                         uint64_t *freq_hz)
 {
     (void)tx;
-    lo_synced_expected = expected_freq_hz;
     (void)freq_hz;
+    if (bank_stale) {
+        lo_invalidated++;
+        return -EIO;
+    }
+    lo_synced_expected = expected_freq_hz;
     lo_synced_profile = profile;
     phy->fastlock.current_profile[0] = profile + 1;
     return 0;
@@ -829,7 +850,7 @@ static void check_rx2_only_session(void)
  * record (slot 3 at 300 MHz here), checked against the chip; without it a
  * later sample-rate change hits profile 0xff (-EINVAL). Unknown when the
  * last record failed or the chip has another slot recalled. */
-static void end_session(bool last_fails, uint8_t chip_slot)
+static void end_session(bool last_fails, uint8_t chip_slot, bool stale)
 {
     static uint8_t spi_dummy;
 
@@ -858,13 +879,16 @@ static void end_session(bool last_fails, uint8_t chip_slot)
         success_order[1] = 1;
         successes_published = 2;
     }
+    bank_stale = stale;
+    bank_loads = 0;
+    board_data.nios_fastlock_words[0][3].valid = true;
     now_timestamp = 3000;
     CHECK(bladerf2_rx_sweep_end(&dev, BLADERF_CHANNEL_RX(0)) == 0, "end");
 }
 
 static void check_end_syncs_host_lo(void)
 {
-    end_session(false, 3);
+    end_session(false, 3, false);
     CHECK(lo_invalidated == 0 && lo_synced_profile == 3 &&
               lo_synced_expected == 300000000 &&
               mock_phy.fastlock.current_profile[0] == 4 &&
@@ -873,12 +897,20 @@ static void check_end_syncs_host_lo(void)
           "profile byte %u, invalidated %u)", lo_synced_profile,
           (unsigned long long)lo_synced_expected,
           mock_phy.fastlock.current_profile[0], lo_invalidated);
-    end_session(true, 3);
+    end_session(true, 3, false);
     CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
           "failed last record left a known LO");
-    end_session(false, 2);
+    end_session(false, 2, false);
     CHECK(lo_invalidated == 1 && lo_synced_profile == 0xff,
           "chip slot 2 against record slot 3 left a known LO");
+    /* NIOS staged a later profile into the recalled slot: the words of the
+     * last executed record go back, then the LO reads back. */
+    end_session(false, 3, true);
+    CHECK(bank_loads == 1 && lo_synced_profile == 3 &&
+              lo_synced_expected == 300000000 &&
+              mock_phy.fastlock.current_profile[0] == 4,
+          "stale bank slot not restored (loads %u, profile %u)", bank_loads,
+          lo_synced_profile);
 }
 
 int main(void)

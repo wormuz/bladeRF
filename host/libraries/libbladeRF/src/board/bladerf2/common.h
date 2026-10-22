@@ -358,6 +358,7 @@ struct bladerf2_board_data {
         bool lo_known;
         uint32_t lo_sequence;
         uint8_t lo_rffe_profile;
+        uint16_t lo_nios_profile;
         bladerf_frequency lo_frequency;
         /* RX RFPLL reference rate read at begin; 0 when unknown (FPGA
          * tuning mode: no host AD9361 driver). */
