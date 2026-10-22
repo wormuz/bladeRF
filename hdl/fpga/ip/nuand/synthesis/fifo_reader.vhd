@@ -260,6 +260,14 @@ architecture simple of fifo_reader is
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
     signal meta_future  : meta_fsm_t := META_FSM_RESET_VALUE;
 
+    -- Low word of timestamp+4 for the due borrow, without the adder: the
+    -- timestamp steps by one, so this cycle's +4 is last cycle's +4, or
+    -- its +5 when the LSB moved. Not cleared by fifo_flush: it tracks the
+    -- timestamp, not the FIFO.
+    signal ts4_low_r    : unsigned(31 downto 0) := (others => '0');
+    signal ts5_low_r    : unsigned(31 downto 0) := (others => '0');
+    signal ts_lsb_r     : std_logic := '0';
+
     type fifo_state_t is (
         COMPUTE_ENABLED_CHANNELS,
         COMPUTE_OFFSETS,
@@ -747,6 +755,15 @@ begin
     -- META FIFO FSM
     -- ------------------------------------------------------------------------
 
+    ts_plus4_regs : process( clock )
+    begin
+        if( rising_edge(clock) ) then
+            ts4_low_r <= timestamp(31 downto 0) + 4;
+            ts5_low_r <= timestamp(31 downto 0) + 5;
+            ts_lsb_r  <= timestamp(0);
+        end if;
+    end process;
+
     -- Meta FIFO synchronous process
     meta_fsm_sync : process( clock, reset )
     begin
@@ -768,7 +785,6 @@ begin
         constant  META_NOW      : unsigned(63 downto 0) := (others => '1');
         variable  meta_time     : unsigned(63 downto 0);
         variable  packet_len    : integer;
-        variable  ts_load_next  : unsigned(63 downto 0);
         variable  ts_load_high  : unsigned(31 downto 0);
         variable  cmp_tgt       : unsigned(63 downto 0);
         variable  v_due_time    : std_logic;
@@ -813,7 +829,6 @@ begin
         cmp_tgt := meta_current.meta_header;
         v_due_time := '0';
 
-        ts_load_next := timestamp + 4;
         -- Align the high word of timestamp+4 with the low-word borrow below.
         -- On the next sample-clock edge it is the high word of timestamp+3.
         -- Register it here so the META_EVAL path only subtracts high words;
@@ -825,16 +840,34 @@ begin
         end if;
         meta_future.due_high_time <= ts_load_high;
 
-        if ts_load_next(31 downto 0) <
-           unsigned(meta_current.meta_fifo_data(63 downto 32)) then
-            v_fifo_borrow := '1';
+        -- Low word of timestamp+4 from registers (ts_plus4_regs): the 32-bit
+        -- increment from the time-tamer bus in front of these compares
+        -- missed setup (-0.124 ns, sweep A4 2026-10-22). Both candidates are
+        -- compared and the LSB step picks one.
+        if timestamp(0) /= ts_lsb_r then
+            if ts5_low_r <
+               unsigned(meta_current.meta_fifo_data(63 downto 32)) then
+                v_fifo_borrow := '1';
+            else
+                v_fifo_borrow := '0';
+            end if;
+            if ts5_low_r < cmp_tgt(31 downto 0) then
+                v_header_borrow := '1';
+            else
+                v_header_borrow := '0';
+            end if;
         else
-            v_fifo_borrow := '0';
-        end if;
-        if ts_load_next(31 downto 0) < cmp_tgt(31 downto 0) then
-            v_header_borrow := '1';
-        else
-            v_header_borrow := '0';
+            if ts4_low_r <
+               unsigned(meta_current.meta_fifo_data(63 downto 32)) then
+                v_fifo_borrow := '1';
+            else
+                v_fifo_borrow := '0';
+            end if;
+            if ts4_low_r < cmp_tgt(31 downto 0) then
+                v_header_borrow := '1';
+            else
+                v_header_borrow := '0';
+            end if;
         end if;
 
         if meta_current.state = META_LOAD and

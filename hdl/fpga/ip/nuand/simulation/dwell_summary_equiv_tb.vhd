@@ -360,6 +360,20 @@ begin
             end if;
         end loop;
 
+        -- 10. Peak decided in the low byte: energies below 256 (I 10..13,
+        --     Q 0), so the upper bytes are equal and only the last orders them.
+        for d in 0 to 3 loop
+            for k in 1 to WINDOW_LEN * 3 loop
+                wait until rising_edge(clock);
+                lfsr := lfsr(14 downto 0) &
+                        (lfsr(15) xor lfsr(13) xor lfsr(12) xor lfsr(10));
+                sample.data_i <= to_signed(10, 16) + signed("00000000000000" & lfsr(1 downto 0));
+                sample.data_q <= to_signed(0, 16);
+                sample.data_v <= '1';
+            end loop;
+            boundary;
+        end loop;
+
         idle(20);
 
         assert records_seen > 0
