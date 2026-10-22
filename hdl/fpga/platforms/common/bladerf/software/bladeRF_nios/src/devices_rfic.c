@@ -34,6 +34,7 @@
 #include "devices_rfic.h"
 #include "ad936x_helpers.h"
 #include "nios_pkt_8x64.h"
+#include "nios_pkt_16x64.h"
 #include "nios_pkt_retune2.h"
 #include "nios_pkt_8x32.h"
 #include "rfic_frequency_policy.h"
@@ -384,6 +385,51 @@ static const struct gain_table_info *rfic_gain_table_info(bool split,
         }
     }
     return NULL;
+}
+
+/* NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION: the host driver's whole-table
+ * write from this copy of the ADI table (nios_pkt_16x64.h). */
+static const struct gain_table_info *rfic_gain_table_region_info(
+    uint8_t region, bool split, uint8_t rows)
+{
+    const struct gain_table_info *info = rfic_gain_table_info(split, region);
+
+    return info != NULL && info->max_index == rows ? info : NULL;
+}
+
+bool rfic_gain_table_region_digest(uint8_t region, bool split, uint8_t rows,
+                                   uint64_t *digest)
+{
+    const struct gain_table_info *info =
+        rfic_gain_table_region_info(region, split, rows);
+
+    if (info == NULL || digest == NULL) {
+        return false;
+    }
+    *digest = nios_pkt_16x64_gain_table_digest(info->tab, info->max_index);
+    return true;
+}
+
+bool rfic_gain_table_region_write(uint8_t region, bool split, uint8_t rows,
+                                  uint8_t lna, uint8_t config)
+{
+    const struct gain_table_info *info =
+        rfic_gain_table_region_info(region, split, rows);
+    uint8_t row;
+
+    if (info == NULL) {
+        return false;
+    }
+    /* Each row is one arbiter hold with its 2 us settle, as the per-row
+     * request; the settle delay is also the service-hook safe point. */
+    for (row = 0; row < info->max_index; ++row) {
+        if (!adi_spi_gain_table_row(row, info->tab[row][0] | lna,
+                                    info->tab[row][1], info->tab[row][2],
+                                    config, 2)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* HOST tuning mode has no PHY; the table rows go over this transport. */

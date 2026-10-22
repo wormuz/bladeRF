@@ -5441,6 +5441,13 @@ typedef enum {
  * The RX_DATA_INVALIDATED reason bits are all assigned, so this change is
  * identified on the transition events rather than by a reason bit. */
 #define BLADERF_RF_EVENT_F_SPATIAL_FIR (1U << 25)
+/** On BLADERF_RF_EVT_RX_RETUNE_FAILED: the scheduled RX retune was removed
+ * by a queue clear the application requested (bladerf_cancel_scheduled_
+ * retunes() or an RX transition, which cancels retunes queued before it)
+ * while NIOS still held it (stage CANCELLED, e.g. a gain-table load in
+ * progress). Superseded by the application, not a retune failure; it never
+ * changed the LO. */
+#define BLADERF_RF_EVENT_F_RETUNE_SUPERSEDED (1U << 24)
 
 /** Reason flags carried by BLADERF_RF_EVT_RX_DATA_INVALIDATED. */
 #define BLADERF_RF_INVALIDATE_FREQUENCY  (1U << 0)

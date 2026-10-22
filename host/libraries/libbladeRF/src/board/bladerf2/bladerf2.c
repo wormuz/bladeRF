@@ -5237,8 +5237,17 @@ static int bladerf2_cancel_scheduled_retunes(struct bladerf *dev,
                                     BLADERF_RF_STATE_ERROR;
                                 failure_event.event_type =
                                     BLADERF_RF_EVT_RX_RETUNE_FAILED;
+                                /* This queue clear was requested by the
+                                 * application (explicit cancel or an RX
+                                 * transition), so a request NIOS reports
+                                 * CANCELLED for it was superseded, not
+                                 * failed. Keep it visible and distinct. */
                                 failure_event.flags =
-                                    BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID;
+                                    BLADERF_RF_EVENT_F_NIOS_FAILURE_STAGE_VALID |
+                                    (bladerf2_retune_failure_superseded(
+                                         failure_stage)
+                                         ? BLADERF_RF_EVENT_F_RETUNE_SUPERSEDED
+                                         : 0u);
                                 failure_event.error_code =
                                     BLADERF_ERR_FPGA_OP;
                                 bladerf2_rf_event_append(board_data,

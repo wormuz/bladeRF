@@ -71,6 +71,28 @@ static inline bool perform_write(uint8_t id, uint16_t addr, uint64_t data,
             break;
 #endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
 
+#if (defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)) && \
+    defined(BLADERF_NIOS_LIBAD936X)
+        case NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION: {
+            uint8_t region, rows;
+            bool split;
+
+            /* Same admission as the per-row request it replaces. */
+            if (!rfic_direct_gain_table_write_allowed(
+                    rfic_command_state_faulted(),
+                    rfic_command_owns_device(), rfic_phy_present()) ||
+                !nios_pkt_16x64_gain_table_region_unpack(addr, &region,
+                                                          &split, &rows) ||
+                (data >> 16) != 0) {
+                return false;
+            }
+            success = rfic_gain_table_region_write(
+                region, split, rows, (uint8_t)(data & 0xff),
+                (uint8_t)((data >> 8) & 0xff));
+            break;
+        }
+#endif
+
 #ifdef BLADERF_NIOS_LIBAD936X
         case NIOS_PKT_16x64_TARGET_RFIC: {
             const enum bladerf_rfic_write_admission admission =
@@ -111,6 +133,20 @@ static inline bool perform_read(uint8_t id, uint16_t addr, uint64_t *data)
             }
             return adi_spi_read_checked(addr, data);
 #endif  // BOARD_BLADERF_MICRO || BLADERF_NIOS_PC_SIMULATION
+
+#if (defined(BOARD_BLADERF_MICRO) || defined(BLADERF_NIOS_PC_SIMULATION)) && \
+    defined(BLADERF_NIOS_LIBAD936X)
+        case NIOS_PKT_16x64_TARGET_GAIN_TABLE_REGION: {
+            uint8_t region, rows;
+            bool split;
+
+            success = nios_pkt_16x64_gain_table_region_unpack(
+                          addr, &region, &split, &rows) &&
+                      rfic_gain_table_region_digest(region, split, rows,
+                                                    data);
+            break;
+        }
+#endif
 
 #ifdef BLADERF_NIOS_LIBAD936X
         case NIOS_PKT_16x64_TARGET_RFIC:
