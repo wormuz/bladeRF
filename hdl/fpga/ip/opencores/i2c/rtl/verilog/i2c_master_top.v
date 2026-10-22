@@ -154,6 +154,24 @@ module i2c_master_top(
 	// generate wishbone signals
 	wire wb_wacc = wb_we_i & wb_ack_o;
 
+	// bladeRF: software reset of the transfer logic. Writing
+	// I2C_SOFT_RESET_KEY to offset 7 resets the byte/bit controllers, the
+	// command register and the status bits for one cycle; prescale and
+	// control registers are kept for the caller to rewrite. Without it
+	// only an FPGA reload resets a controller left mid-transfer, because
+	// the Nios is not rebooted between host sessions.
+	localparam [7:0] I2C_SOFT_RESET_KEY = 8'ha5;
+	reg  soft_rst;
+	wire core_rst = wb_rst_i | soft_rst;
+	wire [7:0] diag;
+
+	always @(posedge wb_clk_i or negedge rst_i)
+	  if (!rst_i)
+	    soft_rst <= #1 1'b0;
+	  else
+	    soft_rst <= #1 wb_wacc & (wb_adr_i == 3'b111) &
+	                (wb_dat_i == I2C_SOFT_RESET_KEY) & ~soft_rst;
+
 	// generate acknowledge output signal
 	always @(posedge wb_clk_i)
 	  wb_ack_o <= #1 wb_cyc_i & wb_stb_i & ~wb_ack_o; // because timing is always honored
@@ -169,7 +187,7 @@ module i2c_master_top(
 	    3'b100: wb_dat_o <= #1 sr;  // write is command register (cr)
 	    3'b101: wb_dat_o <= #1 txr;
 	    3'b110: wb_dat_o <= #1 cr;
-	    3'b111: wb_dat_o <= #1 0;   // reserved
+	    3'b111: wb_dat_o <= #1 diag; // bladeRF: {sda, scl, slave_wait, byte state}
 	  endcase
 	end
 
@@ -201,7 +219,7 @@ module i2c_master_top(
 	always @(posedge wb_clk_i or negedge rst_i)
 	  if (!rst_i)
 	    cr <= #1 8'h0;
-	  else if (wb_rst_i)
+	  else if (core_rst)
 	    cr <= #1 8'h0;
 	  else if (wb_wacc)
 	    begin
@@ -233,7 +251,7 @@ module i2c_master_top(
 	// hookup byte controller block
 	i2c_master_byte_ctrl byte_controller (
 		.clk      ( wb_clk_i     ),
-		.rst      ( wb_rst_i     ),
+		.rst      ( core_rst     ),
 		.nReset   ( rst_i        ),
 		.ena      ( core_en      ),
 		.clk_cnt  ( prer         ),
@@ -253,7 +271,8 @@ module i2c_master_top(
 		.scl_oen  ( scl_padoen_o ),
 		.sda_i    ( sda_pad_i    ),
 		.sda_o    ( sda_pad_o    ),
-		.sda_oen  ( sda_padoen_o )
+		.sda_oen  ( sda_padoen_o ),
+		.diag     ( diag         )
 	);
 
 	// status register block + interrupt request signal
@@ -265,7 +284,7 @@ module i2c_master_top(
 	        tip      <= #1 1'b0;
 	        irq_flag <= #1 1'b0;
 	    end
-	  else if (wb_rst_i)
+	  else if (core_rst)
 	    begin
 	        al       <= #1 1'b0;
 	        rxack    <= #1 1'b0;

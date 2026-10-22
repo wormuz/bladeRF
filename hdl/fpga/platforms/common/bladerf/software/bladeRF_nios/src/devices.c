@@ -537,11 +537,15 @@ bool tamer_cancel_acknowledged(bladerf_module m, uint8_t ack_before)
 void bladerf_nios_init(struct pkt_buf *pkt,
                        struct vctcxo_tamer_pkt_buf *vctcxo_tamer_pkt)
 {
+#ifdef BOARD_BLADERF_MICRO
+    i2c_session_begin(command_uart_current_session_generation());
+#else
     /* Set the prescaler for 400kHz with an 80MHz clock:
      *      (prescaler = clock / (5*desired) - 1)
      */
-    IOWR_16DIRECT(I2C, OC_I2C_PRESCALER, 39);
+    IOWR_16DIRECT(I2C, OC_I2C_PRESCALER, OC_I2C_PRESCALER_400KHZ);
     IOWR_8DIRECT(I2C, OC_I2C_CTRL, OC_I2C_ENABLE);
+#endif
 
 #ifdef IQ_CORR_RX_PHASE_GAIN_BASE
 #ifdef IQ_CORR_TX_PHASE_GAIN_BASE
@@ -600,6 +604,28 @@ static bool bladerf_i2c_deadline_expired(uint64_t start_ticks)
 }
 #endif
 
+/* NIOS_PKT_8x32_TARGET_I2C_DIAG record; survives host sessions like the
+ * controller state it describes. */
+static struct {
+    uint32_t failure;
+    uint32_t failures;
+    uint32_t recovery;
+    bool session_valid;
+    uint32_t session_generation;
+} i2c_diag;
+
+/* Outcome of the last i2c_complete_transfer(): NIOS_I2C_FAIL_* or 0, and
+ * the status register it ended on. */
+static uint8_t i2c_transfer_failure;
+static uint8_t i2c_transfer_status;
+
+static bool i2c_transfer_timed_out(uint8_t reason)
+{
+    i2c_transfer_failure = reason;
+    i2c_transfer_status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
+    return false;
+}
+
 static bool i2c_complete_transfer(uint8_t check_rxack)
 {
     /* Retain a finite fallback if the monotonic timer stops advancing. */
@@ -610,50 +636,80 @@ static bool i2c_complete_transfer(uint8_t check_rxack)
     uint64_t const start_ticks = bladerf_platform_monotonic_ticks();
 #endif
 
-    if ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
-        count = 0;
-        while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) == 0) {
+    /* Every command write carries IACK, which clears IF; the core sets IF
+     * again when that command completes or loses arbitration, whether or
+     * not interrupts are enabled. IF therefore separates "already done"
+     * from "not started": a byte that finished (or an AL abort) before
+     * this first read leaves TIP low and IF high, and is not mistaken for
+     * a command the core never took.
+     *
+     * TIP and IF are registered from CR, which is itself registered from
+     * the write, and the read data is registered again: a read issued
+     * straight after the command write can still return the previous
+     * command's TIP=0/IF=1. Discard one read; the next one is issued only
+     * after it completes and sees this command's state. */
+    (void)IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
+    status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
+    count = 0;
+    while ((status & (OC_I2C_TIP | OC_I2C_IF)) == 0) {
 #ifdef BOARD_BLADERF_MICRO
-            if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
-                bladerf_i2c_deadline_expired(start_ticks)) {
-                DBG("%s: timed out waiting for TIP to assert\n",
-                    __FUNCTION__);
-                return false;
-            }
-#endif
-            if (++count >= TRIES) {
-                DBG("%s: timed out waiting for TIP to assert\n", __FUNCTION__);
-                return false;
-            }
+        if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
+            bladerf_i2c_deadline_expired(start_ticks)) {
+            DBG("%s: timed out waiting for TIP to assert\n",
+                __FUNCTION__);
+            return i2c_transfer_timed_out(NIOS_I2C_FAIL_TIP_ASSERT);
         }
+#endif
+        if (++count >= TRIES) {
+            DBG("%s: timed out waiting for TIP to assert\n", __FUNCTION__);
+            return i2c_transfer_timed_out(NIOS_I2C_FAIL_TIP_ASSERT);
+        }
+        status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
     }
 
     count = 0;
-    status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
     while (status & OC_I2C_TIP) {
 #ifdef BOARD_BLADERF_MICRO
         if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
             bladerf_i2c_deadline_expired(start_ticks)) {
             DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
-            return false;
+            return i2c_transfer_timed_out(NIOS_I2C_FAIL_TIP_CLEAR);
         }
 #endif
         if (++count >= TRIES) {
             DBG("%s: timed out waiting for TIP to clear\n", __FUNCTION__);
-            return false;
+            return i2c_transfer_timed_out(NIOS_I2C_FAIL_TIP_CLEAR);
         }
         status = IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
     }
 
-    if (!bladerf_i2c_status_success(status, OC_I2C_TIP, OC_I2C_RXACK,
-                                    check_rxack)) {
-        if (check_rxack && (status & OC_I2C_RXACK)) {
-            DBG("%s: I2C slave returned NACK\n", __FUNCTION__);
-        }
+    i2c_transfer_failure = bladerf_i2c_status_failure(
+        status, OC_I2C_TIP, OC_I2C_RXACK, OC_I2C_AL, check_rxack);
+    i2c_transfer_status = status;
+    if (i2c_transfer_failure != 0) {
+        DBG("%s: I2C transfer failed, reason %u\n", __FUNCTION__,
+            i2c_transfer_failure);
         return false;
     }
 
     return true;
+}
+
+/* Called on every failed SI5338/INA219 operation, before the abort. */
+static void i2c_note_failure(uint8_t op, uint8_t step)
+{
+    i2c_diag.failure = (uint32_t)op |
+                       ((uint32_t)step << 8) |
+                       ((uint32_t)i2c_transfer_failure << 16) |
+                       ((uint32_t)i2c_transfer_status << 24);
+    ++i2c_diag.failures;
+}
+
+/* One byte of an operation; *step numbers it for i2c_note_failure(). */
+static bool i2c_step(uint8_t *step, uint8_t check_rxack)
+{
+    ++*step;
+    return i2c_complete_transfer(check_rxack);
 }
 
 /* A failed byte can leave the OpenCores controller holding the bus after a
@@ -667,8 +723,14 @@ static void i2c_abort_transfer(void)
     uint64_t const start_ticks = bladerf_platform_monotonic_ticks();
 #endif
 
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STO);
-    while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_TIP) != 0) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STO | OC_I2C_IACK);
+    /* A STOP-only command never sets TIP (TIP is RD|WR); IF marks its
+     * completion. Returning before it completes would let the next
+     * command's bits be cleared by this STOP's done. Discard one read for
+     * the register latency described in i2c_complete_transfer(). */
+    (void)IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS);
+    while ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) &
+            (OC_I2C_TIP | OC_I2C_IF)) != OC_I2C_IF) {
 #ifdef BOARD_BLADERF_MICRO
         if ((count & BLADERF_I2C_TIMEOUT_CHECK_MASK) == 0 &&
             bladerf_i2c_deadline_expired(start_ticks)) {
@@ -680,6 +742,124 @@ static void i2c_abort_transfer(void)
             DBG("%s: timed out issuing I2C STOP\n", __FUNCTION__);
             return;
         }
+    }
+}
+
+#ifdef BOARD_BLADERF_MICRO
+#define I2C_RECOVERY_CLOCK_BURSTS 3u
+/* Status reads; each takes several sys_clock cycles, while the input filter
+ * settles within a few PRER/4 periods. */
+#define I2C_RECOVERY_BUSY_POLLS   10000u
+
+/* The soft reset presets the filtered SCL/SDA high; with EN=0 the input
+ * filter samples every cycle, so the register writes below already let it
+ * follow the lines (tst_soft_reset.v checks a held-low SDA after this
+ * sequence). The reads are margin. Returns the diagnostic byte. */
+#define I2C_LINE_SETTLE_READS 32u
+
+static uint8_t i2c_soft_reset_and_configure(void)
+{
+    uint32_t i;
+    uint8_t diag = 0;
+
+    IOWR_8DIRECT(I2C, OC_I2C_DIAG, OC_I2C_SOFT_RESET_KEY);
+    IOWR_8DIRECT(I2C, OC_I2C_CTRL, 0);
+    IOWR_16DIRECT(I2C, OC_I2C_PRESCALER, OC_I2C_PRESCALER_400KHZ);
+    IOWR_8DIRECT(I2C, OC_I2C_CTRL, OC_I2C_ENABLE);
+    for (i = 0; i < I2C_LINE_SETTLE_READS; ++i) {
+        diag = IORD_8DIRECT(I2C, OC_I2C_DIAG);
+    }
+    return diag;
+}
+
+/* Bring the controller and bus to idle from any state a previous session
+ * can leave: the soft reset ends a transfer frozen mid-byte and clears
+ * CR/AL; PRER and CTRL are rewritten. A slave still driving SDA low (cut
+ * off inside a read) gets read clocks without a START, nine per burst with
+ * SDA released, which walks it to the end of its byte. If the slave still
+ * holds SDA at the ACK clock the master loses arbitration and skips the
+ * burst's STOP, so each burst ends with a fresh soft reset and SDA is
+ * sampled again. Once SDA is free a STOP ends whatever transaction a slave
+ * still believes is open. */
+static void i2c_core_init(void)
+{
+    uint32_t flags = NIOS_I2C_RECOVERY_SOFT_RESET;
+    uint32_t burst;
+    uint8_t diag;
+
+    diag = i2c_soft_reset_and_configure();
+    for (burst = 0; burst < I2C_RECOVERY_CLOCK_BURSTS &&
+                    (diag & OC_I2C_DIAG_SDA) == 0; ++burst) {
+        flags |= NIOS_I2C_RECOVERY_SDA_LOW | NIOS_I2C_RECOVERY_CLOCKED;
+        IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS,
+                     OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO | OC_I2C_IACK);
+        (void)i2c_complete_transfer(0);
+        diag = i2c_soft_reset_and_configure();
+    }
+
+    if ((diag & OC_I2C_DIAG_SDA) == 0) {
+        flags |= NIOS_I2C_RECOVERY_FAILED;
+    } else {
+        /* The soft reset clears the master's BUSY, not a slave's view of
+         * the bus: one left after a START (and its address) still waits for
+         * more bytes. A STOP returns every slave to idle. */
+        uint32_t polls;
+
+        flags |= NIOS_I2C_RECOVERY_STOP;
+        i2c_abort_transfer();
+        /* IF rises at the end of the STOP command; BUSY falls only once the
+         * filtered lines show the STOP condition, a few input-filter
+         * periods later. */
+        for (polls = 0; polls < I2C_RECOVERY_BUSY_POLLS &&
+                        (IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) &
+                         OC_I2C_BUSY) != 0; ++polls) {
+        }
+        diag = IORD_8DIRECT(I2C, OC_I2C_DIAG);
+        if ((IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) & OC_I2C_BUSY) != 0) {
+            flags |= NIOS_I2C_RECOVERY_FAILED;
+        }
+    }
+
+    i2c_diag.recovery = ((i2c_diag.recovery + 1u) & 0xffffu) |
+                        (flags << 16) | ((uint32_t)diag << 24);
+}
+
+void i2c_session_begin(uint32_t session_generation)
+{
+    if (i2c_diag.session_valid &&
+        i2c_diag.session_generation == session_generation) {
+        return;
+    }
+    i2c_core_init();
+    i2c_diag.session_generation = session_generation;
+    i2c_diag.session_valid = true;
+}
+#endif  // BOARD_BLADERF_MICRO
+
+bool i2c_diag_read(uint8_t addr, uint32_t *value)
+{
+    switch (addr) {
+        case NIOS_PKT_8x32_I2C_DIAG_REGS:
+            *value = (uint32_t)IORD_8DIRECT(I2C, OC_I2C_PRESCALER) |
+                     ((uint32_t)IORD_8DIRECT(I2C, OC_I2C_PRESCALER + 1) << 8) |
+                     ((uint32_t)IORD_8DIRECT(I2C, OC_I2C_CTRL) << 16) |
+                     ((uint32_t)IORD_8DIRECT(I2C, OC_I2C_CMD_STATUS) << 24);
+            return true;
+        case NIOS_PKT_8x32_I2C_DIAG_CORE:
+            *value = (uint32_t)IORD_8DIRECT(I2C, OC_I2C_CR_READBACK) |
+                     ((uint32_t)IORD_8DIRECT(I2C, OC_I2C_DIAG) << 8);
+            return true;
+        case NIOS_PKT_8x32_I2C_DIAG_FAILURE:
+            *value = i2c_diag.failure;
+            return true;
+        case NIOS_PKT_8x32_I2C_DIAG_FAILURES:
+            *value = i2c_diag.failures;
+            return true;
+        case NIOS_PKT_8x32_I2C_DIAG_RECOVERY:
+            *value = i2c_diag.recovery;
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -1774,6 +1954,9 @@ bool adi_rfspdt_select(bladerf_module m, fastlock_profile *p)
 
 bool si5338_read(uint8_t addr, uint8_t *data)
 {
+    const uint8_t op = NIOS_I2C_OP_SI5338_READ;
+    uint8_t step = 0;
+
     if (data == NULL) {
         return false;
     }
@@ -1781,26 +1964,27 @@ bool si5338_read(uint8_t addr, uint8_t *data)
 
     /* Set the address to the Si5338 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, SI5338_I2C);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, addr);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     /* Next transfer is a read operation, so '1' in the read/write bit */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, SI5338_I2C | 1);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO);
-    if (!i2c_complete_transfer(0)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS,
+                 OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 0)) {
         goto i2c_fail;
     }
 
@@ -1809,28 +1993,33 @@ bool si5338_read(uint8_t addr, uint8_t *data)
 
 i2c_fail:
     /* Preserve the read failure and release any transaction already started. */
+    i2c_note_failure(op, step);
     i2c_abort_transfer();
     return false;
 }
 
 bool si5338_write(uint8_t addr, uint8_t data)
 {
+    const uint8_t op = NIOS_I2C_OP_SI5338_WRITE;
+    uint8_t step = 0;
+
     /* Set the address to the Si5338 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, SI5338_I2C);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, addr);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    if (!i2c_complete_transfer(0)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 0)) {
+        i2c_note_failure(op, step);
         i2c_abort_transfer();
         return false;
     }
@@ -1838,6 +2027,7 @@ bool si5338_write(uint8_t addr, uint8_t data)
 
 i2c_fail:
     /* Preserve the write failure and release any transaction already started. */
+    i2c_note_failure(op, step);
     i2c_abort_transfer();
     return false;
 }
@@ -1845,6 +2035,9 @@ i2c_fail:
 #ifdef BOARD_BLADERF_MICRO
 bool ina219_read(uint8_t addr, uint16_t *data)
 {
+    const uint8_t op = NIOS_I2C_OP_INA219_READ;
+    uint8_t step = 0;
+
     if (data == NULL) {
         return false;
     }
@@ -1852,32 +2045,33 @@ bool ina219_read(uint8_t addr, uint16_t *data)
 
     /* Set the address to the INA219 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, INA219_I2C);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, addr);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     /* Next transfer is a read operation, so '1' in the read/write bit */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, INA219_I2C | 1);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_RD);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_RD | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
     *data = IORD_8DIRECT(I2C, OC_I2C_DATA) << 8;
 
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO);
-    if (!i2c_complete_transfer(0)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS,
+                 OC_I2C_RD | OC_I2C_NACK | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 0)) {
         goto i2c_fail;
     }
 
@@ -1886,6 +2080,7 @@ bool ina219_read(uint8_t addr, uint16_t *data)
 
 i2c_fail:
     /* Preserve the read failure and release any transaction already started. */
+    i2c_note_failure(op, step);
     i2c_abort_transfer();
     return false;
 }
@@ -1894,28 +2089,32 @@ i2c_fail:
 #ifdef BOARD_BLADERF_MICRO
 bool ina219_write(uint8_t addr, uint16_t data)
 {
+    const uint8_t op = NIOS_I2C_OP_INA219_WRITE;
+    uint8_t step = 0;
+
     /* Set the address to the INA219 */
     IOWR_8DIRECT(I2C, OC_I2C_DATA, INA219_I2C);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_STA | OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, addr);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data >> 8);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR);
-    if (!i2c_complete_transfer(1)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_IACK);
+    if (!i2c_step(&step, 1)) {
         goto i2c_fail;
     }
 
     IOWR_8DIRECT(I2C, OC_I2C_DATA, data);
-    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO);
-    if (!i2c_complete_transfer(0)) {
+    IOWR_8DIRECT(I2C, OC_I2C_CMD_STATUS, OC_I2C_WR | OC_I2C_STO | OC_I2C_IACK);
+    if (!i2c_step(&step, 0)) {
+        i2c_note_failure(op, step);
         i2c_abort_transfer();
         return false;
     }
@@ -1923,6 +2122,7 @@ bool ina219_write(uint8_t addr, uint16_t data)
 
 i2c_fail:
     /* Preserve the write failure and release any transaction already started. */
+    i2c_note_failure(op, step);
     i2c_abort_transfer();
     return false;
 }

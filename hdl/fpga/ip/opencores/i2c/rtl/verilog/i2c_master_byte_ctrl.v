@@ -74,7 +74,8 @@
 
 module i2c_master_byte_ctrl (
 	clk, rst, nReset, ena, clk_cnt, start, stop, read, write, ack_in, din,
-	cmd_ack, ack_out, dout, i2c_busy, i2c_al, scl_i, scl_o, scl_oen, sda_i, sda_o, sda_oen );
+	cmd_ack, ack_out, dout, i2c_busy, i2c_al, scl_i, scl_o, scl_oen, sda_i, sda_o, sda_oen,
+	diag );
 
 	//
 	// inputs & outputs
@@ -110,6 +111,11 @@ module i2c_master_byte_ctrl (
 	input  sda_i;
 	output sda_o;
 	output sda_oen;
+
+	// {sda, scl, slave_wait, byte state} for the read-only diagnostic
+	// register (i2c_master_top offset 7)
+	output [7:0] diag;
+	wire diag_slave_wait, diag_scl, diag_sda;
 
 
 	//
@@ -160,7 +166,10 @@ module i2c_master_byte_ctrl (
 		.scl_oen ( scl_oen  ),
 		.sda_i   ( sda_i    ),
 		.sda_o   ( sda_o    ),
-		.sda_oen ( sda_oen  )
+		.sda_oen ( sda_oen  ),
+		.diag_slave_wait ( diag_slave_wait ),
+		.diag_scl        ( diag_scl        ),
+		.diag_sda        ( diag_sda        )
 	);
 
 	// generate go-signal
@@ -197,6 +206,8 @@ module i2c_master_byte_ctrl (
 	// state machine
 	//
 	reg [4:0] c_state; // synopsys enum_state
+
+	assign diag = {diag_sda, diag_scl, diag_slave_wait, c_state};
 
 	always @(posedge clk or negedge nReset)
 	  if (!nReset)

@@ -180,6 +180,12 @@ void pkt_8x16(struct pkt_buf *b)
 
     nios_pkt_8x16_unpack(b->req, &id, &is_write, &addr, &data);
 
+#ifdef BOARD_BLADERF_MICRO
+    if (id == NIOS_PKT_8x16_TARGET_INA219) {
+        i2c_session_begin(b->session_generation);
+    }
+#endif
+
     if (is_write) {
         success = perform_write(id, addr, data);
     } else {
