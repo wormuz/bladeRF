@@ -453,13 +453,26 @@ begin
                                     not retune_gate_muted_status and
                                     tx_stream_data_seen,
             in_samples           => dac_streams_raw,
-            out_samples          => dac_streams,
+            -- Gated in tx_dac_output, after registers.
+            out_samples          => open,
             state                => retune_gate_state,
             muted                => retune_gate_muted,
             mute_start_event     => retune_gate_mute_event,
             resume_event         => retune_gate_resume_event,
             mute_start_timestamp => retune_gate_mute_timestamp,
             muted_sample_count  => retune_gate_muted_sample_count
+        );
+
+    -- The gate's mute applied after registers (tx_dac_output.vhd).
+    U_tx_dac_output : entity work.tx_dac_output
+        generic map (
+            NUM_STREAMS => NUM_STREAMS
+        )
+        port map (
+            clock       => tx_clock,
+            in_samples  => dac_streams_raw,
+            muted       => retune_gate_muted,
+            out_samples => dac_streams
         );
 
     tx_underflow_led <= tx_underflow_led_i;
