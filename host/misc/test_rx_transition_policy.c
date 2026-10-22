@@ -42,6 +42,7 @@ int main(void)
     assert(!bladerf2_rfic_frequency_model_valid(false, true));
     assert(!bladerf2_rfic_frequency_model_valid(true, false));
     assert(!bladerf2_rfic_frequency_model_valid(false, false));
+/* Reference certificate at an RX boundary: a locked (or bypassed) * readback re-certifies after an earlier unlock or read failure; a failed * read or an unlocked reference keeps it revoked; a modified clock tree * is restored only by the reference setters. */ assert(bladerf2_rfic_reference_known_at_boundary(true, 0)); assert(!bladerf2_rfic_reference_known_at_boundary(true, BLADERF_ERR_FPGA_OP)); assert(!bladerf2_rfic_reference_known_at_boundary(true, BLADERF_ERR_IO)); assert(!bladerf2_rfic_reference_known_at_boundary(false, 0));
     assert(bladerf2_rfic_register_is_gain_only(0x109));
     assert(bladerf2_rfic_register_is_gain_only(0x10c));
     assert(!bladerf2_rfic_register_is_gain_only(0x108));

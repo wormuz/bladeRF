@@ -55,6 +55,22 @@ static inline bool bladerf2_rfic_frequency_model_valid(
     return reference_clock_known && rfic_clock_tree_known;
 }
 
+/* Reference certificate at an RX transition boundary. An unlock or a failed
+ * status read revokes it (reference_clock_known=false); it means "check the
+ * hardware again", not a permanent state. With the clock-tree model intact,
+ * a successful readback showing a locked (or bypassed) reference re-certifies
+ * it: an unlock does not change the ADF4002 or AD9361 dividers, and the
+ * transition re-locks and checks the AD9361 PLLs itself. A failed read or an
+ * unlocked reference keeps it revoked. A modified clock tree is re-certified
+ * only by the reference setters. `hw_status` is
+ * bladerf2_rfic_reference_clock_status(); read whenever the tree is known.
+ * Returns the new reference_clock_known. */
+static inline bool bladerf2_rfic_reference_known_at_boundary(
+    bool rfic_clock_tree_known, int hw_status)
+{
+    return rfic_clock_tree_known && hw_status == 0;
+}
+
 /* AD9361 RX1/RX2 manual LMT/full-gain controls (REG_RX1_MANUAL_LMT_FULL_GAIN
  * and REG_RX2_MANUAL_LMT_FULL_GAIN) change gain only. In particular they do
  * not invalidate ADI's cached RFPLL/clock-divider model or FIR state. The

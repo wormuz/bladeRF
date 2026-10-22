@@ -3845,19 +3845,28 @@ static int _bladerf_rx_transition_begin(
             }
         }
         if (rx_source_status == 0 && !rx_source_unsupported) {
+            bool clock_tree_known;
+            bool reference_known;
             MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            clock_tree_known = board_data->rfic_frequency_model_known;
+            MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
+            /* Read the reference on every boundary, also when an earlier
+             * unlock or read failure revoked it: only the setters used to
+             * restore it, so a transient unlock blocked every later
+             * transition (fault_live RUNTIME_REFERENCE_PLL_UNLOCKED). */
+            reference_known = bladerf2_rfic_reference_known_at_boundary(
+                clock_tree_known,
+                clock_tree_known ? bladerf2_rfic_reference_clock_status(dev)
+                                 : BLADERF_ERR_WOULD_BLOCK);
+            MUTEX_LOCK(&board_data->rx_async_epoch_lock);
+            if (board_data->rfic_frequency_model_known == clock_tree_known) {
+                board_data->rfic_reference_clock_known = reference_known;
+            }
             frequency_model_unknown =
                 !bladerf2_rfic_frequency_model_valid(
                     board_data->rfic_reference_clock_known,
                     board_data->rfic_frequency_model_known);
             MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            if (!frequency_model_unknown &&
-                bladerf2_rfic_reference_clock_status(dev) != 0) {
-                frequency_model_unknown = true;
-                MUTEX_LOCK(&board_data->rx_async_epoch_lock);
-                board_data->rfic_reference_clock_known = false;
-                MUTEX_UNLOCK(&board_data->rx_async_epoch_lock);
-            }
         }
         if (rx_source_status != 0 || rx_source_unsupported) {
             /* Reported after leaving dev->lock; no RF or epoch state changed. */
