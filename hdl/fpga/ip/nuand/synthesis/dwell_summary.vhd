@@ -174,9 +174,9 @@ architecture arch of dwell_summary is
     -- cycle ahead. The direct compare closed a 32-bit compare -> load-select
     -- (fanout 48) -> compare loop through dwell_peak in one 8 ns cycle
     -- (sweep setup -0.450 ns, 2026-10-22).
-    signal peak_gt0         : std_logic := '0';
-    signal peak_gtx         : std_logic := '0';
-    signal peak_gtp         : std_logic := '0';
+    signal peak_gt0         : std_logic_vector(3 downto 0) := (others => '0');
+    signal peak_gtx         : std_logic_vector(6 downto 0) := (others => '0');
+    signal peak_gtp         : std_logic_vector(6 downto 0) := (others => '0');
     signal peak_start_d     : std_logic := '0';
     signal peak_upd_d       : std_logic := '0';
     signal peak_gt          : std_logic;
@@ -263,32 +263,30 @@ architecture arch of dwell_summary is
         return n;
     end function;
 
-    -- Parallel lexicographic compare for the instantaneous peak update.
-    -- The fitted dwell_summary path crossed this decision and the peak
-    -- register in the 8 ns pll_sclk domain; independent byte comparisons
-    -- avoid a single 32-bit comparator chain while preserving exact order.
-    function energy_gt( left_v : unsigned(31 downto 0);
-                        right_v : unsigned(31 downto 0) ) return boolean is
-        variable b3_gt : boolean;
-        variable b3_eq : boolean;
-        variable b2_gt : boolean;
-        variable b2_eq : boolean;
-        variable b1_gt : boolean;
-        variable b1_eq : boolean;
-        variable b0_gt : boolean;
+    -- Peak compare (inst_energy > dwell_peak) split at a register: the byte
+    -- compares, independent so no 32-bit comparator chain forms, are taken
+    -- a cycle ahead (energy_parts) and combined after it (parts_gt). The
+    -- compare of the DSP sum of squares as it left the block, all in one
+    -- cycle, missed setup (-0.058 ns, sweep A4 2026-10-22).
+    function energy_parts( left_v : unsigned(31 downto 0);
+                           right_v : unsigned(31 downto 0) )
+                           return std_logic_vector is
+        variable p : std_logic_vector(6 downto 0) := (others => '0');
     begin
-        b3_gt := left_v(31 downto 24) > right_v(31 downto 24);
-        b3_eq := left_v(31 downto 24) = right_v(31 downto 24);
-        b2_gt := left_v(23 downto 16) > right_v(23 downto 16);
-        b2_eq := left_v(23 downto 16) = right_v(23 downto 16);
-        b1_gt := left_v(15 downto 8) > right_v(15 downto 8);
-        b1_eq := left_v(15 downto 8) = right_v(15 downto 8);
-        b0_gt := left_v(7 downto 0) > right_v(7 downto 0);
+        if left_v(31 downto 24) > right_v(31 downto 24) then p(6) := '1'; end if;
+        if left_v(31 downto 24) = right_v(31 downto 24) then p(5) := '1'; end if;
+        if left_v(23 downto 16) > right_v(23 downto 16) then p(4) := '1'; end if;
+        if left_v(23 downto 16) = right_v(23 downto 16) then p(3) := '1'; end if;
+        if left_v(15 downto 8)  > right_v(15 downto 8)  then p(2) := '1'; end if;
+        if left_v(15 downto 8)  = right_v(15 downto 8)  then p(1) := '1'; end if;
+        if left_v(7 downto 0)   > right_v(7 downto 0)   then p(0) := '1'; end if;
+        return p;
+    end function;
 
-        return b3_gt or
-               (b3_eq and b2_gt) or
-               (b3_eq and b2_eq and b1_gt) or
-               (b3_eq and b2_eq and b1_eq and b0_gt);
+    function parts_gt( p : std_logic_vector(6 downto 0) ) return std_logic is
+    begin
+        return p(6) or (p(5) and p(4)) or (p(5) and p(3) and p(2)) or
+               (p(5) and p(3) and p(1) and p(0));
     end function;
 
 begin
@@ -592,24 +590,31 @@ begin
             inst_energy <= (others => '0');
             inst_valid  <= '0';
             inst_clip   <= '0';
-            peak_gt0    <= '0';
-            peak_gtx    <= '0';
-            peak_gtp    <= '0';
+            peak_gt0    <= (others => '0');
+            peak_gtx    <= (others => '0');
+            peak_gtp    <= (others => '0');
         elsif( rising_edge(clock) ) then
             energy_next := sq_i + sq_q;
             inst_valid  <= sq_valid;
             inst_clip   <= sq_clip;
             inst_energy <= energy_next;
-            -- energy_gt(energy_next, 0)
-            if( energy_next /= 0 ) then peak_gt0 <= '1'; else peak_gt0 <= '0'; end if;
-            if( energy_gt(energy_next, inst_energy) ) then peak_gtx <= '1'; else peak_gtx <= '0'; end if;
-            if( energy_gt(energy_next, dwell_peak) ) then peak_gtp <= '1'; else peak_gtp <= '0'; end if;
+            -- energy_next > 0, per byte
+            for b in 0 to 3 loop
+                if( energy_next(8*b+7 downto 8*b) /= 0 ) then
+                    peak_gt0(b) <= '1';
+                else
+                    peak_gt0(b) <= '0';
+                end if;
+            end loop;
+            peak_gtx <= energy_parts(energy_next, inst_energy);
+            peak_gtp <= energy_parts(energy_next, dwell_peak);
         end if;
     end process;
 
-    peak_gt <= peak_gt0 when peak_start_d = '1' else
-               peak_gtx when peak_upd_d = '1' else
-               peak_gtp;
+    peak_gt <= (peak_gt0(3) or peak_gt0(2) or peak_gt0(1) or peak_gt0(0))
+                   when peak_start_d = '1' else
+               parts_gt(peak_gtx) when peak_upd_d = '1' else
+               parts_gt(peak_gtp);
 
 
     -- Stage 2: window accumulation and dwell totals.
