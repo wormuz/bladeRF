@@ -43,3 +43,6 @@ done
 # the writer must judge free space against the real 4096-word depth.
 ghdl -r --std=08 -frelaxed fifo_writer_holdoff_loss_tb --assert-level=error \
     -gUSEDW_BITS=13 -gDEPTH_LOG2=12
+# The full 8192-word FIFO (hosted RX): room for a block up to 7168 used.
+ghdl -r --std=08 -frelaxed fifo_writer_holdoff_loss_tb --assert-level=error \
+    -gUSEDW_BITS=13 -gDEPTH_LOG2=0

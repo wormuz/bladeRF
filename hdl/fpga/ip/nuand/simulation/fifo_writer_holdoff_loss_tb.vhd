@@ -57,12 +57,20 @@ architecture tb of fifo_writer_holdoff_loss_tb is
     constant NSTREAMS   : natural := 2;
     constant CLK_PERIOD : time    := 8 ns;
     -- usedw counts 64-bit write words; one SuperSpeed DMA block
-    -- (GPIF_BUF_SIZE_SS = 2048 dwords) is 1024 of them. 3200 of a 4096-word
-    -- FIFO leaves 896 < 1024: no room. 2900 leaves 1196: room for a block,
-    -- which a dword-unit compare (room > 2048) refused. The 13-bit run with
-    -- DEPTH_LOG2 = 12 must see the same 4096-word FIFO.
-    constant USEDW_TIGHT : natural := 3200;
-    constant USEDW_ROOM  : natural := 2900;
+    -- (GPIF_BUF_SIZE_SS = 2048 dwords) is 1024 of them. TIGHT leaves 896 <
+    -- 1024: no room. ROOM leaves 1196: room for a block, which a dword-unit
+    -- compare (room > 2048) refused. Both against the real depth: the 13-bit
+    -- run with DEPTH_LOG2 = 12 must see a 4096-word FIFO, DEPTH_LOG2 = 0 the
+    -- full 8192 (hosted RX).
+    function real_depth return natural is
+    begin
+        if DEPTH_LOG2 /= 0 then
+            return 2**DEPTH_LOG2;
+        end if;
+        return 2**USEDW_BITS;
+    end function;
+    constant USEDW_TIGHT : natural := real_depth - 896;
+    constant USEDW_ROOM  : natural := real_depth - 1196;
 
     signal clock        : std_logic := '0';
     signal reset        : std_logic := '1';

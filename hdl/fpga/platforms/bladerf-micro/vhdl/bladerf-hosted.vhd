@@ -42,12 +42,17 @@ begin
             ENABLE_TRIGGER_CAPTURE => false,
             ENABLE_GAIN_SEQUENCER  => false,
             ENABLE_SPATIAL_FIR     => true,
-            -- 4096 of 8192 RX and TX words each: M10K 256/308 instead of
-            -- 304/308. The FX3 DMA ring (12 x 8 KiB per direction, about
-            -- 400 us at 61.44 MS/s) carries the buffering; these FIFOs only
-            -- smooth GPIF pauses. TX must hold one SuperSpeed DMA block
-            -- (2048 words), so 4096 is its floor (fx3_gpif).
-            RX_SAMPLE_FIFO_LOG2    => 12,
+            -- TX: 4096 of 8192 words (M10K 304/308 -> 256/308 with both
+            -- halved). TX must hold one SuperSpeed DMA block (2048 words),
+            -- so 4096 is its floor (fx3_gpif).
+            -- RX stays at the full 8192 write words. The writer needs room
+            -- for one DMA block (1024 write words) at each packet start and
+            -- GPIF takes a block once one is there, so the FIFO rides out a
+            -- GPIF pause of (depth - 2048) write words: at RX_X2 23.04 MS/s
+            -- (one 64-bit word per tick) 89 us at 4096, 267 us at 8192.
+            -- 4096 dropped 686 ticks at RX_X2 23.04 MS/s (qualification
+            -- 01326cf4, lte_rxx2_1s; 0bb5f16d with a 44 us margin: 830).
+            RX_SAMPLE_FIFO_LOG2    => 0,
             TX_SAMPLE_FIFO_LOG2    => 12
         )
         port map (
