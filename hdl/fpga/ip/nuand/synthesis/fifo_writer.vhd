@@ -1058,6 +1058,7 @@ begin
 
     packet_pad : process( clock, reset )
         variable pad_target : natural;
+        variable pad_room   : boolean;
     begin
         if( reset = '1' ) then
             pkt_open       <= '0';
@@ -1089,14 +1090,46 @@ begin
             -- is the pad itself (registered), so it is pkt_words plus
             -- pad_write and the live strobe stays out of the decision.
             pad_target := ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH;
+            -- pkt_words + pad_write < pad_target without the two carry chains
+            -- (pkt_words = base + strobe, then + pad_write): compare the
+            -- registered base against pad_target - 0/1/2 and pick by the
+            -- strobes (-1.04 ns into pad_write_byte, sweep A4 2026-10-23).
+            -- pkt_words saturates at 65536, far above any pad_target.
+            if( pkt_rst_d = '1' ) then
+                pad_room := pad_write = '0' or 1 < pad_target;
+            elsif( pkt_meta_d = '1' ) then
+                if( pkt_write_d = '1' and pad_write = '1' ) then
+                    pad_room := 2 < pad_target;
+                elsif( pkt_write_d = '1' or pad_write = '1' ) then
+                    pad_room := 1 < pad_target;
+                else
+                    pad_room := 0 < pad_target;
+                end if;
+            elsif( pkt_write_d = '1' and pad_write = '1' ) then
+                pad_room := pkt_words_base < pad_target - 2;
+            elsif( pkt_write_d = '1' or pad_write = '1' ) then
+                pad_room := pkt_words_base < pad_target - 1;
+            else
+                pad_room := pkt_words_base < pad_target;
+            end if;
+            -- synthesis translate_off
+            if( pad_write = '1' ) then
+                assert pad_room = (pkt_words + 1 < pad_target)
+                    report "fifo_writer: pad_room differs from pkt_words + 1 < target"
+                    severity failure;
+            else
+                assert pad_room = (pkt_words < pad_target)
+                    report "fifo_writer: pad_room differs from pkt_words < target"
+                    severity failure;
+            end if;
+            -- synthesis translate_on
             pad_write <= '0';
             pad_write_byte <= (others => '0');
             if( meta_state_current(META_ABORTED_BIT) = '1' and
                 abort_active_out = '0' and enable = '1' and meta_en = '1' and
                 packet_en = '0' and link_active_i = '1' and fifo_full = '0' and
                 pkt_open = '1' ) then
-                if( (pad_write = '1' and pkt_words + 1 < pad_target) or
-                    (pad_write = '0' and pkt_words < pad_target) ) then
+                if( pad_room ) then
                     pad_write <= '1';
                     pad_write_byte <= (others => '1');
                 end if;
