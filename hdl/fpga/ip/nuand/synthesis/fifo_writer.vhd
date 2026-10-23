@@ -229,6 +229,15 @@ architecture simple of fifo_writer is
     signal pkt_rst_d           : std_logic := '1';
     signal pkt_short           : std_logic;
     signal pad_write           : std_logic := '0';
+    -- One copy of pad_write per data byte for the zero-word select in front of
+    -- the sample FIFO: a single register fanned out to all 64 data inputs of
+    -- M10K spread over the device (-0.226 ns hosted, -0.133 ns sweep A4
+    -- 2026-10-23). dont_merge/preserve keep the copies apart.
+    signal pad_write_byte      : std_logic_vector(FIFO_DATA_WIDTH/8-1 downto 0) := (others => '0');
+    attribute dont_merge : boolean;
+    attribute preserve   : boolean;
+    attribute dont_merge of pad_write_byte : signal is true;
+    attribute preserve   of pad_write_byte : signal is true;
     signal fifo_write_i        : std_logic;
     signal meta_fifo_write_i   : std_logic;
     signal epoch_ack_i         : std_logic := '0';
@@ -399,6 +408,9 @@ begin
     -- Throw an error if port widths don't make sense
     assert (fifo_data'length >= (NUM_STREAMS*2*in_samples(in_samples'low).data_i'length) )
         report "fifo_data port width too narrow to support " & integer'image(NUM_STREAMS) & " MIMO streams."
+        severity failure;
+    assert FIFO_DATA_WIDTH mod 8 = 0
+        report "fifo_data width must be whole bytes (pad_write_byte)"
         severity failure;
 
     -- This classifier is observed only while a link epoch is active. A
@@ -1047,6 +1059,7 @@ begin
             pkt_meta_d     <= '0';
             pkt_rst_d      <= '1';
             pad_write      <= '0';
+            pad_write_byte <= (others => '0');
         elsif( rising_edge(clock) ) then
             pkt_words_base <= pkt_words;
             pkt_write_d    <= fifo_write_i;
@@ -1070,6 +1083,7 @@ begin
             -- pad_write and the live strobe stays out of the decision.
             pad_target := ((dma_buf_size - 4) * 32) / FIFO_DATA_WIDTH;
             pad_write <= '0';
+            pad_write_byte <= (others => '0');
             if( meta_state_current(META_ABORTED_BIT) = '1' and
                 abort_active_out = '0' and enable = '1' and meta_en = '1' and
                 packet_en = '0' and link_active_i = '1' and fifo_full = '0' and
@@ -1077,12 +1091,16 @@ begin
                 if( (pad_write = '1' and pkt_words + 1 < pad_target) or
                     (pad_write = '0' and pkt_words < pad_target) ) then
                     pad_write <= '1';
+                    pad_write_byte <= (others => '1');
                 end if;
             end if;
             -- Holds by construction: ABORTED masks the sample path.
             assert not( meta_state_current(META_ABORTED_BIT) = '1' and
                         fifo_write_i = '1' and pad_write = '0' )
                 report "fifo_writer: a sample write in ABORTED is not counted by the pad decision"
+                severity failure;
+            assert pad_write_byte = (pad_write_byte'range => pad_write)
+                report "fifo_writer: pad_write_byte copies disagree with pad_write"
                 severity failure;
         end if;
     end process;
@@ -1494,11 +1512,14 @@ begin
     fifo_write <= (fifo_current.fifo_write and
                    not abort_active_i and
                    not rx_epoch_gate_fault) or pad_write;
-        if( pad_write = '1' ) then
-            fifo_data <= (others => '0');
-        else
-            fifo_data <= std_logic_vector(fifo_current.fifo_data);
-        end if;
+        for b in pad_write_byte'range loop
+            if( pad_write_byte(b) = '1' ) then
+                fifo_data(8*b+7 downto 8*b) <= (others => '0');
+            else
+                fifo_data(8*b+7 downto 8*b) <=
+                    std_logic_vector(fifo_current.fifo_data(8*b+7 downto 8*b));
+            end if;
+        end loop;
 
     end process;
 

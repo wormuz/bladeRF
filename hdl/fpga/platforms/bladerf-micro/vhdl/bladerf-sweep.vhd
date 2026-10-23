@@ -45,6 +45,8 @@ begin
             ENABLE_TRIGGER_CAPTURE => false,
             ENABLE_GAIN_SEQUENCER  => false,
             ENABLE_SPATIAL_FIR     => true,
+            -- 4096 of 8192 RX words: M10K 278/308 -> 246/308 (see hosted).
+            RX_SAMPLE_FIFO_LOG2    => 12,
             -- 2048 of 8192 TX words: the sweep host never transmits, and the
             -- freed M10K relieve the device. 2048 holds no SuperSpeed DMA
             -- block, so fx3_gpif never grants SuperSpeed TX here (TX is off
