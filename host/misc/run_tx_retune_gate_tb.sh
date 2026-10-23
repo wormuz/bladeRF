@@ -83,6 +83,36 @@ ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
     -gCASE_ID=7 -gHDR_TIME=0000000000000000000000000000000000000000000000000000000000000000 \
     -gEXPECT_RELEASE=true -gSTART_EMPTY=true -gEMPTY_FIFO_CYCLES=30 \
     -gPROGRESS_TIMEOUT_LOG2=4 -gSTOP_AFTER_CYCLES=80
+# Low-word carry into the high word (high word 0 -> 1), not the 64-bit wrap.
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=8 \
+    -gTS_START=0000000000000000000000000000000011111111111111111111111111110000 \
+    -gHDR_TIME=0000000000000000000000000000000100000000000000000000000000010000 \
+    -gEXPECT_RELEASE=false -gSTOP_AFTER_CYCLES=8
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=9 \
+    -gTS_START=0000000000000000000000000000000011111111111111111111111111110000 \
+    -gHDR_TIME=0000000000000000000000000000000100000000000000000000000000010000 \
+    -gEXPECT_RELEASE=true -gSTOP_AFTER_CYCLES=64
+# Target in the four ticks where the lead timestamp carries into the high
+# word: the first read must land on the header tick, on its first clock.
+# Case 11 steps the timestamp every other clock as time_tamer does, case 12
+# every fourth clock.
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=10 \
+    -gTS_START=0000000000000000000000000000000011111111111111111111111110000000 \
+    -gHDR_TIME=0000000000000000000000000000000100000000000000000000000000000000 \
+    -gEXPECT_RELEASE=true -gEXPECT_LATE=0 -gSTOP_AFTER_CYCLES=200
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=11 -gTS_DIV=2 \
+    -gTS_START=0000000000000000000000000000000011111111111111111111111110000000 \
+    -gHDR_TIME=0000000000000000000000000000000100000000000000000000000000000001 \
+    -gEXPECT_RELEASE=true -gEXPECT_LATE=0 -gSTOP_AFTER_CYCLES=400
+ghdl -r --std=08 fifo_reader_edge_tb --assert-level=error \
+    -gCASE_ID=12 -gTS_DIV=4 \
+    -gTS_START=0000000000000000000000000000000011111111111111111111111110000000 \
+    -gHDR_TIME=0000000000000000000000000000000100000000000000000000000000000001 \
+    -gEXPECT_RELEASE=true -gEXPECT_LATE=0 -gSTOP_AFTER_CYCLES=800
 
 ghdl -e --std=08 tx_dac_output_tb
 ghdl -r --std=08 tx_dac_output_tb --assert-level=error

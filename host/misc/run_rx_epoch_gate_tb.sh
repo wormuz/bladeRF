@@ -38,3 +38,8 @@ for testbench in \
     ghdl -e --std=08 -frelaxed "${testbench}"
     ghdl -r --std=08 -frelaxed "${testbench}" --assert-level=error
 done
+
+# A smaller FIFO behind a full-width usedw port (hosted RX_SAMPLE_FIFO_LOG2):
+# the writer must judge free space against the real 4096-word depth.
+ghdl -r --std=08 -frelaxed fifo_writer_holdoff_loss_tb --assert-level=error \
+    -gUSEDW_BITS=13 -gDEPTH_LOG2=12

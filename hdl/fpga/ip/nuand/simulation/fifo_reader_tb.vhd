@@ -160,8 +160,9 @@ begin
 
     clock <= not clock after 5 ns when not done else '0';
 
-    -- The event pulse and episode counter share the same edge detector. This
-    -- guards the event interface independently of the much longer LED timer.
+    -- The event pulse and episode counter share the same edge detector; the
+    -- counter steps exactly one cycle after each event. This guards the event
+    -- interface independently of the much longer LED timer.
     underflow_event_contract : process(clock)
         variable previous_count : unsigned(63 downto 0) := (others => '0');
         variable previous_event : std_logic := '0';
@@ -175,6 +176,8 @@ begin
                     assert previous_event = '0'
                         report "underflow event was not a one-cycle pulse"
                         severity failure;
+                end if;
+                if previous_event = '1' then
                     assert uf_count = previous_count + 1
                         report "underflow event did not match episode counter"
                         severity failure;

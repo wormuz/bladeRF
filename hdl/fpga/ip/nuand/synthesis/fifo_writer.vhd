@@ -30,6 +30,9 @@ entity fifo_writer is
     generic (
         NUM_STREAMS           : natural := 1;
         FIFO_USEDW_WIDTH      : natural := 12;
+        -- log2 of the real sample FIFO depth in write words when fifo_usedw
+        -- is a zero-extended count of a smaller FIFO; 0: FIFO_USEDW_WIDTH.
+        FIFO_DEPTH_LOG2       : natural := 0;
         FIFO_DATA_WIDTH       : natural := 32;
         META_FIFO_USEDW_WIDTH : natural := 5;
         META_FIFO_DATA_WIDTH  : natural := 128;
@@ -110,6 +113,17 @@ entity fifo_writer is
 end entity;
 
 architecture simple of fifo_writer is
+
+    function depth_log2_or(log2 : natural; width : natural) return natural is
+    begin
+        if log2 /= 0 then
+            return log2;
+        end if;
+        return width;
+    end function;
+
+    -- Real sample FIFO depth: fifo_usedw is that FIFO's count, zero-extended.
+    constant FIFO_DEPTH_BITS : natural := depth_log2_or(FIFO_DEPTH_LOG2, FIFO_USEDW_WIDTH);
 
     constant DMA_BUF_SIZE_SS   : natural   := GPIF_BUF_SIZE_SS;
     constant DMA_BUF_SIZE_HS   : natural   := GPIF_BUF_SIZE_HS;
@@ -225,6 +239,12 @@ architecture simple of fifo_writer is
     -- are carried in reserved bits of the opt-in sample-META epoch tag.
     signal rx_epoch_clip_sticky : std_logic_vector(1 downto 0) := (others => '0');
     signal rx_epoch_clip_id     : unsigned(7 downto 0) := (others => '0');
+    -- Rail hits one cycle after the sample, tagged with the epoch it belongs to:
+    -- abs() behind the epoch gate mux was a negating adder chain into the sticky
+    -- bits (hosted Slow 0C setup -0.020 ns).  META samples the sticky bits only
+    -- at block start, so the extra cycle does not change what a block reports.
+    signal rx_epoch_clip_hit    : std_logic_vector(1 downto 0) := (others => '0');
+    signal rx_epoch_clip_hit_id : unsigned(7 downto 0) := (others => '0');
 
     -- Keep the metadata FSM explicitly one-hot. The previous enum/case next
     -- state mux placed two wide selectors between the registered fifo_enough
@@ -495,8 +515,10 @@ begin
                 fault_context_snapshot(4) := '1';
             end if;
             for i in 0 to 8 loop
-                if( i + 4 < fifo_usedw'length ) then
-                    fault_context_snapshot(5 + i) := fifo_usedw(i + 4);
+                -- Top nine bits of the real FIFO's count: fill in 1/512 of
+                -- its depth, whatever the depth.
+                if( i + FIFO_DEPTH_BITS - 9 >= 0 ) then
+                    fault_context_snapshot(5 + i) := fifo_usedw(i + FIFO_DEPTH_BITS - 9);
                 end if;
             end loop;
             for i in 0 to 7 loop
@@ -710,7 +732,7 @@ begin
 
     -- Calculate whether there's enough room in the destination FIFO
     calc_fifo_free : process( clock, reset )
-        constant FIFO_MAX    : natural := 2**fifo_usedw'length;
+        constant FIFO_MAX    : natural := 2**FIFO_DEPTH_BITS;
         constant META_MAX    : natural := 2**meta_fifo_usedw'length;
         variable fifo_used_v : unsigned(fifo_usedw'length downto 0) := (others => '0');
         variable meta_fifo_used_v : unsigned(meta_fifo_usedw'length downto 0) := (others => '0');
@@ -726,7 +748,12 @@ begin
             -- the fidelity of the result. the meta_fifo represents at minimum 204 timestamps.
             -- there is no way for an off by 1 clock cycle timing to overflow the meta fifo
             -- when the buffer leaves 4 full meta buffers empty
-            fifo_used_v := unsigned(fifo_full & fifo_usedw);
+            -- usedw has no MSB bit: a full FIFO reads 0, so full stands for the depth.
+            if( fifo_full = '1' ) then
+                fifo_used_v := to_unsigned(FIFO_MAX, fifo_used_v'length);
+            else
+                fifo_used_v := resize(unsigned(fifo_usedw), fifo_used_v'length);
+            end if;
             fifo_used_v_r <= fifo_used_v;
             meta_fifo_used_v := unsigned(meta_fifo_full & meta_fifo_usedw);
             meta_fifo_used_v_r <= meta_fifo_used_v;
@@ -1070,7 +1097,19 @@ begin
         if reset = '1' then
             rx_epoch_clip_sticky <= (others => '0');
             rx_epoch_clip_id <= (others => '0');
+            rx_epoch_clip_hit <= (others => '0');
+            rx_epoch_clip_hit_id <= (others => '0');
         elsif rising_edge(clock) then
+            rx_epoch_clip_hit <= (others => '0');
+            rx_epoch_clip_hit_id <= rx_epoch_id;
+            for i in 0 to NUM_STREAMS-1 loop
+                if in_samples(i).data_v = '1' and i < 2 and
+                   (in_samples(i).data_i >= 2044 or in_samples(i).data_i <= -2044 or
+                    in_samples(i).data_q >= 2044 or in_samples(i).data_q <= -2044) then
+                    rx_epoch_clip_hit(i) <= '1';
+                end if;
+            end loop;
+
             if rx_epoch_meta_enable = '0' then
                 rx_epoch_clip_sticky <= (others => '0');
                 rx_epoch_clip_id <= rx_epoch_id;
@@ -1079,19 +1118,14 @@ begin
                     rx_epoch_clip_sticky <= (others => '0');
                     rx_epoch_clip_id <= rx_epoch_id;
                 end if;
-                for i in 0 to NUM_STREAMS-1 loop
-                    if in_samples(i).data_v = '1' and i < 2 and
-                       (abs(resize(in_samples(i).data_i, 17)) >=
-                            to_signed(2044, 17) or
-                        abs(resize(in_samples(i).data_q, 17)) >=
-                            to_signed(2044, 17)) then
+                for i in 0 to 1 loop
+                    if rx_epoch_clip_hit(i) = '1' and rx_epoch_clip_hit_id = rx_epoch_id then
                         rx_epoch_clip_sticky(i) <= '1';
                     end if;
                 end loop;
             end if;
         end if;
     end process;
-
 
     -- ------------------------------------------------------------------------
     -- SAMPLE FIFO WRITER

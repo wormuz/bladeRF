@@ -19,9 +19,34 @@
 -- THE SOFTWARE.
 library ieee;
 use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 
 package fx3_gpif_p is
     -- GPIF buf sizes for USB high-speed and super-speed
     constant GPIF_BUF_SIZE_HS : natural := 1024;
     constant GPIF_BUF_SIZE_SS : natural := 2048;
+
+    -- FIFO waterlines against the FIFO's real depth in 32-bit words. A usedw
+    -- port has no MSB bit, so a full FIFO reads 0: the full flag decides.
+    -- "Room for one more DMA block" keeps one word of margin (strict <).
+    function fifo_has_room(used : std_logic_vector; full : std_logic;
+                           depth, buf : natural) return boolean;
+    function fifo_is_critical(used : std_logic_vector; full : std_logic;
+                              depth, buf : natural) return boolean;
 end package fx3_gpif_p;
+
+package body fx3_gpif_p is
+    function fifo_has_room(used : std_logic_vector; full : std_logic;
+                           depth, buf : natural) return boolean is
+    begin
+        return full = '0' and
+               to_integer(unsigned(used)) < depth - buf;
+    end function;
+
+    function fifo_is_critical(used : std_logic_vector; full : std_logic;
+                              depth, buf : natural) return boolean is
+    begin
+        return full = '1' or
+               to_integer(unsigned(used)) >= depth - buf;
+    end function;
+end package body fx3_gpif_p;

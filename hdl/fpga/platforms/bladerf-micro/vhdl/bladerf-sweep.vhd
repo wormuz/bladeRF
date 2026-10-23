@@ -46,7 +46,9 @@ begin
             ENABLE_GAIN_SEQUENCER  => false,
             ENABLE_SPATIAL_FIR     => true,
             -- 2048 of 8192 TX words: the sweep host never transmits, and the
-            -- freed M10K relieve a device at 304/308 (TX dcfifo setup).
+            -- freed M10K relieve the device. 2048 holds no SuperSpeed DMA
+            -- block, so fx3_gpif never grants SuperSpeed TX here (TX is off
+            -- by construction; High-Speed TX still fits).
             TX_SAMPLE_FIFO_LOG2    => 11
         )
         port map (

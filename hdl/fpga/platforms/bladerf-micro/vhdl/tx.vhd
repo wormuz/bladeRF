@@ -279,12 +279,10 @@ begin
             );
     end generate;
 
-    -- A revision whose host never transmits (sweep) keeps 2**TX_SAMPLE_FIFO_LOG2
-    -- write words instead of the full 8192 to give the M10K back. The used
-    -- counts keep the full widths: the write side reads as the small FIFO
-    -- sitting at the top of the full one (upper bits ones, no adder), so
-    -- fx3_gpif's "room for one DMA buffer" test (usedw < 2**W - buf) holds
-    -- exactly when the small FIFO has room; the read side is the true count.
+    -- 2**TX_SAMPLE_FIFO_LOG2 write words instead of the full 8192, to give the
+    -- M10K back. The used counts are the true counts, zero-extended to the
+    -- full widths; fx3_gpif gets the real depth (TX_FIFO_WORDS) for its
+    -- waterlines.
     gen_tx_sample_fifo_small : if TX_SAMPLE_FIFO_LOG2 /= 0 generate
         signal wused_small : std_logic_vector(TX_SAMPLE_FIFO_LOG2-1 downto 0);
         -- The read side is wider words, so its count is that many bits
@@ -318,8 +316,8 @@ begin
                 rdusedw             => rused_small
             );
 
-        sample_fifo_wused <= (sample_fifo_wused'high downto TX_SAMPLE_FIFO_LOG2 => '1') &
-                             wused_small;
+        sample_fifo_wused <= std_logic_vector(resize(unsigned(wused_small),
+                                                     sample_fifo_wused'length));
         sample_fifo.rused <= std_logic_vector(resize(unsigned(rused_small),
                                                      sample_fifo.rused'length));
     end generate;

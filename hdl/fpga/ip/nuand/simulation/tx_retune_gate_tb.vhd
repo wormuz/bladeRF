@@ -190,6 +190,55 @@ begin
             report "TX gate failed to resume after earlier-target test"
             severity failure;
 
+        -- The same two orderings across the high timestamp word: the bank
+        -- order compares high and low words separately.
+        timestamp <= to_unsigned(5, 64);
+        target_timestamp <= x"000000010000000A";
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        queue_arm_at(to_unsigned(20, 64));
+        timestamp <= to_unsigned(20, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "earlier replacement in a lower high word did not move the boundary"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(20, 64)
+            report "lower-high-word replacement boundary was not recorded exactly"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+
+        timestamp <= to_unsigned(5, 64);
+        target_timestamp <= to_unsigned(20, 64);
+        arm <= '1';
+        wait until rising_edge(clock);
+        wait until falling_edge(clock);
+        arm <= '0';
+        queue_arm_at(x"000000010000000A");
+        timestamp <= to_unsigned(20, 64);
+        wait for 1 ns;
+        assert muted = '1'
+            report "later replacement in a higher high word moved the boundary"
+            severity failure;
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        assert state = "10" and mute_start_timestamp = to_unsigned(20, 64)
+            report "higher-high-word replacement kept the wrong boundary"
+            severity failure;
+        complete <= '1';
+        wait until rising_edge(clock);
+        wait for 1 ns;
+        complete <= '0';
+        assert state = "00" and muted = '0'
+            report "TX gate failed to resume after high-word order test"
+            severity failure;
+
         -- After selecting one replacement bank, a still earlier request in
         -- the now-inactive bank must become active and retain its boundary.
         timestamp <= to_unsigned(50, 64);

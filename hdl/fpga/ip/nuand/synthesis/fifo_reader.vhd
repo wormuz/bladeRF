@@ -125,6 +125,7 @@ architecture simple of fifo_reader is
 
     signal   dma_buf_size       : natural range DMA_BUF_SIZE_HS to DMA_BUF_SIZE_SS := DMA_BUF_SIZE_SS;
     signal   underflow_detected : std_logic := '0';
+    signal   underflow_inc      : std_logic := '0';
 
     -- Speed Latch & Monitor: FX3 samples USB speed once per RF-link epoch
     -- and never re-derives pcktSize/burstLen/dmaCfg.size afterward. The
@@ -260,13 +261,21 @@ architecture simple of fifo_reader is
     signal meta_current : meta_fsm_t := META_FSM_RESET_VALUE;
     signal meta_future  : meta_fsm_t := META_FSM_RESET_VALUE;
 
-    -- Low word of timestamp+4 for the due borrow, without the adder: the
-    -- timestamp steps by one, so this cycle's +4 is last cycle's +4, or
-    -- its +5 when the LSB moved. Not cleared by fifo_flush: it tracks the
-    -- timestamp, not the FIFO.
-    signal ts4_low_r    : unsigned(31 downto 0) := (others => '0');
-    signal ts5_low_r    : unsigned(31 downto 0) := (others => '0');
-    signal ts_lsb_r     : std_logic := '0';
+    -- Timestamp the first sample read will carry, for the due borrow. The
+    -- read comes four clocks after the compared timestamp, and the timestamp
+    -- does not step every clock (time_tamer: one tick per two clocks), so the
+    -- lead is the tick count of the last four clocks, not a fixed +4. With
+    -- S = ticks over the three clocks before this one, the registered
+    -- candidates are T+S and T+S+2: if the timestamp steps again now, both
+    -- the base and the lead gain one. Exact for a timestamp that steps every
+    -- clock, every other clock or every fourth clock. Not cleared by
+    -- fifo_flush: it tracks the timestamp, not the FIFO.
+    signal ts_lsb_r       : std_logic := '0';
+    signal ts_step_r      : std_logic_vector(1 downto 0) := (others => '0');
+    signal ts_lead_low_r  : unsigned(31 downto 0) := (others => '0');
+    signal ts_lead2_low_r : unsigned(31 downto 0) := (others => '0');
+    signal ts_lead_high_r : unsigned(31 downto 0) := (others => '0');
+    signal ts_lead2_high_r : unsigned(31 downto 0) := (others => '0');
 
     type fifo_state_t is (
         COMPUTE_ENABLED_CHANNELS,
@@ -340,6 +349,13 @@ architecture simple of fifo_reader is
     signal packed_loopback_valid_i : std_logic := '0';
     signal sample_fifo_empty_i : std_logic;
     signal sample_fifo_starved_i : std_logic;
+
+    function borrow32(a, b : unsigned(31 downto 0)) return std_logic is
+        variable d : unsigned(32 downto 0);
+    begin
+        d := ('0' & a) - ('0' & b);
+        return d(32);
+    end function;
 
 begin
 
@@ -755,11 +771,22 @@ begin
     -- META FIFO FSM
     -- ------------------------------------------------------------------------
 
-    ts_plus4_regs : process( clock )
+    ts_lead_regs : process( clock )
+        variable step  : std_logic;
+        variable ticks : unsigned(1 downto 0);
+        variable lead  : unsigned(32 downto 0);
+        variable lead2 : unsigned(32 downto 0);
     begin
         if( rising_edge(clock) ) then
-            ts4_low_r <= timestamp(31 downto 0) + 4;
-            ts5_low_r <= timestamp(31 downto 0) + 5;
+            step := timestamp(0) xor ts_lsb_r;
+            ticks := ('0' & step) + ('0' & ts_step_r(0)) + ('0' & ts_step_r(1));
+            lead  := ('0' & timestamp(31 downto 0)) + ticks;
+            lead2 := ('0' & timestamp(31 downto 0)) + ticks + 2;
+            ts_lead_low_r   <= lead(31 downto 0);
+            ts_lead2_low_r  <= lead2(31 downto 0);
+            ts_lead_high_r  <= timestamp(63 downto 32) + lead(32 downto 32);
+            ts_lead2_high_r <= timestamp(63 downto 32) + lead2(32 downto 32);
+            ts_step_r <= ts_step_r(0) & step;
             ts_lsb_r  <= timestamp(0);
         end if;
     end process;
@@ -821,53 +848,36 @@ begin
 
         -- Pipeline the modulo timestamp comparison by one cycle. The low
         -- word borrow is registered each cycle; the high-word subtraction
-        -- consumes the previous borrow. Since this path advances one sample
-        -- clock at a time, compare timestamp+4 in the borrow stage with
-        -- timestamp+3 in the high stage. This preserves the original
-        -- three-tick launch compensation and continues updating while
-        -- META_WAIT is active. A raw zero header is the TX_NOW sentinel.
+        -- consumes the previous borrow. The borrow stage compares the lead
+        -- timestamp (ts_lead_regs): the timestamp the first sample read will
+        -- carry, so a burst starts on its header tick at any timestamp step
+        -- rate. Updates continue while META_WAIT is active. A raw zero
+        -- header is the TX_NOW sentinel.
         cmp_tgt := meta_current.meta_header;
         v_due_time := '0';
 
-        -- Align the high word of timestamp+4 with the low-word borrow below.
-        -- On the next sample-clock edge it is the high word of timestamp+3.
-        -- Register it here so the META_EVAL path only subtracts high words;
-        -- it no longer includes a 64-bit increment from the time-tamer bus.
-        if timestamp(31 downto 0) >= unsigned'(x"FFFFFFFC") then
-            ts_load_high := timestamp(63 downto 32) + 1;
+        -- High word of the lead timestamp (ts_lead_regs), aligned with the
+        -- low-word borrow below and subtracted in the high stage next cycle.
+        if timestamp(0) /= ts_lsb_r then
+            ts_load_high := ts_lead2_high_r;
         else
-            ts_load_high := timestamp(63 downto 32);
+            ts_load_high := ts_lead_high_r;
         end if;
         meta_future.due_high_time <= ts_load_high;
 
-        -- Low word of timestamp+4 from registers (ts_plus4_regs): the 32-bit
-        -- increment from the time-tamer bus in front of these compares
-        -- missed setup (-0.124 ns, sweep A4 2026-10-22). Both candidates are
-        -- compared and the LSB step picks one.
+        -- Low word of the lead timestamp from registers: an adder or a wrap
+        -- compare on the time-tamer bus in front of these compares missed
+        -- setup (sweep A4 2026-10-22, hosted A4 2026-10-23). a < b is the
+        -- borrow of a - b, a carry chain: the relational operator became a
+        -- six-level LUT tree from the registered META word.
         if timestamp(0) /= ts_lsb_r then
-            if ts5_low_r <
-               unsigned(meta_current.meta_fifo_data(63 downto 32)) then
-                v_fifo_borrow := '1';
-            else
-                v_fifo_borrow := '0';
-            end if;
-            if ts5_low_r < cmp_tgt(31 downto 0) then
-                v_header_borrow := '1';
-            else
-                v_header_borrow := '0';
-            end if;
+            v_fifo_borrow := borrow32(ts_lead2_low_r,
+                                      unsigned(meta_current.meta_fifo_data(63 downto 32)));
+            v_header_borrow := borrow32(ts_lead2_low_r, cmp_tgt(31 downto 0));
         else
-            if ts4_low_r <
-               unsigned(meta_current.meta_fifo_data(63 downto 32)) then
-                v_fifo_borrow := '1';
-            else
-                v_fifo_borrow := '0';
-            end if;
-            if ts4_low_r < cmp_tgt(31 downto 0) then
-                v_header_borrow := '1';
-            else
-                v_header_borrow := '0';
-            end if;
+            v_fifo_borrow := borrow32(ts_lead_low_r,
+                                      unsigned(meta_current.meta_fifo_data(63 downto 32)));
+            v_header_borrow := borrow32(ts_lead_low_r, cmp_tgt(31 downto 0));
         end if;
 
         if meta_current.state = META_LOAD and
@@ -1528,11 +1538,20 @@ begin
             prev_underflow  := '0';
             underflow_count <= (others =>'0');
             underflow_event <= '0';
+            underflow_inc   <= '0';
         elsif( rising_edge( clock ) ) then
+            -- The counter steps a cycle after the event: the edge decision
+            -- drove the enables of all 64 counter bits, placed beside the
+            -- NIOS-side handshake, in one cycle (-0.130 ns, hosted A4
+            -- 2026-10-23).
             underflow_event <= '0';
+            underflow_inc   <= '0';
             if( prev_underflow = '0' and underflow_detected = '1' ) then
-                underflow_count <= underflow_count + 1;
                 underflow_event <= '1';
+                underflow_inc   <= '1';
+            end if;
+            if( underflow_inc = '1' ) then
+                underflow_count <= underflow_count + 1;
             end if;
             prev_underflow := underflow_detected;
         end if;

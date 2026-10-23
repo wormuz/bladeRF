@@ -31,7 +31,9 @@ entity rx is
         NUM_STREAMS          : natural := 2;
         -- 2x2 spatial FIR between adc_streams and rx_mux
         -- (doc/development/rx-spatial-mimo-fir-design.md). Off: stock chain.
-        ENABLE_SPATIAL_FIR   : boolean := false
+        ENABLE_SPATIAL_FIR   : boolean := false;
+        -- log2 of the sample FIFO depth in write words; 0 keeps the full FIFO.
+        RX_SAMPLE_FIFO_LOG2  : natural := 0
     );
     port (
         rx_reset               : in    std_logic;
@@ -237,26 +239,71 @@ begin
     -- RX sample FIFO
     sample_fifo.aclr   <= sample_fifo_raclr;
     sample_fifo.wclock <= rx_clock;
-    U_rx_sample_fifo : entity work.rx_fifo
-        generic map (
-            LPM_NUMWORDS        => 2**(sample_fifo.wused'length)
-        ) port map (
-            aclr                => sample_fifo.aclr,
+    gen_rx_sample_fifo_full : if RX_SAMPLE_FIFO_LOG2 = 0 generate
+        U_rx_sample_fifo : entity work.rx_fifo
+            generic map (
+                LPM_NUMWORDS        => 2**(sample_fifo.wused'length)
+            ) port map (
+                aclr                => sample_fifo.aclr,
 
-            wrclk               => sample_fifo.wclock,
-            wrreq               => sample_fifo.wreq,
-            data                => sample_fifo.wdata,
-            wrempty             => sample_fifo.wempty,
-            wrfull              => sample_fifo.wfull,
-            wrusedw             => sample_fifo.wused,
+                wrclk               => sample_fifo.wclock,
+                wrreq               => sample_fifo.wreq,
+                data                => sample_fifo.wdata,
+                wrempty             => sample_fifo.wempty,
+                wrfull              => sample_fifo.wfull,
+                wrusedw             => sample_fifo.wused,
 
-            rdclk               => sample_fifo_rclock,
-            rdreq               => sample_fifo_rreq,
-            q                   => sample_fifo_rdata,
-            rdempty             => sample_fifo_rempty,
-            rdfull              => sample_fifo_rfull,
-            rdusedw             => sample_fifo_rused
-        );
+                rdclk               => sample_fifo_rclock,
+                rdreq               => sample_fifo_rreq,
+                q                   => sample_fifo_rdata,
+                rdempty             => sample_fifo_rempty,
+                rdfull              => sample_fifo_rfull,
+                rdusedw             => sample_fifo_rused
+            );
+    end generate;
+
+    -- 2**RX_SAMPLE_FIFO_LOG2 write words instead of the full 8192, as for the
+    -- TX FIFO (tx.vhd). The used counts are the true counts, zero-extended to
+    -- the full widths; fifo_writer (FIFO_DEPTH_LOG2) and fx3_gpif
+    -- (RX_FIFO_WORDS) get the real depth.
+    gen_rx_sample_fifo_small : if RX_SAMPLE_FIFO_LOG2 /= 0 generate
+        signal wused_small : std_logic_vector(RX_SAMPLE_FIFO_LOG2-1 downto 0);
+        -- The read side is narrower words, so its count is that many bits
+        -- longer than the write side, as for the full FIFO.
+        signal rused_small : std_logic_vector(
+            RX_SAMPLE_FIFO_LOG2 - 1 +
+            (sample_fifo_rused'length - sample_fifo.wused'length) downto 0);
+    begin
+        assert RX_SAMPLE_FIFO_LOG2 < sample_fifo.wused'length
+            report "RX_SAMPLE_FIFO_LOG2 must be below the full FIFO depth"
+            severity failure;
+
+        U_rx_sample_fifo : entity work.rx_fifo
+            generic map (
+                LPM_NUMWORDS        => 2**RX_SAMPLE_FIFO_LOG2
+            ) port map (
+                aclr                => sample_fifo.aclr,
+
+                wrclk               => sample_fifo.wclock,
+                wrreq               => sample_fifo.wreq,
+                data                => sample_fifo.wdata,
+                wrempty             => sample_fifo.wempty,
+                wrfull              => sample_fifo.wfull,
+                wrusedw             => wused_small,
+
+                rdclk               => sample_fifo_rclock,
+                rdreq               => sample_fifo_rreq,
+                q                   => sample_fifo_rdata,
+                rdempty             => sample_fifo_rempty,
+                rdfull              => sample_fifo_rfull,
+                rdusedw             => rused_small
+            );
+
+        sample_fifo.wused <= std_logic_vector(resize(unsigned(wused_small),
+                                                     sample_fifo.wused'length));
+        sample_fifo_rused <= std_logic_vector(resize(unsigned(rused_small),
+                                                     sample_fifo_rused'length));
+    end generate;
 
 
     -- RX meta FIFO
@@ -408,6 +455,7 @@ begin
         generic map (
             NUM_STREAMS           => NUM_STREAMS,
             FIFO_USEDW_WIDTH      => sample_fifo.wused'length,
+            FIFO_DEPTH_LOG2       => RX_SAMPLE_FIFO_LOG2,
             FIFO_DATA_WIDTH       => sample_fifo.wdata'length,
             META_FIFO_USEDW_WIDTH => meta_fifo.wused'length,
             META_FIFO_DATA_WIDTH  => meta_fifo.wdata'length

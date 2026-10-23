@@ -5497,7 +5497,9 @@ typedef enum {
 #define BLADERF_RF_FPGA_RX_CTX_META_WRITTEN (1U << 9)
 /** The sample FIFO could accept one complete USB DMA buffer at the boundary. */
 #define BLADERF_RF_FPGA_RX_CTX_FIFO_ENOUGH (1U << 10)
-/** Sample FIFO used-word count in 16 64-bit write-word units. */
+/** Sample FIFO fill in 1/512 of its depth (the top nine bits of its used-word
+ *  count; 16 64-bit words per step for an 8192-word FIFO). A full FIFO reads 0
+ *  here: BLADERF_RF_FPGA_RX_FAULT_FIFO_FULL_AT_STALL reports it. */
 #define BLADERF_RF_FPGA_RX_CTX_SAMPLE_FIFO_USEDW_SHIFT 11
 #define BLADERF_RF_FPGA_RX_CTX_SAMPLE_FIFO_USEDW_MASK  0x000ff800U
 /** META FIFO used-word count in 8-word units; full is reported separately. */

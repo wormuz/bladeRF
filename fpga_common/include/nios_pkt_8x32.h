@@ -428,7 +428,8 @@
 #define NIOS_PKT_8x32_RX_CTX_META_WRITTEN         (1u << 9)
 #define NIOS_PKT_8x32_RX_CTX_FIFO_ENOUGH          (1u << 10)
 #define NIOS_PKT_8x32_RX_CTX_SAMPLE_FIFO_USEDW_SHIFT 11
-#define NIOS_PKT_8x32_RX_CTX_SAMPLE_FIFO_USEDW_MASK  0x000ff800u /* units of 16 entries */
+/* Fill in 1/512 of the sample FIFO depth (top nine bits of its count). */
+#define NIOS_PKT_8x32_RX_CTX_SAMPLE_FIFO_USEDW_MASK  0x000ff800u
 #define NIOS_PKT_8x32_RX_CTX_META_FIFO_USEDW_SHIFT   20
 #define NIOS_PKT_8x32_RX_CTX_META_FIFO_USEDW_MASK    0x7ff00000u /* exact entries */
 #define NIOS_PKT_8x32_RX_FAULT_CAUSES_MASK           0x7fffffffu

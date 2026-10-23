@@ -44,13 +44,20 @@ library work;
     use work.fx3_gpif_p.all;
 
 entity fifo_writer_holdoff_loss_tb is
+    generic (
+        -- usedw port width, and log2 of the real FIFO depth when the count is
+        -- a zero-extended smaller FIFO (0: the port width).
+        USEDW_BITS  : natural := 12;
+        DEPTH_LOG2  : natural := 0
+    );
 end entity;
 
 architecture tb of fifo_writer_holdoff_loss_tb is
 
     constant NSTREAMS   : natural := 2;
     constant CLK_PERIOD : time    := 8 ns;
-    -- usedw 3000 of 4096 leaves 1096 < GPIF_BUF_SIZE_SS (2048)
+    -- usedw 3000 of a 4096-word FIFO leaves 1096 < GPIF_BUF_SIZE_SS (2048);
+    -- the 13-bit run with DEPTH_LOG2 = 12 must see the same 4096-word FIFO.
     constant USEDW_TIGHT : natural := 3000;
 
     signal clock        : std_logic := '0';
@@ -66,7 +73,8 @@ architecture tb of fifo_writer_holdoff_loss_tb is
     signal samples      : sample_streams_t(0 to NSTREAMS-1) :=
                               (others => ZERO_SAMPLE);
 
-    signal fifo_usedw   : std_logic_vector(11 downto 0) := (others => '0');
+    signal fifo_usedw   : std_logic_vector(USEDW_BITS-1 downto 0) := (others => '0');
+    signal fifo_full    : std_logic := '0';
     signal fifo_clear   : std_logic;
     signal fifo_write   : std_logic;
     signal fifo_data    : std_logic_vector(63 downto 0);
@@ -97,6 +105,7 @@ begin
         generic map (
             NUM_STREAMS           => NSTREAMS,
             FIFO_USEDW_WIDTH      => fifo_usedw'length,
+            FIFO_DEPTH_LOG2       => DEPTH_LOG2,
             FIFO_DATA_WIDTH       => fifo_data'length,
             META_FIFO_USEDW_WIDTH => meta_usedw'length,
             META_FIFO_DATA_WIDTH  => meta_data'length
@@ -123,7 +132,7 @@ begin
             fifo_usedw            => fifo_usedw,
             fifo_clear            => fifo_clear,
             fifo_write            => fifo_write,
-            fifo_full             => '0',
+            fifo_full             => fifo_full,
             fifo_data             => fifo_data,
 
             packet_control        => PACKET_CONTROL_DEFAULT,
@@ -189,7 +198,7 @@ begin
         procedure stall(on_off : boolean) is
         begin
             if on_off then
-                fifo_usedw <= std_logic_vector(to_unsigned(USEDW_TIGHT, 12));
+                fifo_usedw <= std_logic_vector(to_unsigned(USEDW_TIGHT, fifo_usedw'length));
             else
                 fifo_usedw <= (others => '0');
             end if;
@@ -282,6 +291,20 @@ begin
             report "phase E: stream not continuing" severity failure;
         assert ovf_count = c0
             report "phase E: counter grew with free FIFO" severity failure;
+
+        -- Phase F: a full FIFO reads usedw 0. When it stops being full with
+        -- less than a DMA block free, the writer must not see the 0 as room.
+        fifo_full <= '1';
+        fifo_usedw <= (others => '0');
+        ticks(400);
+        w0 := writes_total;
+        fifo_full <= '0';
+        fifo_usedw <= std_logic_vector(to_unsigned(USEDW_TIGHT, fifo_usedw'length));
+        ticks(400);
+        assert writes_total = w0
+            report "phase F: writer took a full FIFO's usedw 0 as room"
+            severity failure;
+        report "phase F ok";
 
         report "fifo_writer_holdoff_loss_tb: PASS" severity note;
         done <= true;

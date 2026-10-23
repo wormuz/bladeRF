@@ -83,6 +83,12 @@ entity fifo_reader_edge_tb is
         PROGRESS_TIMEOUT_LOG2 : natural := 22;
         -- Cycles the meta FIFO stays empty between the two headers.
         HDR2_GAP       : natural := 2000;
+        -- Clocks per timestamp tick: time_tamer ticks once per two clocks (2);
+        -- 1 and 4 cover the other step rates the lead prediction handles.
+        TS_DIV         : positive := 1;
+        -- If set, the first read must come exactly this many timestamp ticks
+        -- after HDR_TIME (catches a late gate too); replaces the not-early check.
+        EXPECT_LATE    : integer := integer'low;
         TRACE          : boolean := false
     );
 end entity;
@@ -126,6 +132,11 @@ architecture sim of fifo_reader_edge_tb is
     signal reads      : natural := 0;
     signal reads_before : natural := 0;
     signal reads_after  : natural := 0;
+    signal first_late   : integer := -1;
+    signal first_cycle  : integer := -1;
+    signal first_prev_late : integer := -1;
+    signal ts_prev      : unsigned(63 downto 0) := (others => '0');
+    signal ts_phase     : natural := 0;
     signal cycles     : natural := 0;
     signal done       : boolean := false;
     signal hdr_index  : natural range 0 to 1 := 0;
@@ -189,8 +200,12 @@ begin
         if rising_edge(clock) then
             if reset = '1' then
                 timestamp <= unsigned(TS_START);
+                ts_phase  <= 0;
             else
-                timestamp <= timestamp + 1;
+                ts_phase <= (ts_phase + 1) mod TS_DIV;
+                if ts_phase = TS_DIV - 1 then
+                    timestamp <= timestamp + 1;
+                end if;
             end if;
         end if;
     end process;
@@ -199,8 +214,14 @@ begin
     begin
         if rising_edge(clock) and reset = '0' then
             cycles <= cycles + 1;
+            ts_prev <= timestamp;
             if fifo_read = '1' then
                 reads <= reads + 1;
+                if reads = 0 then
+                    first_late <= to_integer(resize(signed(timestamp - unsigned(HDR_TIME)), 32));
+                    first_cycle <= cycles;
+                    first_prev_late <= to_integer(resize(signed(ts_prev - unsigned(HDR_TIME)), 32));
+                end if;
                 if HDR_TIME = x"0000000000000000" or
                    signed(timestamp - unsigned(HDR_TIME)) >= 0 then
                     reads_after <= reads_after + 1;
@@ -310,13 +331,26 @@ begin
                ": ts_start=" & to_hstring(TS_START) &
                " hdr=" & to_hstring(HDR_TIME) &
                " reads=" & integer'image(reads) &
+               " late=" & integer'image(first_late) &
+               " first_cycle=" & integer'image(first_cycle) &
+               " prev=" & integer'image(first_prev_late) &
                " cycles=" & integer'image(cycles);
 
         if EXPECT_RELEASE then
             assert reads > 0
                 report "case " & integer'image(CASE_ID) & ": gate never opened, expected release"
                 severity failure;
-            if HDR_TIME /= x"0000000000000000" then
+            if EXPECT_LATE /= integer'low then
+                assert first_late = EXPECT_LATE
+                    report "case " & integer'image(CASE_ID) & ": first read " &
+                           integer'image(first_late) & " ticks after the header, expected " &
+                           integer'image(EXPECT_LATE)
+                    severity failure;
+                -- ... and on the first clock of that tick.
+                assert first_prev_late = EXPECT_LATE - 1
+                    report "case " & integer'image(CASE_ID) & ": first read not on the first clock of its tick"
+                    severity failure;
+            elsif HDR_TIME /= x"0000000000000000" then
                 assert reads_before = 0
                     report "case " & integer'image(CASE_ID) &
                            ": gate opened before the modulo timestamp boundary"

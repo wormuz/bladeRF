@@ -232,7 +232,8 @@ begin
         assert fault_context(1) = '1' and fault_context(2) = '1'
             report "stall context did not preserve valid input and HOLDOFF state"
             severity failure;
-        assert fault_context(13 downto 5) = '0' & fifo_usedw(11 downto 4) and
+        -- Sample fill in 1/512 of the 4096-word FIFO: the top nine count bits.
+        assert fault_context(13 downto 5) = fifo_usedw(11 downto 3) and
                fault_context(21 downto 14) = "0000000" & meta_fifo_usedw(3) and
                fault_context(24 downto 22) = "111"
             report "stall context did not preserve quantized sample/META occupancy"
@@ -268,6 +269,15 @@ begin
         assert meta_data(31) = '1' and meta_data(9 downto 8) = "11" and
                meta_data(7 downto 0) = x"07"
             report "epoch META tag did not report per-lane ADC clipping"
+            severity failure;
+        -- The last clipping sample of epoch 7 is still in flight when the ID
+        -- becomes 8: it must not mark the new epoch.
+        epoch_id <= to_unsigned(8, 8);
+        samples <= (others => ZERO_SAMPLE);
+        for i in 1 to 5 loop wait until rising_edge(clock); end loop;
+        assert meta_data(31) = '1' and meta_data(9 downto 8) = "00" and
+               meta_data(7 downto 0) = x"08"
+            report "clipping from the previous epoch leaked into the new epoch tag"
             severity failure;
         epoch_meta_enable <= '0';
         samples <= (others => ZERO_SAMPLE);

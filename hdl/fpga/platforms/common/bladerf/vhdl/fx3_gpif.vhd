@@ -26,6 +26,12 @@ library nuand;
     use nuand.fx3_gpif_p.all;
 
 entity fx3_gpif is
+  generic (
+    -- Real sample FIFO depths in 32-bit words: TX on the write side, RX on
+    -- the read side. 0 means the depth the usedw port width implies.
+    TX_FIFO_WORDS       :   natural := 0;
+    RX_FIFO_WORDS       :   natural := 0
+  );
   port (
     -- FX3 control signals
     pclk                :   in  std_logic;
@@ -198,6 +204,17 @@ architecture sample_shuffler of fx3_gpif is
     signal tx_fifo_enough       :   boolean;
     signal rx_fifo_critical     :   boolean;
 
+    function depth_or(words : natural; usedw_bits : natural) return natural is
+    begin
+        if words /= 0 then
+            return words;
+        end if;
+        return 2**usedw_bits;
+    end function;
+
+    constant TX_DEPTH : natural := depth_or(TX_FIFO_WORDS, tx_fifo_usedw'length);
+    constant RX_DEPTH : natural := depth_or(RX_FIFO_WORDS, rx_fifo_usedw'length);
+
     signal underrun             :   std_logic;
     signal dma_req              :   dma_handshake_t;
     signal gpif_buf_size        :   natural range GPIF_BUF_SIZE_HS to GPIF_BUF_SIZE_SS := GPIF_BUF_SIZE_SS;
@@ -303,6 +320,18 @@ begin
         end if;
     end process calculate_conditionals;
 
+    -- A TX FIFO that cannot hold one SuperSpeed DMA block never has room, so
+    -- TX cannot run at SuperSpeed (the sweep revision, whose host does not
+    -- transmit, builds it that way on purpose).
+    assert TX_DEPTH > GPIF_BUF_SIZE_SS
+        report "fx3_gpif: TX FIFO of " & integer'image(TX_DEPTH) &
+               " words holds no SuperSpeed DMA block: SuperSpeed TX disabled"
+        severity note;
+    assert RX_DEPTH > GPIF_BUF_SIZE_SS
+        report "fx3_gpif: RX FIFO of " & integer'image(RX_DEPTH) &
+               " words holds no SuperSpeed DMA block"
+        severity failure;
+
     -- Manage FIFO capacity to avoid underruns/overruns
     calculate_fifo_waterlines : process(reset, pclk)
     begin
@@ -317,9 +346,11 @@ begin
                rx_fifo_enough      <= (unsigned(rx_fifo_full&rx_fifo_usedw) >= gpif_buf_size);
             end if;
             -- Can we not fit one more block of data in RX buffer?
-            rx_fifo_critical    <= (unsigned(rx_fifo_usedw) >= ((2**(rx_fifo_usedw'length-1) - gpif_buf_size)));
+            rx_fifo_critical    <= fifo_is_critical(rx_fifo_usedw, rx_fifo_full,
+                                                    RX_DEPTH, gpif_buf_size);
             -- Do we have room for one more block of data in the TX buffer?
-            tx_fifo_enough      <= (unsigned(tx_fifo_usedw) < ((2**(tx_fifo_usedw'length) - gpif_buf_size))) and
+            tx_fifo_enough      <= fifo_has_room(tx_fifo_usedw, tx_fifo_full,
+                                                 TX_DEPTH, gpif_buf_size) and
                                     (unsigned(tx_meta_fifo_usedw) < ((2**(tx_meta_fifo_usedw'length-1) - 4)));
         end if;
     end process calculate_fifo_waterlines;

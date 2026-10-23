@@ -104,6 +104,16 @@ architecture rtl of tx_retune_gate is
         return delta(63) = '0';
     end function;
 
+    -- a < b as the borrow of a - b, a carry chain: the relational operators
+    -- became four-level LUT trees from target_timestamp (-0.069 ns, hosted
+    -- A4 2026-10-23).
+    function less_than(a, b : unsigned) return std_logic is
+        variable d : unsigned(a'length downto 0);
+    begin
+        d := ('0' & a) - ('0' & b);
+        return d(a'length);
+    end function;
+
     -- Partial comparisons for the queued-boundary ordering pipeline. Splitting
     -- the low 63-bit lexicographic compare lets Quartus register the two
     -- halves before the final one-bit decision, instead of routing a full
@@ -115,28 +125,15 @@ architecture rtl of tx_retune_gate is
         variable parts : timestamp_order_parts_t;
     begin
         parts.sign_diff := left_ts(63) xor right_ts(63);
-        parts.high_eq := '0';
         if left_ts(62 downto 32) = right_ts(62 downto 32) then
             parts.high_eq := '1';
-            parts.high_lt := '0';
-            parts.high_gt := '0';
-        elsif left_ts(62 downto 32) < right_ts(62 downto 32) then
-            parts.high_lt := '1';
-            parts.high_gt := '0';
         else
-            parts.high_lt := '0';
-            parts.high_gt := '1';
+            parts.high_eq := '0';
         end if;
-        if left_ts(31 downto 0) < right_ts(31 downto 0) then
-            parts.low_lt := '1';
-        else
-            parts.low_lt := '0';
-        end if;
-        if left_ts(31 downto 0) > right_ts(31 downto 0) then
-            parts.low_gt := '1';
-        else
-            parts.low_gt := '0';
-        end if;
+        parts.high_lt := less_than(left_ts(62 downto 32), right_ts(62 downto 32));
+        parts.high_gt := less_than(right_ts(62 downto 32), left_ts(62 downto 32));
+        parts.low_lt := less_than(left_ts(31 downto 0), right_ts(31 downto 0));
+        parts.low_gt := less_than(right_ts(31 downto 0), left_ts(31 downto 0));
         return parts;
     end function;
 

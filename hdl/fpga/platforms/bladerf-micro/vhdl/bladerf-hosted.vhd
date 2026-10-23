@@ -41,7 +41,14 @@ begin
             ENABLE_SWEEP_ANALYZER  => false,
             ENABLE_TRIGGER_CAPTURE => false,
             ENABLE_GAIN_SEQUENCER  => false,
-            ENABLE_SPATIAL_FIR     => true
+            ENABLE_SPATIAL_FIR     => true,
+            -- 4096 of 8192 RX and TX words each: M10K 256/308 instead of
+            -- 304/308. The FX3 DMA ring (12 x 8 KiB per direction, about
+            -- 400 us at 61.44 MS/s) carries the buffering; these FIFOs only
+            -- smooth GPIF pauses. TX must hold one SuperSpeed DMA block
+            -- (2048 words), so 4096 is its floor (fx3_gpif).
+            RX_SAMPLE_FIFO_LOG2    => 12,
+            TX_SAMPLE_FIFO_LOG2    => 12
         )
         port map (
             c5_clock2      => c5_clock2,

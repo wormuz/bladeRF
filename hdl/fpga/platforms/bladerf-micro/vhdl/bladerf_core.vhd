@@ -48,7 +48,10 @@ entity bladerf_core is
     -- log2 of the TX sample FIFO depth in write words (tx.vhd); 0 keeps the
     -- full FIFO. The sweep revision, whose host never transmits, shrinks it
     -- to give the M10K back.
-    TX_SAMPLE_FIFO_LOG2    : natural := 0
+    TX_SAMPLE_FIFO_LOG2    : natural := 0;
+    -- log2 of the RX sample FIFO depth in write words (rx.vhd); 0 keeps the
+    -- full FIFO.
+    RX_SAMPLE_FIFO_LOG2    : natural := 0
   );
   port (
     -- Main 38.4MHz system clock (3.3 V)
@@ -153,6 +156,16 @@ entity bladerf_core is
 end entity ; -- bladerf_core
 
 architecture core_bladerf of bladerf_core is
+
+    -- Sample FIFO depth in 32-bit words from its write-word log2: 0 for the
+    -- full FIFO, else 2**log2 write words of words_per_write 32-bit words.
+    function fifo_words(log2 : natural; words_per_write : natural) return natural is
+    begin
+        if log2 = 0 then
+            return 0;
+        end if;
+        return words_per_write * 2**log2;
+    end function;
 
     attribute noprune          : boolean;
     attribute keep             : boolean;
@@ -736,6 +749,11 @@ begin
 
     -- FX3 GPIF
     U_fx3_gpif : entity work.fx3_gpif
+        generic map (
+            -- 0 keeps the depth the usedw width implies (the full FIFOs).
+            TX_FIFO_WORDS       =>  fifo_words(TX_SAMPLE_FIFO_LOG2, 1),
+            RX_FIFO_WORDS       =>  fifo_words(RX_SAMPLE_FIFO_LOG2, 2)
+        )
         port map (
             pclk                =>  fx3_pclk_pll,
             reset               =>  sys_reset_pclk,
@@ -1952,7 +1970,8 @@ begin
     U_rx : entity work.rx
         generic map (
             NUM_STREAMS            => adc_controls'length,
-            ENABLE_SPATIAL_FIR     => ENABLE_SPATIAL_FIR
+            ENABLE_SPATIAL_FIR     => ENABLE_SPATIAL_FIR,
+            RX_SAMPLE_FIFO_LOG2    => RX_SAMPLE_FIFO_LOG2
         )
         port map (
             rx_reset               => rx_reset,
