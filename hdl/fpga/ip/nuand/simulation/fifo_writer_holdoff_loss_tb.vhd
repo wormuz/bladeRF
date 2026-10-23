@@ -56,9 +56,13 @@ architecture tb of fifo_writer_holdoff_loss_tb is
 
     constant NSTREAMS   : natural := 2;
     constant CLK_PERIOD : time    := 8 ns;
-    -- usedw 3000 of a 4096-word FIFO leaves 1096 < GPIF_BUF_SIZE_SS (2048);
-    -- the 13-bit run with DEPTH_LOG2 = 12 must see the same 4096-word FIFO.
-    constant USEDW_TIGHT : natural := 3000;
+    -- usedw counts 64-bit write words; one SuperSpeed DMA block
+    -- (GPIF_BUF_SIZE_SS = 2048 dwords) is 1024 of them. 3200 of a 4096-word
+    -- FIFO leaves 896 < 1024: no room. 2900 leaves 1196: room for a block,
+    -- which a dword-unit compare (room > 2048) refused. The 13-bit run with
+    -- DEPTH_LOG2 = 12 must see the same 4096-word FIFO.
+    constant USEDW_TIGHT : natural := 3200;
+    constant USEDW_ROOM  : natural := 2900;
 
     signal clock        : std_logic := '0';
     signal reset        : std_logic := '1';
@@ -305,6 +309,22 @@ begin
             report "phase F: writer took a full FIFO's usedw 0 as room"
             severity failure;
         report "phase F ok";
+
+        -- Phase G: more than one DMA block of write words free (but less
+        -- than 2048): the writer keeps writing and counts no loss.
+        fifo_usedw <= std_logic_vector(to_unsigned(USEDW_ROOM, fifo_usedw'length));
+        ticks(3000);
+        c0 := ovf_count;
+        w0 := writes_total;
+        m0 := metas_total;
+        ticks(9000);
+        assert writes_total > w0 and metas_total > m0 + 2
+            report "phase G: writer held off with a DMA block of room"
+            severity failure;
+        assert ovf_count = c0
+            report "phase G: loss counted with a DMA block of room"
+            severity failure;
+        report "phase G ok";
 
         report "fifo_writer_holdoff_loss_tb: PASS" severity note;
         done <= true;

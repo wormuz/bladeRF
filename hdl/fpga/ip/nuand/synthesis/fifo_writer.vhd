@@ -745,6 +745,13 @@ begin
     -- Calculate whether there's enough room in the destination FIFO
     calc_fifo_free : process( clock, reset )
         constant FIFO_MAX    : natural := 2**FIFO_DEPTH_BITS;
+        -- fifo_usedw counts write words of FIFO_DATA_WIDTH bits; dma_buf_size
+        -- is in 32-bit words. Comparing the two directly asked a 64-bit FIFO
+        -- for room for two DMA buffers: with 4096 write words the writer held
+        -- off at half fill (2048), 89 us at 2 x 23.04 MS/s, and dropped
+        -- samples while the other half was free (RX_X2 gap=830, qualification
+        -- 0bb5f16d).
+        constant DWORDS_PER_WRITE : natural := FIFO_DATA_WIDTH / 32;
         constant META_MAX    : natural := 2**meta_fifo_usedw'length;
         variable fifo_used_v : unsigned(fifo_usedw'length downto 0) := (others => '0');
         variable meta_fifo_used_v : unsigned(meta_fifo_usedw'length downto 0) := (others => '0');
@@ -770,7 +777,7 @@ begin
             meta_fifo_used_v := unsigned(meta_fifo_full & meta_fifo_usedw);
             meta_fifo_used_v_r <= meta_fifo_used_v;
 
-            if( fifo_full = '0' and ((FIFO_MAX - fifo_used_v_r) > ( dma_buf_size )) and
+            if( fifo_full = '0' and ((FIFO_MAX - fifo_used_v_r) > ( dma_buf_size / DWORDS_PER_WRITE )) and
                 ( ( meta_en = '1' and meta_fifo_full = '0' and ( META_MAX - 4 ) > meta_fifo_used_v_r )
                    or (meta_en = '0') ) ) then
                 fifo_enough <= true;
