@@ -135,7 +135,10 @@ int CALL_CONV bladerf_get_rx_qec_tracking(struct bladerf *dev,
                                          bool *enable);
 
 /** Set AD9361 RX BB DC, RF DC and per-lane QEC tracking state together.
- * qec_mask bit 0 controls RX1 and bit 1 controls RX2.
+ * qec_mask bit 0 controls RX1 and bit 1 controls RX2. Disabling BB-DC
+ * tracking can leave a lane-dependent DC component in RX IQ samples; raw
+ * RMS/level measurements and DC-sensitive signal acquisition may then be
+ * misleading. libbladeRF emits a warning when BB-DC tracking is disabled.
  */
 API_EXPORT
 int CALL_CONV bladerf_set_rx_tracking_config(struct bladerf *dev,
@@ -171,6 +174,8 @@ int CALL_CONV bladerf_get_rx_bbdc_tracking_words(struct bladerf *dev,
  * the RX QEC/tracking words. The AD9361's static BB-DC calibration words
  * are readback-only and remain applied. Calling with false restores the
  * saved state. This changes RX data and invalidates the active RX epoch.
+ * Bypassing BB-DC tracking can leave a lane-dependent DC component in RX IQ
+ * samples; libbladeRF emits a warning when bypass is enabled.
  */
 API_EXPORT
 int CALL_CONV bladerf_set_rx_corrections_bypass(struct bladerf *dev,

@@ -9207,6 +9207,10 @@ int bladerf_set_rx_tracking_config(struct bladerf *dev, bool bbdc_enable,
     if (status < 0) {
         log_error("%s: RX tracking configuration failed: %s\n", __FUNCTION__,
                   bladerf_strerror(status));
+    } else if (!bbdc_enable) {
+        log_warning("RX BB-DC tracking is disabled. RX IQ may retain a "
+                    "lane-dependent DC component; raw RMS/level measurements "
+                    "and DC-sensitive acquisition may be misleading.\n");
     }
     return status;
 }
@@ -9768,6 +9772,12 @@ int bladerf_set_rx_corrections_bypass(struct bladerf *dev, bool bypass)
     });
 
     bladerf2_rx_reconfigure_complete(dev, BLADERF_CHANNEL_RX(0));
+    if (status == 0 && bypass) {
+        log_warning("RX correction bypass is enabled, including BB-DC "
+                    "tracking. RX IQ may retain a lane-dependent DC component; "
+                    "raw RMS/level measurements and DC-sensitive acquisition "
+                    "may be misleading.\n");
+    }
     return status;
 }
 
