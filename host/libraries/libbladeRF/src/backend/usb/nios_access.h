@@ -382,6 +382,9 @@ int nios_retune2_failure_completion_read(struct bladerf *dev,
                                          uint8_t *failure_stage,
                                          uint32_t *session_generation,
                                          uint16_t *request_token);
+int nios_retune2_completion_device_duration_read(
+    struct bladerf *dev, bladerf_module module, uint32_t sequence,
+    uint32_t *duration_ticks, bool *duration_valid);
 
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */
@@ -610,7 +613,7 @@ struct nios_retune2_record {
     uint8_t execution_flags;        /* NIOS_PKT_RETUNE2_EXEC_* */
     uint8_t session_generation_low;
     uint8_t failure_stage;
-    uint32_t executed_delta;        /* executed - scheduled timestamp */
+    uint32_t executed_delta;        /* scheduled delta, or NOW duration */
     uint64_t readback_frequency_hz; /* 2 Hz resolution, 0 when not read */
     /* NIOS_PKT_RETUNE2_SYNTH_* bytes, valid with `synth_read`; the length
      * is NIOS_PKT_RETUNE2_SYNTH_LEN (checked in nios_access.c). */

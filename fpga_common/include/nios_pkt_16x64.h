@@ -229,6 +229,11 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION 1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS    2u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH     3u
+/* In word EXECUTION only, low-word bit 31 tags a tokened-NOW duration;
+ * bits 30:0 are NIOS time-tamer ticks. Scheduled records retain the original
+ * execution-minus-scheduled delta encoding. */
+#define NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID    (1u << 31)
+#define NIOS_PKT_16x64_RETUNE2_NOW_DURATION_MASK     0x7fffffffu
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER   0x5cu
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID    1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE   2u /* not / no longer */

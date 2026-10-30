@@ -15,6 +15,7 @@
 
 enum mock_mode {
     MOCK_RECORDS,
+    MOCK_DURATION,
     MOCK_OLD_FIRMWARE_ECHO,
     MOCK_OVERWRITTEN_BEFORE_SECOND_WORD,
     MOCK_UNKNOWN_FLAG,
@@ -76,7 +77,10 @@ static bool serve(uint16_t addr, uint64_t sequence, uint64_t *data)
                         NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)) |
                 UINT64_C(0x7766554433221100);
     } else {
-        *data = (uint64_t)1234567u |
+        uint32_t elapsed = mock_mode == MOCK_DURATION
+            ? (NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID | 1234567u)
+            : 1234567u;
+        *data = (uint64_t)elapsed |
                 ((uint64_t)(UINT64_C(2400000000) >> 1) << 32);
     }
     return true;
@@ -184,6 +188,22 @@ int main(void)
               record.executed_delta == 1234567 &&
               record.readback_frequency_hz == UINT64_C(2400000000),
           "success record: status %d tx %u", status, transactions);
+
+    mock_mode = MOCK_DURATION;
+    {
+        uint32_t duration_ticks = 0;
+        bool duration_valid = false;
+
+        transactions = 0;
+        status = nios_retune2_completion_device_duration_read(
+            &dev, BLADERF_MODULE_RX, success_sequence, &duration_ticks,
+            &duration_valid);
+        CHECK(status == 0 && duration_valid && duration_ticks == 1234567 &&
+                  transactions == 1,
+              "NOW device duration: status %d valid %d ticks %u tx %u",
+              status, duration_valid, duration_ticks, transactions);
+    }
+    mock_mode = MOCK_RECORDS;
 
     transactions = 0;
     status = nios_retune2_record_read(&dev, BLADERF_MODULE_RX, true,

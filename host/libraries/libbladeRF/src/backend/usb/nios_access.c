@@ -2420,6 +2420,38 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
     return 0;
 }
 
+int nios_retune2_completion_device_duration_read(
+    struct bladerf *dev, bladerf_module module, uint32_t sequence,
+    uint32_t *duration_ticks, bool *duration_valid)
+{
+    uint64_t execution = 0;
+    int status;
+
+    if (dev == NULL || duration_ticks == NULL || duration_valid == NULL ||
+        sequence == 0 ||
+        (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
+        return BLADERF_ERR_INVAL;
+    }
+    *duration_ticks = 0;
+    *duration_valid = false;
+    status = nios_retune2_record_access(
+        dev,
+        nios_pkt_16x64_retune2_record_addr(
+            false, module == BLADERF_MODULE_TX,
+            NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
+        sequence, &execution);
+    if (status != 0) {
+        return status;
+    }
+    if (((uint32_t)execution &
+         NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID) != 0) {
+        *duration_ticks = (uint32_t)execution &
+                          NIOS_PKT_16x64_RETUNE2_NOW_DURATION_MASK;
+        *duration_valid = true;
+    }
+    return 0;
+}
+
 int nios_ad56x1_vctcxo_trim_dac_read(struct bladerf *dev, uint16_t *value)
 {
     int status;
@@ -2924,7 +2956,20 @@ static int nios_retune2_wait_now_terminal(
             }
             if (completed_token == request_token &&
                 completed_session == session_generation) {
+                uint32_t duration_ticks = 0;
+                bool duration_valid = false;
+
                 (void)frequency_hz;
+                if (timestamp == NIOS_PKT_RETUNE2_NOW &&
+                    completed_profile == nios_profile &&
+                    nios_retune2_completion_device_duration_read(
+                        dev, module, sequence, &duration_ticks,
+                        &duration_valid) == 0 && duration_valid &&
+                    dev->nios_retune_trace.valid) {
+                    dev->nios_retune_trace.device_duration_ticks =
+                        duration_ticks;
+                    dev->nios_retune_trace.device_duration_valid = true;
+                }
                 return timestamp == NIOS_PKT_RETUNE2_NOW &&
                        completed_profile == nios_profile
                     ? 0 : BLADERF_ERR_UNEXPECTED;
@@ -3063,7 +3108,6 @@ int nios_retune2(struct bladerf *dev, bladerf_channel ch,
             failure_baseline, &failure_stage);
         if (dev->nios_retune_trace.valid) {
             dev->nios_retune_trace.device_failure_stage = failure_stage;
-            dev->nios_retune_trace.device_duration_valid = false;
             dev->nios_retune_trace.retune2_terminal_unknown =
                 status != 0 && status != BLADERF_ERR_FPGA_OP;
         }

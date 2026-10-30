@@ -3707,7 +3707,7 @@ static int check_completion_ring_overwrite_is_visible(void)
 
     retune2_completion_publish(record, overwritten_sequence,
                                1800000000u, 0x100000002ull, 5, 17, 0x4567,
-                               NULL);
+                               0, false, NULL);
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
                                        requested_sequence) ||
         pkt_retune2_completion_word(

@@ -5632,9 +5632,13 @@ struct bladerf_rf_event {
 #define BLADERF_RF_EVENT_HISTORY_SIZE 64
 
 /** NIOS-owned fastlock timing in addition to host-monotonic RF events.
- * `device_duration_ticks` is the RX/TX time-tamer delta reported by NIOS for
- * a RETUNE2 NOW command. It is valid only when `device_duration_valid` is
- * true; zero can mean the module timestamp counter was not running. */
+ * For tokened RETUNE2 NOW, `device_duration_ticks` spans NIOS request
+ * acceptance through the terminal-success timestamp, immediately before the
+ * completion record is published. It includes profile/gain-table work and
+ * AD9361 fastlock/PLL completion; host polling is excluded. Ticks are edges
+ * of the corresponding RX/TX time-tamer clock; convert using that module's
+ * sample-clock rate. The value is valid only when `device_duration_valid`
+ * is true; zero can mean the module timestamp counter was unavailable. */
 struct bladerf_rx_transition_nios_timing {
     bool transaction_retained;
     bool nios_retune_observed;
