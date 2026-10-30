@@ -2365,7 +2365,7 @@ static int check_rx_success_record_carries_execution(void)
                     true, false,
                     NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
                 1, &data) != NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID ||
-            pkt_retune2_record_read(0x0010, successes, &data) !=
+            pkt_retune2_record_read(0x0020, successes, &data) !=
                 NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID) {
             fputs("RETUNE2 record-read protocol mismatch\n", stderr);
             return 1;
@@ -3707,7 +3707,7 @@ static int check_completion_ring_overwrite_is_visible(void)
 
     retune2_completion_publish(record, overwritten_sequence,
                                1800000000u, 0x100000002ull, 5, 17, 0x4567,
-                               0, false, NULL);
+                               0, NULL);
     if (!pkt_retune2_completion_select(BLADERF_MODULE_TX,
                                        requested_sequence) ||
         pkt_retune2_completion_word(

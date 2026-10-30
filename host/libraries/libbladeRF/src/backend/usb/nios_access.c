@@ -2420,34 +2420,52 @@ int nios_retune2_record_read(struct bladerf *dev, bladerf_module module,
     return 0;
 }
 
-int nios_retune2_completion_device_duration_read(
+int nios_retune2_completion_device_timing_read(
     struct bladerf *dev, bladerf_module module, uint32_t sequence,
-    uint32_t *duration_ticks, bool *duration_valid)
+    struct nios_retune2_device_timing *timing)
 {
-    uint64_t execution = 0;
+    uint64_t data = 0;
+    const uint64_t unit = NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT;
     int status;
 
-    if (dev == NULL || duration_ticks == NULL || duration_valid == NULL ||
+    if (dev == NULL || timing == NULL ||
         sequence == 0 ||
         (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX)) {
         return BLADERF_ERR_INVAL;
     }
-    *duration_ticks = 0;
-    *duration_valid = false;
+    memset(timing, 0, sizeof(*timing));
     status = nios_retune2_record_access(
         dev,
         nios_pkt_16x64_retune2_record_addr(
             false, module == BLADERF_MODULE_TX,
-            NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION),
-        sequence, &execution);
+            NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING),
+        sequence, &data);
     if (status != 0) {
         return status;
     }
-    if (((uint32_t)execution &
-         NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID) != 0) {
-        *duration_ticks = (uint32_t)execution &
-                          NIOS_PKT_16x64_RETUNE2_NOW_DURATION_MASK;
-        *duration_valid = true;
+    if ((data & NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_VALID) != 0) {
+        timing->profile_load_ticks =
+            (uint32_t)((data >> NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_SHIFT) &
+                       NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) * unit;
+        timing->valid_mask |= NIOS_RETUNE2_TIMING_PROFILE_VALID;
+    }
+    if ((data & NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_VALID) != 0) {
+        timing->gain_table_ticks =
+            (uint32_t)((data >> NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_SHIFT) &
+                       NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) * unit;
+        timing->valid_mask |= NIOS_RETUNE2_TIMING_GAIN_VALID;
+    }
+    if ((data & NIOS_PKT_16x64_RETUNE2_TIMING_PLL_VALID) != 0) {
+        timing->pll_ticks =
+            (uint32_t)((data >> NIOS_PKT_16x64_RETUNE2_TIMING_PLL_SHIFT) &
+                       NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) * unit;
+        timing->valid_mask |= NIOS_RETUNE2_TIMING_PLL_VALID;
+    }
+    if ((data & NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID) != 0) {
+        timing->other_ticks =
+            (uint32_t)((data >> NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT) &
+                       NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) * unit;
+        timing->valid_mask |= NIOS_RETUNE2_TIMING_OTHER_VALID;
     }
     return 0;
 }
@@ -2956,19 +2974,32 @@ static int nios_retune2_wait_now_terminal(
             }
             if (completed_token == request_token &&
                 completed_session == session_generation) {
-                uint32_t duration_ticks = 0;
-                bool duration_valid = false;
+                struct nios_retune2_device_timing device_timing = {0};
 
                 (void)frequency_hz;
                 if (timestamp == NIOS_PKT_RETUNE2_NOW &&
                     completed_profile == nios_profile &&
-                    nios_retune2_completion_device_duration_read(
-                        dev, module, sequence, &duration_ticks,
-                        &duration_valid) == 0 && duration_valid &&
+                    nios_retune2_completion_device_timing_read(
+                        dev, module, sequence, &device_timing) == 0 &&
                     dev->nios_retune_trace.valid) {
-                    dev->nios_retune_trace.device_duration_ticks =
-                        duration_ticks;
-                    dev->nios_retune_trace.device_duration_valid = true;
+                    dev->nios_retune_trace.device_profile_load_ticks =
+                        device_timing.profile_load_ticks;
+                    dev->nios_retune_trace.device_gain_table_ticks =
+                        device_timing.gain_table_ticks;
+                    dev->nios_retune_trace.device_pll_ticks =
+                        device_timing.pll_ticks;
+                    dev->nios_retune_trace.device_other_ticks =
+                        device_timing.other_ticks;
+                    dev->nios_retune_trace.device_timing_valid_mask =
+                        device_timing.valid_mask;
+                    if (device_timing.valid_mask == 0x0fu) {
+                        dev->nios_retune_trace.device_duration_ticks =
+                            (uint64_t)device_timing.profile_load_ticks +
+                            device_timing.gain_table_ticks +
+                            device_timing.pll_ticks +
+                            device_timing.other_ticks;
+                        dev->nios_retune_trace.device_duration_valid = true;
+                    }
                 }
                 return timestamp == NIOS_PKT_RETUNE2_NOW &&
                        completed_profile == nios_profile

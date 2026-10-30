@@ -382,9 +382,22 @@ int nios_retune2_failure_completion_read(struct bladerf *dev,
                                          uint8_t *failure_stage,
                                          uint32_t *session_generation,
                                          uint16_t *request_token);
-int nios_retune2_completion_device_duration_read(
+struct nios_retune2_device_timing {
+    uint32_t profile_load_ticks;
+    uint32_t gain_table_ticks;
+    uint32_t pll_ticks;
+    uint32_t other_ticks;
+    uint8_t valid_mask;
+};
+
+#define NIOS_RETUNE2_TIMING_PROFILE_VALID (1u << 0)
+#define NIOS_RETUNE2_TIMING_GAIN_VALID    (1u << 1)
+#define NIOS_RETUNE2_TIMING_PLL_VALID     (1u << 2)
+#define NIOS_RETUNE2_TIMING_OTHER_VALID   (1u << 3)
+
+int nios_retune2_completion_device_timing_read(
     struct bladerf *dev, bladerf_module module, uint32_t sequence,
-    uint32_t *duration_ticks, bool *duration_valid);
+    struct nios_retune2_device_timing *timing);
 
 /* Word indices within the latched dwell summary. Wide fields are split low
  * word first; see NIOS_PKT_8x32_TARGET_DWELL_READOUT for the full table. */

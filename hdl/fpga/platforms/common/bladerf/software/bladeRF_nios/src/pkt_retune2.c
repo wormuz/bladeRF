@@ -131,7 +131,17 @@ struct queue_entry {
     uint8_t gain_table;
     uint64_t timestamp;
     uint64_t worker_start_timestamp;
+    /* Stage marks are low time-tamer words; tokened NOW work is far shorter
+     * than the wrap interval at the RX sample clock. */
+    uint32_t profile_end_timestamp;
+    uint32_t gain_start_timestamp;
+    uint32_t gain_end_timestamp;
+    uint32_t pll_start_timestamp;
     bool worker_start_valid;
+    bool profile_end_valid;
+    bool gain_start_valid;
+    bool gain_end_valid;
+    bool pll_start_valid;
     uint64_t readback_frequency_hz;
     struct retune2_execution execution;
     uint32_t session_generation;
@@ -155,6 +165,17 @@ static struct queue {
     struct queue_entry entries[RETUNE2_QUEUE_MAX];
 } rx_queue, tx_queue;
 static bool profile_preload_tx_first;
+
+static bool time_tamer_read_low32(bladerf_module module, uint32_t *timestamp)
+{
+    uint64_t full_timestamp;
+
+    if (timestamp == NULL || !time_tamer_read(module, &full_timestamp)) {
+        return false;
+    }
+    *timestamp = (uint32_t)full_timestamp;
+    return true;
+}
 
 bool pkt_retune2_defer_clear(bladerf_module module)
 {
@@ -208,8 +229,7 @@ struct retune2_completion {
     uint32_t session_generation;
     uint16_t nios_profile;
     uint16_t request_token;
-    uint32_t worker_duration_ticks;
-    bool worker_duration_valid;
+    uint64_t worker_timing_word;
     struct retune2_execution execution;
 };
 
@@ -239,8 +259,7 @@ static inline void retune2_completion_publish(
     struct retune2_completion *completion, uint32_t sequence,
     uint64_t frequency_hz, uint64_t scheduled_timestamp,
     uint16_t nios_profile, uint32_t session_generation,
-    uint16_t request_token, uint32_t worker_duration_ticks,
-    bool worker_duration_valid,
+    uint16_t request_token, uint64_t worker_timing_word,
     const struct retune2_execution *execution)
 {
     completion->frequency_hz = frequency_hz;
@@ -248,8 +267,7 @@ static inline void retune2_completion_publish(
     completion->nios_profile = nios_profile;
     completion->session_generation = session_generation;
     completion->request_token = request_token;
-    completion->worker_duration_ticks = worker_duration_ticks;
-    completion->worker_duration_valid = worker_duration_valid;
+    completion->worker_timing_word = worker_timing_word;
     if (execution != NULL) {
         completion->execution = *execution;
     } else {
@@ -450,14 +468,6 @@ uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
                         record->scheduled_timestamp;
             }
         }
-        if (record->worker_duration_valid && record->request_token != 0) {
-            /* For tokened NOW only, the scheduled-time delta is undefined.
-             * Reuse its low word as a tagged duration; frequency readback
-             * remains in the high word and legacy/scheduled records are
-             * unchanged. */
-            delta = NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID |
-                    (record->worker_duration_ticks & 0x7fffffffu);
-        }
         if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_IDENTITY) {
             *data = nios_pkt_16x64_retune2_record_identity(
                 record->request_token, (uint8_t)record->nios_profile, flags,
@@ -467,6 +477,8 @@ uint8_t pkt_retune2_record_read(uint16_t addr, uint64_t request,
             memcpy(data, (const uint8_t *)&record->execution +
                              offsetof(struct retune2_execution, flags),
                    8);
+        } else if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING) {
+            *data = record->worker_timing_word;
         } else {
             const uint64_t readback_2hz = record->frequency_hz >> 1;
             *data = delta | ((readback_2hz > UINT32_MAX ? 0 : readback_2hz)
@@ -594,6 +606,10 @@ static inline uint8_t enqueue_retune_with_identity(
     q->entries[q->ins_idx].state = ENTRY_STATE_NEW;
     q->entries[q->ins_idx].timestamp = timestamp;
     q->entries[q->ins_idx].worker_start_valid = false;
+    q->entries[q->ins_idx].profile_end_valid = false;
+    q->entries[q->ins_idx].gain_start_valid = false;
+    q->entries[q->ins_idx].gain_end_valid = false;
+    q->entries[q->ins_idx].pll_start_valid = false;
     q->entries[q->ins_idx].execution.timestamp = 0;
     q->entries[q->ins_idx].execution.flags = 0;
     q->entries[q->ins_idx].session_generation = session_generation;
@@ -638,6 +654,12 @@ static inline uint8_t enqueue_retune_now_with_identity(
     entry->worker_start_valid = time_tamer_read(
         q == &tx_queue ? BLADERF_MODULE_TX : BLADERF_MODULE_RX,
         &entry->worker_start_timestamp);
+    entry->profile_end_valid = false;
+    entry->gain_start_valid = entry->worker_start_valid;
+    entry->gain_end_valid = entry->worker_start_valid;
+    entry->gain_start_timestamp = (uint32_t)entry->worker_start_timestamp;
+    entry->gain_end_timestamp = (uint32_t)entry->worker_start_timestamp;
+    entry->pll_start_valid = false;
     entry->readback_frequency_hz = 0;
     entry->execution.timestamp = 0;
     entry->execution.flags = 0;
@@ -1265,6 +1287,10 @@ static void perform_profile_load_step(struct queue *q,
     if (load_status == 0) {
         return;
     }
+    if (entry->immediate && entry->worker_start_valid) {
+        entry->profile_end_valid = time_tamer_read_low32(
+            module, &entry->profile_end_timestamp);
+    }
     adi_fastlock_profile_cache_commit(module, entry->nios_profile,
                                       &entry->profile);
     entry->state = entry->immediate ? ENTRY_STATE_READY : ENTRY_STATE_NEW;
@@ -1275,9 +1301,12 @@ static void publish_retune2_success(bladerf_module module,
                                     uint64_t readback_frequency_hz)
 {
     uint32_t sequence;
-    uint32_t worker_duration_ticks = 0;
-    bool worker_duration_valid = false;
     uint64_t worker_end_timestamp;
+    uint64_t profile_ticks = 0;
+    uint64_t gain_ticks = 0;
+    uint64_t pll_ticks = 0;
+    uint64_t other_ticks = 0;
+    uint64_t worker_timing_word = 0;
     struct retune2_completion *completion;
 
     if (module != BLADERF_MODULE_RX && module != BLADERF_MODULE_TX) {
@@ -1297,10 +1326,57 @@ static void publish_retune2_success(bladerf_module module,
         entry->worker_start_valid &&
         time_tamer_read(module, &worker_end_timestamp) &&
         worker_end_timestamp >= entry->worker_start_timestamp &&
-        worker_end_timestamp - entry->worker_start_timestamp <= 0x7fffffffu) {
-        worker_duration_ticks = (uint32_t)(worker_end_timestamp -
-                                            entry->worker_start_timestamp);
-        worker_duration_valid = true;
+        worker_end_timestamp - entry->worker_start_timestamp <= UINT32_MAX &&
+        entry->profile_end_valid && entry->gain_start_valid &&
+        entry->gain_end_valid && entry->pll_start_valid) {
+        const uint64_t total_ticks = worker_end_timestamp -
+                                     entry->worker_start_timestamp;
+        const uint32_t start_low = (uint32_t)entry->worker_start_timestamp;
+        const uint32_t profile_end = entry->profile_end_timestamp - start_low;
+        const uint32_t gain_start = entry->gain_start_timestamp - start_low;
+        const uint32_t gain_end = entry->gain_end_timestamp - start_low;
+        const uint32_t pll_start = entry->pll_start_timestamp - start_low;
+
+        if (profile_end <= gain_start && gain_start <= gain_end &&
+            gain_end <= pll_start && pll_start <= total_ticks) {
+            profile_ticks = profile_end;
+            gain_ticks = gain_end - gain_start;
+            pll_ticks = total_ticks - pll_start;
+            if (profile_ticks + gain_ticks + pll_ticks <= total_ticks) {
+                other_ticks = total_ticks - profile_ticks - gain_ticks -
+                              pll_ticks;
+                if (profile_ticks /
+                            NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT <=
+                        NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK &&
+                    gain_ticks /
+                            NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT <=
+                        NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK &&
+                    pll_ticks /
+                            NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT <=
+                        NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK &&
+                    other_ticks /
+                            NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT <=
+                        NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) {
+                    worker_timing_word =
+                        ((profile_ticks /
+                          NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT)
+                         << NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_SHIFT) |
+                        NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_VALID |
+                        ((gain_ticks /
+                          NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT)
+                         << NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_SHIFT) |
+                        NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_VALID |
+                        ((pll_ticks /
+                          NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT)
+                         << NIOS_PKT_16x64_RETUNE2_TIMING_PLL_SHIFT) |
+                        NIOS_PKT_16x64_RETUNE2_TIMING_PLL_VALID |
+                        ((other_ticks /
+                          NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT)
+                         << NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT) |
+                        NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID;
+                }
+            }
+        }
     }
     sequence = pkt_retune2_success_count(module) + 1u;
     completion = module == BLADERF_MODULE_RX
@@ -1311,8 +1387,7 @@ static void publish_retune2_success(bladerf_module module,
     retune2_completion_publish(completion, sequence, readback_frequency_hz,
                                entry->timestamp, entry->nios_profile,
                                entry->session_generation,
-                               entry->request_token, worker_duration_ticks,
-                               worker_duration_valid,
+                               entry->request_token, worker_timing_word,
                                &entry->execution);
     if (module == BLADERF_MODULE_RX) {
         rx_retune2_success_count = sequence;
@@ -1681,6 +1756,10 @@ static inline void perform_work(struct queue *q, bladerf_module module)
              * meanwhile; the executed timestamp follows both. */
             if ((e->gain_table & NIOS_PKT_RETUNE2_GT_REQUEST) != 0 &&
                 (e->gain_table & QUEUE_GT_LOADED) == 0) {
+                if (e->immediate && !e->gain_start_valid) {
+                    e->gain_start_valid = time_tamer_read_low32(
+                        module, &e->gain_start_timestamp);
+                }
                 int32_t gt_status =
                     rfic_start_gain_table_for_retune(e->gain_table);
 
@@ -1694,9 +1773,17 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                     dequeue_retune(q, NULL);
                     break;
                 }
+                if (e->immediate && e->gain_start_valid) {
+                    e->gain_end_valid = time_tamer_read_low32(
+                        module, &e->gain_end_timestamp);
+                }
             }
 #endif
 
+            if (e->immediate && !e->pll_start_valid) {
+                e->pll_start_valid = time_tamer_read_low32(
+                    module, &e->pll_start_timestamp);
+            }
             /* Activate the fast lock profile for this retune */
             if (!profile_activate(module, &e->profile,
                                  &readback_frequency_hz, &failure_stage,
@@ -1736,6 +1823,10 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                 e->gain_table = (uint8_t)(
                     (e->gain_table & ~(0x3u << 2)) | QUEUE_GT_LOADED |
                     (NIOS_PKT_RETUNE2_GT_TO(e->gain_table) << 2));
+                if (e->immediate && e->gain_start_valid) {
+                    e->gain_end_valid = time_tamer_read_low32(
+                        module, &e->gain_end_timestamp);
+                }
                 if (!q->clear_requested) {
                     e->state = ENTRY_STATE_READY;
                     break;
@@ -2206,6 +2297,11 @@ void pkt_retune2(struct pkt_buf *b)
                                     entry->state =
                                         ENTRY_STATE_PROFILE_LOAD_PENDING;
                                     entry->gain_table = gain_table;
+                                    if ((gain_table &
+                                         NIOS_PKT_RETUNE2_GT_REQUEST) != 0) {
+                                        entry->gain_start_valid = false;
+                                        entry->gain_end_valid = false;
+                                    }
                                     if (deferred_legacy_now) {
                                         entry->deferred_response_pkt = b;
                                         b->response_deferred = true;
@@ -2224,6 +2320,13 @@ void pkt_retune2(struct pkt_buf *b)
                                         status = -1;
                                     } else {
                                         if (load_status > 0) {
+                                            if (entry->immediate &&
+                                                entry->worker_start_valid) {
+                                                entry->profile_end_valid =
+                                                    time_tamer_read_low32(
+                                                        module,
+                                                        &entry->profile_end_timestamp);
+                                            }
                                             adi_fastlock_profile_cache_commit(
                                                 module, entry->nios_profile,
                                                 &entry->profile);

@@ -15,7 +15,7 @@
 
 enum mock_mode {
     MOCK_RECORDS,
-    MOCK_DURATION,
+    MOCK_TIMING,
     MOCK_OLD_FIRMWARE_ECHO,
     MOCK_OVERWRITTEN_BEFORE_SECOND_WORD,
     MOCK_UNKNOWN_FLAG,
@@ -76,10 +76,17 @@ static bool serve(uint16_t addr, uint64_t sequence, uint64_t *data)
                      : (NIOS_PKT_RETUNE2_EXEC_TS_VALID |
                         NIOS_PKT_RETUNE2_EXEC_PLL_LOCKED)) |
                 UINT64_C(0x7766554433221100);
+    } else if (word == NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING) {
+        *data = ((uint64_t)3u << NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_VALID |
+                ((uint64_t)4u << NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_VALID |
+                ((uint64_t)5u << NIOS_PKT_16x64_RETUNE2_TIMING_PLL_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_TIMING_PLL_VALID |
+                ((uint64_t)6u << NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID;
     } else {
-        uint32_t elapsed = mock_mode == MOCK_DURATION
-            ? (NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID | 1234567u)
-            : 1234567u;
+        uint32_t elapsed = 1234567u;
         *data = (uint64_t)elapsed |
                 ((uint64_t)(UINT64_C(2400000000) >> 1) << 32);
     }
@@ -189,19 +196,21 @@ int main(void)
               record.readback_frequency_hz == UINT64_C(2400000000),
           "success record: status %d tx %u", status, transactions);
 
-    mock_mode = MOCK_DURATION;
+    mock_mode = MOCK_TIMING;
     {
-        uint32_t duration_ticks = 0;
-        bool duration_valid = false;
+        struct nios_retune2_device_timing timing = {0};
 
         transactions = 0;
-        status = nios_retune2_completion_device_duration_read(
-            &dev, BLADERF_MODULE_RX, success_sequence, &duration_ticks,
-            &duration_valid);
-        CHECK(status == 0 && duration_valid && duration_ticks == 1234567 &&
+        status = nios_retune2_completion_device_timing_read(
+            &dev, BLADERF_MODULE_RX, success_sequence, &timing);
+        CHECK(status == 0 && timing.valid_mask == 0x0f &&
+                  timing.profile_load_ticks == 3 * 64 &&
+                  timing.gain_table_ticks == 4 * 64 &&
+                  timing.pll_ticks == 5 * 64 &&
+                  timing.other_ticks == 6 * 64 &&
                   transactions == 1,
-              "NOW device duration: status %d valid %d ticks %u tx %u",
-              status, duration_valid, duration_ticks, transactions);
+              "NOW device stage timing: status %d mask 0x%x tx %u",
+              status, timing.valid_mask, transactions);
     }
     mock_mode = MOCK_RECORDS;
 

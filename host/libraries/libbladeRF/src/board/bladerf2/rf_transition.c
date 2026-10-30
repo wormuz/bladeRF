@@ -3980,6 +3980,11 @@ static int _bladerf_rx_transition_begin(
                 board_data->rf_transition_nios_timing[timing_slot].transaction_id =
                     board_data->rf_transition_current_id;
                 board_data->rf_transition_nios_timing[timing_slot].duration_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].profile_load_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].gain_table_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].pll_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].other_ticks = 0;
+                board_data->rf_transition_nios_timing[timing_slot].timing_valid_mask = 0;
                 board_data->rf_transition_nios_timing[timing_slot].nios_retune_observed = false;
                 board_data->rf_transition_nios_timing[timing_slot].duration_valid = false;
             }
@@ -4280,6 +4285,16 @@ static int _bladerf_rx_transition_begin(
                     board_data->rf_transition_current_id;
                 board_data->rf_transition_nios_timing[timing_slot].duration_ticks =
                     nios_duration_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].profile_load_ticks =
+                    dev->nios_retune_trace.device_profile_load_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].gain_table_ticks =
+                    dev->nios_retune_trace.device_gain_table_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].pll_ticks =
+                    dev->nios_retune_trace.device_pll_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].other_ticks =
+                    dev->nios_retune_trace.device_other_ticks;
+                board_data->rf_transition_nios_timing[timing_slot].timing_valid_mask =
+                    dev->nios_retune_trace.device_timing_valid_mask;
                 board_data->rf_transition_nios_timing[timing_slot].nios_retune_observed = true;
                 board_data->rf_transition_nios_timing[timing_slot].duration_valid =
                     nios_duration_valid;
@@ -5686,6 +5701,16 @@ int bladerf_rx_transition_get_nios_timing(
                 board_data->rf_transition_nios_timing[slot].duration_valid;
             timing->device_duration_ticks =
                 board_data->rf_transition_nios_timing[slot].duration_ticks;
+            timing->profile_load_ticks =
+                board_data->rf_transition_nios_timing[slot].profile_load_ticks;
+            timing->gain_table_ticks =
+                board_data->rf_transition_nios_timing[slot].gain_table_ticks;
+            timing->pll_ticks =
+                board_data->rf_transition_nios_timing[slot].pll_ticks;
+            timing->other_ticks =
+                board_data->rf_transition_nios_timing[slot].other_ticks;
+            timing->timing_valid_mask =
+                board_data->rf_transition_nios_timing[slot].timing_valid_mask;
         }
     });
     return 0;

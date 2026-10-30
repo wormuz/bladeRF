@@ -233,6 +233,11 @@ struct bladerf {
         uint64_t usb_out_done_ns;
         uint64_t response_done_ns;
         uint64_t device_duration_ticks;
+        uint32_t device_profile_load_ticks;
+        uint32_t device_gain_table_ticks;
+        uint32_t device_pll_ticks;
+        uint32_t device_other_ticks;
+        uint8_t device_timing_valid_mask;
         uint8_t device_failure_stage;
         int status;
         bool valid;

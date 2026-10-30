@@ -829,7 +829,12 @@ header = """
     bool transaction_retained;
     bool nios_retune_observed;
     bool device_duration_valid;
+    uint8_t timing_valid_mask;
     uint64_t device_duration_ticks;
+    uint32_t profile_load_ticks;
+    uint32_t gain_table_ticks;
+    uint32_t pll_ticks;
+    uint32_t other_ticks;
   };
   int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
     const struct bladerf_rx_transition_request *request,

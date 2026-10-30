@@ -444,6 +444,11 @@ struct bladerf2_board_data {
     struct {
         uint32_t transaction_id;
         uint64_t duration_ticks;
+        uint32_t profile_load_ticks;
+        uint32_t gain_table_ticks;
+        uint32_t pll_ticks;
+        uint32_t other_ticks;
+        uint8_t timing_valid_mask;
         bool nios_retune_observed;
         bool duration_valid;
     } rf_transition_nios_timing[BLADERF2_RF_EVENT_HISTORY_SIZE];

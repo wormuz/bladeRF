@@ -1164,7 +1164,12 @@ class BladeRF:
         return (bool(timing.transaction_retained),
                 bool(timing.nios_retune_observed),
                 bool(timing.device_duration_valid),
-                timing.device_duration_ticks)
+                timing.device_duration_ticks,
+                int(timing.timing_valid_mask),
+                int(timing.profile_load_ticks),
+                int(timing.gain_table_ticks),
+                int(timing.pll_ticks),
+                int(timing.other_ticks))
 
     def select_band(self, ch, frequency):
         ret = libbladeRF.bladerf_select_band(self.dev[0], ch, int(frequency))

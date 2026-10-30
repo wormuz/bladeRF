@@ -229,11 +229,19 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_EXECUTION 1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS    2u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH     3u
-/* In word EXECUTION only, low-word bit 31 tags a tokened-NOW duration;
- * bits 30:0 are NIOS time-tamer ticks. Scheduled records retain the original
- * execution-minus-scheduled delta encoding. */
-#define NIOS_PKT_16x64_RETUNE2_NOW_DURATION_VALID    (1u << 31)
-#define NIOS_PKT_16x64_RETUNE2_NOW_DURATION_MASK     0x7fffffffu
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING    4u
+/* TIMING word: four 15-bit stage durations, in units of 64 time-tamer ticks,
+ * each followed by its own valid bit. */
+#define NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT 64u
+#define NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK     0x7fffu
+#define NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_SHIFT  0u
+#define NIOS_PKT_16x64_RETUNE2_TIMING_PROFILE_VALID  (UINT64_C(1) << 15)
+#define NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_SHIFT     16u
+#define NIOS_PKT_16x64_RETUNE2_TIMING_GAIN_VALID     (UINT64_C(1) << 31)
+#define NIOS_PKT_16x64_RETUNE2_TIMING_PLL_SHIFT      32u
+#define NIOS_PKT_16x64_RETUNE2_TIMING_PLL_VALID      (UINT64_C(1) << 47)
+#define NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT    48u
+#define NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID    (UINT64_C(1) << 63)
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER   0x5cu
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID    1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE   2u /* not / no longer */
@@ -243,16 +251,17 @@ static inline uint16_t nios_pkt_16x64_retune2_record_addr(bool failure,
                                                           uint8_t word)
 {
     return (uint16_t)((failure ? 0x8u : 0u) | (tx ? 0x4u : 0u) |
-                      (word & 0x3u));
+                      (word & 0x3u) | ((word & 0x4u) << 2));
 }
 
 static inline bool nios_pkt_16x64_retune2_record_addr_unpack(
     uint16_t addr, bool *failure, bool *tx, uint8_t *word)
 {
-    const uint8_t decoded_word = (uint8_t)(addr & 0x3u);
+    const uint8_t decoded_word = (uint8_t)((addr & 0x3u) |
+                                           ((addr & 0x10u) >> 2));
 
-    if ((addr & 0xfff0u) != 0 ||
-        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH) {
+    if ((addr & 0xffe0u) != 0 ||
+        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING) {
         return false;
     }
     *failure = (addr & 0x8u) != 0;
