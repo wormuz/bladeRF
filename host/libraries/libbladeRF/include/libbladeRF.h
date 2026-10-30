@@ -5639,7 +5639,9 @@ struct bladerf_rf_event {
  * each stage duration is quantized to 64 time-tamer ticks. Host polling is
  * excluded. Convert ticks using the corresponding RX/TX sample-clock rate.
  * `timing_valid_mask` uses bits 0..3 for profile, gain, PLL, and other stage
- * validity. The total is valid only when `device_duration_valid` is true. */
+ * validity; bit 4 validates the gain-table worker-poll and between-poll split.
+ * That split is raw ticks and is included in `gain_table_ticks`. The total is
+ * valid only when `device_duration_valid` is true. */
 struct bladerf_rx_transition_nios_timing {
     bool transaction_retained;
     bool nios_retune_observed;
@@ -5650,6 +5652,8 @@ struct bladerf_rx_transition_nios_timing {
     uint32_t gain_table_ticks;
     uint32_t pll_ticks;
     uint32_t other_ticks;
+    uint32_t gain_loader_active_ticks;
+    uint32_t gain_loader_gap_ticks;
 };
 
 /** Request parameters for ::bladerf_rx_transition_begin. */

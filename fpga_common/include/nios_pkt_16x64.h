@@ -230,6 +230,7 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_COUNTS    2u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_SYNTH     3u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING    4u
+#define NIOS_PKT_16x64_RETUNE2_RECORD_WORD_GAIN_DETAIL 5u
 /* TIMING word: four 15-bit stage durations, in units of 64 time-tamer ticks,
  * each followed by its own valid bit. */
 #define NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT 64u
@@ -242,6 +243,11 @@ static inline bool nios_pkt_16x64_batch_payload_valid(uint16_t count,
 #define NIOS_PKT_16x64_RETUNE2_TIMING_PLL_VALID      (UINT64_C(1) << 47)
 #define NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT    48u
 #define NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_VALID    (UINT64_C(1) << 63)
+/* Gain detail word: raw time-tamer ticks in two 31-bit fields. */
+#define NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK 0x7fffffffu
+#define NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ACTIVE_VALID (UINT64_C(1) << 31)
+#define NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_SHIFT 32u
+#define NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID (UINT64_C(1) << 63)
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERROR_MARKER   0x5cu
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_INVALID    1u
 #define NIOS_PKT_16x64_RETUNE2_RECORD_ERR_SEQUENCE   2u /* not / no longer */
@@ -261,7 +267,7 @@ static inline bool nios_pkt_16x64_retune2_record_addr_unpack(
                                            ((addr & 0x10u) >> 2));
 
     if ((addr & 0xffe0u) != 0 ||
-        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_TIMING) {
+        decoded_word > NIOS_PKT_16x64_RETUNE2_RECORD_WORD_GAIN_DETAIL) {
         return false;
     }
     *failure = (addr & 0x8u) != 0;

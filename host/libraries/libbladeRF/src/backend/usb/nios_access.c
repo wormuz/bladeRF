@@ -2425,6 +2425,7 @@ int nios_retune2_completion_device_timing_read(
     struct nios_retune2_device_timing *timing)
 {
     uint64_t data = 0;
+    uint64_t gain_detail = 0;
     const uint64_t unit = NIOS_PKT_16x64_RETUNE2_TIMING_TICKS_PER_UNIT;
     int status;
 
@@ -2466,6 +2467,25 @@ int nios_retune2_completion_device_timing_read(
             (uint32_t)((data >> NIOS_PKT_16x64_RETUNE2_TIMING_OTHER_SHIFT) &
                        NIOS_PKT_16x64_RETUNE2_TIMING_VALUE_MASK) * unit;
         timing->valid_mask |= NIOS_RETUNE2_TIMING_OTHER_VALID;
+    }
+
+    status = nios_retune2_record_access(
+        dev,
+        nios_pkt_16x64_retune2_record_addr(
+            false, module == BLADERF_MODULE_TX,
+            NIOS_PKT_16x64_RETUNE2_RECORD_WORD_GAIN_DETAIL),
+        sequence, &gain_detail);
+    if (status != 0) {
+        return status;
+    }
+    if ((gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ACTIVE_VALID) != 0 &&
+        (gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID) != 0) {
+        timing->gain_loader_active_ticks = (uint32_t)(
+            gain_detail & NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
+        timing->gain_loader_gap_ticks = (uint32_t)(
+            (gain_detail >> NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_SHIFT) &
+            NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK);
+        timing->valid_mask |= NIOS_RETUNE2_TIMING_GAIN_DETAIL_VALID;
     }
     return 0;
 }
@@ -2990,9 +3010,13 @@ static int nios_retune2_wait_now_terminal(
                         device_timing.pll_ticks;
                     dev->nios_retune_trace.device_other_ticks =
                         device_timing.other_ticks;
+                    dev->nios_retune_trace.device_gain_loader_active_ticks =
+                        device_timing.gain_loader_active_ticks;
+                    dev->nios_retune_trace.device_gain_loader_gap_ticks =
+                        device_timing.gain_loader_gap_ticks;
                     dev->nios_retune_trace.device_timing_valid_mask =
                         device_timing.valid_mask;
-                    if (device_timing.valid_mask == 0x0fu) {
+                    if ((device_timing.valid_mask & 0x0fu) == 0x0fu) {
                         dev->nios_retune_trace.device_duration_ticks =
                             (uint64_t)device_timing.profile_load_ticks +
                             device_timing.gain_table_ticks +

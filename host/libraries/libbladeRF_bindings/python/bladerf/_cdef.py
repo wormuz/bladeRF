@@ -835,6 +835,8 @@ header = """
     uint32_t gain_table_ticks;
     uint32_t pll_ticks;
     uint32_t other_ticks;
+    uint32_t gain_loader_active_ticks;
+    uint32_t gain_loader_gap_ticks;
   };
   int bladerf_rx_transition_begin(struct bladerf *dev, bladerf_channel ch,
     const struct bladerf_rx_transition_request *request,

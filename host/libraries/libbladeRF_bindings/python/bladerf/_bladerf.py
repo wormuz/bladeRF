@@ -1169,7 +1169,9 @@ class BladeRF:
                 int(timing.profile_load_ticks),
                 int(timing.gain_table_ticks),
                 int(timing.pll_ticks),
-                int(timing.other_ticks))
+                int(timing.other_ticks),
+                int(timing.gain_loader_active_ticks),
+                int(timing.gain_loader_gap_ticks))
 
     def select_band(self, ch, frequency):
         ret = libbladeRF.bladerf_select_band(self.dev[0], ch, int(frequency))

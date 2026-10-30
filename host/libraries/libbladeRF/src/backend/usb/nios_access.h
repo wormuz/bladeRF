@@ -387,6 +387,8 @@ struct nios_retune2_device_timing {
     uint32_t gain_table_ticks;
     uint32_t pll_ticks;
     uint32_t other_ticks;
+    uint32_t gain_loader_active_ticks;
+    uint32_t gain_loader_gap_ticks;
     uint8_t valid_mask;
 };
 
@@ -394,6 +396,7 @@ struct nios_retune2_device_timing {
 #define NIOS_RETUNE2_TIMING_GAIN_VALID    (1u << 1)
 #define NIOS_RETUNE2_TIMING_PLL_VALID     (1u << 2)
 #define NIOS_RETUNE2_TIMING_OTHER_VALID   (1u << 3)
+#define NIOS_RETUNE2_TIMING_GAIN_DETAIL_VALID (1u << 4)
 
 int nios_retune2_completion_device_timing_read(
     struct bladerf *dev, bladerf_module module, uint32_t sequence,
