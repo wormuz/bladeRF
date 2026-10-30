@@ -168,6 +168,7 @@ uint64_t bladerf_platform_monotonic_ticks(void);
 typedef void (*bladerf_platform_service_fn)(void);
 void bladerf_platform_set_service_hook(bladerf_platform_service_fn hook);
 void bladerf_platform_service(void);
+void bladerf_platform_service_defer(bool defer);
 unsigned long msleep_interruptible(unsigned int msecs);
 
 #ifndef AXI_ADC_NOT_PRESENT

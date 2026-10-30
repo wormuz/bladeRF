@@ -10,6 +10,7 @@
 #include "no_os_delay.h"
 
 static bladerf_platform_service_fn service_hook;
+static bool service_deferred;
 
 void bladerf_platform_set_service_hook(bladerf_platform_service_fn hook)
 {
@@ -18,9 +19,14 @@ void bladerf_platform_set_service_hook(bladerf_platform_service_fn hook)
 
 void bladerf_platform_service(void)
 {
-    if (service_hook != NULL) {
+    if (!service_deferred && service_hook != NULL) {
         service_hook();
     }
+}
+
+void bladerf_platform_service_defer(bool defer)
+{
+	service_deferred = defer;
 }
 
 /* SPI, GPIO and AXI IO now reach the driver through the no-OS platform ops

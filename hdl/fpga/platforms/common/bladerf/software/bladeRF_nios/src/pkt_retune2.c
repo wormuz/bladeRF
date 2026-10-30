@@ -50,7 +50,7 @@ bool rfic_command_state_faulted(void);
 bool rfic_phy_present(void);
 int32_t rfic_start_gain_table_for_retune(uint8_t request);
 int32_t rfic_poll_gain_table_for_retune(void);
-bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *service_us);
+bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *row_callback_us);
 bool rfic_gain_table_retune_owner(void);
 void rfic_doubt_gain_table(void);
 #endif  // BLADERF_NIOS_LIBAD936X
@@ -119,7 +119,7 @@ struct retune2_now_timing {
     uint32_t pll_start_timestamp;
     uint32_t gain_loader_active_ticks;
     uint32_t gain_loader_spi_us;
-    uint32_t gain_loader_service_us;
+    uint32_t gain_loader_row_callback_us;
     bool worker_start_valid;
     bool profile_end_valid;
     bool gain_start_valid;
@@ -1434,14 +1434,14 @@ static void publish_retune2_success(bladerf_module module,
                             timing->gain_loader_active_ticks;
                         const uint64_t spi_us =
                             timing->gain_loader_spi_us;
-                        const uint64_t service_us =
-                            timing->gain_loader_service_us;
+                        const uint64_t row_callback_us =
+                            timing->gain_loader_row_callback_us;
 
                         if (gap_ticks <=
                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK &&
                             spi_us <=
                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK &&
-                            service_us <=
+                            row_callback_us <=
                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_VALUE_MASK) {
                             worker_gain_detail_word = (gap_ticks <<
                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_SHIFT) |
@@ -1449,9 +1449,9 @@ static void publish_retune2_success(bladerf_module module,
                                 (spi_us <<
                                  NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_SHIFT) |
                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_VALID |
-                                (service_us <<
-                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_SHIFT) |
-                                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_VALID;
+                                (row_callback_us <<
+                                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ROW_CALLBACK_SHIFT) |
+                                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ROW_CALLBACK_VALID;
                         }
                     }
                 }
@@ -1845,7 +1845,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                 }
                 timing->gain_loader_active_ticks = 0;
                 timing->gain_loader_spi_us = 0;
-                timing->gain_loader_service_us = 0;
+                timing->gain_loader_row_callback_us = 0;
                 timing->gain_loader_spi_timing_valid = false;
                 timing->gain_loader_timing_valid =
                     e->immediate && timing->gain_start_valid;
@@ -1860,7 +1860,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                     timing->gain_loader_spi_timing_valid =
                         rfic_gain_table_timing_us(
                             &timing->gain_loader_spi_us,
-                            &timing->gain_loader_service_us);
+                            &timing->gain_loader_row_callback_us);
                 }
 
                 if (loader_timing_valid &&
@@ -1959,7 +1959,7 @@ static inline void perform_work(struct queue *q, bladerf_module module)
                     timing->gain_loader_spi_timing_valid =
                         rfic_gain_table_timing_us(
                             &timing->gain_loader_spi_us,
-                            &timing->gain_loader_service_us);
+                            &timing->gain_loader_row_callback_us);
                 }
                 if (!q->clear_requested) {
                     e->state = ENTRY_STATE_READY;

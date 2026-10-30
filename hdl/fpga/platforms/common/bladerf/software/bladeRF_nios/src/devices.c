@@ -48,21 +48,20 @@ static struct command_uart_fault_state command_uart_fault;
 #include "no_os_delay.h"
 extern uint64_t bladerf_platform_monotonic_ticks(void);
 extern void bladerf_platform_service(void);
+extern void bladerf_platform_service_defer(bool defer);
 
 static bool gain_table_spi_timing_active;
 static bool gain_table_spi_timing_valid;
 static uint32_t gain_table_spi_timing_ticks;
-static uint32_t gain_table_service_timing_ticks;
-static bool gain_table_service_timing_valid;
-static bool gain_table_service_timing_inside;
+static uint32_t gain_table_row_timing_ticks;
+static bool gain_table_row_timing_valid;
 
 void adi_gain_table_spi_timing_start(void)
 {
     gain_table_spi_timing_ticks = 0;
     gain_table_spi_timing_valid = true;
-    gain_table_service_timing_ticks = 0;
-    gain_table_service_timing_valid = true;
-    gain_table_service_timing_inside = false;
+    gain_table_row_timing_ticks = 0;
+    gain_table_row_timing_valid = true;
     gain_table_spi_timing_active = true;
 }
 
@@ -75,21 +74,22 @@ void adi_gain_table_spi_timing_fail(void)
 {
     gain_table_spi_timing_active = false;
     gain_table_spi_timing_valid = false;
-    gain_table_service_timing_valid = false;
+    gain_table_row_timing_valid = false;
 }
 
-bool adi_gain_table_timing_read_us(uint32_t *spi_us, uint32_t *service_us)
+bool adi_gain_table_timing_read_us(uint32_t *spi_us, uint32_t *row_callback_us)
 {
     const uint64_t ticks_per_us = ALT_CPU_FREQ / 1000000ULL;
 
-    if (spi_us == NULL || service_us == NULL || ticks_per_us == 0 ||
+    if (spi_us == NULL || row_callback_us == NULL || ticks_per_us == 0 ||
         !gain_table_spi_timing_valid ||
-        !gain_table_service_timing_valid ||
+        !gain_table_row_timing_valid ||
         gain_table_spi_timing_active) {
         return false;
     }
     *spi_us = (uint32_t)(gain_table_spi_timing_ticks / ticks_per_us);
-    *service_us = (uint32_t)(gain_table_service_timing_ticks / ticks_per_us);
+    *row_callback_us =
+        (uint32_t)(gain_table_row_timing_ticks / ticks_per_us);
     return true;
 }
 
@@ -109,35 +109,21 @@ static void adi_gain_table_spi_timing_record(uint64_t start,
     gain_table_spi_timing_ticks += (uint32_t)elapsed;
 }
 
-static void adi_gain_table_service_timing_record(uint64_t start,
-                                                 uint64_t end)
+static void adi_gain_table_row_timing_record(uint64_t start, uint64_t end)
 {
     const uint64_t elapsed = end - start;
 
     if (end < start || elapsed > UINT32_MAX ||
-        UINT32_MAX - gain_table_service_timing_ticks < elapsed) {
-        gain_table_service_timing_valid = false;
+        UINT32_MAX - gain_table_row_timing_ticks < elapsed) {
+        gain_table_row_timing_valid = false;
         return;
     }
-    gain_table_service_timing_ticks += (uint32_t)elapsed;
+    gain_table_row_timing_ticks += (uint32_t)elapsed;
 }
 
 static void rfic_service_safe_point(void)
 {
-    const bool measure = gain_table_spi_timing_active &&
-                         !gain_table_service_timing_inside;
-    uint64_t start = 0;
-
-    if (measure) {
-        gain_table_service_timing_inside = true;
-        start = bladerf_platform_monotonic_ticks();
-    }
     bladerf_platform_service();
-    if (measure) {
-        adi_gain_table_service_timing_record(
-            start, bladerf_platform_monotonic_ticks());
-        gain_table_service_timing_inside = false;
-    }
 }
 
 #endif
@@ -1375,10 +1361,16 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
                             uint32_t delay_us)
 {
     bool success = false;
+    const bool measure = gain_table_spi_timing_active;
+    const uint64_t start = measure ? bladerf_platform_monotonic_ticks() : 0;
+    bool unlocked;
 
     if (row >= 128 || delay_us != 2 || !spi_arbiter_lock()) {
         return false;
     }
+    /* The row is one indivisible two-command transaction. Defer any ADI
+     * service calls until its SPI arbiter hold, commit and settle are done. */
+    bladerf_platform_service_defer(true);
 
     /* AD9361 REG_GAIN_TABLE_ADDRESS/WRITE_DATA1/2/3/CONFIG are 0x130-0x133
      * and 0x137. Keep the row programming indivisible with respect to other
@@ -1406,7 +1398,14 @@ bool adi_spi_gain_table_row(uint16_t row, uint8_t data1, uint8_t data2,
     success = true;
 
 done:
-    return spi_arbiter_unlock() && success;
+    unlocked = spi_arbiter_unlock();
+    bladerf_platform_service_defer(false);
+    bladerf_platform_service();
+    if (measure) {
+        adi_gain_table_row_timing_record(
+            start, bladerf_platform_monotonic_ticks());
+    }
+    return unlocked && success;
 }
 #endif  // BOARD_BLADERF_MICRO
 

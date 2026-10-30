@@ -37,7 +37,7 @@ extern void adi_gain_table_spi_timing_start(void);
 extern void adi_gain_table_spi_timing_stop(void);
 extern void adi_gain_table_spi_timing_fail(void);
 extern bool adi_gain_table_timing_read_us(uint32_t *spi_us,
-                                          uint32_t *service_us);
+                                          uint32_t *row_callback_us);
 #include "ad936x_helpers.h"
 #include "nios_pkt_8x64.h"
 #include "nios_pkt_16x64.h"
@@ -550,9 +550,9 @@ int32_t rfic_poll_gain_table_for_retune(void)
     return status;
 }
 
-bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *service_us)
+bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *row_callback_us)
 {
-    return adi_gain_table_timing_read_us(spi_us, service_us);
+    return adi_gain_table_timing_read_us(spi_us, row_callback_us);
 }
 
 bool rfic_gain_table_retune_owner(void)

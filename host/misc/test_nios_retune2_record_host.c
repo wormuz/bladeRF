@@ -91,8 +91,8 @@ static bool serve(uint16_t addr, uint64_t sequence, uint64_t *data)
                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_GAP_VALID |
                 (UINT64_C(901) << NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_SHIFT) |
                 NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SPI_VALID |
-                (UINT64_C(123) << NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_SHIFT) |
-                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_SERVICE_VALID;
+                (UINT64_C(123) << NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ROW_CALLBACK_SHIFT) |
+                NIOS_PKT_16x64_RETUNE2_GAIN_DETAIL_ROW_CALLBACK_VALID;
     } else {
         uint32_t elapsed = 1234567u;
         *data = (uint64_t)elapsed |
@@ -219,7 +219,7 @@ int main(void)
                   timing.gain_loader_active_ticks == 192 &&
                   timing.gain_loader_gap_ticks == 64 &&
                   timing.gain_loader_spi_command_us == 901 &&
-                  timing.gain_loader_service_us == 123 &&
+                  timing.gain_loader_row_callback_us == 123 &&
                   transactions == 2,
               "NOW device stage timing: status %d mask 0x%x tx %u",
               status, timing.valid_mask, transactions);

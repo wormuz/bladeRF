@@ -327,7 +327,7 @@ int32_t rfic_poll_tx_quad_calibration_for_retune(uint8_t *failure_stage);
 int32_t rfic_start_gain_table_for_retune(uint8_t request);
 int32_t rfic_poll_gain_table_for_retune(void);
 /* Bounded SPI-command and cooperative-service time in sys_clock microseconds. */
-bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *service_us);
+bool rfic_gain_table_timing_us(uint32_t *spi_us, uint32_t *row_callback_us);
 void rfic_doubt_gain_table(void);
 /* The headless platform SPI transport (platform_bladerf2_headless). */
 extern const struct no_os_spi_platform_ops bladerf2_spi_ops;
